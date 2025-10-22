@@ -1,0 +1,16 @@
+[project]
+name = "spark-api"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "django>=5.2.7",
+    "django-environ>=0.12.0",
+    "hypercorn>=0.17.3",
+    "psycopg[binary]>=3.2.11",
+    "pyrefly>=0.38.1",
+    "strawberry-django-auth>=0.378.4",
+    "strawberry-graphql>=0.284.1",
+    "uuid6>=2025.0.1",
+]
