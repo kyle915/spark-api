@@ -15,7 +15,18 @@ dependencies = [
     "uuid6>=2025.0.1",
 ]
 
+[tool.pyrefly]
+project-includes = ["**/*.py*"]
+project-excludes = [
+    "**/node_modules",
+    "**/__pycache__",
+    "**/*venv/**/*",
+    "**/.[!/.]*/**/*",
+]
+
 [dependency-groups]
 dev = [
     "ruff>=0.14.1",
 ]
+
+[tool]
