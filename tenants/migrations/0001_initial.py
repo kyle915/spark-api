@@ -8,6 +8,15 @@ import uuid6
 from django.conf import settings
 from django.db import migrations, models
 
+def create_default_roles_with_fixed_ids(apps, schema_editor):
+    Role = apps.get_model('tenants', 'Role')
+
+    Role.objects.update_or_create(
+        pk=1, defaults={"name": "Ambassador"}
+    )
+    Role.objects.update_or_create(
+        pk=2, defaults={"name": "Spark Admin"}
+    )
 
 class Migration(migrations.Migration):
 
@@ -86,4 +95,5 @@ class Migration(migrations.Migration):
                 ('user', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='tenanted_users', to=settings.AUTH_USER_MODEL)),
             ],
         ),
+        migrations.RunPython(create_default_roles_with_fixed_ids),
     ]
