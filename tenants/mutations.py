@@ -12,7 +12,6 @@ User = get_user_model()
 class RegisterResponse:
     success: bool
     message: str
-    user: UserType | None
     activation_token: str | None = None
 
 
@@ -23,37 +22,38 @@ async def register_user_with_role(
     role_id: int,
 ) -> RegisterResponse:
     if password1 != password2:
-        return RegisterResponse(success=False, message="Passwords do not match.", user=None)
+        return RegisterResponse(success=False, message="Passwords do not match.")
 
     if await sync_to_async(User.objects.filter(email=email).exists)():
-        return RegisterResponse(success=False, message="Email already exists.", user=None)
+        return RegisterResponse(success=False, message="Email already exists.")
 
     try:
-        role = await sync_to_async(Role.objects.get)(pk=role_id)
+        role: Role = await sync_to_async(Role.objects.get)(pk=role_id)
     except Role.DoesNotExist:
-        return RegisterResponse(success=False, message="Invalid roleId.", user=None)
+        return RegisterResponse(success=False, message="Invalid roleId.")
 
     try:
         @sync_to_async
         def create_user():
-            return User.objects.create_user(
+            user = User.objects.create(
                 username=email,
                 email=email,
-                password=password1,
                 role=role,
                 is_active=True,
             )
+            user.set_password(password1)
+            user.save()
+            return user
 
         user = await create_user()
     except Exception as e:
-        return RegisterResponse(success=False, message=f"Error creating user: {e}", user=None)
+        return RegisterResponse(success=False, message=f"Error creating user: {e}")
 
-    activation_token = await sync_to_async(get_token)(user, "activation")
+    activation_token: str = await sync_to_async(get_token)(user, "activation")
 
     return RegisterResponse(
         success=True,
         message="User registered successfully. Please verify your email.",
-        user=user,
         activation_token=activation_token,
     )
 
