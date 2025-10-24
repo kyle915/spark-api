@@ -31,8 +31,8 @@ class User(AbstractUser):
 class TenantedUser(models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="tenanted_users")
-    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name="tenanted_users")
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.RESTRICT, related_name="tenanted_users")
+    tenant = models.ForeignKey(Tenant, on_delete=models.RESTRICT, related_name="tenanted_users")
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -43,7 +43,7 @@ class TenantedRole(models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
 
-    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name="tenanted_roles")
+    tenant = models.ForeignKey(Tenant, on_delete=models.RESTRICT, related_name="tenanted_roles")
     role = models.ForeignKey(Role, on_delete=models.RESTRICT, related_name="tenanted_roles")
 
     created_at = models.DateTimeField(auto_now_add=True)
