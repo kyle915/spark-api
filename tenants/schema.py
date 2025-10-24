@@ -4,11 +4,14 @@ from django.contrib.auth import get_user_model
 from .mutations import AmbassadorsCustomRegister, SparkCustomRegister, ClientsCustomRegister
 from gqlauth.user import relay as mutations
 
-#Spark Schema
+# Spark Schema
+
+
 @strawberry.django.type(model=get_user_model())
 class QuerySpark:
     me: UserType = UserQueries.me
     public: UserType = UserQueries.public_user
+
 
 @strawberry.type
 class MutationSpark(SparkCustomRegister):
@@ -17,11 +20,14 @@ class MutationSpark(SparkCustomRegister):
     refresh_token = mutations.RefreshToken.field
     verify_account = mutations.VerifyAccount.field
 
-#Ambassadors Schema
+# Ambassadors Schema
+
+
 @strawberry.django.type(model=get_user_model())
 class QueryAmbassadors:
     me: UserType = UserQueries.me
     public: UserType = UserQueries.public_user
+
 
 @strawberry.type
 class MutationAmbassadors(AmbassadorsCustomRegister):
@@ -30,11 +36,14 @@ class MutationAmbassadors(AmbassadorsCustomRegister):
     refresh_token = mutations.RefreshToken.field
     verify_account = mutations.VerifyAccount.field
 
-#Clients Schemas
+# Clients Schemas
+
+
 @strawberry.django.type(model=get_user_model())
 class QueryClients:
     me: UserType = UserQueries.me
     public: UserType = UserQueries.public_user
+
 
 @strawberry.type
 class MutationClients(ClientsCustomRegister):
