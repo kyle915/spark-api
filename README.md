@@ -47,6 +47,10 @@ DEBUG=True
 SECRET_KEY=your-secret-key
 ALLOWED_HOSTS=localhost
 DATABASE_URL=postgres://postgres:postgres123@127.0.0.1:5432/db
+GOOGLE_CLIENT_ID=your_client_id
+GOOGLE_CLIENT_SECRET=your_client_secret
+APPLE_CLIENT_ID=your_client_id
+APPLE_CLIENT_SECRET=your_client_secret
 ```
 ---
 

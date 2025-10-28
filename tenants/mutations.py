@@ -4,6 +4,7 @@ from .models import Role, TenantedUser, Tenant
 from gqlauth.core.utils import get_token
 from asgiref.sync import sync_to_async
 from utils.utils import ROLE_ID
+from .social_auth import BaseSocialAuthMutations, SocialAuthResponse
 
 User = get_user_model()
 
@@ -53,6 +54,7 @@ async def register_user_with_role(
         if user and tenant_id:
             try:
                 tenant: Tenant = await sync_to_async(Tenant.objects.get)(pk=tenant_id)
+
                 @sync_to_async
                 def create_tenant_user():
                     tenant_user: TenantedUser = TenantedUser.objects.create(
@@ -91,6 +93,26 @@ class AmbassadorsCustomRegister:
     ) -> RegisterResponse:
         return await register_user_with_role(first_name, email, password1, password2, role_id=ROLE_ID.Ambassadors)
 
+    @strawberry.mutation
+    async def social_auth_google(
+        self,
+        access_token: str
+    ) -> SocialAuthResponse:
+        return await BaseSocialAuthMutations.social_auth_google(
+            access_token=access_token,
+            role_id=ROLE_ID.Ambassadors
+        )
+
+    @strawberry.mutation
+    async def social_auth_apple(
+        self,
+        identity_token: str,
+    ) -> SocialAuthResponse:
+        return await BaseSocialAuthMutations.social_auth_apple(
+            identity_token=identity_token,
+            role_id=ROLE_ID.Ambassadors
+        )
+
 
 # Spark Admin - role_id = 2
 @strawberry.type
@@ -104,6 +126,26 @@ class SparkCustomRegister:
         password2: str,
     ) -> RegisterResponse:
         return await register_user_with_role(first_name, email, password1, password2, role_id=ROLE_ID.SparkAdmin)
+
+    @strawberry.mutation
+    async def social_auth_google(
+        self,
+        access_token: str
+    ) -> SocialAuthResponse:
+        return await BaseSocialAuthMutations.social_auth_google(
+            access_token=access_token,
+            role_id=ROLE_ID.SparkAdmin
+        )
+
+    @strawberry.mutation
+    async def social_auth_apple(
+        self,
+        identity_token: str
+    ) -> SocialAuthResponse:
+        return await BaseSocialAuthMutations.social_auth_apple(
+            identity_token=identity_token,
+            role_id=ROLE_ID.SparkAdmin
+        )
 
 
 # Clients - variable role_id
@@ -120,3 +162,29 @@ class ClientsCustomRegister:
         tenant_id: strawberry.ID
     ) -> RegisterResponse:
         return await register_user_with_role(first_name, email, password1, password2, role_id=int(role_id), tenant_id=int(tenant_id))
+
+    @strawberry.mutation
+    async def social_auth_google(
+        self,
+        access_token: str,
+        role_id: strawberry.ID,
+        tenant_id: strawberry.ID
+    ) -> SocialAuthResponse:
+        return await BaseSocialAuthMutations.social_auth_google(
+            access_token=access_token,
+            role_id=int(role_id),
+            tenant_id=int(tenant_id)
+        )
+
+    @strawberry.mutation
+    async def social_auth_apple(
+        self,
+        identity_token: str,
+        role_id: strawberry.ID,
+        tenant_id: strawberry.ID
+    ) -> SocialAuthResponse:
+        return await BaseSocialAuthMutations.social_auth_apple(
+            identity_token=identity_token,
+            role_id=int(role_id),
+            tenant_id=int(tenant_id)
+        )
