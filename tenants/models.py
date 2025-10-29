@@ -12,14 +12,12 @@ class Tenant(models.Model):
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=False,
-        blank=False,
         related_name="tenants_created_by",
     )
     updated_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=True,
-        blank=True,
         related_name="tenants_updated_by",
     )
 
@@ -36,14 +34,12 @@ class Role(models.Model):
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=True,
-        blank=True,
         related_name="role_created_by",
     )
     updated_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=True,
-        blank=True,
         related_name="role_updated_by",
     )
 
@@ -63,14 +59,12 @@ class User(AbstractUser):
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=True,
-        blank=True,
         related_name="user_created_by",
     )
     updated_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=True,
-        blank=True,
         related_name="user_updated_by",
     )
 
@@ -98,14 +92,12 @@ class TenantedUser(models.Model):
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=True,
-        blank=True,
         related_name="tenanted_users_created_by",
     )
     updated_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=True,
-        blank=True,
         related_name="tenanted_users_updated_by",
     )
 
@@ -131,14 +123,12 @@ class TenantedRole(models.Model):
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=True,
-        blank=True,
         related_name="tenanted_roles_created_by",
     )
     updated_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=True,
-        blank=True,
         related_name="tenanted_roles_updated_by",
     )
 
