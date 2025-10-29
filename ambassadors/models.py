@@ -8,21 +8,19 @@ from events.models import Location, Client, Event
 class FileType(models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
-    name = models.CharField(max_length=100, blank=False, null=False)
-    extension = models.CharField(max_length=10, blank=True, null=True)
+    name = models.CharField(max_length=100, null=False)
+    extension = models.CharField(max_length=10, null=True)
 
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=False,
-        blank=False,
         related_name="files_types_created_by",
     )
     updated_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=True,
-        blank=True,
         related_name="files_types_updated_by",
     )
 
@@ -37,7 +35,6 @@ class AmbassadorReview(models.Model):
         Client,
         on_delete=models.RESTRICT,
         null=False,
-        blank=False,
         related_name="ambassadors_reviews",
     )
 
@@ -45,14 +42,12 @@ class AmbassadorReview(models.Model):
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=False,
-        blank=False,
         related_name="ambassador_created_by",
     )
     updated_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=True,
-        blank=True,
         related_name="ambassador_updated_by",
     )
 
@@ -69,14 +64,12 @@ class Ambassador(models.Model):
         Location,
         on_delete=models.RESTRICT,
         null=False,
-        blank=False,
         related_name="ambassadors",
     )
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=False,
-        blank=False,
         related_name="ambassadors",
     )
 
@@ -84,14 +77,12 @@ class Ambassador(models.Model):
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=False,
-        blank=False,
         related_name="ambassadors_created_by",
     )
     updated_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=True,
-        blank=True,
         related_name="ambassadors_updated_by",
     )
 
@@ -108,21 +99,18 @@ class AmbassadorEvent(models.Model):
         Ambassador,
         on_delete=models.RESTRICT,
         null=False,
-        blank=False,
         related_name="ambassadors_events",
     )
     tenant = models.ForeignKey(
         Tenant,
         on_delete=models.RESTRICT,
         null=False,
-        blank=False,
         related_name="ambassadors_events",
     )
     event = models.ForeignKey(
         Event,
         on_delete=models.RESTRICT,
         null=False,
-        blank=False,
         related_name="ambassadors_events",
     )
 
@@ -130,14 +118,12 @@ class AmbassadorEvent(models.Model):
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=False,
-        blank=False,
         related_name="ambassadors_events_created_by",
     )
     updated_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=True,
-        blank=True,
         related_name="ambassadors_events_updated_by",
     )
 
@@ -148,8 +134,8 @@ class AmbassadorEvent(models.Model):
 class AmbassadorFile(models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
-    name = models.CharField(max_length=100, blank=False, null=False)
-    url = models.CharField(max_length=2048, blank=True, null=True)
+    name = models.CharField(max_length=100, null=False)
+    url = models.CharField(max_length=2048, null=True)
     main_resume = models.BooleanField(default=False)
     profile_pic = models.BooleanField(default=False)
     is_public = models.BooleanField(default=False)
@@ -158,28 +144,24 @@ class AmbassadorFile(models.Model):
         FileType,
         on_delete=models.RESTRICT,
         null=True,
-        blank=True,
         related_name="ambassadors_files",
     )
     ambassador = models.ForeignKey(
         Ambassador,
         on_delete=models.RESTRICT,
         null=False,
-        blank=False,
         related_name="ambassadors_files",
     )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=False,
-        blank=False,
         related_name="ambassadors_files_created_by",
     )
     updated_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=True,
-        blank=True,
         related_name="ambassadors_files_updated_by",
     )
 
@@ -195,14 +177,12 @@ class AmbassadorTrait(models.Model):
         Ambassador,
         on_delete=models.RESTRICT,
         null=False,
-        blank=False,
         related_name="ambassador_traits",
     )
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=False,
-        blank=False,
         related_name="ambassador_traits",
     )
 
@@ -210,14 +190,12 @@ class AmbassadorTrait(models.Model):
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=False,
-        blank=False,
         related_name="ambassadors_traits_created_by",
     )
     updated_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=True,
-        blank=True,
         related_name="ambassadors_traits_updated_by",
     )
 
@@ -234,7 +212,6 @@ class Skill(models.Model):
         Tenant,
         on_delete=models.RESTRICT,
         null=False,
-        blank=False,
         related_name="skills",
     )
 
@@ -242,14 +219,12 @@ class Skill(models.Model):
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=False,
-        blank=False,
         related_name="skill_created_by",
     )
     updated_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=True,
-        blank=True,
         related_name="skill_updated_by",
     )
 
@@ -265,21 +240,18 @@ class AmbassadorSkill(models.Model):
         Tenant,
         on_delete=models.RESTRICT,
         null=False,
-        blank=False,
         related_name="ambassadors_skills",
     )
     ambassador = models.ForeignKey(
         Ambassador,
         on_delete=models.RESTRICT,
         null=False,
-        blank=False,
         related_name="ambassadors_skills",
     )
     skill = models.ForeignKey(
         Skill,
         on_delete=models.RESTRICT,
         null=False,
-        blank=False,
         related_name="ambassadors_skills",
     )
 
@@ -287,14 +259,12 @@ class AmbassadorSkill(models.Model):
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=False,
-        blank=False,
         related_name="ambassadors_skills_created_by",
     )
     updated_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=True,
-        blank=True,
         related_name="ambassadors_skills_updated_by",
     )
 
@@ -305,20 +275,18 @@ class AmbassadorSkill(models.Model):
 class AmbassadorNote(models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
-    note = models.TextField(blank=False, null=False)
+    note = models.TextField(null=False)
 
     tenant = models.ForeignKey(
         Tenant,
         on_delete=models.RESTRICT,
         null=False,
-        blank=False,
         related_name="ambassadors_notes",
     )
     ambassador = models.ForeignKey(
         Ambassador,
         on_delete=models.RESTRICT,
         null=False,
-        blank=False,
         related_name="ambassadors_notes",
     )
 
@@ -326,14 +294,12 @@ class AmbassadorNote(models.Model):
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=False,
-        blank=False,
         related_name="ambassadors_notes_created_by",
     )
     updated_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=True,
-        blank=True,
         related_name="ambassadors_notes_updated_by",
     )
 
