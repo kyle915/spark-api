@@ -18,7 +18,6 @@ class Location(models.Model):
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=False,
-        blank=False,
         related_name="locations_created_by",
     )
     updated_by = models.ForeignKey(
@@ -46,7 +45,6 @@ class Client(models.Model):
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=False,
-        blank=False,
         related_name="client_created_by",
     )
     updated_by = models.ForeignKey(
@@ -75,7 +73,6 @@ class Distributor(models.Model):
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=False,
-        blank=False,
         related_name="distributor_created_by",
     )
     updated_by = models.ForeignKey(
@@ -105,7 +102,6 @@ class Retailer(models.Model):
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=False,
-        blank=False,
         related_name="retailer_created_by",
     )
     updated_by = models.ForeignKey(
@@ -132,7 +128,6 @@ class ProductType(models.Model):
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=False,
-        blank=False,
         related_name="product_type_created_by",
     )
     updated_by = models.ForeignKey(
@@ -160,7 +155,6 @@ class Product(models.Model):
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=False,
-        blank=False,
         related_name="product_created_by",
     )
     updated_by = models.ForeignKey(
@@ -187,7 +181,6 @@ class RequestType(models.Model):
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=False,
-        blank=False,
         related_name="request_type_created_by",
     )
     updated_by = models.ForeignKey(
@@ -213,35 +206,30 @@ class Request(models.Model):
         Client,
         on_delete=models.RESTRICT,
         null=False,
-        blank=False,
         related_name="requests",
     )
     distributor = models.ForeignKey(
         Distributor,
         on_delete=models.RESTRICT,
         null=False,
-        blank=False,
         related_name="requests",
     )
     retailer = models.ForeignKey(
         Retailer,
         on_delete=models.RESTRICT,
         null=False,
-        blank=False,
         related_name="requests",
     )
     request_type = models.ForeignKey(
         RequestType,
         on_delete=models.RESTRICT,
         null=False,
-        blank=False,
         related_name="requests",
     )
     tenant = models.ForeignKey(
         Tenant,
         on_delete=models.RESTRICT,
         null=False,
-        blank=False,
         related_name="requests",
     )
 
@@ -249,7 +237,6 @@ class Request(models.Model):
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=False,
-        blank=False,
         related_name="request_created_by",
     )
     updated_by = models.ForeignKey(
@@ -273,7 +260,6 @@ class RequestStoreManager(models.Model):
         Request,
         on_delete=models.RESTRICT,
         null=False,
-        blank=False,
         related_name="requests_stores_manager",
     )
     tenant = models.ForeignKey(
@@ -288,7 +274,6 @@ class RequestStoreManager(models.Model):
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=False,
-        blank=False,
         related_name="request_store_manager_created_by",
     )
     updated_by = models.ForeignKey(
@@ -311,14 +296,12 @@ class EventStatus(models.Model):
         Tenant,
         on_delete=models.RESTRICT,
         null=False,
-        blank=False,
         related_name="event_statuses",
     )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=False,
-        blank=False,
         related_name="event_status_created_by",
     )
     updated_by = models.ForeignKey(
@@ -342,7 +325,6 @@ class EventType(models.Model):
         Tenant,
         on_delete=models.RESTRICT,
         null=False,
-        blank=False,
         related_name="event_types",
     )
 
@@ -350,7 +332,6 @@ class EventType(models.Model):
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=False,
-        blank=False,
         related_name="event_types_created_by",
     )
     updated_by = models.ForeignKey(
@@ -374,7 +355,6 @@ class Event(models.Model):
         Tenant,
         on_delete=models.RESTRICT,
         null=False,
-        blank=False,
         related_name="events",
     )
 
@@ -382,7 +362,6 @@ class Event(models.Model):
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=False,
-        blank=False,
         related_name="events_created_by",
     )
     updated_by = models.ForeignKey(
