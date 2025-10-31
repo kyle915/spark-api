@@ -11,10 +11,11 @@ from strawberry_django.permissions import (
     IsAuthenticated,
 )
 from .mutations import EventsAmbassadorsMutation, EventsSparkMutation
+from .queries import EventQueries
 
 
 @strawberry.type
-class EventsQuery:
+class EventsQuery(EventQueries):
     event_types: list[EventType] = strawberry_django.field(
         extensions=[IsAuthenticated()],)
 
