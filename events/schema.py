@@ -11,13 +11,23 @@ from strawberry_django.permissions import (
     IsAuthenticated,
 )
 from .mutations import EventsAmbassadorsMutation, EventsSparkMutation
-from .queries import EventQueries
+from .queries import EventAmbassadorsQueries, EventSparkQueries, EventClientQueries
 
 
 @strawberry.type
-class EventsQuery(EventQueries):
+class EventQueryAmbassadors(EventAmbassadorsQueries):
     event_types: list[EventType] = strawberry_django.field(
         extensions=[IsAuthenticated()],)
+
+
+@strawberry.type
+class EventQuerySpark(EventSparkQueries):
+    pass
+
+
+@strawberry.type
+class EventQueryClient(EventClientQueries):
+    pass
 
 
 @strawberry.type

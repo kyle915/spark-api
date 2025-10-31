@@ -9,47 +9,13 @@ from django.contrib.auth.models import AnonymousUser
 from .types import EventDetailResponse
 from tenants.models import Tenant
 from .models import Event
+from utils.graphql import SparkGraphQLMixin
 
 User = get_user_model()
 
 
-class EventMutationService:
-    async def get_user(self, info: strawberry.Info) -> User:
-        """Get the user for the request.
-
-        Args:
-            info (strawberry.Info): The info object.
-
-        Returns:
-            User: The user for the request.
-        """
-        # request = info.context["request"]
-        # user = getattr(request, "user", None)
-        user = info.context.request.user
-        if not user or not user.is_authenticated or isinstance(user, AnonymousUser):
-            raise GraphQLError(
-                "Authentication required. Please provide a valid Auth token.")
-        return user
-
-    async def get_tenant(
-        self,
-        user: User,
-        tenant_id: int | None = None
-    ) -> Tenant:
-        """Get the tenant for the user.
-
-        Args:
-            info (strawberry.Info): The info object.
-            tenant_id (int | None, optional): The tenant id. Defaults to None.
-
-        Returns:
-            Tenant: The tenant for the user.
-        """
-        tenant = await sync_to_async(user.get_tenant)(tenant_id)
-        if not tenant:
-            raise GraphQLError(
-                f"No active tenant found for user {user.username} with id {tenant_id}.")
-        return tenant
+class EventMutationService(SparkGraphQLMixin):
+    """Service for event mutations."""
 
     async def create_event(
         self,
