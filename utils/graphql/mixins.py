@@ -1,9 +1,11 @@
 import strawberry
+from graphql import GraphQLError
+from asgiref.sync import sync_to_async
+from typing import List
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
-from graphql import GraphQLError
-from asgiref.sync import sync_to_async
+
 from tenants.models import Tenant
 
 User = get_user_model()
@@ -54,8 +56,8 @@ class SparkGraphQLMixin:
         Returns:
             Tenant: The tenant for the user.
         """
-        tenant = await sync_to_async(user.get_tenant)(tenant_id)
-        if not tenant:
+        try:
+            return await sync_to_async(user.get_tenant)(tenant_id)
+        except Exception as e:
             raise GraphQLError(
-                f"No active tenant found for user {user.username} with id {tenant_id}.")
-        return tenant
+                "It looks like you are not a member of this tenant.")

@@ -1,5 +1,6 @@
 import strawberry_django
 import strawberry
+from typing import List
 
 from . import models
 
@@ -9,8 +10,33 @@ class EventType:
     id: strawberry.ID
     uuid: str
     name: str
+    tenant_id: strawberry.ID
     created_at: str
     updated_at: str
+
+
+@strawberry.type
+class EventTypeDetailResponse:
+    success: bool
+    message: str
+    event_type: EventType | None = None
+
+
+@strawberry_django.type(models.EventStatus)
+class EventStatus:
+    id: strawberry.ID
+    uuid: str
+    name: str
+    tenant_id: strawberry.ID
+    created_at: str
+    updated_at: str
+
+
+@strawberry.type
+class EventStatusDetailResponse:
+    success: bool
+    message: str
+    event_status: EventStatus | None = None
 
 
 @strawberry_django.type(models.Event)
@@ -21,6 +47,8 @@ class Event:
     created_at: str
     updated_at: str
     tenant_id: strawberry.ID
+    event_type: EventType | None = None
+    status: EventStatus | None = None
 
 
 @strawberry.type

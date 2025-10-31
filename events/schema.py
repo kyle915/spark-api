@@ -10,7 +10,11 @@ from tenants.models import TenantedUser
 from strawberry_django.permissions import (
     IsAuthenticated,
 )
-from .mutations import EventsAmbassadorsMutation, EventsSparkMutation
+from .mutations import (
+    EventMutations,
+    EventTypeMutations,
+    EventStatusMutations
+)
 from .queries import EventAmbassadorsQueries, EventSparkQueries, EventClientQueries
 
 
@@ -31,10 +35,9 @@ class EventQueryClient(EventClientQueries):
 
 
 @strawberry.type
-class EventsAmbassadorsMutation(EventsAmbassadorsMutation):
-    pass
-
-
-@strawberry.type
-class EventsSparkMutation(EventsSparkMutation):
+class EventsMutations(
+    EventMutations,
+    EventTypeMutations,
+    EventStatusMutations
+):
     pass

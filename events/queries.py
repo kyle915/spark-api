@@ -8,7 +8,7 @@ from django.db.models import QuerySet
 
 from .types import Event
 from .models import Event as EventModel
-from utils.graphql import SparkGraphQLMixin
+from utils.graphql.mixins import SparkGraphQLMixin
 
 
 class EventQueriesService(SparkGraphQLMixin):
