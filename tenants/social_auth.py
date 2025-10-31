@@ -5,6 +5,8 @@ from asgiref.sync import sync_to_async
 from .models import Role, TenantedUser, Tenant
 from utils.utils import ROLE_ID
 
+from gqlauth.jwt.types_ import TokenType
+
 User = get_user_model()
 
 
@@ -123,7 +125,8 @@ class BaseSocialAuthMutations:
             )
 
             # Generate JWT tokens using gqlauth
-            token = await sync_to_async(get_token)(user, "authentication")
+            # token = await sync_to_async(get_token)(user, "authentication")
+            token = TokenType.from_user(user)
             refresh_token = await sync_to_async(get_token)(user, "refresh")
 
             message = "Google authentication successful"
@@ -133,7 +136,7 @@ class BaseSocialAuthMutations:
             return SocialAuthResponse(
                 success=True,
                 message=message,
-                token=token,
+                token=token.token,
                 refresh_token=refresh_token,
             )
 

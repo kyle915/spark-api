@@ -5,7 +5,7 @@ from events.schema import EventsQuery
 from tenants.schema import QueryClients, MutationClients
 from utils.utils import BlockIntrospectionForAnonymous
 
-#Clients Schemas
+# Clients Schemas
 QueryClients = merge_types("Query", (EventsQuery, QueryClients))
 MutationClients = merge_types("Mutation", (MutationClients,))
 
