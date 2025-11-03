@@ -20,8 +20,7 @@ from .queries import EventAmbassadorsQueries, EventSparkQueries, EventClientQuer
 
 @strawberry.type
 class EventQueryAmbassadors(EventAmbassadorsQueries):
-    event_types: list[EventType] = strawberry_django.field(
-        extensions=[IsAuthenticated()],)
+    pass
 
 
 @strawberry.type
