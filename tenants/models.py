@@ -53,7 +53,8 @@ class Role(models.Model):
 class User(AbstractUser):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
-    role = models.ForeignKey(Role, on_delete=models.RESTRICT, related_name="users")
+    role = models.ForeignKey(
+        Role, on_delete=models.RESTRICT, related_name="users")
 
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -74,6 +75,37 @@ class User(AbstractUser):
 
     def __str__(self):
         return self.username
+
+    @property
+    def tenant(self) -> Tenant:
+        """Get the tenant for the user.
+
+        @TODO: Maybe we should check performance of this property.
+
+        Returns:
+            Tenant: The tenant for the user.
+        """
+        return TenantedUser.objects.get(
+            user=self, is_active=True
+        ).tenant
+
+    def get_tenant(self, tenant_id: int | None = None) -> Tenant | None:
+        """Get the tenant for the user.
+
+        @TODO: Maybe we should check performance of this method. 
+        Maybe we should cache the tenant for the user for the given tenant_id.
+
+        Returns:
+            Tenant: The tenant for the user.
+        """
+        try:
+            if tenant_id:
+                return TenantedUser.objects.get(
+                    user=self, tenant_id=tenant_id
+                ).tenant
+            return self.tenant
+        except Tenant.DoesNotExist:
+            return None
 
 
 class TenantedUser(models.Model):

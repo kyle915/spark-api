@@ -357,6 +357,22 @@ class Event(models.Model):
         null=False,
         related_name="events",
     )
+    # Leaving these fields nullable, we'll validate them in the schema
+    # to avoid conflicts with the migrations
+    event_type = models.ForeignKey(
+        EventType,
+        on_delete=models.RESTRICT,
+        null=True,
+        blank=True,
+        related_name="events",
+    )
+    status = models.ForeignKey(
+        EventStatus,
+        on_delete=models.RESTRICT,
+        null=True,
+        blank=True,
+        related_name="events",
+    )
 
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
