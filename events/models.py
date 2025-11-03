@@ -1,6 +1,7 @@
 from uuid6 import uuid7
 from django.db import models
 from tenants.models import Tenant
+from django.contrib.postgres.fields import ArrayField
 from django.conf import settings
 
 
@@ -24,7 +25,6 @@ class Location(models.Model):
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=True,
-        blank=True,
         related_name="locations_updated_by",
     )
 
@@ -51,7 +51,6 @@ class Client(models.Model):
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=True,
-        blank=True,
         related_name="client_updated_by",
     )
 
@@ -79,7 +78,6 @@ class Distributor(models.Model):
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=True,
-        blank=True,
         related_name="distributor_updated_by",
     )
 
@@ -108,7 +106,6 @@ class Retailer(models.Model):
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=True,
-        blank=True,
         related_name="retailer_updated_by",
     )
 
@@ -134,7 +131,6 @@ class ProductType(models.Model):
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=True,
-        blank=True,
         related_name="product_type_updated_by",
     )
 
@@ -161,7 +157,6 @@ class Product(models.Model):
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=True,
-        blank=True,
         related_name="product_updated_by",
     )
 
@@ -187,7 +182,6 @@ class RequestType(models.Model):
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=True,
-        blank=True,
         related_name="request_type_updated_by",
     )
 
@@ -201,6 +195,11 @@ class Request(models.Model):
     name = models.CharField(max_length=50)
     date = models.DateField()
     address = models.CharField(max_length=100)
+    coordinates = ArrayField(
+        models.FloatField(),
+        size=2,
+        default=list,
+    )
 
     client = models.ForeignKey(
         Client,
@@ -243,8 +242,42 @@ class Request(models.Model):
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=True,
-        blank=True,
         related_name="request_updated_by",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
+class RequestDetail(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    is_table_needed = models.BooleanField(default=False)
+    table_size = models.IntegerField(null=True, blank=True)
+
+    request = models.ForeignKey(
+        Request,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="request_details",
+    )
+    tenant = models.ForeignKey(
+        Tenant,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="request_details",
+    )
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="request_detail_created_by",
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="request_detail_updated_by",
     )
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
     updated_at = models.DateTimeField(auto_now=True)
@@ -266,7 +299,6 @@ class RequestStoreManager(models.Model):
         Tenant,
         on_delete=models.RESTRICT,
         null=True,
-        blank=True,
         related_name="requests_stores_managers",
     )
 
@@ -280,7 +312,6 @@ class RequestStoreManager(models.Model):
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=True,
-        blank=True,
         related_name="request_store_manager_updated_by",
     )
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
@@ -308,7 +339,6 @@ class EventStatus(models.Model):
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=True,
-        blank=True,
         related_name="event_status_updated_by",
     )
 
@@ -338,7 +368,6 @@ class EventType(models.Model):
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=True,
-        blank=True,
         related_name="event_types_updated_by",
     )
 
@@ -368,7 +397,6 @@ class Event(models.Model):
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=True,
-        blank=True,
         related_name="events_updated_by",
     )
 

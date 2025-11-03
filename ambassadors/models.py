@@ -2,7 +2,8 @@ from uuid6 import uuid7
 from django.db import models
 from django.conf import settings
 from tenants.models import Tenant
-from events.models import Location, Client, Event
+from events.models import Client, Event, Location
+from django.contrib.postgres.fields import ArrayField
 
 
 class FileType(models.Model):
@@ -28,44 +29,17 @@ class FileType(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
 
-class AmbassadorReview(models.Model):
-    id = models.BigAutoField(primary_key=True)
-    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
-    client = models.ForeignKey(
-        Client,
-        on_delete=models.RESTRICT,
-        null=False,
-        related_name="ambassadors_reviews",
-    )
-
-    created_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.RESTRICT,
-        null=False,
-        related_name="ambassador_created_by",
-    )
-    updated_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.RESTRICT,
-        null=True,
-        related_name="ambassador_updated_by",
-    )
-
-    created_at = models.DateTimeField(auto_now_add=True, editable=False)
-    updated_at = models.DateTimeField(auto_now=True)
-
-
 class Ambassador(models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     rating = models.IntegerField(default=0)
-
-    location = models.ForeignKey(
-        Location,
-        on_delete=models.RESTRICT,
-        null=False,
-        related_name="ambassadors",
+    address = models.CharField(max_length=100, null=True)
+    coordinates = ArrayField(
+        models.FloatField(),
+        size=2,
+        default=list,
     )
+
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
@@ -84,6 +58,50 @@ class Ambassador(models.Model):
         on_delete=models.RESTRICT,
         null=True,
         related_name="ambassadors_updated_by",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
+class AmbassadorReview(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    review = models.TextField(null=True)
+    score = models.IntegerField(null=True)
+
+    ambassador = models.ForeignKey(
+        Ambassador,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="ambassadors_reviews",
+    )
+
+    client = models.ForeignKey(
+        Client,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="ambassadors_reviews",
+    )
+
+    tenant = models.ForeignKey(
+        Tenant,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="ambassadors_reviews",
+    )
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="ambassadors_reviews_created_by",
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="ambassadors_reviews_updated_by",
     )
 
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
@@ -301,6 +319,226 @@ class AmbassadorNote(models.Model):
         on_delete=models.RESTRICT,
         null=True,
         related_name="ambassadors_notes_updated_by",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
+class AmbassadorWorkHistory(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+
+    ambassador = models.ForeignKey(
+        Ambassador,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="ambassador_work_histories",
+    )
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="ambassador_work_histories_user",
+    )
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="ambassador_work_histories_created_by",
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="ambandassador_work_histories_updated_by",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
+class AmbassadorEducation(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+
+    ambassador = models.ForeignKey(
+        Ambassador,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="ambassador_educations",
+    )
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="ambasador_educations_user",
+    )
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="ambassador_educations_created_by",
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="ambasador_educations_updated_by",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
+class People(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    name = models.CharField(max_length=100, null=False)
+
+    tenant = models.ForeignKey(
+        Tenant,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="people",
+    )
+    ambassador = models.ForeignKey(
+        Ambassador,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="people",
+    )
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="people_created_by",
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="people_updated_by",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
+class EventJob(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    name = models.CharField(max_length=50)
+    description = models.TextField(null=True)
+    rate = models.DecimalField(max_digits=14, decimal_places=4)
+    code = models.CharField(max_length=100)
+    address = models.CharField(max_length=255)
+    start_date = models.DateField(null=True, blank=True)
+    end_date = models.DateField(null=True, blank=True)
+
+    location = models.ForeignKey(
+        Location, on_delete=models.RESTRICT, null=False, related_name="event_jobs"
+    )
+
+    tenant = models.ForeignKey(
+        Tenant,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="event_jobs",
+    )
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="event_jobs_created_by",
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="event_jobs_updated_by",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
+class PeopleJob(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    confirmed = models.BooleanField(default=False)
+
+    people = models.ForeignKey(
+        People,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="people_jobs",
+    )
+    event_job = models.ForeignKey(
+        EventJob, on_delete=models.RESTRICT, null=False, related_name="people_jobs"
+    )
+
+    tenant = models.ForeignKey(
+        Tenant,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="people_jobs",
+    )
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="people_jobs_created_by",
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="people_jobs_updated_by",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
+class Review(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    description = models.TextField(null=True)
+    rate = models.DecimalField(max_digits=14, decimal_places=4)
+
+    people = models.ForeignKey(
+        People,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="reviews",
+    )
+
+    tenant = models.ForeignKey(
+        Tenant,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="reviews",
+    )
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="reviews_created_by",
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="reviews_updated_by",
     )
 
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
