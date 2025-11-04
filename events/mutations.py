@@ -303,3 +303,54 @@ class LocationMutations:
                 success=False,
                 message=str(e),
             )
+
+
+class ClientMutationService(BaseMutationService):
+    """Service for client mutations."""
+
+    def get_model(self) -> Model:
+        """Get the model for the service."""
+        return models.Client
+
+
+@strawberry.type
+class ClientMutations:
+    @strawberry.mutation(extensions=[IsAuthenticated()])
+    async def create_client(
+        self,
+        info: strawberry.Info,
+        input: inputs.CreateClientInput,
+    ) -> types.ClientDetailResponse:
+        """Create a new client."""
+        try:
+            client: models.Client = await ClientMutationService.process_create_or_update(input=input, info=info)
+            return types.ClientDetailResponse(
+                success=True,
+                message="Client created successfully.",
+                client=client,
+            )
+        except GraphQLError as e:
+            return types.ClientDetailResponse(
+                success=False,
+                message=str(e),
+            )
+
+    @strawberry.mutation(extensions=[IsAuthenticated()])
+    async def update_client(
+        self,
+        info: strawberry.Info,
+        input: inputs.UpdateClientInput,
+    ) -> types.ClientDetailResponse:
+        """Update an existing client."""
+        try:
+            client: models.Client = await ClientMutationService.process_create_or_update(input=input, info=info)
+            return types.ClientDetailResponse(
+                success=True,
+                message="Client updated successfully.",
+                client=client,
+            )
+        except GraphQLError as e:
+            return types.ClientDetailResponse(
+                success=False,
+                message=str(e),
+            )

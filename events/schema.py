@@ -14,7 +14,8 @@ from .mutations import (
     EventMutations,
     EventTypeMutations,
     EventStatusMutations,
-    LocationMutations
+    LocationMutations,
+    ClientMutations
 )
 from .queries import EventAmbassadorsQueries, EventSparkQueries, EventClientQueries
 
@@ -39,6 +40,7 @@ class EventsMutations(
     EventMutations,
     EventTypeMutations,
     EventStatusMutations,
-    LocationMutations
+    LocationMutations,
+    ClientMutations
 ):
     pass

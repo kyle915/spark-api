@@ -75,3 +75,21 @@ class LocationDetailResponse:
     success: bool
     message: str
     location: Location | None = None
+
+
+@strawberry_django.type(models.Client)
+class Client:
+    id: strawberry.ID
+    uuid: str
+    name: str
+    email: str
+    tenant_id: strawberry.ID
+    created_at: str
+    updated_at: str
+
+
+@strawberry.type
+class ClientDetailResponse:
+    success: bool
+    message: str
+    client: Client | None = None
