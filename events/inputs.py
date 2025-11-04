@@ -4,10 +4,12 @@ from typing import List
 from utils.graphql.inputs import SparkGraphQLInput
 
 
+@strawberry.input
 class BaseTenantInput(SparkGraphQLInput):
     tenant_id: strawberry.ID | None = None
 
 
+@strawberry.input
 class BaseNameableInput(BaseTenantInput):
     name: str
 
@@ -55,7 +57,7 @@ class UpdateLocationInput(CreateLocationInput):
 
 
 @strawberry.input
-class CreateClientInput(BaseNameableEmailInput):
+class CreateClientInput(BaseNameableInput):
     email: str
 
 
@@ -65,7 +67,7 @@ class UpdateClientInput(CreateClientInput):
 
 
 @strawberry.input
-class CreateDistributorInput(BaseNameableEmailInput):
+class CreateDistributorInput(BaseNameableInput):
     email: str
     location_id: strawberry.ID
 

@@ -8,16 +8,9 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.db.models import Model
 
-from .types import EventDetailResponse, EventTypeDetailResponse, EventStatusDetailResponse
-from .models import Event, EventType, EventStatus
-from .inputs import (
-    CreateEventInput,
-    CreateEventTypeInput,
-    CreateEventStatusInput,
-    UpdateEventInput,
-    UpdateEventTypeInput,
-    UpdateEventStatusInput,
-)
+from events import types
+from events import models
+from events import inputs
 from utils.graphql.inputs import SparkGraphQLInput
 from utils.graphql.types import SparkGraphQLErrorResponse
 from utils.graphql.mixins import SparkGraphQLMixin
@@ -101,7 +94,7 @@ class EventMutationService(BaseMutationService):
 
     def get_model(self) -> Model:
         """Get the model for the service."""
-        return Event
+        return models.Event
 
 
 @strawberry.type
@@ -111,17 +104,17 @@ class EventMutations:
     async def create_event(
         self,
         info: strawberry.Info,
-        input: CreateEventInput,
-    ) -> EventDetailResponse:
+        input: inputs.CreateEventInput,
+    ) -> types.EventDetailResponse:
         try:
-            event: Event = await EventMutationService.process_create_or_update(input=input, info=info)
-            return EventDetailResponse(
+            event: models.Event = await EventMutationService.process_create_or_update(input=input, info=info)
+            return types.EventDetailResponse(
                 success=True,
                 message="Event created successfully.",
                 event=event,
             )
         except GraphQLError as e:
-            return EventDetailResponse(
+            return types.EventDetailResponse(
                 success=False,
                 message=str(e),
             )
@@ -130,17 +123,17 @@ class EventMutations:
     async def update_event(
         self,
         info: strawberry.Info,
-        input: UpdateEventInput,
-    ) -> EventDetailResponse:
+        input: inputs.UpdateEventInput,
+    ) -> types.EventDetailResponse:
         try:
-            event: Event = await EventMutationService.process_create_or_update(input=input, info=info)
-            return EventDetailResponse(
+            event: models.Event = await EventMutationService.process_create_or_update(input=input, info=info)
+            return types.EventDetailResponse(
                 success=True,
                 message="Event updated successfully.",
                 event=event,
             )
         except GraphQLError as e:
-            return EventDetailResponse(
+            return types.EventDetailResponse(
                 success=False,
                 message=str(e),
             )
@@ -151,7 +144,7 @@ class EventTypeMutationService(BaseMutationService):
 
     def get_model(self) -> Model:
         """Get the model for the service."""
-        return EventType
+        return models.EventType
 
 
 @strawberry.type
@@ -160,21 +153,21 @@ class EventTypeMutations:
     async def create_event_type(
         self,
         info: strawberry.Info,
-        input: CreateEventTypeInput,
-    ) -> EventTypeDetailResponse:
+        input: inputs.CreateEventTypeInput,
+    ) -> types.EventTypeDetailResponse:
         """Create a new event type."""
         try:
-            event_type: EventType = await EventTypeMutationService.process_create_or_update(
+            event_type: models.EventType = await EventTypeMutationService.process_create_or_update(
                 input=input,
                 info=info,
             )
-            return EventTypeDetailResponse(
+            return types.EventTypeDetailResponse(
                 success=True,
                 message="Event type created successfully.",
                 event_type=event_type,
             )
         except GraphQLError as e:
-            return EventTypeDetailResponse(
+            return types.EventTypeDetailResponse(
                 success=False,
                 message=str(e)
             )
@@ -183,22 +176,22 @@ class EventTypeMutations:
     async def update_event_type(
         self,
         info: strawberry.Info,
-        input: UpdateEventTypeInput,
-    ) -> EventTypeDetailResponse:
+        input: inputs.UpdateEventTypeInput,
+    ) -> types.EventTypeDetailResponse:
         """Update an existing event type."""
         try:
-            event_type: EventType = await EventTypeMutationService.process_create_or_update(
+            event_type: models.EventType = await EventTypeMutationService.process_create_or_update(
                 input=input,
                 info=info,
             )
-            return EventTypeDetailResponse(
+            return types.EventTypeDetailResponse(
                 success=True,
                 message="Event type updated successfully.",
                 event_type=event_type,
             )
 
         except GraphQLError as e:
-            return EventTypeDetailResponse(
+            return types.EventTypeDetailResponse(
                 success=False,
                 message=str(e),
             )
@@ -209,7 +202,7 @@ class EventStatusMutationService(BaseMutationService):
 
     def get_model(self) -> Model:
         """Get the model for the service."""
-        return EventStatus
+        return models.EventStatus
 
 
 @strawberry.type
@@ -218,21 +211,21 @@ class EventStatusMutations:
     async def create_event_status(
         self,
         info: strawberry.Info,
-        input: CreateEventStatusInput,
-    ) -> EventStatusDetailResponse:
+        input: inputs.CreateEventStatusInput,
+    ) -> types.EventStatusDetailResponse:
         """Create a new event status."""
         try:
-            event_status: EventStatus = await EventStatusMutationService.process_create_or_update(
+            event_status: models.EventStatus = await EventStatusMutationService.process_create_or_update(
                 input=input,
                 info=info,
             )
-            return EventStatusDetailResponse(
+            return types.EventStatusDetailResponse(
                 success=True,
                 message="Event status created successfully.",
                 event_status=event_status,
             )
         except GraphQLError as e:
-            return EventStatusDetailResponse(
+            return types.EventStatusDetailResponse(
                 success=False,
                 message=str(e),
             )
@@ -241,21 +234,72 @@ class EventStatusMutations:
     async def update_event_status(
         self,
         info: strawberry.Info,
-        input: UpdateEventStatusInput,
-    ) -> EventStatusDetailResponse:
+        input: inputs.UpdateEventStatusInput,
+    ) -> types.EventStatusDetailResponse:
         """Update an existing event status."""
         try:
-            event_status: EventStatus = await EventStatusMutationService.process_create_or_update(
+            event_status: models.EventStatus = await EventStatusMutationService.process_create_or_update(
                 input=input,
                 info=info,
             )
-            return EventStatusDetailResponse(
+            return types.EventStatusDetailResponse(
                 success=True,
                 message="Event status updated successfully.",
                 event_status=event_status,
             )
         except GraphQLError as e:
-            return EventStatusDetailResponse(
+            return types.EventStatusDetailResponse(
+                success=False,
+                message=str(e),
+            )
+
+
+class LocationMutationService(BaseMutationService):
+    """Service for location mutations."""
+
+    def get_model(self) -> Model:
+        """Get the model for the service."""
+        return models.Location
+
+
+@strawberry.type
+class LocationMutations:
+    @strawberry.mutation(extensions=[IsAuthenticated()])
+    async def create_location(
+        self,
+        info: strawberry.Info,
+        input: inputs.CreateLocationInput,
+    ) -> types.LocationDetailResponse:
+        """Create a new location."""
+        try:
+            location: models.Location = await LocationMutationService.process_create_or_update(input=input, info=info)
+            return types.LocationDetailResponse(
+                success=True,
+                message="Location created successfully.",
+                location=location,
+            )
+        except GraphQLError as e:
+            return types.LocationDetailResponse(
+                success=False,
+                message=str(e),
+            )
+
+    @strawberry.mutation(extensions=[IsAuthenticated()])
+    async def update_location(
+        self,
+        info: strawberry.Info,
+        input: inputs.UpdateLocationInput,
+    ) -> types.LocationDetailResponse:
+        """Update an existing location."""
+        try:
+            location: models.Location = await LocationMutationService.process_create_or_update(input=input, info=info)
+            return types.LocationDetailResponse(
+                success=True,
+                message="Location updated successfully.",
+                location=location,
+            )
+        except GraphQLError as e:
+            return types.LocationDetailResponse(
                 success=False,
                 message=str(e),
             )

@@ -13,7 +13,8 @@ from strawberry_django.permissions import (
 from .mutations import (
     EventMutations,
     EventTypeMutations,
-    EventStatusMutations
+    EventStatusMutations,
+    LocationMutations
 )
 from .queries import EventAmbassadorsQueries, EventSparkQueries, EventClientQueries
 
@@ -37,6 +38,7 @@ class EventQueryClient(EventClientQueries):
 class EventsMutations(
     EventMutations,
     EventTypeMutations,
-    EventStatusMutations
+    EventStatusMutations,
+    LocationMutations
 ):
     pass

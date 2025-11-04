@@ -56,3 +56,22 @@ class EventDetailResponse:
     success: bool
     message: str
     event: Event | None = None
+
+
+@strawberry_django.type(models.Location)
+class Location:
+    id: strawberry.ID
+    uuid: str
+    name: str
+    code: str
+    zip: str
+    tenant_id: strawberry.ID
+    created_at: str
+    updated_at: str
+
+
+@strawberry.type
+class LocationDetailResponse:
+    success: bool
+    message: str
+    location: Location | None = None
