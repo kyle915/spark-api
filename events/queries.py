@@ -179,7 +179,6 @@ class EventSparkQueries:
     ) -> List[Event]:
         """Get all events."""
         service = EventQueriesService()
-        print('executing service.get_records')
         return await service.get_records(limit, offset, q, tenant_id)
 
     @strawberry.field(extensions=[IsAuthenticated()])
