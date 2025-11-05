@@ -115,6 +115,11 @@ class CreateRequestTypeInput(BaseNameableInput):
 
 
 @strawberry.input
+class UpdateRequestTypeInput(CreateRequestTypeInput):
+    id: strawberry.ID
+
+
+@strawberry.input
 class CreateRequestInput(BaseNameableInput):
     date: str
     address: str

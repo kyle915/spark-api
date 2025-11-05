@@ -27,6 +27,7 @@ class BaseMutationService(SparkGraphQLMixin):
     info: strawberry.Info | None = None
     user: User | None = None
     tenant_id: int | None = None
+    is_public: bool = False
 
     @classmethod
     def with_input(cls, input: SparkGraphQLInput) -> 'BaseMutationService':
@@ -53,13 +54,20 @@ class BaseMutationService(SparkGraphQLMixin):
         self.tenant_id = (await self.get_tenant(self.user, self.input.tenant_id)).id
         return self
 
+    def set_is_public(self, is_public: bool) -> 'BaseMutationService':
+        """Set the is public for the service."""
+        self.is_public = is_public
+        return self
+
     def get_model(self) -> Model:
         """Get the model for the service."""
         raise NotImplementedError("Subclasses must implement this method.")
 
     def validations(self):
         """Before save validations."""
-        if self.user.role_id != ROLE_ID.SparkAdmin and self.input.tenant_id:
+        if self.is_public and not self.input.tenant_id:
+            raise GraphQLError("Tenant ID is required.")
+        if not self.is_public and self.user.role_id != ROLE_ID.SparkAdmin and self.input.tenant_id:
             raise GraphQLError("Tenant ID should not be provided.")
 
     async def save(self) -> Model:
@@ -73,10 +81,14 @@ class BaseMutationService(SparkGraphQLMixin):
             self.input, 'id') and self.input.id is not None
         if is_update:
             model = await sync_to_async(model_class.objects.get)(id=self.input.id)
-            setattr(model, 'updated_by', self.user)
+            if self.user:
+                setattr(model, 'updated_by', self.user)
         else:
             model = model_class()
-            setattr(model, 'created_by', self.user)
+            if self.user:
+                setattr(model, 'created_by', self.user)
+            if self.is_public and self.input.tenant_id:
+                self.tenant_id = self.input.tenant_id
 
         # set the parameters
         params: dict[str, Any] = self.input.to_dict(['tenant_id', 'id'])
@@ -565,6 +577,111 @@ class ProductMutations:
             )
         except GraphQLError as e:
             return types.ProductDetailResponse(
+                success=False,
+                message=str(e),
+            )
+
+
+class RequestTypeMutationService(BaseMutationService):
+    """Service for request type mutations."""
+
+    def get_model(self) -> Model:
+        """Get the model for the service."""
+        return models.RequestType
+
+
+@strawberry.type
+class RequestTypeMutations:
+    @strawberry.mutation(extensions=[IsAuthenticated()])
+    async def create_request_type(
+        self,
+        info: strawberry.Info,
+        input: inputs.CreateRequestTypeInput,
+    ) -> types.RequestTypeDetailResponse:
+        """Create a new request type."""
+        try:
+            request_type: models.RequestType = await RequestTypeMutationService.process_create_or_update(input=input, info=info)
+            return types.RequestTypeDetailResponse(
+                success=True,
+                message="Request type created successfully.",
+                request_type=request_type,
+            )
+        except GraphQLError as e:
+            return types.RequestTypeDetailResponse(
+                success=False,
+                message=str(e),
+            )
+
+    @strawberry.mutation(extensions=[IsAuthenticated()])
+    async def update_request_type(
+        self,
+        info: strawberry.Info,
+        input: inputs.UpdateRequestTypeInput,
+    ) -> types.RequestTypeDetailResponse:
+        """Update an existing request type."""
+        try:
+            request_type: models.RequestType = await RequestTypeMutationService.process_create_or_update(input=input, info=info)
+            return types.RequestTypeDetailResponse(
+                success=True,
+                message="Request type updated successfully.",
+                request_type=request_type,
+            )
+        except GraphQLError as e:
+            return types.RequestTypeDetailResponse(
+                success=False,
+                message=str(e),
+            )
+
+
+class RequestMutationService(BaseMutationService):
+    """Service for request mutations."""
+
+    def get_model(self) -> Model:
+        """Get the model for the service."""
+        return models.Request
+
+
+@strawberry.type
+class RequestMutations:
+    @strawberry.mutation
+    async def create_request(
+        self,
+        info: strawberry.Info,
+        input: inputs.CreateRequestInput,
+    ) -> types.RequestDetailResponse:
+        """Create a new request."""
+        try:
+            service: RequestDetailResponse = RequestMutationService.with_input(
+                input=input)
+            service.set_is_public(True)
+            request: models.Request = await service.save()
+            return types.RequestDetailResponse(
+                success=True,
+                message="Request created successfully.",
+                request=request,
+            )
+        except GraphQLError as e:
+            return types.RequestDetailResponse(
+                success=False,
+                message=str(e),
+            )
+
+    @strawberry.mutation
+    async def update_request(
+        self,
+        info: strawberry.Info,
+        input: inputs.UpdateRequestInput,
+    ) -> types.RequestDetailResponse:
+        """Update an existing request."""
+        try:
+            request: models.Request = await RequestMutationService.process_create_or_update(input=input, info=info)
+            return types.RequestDetailResponse(
+                success=True,
+                message="Request updated successfully.",
+                request=request,
+            )
+        except GraphQLError as e:
+            return types.RequestDetailResponse(
                 success=False,
                 message=str(e),
             )

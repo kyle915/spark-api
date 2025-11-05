@@ -167,3 +167,44 @@ class ProductDetailResponse:
     success: bool
     message: str
     product: Product | None = None
+
+
+@strawberry_django.type(models.RequestType)
+class RequestType:
+    id: strawberry.ID
+    uuid: str
+    name: str
+    tenant_id: strawberry.ID
+    created_at: str
+    updated_at: str
+
+
+@strawberry.type
+class RequestTypeDetailResponse:
+    success: bool
+    message: str
+    request_type: RequestType | None = None
+
+
+@strawberry_django.type(models.Request)
+class Request:
+    id: strawberry.ID
+    uuid: str
+    name: str
+    date: str
+    address: str
+    coordinates: List[float]
+    client: Client | None = None
+    distributor: Distributor | None = None
+    retailer: Retailer | None = None
+    request_type: RequestType | None = None
+    tenant_id: strawberry.ID
+    created_at: str
+    updated_at: str
+
+
+@strawberry.type
+class RequestDetailResponse:
+    success: bool
+    message: str
+    request: Request | None = None

@@ -235,7 +235,8 @@ class Request(models.Model):
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
-        null=False,
+        null=True,
+        blank=True,
         related_name="request_created_by",
     )
     updated_by = models.ForeignKey(
