@@ -149,3 +149,21 @@ class ProductTypeDetailResponse:
     success: bool
     message: str
     product_type: ProductType | None = None
+
+
+@strawberry_django.type(models.Product)
+class Product:
+    id: strawberry.ID
+    uuid: str
+    name: str
+    product_type: ProductType | None = None
+    tenant_id: strawberry.ID
+    created_at: str
+    updated_at: str
+
+
+@strawberry.type
+class ProductDetailResponse:
+    success: bool
+    message: str
+    product: Product | None = None

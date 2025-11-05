@@ -517,3 +517,54 @@ class ProductTypeMutations:
                 success=False,
                 message=str(e),
             )
+
+
+class ProductMutationService(BaseMutationService):
+    """Service for product mutations."""
+
+    def get_model(self) -> Model:
+        """Get the model for the service."""
+        return models.Product
+
+
+@strawberry.type
+class ProductMutations:
+    @strawberry.mutation(extensions=[IsAuthenticated()])
+    async def create_product(
+        self,
+        info: strawberry.Info,
+        input: inputs.CreateProductInput,
+    ) -> types.ProductDetailResponse:
+        """Create a new product."""
+        try:
+            product: models.Product = await ProductMutationService.process_create_or_update(input=input, info=info)
+            return types.ProductDetailResponse(
+                success=True,
+                message="Product created successfully.",
+                product=product,
+            )
+        except GraphQLError as e:
+            return types.ProductDetailResponse(
+                success=False,
+                message=str(e),
+            )
+
+    @strawberry.mutation(extensions=[IsAuthenticated()])
+    async def update_product(
+        self,
+        info: strawberry.Info,
+        input: inputs.UpdateProductInput,
+    ) -> types.ProductDetailResponse:
+        """Update an existing product."""
+        try:
+            product: models.Product = await ProductMutationService.process_create_or_update(input=input, info=info)
+            return types.ProductDetailResponse(
+                success=True,
+                message="Product updated successfully.",
+                product=product,
+            )
+        except GraphQLError as e:
+            return types.ProductDetailResponse(
+                success=False,
+                message=str(e),
+            )
