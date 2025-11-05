@@ -354,3 +354,54 @@ class ClientMutations:
                 success=False,
                 message=str(e),
             )
+
+
+class DistributorMutationService(BaseMutationService):
+    """Service for distributor mutations."""
+
+    def get_model(self) -> Model:
+        """Get the model for the service."""
+        return models.Distributor
+
+
+@strawberry.type
+class DistributorMutations:
+    @strawberry.mutation(extensions=[IsAuthenticated()])
+    async def create_distributor(
+        self,
+        info: strawberry.Info,
+        input: inputs.CreateDistributorInput,
+    ) -> types.DistributorDetailResponse:
+        """Create a new distributor."""
+        try:
+            distributor: models.Distributor = await DistributorMutationService.process_create_or_update(input=input, info=info)
+            return types.DistributorDetailResponse(
+                success=True,
+                message="Distributor created successfully.",
+                distributor=distributor,
+            )
+        except GraphQLError as e:
+            return types.DistributorDetailResponse(
+                success=False,
+                message=str(e),
+            )
+
+    @strawberry.mutation(extensions=[IsAuthenticated()])
+    async def update_distributor(
+        self,
+        info: strawberry.Info,
+        input: inputs.UpdateDistributorInput,
+    ) -> types.DistributorDetailResponse:
+        """Update an existing distributor."""
+        try:
+            distributor: models.Distributor = await DistributorMutationService.process_create_or_update(input=input, info=info)
+            return types.DistributorDetailResponse(
+                success=True,
+                message="Distributor updated successfully.",
+                distributor=distributor,
+            )
+        except GraphQLError as e:
+            return types.DistributorDetailResponse(
+                success=False,
+                message=str(e),
+            )

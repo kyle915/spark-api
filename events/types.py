@@ -93,3 +93,22 @@ class ClientDetailResponse:
     success: bool
     message: str
     client: Client | None = None
+
+
+@strawberry_django.type(models.Distributor)
+class Distributor:
+    id: strawberry.ID
+    uuid: str
+    name: str
+    email: str
+    tenant_id: strawberry.ID
+    location: Location | None = None
+    created_at: str
+    updated_at: str
+
+
+@strawberry.type
+class DistributorDetailResponse:
+    success: bool
+    message: str
+    distributor: Distributor | None = None
