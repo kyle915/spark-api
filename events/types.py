@@ -112,3 +112,23 @@ class DistributorDetailResponse:
     success: bool
     message: str
     distributor: Distributor | None = None
+
+
+@strawberry_django.type(models.Retailer)
+class Retailer:
+    id: strawberry.ID
+    uuid: str
+    name: str
+    address: str
+    store_contact: str
+    tenant_id: strawberry.ID
+    location: Location | None = None
+    created_at: str
+    updated_at: str
+
+
+@strawberry.type
+class RetailerDetailResponse:
+    success: bool
+    message: str
+    retailer: Retailer | None = None

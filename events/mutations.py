@@ -366,14 +366,15 @@ class DistributorMutationService(BaseMutationService):
 
 @strawberry.type
 class DistributorMutations:
+
     @strawberry.mutation(extensions=[IsAuthenticated()])
     async def create_distributor(
         self,
         info: strawberry.Info,
         input: inputs.CreateDistributorInput,
     ) -> types.DistributorDetailResponse:
-        """Create a new distributor."""
         try:
+            """Create a new distributor."""
             distributor: models.Distributor = await DistributorMutationService.process_create_or_update(input=input, info=info)
             return types.DistributorDetailResponse(
                 success=True,
@@ -394,7 +395,10 @@ class DistributorMutations:
     ) -> types.DistributorDetailResponse:
         """Update an existing distributor."""
         try:
-            distributor: models.Distributor = await DistributorMutationService.process_create_or_update(input=input, info=info)
+            distributor: models.Distributor = await DistributorMutationService.process_create_or_update(
+                input=input,
+                info=info,
+            )
             return types.DistributorDetailResponse(
                 success=True,
                 message="Distributor updated successfully.",
@@ -402,6 +406,63 @@ class DistributorMutations:
             )
         except GraphQLError as e:
             return types.DistributorDetailResponse(
+                success=False,
+                message=str(e),
+            )
+
+
+class RetailerMutationService(BaseMutationService):
+    """Service for retailer mutations."""
+
+    def get_model(self) -> Model:
+        """Get the model for the service."""
+        return models.Retailer
+
+
+@strawberry.type
+class RetailerMutations:
+    @strawberry.mutation(extensions=[IsAuthenticated()])
+    async def create_retailer(
+        self,
+        info: strawberry.Info,
+        input: inputs.CreateRetailerInput,
+    ) -> types.RetailerDetailResponse:
+        """Create a new retailer."""
+        try:
+            retailer: models.Retailer = await RetailerMutationService.process_create_or_update(
+                input=input,
+                info=info,
+            )
+            return types.RetailerDetailResponse(
+                success=True,
+                message="Retailer created successfully.",
+                retailer=retailer,
+            )
+        except GraphQLError as e:
+            return types.RetailerDetailResponse(
+                success=False,
+                message=str(e),
+            )
+
+    @strawberry.mutation(extensions=[IsAuthenticated()])
+    async def update_retailer(
+        self,
+        info: strawberry.Info,
+        input: inputs.UpdateRetailerInput,
+    ) -> types.RetailerDetailResponse:
+        """Update an existing retailer."""
+        try:
+            retailer: models.Retailer = await RetailerMutationService.process_create_or_update(
+                input=input,
+                info=info,
+            )
+            return types.RetailerDetailResponse(
+                success=True,
+                message="Retailer updated successfully.",
+                retailer=retailer,
+            )
+        except GraphQLError as e:
+            return types.RetailerDetailResponse(
                 success=False,
                 message=str(e),
             )
