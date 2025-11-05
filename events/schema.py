@@ -17,7 +17,8 @@ from .mutations import (
     LocationMutations,
     ClientMutations,
     DistributorMutations,
-    RetailerMutations
+    RetailerMutations,
+    ProductTypeMutations
 )
 from .queries import EventAmbassadorsQueries, EventSparkQueries, EventClientQueries
 
@@ -45,6 +46,7 @@ class EventsMutations(
     LocationMutations,
     ClientMutations,
     DistributorMutations,
-    RetailerMutations
+    RetailerMutations,
+    ProductTypeMutations
 ):
     pass

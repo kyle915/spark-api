@@ -132,3 +132,20 @@ class RetailerDetailResponse:
     success: bool
     message: str
     retailer: Retailer | None = None
+
+
+@strawberry_django.type(models.ProductType)
+class ProductType:
+    id: strawberry.ID
+    uuid: str
+    name: str
+    tenant_id: strawberry.ID
+    created_at: str
+    updated_at: str
+
+
+@strawberry.type
+class ProductTypeDetailResponse:
+    success: bool
+    message: str
+    product_type: ProductType | None = None
