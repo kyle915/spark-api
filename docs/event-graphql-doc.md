@@ -27,11 +27,13 @@ The API provides three different GraphQL endpoints based on user roles:
 
 ## Authentication
 
-All endpoints require authentication. You must include a JWT token in the Authorization header:
+Most endpoints require authentication. You must include a JWT token in the Authorization header:
 
 ```
 Authorization: Bearer <your_jwt_token>
 ```
+
+**Note**: The `createRequest` mutation is **public** and does not require authentication. All other mutations and queries require authentication.
 
 To obtain a token, use the `tokenAuth` mutation:
 
@@ -595,6 +597,881 @@ mutation {
 
 ---
 
+### 7. Create Location
+
+Create a new location.
+
+**Available for**: Ambassadors, Spark Admin, Clients
+
+**GraphQL Mutation:**
+```graphql
+mutation {
+  createLocation(input: {
+    name: "New York"
+    code: "NY"
+    zip: "10001"
+    tenantId: "1"
+  }) {
+    success
+    message
+    location {
+      id
+      uuid
+      name
+      code
+      zip
+      tenantId
+      createdAt
+      updatedAt
+    }
+  }
+}
+```
+
+**Input Fields:**
+- `name` (string, required): Location name
+- `code` (string, required): Location code
+- `zip` (string, required): ZIP/postal code
+- `tenantId` (ID, optional): Tenant ID (only Spark Admin can provide this)
+
+**Response:**
+```json
+{
+  "data": {
+    "createLocation": {
+      "success": true,
+      "message": "Location created successfully.",
+      "location": {
+        "id": "1",
+        "uuid": "01234567-89ab-cdef-0123-456789abcdef",
+        "name": "New York",
+        "code": "NY",
+        "zip": "10001",
+        "tenantId": "1",
+        "createdAt": "2025-01-15T10:00:00Z",
+        "updatedAt": "2025-01-15T10:00:00Z"
+      }
+    }
+  }
+}
+```
+
+---
+
+### 8. Update Location
+
+Update an existing location.
+
+**Available for**: Ambassadors, Spark Admin, Clients
+
+**GraphQL Mutation:**
+```graphql
+mutation {
+  updateLocation(input: {
+    id: "1"
+    name: "Updated Location Name"
+    code: "NYC"
+    zip: "10002"
+    tenantId: "1"
+  }) {
+    success
+    message
+    location {
+      id
+      uuid
+      name
+      code
+      zip
+      updatedAt
+    }
+  }
+}
+```
+
+**Input Fields:**
+- `id` (ID, required): The ID of the location to update
+- `name` (string, required): Updated location name
+- `code` (string, required): Updated location code
+- `zip` (string, required): Updated ZIP/postal code
+- `tenantId` (ID, optional): Tenant ID (only Spark Admin can provide this)
+
+---
+
+### 9. Create Client
+
+Create a new client.
+
+**Available for**: Ambassadors, Spark Admin, Clients
+
+**GraphQL Mutation:**
+```graphql
+mutation {
+  createClient(input: {
+    name: "Acme Corporation"
+    email: "contact@acme.com"
+    tenantId: "1"
+  }) {
+    success
+    message
+    client {
+      id
+      uuid
+      name
+      email
+      tenantId
+      createdAt
+      updatedAt
+    }
+  }
+}
+```
+
+**Input Fields:**
+- `name` (string, required): Client name
+- `email` (string, required): Client email address
+- `tenantId` (ID, optional): Tenant ID (only Spark Admin can provide this)
+
+**Response:**
+```json
+{
+  "data": {
+    "createClient": {
+      "success": true,
+      "message": "Client created successfully.",
+      "client": {
+        "id": "1",
+        "uuid": "01234567-89ab-cdef-0123-456789abcdef",
+        "name": "Acme Corporation",
+        "email": "contact@acme.com",
+        "tenantId": "1",
+        "createdAt": "2025-01-15T10:00:00Z",
+        "updatedAt": "2025-01-15T10:00:00Z"
+      }
+    }
+  }
+}
+```
+
+---
+
+### 10. Update Client
+
+Update an existing client.
+
+**Available for**: Ambassadors, Spark Admin, Clients
+
+**GraphQL Mutation:**
+```graphql
+mutation {
+  updateClient(input: {
+    id: "1"
+    name: "Updated Client Name"
+    email: "newemail@acme.com"
+    tenantId: "1"
+  }) {
+    success
+    message
+    client {
+      id
+      uuid
+      name
+      email
+      updatedAt
+    }
+  }
+}
+```
+
+**Input Fields:**
+- `id` (ID, required): The ID of the client to update
+- `name` (string, required): Updated client name
+- `email` (string, required): Updated client email address
+- `tenantId` (ID, optional): Tenant ID (only Spark Admin can provide this)
+
+---
+
+### 11. Create Distributor
+
+Create a new distributor.
+
+**Available for**: Ambassadors, Spark Admin, Clients
+
+**GraphQL Mutation:**
+```graphql
+mutation {
+  createDistributor(input: {
+    name: "ABC Distributors"
+    email: "info@abcdist.com"
+    locationId: "1"
+    tenantId: "1"
+  }) {
+    success
+    message
+    distributor {
+      id
+      uuid
+      name
+      email
+      tenantId
+      location {
+        id
+        name
+        code
+      }
+      createdAt
+      updatedAt
+    }
+  }
+}
+```
+
+**Input Fields:**
+- `name` (string, required): Distributor name
+- `email` (string, required): Distributor email address
+- `locationId` (ID, required): ID of the associated location
+- `tenantId` (ID, optional): Tenant ID (only Spark Admin can provide this)
+
+**Response:**
+```json
+{
+  "data": {
+    "createDistributor": {
+      "success": true,
+      "message": "Distributor created successfully.",
+      "distributor": {
+        "id": "1",
+        "uuid": "01234567-89ab-cdef-0123-456789abcdef",
+        "name": "ABC Distributors",
+        "email": "info@abcdist.com",
+        "tenantId": "1",
+        "location": {
+          "id": "1",
+          "name": "New York",
+          "code": "NY"
+        },
+        "createdAt": "2025-01-15T10:00:00Z",
+        "updatedAt": "2025-01-15T10:00:00Z"
+      }
+    }
+  }
+}
+```
+
+---
+
+### 12. Update Distributor
+
+Update an existing distributor.
+
+**Available for**: Ambassadors, Spark Admin, Clients
+
+**GraphQL Mutation:**
+```graphql
+mutation {
+  updateDistributor(input: {
+    id: "1"
+    name: "Updated Distributor Name"
+    email: "newemail@abcdist.com"
+    locationId: "2"
+    tenantId: "1"
+  }) {
+    success
+    message
+    distributor {
+      id
+      uuid
+      name
+      email
+      location {
+        id
+        name
+      }
+      updatedAt
+    }
+  }
+}
+```
+
+**Input Fields:**
+- `id` (ID, required): The ID of the distributor to update
+- `name` (string, required): Updated distributor name
+- `email` (string, required): Updated distributor email address
+- `locationId` (ID, required): Updated location ID
+- `tenantId` (ID, optional): Tenant ID (only Spark Admin can provide this)
+
+---
+
+### 13. Create Retailer
+
+Create a new retailer.
+
+**Available for**: Ambassadors, Spark Admin, Clients
+
+**GraphQL Mutation:**
+```graphql
+mutation {
+  createRetailer(input: {
+    name: "Best Buy Store"
+    address: "123 Main St, New York, NY 10001"
+    storeContact: "555-1234"
+    locationId: "1"
+    tenantId: "1"
+  }) {
+    success
+    message
+    retailer {
+      id
+      uuid
+      name
+      address
+      storeContact
+      tenantId
+      location {
+        id
+        name
+        code
+      }
+      createdAt
+      updatedAt
+    }
+  }
+}
+```
+
+**Input Fields:**
+- `name` (string, required): Retailer name
+- `address` (string, required): Retailer address
+- `storeContact` (string, required): Store contact information
+- `locationId` (ID, required): ID of the associated location
+- `tenantId` (ID, optional): Tenant ID (only Spark Admin can provide this)
+
+**Response:**
+```json
+{
+  "data": {
+    "createRetailer": {
+      "success": true,
+      "message": "Retailer created successfully.",
+      "retailer": {
+        "id": "1",
+        "uuid": "01234567-89ab-cdef-0123-456789abcdef",
+        "name": "Best Buy Store",
+        "address": "123 Main St, New York, NY 10001",
+        "storeContact": "555-1234",
+        "tenantId": "1",
+        "location": {
+          "id": "1",
+          "name": "New York",
+          "code": "NY"
+        },
+        "createdAt": "2025-01-15T10:00:00Z",
+        "updatedAt": "2025-01-15T10:00:00Z"
+      }
+    }
+  }
+}
+```
+
+---
+
+### 14. Update Retailer
+
+Update an existing retailer.
+
+**Available for**: Ambassadors, Spark Admin, Clients
+
+**GraphQL Mutation:**
+```graphql
+mutation {
+  updateRetailer(input: {
+    id: "1"
+    name: "Updated Retailer Name"
+    address: "456 New St, New York, NY 10002"
+    storeContact: "555-5678"
+    locationId: "2"
+    tenantId: "1"
+  }) {
+    success
+    message
+    retailer {
+      id
+      uuid
+      name
+      address
+      storeContact
+      location {
+        id
+        name
+      }
+      updatedAt
+    }
+  }
+}
+```
+
+**Input Fields:**
+- `id` (ID, required): The ID of the retailer to update
+- `name` (string, required): Updated retailer name
+- `address` (string, required): Updated retailer address
+- `storeContact` (string, required): Updated store contact information
+- `locationId` (ID, required): Updated location ID
+- `tenantId` (ID, optional): Tenant ID (only Spark Admin can provide this)
+
+---
+
+### 15. Create Product Type
+
+Create a new product type.
+
+**Available for**: Ambassadors, Spark Admin, Clients
+
+**GraphQL Mutation:**
+```graphql
+mutation {
+  createProductType(input: {
+    name: "Electronics"
+    tenantId: "1"
+  }) {
+    success
+    message
+    productType {
+      id
+      uuid
+      name
+      tenantId
+      createdAt
+      updatedAt
+    }
+  }
+}
+```
+
+**Input Fields:**
+- `name` (string, required): Product type name
+- `tenantId` (ID, optional): Tenant ID (only Spark Admin can provide this)
+
+**Response:**
+```json
+{
+  "data": {
+    "createProductType": {
+      "success": true,
+      "message": "Product type created successfully.",
+      "productType": {
+        "id": "1",
+        "uuid": "01234567-89ab-cdef-0123-456789abcdef",
+        "name": "Electronics",
+        "tenantId": "1",
+        "createdAt": "2025-01-15T10:00:00Z",
+        "updatedAt": "2025-01-15T10:00:00Z"
+      }
+    }
+  }
+}
+```
+
+---
+
+### 16. Update Product Type
+
+Update an existing product type.
+
+**Available for**: Ambassadors, Spark Admin, Clients
+
+**GraphQL Mutation:**
+```graphql
+mutation {
+  updateProductType(input: {
+    id: "1"
+    name: "Updated Product Type Name"
+    tenantId: "1"
+  }) {
+    success
+    message
+    productType {
+      id
+      uuid
+      name
+      updatedAt
+    }
+  }
+}
+```
+
+**Input Fields:**
+- `id` (ID, required): The ID of the product type to update
+- `name` (string, required): Updated product type name
+- `tenantId` (ID, optional): Tenant ID (only Spark Admin can provide this)
+
+---
+
+### 17. Create Product
+
+Create a new product.
+
+**Available for**: Ambassadors, Spark Admin, Clients
+
+**GraphQL Mutation:**
+```graphql
+mutation {
+  createProduct(input: {
+    name: "iPhone 15"
+    productTypeId: "1"
+    tenantId: "1"
+  }) {
+    success
+    message
+    product {
+      id
+      uuid
+      name
+      tenantId
+      productType {
+        id
+        name
+      }
+      createdAt
+      updatedAt
+    }
+  }
+}
+```
+
+**Input Fields:**
+- `name` (string, required): Product name
+- `productTypeId` (ID, required): ID of the associated product type
+- `tenantId` (ID, optional): Tenant ID (only Spark Admin can provide this)
+
+**Response:**
+```json
+{
+  "data": {
+    "createProduct": {
+      "success": true,
+      "message": "Product created successfully.",
+      "product": {
+        "id": "1",
+        "uuid": "01234567-89ab-cdef-0123-456789abcdef",
+        "name": "iPhone 15",
+        "tenantId": "1",
+        "productType": {
+          "id": "1",
+          "name": "Electronics"
+        },
+        "createdAt": "2025-01-15T10:00:00Z",
+        "updatedAt": "2025-01-15T10:00:00Z"
+      }
+    }
+  }
+}
+```
+
+---
+
+### 18. Update Product
+
+Update an existing product.
+
+**Available for**: Ambassadors, Spark Admin, Clients
+
+**GraphQL Mutation:**
+```graphql
+mutation {
+  updateProduct(input: {
+    id: "1"
+    name: "iPhone 15 Pro"
+    productTypeId: "1"
+    tenantId: "1"
+  }) {
+    success
+    message
+    product {
+      id
+      uuid
+      name
+      productType {
+        id
+        name
+      }
+      updatedAt
+    }
+  }
+}
+```
+
+**Input Fields:**
+- `id` (ID, required): The ID of the product to update
+- `name` (string, required): Updated product name
+- `productTypeId` (ID, required): Updated product type ID
+- `tenantId` (ID, optional): Tenant ID (only Spark Admin can provide this)
+
+---
+
+### 19. Create Request Type
+
+Create a new request type.
+
+**Available for**: Ambassadors, Spark Admin, Clients
+
+**GraphQL Mutation:**
+```graphql
+mutation {
+  createRequestType(input: {
+    name: "Delivery Request"
+    tenantId: "1"
+  }) {
+    success
+    message
+    requestType {
+      id
+      uuid
+      name
+      tenantId
+      createdAt
+      updatedAt
+    }
+  }
+}
+```
+
+**Input Fields:**
+- `name` (string, required): Request type name
+- `tenantId` (ID, optional): Tenant ID (only Spark Admin can provide this)
+
+**Response:**
+```json
+{
+  "data": {
+    "createRequestType": {
+      "success": true,
+      "message": "Request type created successfully.",
+      "requestType": {
+        "id": "1",
+        "uuid": "01234567-89ab-cdef-0123-456789abcdef",
+        "name": "Delivery Request",
+        "tenantId": "1",
+        "createdAt": "2025-01-15T10:00:00Z",
+        "updatedAt": "2025-01-15T10:00:00Z"
+      }
+    }
+  }
+}
+```
+
+---
+
+### 20. Update Request Type
+
+Update an existing request type.
+
+**Available for**: Ambassadors, Spark Admin, Clients
+
+**GraphQL Mutation:**
+```graphql
+mutation {
+  updateRequestType(input: {
+    id: "1"
+    name: "Updated Request Type Name"
+    tenantId: "1"
+  }) {
+    success
+    message
+    requestType {
+      id
+      uuid
+      name
+      updatedAt
+    }
+  }
+}
+```
+
+**Input Fields:**
+- `id` (ID, required): The ID of the request type to update
+- `name` (string, required): Updated request type name
+- `tenantId` (ID, optional): Tenant ID (only Spark Admin can provide this)
+
+---
+
+### 21. Create Request
+
+Create a new request. **This mutation is PUBLIC** - no authentication required.
+
+**Available for**: Public (no authentication required), Ambassadors, Spark Admin, Clients
+
+**GraphQL Mutation:**
+```graphql
+mutation {
+  createRequest(input: {
+    name: "Product Delivery Request"
+    date: "2025-01-20"
+    address: "123 Main St, New York, NY 10001"
+    coordinates: [-74.0060, 40.7128]
+    clientId: "1"
+    distributorId: "2"
+    retailerId: "3"
+    requestTypeId: "4"
+    tenantId: "5"
+  }) {
+    success
+    message
+    request {
+      id
+      uuid
+      name
+      date
+      address
+      coordinates
+      tenantId
+      client {
+        id
+        name
+        email
+      }
+      distributor {
+        id
+        name
+        email
+      }
+      retailer {
+        id
+        name
+        address
+      }
+      requestType {
+        id
+        name
+      }
+      createdAt
+      updatedAt
+    }
+  }
+}
+```
+
+**Input Fields:**
+- `name` (string, required): Request name
+- `date` (string, required): Request date (ISO 8601 format)
+- `address` (string, required): Delivery/service address
+- `coordinates` (List[float], required): Geographic coordinates `[longitude, latitude]`
+- `clientId` (ID, required): ID of the associated client
+- `distributorId` (ID, required): ID of the associated distributor
+- `retailerId` (ID, required): ID of the associated retailer
+- `requestTypeId` (ID, required): ID of the request type
+- `tenantId` (ID, required): Tenant ID (required for public requests)
+
+**Response:**
+```json
+{
+  "data": {
+    "createRequest": {
+      "success": true,
+      "message": "Request created successfully.",
+      "request": {
+        "id": "1",
+        "uuid": "01234567-89ab-cdef-0123-456789abcdef",
+        "name": "Product Delivery Request",
+        "date": "2025-01-20",
+        "address": "123 Main St, New York, NY 10001",
+        "coordinates": [-74.0060, 40.7128],
+        "tenantId": "5",
+        "client": {
+          "id": "1",
+          "name": "Acme Corporation",
+          "email": "contact@acme.com"
+        },
+        "distributor": {
+          "id": "2",
+          "name": "ABC Distributors",
+          "email": "info@abcdist.com"
+        },
+        "retailer": {
+          "id": "3",
+          "name": "Best Buy Store",
+          "address": "123 Main St, New York, NY 10001"
+        },
+        "requestType": {
+          "id": "4",
+          "name": "Delivery Request"
+        },
+        "createdAt": "2025-01-15T10:00:00Z",
+        "updatedAt": "2025-01-15T10:00:00Z"
+      }
+    }
+  }
+}
+```
+
+**Note**: This is a public mutation that does not require authentication. For public requests, the `tenantId` field is required.
+
+---
+
+### 22. Update Request
+
+Update an existing request.
+
+**Available for**: Ambassadors, Spark Admin, Clients
+
+**GraphQL Mutation:**
+```graphql
+mutation {
+  updateRequest(input: {
+    id: "1"
+    name: "Updated Request Name"
+    date: "2025-01-25"
+    address: "456 New St, New York, NY 10002"
+    coordinates: [-74.0050, 40.7130]
+    clientId: "1"
+    distributorId: "2"
+    retailerId: "3"
+    requestTypeId: "4"
+    tenantId: "5"
+  }) {
+    success
+    message
+    request {
+      id
+      uuid
+      name
+      date
+      address
+      coordinates
+      client {
+        id
+        name
+      }
+      distributor {
+        id
+        name
+      }
+      retailer {
+        id
+        name
+      }
+      requestType {
+        id
+        name
+      }
+      updatedAt
+    }
+  }
+}
+```
+
+**Input Fields:**
+- `id` (ID, required): The ID of the request to update
+- `name` (string, required): Updated request name
+- `date` (string, required): Updated request date
+- `address` (string, required): Updated delivery/service address
+- `coordinates` (List[float], required): Updated geographic coordinates `[longitude, latitude]`
+- `clientId` (ID, required): Updated client ID
+- `distributorId` (ID, required): Updated distributor ID
+- `retailerId` (ID, required): Updated retailer ID
+- `requestTypeId` (ID, required): Updated request type ID
+- `tenantId` (ID, optional): Tenant ID (only Spark Admin can provide this)
+
+---
+
 ## Types
 
 ### Event
@@ -636,6 +1513,134 @@ Represents an event status.
 - `uuid` (string): UUID identifier
 - `name` (string): Status name
 - `tenantId` (ID): Tenant ID
+- `createdAt` (string): Creation timestamp (ISO 8601)
+- `updatedAt` (string): Last update timestamp (ISO 8601)
+
+---
+
+### Location
+
+Represents a location in the system.
+
+**Fields:**
+- `id` (ID): Unique identifier
+- `uuid` (string): UUID identifier
+- `name` (string): Location name
+- `code` (string): Location code
+- `zip` (string): ZIP/postal code
+- `tenantId` (ID): Tenant ID
+- `createdAt` (string): Creation timestamp (ISO 8601)
+- `updatedAt` (string): Last update timestamp (ISO 8601)
+
+---
+
+### Client
+
+Represents a client in the system.
+
+**Fields:**
+- `id` (ID): Unique identifier
+- `uuid` (string): UUID identifier
+- `name` (string): Client name
+- `email` (string): Client email address
+- `tenantId` (ID): Tenant ID
+- `createdAt` (string): Creation timestamp (ISO 8601)
+- `updatedAt` (string): Last update timestamp (ISO 8601)
+
+---
+
+### Distributor
+
+Represents a distributor in the system.
+
+**Fields:**
+- `id` (ID): Unique identifier
+- `uuid` (string): UUID identifier
+- `name` (string): Distributor name
+- `email` (string): Distributor email address
+- `tenantId` (ID): Tenant ID
+- `location` (Location, nullable): Associated location
+- `createdAt` (string): Creation timestamp (ISO 8601)
+- `updatedAt` (string): Last update timestamp (ISO 8601)
+
+---
+
+### Retailer
+
+Represents a retailer in the system.
+
+**Fields:**
+- `id` (ID): Unique identifier
+- `uuid` (string): UUID identifier
+- `name` (string): Retailer name
+- `address` (string): Retailer address
+- `storeContact` (string): Store contact information
+- `tenantId` (ID): Tenant ID
+- `location` (Location, nullable): Associated location
+- `createdAt` (string): Creation timestamp (ISO 8601)
+- `updatedAt` (string): Last update timestamp (ISO 8601)
+
+---
+
+### ProductType
+
+Represents a product type in the system.
+
+**Fields:**
+- `id` (ID): Unique identifier
+- `uuid` (string): UUID identifier
+- `name` (string): Product type name
+- `tenantId` (ID): Tenant ID
+- `createdAt` (string): Creation timestamp (ISO 8601)
+- `updatedAt` (string): Last update timestamp (ISO 8601)
+
+---
+
+### Product
+
+Represents a product in the system.
+
+**Fields:**
+- `id` (ID): Unique identifier
+- `uuid` (string): UUID identifier
+- `name` (string): Product name
+- `tenantId` (ID): Tenant ID
+- `productType` (ProductType, nullable): Associated product type
+- `createdAt` (string): Creation timestamp (ISO 8601)
+- `updatedAt` (string): Last update timestamp (ISO 8601)
+
+---
+
+### RequestType
+
+Represents a request type in the system.
+
+**Fields:**
+- `id` (ID): Unique identifier
+- `uuid` (string): UUID identifier
+- `name` (string): Request type name
+- `tenantId` (ID): Tenant ID
+- `createdAt` (string): Creation timestamp (ISO 8601)
+- `updatedAt` (string): Last update timestamp (ISO 8601)
+
+---
+
+### Request
+
+Represents a request in the system.
+
+**Fields:**
+- `id` (ID): Unique identifier
+- `uuid` (string): UUID identifier
+- `name` (string): Request name
+- `date` (string): Request date
+- `address` (string): Delivery/service address
+- `coordinates` (List[float]): Geographic coordinates `[longitude, latitude]`
+- `tenantId` (ID): Tenant ID
+- `client` (Client, nullable): Associated client
+- `distributor` (Distributor, nullable): Associated distributor
+- `retailer` (Retailer, nullable): Associated retailer
+- `requestType` (RequestType, nullable): Associated request type
 - `createdAt` (string): Creation timestamp (ISO 8601)
 - `updatedAt` (string): Last update timestamp (ISO 8601)
 
@@ -702,6 +1707,180 @@ Extends `CreateEventStatusInput` with:
 
 ---
 
+### CreateLocationInput
+
+**Fields:**
+- `name` (string, required): Location name
+- `code` (string, required): Location code
+- `zip` (string, required): ZIP/postal code
+- `tenantId` (ID, optional): Tenant ID (only for Spark Admin)
+
+**Validation:**
+- Name is required and cannot be empty
+- Code is required and cannot be empty
+- ZIP is required and cannot be empty
+
+---
+
+### UpdateLocationInput
+
+Extends `CreateLocationInput` with:
+- `id` (ID, required): Location ID to update
+
+---
+
+### CreateClientInput
+
+**Fields:**
+- `name` (string, required): Client name
+- `email` (string, required): Client email address
+- `tenantId` (ID, optional): Tenant ID (only for Spark Admin)
+
+**Validation:**
+- Name is required and cannot be empty
+- Email is required and must be a valid email format
+
+---
+
+### UpdateClientInput
+
+Extends `CreateClientInput` with:
+- `id` (ID, required): Client ID to update
+
+---
+
+### CreateDistributorInput
+
+**Fields:**
+- `name` (string, required): Distributor name
+- `email` (string, required): Distributor email address
+- `locationId` (ID, required): ID of the associated location
+- `tenantId` (ID, optional): Tenant ID (only for Spark Admin)
+
+**Validation:**
+- Name is required and cannot be empty
+- Email is required and must be a valid email format
+- Location ID is required
+
+---
+
+### UpdateDistributorInput
+
+Extends `CreateDistributorInput` with:
+- `id` (ID, required): Distributor ID to update
+
+---
+
+### CreateRetailerInput
+
+**Fields:**
+- `name` (string, required): Retailer name
+- `address` (string, required): Retailer address
+- `storeContact` (string, required): Store contact information
+- `locationId` (ID, required): ID of the associated location
+- `tenantId` (ID, optional): Tenant ID (only for Spark Admin)
+
+**Validation:**
+- Name is required and cannot be empty
+- Address is required and cannot be empty
+- Store contact is required and cannot be empty
+- Location ID is required
+
+---
+
+### UpdateRetailerInput
+
+Extends `CreateRetailerInput` with:
+- `id` (ID, required): Retailer ID to update
+
+---
+
+### CreateProductTypeInput
+
+**Fields:**
+- `name` (string, required): Product type name
+- `tenantId` (ID, optional): Tenant ID (only for Spark Admin)
+
+**Validation:**
+- Name is required and cannot be empty
+
+---
+
+### UpdateProductTypeInput
+
+Extends `CreateProductTypeInput` with:
+- `id` (ID, required): Product type ID to update
+
+---
+
+### CreateProductInput
+
+**Fields:**
+- `name` (string, required): Product name
+- `productTypeId` (ID, required): ID of the associated product type
+- `tenantId` (ID, optional): Tenant ID (only for Spark Admin)
+
+**Validation:**
+- Name is required and cannot be empty
+- Product type ID is required
+
+---
+
+### UpdateProductInput
+
+Extends `CreateProductInput` with:
+- `id` (ID, required): Product ID to update
+
+---
+
+### CreateRequestTypeInput
+
+**Fields:**
+- `name` (string, required): Request type name
+- `tenantId` (ID, optional): Tenant ID (only for Spark Admin)
+
+**Validation:**
+- Name is required and cannot be empty
+
+---
+
+### UpdateRequestTypeInput
+
+Extends `CreateRequestTypeInput` with:
+- `id` (ID, required): Request type ID to update
+
+---
+
+### CreateRequestInput
+
+**Fields:**
+- `name` (string, required): Request name
+- `date` (string, required): Request date (ISO 8601 format)
+- `address` (string, required): Delivery/service address
+- `coordinates` (List[float], required): Geographic coordinates `[longitude, latitude]`
+- `clientId` (ID, required): ID of the associated client
+- `distributorId` (ID, required): ID of the associated distributor
+- `retailerId` (ID, required): ID of the associated retailer
+- `requestTypeId` (ID, required): ID of the request type
+- `tenantId` (ID, required): Tenant ID (required for public requests)
+
+**Validation:**
+- Name is required and cannot be empty
+- Date is required and must be a valid date format
+- Address is required and cannot be empty
+- Coordinates must be a list of exactly 2 floats `[longitude, latitude]`
+- All ID fields (clientId, distributorId, retailerId, requestTypeId) are required
+- Tenant ID is required for public (unauthenticated) requests
+
+---
+
+### UpdateRequestInput
+
+Extends `CreateRequestInput` with:
+- `id` (ID, required): Request ID to update
+
+---
+
 ## Response Types
 
 ### EventDetailResponse
@@ -734,6 +1913,94 @@ Response for event status mutations.
 - `success` (boolean): Whether the operation was successful
 - `message` (string): Response message
 - `eventStatus` (EventStatus, nullable): The created/updated event status (null on error)
+
+---
+
+### LocationDetailResponse
+
+Response for location mutations.
+
+**Fields:**
+- `success` (boolean): Whether the operation was successful
+- `message` (string): Response message
+- `location` (Location, nullable): The created/updated location (null on error)
+
+---
+
+### ClientDetailResponse
+
+Response for client mutations.
+
+**Fields:**
+- `success` (boolean): Whether the operation was successful
+- `message` (string): Response message
+- `client` (Client, nullable): The created/updated client (null on error)
+
+---
+
+### DistributorDetailResponse
+
+Response for distributor mutations.
+
+**Fields:**
+- `success` (boolean): Whether the operation was successful
+- `message` (string): Response message
+- `distributor` (Distributor, nullable): The created/updated distributor (null on error)
+
+---
+
+### RetailerDetailResponse
+
+Response for retailer mutations.
+
+**Fields:**
+- `success` (boolean): Whether the operation was successful
+- `message` (string): Response message
+- `retailer` (Retailer, nullable): The created/updated retailer (null on error)
+
+---
+
+### ProductTypeDetailResponse
+
+Response for product type mutations.
+
+**Fields:**
+- `success` (boolean): Whether the operation was successful
+- `message` (string): Response message
+- `productType` (ProductType, nullable): The created/updated product type (null on error)
+
+---
+
+### ProductDetailResponse
+
+Response for product mutations.
+
+**Fields:**
+- `success` (boolean): Whether the operation was successful
+- `message` (string): Response message
+- `product` (Product, nullable): The created/updated product (null on error)
+
+---
+
+### RequestTypeDetailResponse
+
+Response for request type mutations.
+
+**Fields:**
+- `success` (boolean): Whether the operation was successful
+- `message` (string): Response message
+- `requestType` (RequestType, nullable): The created/updated request type (null on error)
+
+---
+
+### RequestDetailResponse
+
+Response for request mutations.
+
+**Fields:**
+- `success` (boolean): Whether the operation was successful
+- `message` (string): Response message
+- `request` (Request, nullable): The created/updated request (null on error)
 
 ---
 

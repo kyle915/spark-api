@@ -1,5 +1,6 @@
 import strawberry
 from strawberry_django.permissions import IsAuthenticated
+from strawberry.extensions import MaxTokensLimiter
 from graphql import GraphQLError
 from asgiref.sync import sync_to_async
 from typing import Union
@@ -643,7 +644,7 @@ class RequestMutationService(BaseMutationService):
 
 @strawberry.type
 class RequestMutations:
-    @strawberry.mutation
+
     async def create_request(
         self,
         info: strawberry.Info,
@@ -666,7 +667,6 @@ class RequestMutations:
                 message=str(e),
             )
 
-    @strawberry.mutation
     async def update_request(
         self,
         info: strawberry.Info,
