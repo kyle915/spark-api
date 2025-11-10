@@ -3,7 +3,12 @@ from graphql import GraphQLError
 
 
 class BlockIntrospectionForAnonymous(SchemaExtension):
-    allowed_mutations = ["SocialAuthGoogle", "SocialAuthApple"]
+    allowed_mutations = [
+        "SocialAuthGoogle",
+        "SocialAuthApple",
+        "CreateRequest",
+        "UpdateRequest"
+    ]
 
     def on_request_start(self):
         request = self.execution_context.context["request"]
