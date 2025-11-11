@@ -10,6 +10,7 @@ class EventType:
     id: strawberry.ID
     uuid: str
     name: str
+    is_default: bool
     tenant_id: strawberry.ID
     created_at: str
     updated_at: str
@@ -27,6 +28,7 @@ class EventStatus:
     id: strawberry.ID
     uuid: str
     name: str
+    is_default: bool
     tenant_id: strawberry.ID
     created_at: str
     updated_at: str
