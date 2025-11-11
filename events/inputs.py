@@ -111,8 +111,8 @@ class UpdateProductInput(CreateProductInput):
 
 @strawberry.input
 class CreateRequestStatusInput(BaseNameableInput):
-    create_event: bool
-    is_default: bool
+    create_event: bool = False
+    is_default: bool = False
 
 
 @strawberry.input
