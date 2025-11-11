@@ -95,6 +95,23 @@ Visit the project at:
 
 ---
 
+### Generate GraphQL Schemas
+
+Run the `export_schema` management command for each schema module to keep the `.graphql` snapshots up to date:
+
+```bash
+# Spark app schema
+uv run python manage.py export_schema config.schema_spark:schema_spark --path schema_spark.graphql
+
+# Client portal schema
+uv run python manage.py export_schema config.schema_client:schema_clients --path schema_clients.graphql
+
+# Ambassador portal schema
+uv run python manage.py export_schema config.schema_ambassador:schema_ambassador --path schema_ambassador.graphql
+```
+
+---
+
 ## Contributing Guide (GitFlow)
 
 ### Branch Model

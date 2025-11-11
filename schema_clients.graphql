@@ -1,0 +1,275 @@
+"""
+Can only be resolved by authenticated users.
+
+When the condition fails, the following can be returned (following this priority):
+1) `OperationInfo`/`OperationMessage` if those types are allowed at the return type
+2) `null` in case the field is not mandatory (e.g. `String` or `[String]`)
+3) An empty list in case the field is a list (e.g. `[String]!`)
+4) An empty `Connection` in case the return type is a relay connection
+2) Otherwise, an error will be raised
+"""
+directive @isAuthenticated repeatable on FIELD_DEFINITION
+
+input CreateEventInput {
+  name: String!
+  eventTypeId: ID!
+  statusId: ID!
+  tenantId: ID = null
+}
+
+input CreateEventStatusInput {
+  name: String!
+  tenantId: ID = null
+}
+
+input CreateEventTypeInput {
+  name: String!
+  tenantId: ID = null
+}
+
+"""Date with time (isoformat)"""
+scalar DateTime
+
+type DjangoModelType {
+  pk: ID!
+}
+
+"""
+Event(id, uuid, name, tenant, event_type, status, created_by, updated_by, created_at, updated_at)
+"""
+type Event {
+  id: ID!
+  uuid: String!
+  name: String!
+  createdAt: String!
+  updatedAt: String!
+  tenantId: ID!
+  eventType: EventType
+  status: EventStatus
+}
+
+type EventDetailResponse {
+  success: Boolean!
+  message: String!
+  event: Event
+}
+
+"""
+EventStatus(id, uuid, name, tenant, created_by, updated_by, created_at, updated_at)
+"""
+type EventStatus {
+  id: ID!
+  uuid: String!
+  name: String!
+  tenantId: ID!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type EventStatusDetailResponse {
+  success: Boolean!
+  message: String!
+  eventStatus: EventStatus
+}
+
+"""
+EventType(id, uuid, name, tenant, created_by, updated_by, created_at, updated_at)
+"""
+type EventType {
+  id: ID!
+  uuid: String!
+  name: String!
+  tenantId: ID!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type EventTypeDetailResponse {
+  success: Boolean!
+  message: String!
+  eventType: EventType
+}
+
+"\n     Errors messages and codes mapped to\n    fields or non fields errors.\n    Example:\n    {\n        field_name: [\n            {\n                \"message\": \"error message\",\n                \"code\": \"error_code\"\n            }\n        ],\n        other_field: [\n            {\n                \"message\": \"error message\",\n                \"code\": \"error_code\"\n            }\n        ],\n        nonFieldErrors: [\n            {\n                \"message\": \"error message\",\n                \"code\": \"error_code\"\n            }\n        ]\n    }\n    "
+scalar ExpectedError
+
+type Mutation {
+  createEvent(input: CreateEventInput!): EventDetailResponse! @isAuthenticated
+  updateEvent(input: UpdateEventInput!): EventDetailResponse! @isAuthenticated
+  createEventType(input: CreateEventTypeInput!): EventTypeDetailResponse! @isAuthenticated
+  updateEventType(input: UpdateEventTypeInput!): EventTypeDetailResponse! @isAuthenticated
+  createEventStatus(input: CreateEventStatusInput!): EventStatusDetailResponse! @isAuthenticated
+  updateEventStatus(input: UpdateEventStatusInput!): EventStatusDetailResponse! @isAuthenticated
+  register(firstName: String!, email: String!, password1: String!, password2: String!, roleId: ID!, tenantId: ID!): RegisterResponse!
+  socialAuthGoogle(accessToken: String!, roleId: ID!, tenantId: ID!): SocialAuthResponse!
+  socialAuthApple(identityToken: String!, roleId: ID!, tenantId: ID!): SocialAuthResponse!
+
+  "### Checks if a token is not expired and correct.\n\n*Note that this is not for refresh tokens.*\n"
+  verifyToken(input: VerifyTokenInput!): VerifyTokenType!
+
+  "Obtain JSON web token for given user.\n\nAllow to perform login with different fields, The fields are defined\non settings.\n\nNot verified users can log in by default. This can be changes on\nsettings.\n\nIf user is archived, make it unarchived and return\n`unarchiving=True` on OutputBase.\n"
+  tokenAuth(input: ObtainJSONWebTokenInput!): ObtainJSONWebTokenType!
+
+  "### refreshToken to generate a new login token:\n\n*Use this only if `JWT_LONG_RUNNING_REFRESH_TOKEN` is True*\n\nusing the refresh-token you already got during authorization, and\nobtain a brand-new token (and possibly a new refresh token if you\nrevoked the previous). This is an alternative to log in when your\ntoken expired.\n"
+  refreshToken(input: RefreshTokenInput!): ObtainJSONWebTokenType!
+
+  "Verify user account.\n\nReceive the token that was sent by email. If the token is valid,\nmake the user verified by making the `user.status.verified` field\ntrue.\n"
+  verifyAccount(input: VerifyAccountInput!): MutationNormalOutput!
+}
+
+type MutationNormalOutput {
+  success: Boolean!
+  errors: ExpectedError
+}
+
+input ObtainJSONWebTokenInput {
+  password: String!
+  username: String!
+}
+
+"\n    encapsulates token data, and refresh token data if `JWT_LONG_RUNNING_REFRESH_TOKEN` is on.\n    with an output interface.\n    "
+type ObtainJSONWebTokenType implements OutputInterface {
+  success: Boolean!
+  errors: ExpectedError
+  user: UserType
+  token: TokenType
+  refreshToken: RefreshTokenType
+}
+
+interface OutputInterface {
+  success: Boolean!
+  errors: ExpectedError
+}
+
+type Query {
+  events(limit: Int! = 10, offset: Int! = 0, q: String = null): [Event!]! @isAuthenticated
+  event(id: ID!): Event @isAuthenticated
+  eventTypes(limit: Int! = 10, offset: Int! = 0, q: String = null): [EventType!]! @isAuthenticated
+  eventType(id: ID!): EventType @isAuthenticated
+  eventStatuses(limit: Int! = 10, offset: Int! = 0, q: String = null): [EventStatus!]! @isAuthenticated
+  eventStatus(id: ID!): EventStatus @isAuthenticated
+  me: UserType!
+
+  """Returns the current user if he is not anonymous."""
+  public: UserType
+}
+
+"""
+If `revoke_refresh_token` is true, revokes to refresh token an creates a new one.
+"""
+input RefreshTokenInput {
+  refreshToken: String!
+
+  """revokes the previous refresh token, and will generate new one."""
+  revokeRefreshToken: Boolean! = false
+}
+
+"\nRefresh token can be used to obtain a new token instead of log in again\nwhen the token expires.\n\n*This is only used if `JWT_LONG_RUNNING_REFRESH_TOKEN` is set to True.*\n"
+type RefreshTokenType {
+  """randomly generated token that is attached to a FK user."""
+  token: String!
+  created: DateTime!
+  revoked: DateTime
+  expiresAt: DateTime!
+  isExpired: Boolean!
+}
+
+type RegisterResponse {
+  success: Boolean!
+  message: String!
+  activationToken: String
+}
+
+type SocialAuthResponse {
+  success: Boolean!
+  message: String!
+  token: String
+  refreshToken: String
+}
+
+"\nthe data that was used to create the token.\n"
+type TokenPayloadType {
+  """when the token was created"""
+  origIat: DateTime!
+
+  """when the token will be expired"""
+  exp: DateTime!
+  username: String!
+}
+
+"\nencapsulates the token with the payload that was used to create the token.\n"
+type TokenType {
+  payload: TokenPayloadType!
+
+  """The encoded payload, namely a token."""
+  token: String!
+}
+
+input UpdateEventInput {
+  name: String!
+  eventTypeId: ID!
+  statusId: ID!
+  tenantId: ID = null
+  id: ID!
+}
+
+input UpdateEventStatusInput {
+  name: String!
+  tenantId: ID = null
+  id: ID!
+}
+
+input UpdateEventTypeInput {
+  name: String!
+  tenantId: ID = null
+  id: ID!
+}
+
+"""A helper model that handles user account stuff."""
+type UserStatusType {
+  verified: Boolean!
+  archived: Boolean!
+}
+
+"""
+User(password, last_login, is_superuser, username, first_name, last_name, email, is_staff, date_joined, id, uuid, role, created_by, updated_by, created_at, updated_at, is_active)
+"""
+type UserType {
+  logentrySet: [DjangoModelType!]!
+
+  """
+  Designates that this user has all permissions without explicitly assigning them.
+  """
+  isSuperuser: Boolean!
+  lastLogin: DateTime
+
+  """Designates whether the user can log into this admin site."""
+  isStaff: Boolean!
+  isActive: Boolean!
+  dateJoined: DateTime!
+  status: UserStatusType!
+  id: ID!
+
+  """Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only."""
+  username: String!
+  lastName: String
+  firstName: String
+  email: String!
+  archived: Boolean!
+  verified: Boolean!
+}
+
+input VerifyAccountInput {
+  token: String!
+}
+
+input VerifyTokenInput {
+  token: String!
+}
+
+type VerifyTokenType implements OutputInterface {
+  success: Boolean!
+  errors: ExpectedError
+  token: TokenType
+  user: UserType
+}

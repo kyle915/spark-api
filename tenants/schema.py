@@ -1,16 +1,42 @@
 import strawberry
-from gqlauth.user.queries import UserQueries, UserType
 from django.contrib.auth import get_user_model
-from .mutations import AmbassadorsCustomRegister, SparkCustomRegister, ClientsCustomRegister
 from gqlauth.user import relay as mutations
+from gqlauth.user.queries import UserQueries
+
+from .models import Role
+from .mutations import (
+    AmbassadorsCustomRegister,
+    ClientsCustomRegister,
+    SparkCustomRegister,
+)
+
+User = get_user_model()
+
+
+@strawberry.django.type(Role)
+class RoleType:
+    id: strawberry.auto
+    uuid: strawberry.auto
+    name: strawberry.auto
+
+
+@strawberry.django.type(model=get_user_model(), name="CustomUserType")
+class CustomUserType:
+    id: strawberry.auto
+    uuid: strawberry.auto
+    username: strawberry.auto
+    email: strawberry.auto
+    first_name: strawberry.auto
+    last_name: strawberry.auto
+    role: RoleType
+
 
 # Spark Schema
-
-
-@strawberry.django.type(model=get_user_model())
+@strawberry.type
 class QuerySpark:
-    me: UserType = UserQueries.me
-    public: UserType = UserQueries.public_user
+    @strawberry.field
+    def me(self, info) -> CustomUserType:
+        return info.context.request.user
 
 
 @strawberry.type
@@ -20,13 +46,12 @@ class MutationSpark(SparkCustomRegister):
     refresh_token = mutations.RefreshToken.field
     verify_account = mutations.VerifyAccount.field
 
+
 # Ambassadors Schema
-
-
 @strawberry.django.type(model=get_user_model())
 class QueryAmbassadors:
-    me: UserType = UserQueries.me
-    public: UserType = UserQueries.public_user
+    me: CustomUserType = UserQueries.me
+    public: CustomUserType = UserQueries.public_user
 
 
 @strawberry.type
@@ -36,13 +61,12 @@ class MutationAmbassadors(AmbassadorsCustomRegister):
     refresh_token = mutations.RefreshToken.field
     verify_account = mutations.VerifyAccount.field
 
+
 # Clients Schemas
-
-
 @strawberry.django.type(model=get_user_model())
 class QueryClients:
-    me: UserType = UserQueries.me
-    public: UserType = UserQueries.public_user
+    me: CustomUserType = UserQueries.me
+    public: CustomUserType = UserQueries.public_user
 
 
 @strawberry.type
