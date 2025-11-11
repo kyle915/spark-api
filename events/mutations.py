@@ -16,7 +16,7 @@ from utils.graphql.inputs import SparkGraphQLInput
 from utils.graphql.types import SparkGraphQLErrorResponse
 from utils.graphql.mixins import SparkGraphQLMixin
 from utils.utils import ROLE_ID
-from tenants.models import Tenant
+from tenants.models import Tenant, User
 
 User = get_user_model()
 
@@ -738,6 +738,55 @@ class RequestMutations:
                 request=request,
             )
         except GraphQLError as e:
+            return types.RequestDetailResponse(
+                success=False,
+                message=str(e),
+            )
+
+    async def approve_request(
+        self,
+        info: strawberry.Info,
+        id: strawberry.ID,
+    ) -> types.RequestDetailResponse:
+        """Approve a request."""
+        try:
+            service: RequestMutationService = RequestMutationService()
+            user: User = await service.get_user(info)
+            tenant: Tenant = user.tenant
+            if user.role_id == ROLE_ID.Ambassadors:
+                raise GraphQLError(
+                    "You are not authorized to approve requests.")
+
+            if not tenant:
+                raise GraphQLError(
+                    "Tenant not found. Please ensure you are a member of a tenant.")
+
+            approval_status = await sync_to_async(
+                models.RequestStatus.objects.get_for_approval)(tenant=tenant.id)
+            if not approval_status:
+                raise GraphQLError(
+                    "Approval status not found. Please ensure you have a status for approval.")
+
+            request = await sync_to_async(service.get_model().objects.get)(id=id)
+            request.status = approval_status
+            await sync_to_async(request.save)()
+            await sync_to_async(models.Event.from_request)(
+                request=request,
+                created_by=user
+            )
+
+            request.refresh_from_db()
+            return types.RequestDetailResponse(
+                success=True,
+                message="Request approved successfully.",
+                request=request,
+            )
+        except GraphQLError as e:
+            return types.RequestDetailResponse(
+                success=False,
+                message=str(e),
+            )
+        except Exception as e:
             return types.RequestDetailResponse(
                 success=False,
                 message=str(e),

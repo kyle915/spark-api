@@ -2,9 +2,9 @@ from uuid6 import uuid7
 from django.db import models, transaction
 from django.contrib.postgres.fields import ArrayField
 from django.conf import settings
-from tenants.models import Tenant
+from tenants.models import Tenant, User
 
-from .managers import RequestStatusManager
+from .managers import RequestStatusManager, EventStatusManager, EventTypeManager
 
 
 class Location(models.Model):
@@ -228,6 +228,7 @@ class RequestStatus(models.Model):
         with transaction.atomic():
             super().save(*args, **kwargs)
 
+            # Set the default status to false if the current status is set to true
             if self.is_default:
                 (
                     RequestStatus.objects.filter(
@@ -236,12 +237,23 @@ class RequestStatus(models.Model):
                     .update(is_default=False)
                 )
 
+            # Set the create event flag to false if the current status is set to true
+            if self.create_event:
+                (
+                    RequestStatus.objects.filter(
+                        tenant=self.tenant, create_event=True)
+                    .exclude(pk=self.pk)
+                    .update(create_event=False)
+                )
+
 
 class Request(models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     name = models.CharField(max_length=50)
     date = models.DateField()
+    start_time = models.DateTimeField(null=True, db_index=True)
+    end_time = models.DateTimeField(null=True, blank=True)
     address = models.CharField(max_length=100)
     coordinates = ArrayField(
         models.FloatField(),
@@ -382,6 +394,7 @@ class EventStatus(models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     name = models.CharField(max_length=50)
+    is_default = models.BooleanField(default=False, db_index=True)
 
     tenant = models.ForeignKey(
         Tenant,
@@ -405,11 +418,14 @@ class EventStatus(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
     updated_at = models.DateTimeField(auto_now=True)
 
+    objects = EventStatusManager()
+
 
 class EventType(models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     name = models.CharField(max_length=50)
+    is_default = models.BooleanField(default=False, db_index=True)
 
     tenant = models.ForeignKey(
         Tenant,
@@ -433,6 +449,8 @@ class EventType(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
     updated_at = models.DateTimeField(auto_now=True)
+
+    objects = EventTypeManager()
 
 
 class Event(models.Model):
@@ -491,3 +509,32 @@ class Event(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
     updated_at = models.DateTimeField(auto_now=True)
+
+    def from_request(
+        self, request: Request,
+        created_by: User,
+        event_type: EventType | None = None,
+        status: EventStatus | None = None,
+    ) -> 'Event':
+        """Create an event from a request."""
+        event_type = event_type or EventType.objects.get_default(
+            request.tenant)
+        status = status or EventStatus.objects.get_default(request.tenant)
+
+        if not event_type:
+            raise ValueError("Event type not found.")
+
+        if not status:
+            raise ValueError("Event status not found.")
+
+        return Event(
+            request=request,
+            tenant=request.tenant,
+            created_by=created_by,
+            event_type=event_type,
+            status=status,
+            name=request.name,
+            start_time=request.start_time,
+            end_time=request.end_time,
+            address=request.address,
+        )

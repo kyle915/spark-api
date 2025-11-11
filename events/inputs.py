@@ -27,7 +27,7 @@ class UpdateEventInput(CreateEventInput):
 
 @strawberry.input
 class CreateEventTypeInput(BaseNameableInput):
-    pass
+    is_default: bool = False
 
 
 @strawberry.input
@@ -37,7 +37,7 @@ class UpdateEventTypeInput(CreateEventTypeInput):
 
 @strawberry.input
 class CreateEventStatusInput(BaseNameableInput):
-    pass
+    is_default: bool = False
 
 
 @strawberry.input
@@ -133,6 +133,8 @@ class UpdateRequestTypeInput(CreateRequestTypeInput):
 @strawberry.input
 class CreateRequestInput(BaseNameableInput):
     date: str
+    start_time: str
+    end_time: str
     address: str
     coordinates: List[float]
     client_id: strawberry.ID
