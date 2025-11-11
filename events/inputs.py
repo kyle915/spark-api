@@ -110,6 +110,17 @@ class UpdateProductInput(CreateProductInput):
 
 
 @strawberry.input
+class CreateRequestStatusInput(BaseNameableInput):
+    create_event: bool
+    is_default: bool
+
+
+@strawberry.input
+class UpdateRequestStatusInput(CreateRequestStatusInput):
+    id: strawberry.ID
+
+
+@strawberry.input
 class CreateRequestTypeInput(BaseNameableInput):
     pass
 

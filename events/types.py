@@ -186,6 +186,24 @@ class RequestTypeDetailResponse:
     request_type: RequestType | None = None
 
 
+@strawberry.type
+class RequestStatus:
+    id: strawberry.ID
+    uuid: str
+    name: str
+    create_event: bool
+    is_default: bool
+    created_at: str
+    updated_at: str
+
+
+@strawberry.type
+class RequestStatusDetailResponse:
+    success: bool
+    message: str
+    request_status: RequestStatus | None = None
+
+
 @strawberry_django.type(models.Request)
 class Request:
     id: strawberry.ID
@@ -198,6 +216,7 @@ class Request:
     distributor: Distributor | None = None
     retailer: Retailer | None = None
     request_type: RequestType | None = None
+    status: RequestStatus | None = None
     tenant_id: strawberry.ID
     created_at: str
     updated_at: str

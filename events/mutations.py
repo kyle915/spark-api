@@ -634,6 +634,63 @@ class RequestTypeMutations:
             )
 
 
+@strawberry.type
+class RequestStatusMutations:
+    @strawberry.mutation(extensions=[IsAuthenticated()])
+    async def create_request_status(
+        self,
+        info: strawberry.Info,
+        input: inputs.CreateRequestStatusInput,
+    ) -> types.RequestStatusDetailResponse:
+        """Create a new request status."""
+        try:
+            request_status: models.RequestStatus = await RequestStatusMutationService.process_create_or_update(
+                input=input,
+                info=info
+            )
+            return types.RequestStatusDetailResponse(
+                success=True,
+                message="Request status created successfully.",
+                request_status=request_status,
+            )
+        except GraphQLError as e:
+            return types.RequestStatusDetailResponse(
+                success=False,
+                message=str(e),
+            )
+
+    @strawberry.mutation(extensions=[IsAuthenticated()])
+    async def update_request_status(
+        self,
+        info: strawberry.Info,
+        input: inputs.UpdateRequestStatusInput,
+    ) -> types.RequestStatusDetailResponse:
+        """Update an existing request status."""
+        try:
+            request_status: models.RequestStatus = await RequestStatusMutationService.process_create_or_update(
+                input=input,
+                info=info
+            )
+            return types.RequestStatusDetailResponse(
+                success=True,
+                message="Request status updated successfully.",
+                request_status=request_status,
+            )
+        except GraphQLError as e:
+            return types.RequestStatusDetailResponse(
+                success=False,
+                message=str(e),
+            )
+
+
+class RequestStatusMutationService(BaseMutationService):
+    """Service for request status mutations"""
+
+    def get_model(self) -> Model:
+        """Get the model for the service"""
+        return models.RequestStatus
+
+
 class RequestMutationService(BaseMutationService):
     """Service for request mutations."""
 

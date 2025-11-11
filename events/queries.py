@@ -62,81 +62,8 @@ class EventQueriesService(BaseEventQueriesService):
         return models.Event
 
 
-class EventTypeQueriesService(BaseEventQueriesService):
-    """Service for event type queries."""
-
-    def get_model(self) -> Model:
-        """Get the model for the service."""
-        return models.EventType
-
-
-class EventStatusQueriesService(BaseEventQueriesService):
-    """Service for event status queries."""
-
-    def get_model(self) -> Model:
-        """Get the model for the service."""
-        return models.EventStatus
-
-
-class RequestQueriesService(BaseEventQueriesService):
-    """Service for request queries."""
-
-    def get_model(self) -> Model:
-        """Get the model for the service."""
-        return models.Request
-
-
-class ClientQueriesService(BaseEventQueriesService):
-    """Service for client queries."""
-
-    def get_model(self) -> Model:
-        """Get the model for the service."""
-        return models.Client
-
-
-class DistributorQueriesService(BaseEventQueriesService):
-    """Service for distributor queries."""
-
-    def get_model(self) -> Model:
-        """Get the model for the service."""
-        return models.Distributor
-
-
-class RetailerQueriesService(BaseEventQueriesService):
-    """Service for retailer queries."""
-
-    def get_model(self) -> Model:
-        """Get the model for the service."""
-        return models.Retailer
-
-
-class RequestTypeQueriesService(BaseEventQueriesService):
-    """Service for request type queries."""
-
-    def get_model(self) -> Model:
-        """Get the model for the service."""
-        return models.RequestType
-
-
-class ProductTypeQueriesService(BaseEventQueriesService):
-    """Service for product type queries."""
-
-    def get_model(self) -> Model:
-        """Get the model for the service."""
-        return models.ProductType
-
-
-class ProductQueriesService(BaseEventQueriesService):
-    """Service for product queries."""
-
-    def get_model(self) -> Model:
-        """Get the model for the service."""
-        return models.Product
-
-
 @strawberry.type
-class EventAmbassadorsQueries:
-
+class EventQueries:
     @strawberry.field(extensions=[IsAuthenticated()])
     async def events(
         self,
@@ -146,7 +73,6 @@ class EventAmbassadorsQueries:
         q: str | None = None,
     ) -> List[types.Event]:
         """Get all events."""
-        logger.info('executing events query')
         service = EventQueriesService()
         tenant = await service.get_user_tenant(info)
 
@@ -165,6 +91,17 @@ class EventAmbassadorsQueries:
         except GraphQLError:
             return None
 
+
+class EventTypeQueriesService(BaseEventQueriesService):
+    """Service for event type queries."""
+
+    def get_model(self) -> Model:
+        """Get the model for the service."""
+        return models.EventType
+
+
+@strawberry.type
+class EventTypeQueries:
     @strawberry.field(extensions=[IsAuthenticated()])
     async def event_types(
         self,
@@ -189,18 +126,26 @@ class EventAmbassadorsQueries:
         except GraphQLError:
             return None
 
+
+class EventStatusQueriesService(BaseEventQueriesService):
+    """Service for event status queries."""
+
+    def get_model(self) -> Model:
+        """Get the model for the service."""
+        return models.EventStatus
+
+
+@strawberry.type
+class EventStatusQueries:
     @strawberry.field(extensions=[IsAuthenticated()])
     async def event_statuses(
         self,
         info: strawberry.Info,
-        limit: int = 10,
-        offset: int = 0,
-        q: str | None = None,
     ) -> List[types.EventStatus]:
         """Get all event statuses."""
         service = EventStatusQueriesService()
         tenant = await service.get_user_tenant(info)
-        return await service.get_records(limit, offset, q, tenant.id)
+        return await service.get_records(limit=50, offset=0, q=None, tenant_id=tenant.id)
 
     @strawberry.field(extensions=[IsAuthenticated()])
     async def event_status(self, info: strawberry.Info, id: strawberry.ID) -> types.EventStatus | None:
@@ -214,88 +159,16 @@ class EventAmbassadorsQueries:
             return None
 
 
-@strawberry.type
-class EventClientQueries(EventAmbassadorsQueries):
-    pass
+class RequestQueriesService(BaseEventQueriesService):
+    """Service for request queries."""
+
+    def get_model(self) -> Model:
+        """Get the model for the service."""
+        return models.Request
 
 
 @strawberry.type
-class EventSparkQueries:
-
-    @strawberry.field(extensions=[IsAuthenticated()])
-    async def events(
-        self,
-        info: strawberry.Info,
-        limit: int = 10,
-        offset: int = 0,
-        tenant_id: strawberry.ID | None = None,
-        q: str | None = None,
-    ) -> List[types.Event]:
-        """Get all events."""
-        service = EventQueriesService()
-        return await service.get_records(limit, offset, q, tenant_id)
-
-    @strawberry.field(extensions=[IsAuthenticated()])
-    async def event(self, info: strawberry.Info, id: strawberry.ID) -> types.Event | None:
-        """Get a single event.
-
-        It doesn't limit the events to the tenant of the user.
-        """
-        try:
-            service = EventQueriesService()
-            event = await service.get_event(id)
-            return event
-        except GraphQLError:
-            return None
-
-    @strawberry.field(extensions=[IsAuthenticated()])
-    async def event_types(
-        self,
-        info: strawberry.Info,
-        limit: int = 10,
-        offset: int = 0,
-        q: str | None = None,
-    ) -> List[types.EventType]:
-        """Get all event types."""
-        service = EventTypeQueriesService()
-        tenant = await service.get_user_tenant(info)
-        return await service.get_records(limit, offset, q, tenant.id)
-
-    @strawberry.field(extensions=[IsAuthenticated()])
-    async def event_type(self, info: strawberry.Info, id: strawberry.ID) -> types.EventType | None:
-        """Get a single event type."""
-        try:
-            service = EventTypeQueriesService()
-            tenant = await service.get_user_tenant(info)
-            event_type = await service.get_record(id, tenant.id)
-            return event_type
-        except GraphQLError:
-            return None
-
-    @strawberry.field(extensions=[IsAuthenticated()])
-    async def event_statuses(
-        self,
-        info: strawberry.Info,
-        limit: int = 10,
-        offset: int = 0,
-        q: str | None = None,
-    ) -> List[types.EventStatus]:
-        """Get all event statuses."""
-        service = EventStatusQueriesService()
-        tenant = await service.get_user_tenant(info)
-        return await service.get_records(limit, offset, q, tenant.id)
-
-    @strawberry.field(extensions=[IsAuthenticated()])
-    async def event_status(self, info: strawberry.Info, id: strawberry.ID) -> types.EventStatus | None:
-        """Get a single event status."""
-        try:
-            service = EventStatusQueriesService()
-            tenant = await service.get_user_tenant(info)
-            event_status = await service.get_record(id, tenant.id)
-            return event_status
-        except GraphQLError:
-            return None
-
+class RequestQueries:
     @strawberry.field(extensions=[IsAuthenticated()])
     async def requests(
         self,
@@ -320,6 +193,17 @@ class EventSparkQueries:
         except GraphQLError:
             return None
 
+
+class ClientQueriesService(BaseEventQueriesService):
+    """Service for client queries."""
+
+    def get_model(self) -> Model:
+        """Get the model for the service."""
+        return models.Client
+
+
+@strawberry.type
+class ClientQueries:
     @strawberry.field(extensions=[IsAuthenticated()])
     async def clients(
         self,
@@ -344,6 +228,46 @@ class EventSparkQueries:
         except GraphQLError:
             return None
 
+
+class LocationQueriesService(BaseEventQueriesService):
+    """Service for location queries."""
+
+    def get_model(self) -> Model:
+        """Get the model for the service."""
+        return models.Location
+
+
+@strawberry.type
+class LocationQueries:
+    @strawberry.field(extensions=[IsAuthenticated()])
+    async def locations(self, info: strawberry.Info) -> List[types.Location]:
+        """Get all locations."""
+        service = LocationQueriesService()
+        tenant = await service.get_user_tenant(info)
+        return await service.get_records(limit=50, offset=0, q=None, tenant_id=tenant.id)
+
+    @strawberry.field(extensions=[IsAuthenticated()])
+    async def location(self, info: strawberry.Info, id: strawberry.ID) -> types.Location | None:
+        """Get a single location."""
+        try:
+            service = LocationQueriesService()
+            tenant = await service.get_user_tenant(info)
+            location = await service.get_record(id, tenant.id)
+            return location
+        except GraphQLError:
+            return None
+
+
+class DistributorQueriesService(BaseEventQueriesService):
+    """Service for distributor queries."""
+
+    def get_model(self) -> Model:
+        """Get the model for the service."""
+        return models.Distributor
+
+
+@strawberry.type
+class DistributorQueries:
     @strawberry.field(extensions=[IsAuthenticated()])
     async def distributors(
         self,
@@ -368,6 +292,17 @@ class EventSparkQueries:
         except GraphQLError:
             return None
 
+
+class RetailerQueriesService(BaseEventQueriesService):
+    """Service for retailer queries."""
+
+    def get_model(self) -> Model:
+        """Get the model for the service."""
+        return models.Retailer
+
+
+@strawberry.type
+class RetailerQueries:
     @strawberry.field(extensions=[IsAuthenticated()])
     async def retailers(
         self,
@@ -392,6 +327,17 @@ class EventSparkQueries:
         except GraphQLError:
             return None
 
+
+class RequestTypeQueriesService(BaseEventQueriesService):
+    """Service for request type queries."""
+
+    def get_model(self) -> Model:
+        """Get the model for the service."""
+        return models.RequestType
+
+
+@strawberry.type
+class RequestTypeQueries:
     @strawberry.field(extensions=[IsAuthenticated()])
     async def request_types(
         self,
@@ -416,18 +362,51 @@ class EventSparkQueries:
         except GraphQLError:
             return None
 
+
+class RequestStatusQueriesService(BaseEventQueriesService):
+    """Service for request status queries."""
+
+    def get_model(self) -> Model:
+        """Get the model for the service."""
+        return models.RequestStatus
+
+
+@strawberry.type
+class RequestStatusQueries:
     @strawberry.field(extensions=[IsAuthenticated()])
-    async def product_types(
-        self,
-        info: strawberry.Info,
-        limit: int = 10,
-        offset: int = 0,
-        q: str | None = None,
-    ) -> List[types.ProductType]:
+    async def request_statuses(self, info: strawberry.Info) -> List[types.RequestStatus]:
+        """Get all request statuses."""
+        service = RequestStatusQueriesService()
+        tenant = await service.get_user_tenant(info)
+        return await service.get_records(limit=50, offset=0, q=None, tenant_id=tenant.id)
+
+    @strawberry.field(extensions=[IsAuthenticated()])
+    async def request_status(self, info: strawberry.Info, id: strawberry.ID) -> types.RequestStatus | None:
+        """Get a single request status."""
+        try:
+            service = RequestStatusQueriesService()
+            tenant = await service.get_user_tenant(info)
+            return await service.get_record(id, tenant.id)
+        except GraphQLError:
+            return None
+
+
+class ProductTypeQueriesService(BaseEventQueriesService):
+    """Service for product type queries."""
+
+    def get_model(self) -> Model:
+        """Get the model for the service."""
+        return models.ProductType
+
+
+@strawberry.type
+class ProductTypeQueries:
+    @strawberry.field(extensions=[IsAuthenticated()])
+    async def product_types(self, info: strawberry.Info) -> List[types.ProductType]:
         """Get all product types."""
         service = ProductTypeQueriesService()
         tenant = await service.get_user_tenant(info)
-        return await service.get_records(limit, offset, q, tenant.id)
+        return await service.get_records(limit=50, offset=0, q=None, tenant_id=tenant.id)
 
     @strawberry.field(extensions=[IsAuthenticated()])
     async def product_type(self, info: strawberry.Info, id: strawberry.ID) -> types.ProductType | None:
@@ -435,11 +414,21 @@ class EventSparkQueries:
         try:
             service = ProductTypeQueriesService()
             tenant = await service.get_user_tenant(info)
-            product_type = await service.get_record(id, tenant.id)
-            return product_type
+            return await service.get_record(id, tenant.id)
         except GraphQLError:
             return None
 
+
+class ProductQueriesService(BaseEventQueriesService):
+    """Service for product queries."""
+
+    def get_model(self) -> Model:
+        """Get the model for the service."""
+        return models.Product
+
+
+@strawberry.type
+class ProductQueries:
     @strawberry.field(extensions=[IsAuthenticated()])
     async def products(
         self,
@@ -459,7 +448,6 @@ class EventSparkQueries:
         try:
             service = ProductQueriesService()
             tenant = await service.get_user_tenant(info)
-            product = await service.get_record(id, tenant.id)
-            return product
+            return await service.get_record(id, tenant.id)
         except GraphQLError:
             return None

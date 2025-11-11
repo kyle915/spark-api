@@ -1,5 +1,5 @@
 from uuid6 import uuid7
-from django.db import models
+from django.db import models, transaction
 from django.contrib.postgres.fields import ArrayField
 from django.conf import settings
 from tenants.models import Tenant
@@ -219,10 +219,22 @@ class RequestStatus(models.Model):
         related_name="request_status_updated_by",
     )
 
-    objects = RequestStatusManager()
-
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
     updated_at = models.DateTimeField(auto_now=True)
+
+    objects = RequestStatusManager()
+
+    def save(self, *args, **kwargs):
+        with transaction.atomic():
+            super().save(*args, **kwargs)
+
+            if self.is_default:
+                (
+                    RequestStatus.objects.filter(
+                        tenant=self.tenant, is_default=True)
+                    .exclude(pk=self.pk)
+                    .update(is_default=False)
+                )
 
 
 class Request(models.Model):
@@ -293,7 +305,7 @@ class Request(models.Model):
     def save(self, *args, **kwargs):
         if not self.status:
             self.status = RequestStatus.objects.get_default(self.tenant)
-        super(self, Request).save(*args, **kwargs)
+        super().save(*args, **kwargs)
 
 
 class RequestDetail(models.Model):
