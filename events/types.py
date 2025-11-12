@@ -41,25 +41,6 @@ class EventStatusDetailResponse:
     event_status: EventStatus | None = None
 
 
-@strawberry_django.type(models.Event)
-class Event:
-    id: strawberry.ID
-    uuid: str
-    name: str
-    created_at: str
-    updated_at: str
-    tenant_id: strawberry.ID
-    event_type: EventType | None = None
-    status: EventStatus | None = None
-
-
-@strawberry.type
-class EventDetailResponse:
-    success: bool
-    message: str
-    event: Event | None = None
-
-
 @strawberry_django.type(models.Location)
 class Location:
     id: strawberry.ID
@@ -231,3 +212,36 @@ class RequestDetailResponse:
     success: bool
     message: str
     request: Request | None = None
+
+
+@strawberry_django.type(models.Event)
+class Event:
+    id: strawberry.ID
+    uuid: str
+    name: str
+    start_time: str | None = None
+    end_time: str | None = None
+    address: str
+    is_national: bool
+    notes: str | None = None
+    request: Request | None = None
+    created_at: str
+    updated_at: str
+    tenant_id: strawberry.ID
+    event_type: EventType | None = None
+    status: EventStatus | None = None
+
+
+@strawberry.type
+class EventDetailResponse:
+    success: bool
+    message: str
+    event: Event | None = None
+
+
+@strawberry.type
+class ApproveRequestResponse:
+    success: bool
+    message: str
+    request: Request | None = None
+    event: Event | None = None

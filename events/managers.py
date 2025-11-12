@@ -1,4 +1,5 @@
 from django.db import models
+from asgiref.sync import sync_to_async
 
 from tenants.models import User
 
@@ -8,7 +9,7 @@ class DefaultStatusManager(models.Manager):
     Custom manager for `DefaultStatus` that provides helper shortcuts.
     """
 
-    def get_default(self, tenant=None) -> models.Model | None:
+    def get_default(self, tenant_id: int | None = None) -> models.Model | None:
         """
         Return the default status.
 
@@ -17,8 +18,8 @@ class DefaultStatusManager(models.Manager):
         """
         queryset = self.get_queryset().filter(is_default=True)
 
-        if tenant is not None:
-            queryset = queryset.filter(tenant=tenant)
+        if tenant_id is not None:
+            queryset = queryset.filter(tenant_id=tenant_id)
 
         return queryset.first()
 
@@ -56,7 +57,7 @@ class EventManager(models.Manager):
     Custom manager for `Event` that provides helper shortcuts.
     """
 
-    def from_request(
+    async def from_request(
         self,
         request: models.Model,
         created_by: User,
@@ -65,23 +66,25 @@ class EventManager(models.Manager):
     ) -> models.Model:
         """Create an event from a request."""
         from .models import EventType, EventStatus
-        event_type = event_type or EventType.objects.get_default(
-            tenant=request.tenant)
-        status = status or EventStatus.objects.get_default(
-            tenant=request.tenant)
 
-        if not event_type:
-            raise ValueError("Event type not found.")
+        async def get_object_or_default(
+            model_class: models.Model,
+            tenant_id: int,
+            model: models.Model | None = None,
+        ) -> models.Model:
+            if model:
+                return model
+            return await sync_to_async(model_class.objects.get_default)(tenant_id=tenant_id)
+
+        event_type = await get_object_or_default(EventType, request.tenant_id, event_type)
+        status = await get_object_or_default(EventStatus, request.tenant_id, status)
 
         if not status:
             raise ValueError("Event status not found.")
 
-        if not request.tenant:
-            raise ValueError("Request tenant not found.")
-
-        return self.create(
+        return await sync_to_async(self.create)(
             request=request,
-            tenant=request.tenant,
+            tenant_id=request.tenant_id,
             created_by=created_by,
             event_type=event_type,
             status=status,

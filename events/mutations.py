@@ -746,19 +746,20 @@ class RequestMutations:
                 message=str(e),
             )
 
+    @strawberry.mutation(extensions=[IsAuthenticated()])
     async def approve_request(
         self,
         info: strawberry.Info,
         id: strawberry.ID,
-    ) -> types.RequestDetailResponse:
+    ) -> types.ApproveRequestResponse:
         """Approve a request."""
         try:
             service: RequestMutationService = RequestMutationService()
             user: User = await service.get_user(info)
-            tenant: Tenant = user.tenant
-            if user.role_id == ROLE_ID.Ambassadors:
-                raise GraphQLError(
-                    "You are not authorized to approve requests.")
+            tenant: Tenant = await sync_to_async(user.get_tenant)()
+            # if user.role_id == ROLE_ID.Ambassadors:
+            #     raise GraphQLError(
+            #         "You are not authorized to approve requests.")
 
             if not tenant:
                 raise GraphQLError(
@@ -770,27 +771,28 @@ class RequestMutations:
                 raise GraphQLError(
                     "Approval status not found. Please ensure you have a status for approval.")
 
-            request = await sync_to_async(service.get_model().objects.get)(id=id)
+            request: models.Request = await sync_to_async(models.Request.objects.get)(id=id)
             request.status = approval_status
             await sync_to_async(request.save)()
-            await sync_to_async(models.Event.from_request)(
+            event: models.Event = await models.Event.objects.from_request(
                 request=request,
                 created_by=user
             )
 
-            request.refresh_from_db()
-            return types.RequestDetailResponse(
+            return types.ApproveRequestResponse(
                 success=True,
                 message="Request approved successfully.",
                 request=request,
+                event=event,
             )
         except GraphQLError as e:
-            return types.RequestDetailResponse(
+            return types.ApproveRequestResponse(
                 success=False,
                 message=str(e),
             )
         except Exception as e:
-            return types.RequestDetailResponse(
+            raise e
+            return types.ApproveRequestResponse(
                 success=False,
                 message=str(e),
             )
