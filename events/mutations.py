@@ -791,7 +791,6 @@ class RequestMutations:
                 message=str(e),
             )
         except Exception as e:
-            raise e
             return types.ApproveRequestResponse(
                 success=False,
                 message=str(e),
