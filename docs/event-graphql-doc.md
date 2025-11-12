@@ -1301,18 +1301,8 @@ Create a new request. **This mutation is PUBLIC** - no authentication required.
 
 **GraphQL Mutation:**
 ```graphql
-mutation {
-  createRequest(input: {
-    name: "Product Delivery Request"
-    date: "2025-01-20"
-    address: "123 Main St, New York, NY 10001"
-    coordinates: [-74.0060, 40.7128]
-    clientId: "1"
-    distributorId: "2"
-    retailerId: "3"
-    requestTypeId: "4"
-    tenantId: "5"
-  }) {
+mutation CreateRequest($input: CreateRequestInput!) {
+  createRequest(input: $input) {
     success
     message
     request {
@@ -1320,8 +1310,15 @@ mutation {
       uuid
       name
       date
+      startTime
+      endTime
       address
       coordinates
+      status {
+        id
+        name
+        isDefault
+      }
       tenantId
       client {
         id
@@ -1349,6 +1346,25 @@ mutation {
 }
 ```
 
+**Variables:**
+```json
+{
+  "input": {
+    "name": "Product Delivery Request",
+    "date": "2025-01-20",
+    "startTime": "2025-01-20T14:00:00Z",
+    "endTime": "2025-01-20T16:00:00Z",
+    "address": "123 Main St, New York, NY 10001",
+    "coordinates": [-74.0060, 40.7128],
+    "clientId": "1",
+    "distributorId": "2",
+    "retailerId": "3",
+    "requestTypeId": "4",
+    "tenantId": "5"
+  }
+}
+```
+
 **Input Fields:**
 - `name` (string, required): Request name
 - `date` (string, required): Request date (ISO 8601 format)
@@ -1370,10 +1386,17 @@ mutation {
       "request": {
         "id": "1",
         "uuid": "01234567-89ab-cdef-0123-456789abcdef",
-        "name": "Product Delivery Request",
-        "date": "2025-01-20",
-        "address": "123 Main St, New York, NY 10001",
-        "coordinates": [-74.0060, 40.7128],
+      "name": "Product Delivery Request",
+      "date": "2025-01-20",
+      "startTime": "2025-01-20T14:00:00Z",
+      "endTime": "2025-01-20T16:00:00Z",
+      "address": "123 Main St, New York, NY 10001",
+      "coordinates": [-74.0060, 40.7128],
+      "status": {
+        "id": "7",
+        "name": "Pending",
+        "isDefault": true
+      },
         "tenantId": "5",
         "client": {
           "id": "1",
@@ -1404,6 +1427,8 @@ mutation {
 
 **Note**: This is a public mutation that does not require authentication. For public requests, the `tenantId` field is required.
 
+**Default status behavior**: If the tenant has a default `RequestStatus`, the system attaches it automatically when the request is created. If no default status exists, the `status` field remains `null`.
+
 ---
 
 ### 22. Update Request
@@ -1419,6 +1444,8 @@ mutation {
     id: "1"
     name: "Updated Request Name"
     date: "2025-01-25"
+    startTime: "2025-01-25T15:00:00Z"
+    endTime: "2025-01-25T17:00:00Z"
     address: "456 New St, New York, NY 10002"
     coordinates: [-74.0050, 40.7130]
     clientId: "1"
@@ -1434,8 +1461,14 @@ mutation {
       uuid
       name
       date
+      startTime
+      endTime
       address
       coordinates
+      status {
+        id
+        name
+      }
       client {
         id
         name
@@ -1462,6 +1495,8 @@ mutation {
 - `id` (ID, required): The ID of the request to update
 - `name` (string, required): Updated request name
 - `date` (string, required): Updated request date
+- `startTime` (string, required): Updated start time (ISO 8601)
+- `endTime` (string, required): Updated end time (ISO 8601)
 - `address` (string, required): Updated delivery/service address
 - `coordinates` (List[float], required): Updated geographic coordinates `[longitude, latitude]`
 - `clientId` (ID, required): Updated client ID
@@ -1469,6 +1504,46 @@ mutation {
 - `retailerId` (ID, required): Updated retailer ID
 - `requestTypeId` (ID, required): Updated request type ID
 - `tenantId` (ID, optional): Tenant ID (only Spark Admin can provide this)
+
+---
+
+### 23. Approve Request
+
+Approve a pending request and (optionally) create a follow-up event when the approval status is configured to do so.
+
+**Available for**: Authenticated users with permissions (Ambassadors cannot approve requests).
+
+**GraphQL Mutation:**
+```graphql
+mutation {
+  approveRequest(id: "1") {
+    success
+    message
+    request {
+      id
+      name
+      status {
+        id
+        name
+      }
+    }
+    event {
+      id
+      startTime
+      endTime
+      status {
+        id
+        name
+      }
+    }
+  }
+}
+```
+
+**Behavior:**
+- Requires authentication; the caller must belong to a tenant and have the appropriate role.
+- Uses the tenant’s approval-status configuration (`RequestStatus.create_event` and `RequestStatus.is_default`) to determine the new request status.
+- When the approval status is configured with `createEvent = true`, an `Event` is generated from the request and returned alongside the updated request.
 
 ---
 
@@ -1482,6 +1557,12 @@ Represents an event in the system.
 - `id` (ID): Unique identifier
 - `uuid` (string): UUID identifier
 - `name` (string): Event name
+- `startTime` (string, nullable): Event start timestamp (ISO 8601)
+- `endTime` (string, nullable): Event end timestamp (ISO 8601)
+- `address` (string): Event address
+- `isNational` (boolean): Whether the event is national
+- `notes` (string, nullable): Additional notes attached to the event
+- `request` (Request, nullable): Associated request when created from a request approval
 - `createdAt` (string): Creation timestamp (ISO 8601)
 - `updatedAt` (string): Last update timestamp (ISO 8601)
 - `tenantId` (ID): Tenant ID
@@ -1625,6 +1706,21 @@ Represents a request type in the system.
 
 ---
 
+### RequestStatus
+
+Represents a status value that can be assigned to requests.
+
+**Fields:**
+- `id` (ID): Unique identifier
+- `uuid` (string): UUID identifier
+- `name` (string): Status name
+- `createEvent` (boolean): Whether approving with this status should spawn an event
+- `isDefault` (boolean): Marks the tenant-wide default status applied on create
+- `createdAt` (string): Creation timestamp (ISO 8601)
+- `updatedAt` (string): Last update timestamp (ISO 8601)
+
+---
+
 ### Request
 
 Represents a request in the system.
@@ -1634,8 +1730,11 @@ Represents a request in the system.
 - `uuid` (string): UUID identifier
 - `name` (string): Request name
 - `date` (string): Request date
+- `startTime` (string, nullable): Request start time (ISO 8601)
+- `endTime` (string, nullable): Request end time (ISO 8601)
 - `address` (string): Delivery/service address
 - `coordinates` (List[float]): Geographic coordinates `[longitude, latitude]`
+- `status` (RequestStatus, nullable): Current request status
 - `tenantId` (ID): Tenant ID
 - `client` (Client, nullable): Associated client
 - `distributor` (Distributor, nullable): Associated distributor
@@ -1856,6 +1955,8 @@ Extends `CreateRequestTypeInput` with:
 **Fields:**
 - `name` (string, required): Request name
 - `date` (string, required): Request date (ISO 8601 format)
+- `startTime` (string, required): Request start time (ISO 8601 format)
+- `endTime` (string, required): Request end time (ISO 8601 format)
 - `address` (string, required): Delivery/service address
 - `coordinates` (List[float], required): Geographic coordinates `[longitude, latitude]`
 - `clientId` (ID, required): ID of the associated client
@@ -1866,7 +1967,7 @@ Extends `CreateRequestTypeInput` with:
 
 **Validation:**
 - Name is required and cannot be empty
-- Date is required and must be a valid date format
+- Date, startTime, and endTime are required and must be valid ISO 8601 strings
 - Address is required and cannot be empty
 - Coordinates must be a list of exactly 2 floats `[longitude, latitude]`
 - All ID fields (clientId, distributorId, retailerId, requestTypeId) are required
@@ -2001,6 +2102,18 @@ Response for request mutations.
 - `success` (boolean): Whether the operation was successful
 - `message` (string): Response message
 - `request` (Request, nullable): The created/updated request (null on error)
+
+---
+
+### ApproveRequestResponse
+
+Response returned by the `approveRequest` mutation.
+
+**Fields:**
+- `success` (boolean): Whether the operation was successful
+- `message` (string): Response message
+- `request` (Request, nullable): The updated request after approval
+- `event` (Event, nullable): The event created from the request (present only when the approval status is configured to spawn events)
 
 ---
 
