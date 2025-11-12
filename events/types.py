@@ -10,6 +10,7 @@ class EventType:
     id: strawberry.ID
     uuid: str
     name: str
+    is_default: bool
     tenant_id: strawberry.ID
     created_at: str
     updated_at: str
@@ -27,6 +28,7 @@ class EventStatus:
     id: strawberry.ID
     uuid: str
     name: str
+    is_default: bool
     tenant_id: strawberry.ID
     created_at: str
     updated_at: str
@@ -37,25 +39,6 @@ class EventStatusDetailResponse:
     success: bool
     message: str
     event_status: EventStatus | None = None
-
-
-@strawberry_django.type(models.Event)
-class Event:
-    id: strawberry.ID
-    uuid: str
-    name: str
-    created_at: str
-    updated_at: str
-    tenant_id: strawberry.ID
-    event_type: EventType | None = None
-    status: EventStatus | None = None
-
-
-@strawberry.type
-class EventDetailResponse:
-    success: bool
-    message: str
-    event: Event | None = None
 
 
 @strawberry_django.type(models.Location)
@@ -186,18 +169,39 @@ class RequestTypeDetailResponse:
     request_type: RequestType | None = None
 
 
+@strawberry.type
+class RequestStatus:
+    id: strawberry.ID
+    uuid: str
+    name: str
+    create_event: bool
+    is_default: bool
+    created_at: str
+    updated_at: str
+
+
+@strawberry.type
+class RequestStatusDetailResponse:
+    success: bool
+    message: str
+    request_status: RequestStatus | None = None
+
+
 @strawberry_django.type(models.Request)
 class Request:
     id: strawberry.ID
     uuid: str
     name: str
     date: str
+    start_time: str | None = None
+    end_time: str | None = None
     address: str
     coordinates: List[float]
     client: Client | None = None
     distributor: Distributor | None = None
     retailer: Retailer | None = None
     request_type: RequestType | None = None
+    status: RequestStatus | None = None
     tenant_id: strawberry.ID
     created_at: str
     updated_at: str
@@ -208,3 +212,36 @@ class RequestDetailResponse:
     success: bool
     message: str
     request: Request | None = None
+
+
+@strawberry_django.type(models.Event)
+class Event:
+    id: strawberry.ID
+    uuid: str
+    name: str
+    start_time: str | None = None
+    end_time: str | None = None
+    address: str
+    is_national: bool
+    notes: str | None = None
+    request: Request | None = None
+    created_at: str
+    updated_at: str
+    tenant_id: strawberry.ID
+    event_type: EventType | None = None
+    status: EventStatus | None = None
+
+
+@strawberry.type
+class EventDetailResponse:
+    success: bool
+    message: str
+    event: Event | None = None
+
+
+@strawberry.type
+class ApproveRequestResponse:
+    success: bool
+    message: str
+    request: Request | None = None
+    event: Event | None = None

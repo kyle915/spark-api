@@ -1,8 +1,16 @@
 from uuid6 import uuid7
-from django.db import models
-from tenants.models import Tenant
+from django.db import models, transaction
 from django.contrib.postgres.fields import ArrayField
 from django.conf import settings
+from tenants.models import Tenant
+
+from .managers import (
+    RequestStatusManager,
+    EventStatusManager,
+    EventTypeManager,
+    EventManager
+)
+from utils.models import WithDefaultAttribute
 
 
 class Location(models.Model):
@@ -189,11 +197,63 @@ class RequestType(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
 
+class RequestStatus(
+    WithDefaultAttribute,
+    models.Model
+):
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    name = models.CharField(max_length=50)
+    # This create_event flag is used to know if the event should be created
+    # if the status is selected
+    create_event = models.BooleanField(default=False)
+    is_default = models.BooleanField(default=False, db_index=True)
+
+    tenant = models.ForeignKey(
+        Tenant,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="request_statuses",
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="request_status_created_by",
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="request_status_updated_by",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    objects = RequestStatusManager()
+
+    def save(self, *args, **kwargs):
+        with transaction.atomic():
+            super().save(*args, **kwargs)
+
+            # Set the create event flag to false if the current status is set to true
+            if self.create_event:
+                (
+                    RequestStatus.objects.filter(
+                        tenant=self.tenant, create_event=True)
+                    .exclude(pk=self.pk)
+                    .update(create_event=False)
+                )
+
+
 class Request(models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     name = models.CharField(max_length=50)
     date = models.DateField()
+    start_time = models.DateTimeField(null=True, db_index=True)
+    end_time = models.DateTimeField(null=True, blank=True)
     address = models.CharField(max_length=100)
     coordinates = ArrayField(
         models.FloatField(),
@@ -225,6 +285,12 @@ class Request(models.Model):
         null=False,
         related_name="requests",
     )
+    status = models.ForeignKey(
+        RequestStatus,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='requests'
+    )
     tenant = models.ForeignKey(
         Tenant,
         on_delete=models.RESTRICT,
@@ -247,6 +313,11 @@ class Request(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
     updated_at = models.DateTimeField(auto_now=True)
+
+    def save(self, *args, **kwargs):
+        if not self.status:
+            self.status = RequestStatus.objects.get_default(self.tenant)
+        super().save(*args, **kwargs)
 
 
 class RequestDetail(models.Model):
@@ -319,10 +390,14 @@ class RequestStoreManager(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
 
-class EventStatus(models.Model):
+class EventStatus(
+    WithDefaultAttribute,
+    models.Model
+):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     name = models.CharField(max_length=50)
+    is_default = models.BooleanField(default=False, db_index=True)
 
     tenant = models.ForeignKey(
         Tenant,
@@ -346,11 +421,17 @@ class EventStatus(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
     updated_at = models.DateTimeField(auto_now=True)
 
+    objects = EventStatusManager()
 
-class EventType(models.Model):
+
+class EventType(
+    WithDefaultAttribute,
+    models.Model
+):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     name = models.CharField(max_length=50)
+    is_default = models.BooleanField(default=False, db_index=True)
 
     tenant = models.ForeignKey(
         Tenant,
@@ -375,6 +456,8 @@ class EventType(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
     updated_at = models.DateTimeField(auto_now=True)
 
+    objects = EventTypeManager()
+
 
 class Event(models.Model):
     id = models.BigAutoField(primary_key=True)
@@ -386,6 +469,13 @@ class Event(models.Model):
         on_delete=models.RESTRICT,
         null=False,
         related_name="events",
+    )
+    request = models.ForeignKey(
+        Request,
+        on_delete=models.CASCADE,
+        # just in case we have records already. We'll validate in the request anyway.
+        null=True,
+        db_index=True
     )
     # Leaving these fields nullable, we'll validate them in the schema
     # to avoid conflicts with the migrations
@@ -404,6 +494,12 @@ class Event(models.Model):
         related_name="events",
     )
 
+    start_time = models.DateTimeField(null=True, db_index=True)
+    end_time = models.DateTimeField(null=True, blank=True)
+    address = models.CharField(max_length=100, null=False, default="")
+    notes = models.TextField(null=True, blank=True)
+    is_national = models.BooleanField(default=False)
+
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
@@ -419,3 +515,5 @@ class Event(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
     updated_at = models.DateTimeField(auto_now=True)
+
+    objects = EventManager()

@@ -16,7 +16,7 @@ from utils.graphql.inputs import SparkGraphQLInput
 from utils.graphql.types import SparkGraphQLErrorResponse
 from utils.graphql.mixins import SparkGraphQLMixin
 from utils.utils import ROLE_ID
-from tenants.models import Tenant
+from tenants.models import Tenant, User
 
 User = get_user_model()
 
@@ -634,6 +634,63 @@ class RequestTypeMutations:
             )
 
 
+@strawberry.type
+class RequestStatusMutations:
+    @strawberry.mutation(extensions=[IsAuthenticated()])
+    async def create_request_status(
+        self,
+        info: strawberry.Info,
+        input: inputs.CreateRequestStatusInput,
+    ) -> types.RequestStatusDetailResponse:
+        """Create a new request status."""
+        try:
+            request_status: models.RequestStatus = await RequestStatusMutationService.process_create_or_update(
+                input=input,
+                info=info
+            )
+            return types.RequestStatusDetailResponse(
+                success=True,
+                message="Request status created successfully.",
+                request_status=request_status,
+            )
+        except GraphQLError as e:
+            return types.RequestStatusDetailResponse(
+                success=False,
+                message=str(e),
+            )
+
+    @strawberry.mutation(extensions=[IsAuthenticated()])
+    async def update_request_status(
+        self,
+        info: strawberry.Info,
+        input: inputs.UpdateRequestStatusInput,
+    ) -> types.RequestStatusDetailResponse:
+        """Update an existing request status."""
+        try:
+            request_status: models.RequestStatus = await RequestStatusMutationService.process_create_or_update(
+                input=input,
+                info=info
+            )
+            return types.RequestStatusDetailResponse(
+                success=True,
+                message="Request status updated successfully.",
+                request_status=request_status,
+            )
+        except GraphQLError as e:
+            return types.RequestStatusDetailResponse(
+                success=False,
+                message=str(e),
+            )
+
+
+class RequestStatusMutationService(BaseMutationService):
+    """Service for request status mutations"""
+
+    def get_model(self) -> Model:
+        """Get the model for the service"""
+        return models.RequestStatus
+
+
 class RequestMutationService(BaseMutationService):
     """Service for request mutations."""
 
@@ -643,16 +700,15 @@ class RequestMutationService(BaseMutationService):
 
 
 @strawberry.type
-class RequestMutations:
-
+class PublicRequestMutations:
+    @strawberry.mutation
     async def create_request(
         self,
-        info: strawberry.Info,
         input: inputs.CreateRequestInput,
     ) -> types.RequestDetailResponse:
         """Create a new request."""
         try:
-            service: RequestDetailResponse = RequestMutationService.with_input(
+            service: RequestMutationService = RequestMutationService.with_input(
                 input=input)
             service.set_is_public(True)
             request: models.Request = await service.save()
@@ -666,6 +722,10 @@ class RequestMutations:
                 success=False,
                 message=str(e),
             )
+
+
+@strawberry.type
+class RequestMutations:
 
     async def update_request(
         self,
@@ -682,6 +742,56 @@ class RequestMutations:
             )
         except GraphQLError as e:
             return types.RequestDetailResponse(
+                success=False,
+                message=str(e),
+            )
+
+    @strawberry.mutation(extensions=[IsAuthenticated()])
+    async def approve_request(
+        self,
+        info: strawberry.Info,
+        id: strawberry.ID,
+    ) -> types.ApproveRequestResponse:
+        """Approve a request."""
+        try:
+            service: RequestMutationService = RequestMutationService()
+            user: User = await service.get_user(info)
+            tenant: Tenant = await sync_to_async(user.get_tenant)()
+            if user.role_id == ROLE_ID.Ambassadors:
+                raise GraphQLError(
+                    "You are not authorized to approve requests.")
+
+            if not tenant:
+                raise GraphQLError(
+                    "Tenant not found. Please ensure you are a member of a tenant.")
+
+            approval_status = await sync_to_async(
+                models.RequestStatus.objects.get_for_approval)(tenant=tenant.id)
+            if not approval_status:
+                raise GraphQLError(
+                    "Approval status not found. Please ensure you have a status for approval.")
+
+            request: models.Request = await sync_to_async(models.Request.objects.get)(id=id)
+            request.status = approval_status
+            await sync_to_async(request.save)()
+            event: models.Event = await models.Event.objects.from_request(
+                request=request,
+                created_by=user
+            )
+
+            return types.ApproveRequestResponse(
+                success=True,
+                message="Request approved successfully.",
+                request=request,
+                event=event,
+            )
+        except GraphQLError as e:
+            return types.ApproveRequestResponse(
+                success=False,
+                message=str(e),
+            )
+        except Exception as e:
+            return types.ApproveRequestResponse(
                 success=False,
                 message=str(e),
             )

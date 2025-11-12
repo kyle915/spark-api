@@ -17,27 +17,48 @@ from .mutations import (
     LocationMutations,
     ClientMutations,
     DistributorMutations,
+    RequestStatusMutations,
     RetailerMutations,
     ProductTypeMutations,
     ProductMutations,
     RequestTypeMutations,
-    RequestMutations
+    RequestMutations,
+    PublicRequestMutations,
 )
-from .queries import EventAmbassadorsQueries, EventSparkQueries, EventClientQueries
+from events import queries
 
 
 @strawberry.type
-class EventQueryAmbassadors(EventAmbassadorsQueries):
+class EventQueryAmbassadors(
+    queries.EventQueries,
+    queries.EventTypeQueries,
+    queries.EventStatusQueries,
+):
     pass
 
 
 @strawberry.type
-class EventQuerySpark(EventSparkQueries):
+class EventQueryClient(
+    queries.EventQueries,
+    queries.EventTypeQueries,
+    queries.EventStatusQueries,
+    queries.ClientQueries,
+    queries.DistributorQueries,
+    queries.RetailerQueries,
+    queries.ProductTypeQueries,
+    queries.ProductQueries,
+    queries.RequestTypeQueries,
+    queries.RequestStatusQueries,
+    queries.RequestQueries,
+    queries.LocationQueries,
+):
     pass
 
 
 @strawberry.type
-class EventQueryClient(EventClientQueries):
+class EventQuerySpark(
+    EventQueryClient
+):
     pass
 
 
@@ -45,6 +66,7 @@ class EventQueryClient(EventClientQueries):
 class EventsMutations(
     EventMutations,
     EventTypeMutations,
+    PublicRequestMutations,
     EventStatusMutations,
     LocationMutations,
     ClientMutations,
@@ -53,6 +75,7 @@ class EventsMutations(
     ProductTypeMutations,
     ProductMutations,
     RequestTypeMutations,
+    RequestStatusMutations,
     RequestMutations
 ):
     pass
