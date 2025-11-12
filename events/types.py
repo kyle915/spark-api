@@ -212,6 +212,8 @@ class Request:
     uuid: str
     name: str
     date: str
+    start_time: str | None = None
+    end_time: str | None = None
     address: str
     coordinates: List[float]
     client: Client | None = None

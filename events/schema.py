@@ -23,6 +23,7 @@ from .mutations import (
     ProductMutations,
     RequestTypeMutations,
     RequestMutations,
+    PublicRequestMutations,
 )
 from events import queries
 
@@ -65,6 +66,7 @@ class EventQuerySpark(
 class EventsMutations(
     EventMutations,
     EventTypeMutations,
+    PublicRequestMutations,
     EventStatusMutations,
     LocationMutations,
     ClientMutations,

@@ -700,16 +700,15 @@ class RequestMutationService(BaseMutationService):
 
 
 @strawberry.type
-class RequestMutations:
-
+class PublicRequestMutations:
+    @strawberry.mutation
     async def create_request(
         self,
-        info: strawberry.Info,
         input: inputs.CreateRequestInput,
     ) -> types.RequestDetailResponse:
         """Create a new request."""
         try:
-            service: RequestDetailResponse = RequestMutationService.with_input(
+            service: RequestMutationService = RequestMutationService.with_input(
                 input=input)
             service.set_is_public(True)
             request: models.Request = await service.save()
@@ -723,6 +722,10 @@ class RequestMutations:
                 success=False,
                 message=str(e),
             )
+
+
+@strawberry.type
+class RequestMutations:
 
     async def update_request(
         self,

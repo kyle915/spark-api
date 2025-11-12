@@ -23,7 +23,7 @@ class DefaultStatusManager(models.Manager):
         return queryset.first()
 
 
-class RequestStatusManager(models.Manager):
+class RequestStatusManager(DefaultStatusManager):
     """
     Custom manager for `RequestStatus` that provides helper shortcuts.
     """
