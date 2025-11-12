@@ -757,9 +757,9 @@ class RequestMutations:
             service: RequestMutationService = RequestMutationService()
             user: User = await service.get_user(info)
             tenant: Tenant = await sync_to_async(user.get_tenant)()
-            # if user.role_id == ROLE_ID.Ambassadors:
-            #     raise GraphQLError(
-            #         "You are not authorized to approve requests.")
+            if user.role_id == ROLE_ID.Ambassadors:
+                raise GraphQLError(
+                    "You are not authorized to approve requests.")
 
             if not tenant:
                 raise GraphQLError(
