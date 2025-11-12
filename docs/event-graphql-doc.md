@@ -292,6 +292,57 @@ query {
 
 ---
 
+### 6. Get Today's Events
+
+Retrieve all events happening today for the authenticated user's tenant, optionally filtered by a search term. Events are returned in chronological order by `startTime`.
+
+**Available for**: Ambassadors, Clients, Spark Admin
+
+**GraphQL Query:**
+```graphql
+query {
+  todayEvents(q: "training") {
+    id
+    uuid
+    name
+    startTime
+    endTime
+    address
+    status {
+      id
+      name
+    }
+  }
+}
+```
+
+**Parameters:**
+- `q` (string, optional): Case-insensitive search string that filters by event name.
+
+**Response:**
+```json
+{
+  "data": {
+    "todayEvents": [
+      {
+        "id": "12",
+        "uuid": "91cb6f3a-3c5a-4daf-901a-661e95d8953d",
+        "name": "In-Store Sampling",
+        "startTime": "2025-01-20T14:00:00Z",
+        "endTime": "2025-01-20T18:00:00Z",
+        "address": "123 Market St, Springfield, IL",
+        "status": {
+          "id": "3",
+          "name": "Scheduled"
+        }
+      }
+    ]
+  }
+}
+```
+
+---
+
 ## Mutations
 
 ### 1. Create Event

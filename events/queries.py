@@ -1,3 +1,4 @@
+import datetime
 import strawberry
 from strawberry_django.permissions import IsAuthenticated
 from asgiref.sync import sync_to_async
@@ -24,6 +25,23 @@ class BaseEventQueriesService(SparkGraphQLMixin):
         """Get the model for the service."""
         raise NotImplementedError("Subclasses must implement this method.")
 
+    def get_queryset(self) -> QuerySet:
+        """Get the queryset for the service."""
+        return self.get_model().objects.all()
+
+    def get_filtered_queryset(
+        self,
+        tenant_id: int | None = None,
+        q: str | None = None
+    ) -> QuerySet:
+        """Get the filtered queryset for the service."""
+        queryset = self.get_queryset()
+        if tenant_id:
+            queryset = queryset.filter(tenant_id=tenant_id)
+        if q:
+            queryset = queryset.filter(name__icontains=q)
+        return queryset
+
     async def get_records(
         self,
         limit: int = 10,
@@ -32,11 +50,7 @@ class BaseEventQueriesService(SparkGraphQLMixin):
         tenant_id: strawberry.ID | None = None
     ) -> List[Model]:
         """Get all records."""
-        queryset = self.get_model().objects.all()
-        if tenant_id:
-            queryset = queryset.filter(tenant_id=tenant_id)
-        if q:
-            queryset = queryset.filter(name__icontains=q)
+        queryset = self.get_filtered_queryset(tenant_id, q)
         queryset = queryset.order_by('-created_at')[offset:offset+limit]
         return await sync_to_async(list)(queryset)
 
@@ -90,6 +104,21 @@ class EventQueries:
             return event
         except GraphQLError:
             return None
+
+    @strawberry.field(extensions=[IsAuthenticated()])
+    async def today_events(
+        self,
+        info: strawberry.Info,
+        q: str | None = None,
+    ) -> List[types.Event]:
+        """Get all events for today."""
+        service = EventQueriesService()
+        tenant = await service.get_user_tenant(info)
+        queryset = service.get_filtered_queryset(tenant.id, q)
+        queryset = queryset.filter(start_time__day=datetime.date.today().day)
+        queryset = queryset.order_by('start_time')
+
+        return await sync_to_async(list)(queryset)
 
 
 class EventTypeQueriesService(BaseEventQueriesService):
