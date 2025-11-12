@@ -13,23 +13,52 @@ from strawberry_django.permissions import (
 from .mutations import (
     EventMutations,
     EventTypeMutations,
-    EventStatusMutations
+    EventStatusMutations,
+    LocationMutations,
+    ClientMutations,
+    DistributorMutations,
+    RequestStatusMutations,
+    RetailerMutations,
+    ProductTypeMutations,
+    ProductMutations,
+    RequestTypeMutations,
+    RequestMutations,
+    PublicRequestMutations,
 )
-from .queries import EventAmbassadorsQueries, EventSparkQueries, EventClientQueries
+from events import queries
 
 
 @strawberry.type
-class EventQueryAmbassadors(EventAmbassadorsQueries):
+class EventQueryAmbassadors(
+    queries.EventQueries,
+    queries.EventTypeQueries,
+    queries.EventStatusQueries,
+):
     pass
 
 
 @strawberry.type
-class EventQuerySpark(EventSparkQueries):
+class EventQueryClient(
+    queries.EventQueries,
+    queries.EventTypeQueries,
+    queries.EventStatusQueries,
+    queries.ClientQueries,
+    queries.DistributorQueries,
+    queries.RetailerQueries,
+    queries.ProductTypeQueries,
+    queries.ProductQueries,
+    queries.RequestTypeQueries,
+    queries.RequestStatusQueries,
+    queries.RequestQueries,
+    queries.LocationQueries,
+):
     pass
 
 
 @strawberry.type
-class EventQueryClient(EventClientQueries):
+class EventQuerySpark(
+    EventQueryClient
+):
     pass
 
 
@@ -37,6 +66,16 @@ class EventQueryClient(EventClientQueries):
 class EventsMutations(
     EventMutations,
     EventTypeMutations,
-    EventStatusMutations
+    PublicRequestMutations,
+    EventStatusMutations,
+    LocationMutations,
+    ClientMutations,
+    DistributorMutations,
+    RetailerMutations,
+    ProductTypeMutations,
+    ProductMutations,
+    RequestTypeMutations,
+    RequestStatusMutations,
+    RequestMutations
 ):
     pass
