@@ -79,3 +79,35 @@ class EventsMutations(
     RequestMutations
 ):
     pass
+
+
+@strawberry.type
+class EventMutationsAmbassadors(
+    PublicRequestMutations,
+):
+    pass
+
+
+@strawberry.type
+class EventMutationsClient(
+    PublicRequestMutations,
+    EventStatusMutations,
+    LocationMutations,
+    ClientMutations,
+    DistributorMutations,
+    RetailerMutations,
+    ProductTypeMutations,
+    ProductMutations,
+    RequestTypeMutations,
+    RequestStatusMutations,
+    RequestMutations,
+):
+    pass
+
+
+@strawberry.type
+class EventMutationsSpark(
+    EventMutationsAmbassadors,
+    EventMutationsClient,
+):
+    pass

@@ -64,17 +64,17 @@ class BaseMutationService(SparkGraphQLMixin):
         """Get the model for the service."""
         raise NotImplementedError("Subclasses must implement this method.")
 
-    def validations(self):
+    async def validations(self):
         """Before save validations."""
         if self.is_public and not self.input.tenant_id:
             raise GraphQLError("Tenant ID is required.")
-        if not self.is_public and self.user.role_id != ROLE_ID.SparkAdmin and self.input.tenant_id:
+        if not self.is_public and not await self.user.role.is_spark_admin and self.input.tenant_id:
             raise GraphQLError("Tenant ID should not be provided.")
 
     async def save(self) -> Model:
         """Save the model."""
         # validate the input
-        self.validations()
+        await self.validations()
 
         # get the model
         model_class = self.get_model()
@@ -757,7 +757,7 @@ class RequestMutations:
             service: RequestMutationService = RequestMutationService()
             user: User = await service.get_user(info)
             tenant: Tenant = await sync_to_async(user.get_tenant)()
-            if user.role_id == ROLE_ID.Ambassadors:
+            if await user.role.is_ambassador:
                 raise GraphQLError(
                     "You are not authorized to approve requests.")
 

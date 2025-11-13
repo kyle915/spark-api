@@ -1,7 +1,10 @@
 from uuid6 import uuid7
+from django.utils.text import slugify
 from django.db import models
 from django.contrib.auth.models import AbstractUser
 from django.conf import settings
+
+from .managers import UserManager, TenantedUserManager
 
 
 class Tenant(models.Model):
@@ -29,6 +32,7 @@ class Role(models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     name = models.CharField(max_length=50, unique=True)
+    slug = models.SlugField(max_length=50, unique=True, null=True)
 
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -48,6 +52,23 @@ class Role(models.Model):
 
     def __str__(self):
         return self.name
+
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            self.slug = slugify(self.name)
+        super().save(*args, **kwargs)
+
+    @property
+    async def is_ambassador(self) -> bool:
+        return self.slug == 'ambassador'
+
+    @property
+    async def is_spark_admin(self) -> bool:
+        return self.slug == 'spark-admin'
+
+    @property
+    async def is_client(self) -> bool:
+        return self.slug == 'client'
 
 
 class User(AbstractUser):
@@ -72,6 +93,8 @@ class User(AbstractUser):
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
     updated_at = models.DateTimeField(auto_now=True)
     is_active = models.BooleanField(default=True)
+
+    objects = UserManager()
 
     def __str__(self):
         return self.username
@@ -135,6 +158,8 @@ class TenantedUser(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
     updated_at = models.DateTimeField(auto_now=True)
+
+    objects = TenantedUserManager()
 
     def __str__(self):
         return f"{self.user.username} @ {self.tenant.name}"

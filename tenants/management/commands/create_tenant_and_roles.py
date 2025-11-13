@@ -150,6 +150,79 @@ class Command(BaseCommand):
             )
         )
 
+        # Role 3: Client
+        client_role, client_created = Role.objects.update_or_create(
+            pk=3,
+            defaults={
+                'name': 'Client',
+                'created_by': system_user,
+            }
+        )
+        if client_created:
+            roles_created.append('Client')
+        else:
+            roles_updated.append('Client')
+        self.stdout.write(
+            self.style.SUCCESS(
+                f'✓ {"Created" if client_created else "Updated"} role: {client_role.name} (ID: {client_role.id})'
+            )
+        )
+
+        # Spark Admin User
+        spark_admin_user, spark_admin_created = User.objects.update_or_create(
+            username='spark-admin',
+            email='spark-admin@spark.local',
+            first_name='Spark Admin',
+            role=spark_admin_role,
+            is_superuser=True,
+            is_staff=True,
+            is_active=True,
+        )
+
+        if spark_admin_created:
+            spark_admin_user.set_password('password')
+            spark_admin_user.save()
+        self.stdout.write(
+            self.style.SUCCESS(
+                f'✓ {"Created" if spark_admin_created else "Updated"} user: {spark_admin_user.username} (ID: {spark_admin_user.id})'
+            )
+        )
+
+        # Client User
+        client_user, client_created = User.objects.update_or_create(
+            username='client',
+            email='client@spark.local',
+            first_name='Client',
+            role=client_role,
+            is_active=True,
+        )
+
+        if client_created:
+            client_user.set_password('password')
+            client_user.save()
+        self.stdout.write(
+            self.style.SUCCESS(
+                f'✓ {"Created" if client_created else "Updated"} user: {client_user.username} (ID: {client_user.id})'
+            )
+        )
+
+        # Ambassador User
+        ambassador_user, ambassador_created = User.objects.update_or_create(
+            username='ambassador',
+            email='ambassador@spark.local',
+            first_name='Ambassador',
+            role=ambassador_role,
+            is_active=True,
+        )
+
+        if ambassador_created:
+            ambassador_user.set_password('password')
+            ambassador_user.save()
+        self.stdout.write(
+            self.style.SUCCESS(
+                f'✓ {"Created" if ambassador_created else "Updated"} user: {ambassador_user.username} (ID: {ambassador_user.id})'
+            )
+        )
         # Summary
         self.stdout.write('')
         self.stdout.write(self.style.SUCCESS('=' * 50))
@@ -161,3 +234,12 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS(
             f'  Roles updated: {", ".join(roles_updated) if roles_updated else "None"}'))
         self.stdout.write(self.style.SUCCESS('=' * 50))
+        self.stdout.write(self.style.SUCCESS(
+            f'  Spark Admin User: {spark_admin_user.username} (ID: {spark_admin_user.id})'
+        ))
+        self.stdout.write(self.style.SUCCESS(
+            f'  Client User: {client_user.username} (ID: {client_user.id})'
+        ))
+        self.stdout.write(self.style.SUCCESS(
+            f'  Ambassador User: {ambassador_user.username} (ID: {ambassador_user.id})'
+        ))
