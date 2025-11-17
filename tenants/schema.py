@@ -126,10 +126,6 @@ class QueryClients:
         before: str | None = None,
     ) -> CountableConnection[TenantType]:
         user = info.context.request.user
-        if not user or not user.is_authenticated:
-            raise GraphQLError(
-                "Authentication required. Please provide a valid Auth token."
-            )
 
         filters = {
             "tenanted_users__is_active": True,
@@ -156,6 +152,22 @@ class QueryClients:
 
 @strawberry.type
 class MutationClients(ClientsCustomRegister):
+    verify_token = mutations.VerifyToken.field
+    token_auth = mutations.ObtainJSONWebToken.field
+    refresh_token = mutations.RefreshToken.field
+    verify_account = mutations.VerifyAccount.field
+
+
+# Mobile Schemas
+@strawberry.django.type(model=get_user_model())
+class QueryMobile:
+    @strawberry.field
+    def me(self, info) -> CustomUserType:
+        return info.context.request.user
+
+
+@strawberry.type
+class MutationMobile(ClientsCustomRegister):
     verify_token = mutations.VerifyToken.field
     token_auth = mutations.ObtainJSONWebToken.field
     refresh_token = mutations.RefreshToken.field
