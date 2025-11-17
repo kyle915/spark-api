@@ -16,6 +16,7 @@ class SocialAuthResponse:
     message: str
     token: str | None = None
     refresh_token: str | None = None
+    client_mutation_id: strawberry.ID | None = None
 
 
 async def authenticate_or_create_social_user(
@@ -84,6 +85,7 @@ class BaseSocialAuthMutations:
         access_token: str,
         role_id: int | None = None,
         tenant_id: int | None = None,
+        client_mutation_id: strawberry.ID | None = None,
     ) -> SocialAuthResponse:
         """
         Authenticate with Google OAuth access token.
@@ -102,7 +104,8 @@ class BaseSocialAuthMutations:
                 if response.status_code != 200:
                     return SocialAuthResponse(
                         success=False,
-                        message="Invalid Google access token"
+                        message="Invalid Google access token",
+                        client_mutation_id=client_mutation_id,
                     )
 
                 user_info = response.json()
@@ -111,7 +114,8 @@ class BaseSocialAuthMutations:
             if not email:
                 return SocialAuthResponse(
                     success=False,
-                    message="Unable to get email from Google"
+                    message="Unable to get email from Google",
+                    client_mutation_id=client_mutation_id,
                 )
 
             # Authenticate or create user
@@ -138,12 +142,14 @@ class BaseSocialAuthMutations:
                 message=message,
                 token=token.token,
                 refresh_token=refresh_token,
+                client_mutation_id=client_mutation_id,
             )
 
         except Exception as e:
             return SocialAuthResponse(
                 success=False,
-                message=f"Error during Google authentication: {str(e)}"
+                message=f"Error during Google authentication: {str(e)}",
+                client_mutation_id=client_mutation_id,
             )
 
     @staticmethod
@@ -151,6 +157,7 @@ class BaseSocialAuthMutations:
         identity_token: str,
         role_id: int | None = None,
         tenant_id: int | None = None,
+        client_mutation_id: strawberry.ID | None = None,
     ) -> SocialAuthResponse:
         """
         Authenticate with Apple Sign In identity token.
@@ -169,7 +176,8 @@ class BaseSocialAuthMutations:
             if not email:
                 return SocialAuthResponse(
                     success=False,
-                    message="Unable to get email from Apple token"
+                    message="Unable to get email from Apple token",
+                    client_mutation_id=client_mutation_id,
                 )
 
             # Get name from token if available
@@ -202,10 +210,12 @@ class BaseSocialAuthMutations:
                 message=message,
                 token=token,
                 refresh_token=refresh_token,
+                client_mutation_id=client_mutation_id,
             )
 
         except Exception as e:
             return SocialAuthResponse(
                 success=False,
-                message=f"Error during Apple authentication: {str(e)}"
+                message=f"Error during Apple authentication: {str(e)}",
+                client_mutation_id=client_mutation_id,
             )

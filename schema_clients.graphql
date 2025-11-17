@@ -10,37 +10,171 @@ When the condition fails, the following can be returned (following this priority
 """
 directive @isAuthenticated repeatable on FIELD_DEFINITION
 
+type ApproveRequestResponse {
+  success: Boolean!
+  message: String!
+  request: Request
+  event: Event
+}
+
+"""
+Client(id, uuid, name, email, tenant, created_by, updated_by, created_at, updated_at)
+"""
+type Client {
+  id: ID!
+  uuid: String!
+  name: String!
+  email: String!
+  tenantId: ID!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type ClientDetailResponse {
+  success: Boolean!
+  message: String!
+  client: Client
+}
+
+input CreateClientInput {
+  tenantId: ID = null
+  name: String!
+  email: String!
+}
+
+input CreateDistributorInput {
+  tenantId: ID = null
+  name: String!
+  email: String!
+  locationId: ID!
+}
+
 input CreateEventInput {
+  tenantId: ID = null
   name: String!
   eventTypeId: ID!
   statusId: ID!
-  tenantId: ID = null
 }
 
 input CreateEventStatusInput {
-  name: String!
   tenantId: ID = null
+  name: String!
+  isDefault: Boolean! = false
 }
 
 input CreateEventTypeInput {
-  name: String!
   tenantId: ID = null
+  name: String!
+  isDefault: Boolean! = false
+}
+
+input CreateLocationInput {
+  tenantId: ID = null
+  name: String!
+  code: String!
+  zip: String!
+}
+
+input CreateProductInput {
+  tenantId: ID = null
+  name: String!
+  productTypeId: ID!
+}
+
+input CreateProductTypeInput {
+  tenantId: ID = null
+  name: String!
+}
+
+input CreateRequestInput {
+  tenantId: ID = null
+  name: String!
+  date: String!
+  startTime: String!
+  endTime: String!
+  address: String!
+  coordinates: [Float!]!
+  clientId: ID!
+  distributorId: ID!
+  retailerId: ID!
+  requestTypeId: ID!
+}
+
+input CreateRequestStatusInput {
+  tenantId: ID = null
+  name: String!
+  createEvent: Boolean! = false
+  isDefault: Boolean! = false
+}
+
+input CreateRequestTypeInput {
+  tenantId: ID = null
+  name: String!
+}
+
+input CreateRetailerInput {
+  tenantId: ID = null
+  name: String!
+  address: String!
+  storeContact: String!
+  locationId: ID!
+}
+
+"""
+User(password, last_login, is_superuser, username, first_name, last_name, email, is_staff, date_joined, id, uuid, role, created_by, updated_by, created_at, updated_at, is_active)
+"""
+type CustomUserType {
+  id: ID!
+  uuid: UUID!
+
+  """Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only."""
+  username: String!
+  email: String!
+  firstName: String!
+  lastName: String!
+  role: RoleType!
 }
 
 """Date with time (isoformat)"""
 scalar DateTime
+
+"""
+Distributor(id, uuid, name, email, location, tenant, created_by, updated_by, created_at, updated_at)
+"""
+type Distributor {
+  id: ID!
+  uuid: String!
+  name: String!
+  email: String!
+  tenantId: ID!
+  location: Location
+  createdAt: String!
+  updatedAt: String!
+}
+
+type DistributorDetailResponse {
+  success: Boolean!
+  message: String!
+  distributor: Distributor
+}
 
 type DjangoModelType {
   pk: ID!
 }
 
 """
-Event(id, uuid, name, tenant, event_type, status, created_by, updated_by, created_at, updated_at)
+Event(id, uuid, name, tenant, request, event_type, status, start_time, end_time, address, notes, is_national, created_by, updated_by, created_at, updated_at)
 """
 type Event {
   id: ID!
   uuid: String!
   name: String!
+  startTime: String
+  endTime: String
+  address: String!
+  isNational: Boolean!
+  notes: String
+  request: Request
   createdAt: String!
   updatedAt: String!
   tenantId: ID!
@@ -55,12 +189,13 @@ type EventDetailResponse {
 }
 
 """
-EventStatus(id, uuid, name, tenant, created_by, updated_by, created_at, updated_at)
+EventStatus(id, uuid, name, is_default, tenant, created_by, updated_by, created_at, updated_at)
 """
 type EventStatus {
   id: ID!
   uuid: String!
   name: String!
+  isDefault: Boolean!
   tenantId: ID!
   createdAt: String!
   updatedAt: String!
@@ -73,12 +208,13 @@ type EventStatusDetailResponse {
 }
 
 """
-EventType(id, uuid, name, tenant, created_by, updated_by, created_at, updated_at)
+EventType(id, uuid, name, is_default, tenant, created_by, updated_by, created_at, updated_at)
 """
 type EventType {
   id: ID!
   uuid: String!
   name: String!
+  isDefault: Boolean!
   tenantId: ID!
   createdAt: String!
   updatedAt: String!
@@ -93,13 +229,51 @@ type EventTypeDetailResponse {
 "\n     Errors messages and codes mapped to\n    fields or non fields errors.\n    Example:\n    {\n        field_name: [\n            {\n                \"message\": \"error message\",\n                \"code\": \"error_code\"\n            }\n        ],\n        other_field: [\n            {\n                \"message\": \"error message\",\n                \"code\": \"error_code\"\n            }\n        ],\n        nonFieldErrors: [\n            {\n                \"message\": \"error message\",\n                \"code\": \"error_code\"\n            }\n        ]\n    }\n    "
 scalar ExpectedError
 
+"""
+Location(id, uuid, name, code, zip, tenant, created_by, updated_by, created_at, updated_at)
+"""
+type Location {
+  id: ID!
+  uuid: String!
+  name: String!
+  code: String!
+  zip: String!
+  tenantId: ID!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type LocationDetailResponse {
+  success: Boolean!
+  message: String!
+  location: Location
+}
+
 type Mutation {
   createEvent(input: CreateEventInput!): EventDetailResponse! @isAuthenticated
   updateEvent(input: UpdateEventInput!): EventDetailResponse! @isAuthenticated
   createEventType(input: CreateEventTypeInput!): EventTypeDetailResponse! @isAuthenticated
   updateEventType(input: UpdateEventTypeInput!): EventTypeDetailResponse! @isAuthenticated
+  createRequest(input: CreateRequestInput!): RequestDetailResponse!
   createEventStatus(input: CreateEventStatusInput!): EventStatusDetailResponse! @isAuthenticated
   updateEventStatus(input: UpdateEventStatusInput!): EventStatusDetailResponse! @isAuthenticated
+  createLocation(input: CreateLocationInput!): LocationDetailResponse! @isAuthenticated
+  updateLocation(input: UpdateLocationInput!): LocationDetailResponse! @isAuthenticated
+  createClient(input: CreateClientInput!): ClientDetailResponse! @isAuthenticated
+  updateClient(input: UpdateClientInput!): ClientDetailResponse! @isAuthenticated
+  createDistributor(input: CreateDistributorInput!): DistributorDetailResponse! @isAuthenticated
+  updateDistributor(input: UpdateDistributorInput!): DistributorDetailResponse! @isAuthenticated
+  createRetailer(input: CreateRetailerInput!): RetailerDetailResponse! @isAuthenticated
+  updateRetailer(input: UpdateRetailerInput!): RetailerDetailResponse! @isAuthenticated
+  createProductType(input: CreateProductTypeInput!): ProductTypeDetailResponse! @isAuthenticated
+  updateProductType(input: UpdateProductTypeInput!): ProductTypeDetailResponse! @isAuthenticated
+  createProduct(input: CreateProductInput!): ProductDetailResponse! @isAuthenticated
+  updateProduct(input: UpdateProductInput!): ProductDetailResponse! @isAuthenticated
+  createRequestType(input: CreateRequestTypeInput!): RequestTypeDetailResponse! @isAuthenticated
+  updateRequestType(input: UpdateRequestTypeInput!): RequestTypeDetailResponse! @isAuthenticated
+  createRequestStatus(input: CreateRequestStatusInput!): RequestStatusDetailResponse! @isAuthenticated
+  updateRequestStatus(input: UpdateRequestStatusInput!): RequestStatusDetailResponse! @isAuthenticated
+  approveRequest(id: ID!): ApproveRequestResponse! @isAuthenticated
   register(firstName: String!, email: String!, password1: String!, password2: String!, roleId: ID!, tenantId: ID!): RegisterResponse!
   socialAuthGoogle(accessToken: String!, roleId: ID!, tenantId: ID!): SocialAuthResponse!
   socialAuthApple(identityToken: String!, roleId: ID!, tenantId: ID!): SocialAuthResponse!
@@ -141,17 +315,71 @@ interface OutputInterface {
   errors: ExpectedError
 }
 
+"""
+Product(id, uuid, name, product_type, tenant, created_by, updated_by, created_at, updated_at)
+"""
+type Product {
+  id: ID!
+  uuid: String!
+  name: String!
+  productType: ProductType
+  tenantId: ID!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type ProductDetailResponse {
+  success: Boolean!
+  message: String!
+  product: Product
+}
+
+"""
+ProductType(id, uuid, name, tenant, created_by, updated_by, created_at, updated_at)
+"""
+type ProductType {
+  id: ID!
+  uuid: String!
+  name: String!
+  tenantId: ID!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type ProductTypeDetailResponse {
+  success: Boolean!
+  message: String!
+  productType: ProductType
+}
+
 type Query {
   events(limit: Int! = 10, offset: Int! = 0, q: String = null): [Event!]! @isAuthenticated
   event(id: ID!): Event @isAuthenticated
+  todayEvents(q: String = null): [Event!]! @isAuthenticated
   eventTypes(limit: Int! = 10, offset: Int! = 0, q: String = null): [EventType!]! @isAuthenticated
   eventType(id: ID!): EventType @isAuthenticated
-  eventStatuses(limit: Int! = 10, offset: Int! = 0, q: String = null): [EventStatus!]! @isAuthenticated
+  eventStatuses: [EventStatus!]! @isAuthenticated
   eventStatus(id: ID!): EventStatus @isAuthenticated
-  me: UserType!
-
-  """Returns the current user if he is not anonymous."""
-  public: UserType
+  clients(limit: Int! = 10, offset: Int! = 0, q: String = null): [Client!]! @isAuthenticated
+  client(id: ID!): Client @isAuthenticated
+  distributors(limit: Int! = 10, offset: Int! = 0, q: String = null): [Distributor!]! @isAuthenticated
+  distributor(id: ID!): Distributor @isAuthenticated
+  retailers(limit: Int! = 10, offset: Int! = 0, q: String = null): [Retailer!]! @isAuthenticated
+  retailer(id: ID!): Retailer @isAuthenticated
+  productTypes: [ProductType!]! @isAuthenticated
+  productType(id: ID!): ProductType @isAuthenticated
+  products(limit: Int! = 10, offset: Int! = 0, q: String = null): [Product!]! @isAuthenticated
+  product(id: ID!): Product @isAuthenticated
+  requestTypes(limit: Int! = 10, offset: Int! = 0, q: String = null): [RequestType!]! @isAuthenticated
+  requestType(id: ID!): RequestType @isAuthenticated
+  requestStatuses: [RequestStatus!]! @isAuthenticated
+  requestStatus(id: ID!): RequestStatus @isAuthenticated
+  requests(limit: Int! = 10, offset: Int! = 0, q: String = null): [Request!]! @isAuthenticated
+  request(id: ID!): Request @isAuthenticated
+  locations: [Location!]! @isAuthenticated
+  location(id: ID!): Location @isAuthenticated
+  me: CustomUserType!
+  tenants(userUuid: ID = null): [TenantType!]!
 }
 
 """
@@ -180,11 +408,108 @@ type RegisterResponse {
   activationToken: String
 }
 
+"""
+Request(id, uuid, name, date, start_time, end_time, address, coordinates, client, distributor, retailer, request_type, status, tenant, created_by, updated_by, created_at, updated_at)
+"""
+type Request {
+  id: ID!
+  uuid: String!
+  name: String!
+  date: String!
+  startTime: String
+  endTime: String
+  address: String!
+  coordinates: [Float!]!
+  client: Client
+  distributor: Distributor
+  retailer: Retailer
+  requestType: RequestType
+  status: RequestStatus
+  tenantId: ID!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type RequestDetailResponse {
+  success: Boolean!
+  message: String!
+  request: Request
+}
+
+type RequestStatus {
+  id: ID!
+  uuid: String!
+  name: String!
+  createEvent: Boolean!
+  isDefault: Boolean!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type RequestStatusDetailResponse {
+  success: Boolean!
+  message: String!
+  requestStatus: RequestStatus
+}
+
+"""
+RequestType(id, uuid, name, tenant, created_by, updated_by, created_at, updated_at)
+"""
+type RequestType {
+  id: ID!
+  uuid: String!
+  name: String!
+  tenantId: ID!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type RequestTypeDetailResponse {
+  success: Boolean!
+  message: String!
+  requestType: RequestType
+}
+
+"""
+Retailer(id, uuid, name, address, store_contact, location, tenant, created_by, updated_by, created_at, updated_at)
+"""
+type Retailer {
+  id: ID!
+  uuid: String!
+  name: String!
+  address: String!
+  storeContact: String!
+  tenantId: ID!
+  location: Location
+  createdAt: String!
+  updatedAt: String!
+}
+
+type RetailerDetailResponse {
+  success: Boolean!
+  message: String!
+  retailer: Retailer
+}
+
+"""Role(id, uuid, name, created_by, updated_by, created_at, updated_at)"""
+type RoleType {
+  id: ID!
+  uuid: UUID!
+  name: String!
+}
+
 type SocialAuthResponse {
   success: Boolean!
   message: String!
   token: String
   refreshToken: String
+}
+
+"""Tenant(id, uuid, name, created_by, updated_by, created_at, updated_at)"""
+type TenantType {
+  id: ID!
+  uuid: UUID!
+  name: String!
 }
 
 "\nthe data that was used to create the token.\n"
@@ -205,23 +530,86 @@ type TokenType {
   token: String!
 }
 
+scalar UUID
+
+input UpdateClientInput {
+  tenantId: ID = null
+  name: String!
+  email: String!
+  id: ID!
+}
+
+input UpdateDistributorInput {
+  tenantId: ID = null
+  name: String!
+  email: String!
+  locationId: ID!
+  id: ID!
+}
+
 input UpdateEventInput {
+  tenantId: ID = null
   name: String!
   eventTypeId: ID!
   statusId: ID!
-  tenantId: ID = null
   id: ID!
 }
 
 input UpdateEventStatusInput {
-  name: String!
   tenantId: ID = null
+  name: String!
+  isDefault: Boolean! = false
   id: ID!
 }
 
 input UpdateEventTypeInput {
-  name: String!
   tenantId: ID = null
+  name: String!
+  isDefault: Boolean! = false
+  id: ID!
+}
+
+input UpdateLocationInput {
+  tenantId: ID = null
+  name: String!
+  code: String!
+  zip: String!
+  id: ID!
+}
+
+input UpdateProductInput {
+  tenantId: ID = null
+  name: String!
+  productTypeId: ID!
+  id: ID!
+}
+
+input UpdateProductTypeInput {
+  tenantId: ID = null
+  name: String!
+  id: ID!
+}
+
+input UpdateRequestStatusInput {
+  tenantId: ID = null
+  name: String!
+  createEvent: Boolean! = false
+  isDefault: Boolean! = false
+  id: ID!
+}
+
+input UpdateRequestTypeInput {
+  tenantId: ID = null
+  name: String!
+  id: ID!
+}
+
+input UpdateRetailerInput {
+  tenantId: ID = null
+  name: String!
+  address: String!
+  storeContact: String!
+  locationId: ID!
   id: ID!
 }
 
@@ -248,13 +636,13 @@ type UserType {
   isActive: Boolean!
   dateJoined: DateTime!
   status: UserStatusType!
+  lastName: String
+  email: String!
   id: ID!
+  firstName: String
 
   """Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only."""
   username: String!
-  lastName: String
-  firstName: String
-  email: String!
   archived: Boolean!
   verified: Boolean!
 }

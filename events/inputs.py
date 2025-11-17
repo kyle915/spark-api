@@ -146,3 +146,8 @@ class CreateRequestInput(BaseNameableInput):
 @strawberry.input
 class UpdateRequestInput(CreateRequestInput):
     id: strawberry.ID
+
+
+@strawberry.input
+class ApproveRequestInput(SparkGraphQLInput):
+    id: strawberry.ID

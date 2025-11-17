@@ -1,8 +1,9 @@
 import datetime
+import logging
+
 import strawberry
-from strawberry_django.permissions import IsAuthenticated
+from utils.graphql.permissions import StrictIsAuthenticated
 from asgiref.sync import sync_to_async
-from typing import List
 from graphql import GraphQLError
 
 from django.db.models import QuerySet
@@ -12,14 +13,18 @@ from events import types
 from events import models
 
 from utils.graphql.mixins import SparkGraphQLMixin
-
-import logging
+from utils.graphql.relay import (
+    CountableConnection,
+    connection_from_queryset_async,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class BaseEventQueriesService(SparkGraphQLMixin):
     """Service for event queries."""
+
+    ordering: tuple[str, ...] = ("-created_at",)
 
     def get_model(self) -> Model:
         """Get the model for the service."""
@@ -30,9 +35,7 @@ class BaseEventQueriesService(SparkGraphQLMixin):
         return self.get_model().objects.all()
 
     def get_filtered_queryset(
-        self,
-        tenant_id: int | None = None,
-        q: str | None = None
+        self, tenant_id: int | None = None, q: str | None = None
     ) -> QuerySet:
         """Get the filtered queryset for the service."""
         queryset = self.get_queryset()
@@ -42,27 +45,57 @@ class BaseEventQueriesService(SparkGraphQLMixin):
             queryset = queryset.filter(name__icontains=q)
         return queryset
 
-    async def get_records(
+    def get_ordered_queryset(
         self,
-        limit: int = 10,
-        offset: int = 0,
+        tenant_id: strawberry.ID | None = None,
         q: str | None = None,
-        tenant_id: strawberry.ID | None = None
-    ) -> List[Model]:
-        """Get all records."""
+        ordering: tuple[str, ...] | None = None,
+    ) -> QuerySet:
+        """Return the filtered queryset with ordering applied."""
         queryset = self.get_filtered_queryset(tenant_id, q)
-        queryset = queryset.order_by('-created_at')[offset:offset+limit]
-        return await sync_to_async(list)(queryset)
+        ordering = ordering or self.ordering
+        if ordering:
+            queryset = queryset.order_by(*ordering)
+        return queryset
+
+    async def get_connection(
+        self,
+        *,
+        tenant_id: strawberry.ID | None = None,
+        q: str | None = None,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        default_limit: int = 10,
+        max_limit: int = 50,
+        ordering: tuple[str, ...] | None = None,
+        queryset: QuerySet | None = None,
+    ) -> CountableConnection[Model]:
+        """Return a Relay compliant connection for the queryset."""
+        queryset = queryset or self.get_ordered_queryset(tenant_id, q, ordering)
+        try:
+            return await connection_from_queryset_async(
+                queryset,
+                first=first,
+                after=after,
+                last=last,
+                before=before,
+                default_limit=default_limit,
+                max_limit=max_limit,
+            )
+        except ValueError as exc:
+            raise GraphQLError(str(exc)) from exc
 
     async def get_record(
-        self,
-        id: strawberry.ID,
-        tenant_id: strawberry.ID | None = None
+        self, id: strawberry.ID, tenant_id: strawberry.ID | None = None
     ) -> Model | None:
         """Get a single record."""
         try:
             if tenant_id:
-                return await sync_to_async(self.get_model().objects.get)(id=id, tenant_id=tenant_id)
+                return await sync_to_async(self.get_model().objects.get)(
+                    id=id, tenant_id=tenant_id
+                )
             return await sync_to_async(self.get_model().objects.get)(id=id)
         except self.get_model().DoesNotExist:
             raise GraphQLError("Record not found.")
@@ -78,22 +111,33 @@ class EventQueriesService(BaseEventQueriesService):
 
 @strawberry.type
 class EventQueries:
-    @strawberry.field(extensions=[IsAuthenticated()])
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def events(
         self,
         info: strawberry.Info,
-        limit: int = 10,
-        offset: int = 0,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
         q: str | None = None,
-    ) -> List[types.Event]:
-        """Get all events."""
+    ) -> CountableConnection[types.Event]:
+        """Get all events using Relay pagination."""
         service = EventQueriesService()
         tenant = await service.get_user_tenant(info)
 
-        return await service.get_records(limit, offset, q, tenant.id)
+        return await service.get_connection(
+            tenant_id=tenant.id,
+            q=q,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+        )
 
-    @strawberry.field(extensions=[IsAuthenticated()])
-    async def event(self, info: strawberry.Info, id: strawberry.ID) -> types.Event | None:
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def event(
+        self, info: strawberry.Info, id: strawberry.ID
+    ) -> types.Event | None:
         """Get a single event.
         It limits the events to the tenant of the user. Otherwise, it returns 404 (None)
         """
@@ -105,20 +149,59 @@ class EventQueries:
         except GraphQLError:
             return None
 
-    @strawberry.field(extensions=[IsAuthenticated()])
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def today_events(
         self,
         info: strawberry.Info,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
         q: str | None = None,
-    ) -> List[types.Event]:
-        """Get all events for today."""
+    ) -> CountableConnection[types.Event]:
+        """Get today's events for the current tenant."""
         service = EventQueriesService()
         tenant = await service.get_user_tenant(info)
-        queryset = service.get_filtered_queryset(tenant.id, q)
-        queryset = queryset.filter(start_time__day=datetime.date.today().day)
-        queryset = queryset.order_by('start_time')
+        queryset = (
+            service.get_filtered_queryset(tenant.id, q)
+            .filter(start_time__day=datetime.date.today().day)
+            .order_by("start_time")
+        )
 
-        return await sync_to_async(list)(queryset)
+        return await service.get_connection(
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+            queryset=queryset,
+        )
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def tenant_events(
+        self,
+        info: strawberry.Info,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        q: str | None = None,
+        tenant_uuid: strawberry.ID | None = None,
+    ) -> CountableConnection[types.Event]:
+        """Get tenant events using Relay pagination."""
+        service = EventQueriesService()
+        tenant = await service.get_user_tenant(
+            info,
+            tenant_uuid=tenant_uuid,
+        )
+
+        return await service.get_connection(
+            tenant_id=tenant.id,
+            q=q,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+        )
 
 
 class EventTypeQueriesService(BaseEventQueriesService):
@@ -131,21 +214,32 @@ class EventTypeQueriesService(BaseEventQueriesService):
 
 @strawberry.type
 class EventTypeQueries:
-    @strawberry.field(extensions=[IsAuthenticated()])
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def event_types(
         self,
         info: strawberry.Info,
-        limit: int = 10,
-        offset: int = 0,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
         q: str | None = None,
-    ) -> List[types.EventType]:
+    ) -> CountableConnection[types.EventType]:
         """Get all event types."""
         service = EventTypeQueriesService()
         tenant = await service.get_user_tenant(info)
-        return await service.get_records(limit, offset, q, tenant.id)
+        return await service.get_connection(
+            tenant_id=tenant.id,
+            q=q,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+        )
 
-    @strawberry.field(extensions=[IsAuthenticated()])
-    async def event_type(self, info: strawberry.Info, id: strawberry.ID) -> types.EventType | None:
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def event_type(
+        self, info: strawberry.Info, id: strawberry.ID
+    ) -> types.EventType | None:
         """Get a single event type."""
         try:
             service = EventTypeQueriesService()
@@ -166,18 +260,32 @@ class EventStatusQueriesService(BaseEventQueriesService):
 
 @strawberry.type
 class EventStatusQueries:
-    @strawberry.field(extensions=[IsAuthenticated()])
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def event_statuses(
         self,
         info: strawberry.Info,
-    ) -> List[types.EventStatus]:
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+    ) -> CountableConnection[types.EventStatus]:
         """Get all event statuses."""
         service = EventStatusQueriesService()
         tenant = await service.get_user_tenant(info)
-        return await service.get_records(limit=50, offset=0, q=None, tenant_id=tenant.id)
+        return await service.get_connection(
+            tenant_id=tenant.id,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+            default_limit=50,
+            max_limit=100,
+        )
 
-    @strawberry.field(extensions=[IsAuthenticated()])
-    async def event_status(self, info: strawberry.Info, id: strawberry.ID) -> types.EventStatus | None:
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def event_status(
+        self, info: strawberry.Info, id: strawberry.ID
+    ) -> types.EventStatus | None:
         """Get a single event status."""
         try:
             service = EventStatusQueriesService()
@@ -198,21 +306,32 @@ class RequestQueriesService(BaseEventQueriesService):
 
 @strawberry.type
 class RequestQueries:
-    @strawberry.field(extensions=[IsAuthenticated()])
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def requests(
         self,
         info: strawberry.Info,
-        limit: int = 10,
-        offset: int = 0,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
         q: str | None = None,
-    ) -> List[types.Request]:
+    ) -> CountableConnection[types.Request]:
         """Get all requests."""
         service = RequestQueriesService()
         tenant = await service.get_user_tenant(info)
-        return await service.get_records(limit, offset, q, tenant.id)
+        return await service.get_connection(
+            tenant_id=tenant.id,
+            q=q,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+        )
 
-    @strawberry.field(extensions=[IsAuthenticated()])
-    async def request(self, info: strawberry.Info, id: strawberry.ID) -> types.Request | None:
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def request(
+        self, info: strawberry.Info, id: strawberry.ID
+    ) -> types.Request | None:
         """Get a single request."""
         try:
             service = RequestQueriesService()
@@ -233,21 +352,32 @@ class ClientQueriesService(BaseEventQueriesService):
 
 @strawberry.type
 class ClientQueries:
-    @strawberry.field(extensions=[IsAuthenticated()])
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def clients(
         self,
         info: strawberry.Info,
-        limit: int = 10,
-        offset: int = 0,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
         q: str | None = None,
-    ) -> List[types.Client]:
+    ) -> CountableConnection[types.Client]:
         """Get all clients."""
         service = ClientQueriesService()
         tenant = await service.get_user_tenant(info)
-        return await service.get_records(limit, offset, q, tenant.id)
+        return await service.get_connection(
+            tenant_id=tenant.id,
+            q=q,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+        )
 
-    @strawberry.field(extensions=[IsAuthenticated()])
-    async def client(self, info: strawberry.Info, id: strawberry.ID) -> types.Client | None:
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def client(
+        self, info: strawberry.Info, id: strawberry.ID
+    ) -> types.Client | None:
         """Get a single client."""
         try:
             service = ClientQueriesService()
@@ -268,15 +398,34 @@ class LocationQueriesService(BaseEventQueriesService):
 
 @strawberry.type
 class LocationQueries:
-    @strawberry.field(extensions=[IsAuthenticated()])
-    async def locations(self, info: strawberry.Info) -> List[types.Location]:
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def locations(
+        self,
+        info: strawberry.Info,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        q: str | None = None,
+    ) -> CountableConnection[types.Location]:
         """Get all locations."""
         service = LocationQueriesService()
         tenant = await service.get_user_tenant(info)
-        return await service.get_records(limit=50, offset=0, q=None, tenant_id=tenant.id)
+        return await service.get_connection(
+            tenant_id=tenant.id,
+            q=q,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+            default_limit=50,
+            max_limit=100,
+        )
 
-    @strawberry.field(extensions=[IsAuthenticated()])
-    async def location(self, info: strawberry.Info, id: strawberry.ID) -> types.Location | None:
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def location(
+        self, info: strawberry.Info, id: strawberry.ID
+    ) -> types.Location | None:
         """Get a single location."""
         try:
             service = LocationQueriesService()
@@ -297,21 +446,32 @@ class DistributorQueriesService(BaseEventQueriesService):
 
 @strawberry.type
 class DistributorQueries:
-    @strawberry.field(extensions=[IsAuthenticated()])
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def distributors(
         self,
         info: strawberry.Info,
-        limit: int = 10,
-        offset: int = 0,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
         q: str | None = None,
-    ) -> List[types.Distributor]:
+    ) -> CountableConnection[types.Distributor]:
         """Get all distributors."""
         service = DistributorQueriesService()
         tenant = await service.get_user_tenant(info)
-        return await service.get_records(limit, offset, q, tenant.id)
+        return await service.get_connection(
+            tenant_id=tenant.id,
+            q=q,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+        )
 
-    @strawberry.field(extensions=[IsAuthenticated()])
-    async def distributor(self, info: strawberry.Info, id: strawberry.ID) -> types.Distributor | None:
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def distributor(
+        self, info: strawberry.Info, id: strawberry.ID
+    ) -> types.Distributor | None:
         """Get a single distributor."""
         try:
             service = DistributorQueriesService()
@@ -332,21 +492,32 @@ class RetailerQueriesService(BaseEventQueriesService):
 
 @strawberry.type
 class RetailerQueries:
-    @strawberry.field(extensions=[IsAuthenticated()])
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def retailers(
         self,
         info: strawberry.Info,
-        limit: int = 10,
-        offset: int = 0,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
         q: str | None = None,
-    ) -> List[types.Retailer]:
+    ) -> CountableConnection[types.Retailer]:
         """Get all retailers."""
         service = RetailerQueriesService()
         tenant = await service.get_user_tenant(info)
-        return await service.get_records(limit, offset, q, tenant.id)
+        return await service.get_connection(
+            tenant_id=tenant.id,
+            q=q,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+        )
 
-    @strawberry.field(extensions=[IsAuthenticated()])
-    async def retailer(self, info: strawberry.Info, id: strawberry.ID) -> types.Retailer | None:
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def retailer(
+        self, info: strawberry.Info, id: strawberry.ID
+    ) -> types.Retailer | None:
         """Get a single retailer."""
         try:
             service = RetailerQueriesService()
@@ -367,21 +538,32 @@ class RequestTypeQueriesService(BaseEventQueriesService):
 
 @strawberry.type
 class RequestTypeQueries:
-    @strawberry.field(extensions=[IsAuthenticated()])
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def request_types(
         self,
         info: strawberry.Info,
-        limit: int = 10,
-        offset: int = 0,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
         q: str | None = None,
-    ) -> List[types.RequestType]:
+    ) -> CountableConnection[types.RequestType]:
         """Get all request types."""
         service = RequestTypeQueriesService()
         tenant = await service.get_user_tenant(info)
-        return await service.get_records(limit, offset, q, tenant.id)
+        return await service.get_connection(
+            tenant_id=tenant.id,
+            q=q,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+        )
 
-    @strawberry.field(extensions=[IsAuthenticated()])
-    async def request_type(self, info: strawberry.Info, id: strawberry.ID) -> types.RequestType | None:
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def request_type(
+        self, info: strawberry.Info, id: strawberry.ID
+    ) -> types.RequestType | None:
         """Get a single request type."""
         try:
             service = RequestTypeQueriesService()
@@ -402,15 +584,32 @@ class RequestStatusQueriesService(BaseEventQueriesService):
 
 @strawberry.type
 class RequestStatusQueries:
-    @strawberry.field(extensions=[IsAuthenticated()])
-    async def request_statuses(self, info: strawberry.Info) -> List[types.RequestStatus]:
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def request_statuses(
+        self,
+        info: strawberry.Info,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+    ) -> CountableConnection[types.RequestStatus]:
         """Get all request statuses."""
         service = RequestStatusQueriesService()
         tenant = await service.get_user_tenant(info)
-        return await service.get_records(limit=50, offset=0, q=None, tenant_id=tenant.id)
+        return await service.get_connection(
+            tenant_id=tenant.id,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+            default_limit=50,
+            max_limit=100,
+        )
 
-    @strawberry.field(extensions=[IsAuthenticated()])
-    async def request_status(self, info: strawberry.Info, id: strawberry.ID) -> types.RequestStatus | None:
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def request_status(
+        self, info: strawberry.Info, id: strawberry.ID
+    ) -> types.RequestStatus | None:
         """Get a single request status."""
         try:
             service = RequestStatusQueriesService()
@@ -430,15 +629,34 @@ class ProductTypeQueriesService(BaseEventQueriesService):
 
 @strawberry.type
 class ProductTypeQueries:
-    @strawberry.field(extensions=[IsAuthenticated()])
-    async def product_types(self, info: strawberry.Info) -> List[types.ProductType]:
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def product_types(
+        self,
+        info: strawberry.Info,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        q: str | None = None,
+    ) -> CountableConnection[types.ProductType]:
         """Get all product types."""
         service = ProductTypeQueriesService()
         tenant = await service.get_user_tenant(info)
-        return await service.get_records(limit=50, offset=0, q=None, tenant_id=tenant.id)
+        return await service.get_connection(
+            tenant_id=tenant.id,
+            q=q,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+            default_limit=50,
+            max_limit=100,
+        )
 
-    @strawberry.field(extensions=[IsAuthenticated()])
-    async def product_type(self, info: strawberry.Info, id: strawberry.ID) -> types.ProductType | None:
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def product_type(
+        self, info: strawberry.Info, id: strawberry.ID
+    ) -> types.ProductType | None:
         """Get a single product type."""
         try:
             service = ProductTypeQueriesService()
@@ -458,21 +676,32 @@ class ProductQueriesService(BaseEventQueriesService):
 
 @strawberry.type
 class ProductQueries:
-    @strawberry.field(extensions=[IsAuthenticated()])
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def products(
         self,
         info: strawberry.Info,
-        limit: int = 10,
-        offset: int = 0,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
         q: str | None = None,
-    ) -> List[types.Product]:
+    ) -> CountableConnection[types.Product]:
         """Get all products."""
         service = ProductQueriesService()
         tenant = await service.get_user_tenant(info)
-        return await service.get_records(limit, offset, q, tenant.id)
+        return await service.get_connection(
+            tenant_id=tenant.id,
+            q=q,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+        )
 
-    @strawberry.field(extensions=[IsAuthenticated()])
-    async def product(self, info: strawberry.Info, id: strawberry.ID) -> types.Product | None:
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def product(
+        self, info: strawberry.Info, id: strawberry.ID
+    ) -> types.Product | None:
         """Get a single product."""
         try:
             service = ProductQueriesService()

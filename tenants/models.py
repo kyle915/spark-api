@@ -112,8 +112,12 @@ class User(AbstractUser):
             user=self, is_active=True
         ).tenant
 
-    def get_tenant(self, tenant_id: int | None = None) -> Tenant | None:
-        """Get the tenant for the user.
+    def get_tenant(
+        self,
+        tenant_id: int | None = None,
+        tenant_uuid: str | None = None,
+    ) -> Tenant | None:
+        """Get the tenant for the user by id or uuid.
 
         @TODO: Maybe we should check performance of this method. 
         Maybe we should cache the tenant for the user for the given tenant_id.
@@ -122,13 +126,22 @@ class User(AbstractUser):
             Tenant: The tenant for the user.
         """
         try:
+            if not tenant_id and not tenant_uuid:
+                return self.tenant
+
+            filters = {
+                "user": self,
+                "is_active": True,
+            }
+
             if tenant_id:
-                return TenantedUser.objects.get(
-                    user=self, tenant_id=tenant_id
-                ).tenant
-            return self.tenant
-        except Tenant.DoesNotExist:
-            return None
+                filters["tenant_id"] = tenant_id
+            if tenant_uuid:
+                filters["tenant__uuid"] = tenant_uuid
+
+            return TenantedUser.objects.get(**filters).tenant
+        except (Tenant.DoesNotExist, TenantedUser.DoesNotExist):
+            raise Tenant.DoesNotExist
 
 
 class TenantedUser(models.Model):

@@ -20,6 +20,7 @@ class EventType:
 class EventTypeDetailResponse:
     success: bool
     message: str
+    client_mutation_id: strawberry.ID | None = None
     event_type: EventType | None = None
 
 
@@ -38,6 +39,7 @@ class EventStatus:
 class EventStatusDetailResponse:
     success: bool
     message: str
+    client_mutation_id: strawberry.ID | None = None
     event_status: EventStatus | None = None
 
 
@@ -57,6 +59,7 @@ class Location:
 class LocationDetailResponse:
     success: bool
     message: str
+    client_mutation_id: strawberry.ID | None = None
     location: Location | None = None
 
 
@@ -75,6 +78,7 @@ class Client:
 class ClientDetailResponse:
     success: bool
     message: str
+    client_mutation_id: strawberry.ID | None = None
     client: Client | None = None
 
 
@@ -94,6 +98,7 @@ class Distributor:
 class DistributorDetailResponse:
     success: bool
     message: str
+    client_mutation_id: strawberry.ID | None = None
     distributor: Distributor | None = None
 
 
@@ -114,6 +119,7 @@ class Retailer:
 class RetailerDetailResponse:
     success: bool
     message: str
+    client_mutation_id: strawberry.ID | None = None
     retailer: Retailer | None = None
 
 
@@ -131,6 +137,7 @@ class ProductType:
 class ProductTypeDetailResponse:
     success: bool
     message: str
+    client_mutation_id: strawberry.ID | None = None
     product_type: ProductType | None = None
 
 
@@ -149,6 +156,7 @@ class Product:
 class ProductDetailResponse:
     success: bool
     message: str
+    client_mutation_id: strawberry.ID | None = None
     product: Product | None = None
 
 
@@ -166,6 +174,7 @@ class RequestType:
 class RequestTypeDetailResponse:
     success: bool
     message: str
+    client_mutation_id: strawberry.ID | None = None
     request_type: RequestType | None = None
 
 
@@ -184,6 +193,7 @@ class RequestStatus:
 class RequestStatusDetailResponse:
     success: bool
     message: str
+    client_mutation_id: strawberry.ID | None = None
     request_status: RequestStatus | None = None
 
 
@@ -211,7 +221,14 @@ class Request:
 class RequestDetailResponse:
     success: bool
     message: str
+    client_mutation_id: strawberry.ID | None = None
     request: Request | None = None
+
+
+@strawberry.type
+class RequestListResponse:
+    total_pages: int
+    requests: List[Request]
 
 
 @strawberry_django.type(models.Event)
@@ -233,9 +250,16 @@ class Event:
 
 
 @strawberry.type
+class EventListResponse:
+    total_pages: int
+    events: List[Event]
+
+
+@strawberry.type
 class EventDetailResponse:
     success: bool
     message: str
+    client_mutation_id: strawberry.ID | None = None
     event: Event | None = None
 
 
@@ -243,5 +267,6 @@ class EventDetailResponse:
 class ApproveRequestResponse:
     success: bool
     message: str
+    client_mutation_id: strawberry.ID | None = None
     request: Request | None = None
     event: Event | None = None
