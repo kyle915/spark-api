@@ -1,9 +1,9 @@
 import strawberry
-from strawberry_django.permissions import IsAuthenticated
+from strawberry import relay
 from strawberry.extensions import MaxTokensLimiter
 from graphql import GraphQLError
 from asgiref.sync import sync_to_async
-from typing import Union
+from typing import Any, Type, TypeVar, Union
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
@@ -13,12 +13,36 @@ from events import types
 from events import models
 from events import inputs
 from utils.graphql.inputs import SparkGraphQLInput
+from utils.graphql.permissions import StrictIsAuthenticated
+from utils.graphql.relay import ensure_relay_mutation
 from utils.graphql.types import SparkGraphQLErrorResponse
 from utils.graphql.mixins import SparkGraphQLMixin
 from utils.utils import ROLE_ID
 from tenants.models import Tenant, User
 
+ensure_relay_mutation()
+
 User = get_user_model()
+
+MutationResponseType = TypeVar("MutationResponseType")
+
+
+def build_mutation_response(
+    response_cls: Type[MutationResponseType],
+    *,
+    success: bool,
+    message: str,
+    input_obj: SparkGraphQLInput | None = None,
+    **extra_fields: Any,
+) -> MutationResponseType:
+    """Helper to keep relay clientMutationId propagation consistent."""
+    client_mutation_id = getattr(input_obj, "client_mutation_id", None)
+    return response_cls(
+        success=success,
+        message=message,
+        client_mutation_id=client_mutation_id,
+        **extra_fields,
+    )
 
 
 class BaseMutationService(SparkGraphQLMixin):
@@ -29,33 +53,44 @@ class BaseMutationService(SparkGraphQLMixin):
     user: User | None = None
     tenant_id: int | None = None
     is_public: bool = False
+    is_spark_schema: bool = False
 
     @classmethod
-    def with_input(cls, input: SparkGraphQLInput) -> 'BaseMutationService':
+    def with_input(cls, input: SparkGraphQLInput) -> "BaseMutationService":
         """Create a new instance of the service with the input."""
         service = cls()
         service.set_input(input)
         return service
 
     @classmethod
-    async def process_create_or_update(cls, input: SparkGraphQLInput, info: strawberry.Info) -> Model:
+    async def process_create_or_update(
+        cls, input: SparkGraphQLInput, info: strawberry.Info
+    ) -> Model:
         """Process the create or update operation."""
         service = cls.with_input(input)
         await service.set_user_and_tenant(info)
         return await service.save()
 
-    def set_input(self, input: SparkGraphQLInput) -> 'BaseMutationService':
+    def set_input(self, input: SparkGraphQLInput) -> "BaseMutationService":
         """Set the input for the service."""
         self.input = input
         return self
 
-    async def set_user_and_tenant(self, info: strawberry.Info) -> 'BaseMutationService':
+    async def set_user_and_tenant(self, info: strawberry.Info) -> "BaseMutationService":
         """Set the user and tenant for the service."""
+        self.info = info
         self.user = await self.get_user(info)
-        self.tenant_id = (await self.get_tenant(self.user, self.input.tenant_id)).id
+        self.is_spark_schema = self.is_spark_schema_request(info, user=self.user)
+        tenant_id = getattr(self.input, "tenant_id", None)
+
+        if self.is_spark_schema and tenant_id:
+            self.tenant_id = await self._resolve_tenant_without_membership(tenant_id)
+        else:
+            tenant = await self.get_tenant(self.user, tenant_id)
+            self.tenant_id = tenant.id
         return self
 
-    def set_is_public(self, is_public: bool) -> 'BaseMutationService':
+    def set_is_public(self, is_public: bool) -> "BaseMutationService":
         """Set the is public for the service."""
         self.is_public = is_public
         return self
@@ -66,10 +101,32 @@ class BaseMutationService(SparkGraphQLMixin):
 
     async def validations(self):
         """Before save validations."""
-        if self.is_public and not self.input.tenant_id:
+        tenant_id = getattr(self.input, "tenant_id", None)
+        if self.is_public and not tenant_id:
             raise GraphQLError("Tenant ID is required.")
-        if not self.is_public and not await self.user.role.is_spark_admin and self.input.tenant_id:
+        if (
+            not self.is_public
+            and not self.is_spark_schema
+            and self.user.role_id != ROLE_ID.SparkAdmin
+            and tenant_id
+        ):
             raise GraphQLError("Tenant ID should not be provided.")
+
+    async def _resolve_tenant_without_membership(
+        self, tenant_id: Union[str, int]
+    ) -> int:
+        """Resolve tenant ID for Spark schema requests without membership restrictions."""
+        try:
+            tenant_pk = int(tenant_id)
+        except (TypeError, ValueError):
+            raise GraphQLError("Invalid tenant ID.")
+
+        try:
+            await sync_to_async(Tenant.objects.get)(id=tenant_pk)
+        except Tenant.DoesNotExist:
+            raise GraphQLError("Tenant not found.")
+
+        return tenant_pk
 
     async def save(self) -> Model:
         """Save the model."""
@@ -78,26 +135,25 @@ class BaseMutationService(SparkGraphQLMixin):
 
         # get the model
         model_class = self.get_model()
-        is_update: bool = hasattr(
-            self.input, 'id') and self.input.id is not None
+        is_update: bool = hasattr(self.input, "id") and self.input.id is not None
         if is_update:
             model = await sync_to_async(model_class.objects.get)(id=self.input.id)
             if self.user:
-                setattr(model, 'updated_by', self.user)
+                setattr(model, "updated_by", self.user)
         else:
             model = model_class()
             if self.user:
-                setattr(model, 'created_by', self.user)
+                setattr(model, "created_by", self.user)
             if self.is_public and self.input.tenant_id:
                 self.tenant_id = self.input.tenant_id
 
         # set the parameters
-        params: dict[str, Any] = self.input.to_dict(['tenant_id', 'id'])
+        params: dict[str, Any] = self.input.to_dict(["tenant_id", "id"])
         for key, value in params.items():
             setattr(model, key, value)
 
         # set the tenant id
-        setattr(model, 'tenant_id', self.tenant_id)
+        setattr(model, "tenant_id", self.tenant_id)
         await sync_to_async(model.save)()
         return model
 
@@ -112,43 +168,54 @@ class EventMutationService(BaseMutationService):
 
 @strawberry.type
 class EventMutations:
-
-    @strawberry.mutation(extensions=[IsAuthenticated()])
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
     async def create_event(
         self,
         info: strawberry.Info,
         input: inputs.CreateEventInput,
     ) -> types.EventDetailResponse:
         try:
-            event: models.Event = await EventMutationService.process_create_or_update(input=input, info=info)
-            return types.EventDetailResponse(
+            event: models.Event = await EventMutationService.process_create_or_update(
+                input=input, info=info
+            )
+            return build_mutation_response(
+                types.EventDetailResponse,
                 success=True,
                 message="Event created successfully.",
+                input_obj=input,
                 event=event,
             )
         except GraphQLError as e:
-            return types.EventDetailResponse(
+            return build_mutation_response(
+                types.EventDetailResponse,
                 success=False,
                 message=str(e),
+                input_obj=input,
             )
 
-    @strawberry.mutation(extensions=[IsAuthenticated()])
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
     async def update_event(
         self,
         info: strawberry.Info,
         input: inputs.UpdateEventInput,
     ) -> types.EventDetailResponse:
         try:
-            event: models.Event = await EventMutationService.process_create_or_update(input=input, info=info)
-            return types.EventDetailResponse(
+            event: models.Event = await EventMutationService.process_create_or_update(
+                input=input, info=info
+            )
+            return build_mutation_response(
+                types.EventDetailResponse,
                 success=True,
                 message="Event updated successfully.",
+                input_obj=input,
                 event=event,
             )
         except GraphQLError as e:
-            return types.EventDetailResponse(
+            return build_mutation_response(
+                types.EventDetailResponse,
                 success=False,
                 message=str(e),
+                input_obj=input,
             )
 
 
@@ -162,7 +229,7 @@ class EventTypeMutationService(BaseMutationService):
 
 @strawberry.type
 class EventTypeMutations:
-    @strawberry.mutation(extensions=[IsAuthenticated()])
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
     async def create_event_type(
         self,
         info: strawberry.Info,
@@ -170,22 +237,29 @@ class EventTypeMutations:
     ) -> types.EventTypeDetailResponse:
         """Create a new event type."""
         try:
-            event_type: models.EventType = await EventTypeMutationService.process_create_or_update(
-                input=input,
-                info=info,
+            print("INPUT", input)
+            event_type: models.EventType = (
+                await EventTypeMutationService.process_create_or_update(
+                    input=input,
+                    info=info,
+                )
             )
-            return types.EventTypeDetailResponse(
+            return build_mutation_response(
+                types.EventTypeDetailResponse,
                 success=True,
                 message="Event type created successfully.",
+                input_obj=input,
                 event_type=event_type,
             )
         except GraphQLError as e:
-            return types.EventTypeDetailResponse(
+            return build_mutation_response(
+                types.EventTypeDetailResponse,
                 success=False,
-                message=str(e)
+                message=str(e),
+                input_obj=input,
             )
 
-    @strawberry.mutation(extensions=[IsAuthenticated()])
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
     async def update_event_type(
         self,
         info: strawberry.Info,
@@ -193,20 +267,26 @@ class EventTypeMutations:
     ) -> types.EventTypeDetailResponse:
         """Update an existing event type."""
         try:
-            event_type: models.EventType = await EventTypeMutationService.process_create_or_update(
-                input=input,
-                info=info,
+            event_type: models.EventType = (
+                await EventTypeMutationService.process_create_or_update(
+                    input=input,
+                    info=info,
+                )
             )
-            return types.EventTypeDetailResponse(
+            return build_mutation_response(
+                types.EventTypeDetailResponse,
                 success=True,
                 message="Event type updated successfully.",
+                input_obj=input,
                 event_type=event_type,
             )
 
         except GraphQLError as e:
-            return types.EventTypeDetailResponse(
+            return build_mutation_response(
+                types.EventTypeDetailResponse,
                 success=False,
                 message=str(e),
+                input_obj=input,
             )
 
 
@@ -220,7 +300,7 @@ class EventStatusMutationService(BaseMutationService):
 
 @strawberry.type
 class EventStatusMutations:
-    @strawberry.mutation(extensions=[IsAuthenticated()])
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
     async def create_event_status(
         self,
         info: strawberry.Info,
@@ -228,22 +308,28 @@ class EventStatusMutations:
     ) -> types.EventStatusDetailResponse:
         """Create a new event status."""
         try:
-            event_status: models.EventStatus = await EventStatusMutationService.process_create_or_update(
-                input=input,
-                info=info,
+            event_status: models.EventStatus = (
+                await EventStatusMutationService.process_create_or_update(
+                    input=input,
+                    info=info,
+                )
             )
-            return types.EventStatusDetailResponse(
+            return build_mutation_response(
+                types.EventStatusDetailResponse,
                 success=True,
                 message="Event status created successfully.",
+                input_obj=input,
                 event_status=event_status,
             )
         except GraphQLError as e:
-            return types.EventStatusDetailResponse(
+            return build_mutation_response(
+                types.EventStatusDetailResponse,
                 success=False,
                 message=str(e),
+                input_obj=input,
             )
 
-    @strawberry.mutation(extensions=[IsAuthenticated()])
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
     async def update_event_status(
         self,
         info: strawberry.Info,
@@ -251,19 +337,25 @@ class EventStatusMutations:
     ) -> types.EventStatusDetailResponse:
         """Update an existing event status."""
         try:
-            event_status: models.EventStatus = await EventStatusMutationService.process_create_or_update(
-                input=input,
-                info=info,
+            event_status: models.EventStatus = (
+                await EventStatusMutationService.process_create_or_update(
+                    input=input,
+                    info=info,
+                )
             )
-            return types.EventStatusDetailResponse(
+            return build_mutation_response(
+                types.EventStatusDetailResponse,
                 success=True,
                 message="Event status updated successfully.",
+                input_obj=input,
                 event_status=event_status,
             )
         except GraphQLError as e:
-            return types.EventStatusDetailResponse(
+            return build_mutation_response(
+                types.EventStatusDetailResponse,
                 success=False,
                 message=str(e),
+                input_obj=input,
             )
 
 
@@ -277,7 +369,7 @@ class LocationMutationService(BaseMutationService):
 
 @strawberry.type
 class LocationMutations:
-    @strawberry.mutation(extensions=[IsAuthenticated()])
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
     async def create_location(
         self,
         info: strawberry.Info,
@@ -285,19 +377,27 @@ class LocationMutations:
     ) -> types.LocationDetailResponse:
         """Create a new location."""
         try:
-            location: models.Location = await LocationMutationService.process_create_or_update(input=input, info=info)
-            return types.LocationDetailResponse(
+            location: models.Location = (
+                await LocationMutationService.process_create_or_update(
+                    input=input, info=info
+                )
+            )
+            return build_mutation_response(
+                types.LocationDetailResponse,
                 success=True,
                 message="Location created successfully.",
+                input_obj=input,
                 location=location,
             )
         except GraphQLError as e:
-            return types.LocationDetailResponse(
+            return build_mutation_response(
+                types.LocationDetailResponse,
                 success=False,
                 message=str(e),
+                input_obj=input,
             )
 
-    @strawberry.mutation(extensions=[IsAuthenticated()])
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
     async def update_location(
         self,
         info: strawberry.Info,
@@ -305,16 +405,24 @@ class LocationMutations:
     ) -> types.LocationDetailResponse:
         """Update an existing location."""
         try:
-            location: models.Location = await LocationMutationService.process_create_or_update(input=input, info=info)
-            return types.LocationDetailResponse(
+            location: models.Location = (
+                await LocationMutationService.process_create_or_update(
+                    input=input, info=info
+                )
+            )
+            return build_mutation_response(
+                types.LocationDetailResponse,
                 success=True,
                 message="Location updated successfully.",
+                input_obj=input,
                 location=location,
             )
         except GraphQLError as e:
-            return types.LocationDetailResponse(
+            return build_mutation_response(
+                types.LocationDetailResponse,
                 success=False,
                 message=str(e),
+                input_obj=input,
             )
 
 
@@ -328,7 +436,7 @@ class ClientMutationService(BaseMutationService):
 
 @strawberry.type
 class ClientMutations:
-    @strawberry.mutation(extensions=[IsAuthenticated()])
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
     async def create_client(
         self,
         info: strawberry.Info,
@@ -336,19 +444,27 @@ class ClientMutations:
     ) -> types.ClientDetailResponse:
         """Create a new client."""
         try:
-            client: models.Client = await ClientMutationService.process_create_or_update(input=input, info=info)
-            return types.ClientDetailResponse(
+            client: models.Client = (
+                await ClientMutationService.process_create_or_update(
+                    input=input, info=info
+                )
+            )
+            return build_mutation_response(
+                types.ClientDetailResponse,
                 success=True,
                 message="Client created successfully.",
+                input_obj=input,
                 client=client,
             )
         except GraphQLError as e:
-            return types.ClientDetailResponse(
+            return build_mutation_response(
+                types.ClientDetailResponse,
                 success=False,
                 message=str(e),
+                input_obj=input,
             )
 
-    @strawberry.mutation(extensions=[IsAuthenticated()])
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
     async def update_client(
         self,
         info: strawberry.Info,
@@ -356,16 +472,24 @@ class ClientMutations:
     ) -> types.ClientDetailResponse:
         """Update an existing client."""
         try:
-            client: models.Client = await ClientMutationService.process_create_or_update(input=input, info=info)
-            return types.ClientDetailResponse(
+            client: models.Client = (
+                await ClientMutationService.process_create_or_update(
+                    input=input, info=info
+                )
+            )
+            return build_mutation_response(
+                types.ClientDetailResponse,
                 success=True,
                 message="Client updated successfully.",
+                input_obj=input,
                 client=client,
             )
         except GraphQLError as e:
-            return types.ClientDetailResponse(
+            return build_mutation_response(
+                types.ClientDetailResponse,
                 success=False,
                 message=str(e),
+                input_obj=input,
             )
 
 
@@ -379,8 +503,7 @@ class DistributorMutationService(BaseMutationService):
 
 @strawberry.type
 class DistributorMutations:
-
-    @strawberry.mutation(extensions=[IsAuthenticated()])
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
     async def create_distributor(
         self,
         info: strawberry.Info,
@@ -388,19 +511,27 @@ class DistributorMutations:
     ) -> types.DistributorDetailResponse:
         try:
             """Create a new distributor."""
-            distributor: models.Distributor = await DistributorMutationService.process_create_or_update(input=input, info=info)
-            return types.DistributorDetailResponse(
+            distributor: models.Distributor = (
+                await DistributorMutationService.process_create_or_update(
+                    input=input, info=info
+                )
+            )
+            return build_mutation_response(
+                types.DistributorDetailResponse,
                 success=True,
                 message="Distributor created successfully.",
+                input_obj=input,
                 distributor=distributor,
             )
         except GraphQLError as e:
-            return types.DistributorDetailResponse(
+            return build_mutation_response(
+                types.DistributorDetailResponse,
                 success=False,
                 message=str(e),
+                input_obj=input,
             )
 
-    @strawberry.mutation(extensions=[IsAuthenticated()])
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
     async def update_distributor(
         self,
         info: strawberry.Info,
@@ -408,19 +539,25 @@ class DistributorMutations:
     ) -> types.DistributorDetailResponse:
         """Update an existing distributor."""
         try:
-            distributor: models.Distributor = await DistributorMutationService.process_create_or_update(
-                input=input,
-                info=info,
+            distributor: models.Distributor = (
+                await DistributorMutationService.process_create_or_update(
+                    input=input,
+                    info=info,
+                )
             )
-            return types.DistributorDetailResponse(
+            return build_mutation_response(
+                types.DistributorDetailResponse,
                 success=True,
                 message="Distributor updated successfully.",
+                input_obj=input,
                 distributor=distributor,
             )
         except GraphQLError as e:
-            return types.DistributorDetailResponse(
+            return build_mutation_response(
+                types.DistributorDetailResponse,
                 success=False,
                 message=str(e),
+                input_obj=input,
             )
 
 
@@ -434,7 +571,7 @@ class RetailerMutationService(BaseMutationService):
 
 @strawberry.type
 class RetailerMutations:
-    @strawberry.mutation(extensions=[IsAuthenticated()])
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
     async def create_retailer(
         self,
         info: strawberry.Info,
@@ -442,22 +579,28 @@ class RetailerMutations:
     ) -> types.RetailerDetailResponse:
         """Create a new retailer."""
         try:
-            retailer: models.Retailer = await RetailerMutationService.process_create_or_update(
-                input=input,
-                info=info,
+            retailer: models.Retailer = (
+                await RetailerMutationService.process_create_or_update(
+                    input=input,
+                    info=info,
+                )
             )
-            return types.RetailerDetailResponse(
+            return build_mutation_response(
+                types.RetailerDetailResponse,
                 success=True,
                 message="Retailer created successfully.",
+                input_obj=input,
                 retailer=retailer,
             )
         except GraphQLError as e:
-            return types.RetailerDetailResponse(
+            return build_mutation_response(
+                types.RetailerDetailResponse,
                 success=False,
                 message=str(e),
+                input_obj=input,
             )
 
-    @strawberry.mutation(extensions=[IsAuthenticated()])
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
     async def update_retailer(
         self,
         info: strawberry.Info,
@@ -465,19 +608,25 @@ class RetailerMutations:
     ) -> types.RetailerDetailResponse:
         """Update an existing retailer."""
         try:
-            retailer: models.Retailer = await RetailerMutationService.process_create_or_update(
-                input=input,
-                info=info,
+            retailer: models.Retailer = (
+                await RetailerMutationService.process_create_or_update(
+                    input=input,
+                    info=info,
+                )
             )
-            return types.RetailerDetailResponse(
+            return build_mutation_response(
+                types.RetailerDetailResponse,
                 success=True,
                 message="Retailer updated successfully.",
+                input_obj=input,
                 retailer=retailer,
             )
         except GraphQLError as e:
-            return types.RetailerDetailResponse(
+            return build_mutation_response(
+                types.RetailerDetailResponse,
                 success=False,
                 message=str(e),
+                input_obj=input,
             )
 
 
@@ -491,7 +640,7 @@ class ProductTypeMutationService(BaseMutationService):
 
 @strawberry.type
 class ProductTypeMutations:
-    @strawberry.mutation(extensions=[IsAuthenticated()])
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
     async def create_product_type(
         self,
         info: strawberry.Info,
@@ -499,19 +648,27 @@ class ProductTypeMutations:
     ) -> types.ProductTypeDetailResponse:
         """Create a new product type."""
         try:
-            product_type: models.ProductType = await ProductTypeMutationService.process_create_or_update(input=input, info=info)
-            return types.ProductTypeDetailResponse(
+            product_type: models.ProductType = (
+                await ProductTypeMutationService.process_create_or_update(
+                    input=input, info=info
+                )
+            )
+            return build_mutation_response(
+                types.ProductTypeDetailResponse,
                 success=True,
                 message="Product type created successfully.",
+                input_obj=input,
                 product_type=product_type,
             )
         except GraphQLError as e:
-            return types.ProductTypeDetailResponse(
+            return build_mutation_response(
+                types.ProductTypeDetailResponse,
                 success=False,
                 message=str(e),
+                input_obj=input,
             )
 
-    @strawberry.mutation(extensions=[IsAuthenticated()])
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
     async def update_product_type(
         self,
         info: strawberry.Info,
@@ -519,16 +676,24 @@ class ProductTypeMutations:
     ) -> types.ProductTypeDetailResponse:
         """Update an existing product type."""
         try:
-            product_type: models.ProductType = await ProductTypeMutationService.process_create_or_update(input=input, info=info)
-            return types.ProductTypeDetailResponse(
+            product_type: models.ProductType = (
+                await ProductTypeMutationService.process_create_or_update(
+                    input=input, info=info
+                )
+            )
+            return build_mutation_response(
+                types.ProductTypeDetailResponse,
                 success=True,
                 message="Product type updated successfully.",
+                input_obj=input,
                 product_type=product_type,
             )
         except GraphQLError as e:
-            return types.ProductTypeDetailResponse(
+            return build_mutation_response(
+                types.ProductTypeDetailResponse,
                 success=False,
                 message=str(e),
+                input_obj=input,
             )
 
 
@@ -542,7 +707,7 @@ class ProductMutationService(BaseMutationService):
 
 @strawberry.type
 class ProductMutations:
-    @strawberry.mutation(extensions=[IsAuthenticated()])
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
     async def create_product(
         self,
         info: strawberry.Info,
@@ -550,19 +715,27 @@ class ProductMutations:
     ) -> types.ProductDetailResponse:
         """Create a new product."""
         try:
-            product: models.Product = await ProductMutationService.process_create_or_update(input=input, info=info)
-            return types.ProductDetailResponse(
+            product: models.Product = (
+                await ProductMutationService.process_create_or_update(
+                    input=input, info=info
+                )
+            )
+            return build_mutation_response(
+                types.ProductDetailResponse,
                 success=True,
                 message="Product created successfully.",
+                input_obj=input,
                 product=product,
             )
         except GraphQLError as e:
-            return types.ProductDetailResponse(
+            return build_mutation_response(
+                types.ProductDetailResponse,
                 success=False,
                 message=str(e),
+                input_obj=input,
             )
 
-    @strawberry.mutation(extensions=[IsAuthenticated()])
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
     async def update_product(
         self,
         info: strawberry.Info,
@@ -570,16 +743,24 @@ class ProductMutations:
     ) -> types.ProductDetailResponse:
         """Update an existing product."""
         try:
-            product: models.Product = await ProductMutationService.process_create_or_update(input=input, info=info)
-            return types.ProductDetailResponse(
+            product: models.Product = (
+                await ProductMutationService.process_create_or_update(
+                    input=input, info=info
+                )
+            )
+            return build_mutation_response(
+                types.ProductDetailResponse,
                 success=True,
                 message="Product updated successfully.",
+                input_obj=input,
                 product=product,
             )
         except GraphQLError as e:
-            return types.ProductDetailResponse(
+            return build_mutation_response(
+                types.ProductDetailResponse,
                 success=False,
                 message=str(e),
+                input_obj=input,
             )
 
 
@@ -593,7 +774,7 @@ class RequestTypeMutationService(BaseMutationService):
 
 @strawberry.type
 class RequestTypeMutations:
-    @strawberry.mutation(extensions=[IsAuthenticated()])
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
     async def create_request_type(
         self,
         info: strawberry.Info,
@@ -601,19 +782,27 @@ class RequestTypeMutations:
     ) -> types.RequestTypeDetailResponse:
         """Create a new request type."""
         try:
-            request_type: models.RequestType = await RequestTypeMutationService.process_create_or_update(input=input, info=info)
-            return types.RequestTypeDetailResponse(
+            request_type: models.RequestType = (
+                await RequestTypeMutationService.process_create_or_update(
+                    input=input, info=info
+                )
+            )
+            return build_mutation_response(
+                types.RequestTypeDetailResponse,
                 success=True,
                 message="Request type created successfully.",
+                input_obj=input,
                 request_type=request_type,
             )
         except GraphQLError as e:
-            return types.RequestTypeDetailResponse(
+            return build_mutation_response(
+                types.RequestTypeDetailResponse,
                 success=False,
                 message=str(e),
+                input_obj=input,
             )
 
-    @strawberry.mutation(extensions=[IsAuthenticated()])
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
     async def update_request_type(
         self,
         info: strawberry.Info,
@@ -621,22 +810,30 @@ class RequestTypeMutations:
     ) -> types.RequestTypeDetailResponse:
         """Update an existing request type."""
         try:
-            request_type: models.RequestType = await RequestTypeMutationService.process_create_or_update(input=input, info=info)
-            return types.RequestTypeDetailResponse(
+            request_type: models.RequestType = (
+                await RequestTypeMutationService.process_create_or_update(
+                    input=input, info=info
+                )
+            )
+            return build_mutation_response(
+                types.RequestTypeDetailResponse,
                 success=True,
                 message="Request type updated successfully.",
+                input_obj=input,
                 request_type=request_type,
             )
         except GraphQLError as e:
-            return types.RequestTypeDetailResponse(
+            return build_mutation_response(
+                types.RequestTypeDetailResponse,
                 success=False,
                 message=str(e),
+                input_obj=input,
             )
 
 
 @strawberry.type
 class RequestStatusMutations:
-    @strawberry.mutation(extensions=[IsAuthenticated()])
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
     async def create_request_status(
         self,
         info: strawberry.Info,
@@ -644,22 +841,27 @@ class RequestStatusMutations:
     ) -> types.RequestStatusDetailResponse:
         """Create a new request status."""
         try:
-            request_status: models.RequestStatus = await RequestStatusMutationService.process_create_or_update(
-                input=input,
-                info=info
+            request_status: models.RequestStatus = (
+                await RequestStatusMutationService.process_create_or_update(
+                    input=input, info=info
+                )
             )
-            return types.RequestStatusDetailResponse(
+            return build_mutation_response(
+                types.RequestStatusDetailResponse,
                 success=True,
                 message="Request status created successfully.",
+                input_obj=input,
                 request_status=request_status,
             )
         except GraphQLError as e:
-            return types.RequestStatusDetailResponse(
+            return build_mutation_response(
+                types.RequestStatusDetailResponse,
                 success=False,
                 message=str(e),
+                input_obj=input,
             )
 
-    @strawberry.mutation(extensions=[IsAuthenticated()])
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
     async def update_request_status(
         self,
         info: strawberry.Info,
@@ -667,19 +869,24 @@ class RequestStatusMutations:
     ) -> types.RequestStatusDetailResponse:
         """Update an existing request status."""
         try:
-            request_status: models.RequestStatus = await RequestStatusMutationService.process_create_or_update(
-                input=input,
-                info=info
+            request_status: models.RequestStatus = (
+                await RequestStatusMutationService.process_create_or_update(
+                    input=input, info=info
+                )
             )
-            return types.RequestStatusDetailResponse(
+            return build_mutation_response(
+                types.RequestStatusDetailResponse,
                 success=True,
                 message="Request status updated successfully.",
+                input_obj=input,
                 request_status=request_status,
             )
         except GraphQLError as e:
-            return types.RequestStatusDetailResponse(
+            return build_mutation_response(
+                types.RequestStatusDetailResponse,
                 success=False,
                 message=str(e),
+                input_obj=input,
             )
 
 
@@ -701,7 +908,7 @@ class RequestMutationService(BaseMutationService):
 
 @strawberry.type
 class PublicRequestMutations:
-    @strawberry.mutation
+    @relay.mutation
     async def create_request(
         self,
         input: inputs.CreateRequestInput,
@@ -709,24 +916,29 @@ class PublicRequestMutations:
         """Create a new request."""
         try:
             service: RequestMutationService = RequestMutationService.with_input(
-                input=input)
+                input=input
+            )
             service.set_is_public(True)
             request: models.Request = await service.save()
-            return types.RequestDetailResponse(
+            return build_mutation_response(
+                types.RequestDetailResponse,
                 success=True,
                 message="Request created successfully.",
+                input_obj=input,
                 request=request,
             )
         except GraphQLError as e:
-            return types.RequestDetailResponse(
+            return build_mutation_response(
+                types.RequestDetailResponse,
                 success=False,
                 message=str(e),
+                input_obj=input,
             )
 
 
 @strawberry.type
 class RequestMutations:
-
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
     async def update_request(
         self,
         info: strawberry.Info,
@@ -734,64 +946,81 @@ class RequestMutations:
     ) -> types.RequestDetailResponse:
         """Update an existing request."""
         try:
-            request: models.Request = await RequestMutationService.process_create_or_update(input=input, info=info)
-            return types.RequestDetailResponse(
+            request: models.Request = (
+                await RequestMutationService.process_create_or_update(
+                    input=input, info=info
+                )
+            )
+            return build_mutation_response(
+                types.RequestDetailResponse,
                 success=True,
                 message="Request updated successfully.",
+                input_obj=input,
                 request=request,
             )
         except GraphQLError as e:
-            return types.RequestDetailResponse(
+            return build_mutation_response(
+                types.RequestDetailResponse,
                 success=False,
                 message=str(e),
+                input_obj=input,
             )
 
-    @strawberry.mutation(extensions=[IsAuthenticated()])
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
     async def approve_request(
         self,
         info: strawberry.Info,
-        id: strawberry.ID,
+        input: inputs.ApproveRequestInput,
     ) -> types.ApproveRequestResponse:
         """Approve a request."""
         try:
             service: RequestMutationService = RequestMutationService()
             user: User = await service.get_user(info)
             tenant: Tenant = await sync_to_async(user.get_tenant)()
-            if await user.role.is_ambassador:
-                raise GraphQLError(
-                    "You are not authorized to approve requests.")
+            if user.role_id == ROLE_ID.Ambassadors:
+                raise GraphQLError("You are not authorized to approve requests.")
 
             if not tenant:
                 raise GraphQLError(
-                    "Tenant not found. Please ensure you are a member of a tenant.")
+                    "Tenant not found. Please ensure you are a member of a tenant."
+                )
 
             approval_status = await sync_to_async(
-                models.RequestStatus.objects.get_for_approval)(tenant=tenant.id)
+                models.RequestStatus.objects.get_for_approval
+            )(tenant=tenant.id)
             if not approval_status:
                 raise GraphQLError(
-                    "Approval status not found. Please ensure you have a status for approval.")
+                    "Approval status not found. Please ensure you have a status for approval."
+                )
 
-            request: models.Request = await sync_to_async(models.Request.objects.get)(id=id)
+            request: models.Request = await sync_to_async(models.Request.objects.get)(
+                id=input.id
+            )
             request.status = approval_status
             await sync_to_async(request.save)()
             event: models.Event = await models.Event.objects.from_request(
-                request=request,
-                created_by=user
+                request=request, created_by=user
             )
 
-            return types.ApproveRequestResponse(
+            return build_mutation_response(
+                types.ApproveRequestResponse,
                 success=True,
                 message="Request approved successfully.",
+                input_obj=input,
                 request=request,
                 event=event,
             )
         except GraphQLError as e:
-            return types.ApproveRequestResponse(
+            return build_mutation_response(
+                types.ApproveRequestResponse,
                 success=False,
                 message=str(e),
+                input_obj=input,
             )
         except Exception as e:
-            return types.ApproveRequestResponse(
+            return build_mutation_response(
+                types.ApproveRequestResponse,
                 success=False,
                 message=str(e),
+                input_obj=input,
             )

@@ -5,6 +5,8 @@ from typing import List, Dict, Any
 class SparkGraphQLInput:
     """Base class for Spark GraphQL inputs."""
 
+    client_mutation_id: strawberry.ID | None = None
+
     def to_dict(self, exclude: List[str] | None = None) -> Dict[str, Any]:
         """
         Convert Strawberry input to dictionary for Django model assignment.
@@ -20,7 +22,7 @@ class SparkGraphQLInput:
 
         # Strawberry inputs store fields in __dict__
         for key, value in self.__dict__.items():
-            if key in exclude or value is None:
+            if key in exclude or key == "client_mutation_id" or value is None:
                 continue
             result[key] = value
 

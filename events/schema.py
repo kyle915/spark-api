@@ -56,9 +56,7 @@ class EventQueryClient(
 
 
 @strawberry.type
-class EventQuerySpark(
-    EventQueryClient
-):
+class EventQuerySpark(EventQueryClient):
     pass
 
 
@@ -76,7 +74,7 @@ class EventsMutations(
     ProductMutations,
     RequestTypeMutations,
     RequestStatusMutations,
-    RequestMutations
+    RequestMutations,
 ):
     pass
 
@@ -107,7 +105,6 @@ class EventMutationsClient(
 
 @strawberry.type
 class EventMutationsSpark(
-    EventMutationsAmbassadors,
-    EventMutationsClient,
+    EventMutationsAmbassadors, EventMutationsClient, EventTypeMutations
 ):
     pass
