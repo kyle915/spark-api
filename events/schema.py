@@ -1,15 +1,5 @@
 import strawberry
-import strawberry_django
-from strawberry.types import Info
-from asgiref.sync import sync_to_async
-from graphql import GraphQLError
 
-from .types import EventType, Event
-from . import models
-from tenants.models import TenantedUser
-from strawberry_django.permissions import (
-    IsAuthenticated,
-)
 from .mutations import (
     EventMutations,
     EventTypeMutations,
