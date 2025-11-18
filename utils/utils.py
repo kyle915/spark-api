@@ -1,5 +1,8 @@
 from strawberry.extensions import SchemaExtension
 from graphql import GraphQLError
+from typing import Any, Type, TypeVar, Union
+
+from utils.graphql.inputs import SparkGraphQLInput
 
 
 class BlockIntrospectionForAnonymous(SchemaExtension):
@@ -27,3 +30,24 @@ class BlockIntrospectionForAnonymous(SchemaExtension):
 class ROLE_ID:
     Ambassadors = 1
     SparkAdmin = 2
+
+
+MutationResponseType = TypeVar("MutationResponseType")
+
+
+def build_mutation_response(
+    response_cls: Type[MutationResponseType],
+    *,
+    success: bool,
+    message: str,
+    input_obj: SparkGraphQLInput | None = None,
+    **extra_fields: Any,
+) -> MutationResponseType:
+    """Helper to keep relay clientMutationId propagation consistent."""
+    client_mutation_id = getattr(input_obj, "client_mutation_id", None)
+    return response_cls(
+        success=success,
+        message=message,
+        client_mutation_id=client_mutation_id,
+        **extra_fields,
+    )

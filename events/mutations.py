@@ -17,32 +17,32 @@ from utils.graphql.permissions import StrictIsAuthenticated
 from utils.graphql.relay import ensure_relay_mutation
 from utils.graphql.types import SparkGraphQLErrorResponse
 from utils.graphql.mixins import SparkGraphQLMixin
-from utils.utils import ROLE_ID
+from utils.utils import ROLE_ID, build_mutation_response
 from tenants.models import Tenant, User
 
 ensure_relay_mutation()
 
 User = get_user_model()
 
-MutationResponseType = TypeVar("MutationResponseType")
+# MutationResponseType = TypeVar("MutationResponseType")
 
 
-def build_mutation_response(
-    response_cls: Type[MutationResponseType],
-    *,
-    success: bool,
-    message: str,
-    input_obj: SparkGraphQLInput | None = None,
-    **extra_fields: Any,
-) -> MutationResponseType:
-    """Helper to keep relay clientMutationId propagation consistent."""
-    client_mutation_id = getattr(input_obj, "client_mutation_id", None)
-    return response_cls(
-        success=success,
-        message=message,
-        client_mutation_id=client_mutation_id,
-        **extra_fields,
-    )
+# def build_mutation_response(
+#     response_cls: Type[MutationResponseType],
+#     *,
+#     success: bool,
+#     message: str,
+#     input_obj: SparkGraphQLInput | None = None,
+#     **extra_fields: Any,
+# ) -> MutationResponseType:
+#     """Helper to keep relay clientMutationId propagation consistent."""
+#     client_mutation_id = getattr(input_obj, "client_mutation_id", None)
+#     return response_cls(
+#         success=success,
+#         message=message,
+#         client_mutation_id=client_mutation_id,
+#         **extra_fields,
+#     )
 
 
 class BaseMutationService(SparkGraphQLMixin):
@@ -80,7 +80,8 @@ class BaseMutationService(SparkGraphQLMixin):
         """Set the user and tenant for the service."""
         self.info = info
         self.user = await self.get_user(info)
-        self.is_spark_schema = self.is_spark_schema_request(info, user=self.user)
+        self.is_spark_schema = self.is_spark_schema_request(
+            info, user=self.user)
         tenant_id = getattr(self.input, "tenant_id", None)
 
         if self.is_spark_schema and tenant_id:
@@ -135,7 +136,8 @@ class BaseMutationService(SparkGraphQLMixin):
 
         # get the model
         model_class = self.get_model()
-        is_update: bool = hasattr(self.input, "id") and self.input.id is not None
+        is_update: bool = hasattr(
+            self.input, "id") and self.input.id is not None
         if is_update:
             model = await sync_to_async(model_class.objects.get)(id=self.input.id)
             if self.user:
@@ -978,7 +980,8 @@ class RequestMutations:
             user: User = await service.get_user(info)
             tenant: Tenant = await sync_to_async(user.get_tenant)()
             if user.role_id == ROLE_ID.Ambassadors:
-                raise GraphQLError("You are not authorized to approve requests.")
+                raise GraphQLError(
+                    "You are not authorized to approve requests.")
 
             if not tenant:
                 raise GraphQLError(
