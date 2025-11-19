@@ -100,6 +100,18 @@ class BaseEventQueriesService(SparkGraphQLMixin):
         except self.get_model().DoesNotExist:
             raise GraphQLError("Record not found.")
 
+    async def get_record_by_uuid(
+        self, uuid: str, tenant_id: strawberry.ID | None = None
+    ) -> Model | None:
+        """Get a single record by UUID."""
+        filters = {"uuid": uuid}
+        if tenant_id:
+            filters["tenant_id"] = tenant_id
+        try:
+            return await sync_to_async(self.get_model().objects.get)(**filters)
+        except self.get_model().DoesNotExist:
+            raise GraphQLError("Record not found.")
+
 
 class EventQueriesService(BaseEventQueriesService):
     """Service for event queries."""
@@ -318,9 +330,16 @@ class RequestQueries:
     ) -> CountableConnection[types.Request]:
         """Get all requests."""
         service = RequestQueriesService()
-        tenant = await service.get_user_tenant(info)
+        user = await service.get_user(info)
+        is_spark_request = service.is_spark_schema_request(info, user=user)
+
+        tenant_id: int | None = None
+        if not is_spark_request:
+            tenant = await service.get_user_tenant(info, user=user)
+            tenant_id = tenant.id
+
         return await service.get_connection(
-            tenant_id=tenant.id,
+            tenant_id=tenant_id,
             q=q,
             first=first,
             after=after,
@@ -330,16 +349,21 @@ class RequestQueries:
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def request(
-        self, info: strawberry.Info, id: strawberry.ID
+        self, info: strawberry.Info, uuid: strawberry.ID
     ) -> types.Request | None:
         """Get a single request."""
         try:
             service = RequestQueriesService()
-            tenant = await service.get_user_tenant(info)
-            request = await service.get_record(id, tenant.id)
+            user = await service.get_user(info)
+            tenant_id: int | None = None
+            if not service.is_spark_schema_request(info, user=user):
+                tenant = await service.get_user_tenant(info, user=user)
+                tenant_id = tenant.id
+
+            request = await service.get_record_by_uuid(str(uuid), tenant_id)
             return request
         except GraphQLError:
-            return None
+            raise GraphQLError
 
 
 class ClientQueriesService(BaseEventQueriesService):

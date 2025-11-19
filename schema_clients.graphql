@@ -375,7 +375,7 @@ type Query {
   requestStatuses: [RequestStatus!]! @isAuthenticated
   requestStatus(id: ID!): RequestStatus @isAuthenticated
   requests(limit: Int! = 10, offset: Int! = 0, q: String = null): [Request!]! @isAuthenticated
-  request(id: ID!): Request @isAuthenticated
+  request(uuid: ID!): Request @isAuthenticated
   locations: [Location!]! @isAuthenticated
   location(id: ID!): Location @isAuthenticated
   me: CustomUserType!
