@@ -2,6 +2,7 @@ import strawberry
 from typing import List, Dict, Any
 
 
+@strawberry.input
 class SparkGraphQLInput:
     """Base class for Spark GraphQL inputs."""
 
@@ -27,3 +28,13 @@ class SparkGraphQLInput:
             result[key] = value
 
         return result
+
+
+@strawberry.input
+class BaseTenantInput(SparkGraphQLInput):
+    tenant_id: strawberry.ID | None = None
+
+
+@strawberry.input
+class BaseNameableInput(BaseTenantInput):
+    name: str

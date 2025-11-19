@@ -1,12 +1,15 @@
 import strawberry
-from typing import Any
+from typing import Any, Union, Type
 from graphql import GraphQLError
 from asgiref.sync import sync_to_async
 
+
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
+from django.db.models import Model
 
 from tenants.models import Tenant
+from utils.graphql.inputs import SparkGraphQLInput
 
 User = get_user_model()
 
@@ -103,7 +106,8 @@ class SparkGraphQLMixin:
                 tenant_uuid,
             )
         except Exception as e:
-            raise GraphQLError("It looks like you are not a member of this tenant.")
+            raise GraphQLError(
+                "It looks like you are not a member of this tenant.")
 
     async def _get_tenant_without_membership(
         self,
@@ -127,3 +131,265 @@ class SparkGraphQLMixin:
             return await sync_to_async(Tenant.objects.get)(**filters)
         except Tenant.DoesNotExist:
             raise GraphQLError("Tenant not found.")
+
+
+class BaseMutationService(SparkGraphQLMixin):
+    """Base class for mutation services."""
+
+    input: SparkGraphQLInput | None = None
+    info: strawberry.Info | None = None
+    user: User | None = None
+    tenant_id: int | None = None
+    is_public: bool = False
+    is_spark_schema: bool = False
+
+    # Response configuration - can be overridden by subclasses
+    response_class: Type | None = None
+    model_field_name: str = "model"
+    create_message: str | None = None
+    update_message: str | None = None
+
+    @classmethod
+    def with_input(cls, input: SparkGraphQLInput) -> "BaseMutationService":
+        """Create a new instance of the service with the input."""
+        service = cls()
+        service.set_input(input)
+        return service
+
+    @classmethod
+    async def process_create_or_update(
+        cls, input: SparkGraphQLInput, info: strawberry.Info
+    ) -> Model:
+        """Process the create or update operation."""
+        service = cls.with_input(input)
+        await service.set_user_and_tenant(info)
+        return await service.save()
+
+    @classmethod
+    def _get_default_message(cls, model_field_name: str, action: str) -> str:
+        """Generate a default success message based on model_field_name and action."""
+        if not model_field_name:
+            return f"{action.capitalize()}d successfully."
+
+        model_name = model_field_name.replace("_", " ").title()
+
+        if action == "create":
+            return f"{model_name} created successfully."
+        elif action == "update":
+            return f"{model_name} updated successfully."
+        else:
+            return f"{model_name} {action}d successfully."
+
+    @classmethod
+    def _build_mutation_response(
+        cls,
+        *,
+        response_class: Type,
+        success: bool,
+        message: str,
+        input_obj: SparkGraphQLInput | None = None,
+        **extra_fields: Any,
+    ) -> Any:
+        """Build a mutation response (success or error)."""
+        from utils.utils import build_mutation_response as _build_mutation_response
+        return _build_mutation_response(
+            response_class,
+            success=success,
+            message=message,
+            input_obj=input_obj,
+            **extra_fields,
+        )
+
+    @classmethod
+    async def create(
+        cls,
+        input: SparkGraphQLInput,
+        info: strawberry.Info,
+        *,
+        response_class: Type | None = None,
+        model_field_name: str | None = None,
+        create_message: str | None = None,
+    ) -> Any:
+        """
+        Create mutation handler.
+
+        Args:
+            input: The input for the mutation
+            info: Strawberry GraphQL info
+            response_class: Response class type (uses cls.response_class if not provided)
+            model_field_name: Field name in response (uses cls.model_field_name if not provided)
+            create_message: Success message (uses cls.create_message if not provided)
+
+        Returns:
+            Response object with success/message and model instance
+        """
+        response_cls = response_class or cls.response_class
+        field_name = model_field_name or cls.model_field_name
+        message = create_message or cls.create_message
+
+        if not response_cls:
+            raise ValueError(
+                "response_class must be provided either as class attribute or parameter")
+
+        try:
+            model_instance: Model = await cls.process_create_or_update(input=input, info=info)
+
+            # Generate message if not provided
+            if not message:
+                message = cls._get_default_message(field_name, "create")
+
+            return cls._build_mutation_response(
+                response_class=response_cls,
+                success=True,
+                message=message,
+                input_obj=input,
+                **{field_name: model_instance}
+            )
+        except GraphQLError as e:
+            return cls._build_mutation_response(
+                response_class=response_cls,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
+    @classmethod
+    async def update(
+        cls,
+        input: SparkGraphQLInput,
+        info: strawberry.Info,
+        *,
+        response_class: Type | None = None,
+        model_field_name: str | None = None,
+        update_message: str | None = None,
+    ) -> Any:
+        """
+        Update mutation handler.
+
+        Args:
+            input: The input for the mutation
+            info: Strawberry GraphQL info
+            response_class: Response class type (uses cls.response_class if not provided)
+            model_field_name: Field name in response (uses cls.model_field_name if not provided)
+            update_message: Success message (uses cls.update_message if not provided)
+
+        Returns:
+            Response object with success/message and model instance
+        """
+        response_cls: Type | None = response_class or cls.response_class
+        field_name: str | None = model_field_name or cls.model_field_name
+        message: str | None = update_message or cls.update_message
+
+        if not response_cls:
+            raise ValueError(
+                "response_class must be provided either as class attribute or parameter")
+
+        try:
+            model_instance: Model = await cls.process_create_or_update(input=input, info=info)
+
+            # Generate message if not provided
+            if not message:
+                message = cls._get_default_message(field_name, "update")
+
+            return cls._build_mutation_response(
+                response_class=response_cls,
+                success=True,
+                message=message,
+                input_obj=input,
+                **{field_name: model_instance}
+            )
+        except GraphQLError as e:
+            return cls._build_mutation_response(
+                response_class=response_cls,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
+    def set_input(self, input: SparkGraphQLInput) -> "BaseMutationService":
+        """Set the input for the service."""
+        self.input = input
+        return self
+
+    async def set_user_and_tenant(self, info: strawberry.Info) -> "BaseMutationService":
+        """Set the user and tenant for the service."""
+        self.info = info
+        self.user = await self.get_user(info)
+        self.is_spark_schema = self.is_spark_schema_request(
+            info, user=self.user)
+        tenant_id = getattr(self.input, "tenant_id", None)
+
+        if self.is_spark_schema and tenant_id:
+            self.tenant_id = await self._resolve_tenant_without_membership(tenant_id)
+        else:
+            tenant = await self.get_tenant(self.user, tenant_id)
+            self.tenant_id = tenant.id
+        return self
+
+    def set_is_public(self, is_public: bool) -> "BaseMutationService":
+        """Set the is public for the service."""
+        self.is_public = is_public
+        return self
+
+    def get_model(self) -> Model:
+        """Get the model for the service."""
+        raise NotImplementedError("Subclasses must implement this method.")
+
+    async def validations(self):
+        """Before save validations."""
+        tenant_id = getattr(self.input, "tenant_id", None)
+        if self.is_public and not tenant_id:
+            raise GraphQLError("Tenant ID is required.")
+        if (
+            not self.is_public
+            and not self.is_spark_schema
+            and self.user.role.is_spark_admin
+            and tenant_id
+        ):
+            raise GraphQLError("Tenant ID should not be provided.")
+
+    async def _resolve_tenant_without_membership(
+        self, tenant_id: Union[str, int]
+    ) -> int:
+        """Resolve tenant ID for Spark schema requests without membership restrictions."""
+        try:
+            tenant_pk = int(tenant_id)
+        except (TypeError, ValueError):
+            raise GraphQLError("Invalid tenant ID.")
+
+        try:
+            await sync_to_async(Tenant.objects.get)(id=tenant_pk)
+        except Tenant.DoesNotExist:
+            raise GraphQLError("Tenant not found.")
+
+        return tenant_pk
+
+    async def save(self) -> Model:
+        """Save the model."""
+        # validate the input
+        await self.validations()
+
+        # get the model
+        model_class = self.get_model()
+        is_update: bool = hasattr(
+            self.input, "id") and self.input.id is not None
+        if is_update:
+            model = await sync_to_async(model_class.objects.get)(id=self.input.id)
+            if self.user:
+                setattr(model, "updated_by", self.user)
+        else:
+            model = model_class()
+            if self.user:
+                setattr(model, "created_by", self.user)
+            if self.is_public and self.input.tenant_id:
+                self.tenant_id = self.input.tenant_id
+
+        # set the parameters
+        params: dict[str, Any] = self.input.to_dict(["tenant_id", "id"])
+        for key, value in params.items():
+            setattr(model, key, value)
+
+        # set the tenant id
+        setattr(model, "tenant_id", self.tenant_id)
+        await sync_to_async(model.save)()
+        return model
