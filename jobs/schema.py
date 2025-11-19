@@ -5,7 +5,27 @@ from jobs import mutations, queries
 
 @strawberry.type
 class ClientJobQueries(
-    queries.StatusQueries
+    queries.StatusQueries,
+    queries.CompanyFileQueries,
+    queries.CompanyQueries,
+    queries.CompanyReviewQueries,
+    queries.PayTimingQueries,
+    queries.ReviewScoreQueries,
+    queries.JobTitleQueries,
+    queries.RateTypeQueries,
+    queries.RateQueries,
+    queries.JobQueries,
+    queries.JobFileQueries,
+    queries.JobRequirementTypeQueries,
+    queries.JobRequirementQueries,
+    queries.JobRequirementFileQueries,
+    queries.AmbassadorJobQueries,
+    queries.CompanyToAmbassadorReviewQueries,
+    queries.AmbassadorToAmbassadorReviewQueries,
+    queries.QuestionTypeQueries,
+    queries.JobRequirementQuestionQueries,
+    queries.QuestionOptionQueries,
+    queries.JobRequirementAnswerQueries,
 ):
     pass
 
