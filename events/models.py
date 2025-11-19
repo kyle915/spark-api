@@ -8,7 +8,7 @@ from .managers import (
     RequestStatusManager,
     EventStatusManager,
     EventTypeManager,
-    EventManager
+    EventManager,
 )
 from utils.models import WithDefaultAttribute
 
@@ -197,10 +197,7 @@ class RequestType(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
 
-class RequestStatus(
-    WithDefaultAttribute,
-    models.Model
-):
+class RequestStatus(WithDefaultAttribute, models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     name = models.CharField(max_length=50)
@@ -240,8 +237,7 @@ class RequestStatus(
             # Set the create event flag to false if the current status is set to true
             if self.create_event:
                 (
-                    RequestStatus.objects.filter(
-                        tenant=self.tenant, create_event=True)
+                    RequestStatus.objects.filter(tenant=self.tenant, create_event=True)
                     .exclude(pk=self.pk)
                     .update(create_event=False)
                 )
@@ -286,10 +282,7 @@ class Request(models.Model):
         related_name="requests",
     )
     status = models.ForeignKey(
-        RequestStatus,
-        on_delete=models.SET_NULL,
-        null=True,
-        related_name='requests'
+        RequestStatus, on_delete=models.SET_NULL, null=True, related_name="requests"
     )
     tenant = models.ForeignKey(
         Tenant,
@@ -355,6 +348,47 @@ class RequestDetail(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
 
+class RequestProduct(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+
+    request = models.ForeignKey(
+        Request,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="request_product",
+    )
+
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="request_product",
+    )
+
+    tenant = models.ForeignKey(
+        Tenant,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="request_product",
+    )
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="request_product_created_by",
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="request_product_updated_by",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
 class RequestStoreManager(models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
@@ -390,10 +424,7 @@ class RequestStoreManager(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
 
-class EventStatus(
-    WithDefaultAttribute,
-    models.Model
-):
+class EventStatus(WithDefaultAttribute, models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     name = models.CharField(max_length=50)
@@ -424,10 +455,7 @@ class EventStatus(
     objects = EventStatusManager()
 
 
-class EventType(
-    WithDefaultAttribute,
-    models.Model
-):
+class EventType(WithDefaultAttribute, models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     name = models.CharField(max_length=50)
@@ -475,7 +503,7 @@ class Event(models.Model):
         on_delete=models.CASCADE,
         # just in case we have records already. We'll validate in the request anyway.
         null=True,
-        db_index=True
+        db_index=True,
     )
     # Leaving these fields nullable, we'll validate them in the schema
     # to avoid conflicts with the migrations
