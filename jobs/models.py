@@ -283,7 +283,7 @@ class RateType(models.Model):
 class Rate(models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
-    amout = models.DecimalField(max_digits=14, decimal_places=4)
+    amount = models.DecimalField(max_digits=14, decimal_places=4)
 
     tenant = models.ForeignKey(
         Tenant,

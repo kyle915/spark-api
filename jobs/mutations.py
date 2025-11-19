@@ -5,6 +5,9 @@ from strawberry import relay
 from jobs import models, inputs, types
 from utils.graphql.mixins import BaseMutationService
 from utils.graphql.permissions import StrictIsAuthenticated
+from utils.graphql.relay import ensure_relay_mutation
+
+ensure_relay_mutation()
 
 
 # Status Mutations

@@ -2,6 +2,7 @@ import strawberry
 from typing import List, Dict, Any
 
 
+@strawberry.input
 class SparkGraphQLInput:
     """Base class for Spark GraphQL inputs."""
 

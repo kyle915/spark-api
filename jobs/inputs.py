@@ -111,7 +111,7 @@ class UpdateRateTypeInput(CreateRateTypeInput):
 
 @strawberry.input
 class CreateRateInput(BaseNameableInput):
-    amout: float  # Note: matches model field name (typo in model)
+    amount: float  # Note: matches model field name (typo in model)
     rate_type_id: strawberry.ID
 
 

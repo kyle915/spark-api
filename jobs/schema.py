@@ -6,9 +6,10 @@ from jobs import mutations
 @strawberry.type
 class ClientJobMutations(
     mutations.StatusMutations,
+    mutations.CompanyFileMutations,
     mutations.CompanyMutations,
+    mutations.CompanyReviewMutations,
     mutations.PayTimingMutations,
-    mutations.JobMutations,
     mutations.ReviewScoreMutations,
     mutations.JobTitleMutations,
     mutations.RateTypeMutations,
