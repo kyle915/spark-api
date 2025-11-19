@@ -50,7 +50,7 @@ class UpdateCompanyInput(CreateCompanyInput):
 
 
 @strawberry.input
-class CreateCompanyReviewInput(BaseNameableInput):
+class CreateCompanyReviewInput(BaseTenantInput):
     company_id: strawberry.ID
     global_score: int
     review: str
@@ -66,7 +66,7 @@ class UpdateCompanyReviewInput(CreateCompanyReviewInput):
 
 
 @strawberry.input
-class CreatePayTimingInput(BaseNameableInput):
+class CreatePayTimingInput(BaseTenantInput):
     min_pay_timing: int
     max_pay_timing: int
     unit: str
@@ -111,7 +111,7 @@ class UpdateRateTypeInput(CreateRateTypeInput):
 
 @strawberry.input
 class CreateRateInput(BaseNameableInput):
-    amount: float
+    amout: float  # Note: matches model field name (typo in model)
     rate_type_id: strawberry.ID
 
 
@@ -210,4 +210,74 @@ class CreateAmbassadorJobStatusInput(BaseNameableInput):
 
 @strawberry.input
 class UpdateAmbassadorJobStatusInput(CreateAmbassadorJobStatusInput):
+    id: strawberry.ID
+
+
+@strawberry.input
+class CreateCompanyToAmbassadorReviewInput(BaseTenantInput):
+    description: str
+    rate: float
+    ambassador_id: strawberry.ID
+    job_id: strawberry.ID
+
+
+@strawberry.input
+class UpdateCompanyToAmbassadorReviewInput(CreateCompanyToAmbassadorReviewInput):
+    id: strawberry.ID
+
+
+@strawberry.input
+class CreateAmbassadorToAmbassadorReviewInput(BaseTenantInput):
+    description: str
+    rate: float
+    ambassador_id: strawberry.ID
+
+
+@strawberry.input
+class UpdateAmbassadorToAmbassadorReviewInput(CreateAmbassadorToAmbassadorReviewInput):
+    id: strawberry.ID
+
+
+@strawberry.input
+class CreateQuestionTypeInput(BaseNameableInput):
+    pass
+
+
+@strawberry.input
+class UpdateQuestionTypeInput(CreateQuestionTypeInput):
+    id: strawberry.ID
+
+
+@strawberry.input
+class CreateJobRequirementQuestionInput(BaseTenantInput):
+    question: str
+    job_requirement_id: strawberry.ID
+    question_type_id: strawberry.ID
+
+
+@strawberry.input
+class UpdateJobRequirementQuestionInput(CreateJobRequirementQuestionInput):
+    id: strawberry.ID
+
+
+@strawberry.input
+class CreateQuestionOptionInput(BaseTenantInput):
+    option: str
+    job_requirement_question_id: strawberry.ID
+
+
+@strawberry.input
+class UpdateQuestionOptionInput(CreateQuestionOptionInput):
+    id: strawberry.ID
+
+
+@strawberry.input
+class CreateJobRequirementAnswerInput(BaseTenantInput):
+    selected_answer: List[int]
+    job_requirement_question_id: strawberry.ID
+    ambassador_id: strawberry.ID
+
+
+@strawberry.input
+class UpdateJobRequirementAnswerInput(CreateJobRequirementAnswerInput):
     id: strawberry.ID

@@ -7,6 +7,7 @@ from utils.graphql.mixins import BaseMutationService
 from utils.graphql.permissions import StrictIsAuthenticated
 
 
+# Status Mutations
 class StatusMutationService(BaseMutationService):
     """Service for status mutations."""
     response_class = types.StatusDetailResponse
@@ -34,3 +35,603 @@ class StatusMutations:
         input: inputs.UpdateStatusInput,
     ) -> types.StatusDetailResponse:
         return await StatusMutationService.update(input, info)
+
+
+# CompanyFile Mutations
+class CompanyFileMutationService(BaseMutationService):
+    """Service for company file mutations."""
+    response_class = types.CompanyFileDetailResponse
+    model_field_name = "company_file"
+
+    def get_model(self) -> Model:
+        """Get the model for the service."""
+        return models.CompanyFile
+
+
+@strawberry.type
+class CompanyFileMutations:
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def create_company_file(
+        self,
+        info: strawberry.Info,
+        input: inputs.CreateCompanyFileInput,
+    ) -> types.CompanyFileDetailResponse:
+        return await CompanyFileMutationService.create(input, info)
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def update_company_file(
+        self,
+        info: strawberry.Info,
+        input: inputs.UpdateCompanyFileInput,
+    ) -> types.CompanyFileDetailResponse:
+        return await CompanyFileMutationService.update(input, info)
+
+
+# Company Mutations
+class CompanyMutationService(BaseMutationService):
+    """Service for company mutations."""
+    response_class = types.CompanyDetailResponse
+    model_field_name = "company"
+
+    def get_model(self) -> Model:
+        """Get the model for the service."""
+        return models.Company
+
+
+@strawberry.type
+class CompanyMutations:
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def create_company(
+        self,
+        info: strawberry.Info,
+        input: inputs.CreateCompanyInput,
+    ) -> types.CompanyDetailResponse:
+        return await CompanyMutationService.create(input, info)
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def update_company(
+        self,
+        info: strawberry.Info,
+        input: inputs.UpdateCompanyInput,
+    ) -> types.CompanyDetailResponse:
+        return await CompanyMutationService.update(input, info)
+
+
+# CompanyReview Mutations
+class CompanyReviewMutationService(BaseMutationService):
+    """Service for company review mutations."""
+    response_class = types.CompanyReviewDetailResponse
+    model_field_name = "company_review"
+
+    def get_model(self) -> Model:
+        """Get the model for the service."""
+        return models.CompanyReview
+
+
+@strawberry.type
+class CompanyReviewMutations:
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def create_company_review(
+        self,
+        info: strawberry.Info,
+        input: inputs.CreateCompanyReviewInput,
+    ) -> types.CompanyReviewDetailResponse:
+        return await CompanyReviewMutationService.create(input, info)
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def update_company_review(
+        self,
+        info: strawberry.Info,
+        input: inputs.UpdateCompanyReviewInput,
+    ) -> types.CompanyReviewDetailResponse:
+        return await CompanyReviewMutationService.update(input, info)
+
+
+# PayTiming Mutations
+class PayTimingMutationService(BaseMutationService):
+    """Service for pay timing mutations."""
+    response_class = types.PayTimingDetailResponse
+    model_field_name = "pay_timing"
+
+    def get_model(self) -> Model:
+        """Get the model for the service."""
+        return models.PayTiming
+
+
+@strawberry.type
+class PayTimingMutations:
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def create_pay_timing(
+        self,
+        info: strawberry.Info,
+        input: inputs.CreatePayTimingInput,
+    ) -> types.PayTimingDetailResponse:
+        return await PayTimingMutationService.create(input, info)
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def update_pay_timing(
+        self,
+        info: strawberry.Info,
+        input: inputs.UpdatePayTimingInput,
+    ) -> types.PayTimingDetailResponse:
+        return await PayTimingMutationService.update(input, info)
+
+
+# ReviewScore Mutations
+class ReviewScoreMutationService(BaseMutationService):
+    """Service for review score mutations."""
+    response_class = types.ReviewScoreDetailResponse
+    model_field_name = "review_score"
+
+    def get_model(self) -> Model:
+        """Get the model for the service."""
+        return models.ReviewScore
+
+
+@strawberry.type
+class ReviewScoreMutations:
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def create_review_score(
+        self,
+        info: strawberry.Info,
+        input: inputs.CreateReviewScoreInput,
+    ) -> types.ReviewScoreDetailResponse:
+        return await ReviewScoreMutationService.create(input, info)
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def update_review_score(
+        self,
+        info: strawberry.Info,
+        input: inputs.UpdateReviewScoreInput,
+    ) -> types.ReviewScoreDetailResponse:
+        return await ReviewScoreMutationService.update(input, info)
+
+
+# JobTitle Mutations
+class JobTitleMutationService(BaseMutationService):
+    """Service for job title mutations."""
+    response_class = types.JobTitleDetailResponse
+    model_field_name = "job_title"
+
+    def get_model(self) -> Model:
+        """Get the model for the service."""
+        return models.JobTitle
+
+
+@strawberry.type
+class JobTitleMutations:
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def create_job_title(
+        self,
+        info: strawberry.Info,
+        input: inputs.CreateJobTitleInput,
+    ) -> types.JobTitleDetailResponse:
+        return await JobTitleMutationService.create(input, info)
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def update_job_title(
+        self,
+        info: strawberry.Info,
+        input: inputs.UpdateJobTitleInput,
+    ) -> types.JobTitleDetailResponse:
+        return await JobTitleMutationService.update(input, info)
+
+
+# RateType Mutations
+class RateTypeMutationService(BaseMutationService):
+    """Service for rate type mutations."""
+    response_class = types.RateTypeDetailResponse
+    model_field_name = "rate_type"
+
+    def get_model(self) -> Model:
+        """Get the model for the service."""
+        return models.RateType
+
+
+@strawberry.type
+class RateTypeMutations:
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def create_rate_type(
+        self,
+        info: strawberry.Info,
+        input: inputs.CreateRateTypeInput,
+    ) -> types.RateTypeDetailResponse:
+        return await RateTypeMutationService.create(input, info)
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def update_rate_type(
+        self,
+        info: strawberry.Info,
+        input: inputs.UpdateRateTypeInput,
+    ) -> types.RateTypeDetailResponse:
+        return await RateTypeMutationService.update(input, info)
+
+
+# Rate Mutations
+class RateMutationService(BaseMutationService):
+    """Service for rate mutations."""
+    response_class = types.RateDetailResponse
+    model_field_name = "rate"
+
+    def get_model(self) -> Model:
+        """Get the model for the service."""
+        return models.Rate
+
+
+@strawberry.type
+class RateMutations:
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def create_rate(
+        self,
+        info: strawberry.Info,
+        input: inputs.CreateRateInput,
+    ) -> types.RateDetailResponse:
+        return await RateMutationService.create(input, info)
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def update_rate(
+        self,
+        info: strawberry.Info,
+        input: inputs.UpdateRateInput,
+    ) -> types.RateDetailResponse:
+        return await RateMutationService.update(input, info)
+
+
+# Job Mutations
+class JobMutationService(BaseMutationService):
+    """Service for job mutations."""
+    response_class = types.JobDetailResponse
+    model_field_name = "job"
+
+    def get_model(self) -> Model:
+        """Get the model for the service."""
+        return models.Job
+
+
+@strawberry.type
+class JobMutations:
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def create_job(
+        self,
+        info: strawberry.Info,
+        input: inputs.CreateJobInput,
+    ) -> types.JobDetailResponse:
+        return await JobMutationService.create(input, info)
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def update_job(
+        self,
+        info: strawberry.Info,
+        input: inputs.UpdateJobInput,
+    ) -> types.JobDetailResponse:
+        return await JobMutationService.update(input, info)
+
+
+# JobFile Mutations
+class JobFileMutationService(BaseMutationService):
+    """Service for job file mutations."""
+    response_class = types.JobFileDetailResponse
+    model_field_name = "job_file"
+
+    def get_model(self) -> Model:
+        """Get the model for the service."""
+        return models.JobFile
+
+
+@strawberry.type
+class JobFileMutations:
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def create_job_file(
+        self,
+        info: strawberry.Info,
+        input: inputs.CreateJobFileInput,
+    ) -> types.JobFileDetailResponse:
+        return await JobFileMutationService.create(input, info)
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def update_job_file(
+        self,
+        info: strawberry.Info,
+        input: inputs.UpdateJobFileInput,
+    ) -> types.JobFileDetailResponse:
+        return await JobFileMutationService.update(input, info)
+
+
+# JobRequirementType Mutations
+class JobRequirementTypeMutationService(BaseMutationService):
+    """Service for job requirement type mutations."""
+    response_class = types.JobRequirementTypeDetailResponse
+    model_field_name = "job_requirement_type"
+
+    def get_model(self) -> Model:
+        """Get the model for the service."""
+        return models.JobRequirementType
+
+
+@strawberry.type
+class JobRequirementTypeMutations:
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def create_job_requirement_type(
+        self,
+        info: strawberry.Info,
+        input: inputs.CreateJobRequirementTypeInput,
+    ) -> types.JobRequirementTypeDetailResponse:
+        return await JobRequirementTypeMutationService.create(input, info)
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def update_job_requirement_type(
+        self,
+        info: strawberry.Info,
+        input: inputs.UpdateJobRequirementTypeInput,
+    ) -> types.JobRequirementTypeDetailResponse:
+        return await JobRequirementTypeMutationService.update(input, info)
+
+
+# JobRequirement Mutations
+class JobRequirementMutationService(BaseMutationService):
+    """Service for job requirement mutations."""
+    response_class = types.JobRequirementDetailResponse
+    model_field_name = "job_requirement"
+
+    def get_model(self) -> Model:
+        """Get the model for the service."""
+        return models.JobRequirement
+
+
+@strawberry.type
+class JobRequirementMutations:
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def create_job_requirement(
+        self,
+        info: strawberry.Info,
+        input: inputs.CreateJobRequirementInput,
+    ) -> types.JobRequirementDetailResponse:
+        return await JobRequirementMutationService.create(input, info)
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def update_job_requirement(
+        self,
+        info: strawberry.Info,
+        input: inputs.UpdateJobRequirementInput,
+    ) -> types.JobRequirementDetailResponse:
+        return await JobRequirementMutationService.update(input, info)
+
+
+# JobRequirementFile Mutations
+class JobRequirementFileMutationService(BaseMutationService):
+    """Service for job requirement file mutations."""
+    response_class = types.JobRequirementFileDetailResponse
+    model_field_name = "job_requirement_file"
+
+    def get_model(self) -> Model:
+        """Get the model for the service."""
+        return models.JobRequirementFile
+
+
+@strawberry.type
+class JobRequirementFileMutations:
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def create_job_requirement_file(
+        self,
+        info: strawberry.Info,
+        input: inputs.CreateJobRequirementFileInput,
+    ) -> types.JobRequirementFileDetailResponse:
+        return await JobRequirementFileMutationService.create(input, info)
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def update_job_requirement_file(
+        self,
+        info: strawberry.Info,
+        input: inputs.UpdateJobRequirementFileInput,
+    ) -> types.JobRequirementFileDetailResponse:
+        return await JobRequirementFileMutationService.update(input, info)
+
+
+# AmbassadorJob Mutations
+class AmbassadorJobMutationService(BaseMutationService):
+    """Service for ambassador job mutations."""
+    response_class = types.AmbassadorJobDetailResponse
+    model_field_name = "ambassador_job"
+
+    def get_model(self) -> Model:
+        """Get the model for the service."""
+        return models.AmbassadorJob
+
+
+@strawberry.type
+class AmbassadorJobMutations:
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def create_ambassador_job(
+        self,
+        info: strawberry.Info,
+        input: inputs.CreateAmbassadorJobInput,
+    ) -> types.AmbassadorJobDetailResponse:
+        return await AmbassadorJobMutationService.create(input, info)
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def update_ambassador_job(
+        self,
+        info: strawberry.Info,
+        input: inputs.UpdateAmbassadorJobInput,
+    ) -> types.AmbassadorJobDetailResponse:
+        return await AmbassadorJobMutationService.update(input, info)
+
+
+# CompanyToAmbassadorReview Mutations
+class CompanyToAmbassadorReviewMutationService(BaseMutationService):
+    """Service for company to ambassador review mutations."""
+    response_class = types.CompanyToAmbassadorReviewDetailResponse
+    model_field_name = "company_to_ambassador_review"
+
+    def get_model(self) -> Model:
+        """Get the model for the service."""
+        return models.CompanyToAmbassadorReview
+
+
+@strawberry.type
+class CompanyToAmbassadorReviewMutations:
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def create_company_to_ambassador_review(
+        self,
+        info: strawberry.Info,
+        input: inputs.CreateCompanyToAmbassadorReviewInput,
+    ) -> types.CompanyToAmbassadorReviewDetailResponse:
+        return await CompanyToAmbassadorReviewMutationService.create(input, info)
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def update_company_to_ambassador_review(
+        self,
+        info: strawberry.Info,
+        input: inputs.UpdateCompanyToAmbassadorReviewInput,
+    ) -> types.CompanyToAmbassadorReviewDetailResponse:
+        return await CompanyToAmbassadorReviewMutationService.update(input, info)
+
+
+# AmbassadorToAmbassadorReview Mutations
+class AmbassadorToAmbassadorReviewMutationService(BaseMutationService):
+    """Service for ambassador to ambassador review mutations."""
+    response_class = types.AmbassadorToAmbassadorReviewDetailResponse
+    model_field_name = "ambassador_to_ambassador_review"
+
+    def get_model(self) -> Model:
+        """Get the model for the service."""
+        return models.AmbassadorToAmbassadorReview
+
+
+@strawberry.type
+class AmbassadorToAmbassadorReviewMutations:
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def create_ambassador_to_ambassador_review(
+        self,
+        info: strawberry.Info,
+        input: inputs.CreateAmbassadorToAmbassadorReviewInput,
+    ) -> types.AmbassadorToAmbassadorReviewDetailResponse:
+        return await AmbassadorToAmbassadorReviewMutationService.create(input, info)
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def update_ambassador_to_ambassador_review(
+        self,
+        info: strawberry.Info,
+        input: inputs.UpdateAmbassadorToAmbassadorReviewInput,
+    ) -> types.AmbassadorToAmbassadorReviewDetailResponse:
+        return await AmbassadorToAmbassadorReviewMutationService.update(input, info)
+
+
+# QuestionType Mutations
+class QuestionTypeMutationService(BaseMutationService):
+    """Service for question type mutations."""
+    response_class = types.QuestionTypeDetailResponse
+    model_field_name = "question_type"
+
+    def get_model(self) -> Model:
+        """Get the model for the service."""
+        return models.QuestionType
+
+
+@strawberry.type
+class QuestionTypeMutations:
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def create_question_type(
+        self,
+        info: strawberry.Info,
+        input: inputs.CreateQuestionTypeInput,
+    ) -> types.QuestionTypeDetailResponse:
+        return await QuestionTypeMutationService.create(input, info)
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def update_question_type(
+        self,
+        info: strawberry.Info,
+        input: inputs.UpdateQuestionTypeInput,
+    ) -> types.QuestionTypeDetailResponse:
+        return await QuestionTypeMutationService.update(input, info)
+
+
+# JobRequirementQuestion Mutations
+class JobRequirementQuestionMutationService(BaseMutationService):
+    """Service for job requirement question mutations."""
+    response_class = types.JobRequirementQuestionDetailResponse
+    model_field_name = "job_requirement_question"
+
+    def get_model(self) -> Model:
+        """Get the model for the service."""
+        return models.JobRequirementQuestion
+
+
+@strawberry.type
+class JobRequirementQuestionMutations:
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def create_job_requirement_question(
+        self,
+        info: strawberry.Info,
+        input: inputs.CreateJobRequirementQuestionInput,
+    ) -> types.JobRequirementQuestionDetailResponse:
+        return await JobRequirementQuestionMutationService.create(input, info)
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def update_job_requirement_question(
+        self,
+        info: strawberry.Info,
+        input: inputs.UpdateJobRequirementQuestionInput,
+    ) -> types.JobRequirementQuestionDetailResponse:
+        return await JobRequirementQuestionMutationService.update(input, info)
+
+
+# QuestionOption Mutations
+class QuestionOptionMutationService(BaseMutationService):
+    """Service for question option mutations."""
+    response_class = types.QuestionOptionDetailResponse
+    model_field_name = "question_option"
+
+    def get_model(self) -> Model:
+        """Get the model for the service."""
+        return models.QuestionOption
+
+
+@strawberry.type
+class QuestionOptionMutations:
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def create_question_option(
+        self,
+        info: strawberry.Info,
+        input: inputs.CreateQuestionOptionInput,
+    ) -> types.QuestionOptionDetailResponse:
+        return await QuestionOptionMutationService.create(input, info)
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def update_question_option(
+        self,
+        info: strawberry.Info,
+        input: inputs.UpdateQuestionOptionInput,
+    ) -> types.QuestionOptionDetailResponse:
+        return await QuestionOptionMutationService.update(input, info)
+
+
+# JobRequirementAnswer Mutations
+class JobRequirementAnswerMutationService(BaseMutationService):
+    """Service for job requirement answer mutations."""
+    response_class = types.JobRequirementAnswerDetailResponse
+    model_field_name = "job_requirement_answer"
+
+    def get_model(self) -> Model:
+        """Get the model for the service."""
+        return models.JobRequirementAnswer
+
+
+@strawberry.type
+class JobRequirementAnswerMutations:
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def create_job_requirement_answer(
+        self,
+        info: strawberry.Info,
+        input: inputs.CreateJobRequirementAnswerInput,
+    ) -> types.JobRequirementAnswerDetailResponse:
+        return await JobRequirementAnswerMutationService.create(input, info)
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def update_job_requirement_answer(
+        self,
+        info: strawberry.Info,
+        input: inputs.UpdateJobRequirementAnswerInput,
+    ) -> types.JobRequirementAnswerDetailResponse:
+        return await JobRequirementAnswerMutationService.update(input, info)
