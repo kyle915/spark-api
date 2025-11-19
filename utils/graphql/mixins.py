@@ -232,7 +232,7 @@ class BaseMutationService(SparkGraphQLMixin):
                 "response_class must be provided either as class attribute or parameter")
 
         try:
-            model_instance = await cls.process_create_or_update(input=input, info=info)
+            model_instance: Model = await cls.process_create_or_update(input=input, info=info)
 
             # Generate message if not provided
             if not message:
@@ -276,16 +276,16 @@ class BaseMutationService(SparkGraphQLMixin):
         Returns:
             Response object with success/message and model instance
         """
-        response_cls = response_class or cls.response_class
-        field_name = model_field_name or cls.model_field_name
-        message = update_message or cls.update_message
+        response_cls: Type | None = response_class or cls.response_class
+        field_name: str | None = model_field_name or cls.model_field_name
+        message: str | None = update_message or cls.update_message
 
         if not response_cls:
             raise ValueError(
                 "response_class must be provided either as class attribute or parameter")
 
         try:
-            model_instance = await cls.process_create_or_update(input=input, info=info)
+            model_instance: Model = await cls.process_create_or_update(input=input, info=info)
 
             # Generate message if not provided
             if not message:
