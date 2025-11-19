@@ -15,7 +15,8 @@ This command will:
 
 from django.core.management.base import BaseCommand
 from django.contrib.auth import get_user_model
-from tenants.models import Tenant, Role
+from tenants.models import Tenant, Role, TenantedUser
+from gqlauth.models import UserStatus
 
 User = get_user_model()
 
@@ -218,6 +219,31 @@ class Command(BaseCommand):
         if ambassador_created:
             ambassador_user.set_password('password')
             ambassador_user.save()
+
+        # Update existing users to be verified
+        for username in ['spark-admin', 'client', 'ambassador']:
+            try:
+                user = User.objects.get(username=username)
+                user_status, created = UserStatus.objects.get_or_create(
+                    user=user,
+                    defaults={'verified': True, 'archived': False}
+                )
+                if not created:
+                    user_status.verified = True
+                    user_status.archived = False
+                    user_status.save()
+
+                # also adding users as member of the tenant
+                TenantedUser.objects.get_or_create(
+                    user=user,
+                    tenant=tenant,
+                    is_active=True
+                )
+                self.stdout.write(
+                    self.style.SUCCESS(f'✓ Verified user: {user.username}')
+                )
+            except User.DoesNotExist:
+                pass
         self.stdout.write(
             self.style.SUCCESS(
                 f'✓ {"Created" if ambassador_created else "Updated"} user: {ambassador_user.username} (ID: {ambassador_user.id})'

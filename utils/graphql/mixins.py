@@ -1,8 +1,7 @@
 import strawberry
-from typing import Any, Union, Type, TypeVar
+from typing import Any, Union, Type
 from graphql import GraphQLError
 from asgiref.sync import sync_to_async
-from strawberry import relay
 
 
 from django.contrib.auth import get_user_model
@@ -11,7 +10,6 @@ from django.db.models import Model
 
 from tenants.models import Tenant
 from utils.graphql.inputs import SparkGraphQLInput
-from utils.graphql.permissions import StrictIsAuthenticated
 
 User = get_user_model()
 
@@ -145,6 +143,12 @@ class BaseMutationService(SparkGraphQLMixin):
     is_public: bool = False
     is_spark_schema: bool = False
 
+    # Response configuration - can be overridden by subclasses
+    response_class: Type | None = None
+    model_field_name: str = "model"
+    create_message: str | None = None
+    update_message: str | None = None
+
     @classmethod
     def with_input(cls, input: SparkGraphQLInput) -> "BaseMutationService":
         """Create a new instance of the service with the input."""
@@ -160,6 +164,147 @@ class BaseMutationService(SparkGraphQLMixin):
         service = cls.with_input(input)
         await service.set_user_and_tenant(info)
         return await service.save()
+
+    @classmethod
+    def _get_default_message(cls, model_field_name: str, action: str) -> str:
+        """Generate a default success message based on model_field_name and action."""
+        if not model_field_name:
+            return f"{action.capitalize()}d successfully."
+
+        model_name = model_field_name.replace("_", " ").title()
+
+        if action == "create":
+            return f"{model_name} created successfully."
+        elif action == "update":
+            return f"{model_name} updated successfully."
+        else:
+            return f"{model_name} {action}d successfully."
+
+    @classmethod
+    def _build_mutation_response(
+        cls,
+        *,
+        response_class: Type,
+        success: bool,
+        message: str,
+        input_obj: SparkGraphQLInput | None = None,
+        **extra_fields: Any,
+    ) -> Any:
+        """Build a mutation response (success or error)."""
+        from utils.utils import build_mutation_response as _build_mutation_response
+        return _build_mutation_response(
+            response_class,
+            success=success,
+            message=message,
+            input_obj=input_obj,
+            **extra_fields,
+        )
+
+    @classmethod
+    async def create(
+        cls,
+        input: SparkGraphQLInput,
+        info: strawberry.Info,
+        *,
+        response_class: Type | None = None,
+        model_field_name: str | None = None,
+        create_message: str | None = None,
+    ) -> Any:
+        """
+        Create mutation handler.
+
+        Args:
+            input: The input for the mutation
+            info: Strawberry GraphQL info
+            response_class: Response class type (uses cls.response_class if not provided)
+            model_field_name: Field name in response (uses cls.model_field_name if not provided)
+            create_message: Success message (uses cls.create_message if not provided)
+
+        Returns:
+            Response object with success/message and model instance
+        """
+        response_cls = response_class or cls.response_class
+        field_name = model_field_name or cls.model_field_name
+        message = create_message or cls.create_message
+
+        if not response_cls:
+            raise ValueError(
+                "response_class must be provided either as class attribute or parameter")
+
+        try:
+            model_instance = await cls.process_create_or_update(input=input, info=info)
+
+            # Generate message if not provided
+            if not message:
+                message = cls._get_default_message(field_name, "create")
+
+            return cls._build_mutation_response(
+                response_class=response_cls,
+                success=True,
+                message=message,
+                input_obj=input,
+                **{field_name: model_instance}
+            )
+        except GraphQLError as e:
+            return cls._build_mutation_response(
+                response_class=response_cls,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
+    @classmethod
+    async def update(
+        cls,
+        input: SparkGraphQLInput,
+        info: strawberry.Info,
+        *,
+        response_class: Type | None = None,
+        model_field_name: str | None = None,
+        update_message: str | None = None,
+    ) -> Any:
+        """
+        Update mutation handler.
+
+        Args:
+            input: The input for the mutation
+            info: Strawberry GraphQL info
+            response_class: Response class type (uses cls.response_class if not provided)
+            model_field_name: Field name in response (uses cls.model_field_name if not provided)
+            update_message: Success message (uses cls.update_message if not provided)
+
+        Returns:
+            Response object with success/message and model instance
+        """
+        response_cls = response_class or cls.response_class
+        field_name = model_field_name or cls.model_field_name
+        message = update_message or cls.update_message
+
+        if not response_cls:
+            raise ValueError(
+                "response_class must be provided either as class attribute or parameter")
+
+        try:
+            model_instance = await cls.process_create_or_update(input=input, info=info)
+
+            # Generate message if not provided
+            if not message:
+                message = cls._get_default_message(field_name, "update")
+
+            return cls._build_mutation_response(
+                response_class=response_cls,
+                success=True,
+                message=message,
+                input_obj=input,
+                **{field_name: model_instance}
+            )
+        except GraphQLError as e:
+            return cls._build_mutation_response(
+                response_class=response_cls,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
 
     def set_input(self, input: SparkGraphQLInput) -> "BaseMutationService":
         """Set the input for the service."""
@@ -248,121 +393,3 @@ class BaseMutationService(SparkGraphQLMixin):
         setattr(model, "tenant_id", self.tenant_id)
         await sync_to_async(model.save)()
         return model
-
-
-TModel = TypeVar("TModel", bound=Model)
-TResponse = TypeVar("TResponse")
-TCreateInput = TypeVar("TCreateInput")
-TUpdateInput = TypeVar("TUpdateInput")
-
-
-class BaseMutationMixin:
-    """
-    Base mixin for GraphQL mutations that provides common error handling.
-    """
-
-    response_class: Type
-    """The response class type for the mutation."""
-
-    def build_mutation_response(
-        self,
-        *,
-        success: bool,
-        message: str,
-        input_obj: SparkGraphQLInput | None = None,
-        **extra_fields: Any,
-    ) -> Any:
-        """
-        Build a mutation response (success or error).
-
-        Args:
-            success: Whether the operation was successful
-            message: Response message
-            input_obj: The input object (optional, for client_mutation_id propagation)
-            **extra_fields: Additional fields to include in the response (e.g., model instance)
-
-        Returns:
-            An instance of response_class with the provided fields
-        """
-        from utils.utils import build_mutation_response as _build_mutation_response
-        return _build_mutation_response(
-            self.response_class,
-            success=success,
-            message=message,
-            input_obj=input_obj,
-            **extra_fields,
-        )
-
-    def _get_message(self, message: str | None = None) -> str:
-        model_name: str = "Object"
-        if hasattr(self, "model_field_name") and self.model_field_name != "":
-            model_name = self.model_field_name.replace("_", " ").title()
-        default_message: str = f"{model_name} saved successfully."
-
-        if message:
-            return message
-        return default_message
-
-
-class CRUDMutationsMixin(BaseMutationMixin):
-    """
-    Mixin that automatically generates create and update mutations.
-
-    Usage:
-        class StatusMutations(CRUDMutationsMixin):
-            service_class = StatusMutationService
-            create_input_class = inputs.CreateStatusInput
-            update_input_class = inputs.UpdateStatusInput
-            response_class = types.StatusDetailResponse
-            model_field_name = "status"  # field name in response (status, event, etc.)
-            create_message = "Status created successfully."
-            update_message = "Status updated successfully."
-    """
-
-    service_class: Type[BaseMutationService]
-    create_input_class: Type
-    update_input_class: Type
-    response_class: Type
-    model_field_name: str
-    create_message: str | None = None
-    update_message: str | None = None
-
-    @relay.mutation(permission_classes=[StrictIsAuthenticated])
-    async def create(self, info: strawberry.Info, input) -> Type[TResponse]:
-        """Create mutation - auto-generated."""
-        try:
-            model_instance = await self.service_class.process_create_or_update(
-                input=input, info=info
-            )
-            return self.build_mutation_response(
-                success=True,
-                message=self._get_message(self.create_message),
-                input_obj=input,
-                **{self.model_field_name: model_instance}
-            )
-        except GraphQLError as e:
-            return self.build_mutation_response(
-                success=False,
-                message=str(e),
-                input_obj=input,
-            )
-
-    @relay.mutation(permission_classes=[StrictIsAuthenticated])
-    async def update(self, info: strawberry.Info, input) -> Type[TResponse]:
-        """Update mutation - auto-generated."""
-        try:
-            model_instance = await self.service_class.process_create_or_update(
-                input=input, info=info
-            )
-            return self.build_mutation_response(
-                success=True,
-                message=self._get_message(self.update_message),
-                input_obj=input,
-                **{self.model_field_name: model_instance}
-            )
-        except GraphQLError as e:
-            return self.build_mutation_response(
-                success=False,
-                message=str(e),
-                input_obj=input,
-            )
