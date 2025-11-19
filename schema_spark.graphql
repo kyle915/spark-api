@@ -1,30 +1,135 @@
-"""
-Can only be resolved by authenticated users.
+input AppleSocialAuthInput {
+  identityToken: String!
+}
 
-When the condition fails, the following can be returned (following this priority):
-1) `OperationInfo`/`OperationMessage` if those types are allowed at the return type
-2) `null` in case the field is not mandatory (e.g. `String` or `[String]`)
-3) An empty list in case the field is a list (e.g. `[String]!`)
-4) An empty `Connection` in case the return type is a relay connection
-2) Otherwise, an error will be raised
-"""
-directive @isAuthenticated repeatable on FIELD_DEFINITION
+input ApproveRequestInput {
+  id: ID!
+}
 
-input CreateEventInput {
+type ApproveRequestResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  request: Request
+  event: Event
+}
+
+input BaseRegisterInput {
+  firstName: String!
+  email: String!
+  password1: String!
+  password2: String!
+}
+
+"""
+Client(id, uuid, name, email, tenant, created_by, updated_by, created_at, updated_at)
+"""
+type Client {
+  id: ID!
+  uuid: String!
   name: String!
-  eventTypeId: ID!
-  statusId: ID!
+  email: String!
+  tenantId: ID!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type ClientCountableConnection {
+  pageInfo: PageInfo!
+  edges: [ClientCountableEdge!]!
+  totalCount: Int!
+}
+
+type ClientCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: Client!
+}
+
+type ClientDetailResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  client: Client
+}
+
+input CreateClientInput {
   tenantId: ID = null
+  name: String!
+  email: String!
+}
+
+input CreateDistributorInput {
+  tenantId: ID = null
+  name: String!
+  email: String!
+  locationId: ID!
 }
 
 input CreateEventStatusInput {
-  name: String!
   tenantId: ID = null
+  name: String!
+  isDefault: Boolean! = false
 }
 
 input CreateEventTypeInput {
-  name: String!
   tenantId: ID = null
+  name: String!
+  isDefault: Boolean! = false
+}
+
+input CreateLocationInput {
+  tenantId: ID = null
+  name: String!
+  code: String!
+  zip: String!
+}
+
+input CreateProductInput {
+  tenantId: ID = null
+  name: String!
+  productTypeId: ID!
+}
+
+input CreateProductTypeInput {
+  tenantId: ID = null
+  name: String!
+}
+
+input CreateRequestInput {
+  tenantId: ID = null
+  name: String!
+  date: String!
+  startTime: String!
+  endTime: String!
+  address: String!
+  coordinates: [Float!]!
+  clientId: ID!
+  distributorId: ID!
+  retailerId: ID!
+  requestTypeId: ID!
+}
+
+input CreateRequestStatusInput {
+  tenantId: ID = null
+  name: String!
+  createEvent: Boolean! = false
+  isDefault: Boolean! = false
+}
+
+input CreateRequestTypeInput {
+  tenantId: ID = null
+  name: String!
+}
+
+input CreateRetailerInput {
+  tenantId: ID = null
+  name: String!
+  address: String!
+  storeContact: String!
+  locationId: ID!
 }
 
 """
@@ -45,17 +150,58 @@ type CustomUserType {
 """Date with time (isoformat)"""
 scalar DateTime
 
+"""
+Distributor(id, uuid, name, email, location, tenant, created_by, updated_by, created_at, updated_at)
+"""
+type Distributor {
+  id: ID!
+  uuid: String!
+  name: String!
+  email: String!
+  tenantId: ID!
+  location: Location
+  createdAt: String!
+  updatedAt: String!
+}
+
+type DistributorCountableConnection {
+  pageInfo: PageInfo!
+  edges: [DistributorCountableEdge!]!
+  totalCount: Int!
+}
+
+type DistributorCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: Distributor!
+}
+
+type DistributorDetailResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  distributor: Distributor
+}
+
 type DjangoModelType {
   pk: ID!
 }
 
 """
-Event(id, uuid, name, tenant, event_type, status, created_by, updated_by, created_at, updated_at)
+Event(id, uuid, name, tenant, request, event_type, status, start_time, end_time, address, notes, is_national, created_by, updated_by, created_at, updated_at)
 """
 type Event {
   id: ID!
   uuid: String!
   name: String!
+  startTime: String
+  endTime: String
+  address: String!
+  isNational: Boolean!
+  notes: String
+  request: Request
   createdAt: String!
   updatedAt: String!
   tenantId: ID!
@@ -63,61 +209,157 @@ type Event {
   status: EventStatus
 }
 
-type EventDetailResponse {
-  success: Boolean!
-  message: String!
-  event: Event
+type EventCountableConnection {
+  pageInfo: PageInfo!
+  edges: [EventCountableEdge!]!
+  totalCount: Int!
+}
+
+type EventCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: Event!
 }
 
 """
-EventStatus(id, uuid, name, tenant, created_by, updated_by, created_at, updated_at)
+EventStatus(id, uuid, name, is_default, tenant, created_by, updated_by, created_at, updated_at)
 """
 type EventStatus {
   id: ID!
   uuid: String!
   name: String!
+  isDefault: Boolean!
   tenantId: ID!
   createdAt: String!
   updatedAt: String!
+}
+
+type EventStatusCountableConnection {
+  pageInfo: PageInfo!
+  edges: [EventStatusCountableEdge!]!
+  totalCount: Int!
+}
+
+type EventStatusCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: EventStatus!
 }
 
 type EventStatusDetailResponse {
   success: Boolean!
   message: String!
+  clientMutationId: ID
   eventStatus: EventStatus
 }
 
 """
-EventType(id, uuid, name, tenant, created_by, updated_by, created_at, updated_at)
+EventType(id, uuid, name, is_default, tenant, created_by, updated_by, created_at, updated_at)
 """
 type EventType {
   id: ID!
   uuid: String!
   name: String!
+  isDefault: Boolean!
   tenantId: ID!
   createdAt: String!
   updatedAt: String!
 }
 
+type EventTypeCountableConnection {
+  pageInfo: PageInfo!
+  edges: [EventTypeCountableEdge!]!
+  totalCount: Int!
+}
+
+type EventTypeCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: EventType!
+}
+
 type EventTypeDetailResponse {
   success: Boolean!
   message: String!
+  clientMutationId: ID
   eventType: EventType
 }
 
 "\n     Errors messages and codes mapped to\n    fields or non fields errors.\n    Example:\n    {\n        field_name: [\n            {\n                \"message\": \"error message\",\n                \"code\": \"error_code\"\n            }\n        ],\n        other_field: [\n            {\n                \"message\": \"error message\",\n                \"code\": \"error_code\"\n            }\n        ],\n        nonFieldErrors: [\n            {\n                \"message\": \"error message\",\n                \"code\": \"error_code\"\n            }\n        ]\n    }\n    "
 scalar ExpectedError
 
+input GoogleSocialAuthInput {
+  accessToken: String!
+}
+
+"""
+Location(id, uuid, name, code, zip, tenant, created_by, updated_by, created_at, updated_at)
+"""
+type Location {
+  id: ID!
+  uuid: String!
+  name: String!
+  code: String!
+  zip: String!
+  tenantId: ID!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type LocationCountableConnection {
+  pageInfo: PageInfo!
+  edges: [LocationCountableEdge!]!
+  totalCount: Int!
+}
+
+type LocationCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: Location!
+}
+
+type LocationDetailResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  location: Location
+}
+
 type Mutation {
-  createEvent(input: CreateEventInput!): EventDetailResponse! @isAuthenticated
-  updateEvent(input: UpdateEventInput!): EventDetailResponse! @isAuthenticated
-  createEventType(input: CreateEventTypeInput!): EventTypeDetailResponse! @isAuthenticated
-  updateEventType(input: UpdateEventTypeInput!): EventTypeDetailResponse! @isAuthenticated
-  createEventStatus(input: CreateEventStatusInput!): EventStatusDetailResponse! @isAuthenticated
-  updateEventStatus(input: UpdateEventStatusInput!): EventStatusDetailResponse! @isAuthenticated
-  register(firstName: String!, email: String!, password1: String!, password2: String!): RegisterResponse!
-  socialAuthGoogle(accessToken: String!): SocialAuthResponse!
-  socialAuthApple(identityToken: String!): SocialAuthResponse!
+  createRequest(input: CreateRequestInput!): RequestDetailResponse!
+  createEventStatus(input: CreateEventStatusInput!): EventStatusDetailResponse!
+  updateEventStatus(input: UpdateEventStatusInput!): EventStatusDetailResponse!
+  createLocation(input: CreateLocationInput!): LocationDetailResponse!
+  updateLocation(input: UpdateLocationInput!): LocationDetailResponse!
+  createClient(input: CreateClientInput!): ClientDetailResponse!
+  updateClient(input: UpdateClientInput!): ClientDetailResponse!
+  createDistributor(input: CreateDistributorInput!): DistributorDetailResponse!
+  updateDistributor(input: UpdateDistributorInput!): DistributorDetailResponse!
+  createRetailer(input: CreateRetailerInput!): RetailerDetailResponse!
+  updateRetailer(input: UpdateRetailerInput!): RetailerDetailResponse!
+  createProductType(input: CreateProductTypeInput!): ProductTypeDetailResponse!
+  updateProductType(input: UpdateProductTypeInput!): ProductTypeDetailResponse!
+  createProduct(input: CreateProductInput!): ProductDetailResponse!
+  updateProduct(input: UpdateProductInput!): ProductDetailResponse!
+  createRequestType(input: CreateRequestTypeInput!): RequestTypeDetailResponse!
+  updateRequestType(input: UpdateRequestTypeInput!): RequestTypeDetailResponse!
+  createRequestStatus(input: CreateRequestStatusInput!): RequestStatusDetailResponse!
+  updateRequestStatus(input: UpdateRequestStatusInput!): RequestStatusDetailResponse!
+  updateRequest(input: UpdateRequestInput!): RequestDetailResponse!
+  approveRequest(input: ApproveRequestInput!): ApproveRequestResponse!
+  createEventType(input: CreateEventTypeInput!): EventTypeDetailResponse!
+  updateEventType(input: UpdateEventTypeInput!): EventTypeDetailResponse!
+  register(input: BaseRegisterInput!): RegisterResponse!
+  socialAuthGoogle(input: GoogleSocialAuthInput!): SocialAuthResponse!
+  socialAuthApple(input: AppleSocialAuthInput!): SocialAuthResponse!
 
   "### Checks if a token is not expired and correct.\n\n*Note that this is not for refresh tokens.*\n"
   verifyToken(input: VerifyTokenInput!): VerifyTokenType!
@@ -156,14 +398,117 @@ interface OutputInterface {
   errors: ExpectedError
 }
 
+"""Information to aid in pagination."""
+type PageInfo {
+  """When paginating forwards, are there more items?"""
+  hasNextPage: Boolean!
+
+  """When paginating backwards, are there more items?"""
+  hasPreviousPage: Boolean!
+
+  """When paginating backwards, the cursor to continue."""
+  startCursor: String
+
+  """When paginating forwards, the cursor to continue."""
+  endCursor: String
+}
+
+"""
+Product(id, uuid, name, product_type, tenant, created_by, updated_by, created_at, updated_at)
+"""
+type Product {
+  id: ID!
+  uuid: String!
+  name: String!
+  productType: ProductType
+  tenantId: ID!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type ProductCountableConnection {
+  pageInfo: PageInfo!
+  edges: [ProductCountableEdge!]!
+  totalCount: Int!
+}
+
+type ProductCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: Product!
+}
+
+type ProductDetailResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  product: Product
+}
+
+"""
+ProductType(id, uuid, name, tenant, created_by, updated_by, created_at, updated_at)
+"""
+type ProductType {
+  id: ID!
+  uuid: String!
+  name: String!
+  tenantId: ID!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type ProductTypeCountableConnection {
+  pageInfo: PageInfo!
+  edges: [ProductTypeCountableEdge!]!
+  totalCount: Int!
+}
+
+type ProductTypeCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: ProductType!
+}
+
+type ProductTypeDetailResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  productType: ProductType
+}
+
 type Query {
-  events(limit: Int! = 10, offset: Int! = 0, tenantId: ID = null, q: String = null): [Event!]! @isAuthenticated
-  event(id: ID!): Event @isAuthenticated
-  eventTypes(limit: Int! = 10, offset: Int! = 0, q: String = null): [EventType!]! @isAuthenticated
-  eventType(id: ID!): EventType @isAuthenticated
-  eventStatuses(limit: Int! = 10, offset: Int! = 0, q: String = null): [EventStatus!]! @isAuthenticated
-  eventStatus(id: ID!): EventStatus @isAuthenticated
+  events(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): EventCountableConnection!
+  event(id: ID!): Event
+  todayEvents(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): EventCountableConnection!
+  tenantEvents(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, tenantUuid: ID = null): EventCountableConnection!
+  eventTypes(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): EventTypeCountableConnection!
+  eventType(id: ID!): EventType
+  eventStatuses(first: Int = null, after: String = null, last: Int = null, before: String = null): EventStatusCountableConnection!
+  eventStatus(id: ID!): EventStatus
+  clients(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): ClientCountableConnection!
+  client(id: ID!): Client
+  distributors(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): DistributorCountableConnection!
+  distributor(id: ID!): Distributor
+  retailers(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): RetailerCountableConnection!
+  retailer(id: ID!): Retailer
+  productTypes(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): ProductTypeCountableConnection!
+  productType(id: ID!): ProductType
+  products(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): ProductCountableConnection!
+  product(id: ID!): Product
+  requestTypes(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): RequestTypeCountableConnection!
+  requestType(id: ID!): RequestType
+  requestStatuses(first: Int = null, after: String = null, last: Int = null, before: String = null): RequestStatusCountableConnection!
+  requestStatus(id: ID!): RequestStatus
+  requests(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): RequestCountableConnection!
+  request(uuid: ID!): Request
+  locations(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): LocationCountableConnection!
+  location(id: ID!): Location
   me: CustomUserType!
+  tenants(userUuid: ID = null, first: Int = null, after: String = null, last: Int = null, before: String = null): TenantTypeCountableConnection!
 }
 
 """
@@ -190,9 +535,155 @@ type RegisterResponse {
   success: Boolean!
   message: String!
   activationToken: String
+  clientMutationId: ID
 }
 
-"""Role(id, uuid, name, created_by, updated_by, created_at, updated_at)"""
+"""
+Request(id, uuid, name, date, start_time, end_time, address, coordinates, client, distributor, retailer, request_type, status, tenant, created_by, updated_by, created_at, updated_at)
+"""
+type Request {
+  id: ID!
+  uuid: String!
+  name: String!
+  date: String!
+  startTime: String
+  endTime: String
+  address: String!
+  coordinates: [Float!]!
+  client: Client
+  distributor: Distributor
+  retailer: Retailer
+  requestType: RequestType
+  status: RequestStatus
+  tenantId: ID!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type RequestCountableConnection {
+  pageInfo: PageInfo!
+  edges: [RequestCountableEdge!]!
+  totalCount: Int!
+}
+
+type RequestCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: Request!
+}
+
+type RequestDetailResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  request: Request
+}
+
+type RequestStatus {
+  id: ID!
+  uuid: String!
+  name: String!
+  createEvent: Boolean!
+  isDefault: Boolean!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type RequestStatusCountableConnection {
+  pageInfo: PageInfo!
+  edges: [RequestStatusCountableEdge!]!
+  totalCount: Int!
+}
+
+type RequestStatusCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: RequestStatus!
+}
+
+type RequestStatusDetailResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  requestStatus: RequestStatus
+}
+
+"""
+RequestType(id, uuid, name, tenant, created_by, updated_by, created_at, updated_at)
+"""
+type RequestType {
+  id: ID!
+  uuid: String!
+  name: String!
+  tenantId: ID!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type RequestTypeCountableConnection {
+  pageInfo: PageInfo!
+  edges: [RequestTypeCountableEdge!]!
+  totalCount: Int!
+}
+
+type RequestTypeCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: RequestType!
+}
+
+type RequestTypeDetailResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  requestType: RequestType
+}
+
+"""
+Retailer(id, uuid, name, address, store_contact, location, tenant, created_by, updated_by, created_at, updated_at)
+"""
+type Retailer {
+  id: ID!
+  uuid: String!
+  name: String!
+  address: String!
+  storeContact: String!
+  tenantId: ID!
+  location: Location
+  createdAt: String!
+  updatedAt: String!
+}
+
+type RetailerCountableConnection {
+  pageInfo: PageInfo!
+  edges: [RetailerCountableEdge!]!
+  totalCount: Int!
+}
+
+type RetailerCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: Retailer!
+}
+
+type RetailerDetailResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  retailer: Retailer
+}
+
+"""
+Role(id, uuid, name, slug, created_by, updated_by, created_at, updated_at)
+"""
 type RoleType {
   id: ID!
   uuid: UUID!
@@ -204,6 +695,28 @@ type SocialAuthResponse {
   message: String!
   token: String
   refreshToken: String
+  clientMutationId: ID
+}
+
+"""Tenant(id, uuid, name, created_by, updated_by, created_at, updated_at)"""
+type TenantType {
+  id: ID!
+  uuid: UUID!
+  name: String!
+}
+
+type TenantTypeCountableConnection {
+  pageInfo: PageInfo!
+  edges: [TenantTypeCountableEdge!]!
+  totalCount: Int!
+}
+
+type TenantTypeCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: TenantType!
 }
 
 "\nthe data that was used to create the token.\n"
@@ -226,23 +739,91 @@ type TokenType {
 
 scalar UUID
 
-input UpdateEventInput {
-  name: String!
-  eventTypeId: ID!
-  statusId: ID!
+input UpdateClientInput {
   tenantId: ID = null
+  name: String!
+  email: String!
+  id: ID!
+}
+
+input UpdateDistributorInput {
+  tenantId: ID = null
+  name: String!
+  email: String!
+  locationId: ID!
   id: ID!
 }
 
 input UpdateEventStatusInput {
-  name: String!
   tenantId: ID = null
+  name: String!
+  isDefault: Boolean! = false
   id: ID!
 }
 
 input UpdateEventTypeInput {
-  name: String!
   tenantId: ID = null
+  name: String!
+  isDefault: Boolean! = false
+  id: ID!
+}
+
+input UpdateLocationInput {
+  tenantId: ID = null
+  name: String!
+  code: String!
+  zip: String!
+  id: ID!
+}
+
+input UpdateProductInput {
+  tenantId: ID = null
+  name: String!
+  productTypeId: ID!
+  id: ID!
+}
+
+input UpdateProductTypeInput {
+  tenantId: ID = null
+  name: String!
+  id: ID!
+}
+
+input UpdateRequestInput {
+  tenantId: ID = null
+  name: String!
+  date: String!
+  startTime: String!
+  endTime: String!
+  address: String!
+  coordinates: [Float!]!
+  clientId: ID!
+  distributorId: ID!
+  retailerId: ID!
+  requestTypeId: ID!
+  id: ID!
+}
+
+input UpdateRequestStatusInput {
+  tenantId: ID = null
+  name: String!
+  createEvent: Boolean! = false
+  isDefault: Boolean! = false
+  id: ID!
+}
+
+input UpdateRequestTypeInput {
+  tenantId: ID = null
+  name: String!
+  id: ID!
+}
+
+input UpdateRetailerInput {
+  tenantId: ID = null
+  name: String!
+  address: String!
+  storeContact: String!
+  locationId: ID!
   id: ID!
 }
 
@@ -270,10 +851,10 @@ type UserType {
   dateJoined: DateTime!
   status: UserStatusType!
   id: ID!
+  lastName: String
 
   """Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only."""
   username: String!
-  lastName: String
   firstName: String
   email: String!
   archived: Boolean!

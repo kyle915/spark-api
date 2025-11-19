@@ -95,6 +95,27 @@ class BaseMutationService(SparkGraphQLMixin):
         self.is_public = is_public
         return self
 
+    async def set_tenant_from_request_url_name(
+        self, request_url_name: str | None = None
+    ) -> "BaseMutationService":
+        """Resolve tenant_id using a provided request_url_name value."""
+        request_url_name = request_url_name or getattr(
+            self.input, "request_url_name", None
+        )
+        if not request_url_name:
+            raise GraphQLError("Tenant request url name is required.")
+
+        try:
+            tenant: Tenant = await sync_to_async(Tenant.objects.get)(
+                request_url_name=request_url_name
+            )
+        except Tenant.DoesNotExist:
+            raise GraphQLError("Tenant not found for the provided request url name.")
+
+        self.tenant_id = tenant.id
+        setattr(self.input, "tenant_id", tenant.id)
+        return self
+
     def get_model(self) -> Model:
         """Get the model for the service."""
         raise NotImplementedError("Subclasses must implement this method.")
@@ -909,9 +930,10 @@ class RequestMutationService(BaseMutationService):
 @strawberry.type
 class PublicRequestMutations:
     @relay.mutation
-    async def create_request(
+    async def create_request_by_url(
         self,
         input: inputs.CreateRequestInput,
+        request_url: str,
     ) -> types.RequestDetailResponse:
         """Create a new request."""
         try:
@@ -919,6 +941,10 @@ class PublicRequestMutations:
                 input=input
             )
             service.set_is_public(True)
+            if not getattr(input, "tenant_id", None):
+                await service.set_tenant_from_request_url_name(
+                    request_url_name=str(request_url)
+                )
             request: models.Request = await service.save()
             return build_mutation_response(
                 types.RequestDetailResponse,
@@ -938,6 +964,34 @@ class PublicRequestMutations:
 
 @strawberry.type
 class RequestMutations:
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def create_request(
+        self,
+        info: strawberry.Info,
+        input: inputs.CreateRequestInput,
+    ) -> types.RequestDetailResponse:
+        """Create a new request as an authenticated user."""
+        try:
+            request: models.Request = (
+                await RequestMutationService.process_create_or_update(
+                    input=input, info=info
+                )
+            )
+            return build_mutation_response(
+                types.RequestDetailResponse,
+                success=True,
+                message="Request created successfully.",
+                input_obj=input,
+                request=request,
+            )
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.RequestDetailResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
     @relay.mutation(permission_classes=[StrictIsAuthenticated])
     async def update_request(
         self,
