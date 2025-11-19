@@ -1,6 +1,20 @@
 import strawberry
 
-from jobs import mutations
+from jobs import mutations, queries
+
+
+@strawberry.type
+class ClientJobQueries(
+    queries.StatusQueries
+):
+    pass
+
+
+@strawberry.type
+class SparkJobQueries(
+    ClientJobQueries
+):
+    pass
 
 
 @strawberry.type
@@ -32,6 +46,6 @@ class ClientJobMutations(
 
 @strawberry.type
 class SparkJobMutations(
-    mutations.StatusMutations,
+    ClientJobMutations
 ):
     pass
