@@ -588,7 +588,6 @@ type CustomUserType {
   firstName: String!
   lastName: String!
   role: RoleType!
-  refreshToken: String
 }
 
 """Date with time (isoformat)"""
@@ -1321,9 +1320,8 @@ type ProductTypeDetailResponse {
 
 type Query {
   events(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: EventFiltersInput = null): EventCountableConnection!
-  event(id: ID!): Event
+  event(uuid: ID!): Event
   todayEvents(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): EventCountableConnection!
-  tenantEvents(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, tenantUuid: ID = null): EventCountableConnection!
   eventTypes(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: EventTypeFiltersInput = null): EventTypeCountableConnection!
   eventType(id: ID!): EventType
   eventStatuses(first: Int = null, after: String = null, last: Int = null, before: String = null, filters: EventStatusFiltersInput = null): EventStatusCountableConnection!

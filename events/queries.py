@@ -174,15 +174,21 @@ class EventQueries:
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def event(
-        self, info: strawberry.Info, id: strawberry.ID
+        self, info: strawberry.Info, uuid: strawberry.ID
     ) -> types.Event | None:
-        """Get a single event.
-        It limits the events to the tenant of the user. Otherwise, it returns 404 (None)
+        """Get a single event by UUID.
+        Spark admins can view any tenant; other roles are limited to their tenant.
         """
         try:
             service = EventQueriesService()
-            tenant = await service.get_user_tenant(info)
-            event = await service.get_record(id, tenant.id)
+            user = await service.get_user(info)
+            tenant_id: int | None = None
+
+            if not service.is_spark_schema_request(info, user=user):
+                tenant = await service.get_user_tenant(info, user=user)
+                tenant_id = tenant.id
+
+            event = await service.get_record_by_uuid(str(uuid), tenant_id)
             return event
         except GraphQLError:
             return None
@@ -214,32 +220,32 @@ class EventQueries:
             queryset=queryset,
         )
 
-    @strawberry.field(permission_classes=[StrictIsAuthenticated])
-    async def tenant_events(
-        self,
-        info: strawberry.Info,
-        first: int | None = None,
-        after: str | None = None,
-        last: int | None = None,
-        before: str | None = None,
-        q: str | None = None,
-        tenant_uuid: strawberry.ID | None = None,
-    ) -> CountableConnection[types.Event]:
-        """Get tenant events using Relay pagination."""
-        service = EventQueriesService()
-        tenant = await service.get_user_tenant(
-            info,
-            tenant_uuid=tenant_uuid,
-        )
+    # @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    # async def tenant_events(
+    #     self,
+    #     info: strawberry.Info,
+    #     first: int | None = None,
+    #     after: str | None = None,
+    #     last: int | None = None,
+    #     before: str | None = None,
+    #     q: str | None = None,
+    #     tenant_uuid: strawberry.ID | None = None,
+    # ) -> CountableConnection[types.Event]:
+    #     """Get tenant events using Relay pagination."""
+    #     service = EventQueriesService()
+    #     tenant = await service.get_user_tenant(
+    #         info,
+    #         tenant_uuid=tenant_uuid,
+    #     )
 
-        return await service.get_connection(
-            tenant_id=tenant.id,
-            q=q,
-            first=first,
-            after=after,
-            last=last,
-            before=before,
-        )
+    #     return await service.get_connection(
+    #         tenant_id=tenant.id,
+    #         q=q,
+    #         first=first,
+    #         after=after,
+    #         last=last,
+    #         before=before,
+    #     )
 
 
 class EventTypeQueriesService(BaseEventQueriesService):
@@ -342,9 +348,7 @@ class EventStatusQueries:
         tenant_uuid: strawberry.ID | None = filters.tenant_uuid if filters else None
         resolved_tenant_id: int | None = None
         should_filter_by_tenant = (
-            not is_spark_request
-            or tenant_id is not None
-            or tenant_uuid is not None
+            not is_spark_request or tenant_id is not None or tenant_uuid is not None
         )
         if should_filter_by_tenant:
             tenant = await service.get_user_tenant(
