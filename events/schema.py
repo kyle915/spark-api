@@ -104,7 +104,7 @@ class EventMutationsClient(
 
 @strawberry.type
 class EventMutationsSpark(
-    EventMutationsAmbassadors, EventMutationsClient, EventTypeMutations
+    EventMutationsAmbassadors, EventMutationsClient, EventTypeMutations, EventMutations
 ):
     pass
 

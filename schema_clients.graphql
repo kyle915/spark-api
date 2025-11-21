@@ -133,6 +133,7 @@ type CustomUserType {
   firstName: String!
   lastName: String!
   role: RoleType!
+  refreshToken: String
 }
 
 """Date with time (isoformat)"""

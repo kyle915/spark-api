@@ -10,6 +10,21 @@ class BaseTenantInput(SparkGraphQLInput):
 
 
 @strawberry.input
+class EventTypeFiltersInput(BaseTenantInput):
+    tenant_uuid: strawberry.ID | None = None
+
+
+@strawberry.input
+class EventStatusFiltersInput(BaseTenantInput):
+    tenant_uuid: strawberry.ID | None = None
+
+
+@strawberry.input
+class EventFiltersInput(BaseTenantInput):
+    tenant_uuid: strawberry.ID | None = None
+
+
+@strawberry.input
 class BaseNameableInput(BaseTenantInput):
     name: str
 
@@ -18,6 +33,12 @@ class BaseNameableInput(BaseTenantInput):
 class CreateEventInput(BaseNameableInput):
     event_type_id: strawberry.ID
     status_id: strawberry.ID
+    request_id: strawberry.ID
+    address: str
+    notes: str
+    is_national: bool = False
+    start_time: str
+    end_time: str
 
 
 @strawberry.input
