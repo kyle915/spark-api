@@ -11,6 +11,11 @@ from django.db.models import Model
 
 from events import types
 from events import models
+from events.inputs import (
+    EventFiltersInput,
+    EventTypeFiltersInput,
+    EventStatusFiltersInput,
+)
 
 from utils.graphql.mixins import SparkGraphQLMixin
 from utils.graphql.relay import (
@@ -132,13 +137,34 @@ class EventQueries:
         last: int | None = None,
         before: str | None = None,
         q: str | None = None,
+        filters: EventFiltersInput | None = None,
     ) -> CountableConnection[types.Event]:
         """Get all events using Relay pagination."""
         service = EventQueriesService()
-        tenant = await service.get_user_tenant(info)
+        user = await service.get_user(info)
+        is_spark_request = service.is_spark_schema_request(info, user=user)
+
+        resolved_tenant_id: int | None = None
+        filters_tenant_id: strawberry.ID | None = filters.tenant_id if filters else None
+        filters_tenant_uuid: strawberry.ID | None = (
+            filters.tenant_uuid if filters else None
+        )
+        should_filter_by_tenant = (
+            not is_spark_request
+            or filters_tenant_id is not None
+            or filters_tenant_uuid is not None
+        )
+        if should_filter_by_tenant:
+            tenant = await service.get_user_tenant(
+                info,
+                tenant_id=filters_tenant_id,
+                tenant_uuid=filters_tenant_uuid,
+                user=user,
+            )
+            resolved_tenant_id = tenant.id
 
         return await service.get_connection(
-            tenant_id=tenant.id,
+            tenant_id=resolved_tenant_id,
             q=q,
             first=first,
             after=after,
@@ -148,15 +174,21 @@ class EventQueries:
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def event(
-        self, info: strawberry.Info, id: strawberry.ID
+        self, info: strawberry.Info, uuid: strawberry.ID
     ) -> types.Event | None:
-        """Get a single event.
-        It limits the events to the tenant of the user. Otherwise, it returns 404 (None)
+        """Get a single event by UUID.
+        Spark admins can view any tenant; other roles are limited to their tenant.
         """
         try:
             service = EventQueriesService()
-            tenant = await service.get_user_tenant(info)
-            event = await service.get_record(id, tenant.id)
+            user = await service.get_user(info)
+            tenant_id: int | None = None
+
+            if not service.is_spark_schema_request(info, user=user):
+                tenant = await service.get_user_tenant(info, user=user)
+                tenant_id = tenant.id
+
+            event = await service.get_record_by_uuid(str(uuid), tenant_id)
             return event
         except GraphQLError:
             return None
@@ -188,32 +220,32 @@ class EventQueries:
             queryset=queryset,
         )
 
-    @strawberry.field(permission_classes=[StrictIsAuthenticated])
-    async def tenant_events(
-        self,
-        info: strawberry.Info,
-        first: int | None = None,
-        after: str | None = None,
-        last: int | None = None,
-        before: str | None = None,
-        q: str | None = None,
-        tenant_uuid: strawberry.ID | None = None,
-    ) -> CountableConnection[types.Event]:
-        """Get tenant events using Relay pagination."""
-        service = EventQueriesService()
-        tenant = await service.get_user_tenant(
-            info,
-            tenant_uuid=tenant_uuid,
-        )
+    # @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    # async def tenant_events(
+    #     self,
+    #     info: strawberry.Info,
+    #     first: int | None = None,
+    #     after: str | None = None,
+    #     last: int | None = None,
+    #     before: str | None = None,
+    #     q: str | None = None,
+    #     tenant_uuid: strawberry.ID | None = None,
+    # ) -> CountableConnection[types.Event]:
+    #     """Get tenant events using Relay pagination."""
+    #     service = EventQueriesService()
+    #     tenant = await service.get_user_tenant(
+    #         info,
+    #         tenant_uuid=tenant_uuid,
+    #     )
 
-        return await service.get_connection(
-            tenant_id=tenant.id,
-            q=q,
-            first=first,
-            after=after,
-            last=last,
-            before=before,
-        )
+    #     return await service.get_connection(
+    #         tenant_id=tenant.id,
+    #         q=q,
+    #         first=first,
+    #         after=after,
+    #         last=last,
+    #         before=before,
+    #     )
 
 
 class EventTypeQueriesService(BaseEventQueriesService):
@@ -235,12 +267,32 @@ class EventTypeQueries:
         last: int | None = None,
         before: str | None = None,
         q: str | None = None,
+        filters: EventTypeFiltersInput | None = None,
     ) -> CountableConnection[types.EventType]:
         """Get all event types."""
         service = EventTypeQueriesService()
-        tenant = await service.get_user_tenant(info)
+        user = await service.get_user(info)
+        is_spark_request = service.is_spark_schema_request(info, user=user)
+
+        tenant_id: strawberry.ID | None = filters.tenant_id if filters else None
+        tenant_uuid: strawberry.ID | None = filters.tenant_uuid if filters else None
+        resolved_tenant_id: int | None = None
+
+        print("IS SPARK", is_spark_request)
+        should_filter_by_tenant = (
+            not is_spark_request or tenant_id is not None or tenant_uuid is not None
+        )
+        if should_filter_by_tenant:
+            tenant = await service.get_user_tenant(
+                info,
+                tenant_id=tenant_id,
+                tenant_uuid=tenant_uuid,
+                user=user,
+            )
+            resolved_tenant_id = tenant.id
+
         return await service.get_connection(
-            tenant_id=tenant.id,
+            tenant_id=resolved_tenant_id,
             q=q,
             first=first,
             after=after,
@@ -255,8 +307,13 @@ class EventTypeQueries:
         """Get a single event type."""
         try:
             service = EventTypeQueriesService()
-            tenant = await service.get_user_tenant(info)
-            event_type = await service.get_record(id, tenant.id)
+            user = await service.get_user(info)
+            tenant_id: int | None = None
+            if not service.is_spark_schema_request(info, user=user):
+                tenant = await service.get_user_tenant(info, user=user)
+                tenant_id = tenant.id
+
+            event_type = await service.get_record(id, tenant_id)
             return event_type
         except GraphQLError:
             return None
@@ -280,12 +337,30 @@ class EventStatusQueries:
         after: str | None = None,
         last: int | None = None,
         before: str | None = None,
+        filters: EventStatusFiltersInput | None = None,
     ) -> CountableConnection[types.EventStatus]:
         """Get all event statuses."""
         service = EventStatusQueriesService()
-        tenant = await service.get_user_tenant(info)
+        user = await service.get_user(info)
+        is_spark_request = service.is_spark_schema_request(info, user=user)
+
+        tenant_id: strawberry.ID | None = filters.tenant_id if filters else None
+        tenant_uuid: strawberry.ID | None = filters.tenant_uuid if filters else None
+        resolved_tenant_id: int | None = None
+        should_filter_by_tenant = (
+            not is_spark_request or tenant_id is not None or tenant_uuid is not None
+        )
+        if should_filter_by_tenant:
+            tenant = await service.get_user_tenant(
+                info,
+                tenant_id=tenant_id,
+                tenant_uuid=tenant_uuid,
+                user=user,
+            )
+            resolved_tenant_id = tenant.id
+
         return await service.get_connection(
-            tenant_id=tenant.id,
+            tenant_id=resolved_tenant_id,
             first=first,
             after=after,
             last=last,

@@ -248,8 +248,8 @@ class Request(models.Model):
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     name = models.CharField(max_length=50)
     date = models.DateField()
-    start_time = models.DateTimeField(null=True, db_index=True)
-    end_time = models.DateTimeField(null=True, blank=True)
+    start_time = models.TimeField(null=True, db_index=True)
+    end_time = models.TimeField(null=True, blank=True)
     address = models.CharField(max_length=100)
     coordinates = ArrayField(
         models.FloatField(),
@@ -522,8 +522,8 @@ class Event(models.Model):
         related_name="events",
     )
 
-    start_time = models.DateTimeField(null=True, db_index=True)
-    end_time = models.DateTimeField(null=True, blank=True)
+    start_time = models.TimeField(null=True, db_index=True)
+    end_time = models.TimeField(null=True, blank=True)
     address = models.CharField(max_length=100, null=False, default="")
     notes = models.TextField(null=True, blank=True)
     is_national = models.BooleanField(default=False)
