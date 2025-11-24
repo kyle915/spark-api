@@ -471,6 +471,8 @@ class JobQueries:
 
 
 # JobFile Queries
+
+
 class JobFileQueriesService(BaseQueriesService):
     """Service for job file queries."""
 
@@ -665,6 +667,32 @@ class AmbassadorJobQueriesService(BaseQueriesService):
 
 @strawberry.type
 class AmbassadorJobQueries:
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def available_jobs(
+        self,
+        info: strawberry.Info,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        q: str | None = None,
+    ) -> CountableConnection[types.Job]:
+        """Get all available jobs."""
+        service = JobQueriesService()
+        tenant = await service.get_user_tenant(info)
+        queryset = service.get_ordered_queryset(
+            tenant_id=tenant.id, q=q, ordering=("start_date",))
+        queryset = queryset.filter(ongoing=True, closed=False, public=True)\
+            .prefetch_related("job_requirements")
+        return await service.get_connection(
+            tenant_id=tenant.id,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+            queryset=queryset,
+        )
+
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def ambassador_jobs(
         self,

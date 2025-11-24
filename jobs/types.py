@@ -1,6 +1,8 @@
+from __future__ import annotations
+
 import strawberry_django
 import strawberry
-from typing import List
+from typing import List, Optional
 
 from . import models
 from events.types import Location, Event
@@ -175,7 +177,7 @@ class RateTypeDetailResponse:
 class Rate:
     id: strawberry.ID
     uuid: str
-    amout: float  # Note: typo in model field name (DecimalField)
+    amount: float  # Note: typo in model field name (DecimalField)
     tenant_id: strawberry.ID
     rate_type: RateType
     created_at: str
@@ -211,6 +213,7 @@ class Job:
     location: Location
     tenant_id: strawberry.ID
     rate: Rate
+    job_requirements: List[JobRequirement]
     created_at: str
     updated_at: str
 
@@ -268,7 +271,7 @@ class JobRequirement:
     name: str
     tenant_id: strawberry.ID
     job_requirement_type: JobRequirementType
-    job: Job
+    job: "Job"
     created_at: str
     updated_at: str
 

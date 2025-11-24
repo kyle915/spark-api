@@ -4,6 +4,13 @@ from jobs import mutations, queries
 
 
 @strawberry.type
+class AmbassadorJobQueries(
+    queries.AmbassadorJobQueries
+):
+    pass
+
+
+@strawberry.type
 class ClientJobQueries(
     queries.StatusQueries,
     queries.CompanyFileQueries,
