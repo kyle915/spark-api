@@ -83,10 +83,18 @@ class BaseMutationService(SparkGraphQLMixin):
         self.is_spark_schema = self.is_spark_schema_request(
             info, user=self.user)
         tenant_id = getattr(self.input, "tenant_id", None)
+        is_update = hasattr(self.input, "id") and self.input.id is not None
 
         if self.is_spark_schema and tenant_id:
+            # Spark user with explicit tenant_id
             self.tenant_id = await self._resolve_tenant_without_membership(tenant_id)
+        elif self.is_spark_schema and is_update:
+            # Spark user updating without tenant_id - use existing object's tenant
+            model_class = self.get_model()
+            existing_obj = await sync_to_async(model_class.objects.get)(id=self.input.id)
+            self.tenant_id = existing_obj.tenant_id
         else:
+            # Non-spark user or spark user creating without tenant_id
             tenant = await self.get_tenant(self.user, tenant_id)
             self.tenant_id = tenant.id
         return self
