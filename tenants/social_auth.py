@@ -3,6 +3,7 @@ from django.contrib.auth import get_user_model
 from gqlauth.core.utils import get_token
 from asgiref.sync import sync_to_async
 from .models import Role, TenantedUser, Tenant
+from gqlauth.models import RefreshToken
 from utils.utils import ROLE_ID
 
 from gqlauth.jwt.types_ import TokenType
@@ -131,7 +132,8 @@ class BaseSocialAuthMutations:
             # Generate JWT tokens using gqlauth
             # token = await sync_to_async(get_token)(user, "authentication")
             token = TokenType.from_user(user)
-            refresh_token = await sync_to_async(get_token)(user, "refresh")
+            refresh_token_obj = await sync_to_async(RefreshToken.from_user)(user)
+            refresh_token = refresh_token_obj.token
 
             message = "Google authentication successful"
             if is_new:

@@ -130,6 +130,12 @@ type ClientDetailResponse {
   client: Client
 }
 
+input ClientFiltersInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  tenantUuid: ID = null
+}
+
 """
 Company(id, uuid, email, website_url, founding_date, phone, address, about_us, company_size_min, company_size_max, approved, tenant, location, cover, profile_image, created_by, updated_by, created_at, updated_at)
 """
@@ -628,6 +634,12 @@ type DistributorDetailResponse {
   distributor: Distributor
 }
 
+input DistributorFiltersInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  tenantUuid: ID = null
+}
+
 type DjangoModelType {
   pk: ID!
 }
@@ -677,6 +689,10 @@ input EventFiltersInput {
   clientMutationId: ID = null
   tenantId: ID = null
   tenantUuid: ID = null
+  eventTypeId: ID = null
+  eventStatusId: ID = null
+  requestId: ID = null
+  date: String = null
 }
 
 """
@@ -1091,6 +1107,12 @@ type LocationDetailResponse {
   location: Location
 }
 
+input LocationFiltersInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  tenantUuid: ID = null
+}
+
 type Mutation {
   createRequestByUrl(input: CreateRequestInput!, requestUrl: String!): RequestDetailResponse!
   createEventStatus(input: CreateEventStatusInput!): EventStatusDetailResponse!
@@ -1285,6 +1307,12 @@ type ProductDetailResponse {
   product: Product
 }
 
+input ProductFiltersInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  tenantUuid: ID = null
+}
+
 """
 ProductType(id, uuid, name, tenant, created_by, updated_by, created_at, updated_at)
 """
@@ -1318,31 +1346,37 @@ type ProductTypeDetailResponse {
   productType: ProductType
 }
 
+input ProductTypeFiltersInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  tenantUuid: ID = null
+}
+
 type Query {
   events(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: EventFiltersInput = null): EventCountableConnection!
   event(uuid: ID!): Event
-  todayEvents(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): EventCountableConnection!
+  todayEvents(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: EventFiltersInput = null): EventCountableConnection!
   eventTypes(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: EventTypeFiltersInput = null): EventTypeCountableConnection!
   eventType(id: ID!): EventType
   eventStatuses(first: Int = null, after: String = null, last: Int = null, before: String = null, filters: EventStatusFiltersInput = null): EventStatusCountableConnection!
   eventStatus(id: ID!): EventStatus
-  clients(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): ClientCountableConnection!
+  clients(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: ClientFiltersInput = null): ClientCountableConnection!
   client(id: ID!): Client
-  distributors(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): DistributorCountableConnection!
+  distributors(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: DistributorFiltersInput = null): DistributorCountableConnection!
   distributor(id: ID!): Distributor
-  retailers(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): RetailerCountableConnection!
+  retailers(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: RetailerFiltersInput = null): RetailerCountableConnection!
   retailer(id: ID!): Retailer
-  productTypes(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): ProductTypeCountableConnection!
+  productTypes(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: ProductTypeFiltersInput = null): ProductTypeCountableConnection!
   productType(id: ID!): ProductType
-  products(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): ProductCountableConnection!
+  products(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: ProductFiltersInput = null): ProductCountableConnection!
   product(id: ID!): Product
-  requestTypes(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): RequestTypeCountableConnection!
+  requestTypes(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: RequestTypeFiltersInput = null): RequestTypeCountableConnection!
   requestType(id: ID!): RequestType
-  requestStatuses(first: Int = null, after: String = null, last: Int = null, before: String = null): RequestStatusCountableConnection!
+  requestStatuses(first: Int = null, after: String = null, last: Int = null, before: String = null, filters: RequestStatusFiltersInput = null): RequestStatusCountableConnection!
   requestStatus(id: ID!): RequestStatus
-  requests(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): RequestCountableConnection!
+  requests(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: RequestFiltersInput = null): RequestCountableConnection!
   request(uuid: ID!): Request
-  locations(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): LocationCountableConnection!
+  locations(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: LocationFiltersInput = null): LocationCountableConnection!
   location(id: ID!): Location
   me: CustomUserType!
   tenants(userUuid: ID = null, first: Int = null, after: String = null, last: Int = null, before: String = null): TenantTypeCountableConnection!
@@ -1594,6 +1628,17 @@ type RequestDetailResponse {
   request: Request
 }
 
+input RequestFiltersInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  tenantUuid: ID = null
+  statusId: ID = null
+  clientId: ID = null
+  retailerId: ID = null
+  distributorId: ID = null
+  date: String = null
+}
+
 type RequestStatus {
   id: ID!
   uuid: String!
@@ -1623,6 +1668,12 @@ type RequestStatusDetailResponse {
   message: String!
   clientMutationId: ID
   requestStatus: RequestStatus
+}
+
+input RequestStatusFiltersInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  tenantUuid: ID = null
 }
 
 """
@@ -1656,6 +1707,12 @@ type RequestTypeDetailResponse {
   message: String!
   clientMutationId: ID
   requestType: RequestType
+}
+
+input RequestTypeFiltersInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  tenantUuid: ID = null
 }
 
 """
@@ -1692,6 +1749,12 @@ type RetailerDetailResponse {
   message: String!
   clientMutationId: ID
   retailer: Retailer
+}
+
+input RetailerFiltersInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  tenantUuid: ID = null
 }
 
 """

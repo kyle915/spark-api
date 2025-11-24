@@ -86,8 +86,8 @@ GQL_AUTH = GqlAuthSettings(
     # JWT_ALGORITHM="H256",
     # ALLOW_DELETE_ACCOUNT=True,
     JWT_LONG_RUNNING_REFRESH_TOKEN=True,
-    JWT_REFRESH_EXPIRATION_DELTA=timedelta(minutes=30),
-    JWT_EXPIRATION_DELTA=timedelta(minutes=30),
+    JWT_REFRESH_EXPIRATION_DELTA=timedelta(days=10),
+    JWT_EXPIRATION_DELTA=timedelta(days=1),
     LOGIN_REQUIRE_CAPTCHA=False,
     REGISTER_REQUIRE_CAPTCHA=False,
 )
