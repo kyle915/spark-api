@@ -22,6 +22,57 @@ class EventStatusFiltersInput(BaseTenantInput):
 @strawberry.input
 class EventFiltersInput(BaseTenantInput):
     tenant_uuid: strawberry.ID | None = None
+    status_id: strawberry.ID | None = None
+
+
+@strawberry.input
+class RequestFiltersInput(BaseTenantInput):
+    tenant_uuid: strawberry.ID | None = None
+    status_id: strawberry.ID | None = None
+    client_id: strawberry.ID | None = None
+    retailer_id: strawberry.ID | None = None
+    distributor_id: strawberry.ID | None = None
+    date: str | None = None
+
+
+@strawberry.input
+class ClientFiltersInput(BaseTenantInput):
+    tenant_uuid: strawberry.ID | None = None
+
+
+@strawberry.input
+class LocationFiltersInput(BaseTenantInput):
+    tenant_uuid: strawberry.ID | None = None
+
+
+@strawberry.input
+class DistributorFiltersInput(BaseTenantInput):
+    tenant_uuid: strawberry.ID | None = None
+
+
+@strawberry.input
+class RetailerFiltersInput(BaseTenantInput):
+    tenant_uuid: strawberry.ID | None = None
+
+
+@strawberry.input
+class RequestTypeFiltersInput(BaseTenantInput):
+    tenant_uuid: strawberry.ID | None = None
+
+
+@strawberry.input
+class RequestStatusFiltersInput(BaseTenantInput):
+    tenant_uuid: strawberry.ID | None = None
+
+
+@strawberry.input
+class ProductTypeFiltersInput(BaseTenantInput):
+    tenant_uuid: strawberry.ID | None = None
+
+
+@strawberry.input
+class ProductFiltersInput(BaseTenantInput):
+    tenant_uuid: strawberry.ID | None = None
 
 
 @strawberry.input
