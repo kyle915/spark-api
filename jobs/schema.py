@@ -45,7 +45,16 @@ class SparkJobQueries(
 
 
 @strawberry.type
+class AmbassadorJobMutations(
+    mutations.AmbassadorJobMutations,
+    mutations.AmbassadorToAmbassadorReviewMutations,
+):
+    pass
+
+
+@strawberry.type
 class ClientJobMutations(
+    AmbassadorJobMutations,
     mutations.StatusMutations,
     mutations.CompanyFileMutations,
     mutations.CompanyMutations,
@@ -60,9 +69,7 @@ class ClientJobMutations(
     mutations.JobRequirementTypeMutations,
     mutations.JobRequirementMutations,
     mutations.JobRequirementFileMutations,
-    mutations.AmbassadorJobMutations,
     mutations.CompanyToAmbassadorReviewMutations,
-    mutations.AmbassadorToAmbassadorReviewMutations,
     mutations.QuestionTypeMutations,
     mutations.JobRequirementQuestionMutations,
     mutations.QuestionOptionMutations,
