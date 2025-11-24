@@ -177,8 +177,15 @@ class EventQueries:
             tenant_id=resolved_tenant_id, q=q
         )
 
-        if filters and filters.status_id:
-            queryset = queryset.filter(status_id=filters.status_id)
+        if filters:
+            if filters.event_type_id:
+                queryset = queryset.filter(event_type_id=filters.event_type_id)
+            if filters.event_status_id:
+                queryset = queryset.filter(status_id=filters.event_status_id)
+            if filters.request_id:
+                queryset = queryset.filter(request_id=filters.request_id)
+            if filters.date:
+                queryset = queryset.filter(request__date=filters.date)
 
         return await service.get_connection(
             tenant_id=resolved_tenant_id,

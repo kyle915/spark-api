@@ -689,7 +689,10 @@ input EventFiltersInput {
   clientMutationId: ID = null
   tenantId: ID = null
   tenantUuid: ID = null
-  statusId: ID = null
+  eventTypeId: ID = null
+  eventStatusId: ID = null
+  requestId: ID = null
+  date: String = null
 }
 
 """
