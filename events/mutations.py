@@ -80,8 +80,7 @@ class BaseMutationService(SparkGraphQLMixin):
         """Set the user and tenant for the service."""
         self.info = info
         self.user = await self.get_user(info)
-        self.is_spark_schema = self.is_spark_schema_request(
-            info, user=self.user)
+        self.is_spark_schema = self.is_spark_schema_request(info, user=self.user)
         tenant_id = getattr(self.input, "tenant_id", None)
         is_update = hasattr(self.input, "id") and self.input.id is not None
 
@@ -91,7 +90,9 @@ class BaseMutationService(SparkGraphQLMixin):
         elif self.is_spark_schema and is_update:
             # Spark user updating without tenant_id - use existing object's tenant
             model_class = self.get_model()
-            existing_obj = await sync_to_async(model_class.objects.get)(id=self.input.id)
+            existing_obj = await sync_to_async(model_class.objects.get)(
+                id=self.input.id
+            )
             self.tenant_id = existing_obj.tenant_id
         else:
             # Non-spark user or spark user creating without tenant_id
@@ -165,8 +166,7 @@ class BaseMutationService(SparkGraphQLMixin):
 
         # get the model
         model_class = self.get_model()
-        is_update: bool = hasattr(
-            self.input, "id") and self.input.id is not None
+        is_update: bool = hasattr(self.input, "id") and self.input.id is not None
         if is_update:
             model = await sync_to_async(model_class.objects.get)(id=self.input.id)
             if self.user:
@@ -1040,15 +1040,27 @@ class RequestMutations:
         try:
             service: RequestMutationService = RequestMutationService()
             user: User = await service.get_user(info)
-            tenant: Tenant = await sync_to_async(user.get_tenant)()
             if user.role_id == ROLE_ID.Ambassadors:
-                raise GraphQLError(
-                    "You are not authorized to approve requests.")
+                raise GraphQLError("You are not authorized to approve requests.")
 
-            if not tenant:
-                raise GraphQLError(
-                    "Tenant not found. Please ensure you are a member of a tenant."
-                )
+            # Get the request first to access its tenant
+            request: models.Request = await sync_to_async(models.Request.objects.get)(
+                id=input.id
+            )
+            # Get tenant using tenant_id to avoid async context issues with foreign key access
+            tenant: Tenant = await sync_to_async(Tenant.objects.get)(
+                id=request.tenant_id
+            )
+
+            # Verify user is a member of the request's tenant (unless user is SparkAdmin)
+            is_spark_admin = user.role_id == ROLE_ID.SparkAdmin
+            if not is_spark_admin:
+                try:
+                    await sync_to_async(user.get_tenant)(tenant_id=tenant.id)
+                except Exception:
+                    raise GraphQLError(
+                        "You are not authorized to approve requests for this tenant."
+                    )
 
             approval_status = await sync_to_async(
                 models.RequestStatus.objects.get_for_approval
@@ -1057,10 +1069,6 @@ class RequestMutations:
                 raise GraphQLError(
                     "Approval status not found. Please ensure you have a status for approval."
                 )
-
-            request: models.Request = await sync_to_async(models.Request.objects.get)(
-                id=input.id
-            )
             request.status = approval_status
             await sync_to_async(request.save)()
             event: models.Event = await models.Event.objects.from_request(
