@@ -1,7 +1,9 @@
 import datetime
 import logging
+from typing import List
 
 import strawberry
+from enum import Enum
 from utils.graphql.permissions import StrictIsAuthenticated
 from asgiref.sync import sync_to_async
 from graphql import GraphQLError
@@ -34,6 +36,14 @@ from utils.graphql.relay import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@strawberry.enum
+class DistanceUnit(str, Enum):
+    """Distance unit for coordinate-based queries."""
+    KILOMETERS = "km"
+    MILES = "mi"
+
 
 
 class BaseEventQueriesService(SparkGraphQLMixin):
@@ -261,6 +271,92 @@ class EventQueries:
                 queryset = queryset.filter(request_id=filters.request_id)
 
         queryset = queryset.filter(request__date=today).order_by("start_time")
+
+        return await service.get_connection(
+            tenant_id=resolved_tenant_id,
+            q=q,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+            queryset=queryset,
+        )
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def today_events_coordinates(
+        self,
+        info: strawberry.Info,
+        coordinates: List[float],
+        range: float,
+        unit: DistanceUnit = DistanceUnit.KILOMETERS,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        q: str | None = None,
+        filters: EventFiltersInput | None = None,
+    ) -> CountableConnection[types.Event]:
+        """Get today's events within a radius of the coordinates.
+        
+        Args:
+            coordinates: [latitude, longitude]
+            range: Search radius
+            unit: Distance unit (km or mi), defaults to kilometers
+        """
+        from django.db.models import F
+        from django.db.models.functions import ACos, Cos, Radians, Sin
+
+        service = EventQueriesService()
+        user = await service.get_user(info)
+        is_spark_request = service.is_spark_schema_request(info, user=user)
+
+        tenant_id: strawberry.ID | None = filters.tenant_id if filters else None
+        tenant_uuid: strawberry.ID | None = filters.tenant_uuid if filters else None
+        resolved_tenant_id: int | None = None
+
+        should_filter_by_tenant = (
+            not is_spark_request or tenant_id is not None or tenant_uuid is not None
+        )
+        if should_filter_by_tenant:
+            tenant = await service.get_user_tenant(
+                info,
+                tenant_id=tenant_id,
+                tenant_uuid=tenant_uuid,
+                user=user,
+            )
+            resolved_tenant_id = tenant.id
+
+        today = timezone.localdate()
+        queryset = service.get_filtered_queryset(resolved_tenant_id, q)
+
+        if filters:
+            if filters.event_type_id:
+                queryset = queryset.filter(event_type_id=filters.event_type_id)
+            if filters.event_status_id:
+                queryset = queryset.filter(status_id=filters.event_status_id)
+            if filters.request_id:
+                queryset = queryset.filter(request_id=filters.request_id)
+
+        # Filter by date
+        queryset = queryset.filter(request__date=today)
+
+        # Calculate distance
+        # Assuming coordinates are [lat, lon]
+        lat = coordinates[0]
+        lon = coordinates[1]
+
+        # Earth radius: 6371 km or 3959 miles
+        earth_radius = 6371 if unit == DistanceUnit.KILOMETERS else 3959
+        
+        distance_expr = earth_radius * ACos(
+            Cos(Radians(lat))
+            * Cos(Radians(F("request__coordinates__0")))
+            * Cos(Radians(F("request__coordinates__1")) - Radians(lon))
+            + Sin(Radians(lat)) * Sin(Radians(F("request__coordinates__0")))
+        )
+
+        queryset = queryset.annotate(distance=distance_expr).filter(distance__lte=range)
+        queryset = queryset.order_by("distance", "start_time")
 
         return await service.get_connection(
             tenant_id=resolved_tenant_id,
