@@ -62,8 +62,9 @@ class BaseQueriesService(SparkGraphQLMixin):
         queryset: QuerySet | None = None,
     ) -> CountableConnection[Model]:
         """Return a Relay compliant connection for the queryset."""
-        queryset = queryset or self.get_ordered_queryset(
-            tenant_id, q, ordering)
+        if queryset is None:
+            queryset = self.get_ordered_queryset(
+                tenant_id, q, ordering)
         try:
             return await connection_from_queryset_async(
                 queryset,

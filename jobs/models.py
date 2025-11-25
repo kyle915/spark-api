@@ -74,6 +74,8 @@ class CompanyFile(models.Model):
 
 class Company(models.Model):
     id = models.BigAutoField(primary_key=True)
+    # null bc I already have companies with no name xd
+    name = models.CharField(max_length=100, null=True, blank=False)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     email = models.CharField(max_length=100, null=False)
     website_url = models.CharField(max_length=254, null=True)

@@ -29,8 +29,9 @@ class UpdateCompanyFileInput(CreateCompanyFileInput):
 
 
 @strawberry.input
-class CreateCompanyInput(BaseNameableInput):
+class CreateCompanyInput(BaseTenantInput):
     email: str
+    name: str
     website_url: str | None = None
     founding_date: str | None = None
     phone: str
@@ -110,7 +111,7 @@ class UpdateRateTypeInput(CreateRateTypeInput):
 
 
 @strawberry.input
-class CreateRateInput(BaseNameableInput):
+class CreateRateInput(BaseTenantInput):
     amount: float  # Note: matches model field name (typo in model)
     rate_type_id: strawberry.ID
 
