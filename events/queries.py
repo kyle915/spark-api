@@ -8,6 +8,7 @@ from graphql import GraphQLError
 
 from django.db.models import QuerySet
 from django.db.models import Model
+from django.utils import timezone
 
 from events import types
 from events import models
@@ -173,9 +174,7 @@ class EventQueries:
             )
             resolved_tenant_id = tenant.id
 
-        queryset = service.get_ordered_queryset(
-            tenant_id=resolved_tenant_id, q=q
-        )
+        queryset = service.get_ordered_queryset(tenant_id=resolved_tenant_id, q=q)
 
         if filters:
             if filters.event_type_id:
@@ -250,13 +249,22 @@ class EventQueries:
             )
             resolved_tenant_id = tenant.id
 
-        queryset = (
-            service.get_filtered_queryset(resolved_tenant_id, q)
-            .filter(start_time__day=datetime.date.today().day)
-            .order_by("start_time")
-        )
+        today = timezone.localdate()
+        queryset = service.get_filtered_queryset(resolved_tenant_id, q)
+
+        if filters:
+            if filters.event_type_id:
+                queryset = queryset.filter(event_type_id=filters.event_type_id)
+            if filters.event_status_id:
+                queryset = queryset.filter(status_id=filters.event_status_id)
+            if filters.request_id:
+                queryset = queryset.filter(request_id=filters.request_id)
+
+        queryset = queryset.filter(request__date=today).order_by("start_time")
 
         return await service.get_connection(
+            tenant_id=resolved_tenant_id,
+            q=q,
             first=first,
             after=after,
             last=last,
@@ -468,9 +476,7 @@ class RequestQueries:
             )
             resolved_tenant_id = tenant.id
 
-        queryset = service.get_ordered_queryset(
-            tenant_id=resolved_tenant_id, q=q
-        )
+        queryset = service.get_ordered_queryset(tenant_id=resolved_tenant_id, q=q)
 
         if filters:
             if filters.status_id:
