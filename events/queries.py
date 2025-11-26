@@ -1148,6 +1148,39 @@ class ProductTypeQueriesService(BaseEventQueriesService):
 
 @strawberry.type
 class ProductTypeQueries:
+    @strawberry.field
+    async def public_product_types(
+        self,
+        info: strawberry.Info,
+        request_url_name: str,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        q: str | None = None,
+    ) -> CountableConnection[types.ProductType]:
+        """Get public product types filtered by tenant request_url_name."""
+        service = ProductTypeQueriesService()
+        try:
+            tenant = await sync_to_async(Tenant.objects.get)(request_url_name=request_url_name)
+        except Tenant.DoesNotExist:
+            return await service.get_connection(
+                queryset=service.get_model().objects.none(),
+                first=first,
+                after=after,
+                last=last,
+                before=before,
+            )
+
+        return await service.get_connection(
+            tenant_id=tenant.id,
+            q=q,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+        )
+
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def product_types(
         self,
