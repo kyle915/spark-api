@@ -625,6 +625,39 @@ class ClientQueriesService(BaseEventQueriesService):
 
 @strawberry.type
 class ClientQueries:
+    @strawberry.field
+    async def public_clients(
+        self,
+        info: strawberry.Info,
+        request_url_name: str,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        q: str | None = None,
+    ) -> CountableConnection[types.Client]:
+        """Get public clients filtered by tenant request_url_name."""
+        service = ClientQueriesService()
+        try:
+            tenant = await sync_to_async(Tenant.objects.get)(request_url_name=request_url_name)
+        except Tenant.DoesNotExist:
+            return await service.get_connection(
+                queryset=service.get_model().objects.none(),
+                first=first,
+                after=after,
+                last=last,
+                before=before,
+            )
+
+        return await service.get_connection(
+            tenant_id=tenant.id,
+            q=q,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+        )
+
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def clients(
         self,
@@ -1181,6 +1214,39 @@ class ProductQueriesService(BaseEventQueriesService):
 
 @strawberry.type
 class ProductQueries:
+    @strawberry.field
+    async def public_products(
+        self,
+        info: strawberry.Info,
+        request_url_name: str,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        q: str | None = None,
+    ) -> CountableConnection[types.Product]:
+        """Get public products filtered by tenant request_url_name."""
+        service = ProductQueriesService()
+        try:
+            tenant = await sync_to_async(Tenant.objects.get)(request_url_name=request_url_name)
+        except Tenant.DoesNotExist:
+            return await service.get_connection(
+                queryset=service.get_model().objects.none(),
+                first=first,
+                after=after,
+                last=last,
+                before=before,
+            )
+
+        return await service.get_connection(
+            tenant_id=tenant.id,
+            q=q,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+        )
+
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def products(
         self,
