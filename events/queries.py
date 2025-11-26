@@ -341,7 +341,6 @@ class EventQueries:
         queryset = queryset.filter(request__date=today)
 
         # Calculate distance
-        # Assuming coordinates are [lat, lon]
         lat = coordinates[0]
         lon = coordinates[1]
 
