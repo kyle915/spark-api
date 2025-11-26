@@ -14,6 +14,7 @@ from django.utils import timezone
 
 from events import types
 from events import models
+from tenants.models import Tenant
 from events.inputs import (
     EventFiltersInput,
     EventTypeFiltersInput,
@@ -756,6 +757,39 @@ class DistributorQueriesService(BaseEventQueriesService):
 
 @strawberry.type
 class DistributorQueries:
+    @strawberry.field
+    async def public_distributors(
+        self,
+        info: strawberry.Info,
+        request_url_name: str,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        q: str | None = None,
+    ) -> CountableConnection[types.Distributor]:
+        """Get public distributors filtered by tenant request_url_name."""
+        service = DistributorQueriesService()
+        try:
+            tenant = await sync_to_async(Tenant.objects.get)(request_url_name=request_url_name)
+        except Tenant.DoesNotExist:
+            return await service.get_connection(
+                queryset=service.get_model().objects.none(),
+                first=first,
+                after=after,
+                last=last,
+                before=before,
+            )
+
+        return await service.get_connection(
+            tenant_id=tenant.id,
+            q=q,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+        )
+
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def distributors(
         self,
@@ -821,6 +855,39 @@ class RetailerQueriesService(BaseEventQueriesService):
 
 @strawberry.type
 class RetailerQueries:
+    @strawberry.field
+    async def public_retailer(
+        self,
+        info: strawberry.Info,
+        request_url_name: str,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        q: str | None = None,
+    ) -> CountableConnection[types.Retailer]:
+        """Get public retailers filtered by tenant request_url_name."""
+        service = RetailerQueriesService()
+        try:
+            tenant = await sync_to_async(Tenant.objects.get)(request_url_name=request_url_name)
+        except Tenant.DoesNotExist:
+            return await service.get_connection(
+                queryset=service.get_model().objects.none(),
+                first=first,
+                after=after,
+                last=last,
+                before=before,
+            )
+
+        return await service.get_connection(
+            tenant_id=tenant.id,
+            q=q,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+        )
+
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def retailers(
         self,
@@ -886,6 +953,39 @@ class RequestTypeQueriesService(BaseEventQueriesService):
 
 @strawberry.type
 class RequestTypeQueries:
+    @strawberry.field
+    async def public_request_type(
+        self,
+        info: strawberry.Info,
+        request_url_name: str,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        q: str | None = None,
+    ) -> CountableConnection[types.RequestType]:
+        """Get public request types filtered by tenant request_url_name."""
+        service = RequestTypeQueriesService()
+        try:
+            tenant = await sync_to_async(Tenant.objects.get)(request_url_name=request_url_name)
+        except Tenant.DoesNotExist:
+            return await service.get_connection(
+                queryset=service.get_model().objects.none(),
+                first=first,
+                after=after,
+                last=last,
+                before=before,
+            )
+
+        return await service.get_connection(
+            tenant_id=tenant.id,
+            q=q,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+        )
+
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def request_types(
         self,
