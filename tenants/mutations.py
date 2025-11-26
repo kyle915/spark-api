@@ -45,13 +45,6 @@ class GoogleSocialAuthInput(SparkGraphQLInput):
 class AppleSocialAuthInput(SparkGraphQLInput):
     identity_token: str
 
-
-@strawberry.input
-class ClientGoogleSocialAuthInput(GoogleSocialAuthInput):
-    role_id: strawberry.ID
-    tenant_id: strawberry.ID
-
-
 @strawberry.input
 class ClientAppleSocialAuthInput(AppleSocialAuthInput):
     role_id: strawberry.ID
@@ -253,12 +246,10 @@ class ClientsCustomRegister:
     async def social_auth_google(
         self,
         info: strawberry.Info,
-        input: ClientGoogleSocialAuthInput,
+        input: GoogleSocialAuthInput,
     ) -> SocialAuthResponse:
         return await BaseSocialAuthMutations.social_auth_google(
             access_token=input.access_token,
-            role_id=int(input.role_id),
-            tenant_id=int(input.tenant_id),
             client_mutation_id=input.client_mutation_id,
         )
 
@@ -266,11 +257,9 @@ class ClientsCustomRegister:
     async def social_auth_apple(
         self,
         info: strawberry.Info,
-        input: ClientAppleSocialAuthInput,
+        input: AppleSocialAuthInput,
     ) -> SocialAuthResponse:
         return await BaseSocialAuthMutations.social_auth_apple(
             identity_token=input.identity_token,
-            role_id=int(input.role_id),
-            tenant_id=int(input.tenant_id),
             client_mutation_id=input.client_mutation_id,
         )

@@ -1,18 +1,89 @@
 """
-Can only be resolved by authenticated users.
-
-When the condition fails, the following can be returned (following this priority):
-1) `OperationInfo`/`OperationMessage` if those types are allowed at the return type
-2) `null` in case the field is not mandatory (e.g. `String` or `[String]`)
-3) An empty list in case the field is a list (e.g. `[String]!`)
-4) An empty `Connection` in case the return type is a relay connection
-2) Otherwise, an error will be raised
+AmbassadorJob(id, uuid, appear_as_rfp, tenant, ambassador, job, status, rate, created_by, updated_by, created_at, updated_at)
 """
-directive @isAuthenticated repeatable on FIELD_DEFINITION
+type AmbassadorJob {
+  id: ID!
+  uuid: String!
+  appearAsRfp: Boolean!
+  tenantId: ID!
+  ambassadorId: ID!
+  job: Job!
+  status: Status!
+  rate: Rate!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type AmbassadorJobCountableConnection {
+  pageInfo: PageInfo!
+  edges: [AmbassadorJobCountableEdge!]!
+  totalCount: Int!
+}
+
+type AmbassadorJobCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: AmbassadorJob!
+}
+
+type AmbassadorJobDetailResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  ambassadorJob: AmbassadorJob
+}
+
+"""
+AmbassadorToAmbassadorReview(id, uuid, description, rate, tenant, ambassador, created_by, updated_by, created_at, updated_at)
+"""
+type AmbassadorToAmbassadorReview {
+  id: ID!
+  uuid: String!
+  description: String!
+  rate: Float!
+  tenantId: ID!
+  ambassadorId: ID!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type AmbassadorToAmbassadorReviewCountableConnection {
+  pageInfo: PageInfo!
+  edges: [AmbassadorToAmbassadorReviewCountableEdge!]!
+  totalCount: Int!
+}
+
+type AmbassadorToAmbassadorReviewCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: AmbassadorToAmbassadorReview!
+}
+
+type AmbassadorToAmbassadorReviewDetailResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  ambassadorToAmbassadorReview: AmbassadorToAmbassadorReview
+}
+
+input AppleSocialAuthInput {
+  clientMutationId: ID = null
+  identityToken: String!
+}
+
+input ApproveRequestInput {
+  clientMutationId: ID = null
+  id: ID!
+}
 
 type ApproveRequestResponse {
   success: Boolean!
   message: String!
+  clientMutationId: ID
   request: Request
   event: Event
 }
@@ -30,63 +101,416 @@ type Client {
   updatedAt: String!
 }
 
+type ClientCountableConnection {
+  pageInfo: PageInfo!
+  edges: [ClientCountableEdge!]!
+  totalCount: Int!
+}
+
+type ClientCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: Client!
+}
+
 type ClientDetailResponse {
   success: Boolean!
   message: String!
+  clientMutationId: ID
   client: Client
 }
 
+input ClientFiltersInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  tenantUuid: ID = null
+}
+
+input ClientRegisterInput {
+  clientMutationId: ID = null
+  firstName: String!
+  email: String!
+  password1: String!
+  password2: String!
+  roleId: ID!
+  tenantId: ID!
+}
+
+"""
+Company(id, name, uuid, email, website_url, founding_date, phone, address, about_us, company_size_min, company_size_max, approved, tenant, location, cover, profile_image, created_by, updated_by, created_at, updated_at)
+"""
+type Company {
+  id: ID!
+  uuid: String!
+  name: String!
+  email: String!
+  websiteUrl: String
+  foundingDate: String
+  phone: String!
+  address: String
+  aboutUs: String
+  companySizeMin: Int
+  companySizeMax: Int
+  approved: Boolean!
+  tenantId: ID
+  location: Location
+  cover: CompanyFile
+  profileImage: CompanyFile
+  createdAt: String!
+  updatedAt: String!
+}
+
+type CompanyCountableConnection {
+  pageInfo: PageInfo!
+  edges: [CompanyCountableEdge!]!
+  totalCount: Int!
+}
+
+type CompanyCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: Company!
+}
+
+type CompanyDetailResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  company: Company
+}
+
+"""
+CompanyFile(id, uuid, name, url, file_type, created_by, updated_by, created_at, updated_at)
+"""
+type CompanyFile {
+  id: ID!
+  uuid: String!
+  name: String!
+  url: String
+  fileTypeId: ID!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type CompanyFileCountableConnection {
+  pageInfo: PageInfo!
+  edges: [CompanyFileCountableEdge!]!
+  totalCount: Int!
+}
+
+type CompanyFileCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: CompanyFile!
+}
+
+type CompanyFileDetailResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  companyFile: CompanyFile
+}
+
+"""
+CompanyReview(id, uuid, global_score, review, min_pay_timing, max_pay_timing, pay_timing_range, company, ambassador, created_by, updated_by, created_at, updated_at)
+"""
+type CompanyReview {
+  id: ID!
+  uuid: String!
+  globalScore: Int!
+  review: String!
+  minPayTiming: Int!
+  maxPayTiming: Int!
+  payTimingRange: Int!
+  company: Company!
+  ambassadorId: ID!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type CompanyReviewCountableConnection {
+  pageInfo: PageInfo!
+  edges: [CompanyReviewCountableEdge!]!
+  totalCount: Int!
+}
+
+type CompanyReviewCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: CompanyReview!
+}
+
+type CompanyReviewDetailResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  companyReview: CompanyReview
+}
+
+"""
+CompanyToAmbassadorReview(id, uuid, description, rate, tenant, ambassador, job, created_by, updated_by, created_at, updated_at)
+"""
+type CompanyToAmbassadorReview {
+  id: ID!
+  uuid: String!
+  description: String!
+  rate: Float!
+  tenantId: ID!
+  ambassadorId: ID!
+  job: Job!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type CompanyToAmbassadorReviewCountableConnection {
+  pageInfo: PageInfo!
+  edges: [CompanyToAmbassadorReviewCountableEdge!]!
+  totalCount: Int!
+}
+
+type CompanyToAmbassadorReviewCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: CompanyToAmbassadorReview!
+}
+
+type CompanyToAmbassadorReviewDetailResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  companyToAmbassadorReview: CompanyToAmbassadorReview
+}
+
+input CreateAmbassadorJobInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  appearAsRfp: Boolean! = true
+  ambassadorId: ID!
+  jobId: ID!
+  statusId: ID!
+  rateId: ID!
+}
+
+input CreateAmbassadorToAmbassadorReviewInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  description: String!
+  rate: Float!
+  ambassadorId: ID!
+}
+
 input CreateClientInput {
+  clientMutationId: ID = null
   tenantId: ID = null
   name: String!
   email: String!
 }
 
+input CreateCompanyFileInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  name: String!
+  fileTypeId: ID!
+  url: String = null
+}
+
+input CreateCompanyInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  email: String!
+  name: String!
+  websiteUrl: String = null
+  foundingDate: String = null
+  phone: String!
+  address: String = null
+  aboutUs: String = null
+  companySizeMin: Int = null
+  companySizeMax: Int = null
+  approved: Boolean! = false
+  locationId: ID = null
+  coverId: ID = null
+  profileImageId: ID = null
+}
+
+input CreateCompanyReviewInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  companyId: ID!
+  globalScore: Int!
+  review: String!
+  minPayTiming: Int!
+  maxPayTiming: Int!
+  payTimingRange: Int!
+  ambassadorId: ID!
+}
+
+input CreateCompanyToAmbassadorReviewInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  description: String!
+  rate: Float!
+  ambassadorId: ID!
+  jobId: ID!
+}
+
 input CreateDistributorInput {
+  clientMutationId: ID = null
   tenantId: ID = null
   name: String!
   email: String!
   locationId: ID!
 }
 
-input CreateEventInput {
-  tenantId: ID = null
-  name: String!
-  eventTypeId: ID!
-  statusId: ID!
-}
-
 input CreateEventStatusInput {
+  clientMutationId: ID = null
   tenantId: ID = null
   name: String!
   isDefault: Boolean! = false
 }
 
-input CreateEventTypeInput {
+input CreateJobFileInput {
+  clientMutationId: ID = null
   tenantId: ID = null
   name: String!
-  isDefault: Boolean! = false
+  url: String!
+  jobId: ID!
+  fileTypeId: ID!
+}
+
+input CreateJobInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  name: String!
+  description: String!
+  code: String!
+  address: String!
+  startDate: String = null
+  endDate: String = null
+  public: Boolean! = false
+  closed: Boolean! = false
+  national: Boolean! = false
+  ongoing: Boolean! = false
+  jobTitleId: ID!
+  otherTitleId: ID = null
+  companyId: ID!
+  eventId: ID!
+  locationId: ID!
+  rateId: ID = null
+}
+
+input CreateJobRequirementAnswerInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  selectedAnswer: [Int!]!
+  jobRequirementQuestionId: ID!
+  ambassadorId: ID!
+}
+
+input CreateJobRequirementFileInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  name: String!
+  url: String!
+  jobRequirementId: ID!
+  fileTypeId: ID!
+}
+
+input CreateJobRequirementInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  name: String!
+  jobRequirementTypeId: ID!
+  jobId: ID!
+}
+
+input CreateJobRequirementQuestionInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  question: String!
+  jobRequirementId: ID!
+  questionTypeId: ID!
+}
+
+input CreateJobRequirementTypeInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  name: String!
+}
+
+input CreateJobTitleInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  name: String!
 }
 
 input CreateLocationInput {
+  clientMutationId: ID = null
   tenantId: ID = null
   name: String!
   code: String!
   zip: String!
 }
 
+input CreatePayTimingInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  minPayTiming: Int!
+  maxPayTiming: Int!
+  unit: String!
+  companyReviewId: ID!
+}
+
 input CreateProductInput {
+  clientMutationId: ID = null
   tenantId: ID = null
   name: String!
   productTypeId: ID!
 }
 
 input CreateProductTypeInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  name: String!
+}
+
+input CreateQuestionOptionInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  option: String!
+  jobRequirementQuestionId: ID!
+}
+
+input CreateQuestionTypeInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  name: String!
+}
+
+input CreateRateInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  amount: Float!
+  rateTypeId: ID!
+}
+
+input CreateRateTypeInput {
+  clientMutationId: ID = null
   tenantId: ID = null
   name: String!
 }
 
 input CreateRequestInput {
+  clientMutationId: ID = null
   tenantId: ID = null
   name: String!
   date: String!
@@ -101,6 +525,7 @@ input CreateRequestInput {
 }
 
 input CreateRequestStatusInput {
+  clientMutationId: ID = null
   tenantId: ID = null
   name: String!
   createEvent: Boolean! = false
@@ -108,16 +533,32 @@ input CreateRequestStatusInput {
 }
 
 input CreateRequestTypeInput {
+  clientMutationId: ID = null
   tenantId: ID = null
   name: String!
 }
 
 input CreateRetailerInput {
+  clientMutationId: ID = null
   tenantId: ID = null
   name: String!
   address: String!
   storeContact: String!
   locationId: ID!
+}
+
+input CreateReviewScoreInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  name: String!
+  score: Int!
+  companyReviewId: ID!
+}
+
+input CreateStatusInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  name: String!
 }
 
 """
@@ -133,11 +574,15 @@ type CustomUserType {
   firstName: String!
   lastName: String!
   role: RoleType!
-  refreshToken: String
 }
 
 """Date with time (isoformat)"""
 scalar DateTime
+
+enum DistanceUnit {
+  KILOMETERS
+  MILES
+}
 
 """
 Distributor(id, uuid, name, email, location, tenant, created_by, updated_by, created_at, updated_at)
@@ -153,10 +598,31 @@ type Distributor {
   updatedAt: String!
 }
 
+type DistributorCountableConnection {
+  pageInfo: PageInfo!
+  edges: [DistributorCountableEdge!]!
+  totalCount: Int!
+}
+
+type DistributorCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: Distributor!
+}
+
 type DistributorDetailResponse {
   success: Boolean!
   message: String!
+  clientMutationId: ID
   distributor: Distributor
+}
+
+input DistributorFiltersInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  tenantUuid: ID = null
 }
 
 type DjangoModelType {
@@ -183,10 +649,28 @@ type Event {
   status: EventStatus
 }
 
-type EventDetailResponse {
-  success: Boolean!
-  message: String!
-  event: Event
+type EventCountableConnection {
+  pageInfo: PageInfo!
+  edges: [EventCountableEdge!]!
+  totalCount: Int!
+}
+
+type EventCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: Event!
+}
+
+input EventFiltersInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  tenantUuid: ID = null
+  eventTypeId: ID = null
+  eventStatusId: ID = null
+  requestId: ID = null
+  date: String = null
 }
 
 """
@@ -202,10 +686,31 @@ type EventStatus {
   updatedAt: String!
 }
 
+type EventStatusCountableConnection {
+  pageInfo: PageInfo!
+  edges: [EventStatusCountableEdge!]!
+  totalCount: Int!
+}
+
+type EventStatusCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: EventStatus!
+}
+
 type EventStatusDetailResponse {
   success: Boolean!
   message: String!
+  clientMutationId: ID
   eventStatus: EventStatus
+}
+
+input EventStatusFiltersInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  tenantUuid: ID = null
 }
 
 """
@@ -221,14 +726,323 @@ type EventType {
   updatedAt: String!
 }
 
-type EventTypeDetailResponse {
-  success: Boolean!
-  message: String!
-  eventType: EventType
+type EventTypeCountableConnection {
+  pageInfo: PageInfo!
+  edges: [EventTypeCountableEdge!]!
+  totalCount: Int!
+}
+
+type EventTypeCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: EventType!
+}
+
+input EventTypeFiltersInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  tenantUuid: ID = null
 }
 
 "\n     Errors messages and codes mapped to\n    fields or non fields errors.\n    Example:\n    {\n        field_name: [\n            {\n                \"message\": \"error message\",\n                \"code\": \"error_code\"\n            }\n        ],\n        other_field: [\n            {\n                \"message\": \"error message\",\n                \"code\": \"error_code\"\n            }\n        ],\n        nonFieldErrors: [\n            {\n                \"message\": \"error message\",\n                \"code\": \"error_code\"\n            }\n        ]\n    }\n    "
 scalar ExpectedError
+
+input GoogleSocialAuthInput {
+  clientMutationId: ID = null
+  accessToken: String!
+}
+
+"""
+Job(id, uuid, name, description, code, address, start_date, end_date, public, closed, national, ongoing, job_title, other_title, company, event, location, tenant, rate, created_by, updated_by, created_at, updated_at)
+"""
+type Job {
+  id: ID!
+  uuid: String!
+  name: String!
+  description: String
+  code: String!
+  address: String!
+  startDate: String
+  endDate: String
+  public: Boolean!
+  closed: Boolean!
+  national: Boolean!
+  ongoing: Boolean!
+  jobTitle: JobTitle!
+  otherTitle: JobTitle
+  company: Company!
+  event: Event!
+  location: Location!
+  tenantId: ID!
+  rate: Rate!
+  jobRequirements: [JobRequirement!]!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type JobCountableConnection {
+  pageInfo: PageInfo!
+  edges: [JobCountableEdge!]!
+  totalCount: Int!
+}
+
+type JobCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: Job!
+}
+
+type JobDetailResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  job: Job
+}
+
+"""
+JobFile(id, uuid, name, url, job, file_type, created_by, updated_by, created_at, updated_at)
+"""
+type JobFile {
+  id: ID!
+  uuid: String!
+  name: String!
+  url: String!
+  job: Job!
+  fileTypeId: ID!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type JobFileCountableConnection {
+  pageInfo: PageInfo!
+  edges: [JobFileCountableEdge!]!
+  totalCount: Int!
+}
+
+type JobFileCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: JobFile!
+}
+
+type JobFileDetailResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  jobFile: JobFile
+}
+
+"""
+JobRequirement(id, uuid, name, tenant, job_requirement_type, job, created_by, updated_by, created_at, updated_at)
+"""
+type JobRequirement {
+  id: ID!
+  uuid: String!
+  name: String!
+  tenantId: ID!
+  jobRequirementType: JobRequirementType!
+  job: Job!
+  createdAt: String!
+  updatedAt: String!
+}
+
+"""
+JobRequirementAnswer(id, uuid, selected_answer, tenant, job_requirement_question, ambassador, created_by, updated_by, created_at, updated_at)
+"""
+type JobRequirementAnswer {
+  id: ID!
+  uuid: String!
+  selectedAnswer: [Int!]!
+  tenantId: ID!
+  jobRequirementQuestion: JobRequirementQuestion!
+  ambassadorId: ID!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type JobRequirementAnswerCountableConnection {
+  pageInfo: PageInfo!
+  edges: [JobRequirementAnswerCountableEdge!]!
+  totalCount: Int!
+}
+
+type JobRequirementAnswerCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: JobRequirementAnswer!
+}
+
+type JobRequirementAnswerDetailResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  jobRequirementAnswer: JobRequirementAnswer
+}
+
+type JobRequirementCountableConnection {
+  pageInfo: PageInfo!
+  edges: [JobRequirementCountableEdge!]!
+  totalCount: Int!
+}
+
+type JobRequirementCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: JobRequirement!
+}
+
+type JobRequirementDetailResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  jobRequirement: JobRequirement
+}
+
+"""
+JobRequirementFile(id, uuid, name, url, job_requirement, file_type, created_by, updated_by, created_at, updated_at)
+"""
+type JobRequirementFile {
+  id: ID!
+  uuid: String!
+  name: String!
+  url: String!
+  jobRequirement: JobRequirement!
+  fileTypeId: ID!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type JobRequirementFileCountableConnection {
+  pageInfo: PageInfo!
+  edges: [JobRequirementFileCountableEdge!]!
+  totalCount: Int!
+}
+
+type JobRequirementFileCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: JobRequirementFile!
+}
+
+type JobRequirementFileDetailResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  jobRequirementFile: JobRequirementFile
+}
+
+"""
+JobRequirementQuestion(id, uuid, question, tenant, job_requirement, question_type, created_by, updated_by, created_at, updated_at)
+"""
+type JobRequirementQuestion {
+  id: ID!
+  uuid: String!
+  question: String!
+  tenantId: ID!
+  jobRequirement: JobRequirement!
+  questionType: QuestionType!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type JobRequirementQuestionCountableConnection {
+  pageInfo: PageInfo!
+  edges: [JobRequirementQuestionCountableEdge!]!
+  totalCount: Int!
+}
+
+type JobRequirementQuestionCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: JobRequirementQuestion!
+}
+
+type JobRequirementQuestionDetailResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  jobRequirementQuestion: JobRequirementQuestion
+}
+
+"""
+JobRequirementType(id, uuid, name, tenant, created_by, updated_by, created_at, updated_at)
+"""
+type JobRequirementType {
+  id: ID!
+  uuid: String!
+  name: String!
+  tenantId: ID!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type JobRequirementTypeCountableConnection {
+  pageInfo: PageInfo!
+  edges: [JobRequirementTypeCountableEdge!]!
+  totalCount: Int!
+}
+
+type JobRequirementTypeCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: JobRequirementType!
+}
+
+type JobRequirementTypeDetailResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  jobRequirementType: JobRequirementType
+}
+
+"""
+JobTitle(id, uuid, name, tenant, created_by, updated_by, created_at, updated_at)
+"""
+type JobTitle {
+  id: ID!
+  uuid: String!
+  name: String
+  tenantId: ID!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type JobTitleCountableConnection {
+  pageInfo: PageInfo!
+  edges: [JobTitleCountableEdge!]!
+  totalCount: Int!
+}
+
+type JobTitleCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: JobTitle!
+}
+
+type JobTitleDetailResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  jobTitle: JobTitle
+}
 
 """
 Location(id, uuid, name, code, zip, tenant, created_by, updated_by, created_at, updated_at)
@@ -244,40 +1058,59 @@ type Location {
   updatedAt: String!
 }
 
+type LocationCountableConnection {
+  pageInfo: PageInfo!
+  edges: [LocationCountableEdge!]!
+  totalCount: Int!
+}
+
+type LocationCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: Location!
+}
+
 type LocationDetailResponse {
   success: Boolean!
   message: String!
+  clientMutationId: ID
   location: Location
 }
 
+input LocationFiltersInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  tenantUuid: ID = null
+}
+
 type Mutation {
-  createEvent(input: CreateEventInput!): EventDetailResponse! @isAuthenticated
-  updateEvent(input: UpdateEventInput!): EventDetailResponse! @isAuthenticated
-  createEventType(input: CreateEventTypeInput!): EventTypeDetailResponse! @isAuthenticated
-  updateEventType(input: UpdateEventTypeInput!): EventTypeDetailResponse! @isAuthenticated
+  createRequestByUrl(input: CreateRequestInput!, requestUrl: String!): RequestDetailResponse!
+  createEventStatus(input: CreateEventStatusInput!): EventStatusDetailResponse!
+  updateEventStatus(input: UpdateEventStatusInput!): EventStatusDetailResponse!
+  createLocation(input: CreateLocationInput!): LocationDetailResponse!
+  updateLocation(input: UpdateLocationInput!): LocationDetailResponse!
+  createClient(input: CreateClientInput!): ClientDetailResponse!
+  updateClient(input: UpdateClientInput!): ClientDetailResponse!
+  createDistributor(input: CreateDistributorInput!): DistributorDetailResponse!
+  updateDistributor(input: UpdateDistributorInput!): DistributorDetailResponse!
+  createRetailer(input: CreateRetailerInput!): RetailerDetailResponse!
+  updateRetailer(input: UpdateRetailerInput!): RetailerDetailResponse!
+  createProductType(input: CreateProductTypeInput!): ProductTypeDetailResponse!
+  updateProductType(input: UpdateProductTypeInput!): ProductTypeDetailResponse!
+  createProduct(input: CreateProductInput!): ProductDetailResponse!
+  updateProduct(input: UpdateProductInput!): ProductDetailResponse!
+  createRequestType(input: CreateRequestTypeInput!): RequestTypeDetailResponse!
+  updateRequestType(input: UpdateRequestTypeInput!): RequestTypeDetailResponse!
+  createRequestStatus(input: CreateRequestStatusInput!): RequestStatusDetailResponse!
+  updateRequestStatus(input: UpdateRequestStatusInput!): RequestStatusDetailResponse!
   createRequest(input: CreateRequestInput!): RequestDetailResponse!
-  createEventStatus(input: CreateEventStatusInput!): EventStatusDetailResponse! @isAuthenticated
-  updateEventStatus(input: UpdateEventStatusInput!): EventStatusDetailResponse! @isAuthenticated
-  createLocation(input: CreateLocationInput!): LocationDetailResponse! @isAuthenticated
-  updateLocation(input: UpdateLocationInput!): LocationDetailResponse! @isAuthenticated
-  createClient(input: CreateClientInput!): ClientDetailResponse! @isAuthenticated
-  updateClient(input: UpdateClientInput!): ClientDetailResponse! @isAuthenticated
-  createDistributor(input: CreateDistributorInput!): DistributorDetailResponse! @isAuthenticated
-  updateDistributor(input: UpdateDistributorInput!): DistributorDetailResponse! @isAuthenticated
-  createRetailer(input: CreateRetailerInput!): RetailerDetailResponse! @isAuthenticated
-  updateRetailer(input: UpdateRetailerInput!): RetailerDetailResponse! @isAuthenticated
-  createProductType(input: CreateProductTypeInput!): ProductTypeDetailResponse! @isAuthenticated
-  updateProductType(input: UpdateProductTypeInput!): ProductTypeDetailResponse! @isAuthenticated
-  createProduct(input: CreateProductInput!): ProductDetailResponse! @isAuthenticated
-  updateProduct(input: UpdateProductInput!): ProductDetailResponse! @isAuthenticated
-  createRequestType(input: CreateRequestTypeInput!): RequestTypeDetailResponse! @isAuthenticated
-  updateRequestType(input: UpdateRequestTypeInput!): RequestTypeDetailResponse! @isAuthenticated
-  createRequestStatus(input: CreateRequestStatusInput!): RequestStatusDetailResponse! @isAuthenticated
-  updateRequestStatus(input: UpdateRequestStatusInput!): RequestStatusDetailResponse! @isAuthenticated
-  approveRequest(id: ID!): ApproveRequestResponse! @isAuthenticated
-  register(firstName: String!, email: String!, password1: String!, password2: String!, roleId: ID!, tenantId: ID!): RegisterResponse!
-  socialAuthGoogle(accessToken: String!, roleId: ID!, tenantId: ID!): SocialAuthResponse!
-  socialAuthApple(identityToken: String!, roleId: ID!, tenantId: ID!): SocialAuthResponse!
+  updateRequest(input: UpdateRequestInput!): RequestDetailResponse!
+  approveRequest(input: ApproveRequestInput!): ApproveRequestResponse!
+  register(input: ClientRegisterInput!): RegisterResponse!
+  socialAuthGoogle(input: GoogleSocialAuthInput!): SocialAuthResponse!
+  socialAuthApple(input: AppleSocialAuthInput!): SocialAuthResponse!
 
   "### Checks if a token is not expired and correct.\n\n*Note that this is not for refresh tokens.*\n"
   verifyToken(input: VerifyTokenInput!): VerifyTokenType!
@@ -290,6 +1123,48 @@ type Mutation {
 
   "Verify user account.\n\nReceive the token that was sent by email. If the token is valid,\nmake the user verified by making the `user.status.verified` field\ntrue.\n"
   verifyAccount(input: VerifyAccountInput!): MutationNormalOutput!
+  createAmbassadorJob(input: CreateAmbassadorJobInput!): AmbassadorJobDetailResponse!
+  updateAmbassadorJob(input: UpdateAmbassadorJobInput!): AmbassadorJobDetailResponse!
+  createAmbassadorToAmbassadorReview(input: CreateAmbassadorToAmbassadorReviewInput!): AmbassadorToAmbassadorReviewDetailResponse!
+  updateAmbassadorToAmbassadorReview(input: UpdateAmbassadorToAmbassadorReviewInput!): AmbassadorToAmbassadorReviewDetailResponse!
+  createAmbassadorJobStatus(input: CreateStatusInput!): StatusDetailResponse!
+  updateAmbassadorJobStatus(input: UpdateStatusInput!): StatusDetailResponse!
+  createCompanyFile(input: CreateCompanyFileInput!): CompanyFileDetailResponse!
+  updateCompanyFile(input: UpdateCompanyFileInput!): CompanyFileDetailResponse!
+  createCompany(input: CreateCompanyInput!): CompanyDetailResponse!
+  updateCompany(input: UpdateCompanyInput!): CompanyDetailResponse!
+  createCompanyReview(input: CreateCompanyReviewInput!): CompanyReviewDetailResponse!
+  updateCompanyReview(input: UpdateCompanyReviewInput!): CompanyReviewDetailResponse!
+  createPayTiming(input: CreatePayTimingInput!): PayTimingDetailResponse!
+  updatePayTiming(input: UpdatePayTimingInput!): PayTimingDetailResponse!
+  createReviewScore(input: CreateReviewScoreInput!): ReviewScoreDetailResponse!
+  updateReviewScore(input: UpdateReviewScoreInput!): ReviewScoreDetailResponse!
+  createJobTitle(input: CreateJobTitleInput!): JobTitleDetailResponse!
+  updateJobTitle(input: UpdateJobTitleInput!): JobTitleDetailResponse!
+  createRateType(input: CreateRateTypeInput!): RateTypeDetailResponse!
+  updateRateType(input: UpdateRateTypeInput!): RateTypeDetailResponse!
+  createRate(input: CreateRateInput!): RateDetailResponse!
+  updateRate(input: UpdateRateInput!): RateDetailResponse!
+  createJob(input: CreateJobInput!): JobDetailResponse!
+  updateJob(input: UpdateJobInput!): JobDetailResponse!
+  createJobFile(input: CreateJobFileInput!): JobFileDetailResponse!
+  updateJobFile(input: UpdateJobFileInput!): JobFileDetailResponse!
+  createJobRequirementType(input: CreateJobRequirementTypeInput!): JobRequirementTypeDetailResponse!
+  updateJobRequirementType(input: UpdateJobRequirementTypeInput!): JobRequirementTypeDetailResponse!
+  createJobRequirement(input: CreateJobRequirementInput!): JobRequirementDetailResponse!
+  updateJobRequirement(input: UpdateJobRequirementInput!): JobRequirementDetailResponse!
+  createJobRequirementFile(input: CreateJobRequirementFileInput!): JobRequirementFileDetailResponse!
+  updateJobRequirementFile(input: UpdateJobRequirementFileInput!): JobRequirementFileDetailResponse!
+  createCompanyToAmbassadorReview(input: CreateCompanyToAmbassadorReviewInput!): CompanyToAmbassadorReviewDetailResponse!
+  updateCompanyToAmbassadorReview(input: UpdateCompanyToAmbassadorReviewInput!): CompanyToAmbassadorReviewDetailResponse!
+  createQuestionType(input: CreateQuestionTypeInput!): QuestionTypeDetailResponse!
+  updateQuestionType(input: UpdateQuestionTypeInput!): QuestionTypeDetailResponse!
+  createJobRequirementQuestion(input: CreateJobRequirementQuestionInput!): JobRequirementQuestionDetailResponse!
+  updateJobRequirementQuestion(input: UpdateJobRequirementQuestionInput!): JobRequirementQuestionDetailResponse!
+  createQuestionOption(input: CreateQuestionOptionInput!): QuestionOptionDetailResponse!
+  updateQuestionOption(input: UpdateQuestionOptionInput!): QuestionOptionDetailResponse!
+  createJobRequirementAnswer(input: CreateJobRequirementAnswerInput!): JobRequirementAnswerDetailResponse!
+  updateJobRequirementAnswer(input: UpdateJobRequirementAnswerInput!): JobRequirementAnswerDetailResponse!
 }
 
 type MutationNormalOutput {
@@ -316,6 +1191,56 @@ interface OutputInterface {
   errors: ExpectedError
 }
 
+"""Information to aid in pagination."""
+type PageInfo {
+  """When paginating forwards, are there more items?"""
+  hasNextPage: Boolean!
+
+  """When paginating backwards, are there more items?"""
+  hasPreviousPage: Boolean!
+
+  """When paginating backwards, the cursor to continue."""
+  startCursor: String
+
+  """When paginating forwards, the cursor to continue."""
+  endCursor: String
+}
+
+"""
+PayTiming(id, uuid, min_pay_timing, max_pay_timing, unit, company_review, created_by, updated_by, created_at, updated_at)
+"""
+type PayTiming {
+  id: ID!
+  uuid: String!
+  minPayTiming: Int!
+  maxPayTiming: Int!
+  unit: String!
+  companyReview: CompanyReview!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type PayTimingCountableConnection {
+  pageInfo: PageInfo!
+  edges: [PayTimingCountableEdge!]!
+  totalCount: Int!
+}
+
+type PayTimingCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: PayTiming!
+}
+
+type PayTimingDetailResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  payTiming: PayTiming
+}
+
 """
 Product(id, uuid, name, product_type, tenant, created_by, updated_by, created_at, updated_at)
 """
@@ -329,10 +1254,31 @@ type Product {
   updatedAt: String!
 }
 
+type ProductCountableConnection {
+  pageInfo: PageInfo!
+  edges: [ProductCountableEdge!]!
+  totalCount: Int!
+}
+
+type ProductCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: Product!
+}
+
 type ProductDetailResponse {
   success: Boolean!
   message: String!
+  clientMutationId: ID
   product: Product
+}
+
+input ProductFiltersInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  tenantUuid: ID = null
 }
 
 """
@@ -347,40 +1293,239 @@ type ProductType {
   updatedAt: String!
 }
 
+type ProductTypeCountableConnection {
+  pageInfo: PageInfo!
+  edges: [ProductTypeCountableEdge!]!
+  totalCount: Int!
+}
+
+type ProductTypeCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: ProductType!
+}
+
 type ProductTypeDetailResponse {
   success: Boolean!
   message: String!
+  clientMutationId: ID
   productType: ProductType
 }
 
+input ProductTypeFiltersInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  tenantUuid: ID = null
+}
+
 type Query {
-  events(limit: Int! = 10, offset: Int! = 0, q: String = null): [Event!]! @isAuthenticated
-  event(id: ID!): Event @isAuthenticated
-  todayEvents(q: String = null): [Event!]! @isAuthenticated
-  eventTypes(limit: Int! = 10, offset: Int! = 0, q: String = null): [EventType!]! @isAuthenticated
-  eventType(id: ID!): EventType @isAuthenticated
-  eventStatuses: [EventStatus!]! @isAuthenticated
-  eventStatus(id: ID!): EventStatus @isAuthenticated
-  clients(limit: Int! = 10, offset: Int! = 0, q: String = null): [Client!]! @isAuthenticated
-  client(id: ID!): Client @isAuthenticated
-  distributors(limit: Int! = 10, offset: Int! = 0, q: String = null): [Distributor!]! @isAuthenticated
-  distributor(id: ID!): Distributor @isAuthenticated
-  retailers(limit: Int! = 10, offset: Int! = 0, q: String = null): [Retailer!]! @isAuthenticated
-  retailer(id: ID!): Retailer @isAuthenticated
-  productTypes: [ProductType!]! @isAuthenticated
-  productType(id: ID!): ProductType @isAuthenticated
-  products(limit: Int! = 10, offset: Int! = 0, q: String = null): [Product!]! @isAuthenticated
-  product(id: ID!): Product @isAuthenticated
-  requestTypes(limit: Int! = 10, offset: Int! = 0, q: String = null): [RequestType!]! @isAuthenticated
-  requestType(id: ID!): RequestType @isAuthenticated
-  requestStatuses: [RequestStatus!]! @isAuthenticated
-  requestStatus(id: ID!): RequestStatus @isAuthenticated
-  requests(limit: Int! = 10, offset: Int! = 0, q: String = null): [Request!]! @isAuthenticated
-  request(uuid: ID!): Request @isAuthenticated
-  locations: [Location!]! @isAuthenticated
-  location(id: ID!): Location @isAuthenticated
+  events(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: EventFiltersInput = null): EventCountableConnection!
+  event(uuid: ID!): Event
+  todayEvents(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: EventFiltersInput = null): EventCountableConnection!
+  todayEventsCoordinates(coordinates: [Float!]!, range: Float!, unit: DistanceUnit! = KILOMETERS, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: EventFiltersInput = null): EventCountableConnection!
+  eventTypes(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: EventTypeFiltersInput = null): EventTypeCountableConnection!
+  eventType(id: ID!): EventType
+  eventStatuses(first: Int = null, after: String = null, last: Int = null, before: String = null, filters: EventStatusFiltersInput = null): EventStatusCountableConnection!
+  eventStatus(id: ID!): EventStatus
+  clients(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: ClientFiltersInput = null): ClientCountableConnection!
+  client(id: ID!): Client
+  distributors(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: DistributorFiltersInput = null): DistributorCountableConnection!
+  distributor(id: ID!): Distributor
+  retailers(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: RetailerFiltersInput = null): RetailerCountableConnection!
+  retailer(id: ID!): Retailer
+  productTypes(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: ProductTypeFiltersInput = null): ProductTypeCountableConnection!
+  productType(id: ID!): ProductType
+  products(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: ProductFiltersInput = null): ProductCountableConnection!
+  product(id: ID!): Product
+  requestTypes(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: RequestTypeFiltersInput = null): RequestTypeCountableConnection!
+  requestType(id: ID!): RequestType
+  requestStatuses(first: Int = null, after: String = null, last: Int = null, before: String = null, filters: RequestStatusFiltersInput = null): RequestStatusCountableConnection!
+  requestStatus(id: ID!): RequestStatus
+  requests(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: RequestFiltersInput = null): RequestCountableConnection!
+  request(uuid: ID!): Request
+  locations(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: LocationFiltersInput = null): LocationCountableConnection!
+  location(id: ID!): Location
   me: CustomUserType!
-  tenants(userUuid: ID = null): [TenantType!]!
+  tenants(userUuid: ID = null, first: Int = null, after: String = null, last: Int = null, before: String = null): TenantTypeCountableConnection!
+  ambassadorJobStatuses(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): StatusCountableConnection!
+  ambassadorJobStatus(id: ID!): Status
+  companyFiles(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): CompanyFileCountableConnection!
+  companyFile(id: ID!): CompanyFile
+  companies(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): CompanyCountableConnection!
+  company(id: ID!): Company
+  companyReviews(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): CompanyReviewCountableConnection!
+  companyReview(id: ID!): CompanyReview
+  payTimings(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): PayTimingCountableConnection!
+  payTiming(id: ID!): PayTiming
+  reviewScores(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): ReviewScoreCountableConnection!
+  reviewScore(id: ID!): ReviewScore
+  jobTitles(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): JobTitleCountableConnection!
+  jobTitle(id: ID!): JobTitle
+  rateTypes(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): RateTypeCountableConnection!
+  rateType(id: ID!): RateType
+  rates(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): RateCountableConnection!
+  rate(id: ID!): Rate
+  jobs(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): JobCountableConnection!
+  job(id: ID!): Job
+  jobFiles(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): JobFileCountableConnection!
+  jobFile(id: ID!): JobFile
+  jobRequirementTypes(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): JobRequirementTypeCountableConnection!
+  jobRequirementType(id: ID!): JobRequirementType
+  jobRequirements(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): JobRequirementCountableConnection!
+  jobRequirement(id: ID!): JobRequirement
+  jobRequirementFiles(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): JobRequirementFileCountableConnection!
+  jobRequirementFile(id: ID!): JobRequirementFile
+  availableJobs(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): JobCountableConnection!
+  ambassadorJobs(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): AmbassadorJobCountableConnection!
+  ambassadorJob(id: ID!): AmbassadorJob
+  companyToAmbassadorReviews(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): CompanyToAmbassadorReviewCountableConnection!
+  companyToAmbassadorReview(id: ID!): CompanyToAmbassadorReview
+  ambassadorToAmbassadorReviews(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): AmbassadorToAmbassadorReviewCountableConnection!
+  ambassadorToAmbassadorReview(id: ID!): AmbassadorToAmbassadorReview
+  questionTypes(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): QuestionTypeCountableConnection!
+  questionType(id: ID!): QuestionType
+  jobRequirementQuestions(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): JobRequirementQuestionCountableConnection!
+  jobRequirementQuestion(id: ID!): JobRequirementQuestion
+  questionOptions(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): QuestionOptionCountableConnection!
+  questionOption(id: ID!): QuestionOption
+  jobRequirementAnswers(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): JobRequirementAnswerCountableConnection!
+  jobRequirementAnswer(id: ID!): JobRequirementAnswer
+}
+
+"""
+QuestionOption(id, uuid, option, tenant, job_requirement_question, created_by, updated_by, created_at, updated_at)
+"""
+type QuestionOption {
+  id: ID!
+  uuid: String!
+  option: String!
+  tenantId: ID!
+  jobRequirementQuestion: JobRequirementQuestion!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type QuestionOptionCountableConnection {
+  pageInfo: PageInfo!
+  edges: [QuestionOptionCountableEdge!]!
+  totalCount: Int!
+}
+
+type QuestionOptionCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: QuestionOption!
+}
+
+type QuestionOptionDetailResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  questionOption: QuestionOption
+}
+
+"""
+QuestionType(id, uuid, name, tenant, created_by, updated_by, created_at, updated_at)
+"""
+type QuestionType {
+  id: ID!
+  uuid: String!
+  name: String!
+  tenantId: ID!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type QuestionTypeCountableConnection {
+  pageInfo: PageInfo!
+  edges: [QuestionTypeCountableEdge!]!
+  totalCount: Int!
+}
+
+type QuestionTypeCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: QuestionType!
+}
+
+type QuestionTypeDetailResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  questionType: QuestionType
+}
+
+"""
+Rate(id, uuid, amount, tenant, rate_type, created_by, updated_by, created_at, updated_at)
+"""
+type Rate {
+  id: ID!
+  uuid: String!
+  amount: Float!
+  tenantId: ID!
+  rateType: RateType!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type RateCountableConnection {
+  pageInfo: PageInfo!
+  edges: [RateCountableEdge!]!
+  totalCount: Int!
+}
+
+type RateCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: Rate!
+}
+
+type RateDetailResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  rate: Rate
+}
+
+"""
+RateType(id, uuid, name, tenant, created_by, updated_by, created_at, updated_at)
+"""
+type RateType {
+  id: ID!
+  uuid: String!
+  name: String!
+  tenantId: ID!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type RateTypeCountableConnection {
+  pageInfo: PageInfo!
+  edges: [RateTypeCountableEdge!]!
+  totalCount: Int!
+}
+
+type RateTypeCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: RateType!
+}
+
+type RateTypeDetailResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  rateType: RateType
 }
 
 """
@@ -407,6 +1552,7 @@ type RegisterResponse {
   success: Boolean!
   message: String!
   activationToken: String
+  clientMutationId: ID
 }
 
 """
@@ -431,10 +1577,36 @@ type Request {
   updatedAt: String!
 }
 
+type RequestCountableConnection {
+  pageInfo: PageInfo!
+  edges: [RequestCountableEdge!]!
+  totalCount: Int!
+}
+
+type RequestCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: Request!
+}
+
 type RequestDetailResponse {
   success: Boolean!
   message: String!
+  clientMutationId: ID
   request: Request
+}
+
+input RequestFiltersInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  tenantUuid: ID = null
+  statusId: ID = null
+  clientId: ID = null
+  retailerId: ID = null
+  distributorId: ID = null
+  date: String = null
 }
 
 type RequestStatus {
@@ -447,10 +1619,31 @@ type RequestStatus {
   updatedAt: String!
 }
 
+type RequestStatusCountableConnection {
+  pageInfo: PageInfo!
+  edges: [RequestStatusCountableEdge!]!
+  totalCount: Int!
+}
+
+type RequestStatusCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: RequestStatus!
+}
+
 type RequestStatusDetailResponse {
   success: Boolean!
   message: String!
+  clientMutationId: ID
   requestStatus: RequestStatus
+}
+
+input RequestStatusFiltersInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  tenantUuid: ID = null
 }
 
 """
@@ -465,10 +1658,31 @@ type RequestType {
   updatedAt: String!
 }
 
+type RequestTypeCountableConnection {
+  pageInfo: PageInfo!
+  edges: [RequestTypeCountableEdge!]!
+  totalCount: Int!
+}
+
+type RequestTypeCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: RequestType!
+}
+
 type RequestTypeDetailResponse {
   success: Boolean!
   message: String!
+  clientMutationId: ID
   requestType: RequestType
+}
+
+input RequestTypeFiltersInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  tenantUuid: ID = null
 }
 
 """
@@ -486,13 +1700,70 @@ type Retailer {
   updatedAt: String!
 }
 
+type RetailerCountableConnection {
+  pageInfo: PageInfo!
+  edges: [RetailerCountableEdge!]!
+  totalCount: Int!
+}
+
+type RetailerCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: Retailer!
+}
+
 type RetailerDetailResponse {
   success: Boolean!
   message: String!
+  clientMutationId: ID
   retailer: Retailer
 }
 
-"""Role(id, uuid, name, created_by, updated_by, created_at, updated_at)"""
+input RetailerFiltersInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  tenantUuid: ID = null
+}
+
+"""
+ReviewScore(id, uuid, name, score, company_review, created_by, updated_by, created_at, updated_at)
+"""
+type ReviewScore {
+  id: ID!
+  uuid: String!
+  name: String
+  score: Int
+  companyReview: CompanyReview!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type ReviewScoreCountableConnection {
+  pageInfo: PageInfo!
+  edges: [ReviewScoreCountableEdge!]!
+  totalCount: Int!
+}
+
+type ReviewScoreCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: ReviewScore!
+}
+
+type ReviewScoreDetailResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  reviewScore: ReviewScore
+}
+
+"""
+Role(id, uuid, name, slug, created_by, updated_by, created_at, updated_at)
+"""
 type RoleType {
   id: ID!
   uuid: UUID!
@@ -504,13 +1775,63 @@ type SocialAuthResponse {
   message: String!
   token: String
   refreshToken: String
+  clientMutationId: ID
 }
 
-"""Tenant(id, uuid, name, created_by, updated_by, created_at, updated_at)"""
+"""
+Status(id, uuid, name, tenant, created_by, updated_by, created_at, updated_at)
+"""
+type Status {
+  id: ID!
+  uuid: String!
+  name: String!
+  tenantId: ID!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type StatusCountableConnection {
+  pageInfo: PageInfo!
+  edges: [StatusCountableEdge!]!
+  totalCount: Int!
+}
+
+type StatusCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: Status!
+}
+
+type StatusDetailResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  status: Status
+}
+
+"""
+Tenant(id, uuid, name, request_url_name, created_by, updated_by, created_at, updated_at)
+"""
 type TenantType {
   id: ID!
   uuid: UUID!
   name: String!
+}
+
+type TenantTypeCountableConnection {
+  pageInfo: PageInfo!
+  edges: [TenantTypeCountableEdge!]!
+  totalCount: Int!
+}
+
+type TenantTypeCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: TenantType!
 }
 
 "\nthe data that was used to create the token.\n"
@@ -533,14 +1854,87 @@ type TokenType {
 
 scalar UUID
 
+input UpdateAmbassadorJobInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  appearAsRfp: Boolean! = true
+  ambassadorId: ID!
+  jobId: ID!
+  statusId: ID!
+  rateId: ID!
+  id: ID!
+}
+
+input UpdateAmbassadorToAmbassadorReviewInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  description: String!
+  rate: Float!
+  ambassadorId: ID!
+  id: ID!
+}
+
 input UpdateClientInput {
+  clientMutationId: ID = null
   tenantId: ID = null
   name: String!
   email: String!
   id: ID!
 }
 
+input UpdateCompanyFileInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  name: String!
+  fileTypeId: ID!
+  url: String = null
+  id: ID!
+}
+
+input UpdateCompanyInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  email: String!
+  name: String!
+  websiteUrl: String = null
+  foundingDate: String = null
+  phone: String!
+  address: String = null
+  aboutUs: String = null
+  companySizeMin: Int = null
+  companySizeMax: Int = null
+  approved: Boolean! = false
+  locationId: ID = null
+  coverId: ID = null
+  profileImageId: ID = null
+  id: ID!
+}
+
+input UpdateCompanyReviewInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  companyId: ID!
+  globalScore: Int!
+  review: String!
+  minPayTiming: Int!
+  maxPayTiming: Int!
+  payTimingRange: Int!
+  ambassadorId: ID!
+  id: ID!
+}
+
+input UpdateCompanyToAmbassadorReviewInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  description: String!
+  rate: Float!
+  ambassadorId: ID!
+  jobId: ID!
+  id: ID!
+}
+
 input UpdateDistributorInput {
+  clientMutationId: ID = null
   tenantId: ID = null
   name: String!
   email: String!
@@ -548,29 +1942,99 @@ input UpdateDistributorInput {
   id: ID!
 }
 
-input UpdateEventInput {
-  tenantId: ID = null
-  name: String!
-  eventTypeId: ID!
-  statusId: ID!
-  id: ID!
-}
-
 input UpdateEventStatusInput {
+  clientMutationId: ID = null
   tenantId: ID = null
   name: String!
   isDefault: Boolean! = false
   id: ID!
 }
 
-input UpdateEventTypeInput {
+input UpdateJobFileInput {
+  clientMutationId: ID = null
   tenantId: ID = null
   name: String!
-  isDefault: Boolean! = false
+  url: String!
+  jobId: ID!
+  fileTypeId: ID!
+  id: ID!
+}
+
+input UpdateJobInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  name: String!
+  description: String!
+  code: String!
+  address: String!
+  startDate: String = null
+  endDate: String = null
+  public: Boolean! = false
+  closed: Boolean! = false
+  national: Boolean! = false
+  ongoing: Boolean! = false
+  jobTitleId: ID!
+  otherTitleId: ID = null
+  companyId: ID!
+  eventId: ID!
+  locationId: ID!
+  rateId: ID = null
+  id: ID!
+}
+
+input UpdateJobRequirementAnswerInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  selectedAnswer: [Int!]!
+  jobRequirementQuestionId: ID!
+  ambassadorId: ID!
+  id: ID!
+}
+
+input UpdateJobRequirementFileInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  name: String!
+  url: String!
+  jobRequirementId: ID!
+  fileTypeId: ID!
+  id: ID!
+}
+
+input UpdateJobRequirementInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  name: String!
+  jobRequirementTypeId: ID!
+  jobId: ID!
+  id: ID!
+}
+
+input UpdateJobRequirementQuestionInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  question: String!
+  jobRequirementId: ID!
+  questionTypeId: ID!
+  id: ID!
+}
+
+input UpdateJobRequirementTypeInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  name: String!
+  id: ID!
+}
+
+input UpdateJobTitleInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  name: String!
   id: ID!
 }
 
 input UpdateLocationInput {
+  clientMutationId: ID = null
   tenantId: ID = null
   name: String!
   code: String!
@@ -578,7 +2042,18 @@ input UpdateLocationInput {
   id: ID!
 }
 
+input UpdatePayTimingInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  minPayTiming: Int!
+  maxPayTiming: Int!
+  unit: String!
+  companyReviewId: ID!
+  id: ID!
+}
+
 input UpdateProductInput {
+  clientMutationId: ID = null
   tenantId: ID = null
   name: String!
   productTypeId: ID!
@@ -586,12 +2061,60 @@ input UpdateProductInput {
 }
 
 input UpdateProductTypeInput {
+  clientMutationId: ID = null
   tenantId: ID = null
   name: String!
   id: ID!
 }
 
+input UpdateQuestionOptionInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  option: String!
+  jobRequirementQuestionId: ID!
+  id: ID!
+}
+
+input UpdateQuestionTypeInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  name: String!
+  id: ID!
+}
+
+input UpdateRateInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  amount: Float!
+  rateTypeId: ID!
+  id: ID!
+}
+
+input UpdateRateTypeInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  name: String!
+  id: ID!
+}
+
+input UpdateRequestInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  name: String!
+  date: String!
+  startTime: String!
+  endTime: String!
+  address: String!
+  coordinates: [Float!]!
+  clientId: ID!
+  distributorId: ID!
+  retailerId: ID!
+  requestTypeId: ID!
+  id: ID!
+}
+
 input UpdateRequestStatusInput {
+  clientMutationId: ID = null
   tenantId: ID = null
   name: String!
   createEvent: Boolean! = false
@@ -600,17 +2123,35 @@ input UpdateRequestStatusInput {
 }
 
 input UpdateRequestTypeInput {
+  clientMutationId: ID = null
   tenantId: ID = null
   name: String!
   id: ID!
 }
 
 input UpdateRetailerInput {
+  clientMutationId: ID = null
   tenantId: ID = null
   name: String!
   address: String!
   storeContact: String!
   locationId: ID!
+  id: ID!
+}
+
+input UpdateReviewScoreInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  name: String!
+  score: Int!
+  companyReviewId: ID!
+  id: ID!
+}
+
+input UpdateStatusInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  name: String!
   id: ID!
 }
 
@@ -637,13 +2178,13 @@ type UserType {
   isActive: Boolean!
   dateJoined: DateTime!
   status: UserStatusType!
-  lastName: String
   email: String!
   id: ID!
-  firstName: String
+  lastName: String
 
   """Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only."""
   username: String!
+  firstName: String
   archived: Boolean!
   verified: Boolean!
 }
