@@ -8,6 +8,7 @@ from typing import Any, Type, TypeVar, Union
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.db.models import Model
+from django.db import transaction
 
 from events import types
 from events import models
@@ -942,18 +943,19 @@ class PublicRequestMutations:
     @relay.mutation
     async def create_request_by_url(
         self,
-        input: inputs.CreateRequestInput,
-        request_url: str,
+        info: strawberry.Info,
+        input: inputs.CreateRequestWithDependenciesInput,
+        request_url_name: str,
     ) -> types.RequestDetailResponse:
-        """Create a new request."""
+        """Create a new request with dependencies by URL."""
         try:
-            service: RequestMutationService = RequestMutationService.with_input(
-                input=input
+            service: RequestWithDependenciesMutationService = (
+                RequestWithDependenciesMutationService.with_input(input=input)
             )
             service.set_is_public(True)
             if not getattr(input, "tenant_id", None):
                 await service.set_tenant_from_request_url_name(
-                    request_url_name=str(request_url)
+                    request_url_name=request_url_name
                 )
             request: models.Request = await service.save()
             return build_mutation_response(
@@ -970,6 +972,65 @@ class PublicRequestMutations:
                 message=str(e),
                 input_obj=input,
             )
+
+
+class RequestWithDependenciesMutationService(BaseMutationService):
+    """Service for request with dependencies mutations."""
+
+    def get_model(self) -> Model:
+        """Get the model for the service."""
+        return models.Request
+
+    def _save_sync(self, params: dict[str, Any]) -> models.Request:
+        """Synchronous save method to handle transaction."""
+        with transaction.atomic():
+            # Create the request
+            request = models.Request(**params)
+            if self.user:
+                request.created_by = self.user
+            
+            if self.is_public and self.input.tenant_id:
+                request.tenant_id = self.input.tenant_id
+            elif self.tenant_id:
+                request.tenant_id = self.tenant_id
+
+            request.save()
+
+            # Create details
+            if self.input.details:
+                for detail_input in self.input.details:
+                    detail_params = detail_input.to_dict()
+                    detail = models.RequestDetail(**detail_params)
+                    detail.request = request
+                    detail.tenant_id = request.tenant_id
+                    if self.user:
+                        detail.created_by = self.user
+                    detail.save()
+
+            # Create products
+            if self.input.products:
+                for product_input in self.input.products:
+                    product_params = product_input.to_dict()
+                    product = models.RequestProduct(**product_params)
+                    product.request = request
+                    product.tenant_id = request.tenant_id
+                    if self.user:
+                        product.created_by = self.user
+                    product.save()
+            
+            return request
+
+    async def save(self) -> models.Request:
+        """Save the request with dependencies."""
+        # validate the input
+        await self.validations()
+
+        # set the parameters
+        params: dict[str, Any] = self.input.to_dict(
+            ["tenant_id", "id", "details", "products"]
+        )
+
+        return await sync_to_async(self._save_sync)(params)
 
 
 @strawberry.type

@@ -137,7 +137,7 @@ input ClientFiltersInput {
 }
 
 """
-Company(id, uuid, email, website_url, founding_date, phone, address, about_us, company_size_min, company_size_max, approved, tenant, location, cover, profile_image, created_by, updated_by, created_at, updated_at)
+Company(id, name, uuid, email, website_url, founding_date, phone, address, about_us, company_size_min, company_size_max, approved, tenant, location, cover, profile_image, created_by, updated_by, created_at, updated_at)
 """
 type Company {
   id: ID!
@@ -325,8 +325,8 @@ input CreateCompanyFileInput {
 input CreateCompanyInput {
   clientMutationId: ID = null
   tenantId: ID = null
-  name: String!
   email: String!
+  name: String!
   websiteUrl: String = null
   foundingDate: String = null
   phone: String!
@@ -518,7 +518,6 @@ input CreateQuestionTypeInput {
 input CreateRateInput {
   clientMutationId: ID = null
   tenantId: ID = null
-  name: String!
   amount: Float!
   rateTypeId: ID!
 }
@@ -527,6 +526,12 @@ input CreateRateTypeInput {
   clientMutationId: ID = null
   tenantId: ID = null
   name: String!
+}
+
+input CreateRequestDetailInput {
+  clientMutationId: ID = null
+  isTableNeeded: Boolean! = false
+  tableSize: Int = null
 }
 
 input CreateRequestInput {
@@ -544,6 +549,11 @@ input CreateRequestInput {
   requestTypeId: ID!
 }
 
+input CreateRequestProductInput {
+  clientMutationId: ID = null
+  productId: ID!
+}
+
 input CreateRequestStatusInput {
   clientMutationId: ID = null
   tenantId: ID = null
@@ -556,6 +566,23 @@ input CreateRequestTypeInput {
   clientMutationId: ID = null
   tenantId: ID = null
   name: String!
+}
+
+input CreateRequestWithDependenciesInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  name: String!
+  date: String!
+  startTime: String!
+  endTime: String!
+  address: String!
+  coordinates: [Float!]!
+  clientId: ID!
+  distributorId: ID!
+  retailerId: ID!
+  requestTypeId: ID!
+  details: [CreateRequestDetailInput!]!
+  products: [CreateRequestProductInput!]!
 }
 
 input CreateRetailerInput {
@@ -598,6 +625,11 @@ type CustomUserType {
 
 """Date with time (isoformat)"""
 scalar DateTime
+
+enum DistanceUnit {
+  KILOMETERS
+  MILES
+}
 
 """
 Distributor(id, uuid, name, email, location, tenant, created_by, updated_by, created_at, updated_at)
@@ -806,6 +838,7 @@ type Job {
   location: Location!
   tenantId: ID!
   rate: Rate!
+  jobRequirements: [JobRequirement!]!
   createdAt: String!
   updatedAt: String!
 }
@@ -1114,7 +1147,7 @@ input LocationFiltersInput {
 }
 
 type Mutation {
-  createRequestByUrl(input: CreateRequestInput!, requestUrl: String!): RequestDetailResponse!
+  createRequestByUrl(input: CreateRequestWithDependenciesInput!, requestUrlName: String!): RequestDetailResponse!
   createEventStatus(input: CreateEventStatusInput!): EventStatusDetailResponse!
   updateEventStatus(input: UpdateEventStatusInput!): EventStatusDetailResponse!
   createLocation(input: CreateLocationInput!): LocationDetailResponse!
@@ -1155,6 +1188,10 @@ type Mutation {
 
   "Verify user account.\n\nReceive the token that was sent by email. If the token is valid,\nmake the user verified by making the `user.status.verified` field\ntrue.\n"
   verifyAccount(input: VerifyAccountInput!): MutationNormalOutput!
+  createAmbassadorJob(input: CreateAmbassadorJobInput!): AmbassadorJobDetailResponse!
+  updateAmbassadorJob(input: UpdateAmbassadorJobInput!): AmbassadorJobDetailResponse!
+  createAmbassadorToAmbassadorReview(input: CreateAmbassadorToAmbassadorReviewInput!): AmbassadorToAmbassadorReviewDetailResponse!
+  updateAmbassadorToAmbassadorReview(input: UpdateAmbassadorToAmbassadorReviewInput!): AmbassadorToAmbassadorReviewDetailResponse!
   createAmbassadorJobStatus(input: CreateStatusInput!): StatusDetailResponse!
   updateAmbassadorJobStatus(input: UpdateStatusInput!): StatusDetailResponse!
   createCompanyFile(input: CreateCompanyFileInput!): CompanyFileDetailResponse!
@@ -1183,12 +1220,8 @@ type Mutation {
   updateJobRequirement(input: UpdateJobRequirementInput!): JobRequirementDetailResponse!
   createJobRequirementFile(input: CreateJobRequirementFileInput!): JobRequirementFileDetailResponse!
   updateJobRequirementFile(input: UpdateJobRequirementFileInput!): JobRequirementFileDetailResponse!
-  createAmbassadorJob(input: CreateAmbassadorJobInput!): AmbassadorJobDetailResponse!
-  updateAmbassadorJob(input: UpdateAmbassadorJobInput!): AmbassadorJobDetailResponse!
   createCompanyToAmbassadorReview(input: CreateCompanyToAmbassadorReviewInput!): CompanyToAmbassadorReviewDetailResponse!
   updateCompanyToAmbassadorReview(input: UpdateCompanyToAmbassadorReviewInput!): CompanyToAmbassadorReviewDetailResponse!
-  createAmbassadorToAmbassadorReview(input: CreateAmbassadorToAmbassadorReviewInput!): AmbassadorToAmbassadorReviewDetailResponse!
-  updateAmbassadorToAmbassadorReview(input: UpdateAmbassadorToAmbassadorReviewInput!): AmbassadorToAmbassadorReviewDetailResponse!
   createQuestionType(input: CreateQuestionTypeInput!): QuestionTypeDetailResponse!
   updateQuestionType(input: UpdateQuestionTypeInput!): QuestionTypeDetailResponse!
   createJobRequirementQuestion(input: CreateJobRequirementQuestionInput!): JobRequirementQuestionDetailResponse!
@@ -1356,20 +1389,27 @@ type Query {
   events(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: EventFiltersInput = null): EventCountableConnection!
   event(uuid: ID!): Event
   todayEvents(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: EventFiltersInput = null): EventCountableConnection!
+  todayEventsCoordinates(coordinates: [Float!]!, range: Float!, unit: DistanceUnit! = KILOMETERS, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: EventFiltersInput = null): EventCountableConnection!
   eventTypes(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: EventTypeFiltersInput = null): EventTypeCountableConnection!
   eventType(id: ID!): EventType
   eventStatuses(first: Int = null, after: String = null, last: Int = null, before: String = null, filters: EventStatusFiltersInput = null): EventStatusCountableConnection!
   eventStatus(id: ID!): EventStatus
+  publicClients(requestUrlName: String!, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): ClientCountableConnection!
   clients(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: ClientFiltersInput = null): ClientCountableConnection!
   client(id: ID!): Client
+  publicDistributors(requestUrlName: String!, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): DistributorCountableConnection!
   distributors(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: DistributorFiltersInput = null): DistributorCountableConnection!
   distributor(id: ID!): Distributor
+  publicRetailer(requestUrlName: String!, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): RetailerCountableConnection!
   retailers(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: RetailerFiltersInput = null): RetailerCountableConnection!
   retailer(id: ID!): Retailer
+  publicProductTypes(requestUrlName: String!, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): ProductTypeCountableConnection!
   productTypes(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: ProductTypeFiltersInput = null): ProductTypeCountableConnection!
   productType(id: ID!): ProductType
+  publicProducts(requestUrlName: String!, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): ProductCountableConnection!
   products(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: ProductFiltersInput = null): ProductCountableConnection!
   product(id: ID!): Product
+  publicRequestType(requestUrlName: String!, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): RequestTypeCountableConnection!
   requestTypes(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: RequestTypeFiltersInput = null): RequestTypeCountableConnection!
   requestType(id: ID!): RequestType
   requestStatuses(first: Int = null, after: String = null, last: Int = null, before: String = null, filters: RequestStatusFiltersInput = null): RequestStatusCountableConnection!
@@ -1408,6 +1448,7 @@ type Query {
   jobRequirement(id: ID!): JobRequirement
   jobRequirementFiles(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): JobRequirementFileCountableConnection!
   jobRequirementFile(id: ID!): JobRequirementFile
+  availableJobs(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): JobCountableConnection!
   ambassadorJobs(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): AmbassadorJobCountableConnection!
   ambassadorJob(id: ID!): AmbassadorJob
   companyToAmbassadorReviews(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): CompanyToAmbassadorReviewCountableConnection!
@@ -1497,7 +1538,7 @@ Rate(id, uuid, amount, tenant, rate_type, created_by, updated_by, created_at, up
 type Rate {
   id: ID!
   uuid: String!
-  amout: Float!
+  amount: Float!
   tenantId: ID!
   rateType: RateType!
   createdAt: String!
@@ -1924,8 +1965,8 @@ input UpdateCompanyFileInput {
 input UpdateCompanyInput {
   clientMutationId: ID = null
   tenantId: ID = null
-  name: String!
   email: String!
+  name: String!
   websiteUrl: String = null
   foundingDate: String = null
   phone: String!
@@ -2138,7 +2179,6 @@ input UpdateQuestionTypeInput {
 input UpdateRateInput {
   clientMutationId: ID = null
   tenantId: ID = null
-  name: String!
   amount: Float!
   rateTypeId: ID!
   id: ID!
