@@ -27,6 +27,7 @@ class ClientJobQueries(
     queries.JobRequirementQueries,
     queries.JobRequirementFileQueries,
     queries.AmbassadorJobQueries,
+    queries.ClientSparkAmbassadorJobQueries,
     queries.CompanyToAmbassadorReviewQueries,
     queries.AmbassadorToAmbassadorReviewQueries,
     queries.QuestionTypeQueries,
@@ -74,6 +75,7 @@ class ClientJobMutations(
     mutations.JobRequirementQuestionMutations,
     mutations.QuestionOptionMutations,
     mutations.JobRequirementAnswerMutations,
+    mutations.ManageAmbassadorJobMutations,
 ):
     pass
 

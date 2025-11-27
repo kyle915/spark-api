@@ -1,11 +1,14 @@
 import strawberry
 from django.db.models import Model
 from strawberry import relay
+from graphql import GraphQLError
+from asgiref.sync import sync_to_async
 
 from jobs import models, inputs, types
-from utils.graphql.mixins import BaseMutationService
+from utils.graphql.mixins import BaseMutationService, SparkGraphQLMixin
 from utils.graphql.permissions import StrictIsAuthenticated
 from utils.graphql.relay import ensure_relay_mutation
+from utils.utils import build_mutation_response
 
 ensure_relay_mutation()
 
@@ -458,6 +461,139 @@ class AmbassadorJobMutations:
         input: inputs.UpdateAmbassadorJobInput,
     ) -> types.AmbassadorJobDetailResponse:
         return await AmbassadorJobMutationService.update(input, info)
+
+
+# Manage Ambassador Job Assignment Mutations
+class ManageAmbassadorJobMutationService(SparkGraphQLMixin):
+    """Service for managing ambassador job assignments."""
+
+    @classmethod
+    async def _find_status_by_name_pattern(
+        cls, tenant_id: int, name_pattern: str
+    ) -> models.Status | None:
+        """Find a status by name pattern (case-insensitive)."""
+        try:
+            status = await sync_to_async(
+                models.Status.objects.filter(
+                    tenant_id=tenant_id, name__icontains=name_pattern
+                ).first
+            )()
+            return status
+        except Exception:
+            return None
+
+    @classmethod
+    async def _get_status_for_action(
+        cls,
+        action: inputs.ManageAmbassadorJobAssignmentAction,
+        tenant_id: int,
+        status_id: strawberry.ID | None = None,
+    ) -> models.Status:
+        """Get the status for the given action."""
+        if status_id:
+            try:
+                status = await sync_to_async(models.Status.objects.get)(
+                    id=status_id, tenant_id=tenant_id
+                )
+                return status
+            except models.Status.DoesNotExist:
+                raise GraphQLError(f"Status with ID {status_id} not found.")
+
+        # Try to find status by name pattern if status_id not provided
+        status_name_map = {
+            inputs.ManageAmbassadorJobAssignmentAction.ACCEPT: "accept",
+            inputs.ManageAmbassadorJobAssignmentAction.REJECT: "reject",
+            inputs.ManageAmbassadorJobAssignmentAction.BLACKLIST: "blacklist",
+            inputs.ManageAmbassadorJobAssignmentAction.WHITELIST: "whitelist",
+        }
+
+        name_pattern = status_name_map.get(action, "accept")
+        status = await cls._find_status_by_name_pattern(tenant_id, name_pattern)
+
+        if not status:
+            raise GraphQLError(
+                f"Status for action '{action.value}' not found. "
+                f"Please create a status with name containing '{name_pattern}' or provide statusId."
+            )
+
+        return status
+
+    @classmethod
+    async def manage_assignment(
+        cls,
+        input: inputs.ManageAmbassadorJobAssignmentInput,
+        info: strawberry.Info,
+    ) -> types.AmbassadorJobDetailResponse:
+        """Manage ambassador job assignment (accept, reject, blacklist, whitelist)."""
+        service = cls()
+        user = await service.get_user(info)
+        tenant = await service.get_user_tenant(
+            info,
+            tenant_id=input.tenant_id,
+            user=user,
+        )
+
+        # Get the AmbassadorJob
+        try:
+            ambassador_job = await sync_to_async(models.AmbassadorJob.objects.get)(
+                id=input.ambassador_job_id, tenant_id=tenant.id
+            )
+        except models.AmbassadorJob.DoesNotExist:
+            return build_mutation_response(
+                types.AmbassadorJobDetailResponse,
+                success=False,
+                message="Ambassador job not found.",
+                input_obj=input,
+            )
+
+        # Get the status for the action
+        try:
+            status = await cls._get_status_for_action(
+                input.action, tenant.id, input.status_id
+            )
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.AmbassadorJobDetailResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
+        # Update the status
+        ambassador_job.status = status
+        ambassador_job.updated_by = user
+        await sync_to_async(ambassador_job.save)()
+
+        action_messages = {
+            inputs.ManageAmbassadorJobAssignmentAction.ACCEPT: "Ambassador accepted for job.",
+            inputs.ManageAmbassadorJobAssignmentAction.REJECT: "Ambassador rejected for job.",
+            inputs.ManageAmbassadorJobAssignmentAction.BLACKLIST: "Ambassador blacklisted for future jobs.",
+            inputs.ManageAmbassadorJobAssignmentAction.WHITELIST: "Ambassador whitelisted for future jobs.",
+        }
+
+        message = action_messages.get(
+            input.action, f"Ambassador job assignment updated to {status.name}."
+        )
+
+        return build_mutation_response(
+            types.AmbassadorJobDetailResponse,
+            success=True,
+            message=message,
+            input_obj=input,
+            ambassador_job=ambassador_job,
+        )
+
+
+@strawberry.type
+class ManageAmbassadorJobMutations:
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def manage_ambassador_job_assignment(
+        self,
+        info: strawberry.Info,
+        input: inputs.ManageAmbassadorJobAssignmentInput,
+    ) -> types.AmbassadorJobDetailResponse:
+        """Manage ambassador job assignment (accept, reject, blacklist, whitelist)."""
+        return await ManageAmbassadorJobMutationService.manage_assignment(input, info)
 
 
 # CompanyToAmbassadorReview Mutations
