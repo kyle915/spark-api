@@ -335,7 +335,7 @@ class RequestDetail(models.Model):
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
-        null=False,
+        null=True,
         related_name="request_detail_created_by",
     )
     updated_by = models.ForeignKey(
@@ -376,7 +376,7 @@ class RequestProduct(models.Model):
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
-        null=False,
+        null=True,
         related_name="request_product_created_by",
     )
     updated_by = models.ForeignKey(

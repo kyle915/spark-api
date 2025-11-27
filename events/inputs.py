@@ -226,3 +226,31 @@ class UpdateRequestInput(CreateRequestInput):
 @strawberry.input
 class ApproveRequestInput(SparkGraphQLInput):
     id: strawberry.ID
+
+
+@strawberry.input
+class CreateRequestDetailInput(SparkGraphQLInput):
+    is_table_needed: bool = False
+    table_size: int | None = None
+
+
+@strawberry.input
+class CreateRequestProductInput(SparkGraphQLInput):
+    product_id: strawberry.ID
+
+
+@strawberry.input
+class CreateRequestWithDependenciesInput(BaseNameableInput):
+    date: str
+    start_time: str
+    end_time: str
+    address: str
+    coordinates: List[float]
+    client_id: strawberry.ID
+    distributor_id: strawberry.ID
+    retailer_id: strawberry.ID
+    request_type_id: strawberry.ID
+    details: List[CreateRequestDetailInput]
+    products: List[CreateRequestProductInput]
+
+
