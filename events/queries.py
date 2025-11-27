@@ -28,6 +28,7 @@ from events.inputs import (
     RequestStatusFiltersInput,
     ProductTypeFiltersInput,
     ProductFiltersInput,
+    DistanceUnit,
 )
 
 from utils.graphql.mixins import SparkGraphQLMixin
@@ -37,15 +38,6 @@ from utils.graphql.relay import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-@strawberry.enum
-class DistanceUnit(str, Enum):
-    """Distance unit for coordinate-based queries."""
-    KILOMETERS = "km"
-    MILES = "mi"
-
-
 
 class BaseEventQueriesService(SparkGraphQLMixin):
     """Service for event queries."""
@@ -196,6 +188,28 @@ class EventQueries:
                 queryset = queryset.filter(request_id=filters.request_id)
             if filters.date:
                 queryset = queryset.filter(request__date=filters.date)
+            
+            if filters.coordinates:
+                from django.db.models import F
+                from django.db.models.functions import ACos, Cos, Radians, Sin
+
+                lat = filters.coordinates.coordinates[0]
+                lon = filters.coordinates.coordinates[1]
+                range_val = filters.coordinates.range
+                unit = filters.coordinates.unit
+
+                # Earth radius: 6371 km or 3959 miles
+                earth_radius = 6371 if unit == DistanceUnit.KILOMETERS else 3959
+                
+                distance_expr = earth_radius * ACos(
+                    Cos(Radians(lat))
+                    * Cos(Radians(F("request__coordinates__0")))
+                    * Cos(Radians(F("request__coordinates__1")) - Radians(lon))
+                    + Sin(Radians(lat)) * Sin(Radians(F("request__coordinates__0")))
+                )
+
+                queryset = queryset.annotate(distance=distance_expr).filter(distance__lte=range_val)
+                queryset = queryset.order_by("distance", "start_time")
 
         return await service.get_connection(
             tenant_id=resolved_tenant_id,

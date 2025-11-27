@@ -1,5 +1,6 @@
 import strawberry
 from strawberry import relay
+from enum import Enum
 from django.contrib.auth import get_user_model
 from gqlauth.core.utils import get_token
 from asgiref.sync import sync_to_async
@@ -30,10 +31,15 @@ class BaseRegisterInput(SparkGraphQLInput):
     password2: str
 
 
+@strawberry.enum
+class UserRoleEnum(Enum):
+    AMBASSADOR = "ambassador"
+
+
 @strawberry.input
 class ClientRegisterInput(BaseRegisterInput):
-    role_id: strawberry.ID
-    tenant_id: strawberry.ID
+    role: UserRoleEnum
+    tenant_id: strawberry.ID | None = None
 
 
 @strawberry.input
@@ -232,13 +238,27 @@ class ClientsCustomRegister:
         info: strawberry.Info,
         input: ClientRegisterInput,
     ) -> RegisterResponse:
+        # Resolve role_id from the enum slug
+        try:
+            role = await sync_to_async(Role.objects.get)(slug=input.role.value)
+            resolved_role_id = role.id
+        except Role.DoesNotExist:
+            return RegisterResponse(
+                success=False,
+                message=f"Invalid role: {input.role.value}",
+                client_mutation_id=input.client_mutation_id,
+            )
+        
+        # Handle optional tenant_id
+        resolved_tenant_id = int(input.tenant_id) if input.tenant_id else None
+        
         return await register_user_with_role(
             first_name=input.first_name,
             email=input.email,
             password1=input.password1,
             password2=input.password2,
-            role_id=int(input.role_id),
-            tenant_id=int(input.tenant_id),
+            role_id=resolved_role_id,
+            tenant_id=resolved_tenant_id,
             client_mutation_id=input.client_mutation_id,
         )
 

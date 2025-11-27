@@ -1,5 +1,6 @@
 import strawberry
 from typing import List
+from enum import Enum
 
 from utils.graphql.inputs import SparkGraphQLInput
 
@@ -19,6 +20,20 @@ class EventStatusFiltersInput(BaseTenantInput):
     tenant_uuid: strawberry.ID | None = None
 
 
+@strawberry.enum
+class DistanceUnit(str, Enum):
+    """Distance unit for coordinate-based queries."""
+    KILOMETERS = "km"
+    MILES = "mi"
+
+
+@strawberry.input
+class CoordinatesFilterInput:
+    coordinates: List[float]
+    range: float
+    unit: DistanceUnit = DistanceUnit.KILOMETERS
+
+
 @strawberry.input
 class EventFiltersInput(BaseTenantInput):
     tenant_uuid: strawberry.ID | None = None
@@ -26,6 +41,7 @@ class EventFiltersInput(BaseTenantInput):
     event_status_id: strawberry.ID | None = None
     request_id: strawberry.ID | None = None
     date: str | None = None
+    coordinates: CoordinatesFilterInput | None = None
 
 
 @strawberry.input
