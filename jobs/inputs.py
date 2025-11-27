@@ -1,4 +1,5 @@
 import strawberry
+from enum import Enum
 from typing import List
 
 from utils.graphql.inputs import SparkGraphQLInput
@@ -285,7 +286,7 @@ class UpdateJobRequirementAnswerInput(CreateJobRequirementAnswerInput):
 
 
 @strawberry.enum
-class ManageAmbassadorJobAssignmentAction:
+class ManageAmbassadorJobAssignmentAction(Enum):
     ACCEPT = "ACCEPT"
     REJECT = "REJECT"
     BLACKLIST = "BLACKLIST"
