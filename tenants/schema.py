@@ -1,3 +1,5 @@
+# Import strawberry_django first to ensure strawberry.django is available
+import strawberry_django
 import strawberry
 from graphql import GraphQLError
 from django.contrib.auth import get_user_model
@@ -20,21 +22,23 @@ from utils.graphql.relay import (
 User = get_user_model()
 
 
-@strawberry.django.type(Role)
+@strawberry_django.type(Role)
 class RoleType:
     id: strawberry.auto
     uuid: strawberry.auto
     name: strawberry.auto
 
 
-@strawberry.django.type(Tenant)
+# @strawberry.django.type(Tenant)
+@strawberry_django.type(Tenant)
 class TenantType:
     id: strawberry.auto
     uuid: strawberry.auto
     name: strawberry.auto
 
 
-@strawberry.django.type(model=get_user_model(), name="CustomUserType")
+# @strawberry.django.type(model=get_user_model(), name="CustomUserType")
+@strawberry_django.type(User)
 class CustomUserType:
     id: strawberry.auto
     uuid: strawberry.auto
@@ -93,7 +97,8 @@ class MutationSpark(SparkCustomRegister):
 
 
 # Ambassadors Schema
-@strawberry.django.type(model=get_user_model())
+# @strawberry.django.type(model=get_user_model())
+@strawberry_django.type(User)
 class QueryAmbassadors:
     @strawberry.field
     def me(self, info) -> CustomUserType:
@@ -109,7 +114,8 @@ class MutationAmbassadors(AmbassadorsCustomRegister):
 
 
 # Clients Schemas
-@strawberry.django.type(model=get_user_model())
+# @strawberry.django.type(model=get_user_model())
+@strawberry_django.type(User)
 class QueryClients:
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     def me(self, info) -> CustomUserType:
@@ -159,7 +165,8 @@ class MutationClients(ClientsCustomRegister):
 
 
 # Mobile Schemas
-@strawberry.django.type(model=get_user_model())
+# @strawberry.django.type(model=get_user_model())
+@strawberry_django.type(User)
 class QueryMobile:
     @strawberry.field
     def me(self, info) -> CustomUserType:
