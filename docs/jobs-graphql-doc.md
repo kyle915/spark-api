@@ -455,6 +455,72 @@ query {
 
 ---
 
+### Job Applicants
+
+Get all ambassadors for a specific job.
+
+**Available for**: Clients, Spark Admin
+
+**GraphQL Query:**
+```graphql
+query {
+  jobApplicants(
+    jobId: "1"
+    first: 10
+    after: null
+  ) {
+    edges {
+      node {
+        id
+        uuid
+        appearAsRfp
+        ambassadorId
+        job {
+          id
+          name
+          description
+          code
+        }
+        ambassador {
+          id
+          email
+        }
+        status {
+          id
+          name
+        }
+        rate {
+          id
+          amount
+        }
+        createdAt
+        updatedAt
+      }
+      cursor
+    }
+    pageInfo {
+      hasNextPage
+      hasPreviousPage
+      startCursor
+      endCursor
+    }
+    totalCount
+  }
+}
+```
+
+**Parameters:**
+- `jobId` (ID, required): The job ID to filter applicants
+- `first` (int, optional): Number of items to return from the start
+- `after` (string, optional): Cursor for pagination (from previous query)
+- `last` (int, optional): Number of items to return from the end
+- `before` (string, optional): Cursor for pagination (from previous query)
+- `q` (string, optional): Search query (currently not used, reserved for future use)
+
+**Note**: This query returns all ambassadors associated with the job, regardless of whether they applied or were invited. The `appear_as_rfp` field in the response indicates how the ambassador was associated with the job.
+
+---
+
 ## Mutations
 
 All mutations follow a consistent pattern and use Relay-style input with `clientMutationId` support. All mutations require authentication.
@@ -790,6 +856,154 @@ mutation {
 
 ---
 
+### Manage Ambassador Job Assignment
+
+Manage ambassador job assignments by accepting, rejecting, blacklisting, or whitelisting ambassadors for a job.
+
+**Available for**: Clients, Spark Admin
+
+**GraphQL Mutation:**
+```graphql
+mutation {
+  manageAmbassadorJobAssignment(input: {
+    ambassadorJobId: "1"
+    action: ACCEPT
+    statusId: "5"
+    tenantId: "1"
+    clientMutationId: "unique-id-789"
+  }) {
+    success
+    message
+    clientMutationId
+    ambassadorJob {
+      id
+      uuid
+      job {
+        id
+        name
+      }
+      ambassador {
+        id
+        email
+      }
+      status {
+        id
+        name
+      }
+      createdAt
+      updatedAt
+    }
+  }
+}
+```
+
+**Input Fields:**
+- `ambassadorJobId` (ID, required): The AmbassadorJob ID to manage
+- `action` (enum, required): One of `ACCEPT`, `REJECT`, `BLACKLIST`, `WHITELIST`
+- `statusId` (ID, optional): Target status ID. If not provided, the system will attempt to find a status by name pattern:
+  - `ACCEPT`: Looks for status with name containing "accept"
+  - `REJECT`: Looks for status with name containing "reject"
+  - `BLACKLIST`: Looks for status with name containing "blacklist"
+  - `WHITELIST`: Looks for status with name containing "whitelist"
+- `tenantId` (ID, optional): Tenant ID (only Spark Admin can provide this)
+- `clientMutationId` (ID, optional): Client mutation ID for tracking
+
+**Action Types:**
+- `ACCEPT`: Accepts the ambassador for the job. Updates the status to an "accepted" status.
+- `REJECT`: Rejects the ambassador for the job. Updates the status to a "rejected" status.
+- `BLACKLIST`: Blacklists the ambassador for future jobs. Updates the status to a "blacklisted" status. This affects the ambassador's eligibility for future jobs with the tenant/client.
+- `WHITELIST`: Whitelists the ambassador for future jobs. Updates the status to a "whitelisted" status. This affects the ambassador's eligibility for future jobs with the tenant/client.
+
+**Response:**
+```json
+{
+  "data": {
+    "manageAmbassadorJobAssignment": {
+      "success": true,
+      "message": "Ambassador accepted for job.",
+      "clientMutationId": "unique-id-789",
+      "ambassadorJob": {
+        "id": "1",
+        "uuid": "01234567-89ab-cdef-0123-456789abcdef",
+        "job": {
+          "id": "5",
+          "name": "Senior Software Engineer"
+        },
+        "ambassador": {
+          "id": "10",
+          "email": "ambassador@example.com"
+        },
+        "status": {
+          "id": "5",
+          "name": "Accepted"
+        },
+        "createdAt": "2025-01-15T10:00:00Z",
+        "updatedAt": "2025-01-15T11:00:00Z"
+      }
+    }
+  }
+}
+```
+
+**Status Requirements:**
+- The system requires appropriate statuses to exist in the database for each action type.
+- If `statusId` is not provided, the system will search for a status by name pattern (case-insensitive).
+- If no matching status is found, the mutation will return an error with a message indicating which status needs to be created.
+- Recommended status names: "Accepted", "Rejected", "Blacklisted", "Whitelisted" (or variations containing these keywords).
+
+**Example: Accept Ambassador**
+```graphql
+mutation {
+  manageAmbassadorJobAssignment(input: {
+    ambassadorJobId: "1"
+    action: ACCEPT
+  }) {
+    success
+    message
+    ambassadorJob {
+      id
+      status {
+        id
+        name
+      }
+    }
+  }
+}
+```
+
+**Example: Reject and Blacklist Ambassador**
+```graphql
+mutation {
+  rejectAmbassador: manageAmbassadorJobAssignment(input: {
+    ambassadorJobId: "1"
+    action: REJECT
+  }) {
+    success
+    message
+  }
+  
+  blacklistAmbassador: manageAmbassadorJobAssignment(input: {
+    ambassadorJobId: "1"
+    action: BLACKLIST
+  }) {
+    success
+    message
+    ambassadorJob {
+      status {
+        name
+      }
+    }
+  }
+}
+```
+
+**Error Handling:**
+- If the `ambassadorJobId` is not found, returns `success: false` with message "Ambassador job not found."
+- If the `statusId` is provided but not found, returns `success: false` with message "Status with ID {id} not found."
+- If no `statusId` is provided and no matching status is found by name pattern, returns `success: false` with a message indicating which status needs to be created.
+
+---
+
 ## Complete List of Available Queries and Mutations
 
 The Jobs API provides queries and mutations for the following models:
@@ -824,8 +1038,9 @@ Each model has two queries:
 20. **QuestionOption**: `questionOptions`, `questionOption`
 21. **JobRequirementAnswer**: `jobRequirementAnswers`, `jobRequirementAnswer`
 
-**Special Query:**
+**Special Queries:**
 - **Available Jobs**: `availableJobs` (Ambassadors only) - Returns available jobs with prefetched `jobRequirements`
+- **Job Applicants**: `jobApplicants` (Clients, Spark Admin only) - Returns ambassadors applying to a specific job
 
 ### Mutations
 
@@ -856,6 +1071,9 @@ Each model has two mutations:
 19. **JobRequirementQuestion**: `createJobRequirementQuestion`, `updateJobRequirementQuestion`
 20. **QuestionOption**: `createQuestionOption`, `updateQuestionOption`
 21. **JobRequirementAnswer**: `createJobRequirementAnswer`, `updateJobRequirementAnswer`
+
+**Special Mutations:**
+- **Manage Ambassador Job Assignment**: `manageAmbassadorJobAssignment` (Clients, Spark Admin only) - Manage ambassador assignments (accept, reject, blacklist, whitelist)
 
 ---
 
