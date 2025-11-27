@@ -728,6 +728,46 @@ class AmbassadorJobQueries:
             return None
 
 
+# Client/Spark AmbassadorJob Queries (for managing applicants)
+@strawberry.type
+class ClientSparkAmbassadorJobQueries:
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def job_applicants(
+        self,
+        info: strawberry.Info,
+        job_id: strawberry.ID,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        q: str | None = None,
+    ) -> CountableConnection[types.AmbassadorJob]:
+        """Get all ambassadors for a specific job."""
+        service = AmbassadorJobQueriesService()
+        tenant = await service.get_user_tenant(info)
+
+        # Get base queryset filtered by tenant
+        queryset = service.get_queryset().filter(tenant_id=tenant.id)
+
+        # Filter by job_id
+        queryset = queryset.filter(job_id=job_id)
+
+        # Note: q parameter is not used here as AmbassadorJob doesn't have a 'name' field
+        # If search is needed, it could be implemented by filtering on related ambassador or job fields
+
+        # Apply ordering
+        queryset = queryset.order_by(*service.ordering)
+
+        return await service.get_connection(
+            tenant_id=tenant.id,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+            queryset=queryset,
+        )
+
+
 # CompanyToAmbassadorReview Queries
 class CompanyToAmbassadorReviewQueriesService(BaseQueriesService):
     """Service for company to ambassador review queries."""

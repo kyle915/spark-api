@@ -282,3 +282,18 @@ class CreateJobRequirementAnswerInput(BaseTenantInput):
 @strawberry.input
 class UpdateJobRequirementAnswerInput(CreateJobRequirementAnswerInput):
     id: strawberry.ID
+
+
+@strawberry.enum
+class ManageAmbassadorJobAssignmentAction:
+    ACCEPT = "ACCEPT"
+    REJECT = "REJECT"
+    BLACKLIST = "BLACKLIST"
+    WHITELIST = "WHITELIST"
+
+
+@strawberry.input
+class ManageAmbassadorJobAssignmentInput(BaseTenantInput):
+    ambassador_job_id: strawberry.ID
+    action: ManageAmbassadorJobAssignmentAction
+    status_id: strawberry.ID | None = None
