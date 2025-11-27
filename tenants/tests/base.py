@@ -5,6 +5,7 @@ This class provides utilities for creating users, tenants, roles, and
 tenanted user relationships needed for testing GraphQL mutations.
 """
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import AnonymousUser
 from gqlauth.models import UserStatus
 from tenants.models import Role, Tenant, TenantedUser
 from utils.utils import ROLE_ID
@@ -213,3 +214,63 @@ class BaseGraphQLTestCase:
         )
 
         return roles
+
+    async def _execute_mutation(self, mutation, variables, endpoint_path=None):
+        """
+        Helper method to execute GraphQL mutations.
+
+        This method creates a mock ASGI request and executes the GraphQL mutation
+        using the schema set by the test class.
+
+        Args:
+            mutation: GraphQL mutation string
+            variables: Variables dictionary
+            endpoint_path: The actual endpoint path being tested (optional,
+                          defaults to self.endpoint_path if set)
+
+        Returns:
+            ExecutionResult: The result from schema.execute()
+        """
+        from django.test import RequestFactory
+        from gqlauth.core.middlewares import USER_OR_ERROR_KEY
+
+        # Use endpoint_path from parameter or fall back to instance attribute
+        path = endpoint_path or getattr(
+            self, 'endpoint_path', '/api/v1/graphql')
+
+        factory = RequestFactory()
+        wsgi_request = factory.post(path)
+        wsgi_request.user = AnonymousUser()
+
+        # Create a mock ASGI request object that JwtSchema expects
+        # JwtSchema middleware looks for request.scope or request.consumer.scope
+        class MockUserOrError:
+            """Mock UserOrError object that the middleware expects."""
+
+            def __init__(self, user):
+                self.user = user
+                self.errors = None
+
+        class MockASGIRequest:
+            def __init__(self, wsgi_request, path):
+                self.wsgi_request = wsgi_request
+                self.user = wsgi_request.user
+                # Create a scope dict that the middleware expects
+                # The middleware expects USER_OR_ERROR_KEY with a UserOrError-like object
+                self.scope = {
+                    "type": "http",
+                    "method": "POST",
+                    "path": path,
+                    USER_OR_ERROR_KEY: MockUserOrError(wsgi_request.user),
+                }
+
+        mock_request = MockASGIRequest(wsgi_request, path)
+
+        # Use execute (async) since mutations are async
+        # According to Strawberry docs: https://strawberry.rocks/docs/operations/testing
+        result = await self.schema.execute(
+            mutation,
+            variable_values=variables,
+            context_value={"request": mock_request},
+        )
+        return result

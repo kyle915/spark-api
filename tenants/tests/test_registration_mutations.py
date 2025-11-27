@@ -20,7 +20,6 @@ import asyncio
 import strawberry_django  # noqa: F401
 from asgiref.sync import sync_to_async
 from django.contrib.auth import get_user_model
-from django.contrib.auth.models import AnonymousUser
 from tenants.models import Role, Tenant, TenantedUser
 from tenants.tests.base import BaseGraphQLTestCase
 from utils.utils import ROLE_ID
@@ -44,54 +43,6 @@ class TestAmbassadorsRegistration(BaseGraphQLTestCase):
         self.roles = self.setup_default_roles()
         self.schema = schema_ambassador
         self.endpoint_path = "/api/v1/graphql/ambassadors"
-
-    async def _execute_mutation(self, mutation, variables, endpoint_path="/api/v1/graphql/ambassadors"):
-        """Helper method to execute GraphQL mutations.
-
-        Args:
-            mutation: GraphQL mutation string
-            variables: Variables dictionary
-            endpoint_path: The actual endpoint path being tested (default: ambassadors)
-        """
-        from django.test import RequestFactory
-        from gqlauth.core.middlewares import USER_OR_ERROR_KEY
-
-        factory = RequestFactory()
-        wsgi_request = factory.post(endpoint_path)
-        wsgi_request.user = AnonymousUser()
-
-        # Create a mock ASGI request object that JwtSchema expects
-        # JwtSchema middleware looks for request.scope or request.consumer.scope
-        class MockUserOrError:
-            """Mock UserOrError object that the middleware expects."""
-
-            def __init__(self, user):
-                self.user = user
-                self.errors = None
-
-        class MockASGIRequest:
-            def __init__(self, wsgi_request, path):
-                self.wsgi_request = wsgi_request
-                self.user = wsgi_request.user
-                # Create a scope dict that the middleware expects
-                # The middleware expects USER_OR_ERROR_KEY with a UserOrError-like object
-                self.scope = {
-                    "type": "http",
-                    "method": "POST",
-                    "path": path,
-                    USER_OR_ERROR_KEY: MockUserOrError(wsgi_request.user),
-                }
-
-        mock_request = MockASGIRequest(wsgi_request, endpoint_path)
-
-        # Use execute (async) since mutations are async
-        # According to Strawberry docs: https://strawberry.rocks/docs/operations/testing
-        result = await self.schema.execute(
-            mutation,
-            variable_values=variables,
-            context_value={"request": mock_request},
-        )
-        return result
 
     @pytest.mark.asyncio
     async def test_register_ambassador_success(self):
@@ -221,39 +172,6 @@ class TestSparkRegistration(BaseGraphQLTestCase):
         self.schema = schema_spark
         self.endpoint_path = "/api/v1/graphql/spark"
 
-    async def _execute_mutation(self, mutation, variables, endpoint_path="/api/v1/graphql/spark"):
-        """Helper method to execute GraphQL mutations."""
-        from django.test import RequestFactory
-        from gqlauth.core.middlewares import USER_OR_ERROR_KEY
-
-        factory = RequestFactory()
-        wsgi_request = factory.post(endpoint_path)
-        wsgi_request.user = AnonymousUser()
-
-        class MockUserOrError:
-            def __init__(self, user):
-                self.user = user
-                self.errors = None
-
-        class MockASGIRequest:
-            def __init__(self, wsgi_request, path):
-                self.wsgi_request = wsgi_request
-                self.user = wsgi_request.user
-                self.scope = {
-                    "type": "http",
-                    "method": "POST",
-                    "path": path,
-                    USER_OR_ERROR_KEY: MockUserOrError(wsgi_request.user),
-                }
-
-        mock_request = MockASGIRequest(wsgi_request, endpoint_path)
-        result = await self.schema.execute(
-            mutation,
-            variable_values=variables,
-            context_value={"request": mock_request},
-        )
-        return result
-
     @pytest.mark.asyncio
     async def test_register_spark_admin_success(self):
         """Test successful spark admin registration."""
@@ -381,39 +299,6 @@ class TestClientsRegistration(BaseGraphQLTestCase):
         self.tenant = self.create_tenant(name="Test Company")
         self.schema = schema_clients
         self.endpoint_path = "/api/v1/graphql/clients"
-
-    async def _execute_mutation(self, mutation, variables, endpoint_path="/api/v1/graphql/clients"):
-        """Helper method to execute GraphQL mutations."""
-        from django.test import RequestFactory
-        from gqlauth.core.middlewares import USER_OR_ERROR_KEY
-
-        factory = RequestFactory()
-        wsgi_request = factory.post(endpoint_path)
-        wsgi_request.user = AnonymousUser()
-
-        class MockUserOrError:
-            def __init__(self, user):
-                self.user = user
-                self.errors = None
-
-        class MockASGIRequest:
-            def __init__(self, wsgi_request, path):
-                self.wsgi_request = wsgi_request
-                self.user = wsgi_request.user
-                self.scope = {
-                    "type": "http",
-                    "method": "POST",
-                    "path": path,
-                    USER_OR_ERROR_KEY: MockUserOrError(wsgi_request.user),
-                }
-
-        mock_request = MockASGIRequest(wsgi_request, endpoint_path)
-        result = await self.schema.execute(
-            mutation,
-            variable_values=variables,
-            context_value={"request": mock_request},
-        )
-        return result
 
     @pytest.mark.asyncio
     async def test_register_client_success(self):
