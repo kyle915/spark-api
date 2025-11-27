@@ -200,6 +200,43 @@ class JobsGraphQLTestCase(BaseGraphQLTestCase):
 
         return ambassador
 
+    def create_ambassador_job(
+        self,
+        ambassador: Ambassador,
+        job: models.Job,
+        status: models.Status,
+        rate: models.Rate,
+        tenant: Tenant,
+        **kwargs
+    ):
+        """
+        Create an AmbassadorJob instance.
+
+        Args:
+            ambassador: Ambassador instance
+            job: Job instance
+            status: Status instance
+            rate: Rate instance
+            tenant: Tenant instance
+            **kwargs: Additional fields to set on the ambassador job
+
+        Returns:
+            AmbassadorJob: The created ambassador job instance
+        """
+        system_user = self.get_system_user()
+
+        ambassador_job = models.AmbassadorJob.objects.create(
+            ambassador=ambassador,
+            job=job,
+            status=status,
+            rate=rate,
+            tenant=tenant,
+            created_by=system_user,
+            **kwargs
+        )
+
+        return ambassador_job
+
     def create_job_title(self, name: str, tenant: Tenant, **kwargs):
         """
         Create a JobTitle instance.
