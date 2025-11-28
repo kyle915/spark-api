@@ -134,8 +134,8 @@ input ClientRegisterInput {
   email: String!
   password1: String!
   password2: String!
-  roleId: ID!
-  tenantId: ID!
+  role: UserRoleEnum!
+  tenantId: ID = null
 }
 
 """
@@ -289,6 +289,12 @@ type CompanyToAmbassadorReviewDetailResponse {
   message: String!
   clientMutationId: ID
   companyToAmbassadorReview: CompanyToAmbassadorReview
+}
+
+input CoordinatesFilterInput {
+  coordinates: [Float!]!
+  range: Float!
+  unit: DistanceUnit! = KILOMETERS
 }
 
 input CreateAmbassadorJobInput {
@@ -699,6 +705,7 @@ input EventFiltersInput {
   eventStatusId: ID = null
   requestId: ID = null
   date: String = null
+  coordinates: CoordinatesFilterInput = null
 }
 
 """
@@ -1113,6 +1120,21 @@ input LocationFiltersInput {
   tenantUuid: ID = null
 }
 
+enum ManageAmbassadorJobAssignmentAction {
+  ACCEPT
+  REJECT
+  BLACKLIST
+  WHITELIST
+}
+
+input ManageAmbassadorJobAssignmentInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  ambassadorJobId: ID!
+  action: ManageAmbassadorJobAssignmentAction!
+  statusId: ID = null
+}
+
 type Mutation {
   createRequestByUrl(input: CreateRequestWithDependenciesInput!, requestUrlName: String!): RequestDetailResponse!
   createEventStatus(input: CreateEventStatusInput!): EventStatusDetailResponse!
@@ -1193,6 +1215,7 @@ type Mutation {
   updateQuestionOption(input: UpdateQuestionOptionInput!): QuestionOptionDetailResponse!
   createJobRequirementAnswer(input: CreateJobRequirementAnswerInput!): JobRequirementAnswerDetailResponse!
   updateJobRequirementAnswer(input: UpdateJobRequirementAnswerInput!): JobRequirementAnswerDetailResponse!
+  manageAmbassadorJobAssignment(input: ManageAmbassadorJobAssignmentInput!): AmbassadorJobDetailResponse!
 }
 
 type MutationNormalOutput {
@@ -1414,6 +1437,7 @@ type Query {
   availableJobs(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): JobCountableConnection!
   ambassadorJobs(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): AmbassadorJobCountableConnection!
   ambassadorJob(id: ID!): AmbassadorJob
+  jobApplicants(jobId: ID!, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): AmbassadorJobCountableConnection!
   companyToAmbassadorReviews(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): CompanyToAmbassadorReviewCountableConnection!
   companyToAmbassadorReview(id: ID!): CompanyToAmbassadorReview
   ambassadorToAmbassadorReviews(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): AmbassadorToAmbassadorReviewCountableConnection!
@@ -2187,6 +2211,10 @@ input UpdateStatusInput {
   tenantId: ID = null
   name: String!
   id: ID!
+}
+
+enum UserRoleEnum {
+  AMBASSADOR
 }
 
 """A helper model that handles user account stuff."""
