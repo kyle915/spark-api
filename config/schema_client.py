@@ -3,12 +3,13 @@ from strawberry_django.optimizer import DjangoOptimizerExtension
 from gqlauth.core.middlewares import JwtSchema
 from events.schema import EventQueryClient, EventMutationsClient
 from tenants.schema import QueryClients, MutationClients
+from tenants.dashboard.schema import DashboardQueries
 from jobs.schema import ClientJobMutations, ClientJobQueries
 from utils.utils import BlockIntrospectionForAnonymous
 
 # Clients Schemas
 QueryClients = merge_types(
-    "Query", (EventQueryClient, QueryClients, ClientJobQueries))
+    "Query", (EventQueryClient, QueryClients, ClientJobQueries, DashboardQueries))
 MutationClients = merge_types(
     "Mutation", (EventMutationsClient, MutationClients, ClientJobMutations))
 

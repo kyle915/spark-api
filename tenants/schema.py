@@ -14,6 +14,7 @@ from .mutations import (
     ClientsCustomRegister,
     SparkCustomRegister,
 )
+from .dashboard.schema import DashboardQueries
 from utils.graphql.relay import (
     CountableConnection,
     connection_from_queryset_async,
@@ -86,6 +87,9 @@ class QuerySpark:
             )
         except ValueError as exc:
             raise GraphQLError(str(exc)) from exc
+
+
+# Import dashboard queries (moved to top after imports)
 
 
 @strawberry.type
