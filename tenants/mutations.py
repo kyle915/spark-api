@@ -41,6 +41,11 @@ class ClientRegisterInput(BaseRegisterInput):
     role: UserRoleEnum
     tenant_id: strawberry.ID | None = None
 
+@strawberry.input
+class AmbassadorRegisterInput(BaseRegisterInput):
+    role: UserRoleEnum
+    tenant_id: strawberry.ID | None = None
+
 
 @strawberry.input
 class GoogleSocialAuthInput(SparkGraphQLInput):
@@ -150,7 +155,7 @@ class AmbassadorsCustomRegister:
     async def register(
         self,
         info: strawberry.Info,
-        input: ClientRegisterInput,
+        input: AmbassadorRegisterInput,
     ) -> RegisterResponse:
         # Resolve role_id from the enum slug
         try:
