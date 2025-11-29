@@ -1,5 +1,4 @@
 # Import strawberry_django first to ensure strawberry.django is available
-import transaction
 import strawberry_django
 import strawberry
 from graphql import GraphQLError
