@@ -1,4 +1,5 @@
 # Import strawberry_django first to ensure strawberry.django is available
+import transaction
 import strawberry_django
 import strawberry
 from graphql import GraphQLError
@@ -175,6 +176,18 @@ class QueryMobile:
     @strawberry.field
     def me(self, info) -> CustomUserType:
         return info.context.request.user
+
+
+class AppointmentSlot:
+    pass
+
+
+class Reservation:
+    pass
+
+
+class Customer:
+    pass
 
 
 @strawberry.type

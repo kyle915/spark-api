@@ -14,8 +14,7 @@ from datetime import datetime, timedelta, date
 from typing import List
 from asgiref.sync import sync_to_async
 from django.db.models import (
-    Count, Q, F, Case, When, IntegerField, FloatField,
-    Sum, Avg, Max, Min
+    Count, Q,
 )
 from django.db.models.functions import (
     TruncHour, TruncDay, TruncWeek, TruncMonth
@@ -23,94 +22,11 @@ from django.db.models.functions import (
 from django.utils import timezone
 
 from utils.graphql.permissions import StrictIsAuthenticated
-from utils.graphql.queries import BaseQueriesService
-from utils.graphql.mixins import SparkGraphQLMixin
 from . import types, inputs
+from .services import DashboardQueriesService
 from events import models as event_models
 from jobs import models as job_models
 from ambassadors import models as ambassador_models
-
-
-class DashboardQueriesService(SparkGraphQLMixin):
-    """Service for dashboard queries with performance optimizations."""
-
-    def _apply_filters(
-        self,
-        queryset,
-        filters: inputs.DashboardFiltersInput | None,
-        tenant_id: int
-    ):
-        """Apply filters to queryset efficiently."""
-        if not filters:
-            return queryset.filter(tenant_id=tenant_id)
-
-        # Start with tenant filter
-        queryset = queryset.filter(tenant_id=tenant_id)
-
-        # Date range filters
-        if filters.start_date:
-            try:
-                start = datetime.fromisoformat(filters.start_date.replace('Z', '+00:00'))
-                queryset = queryset.filter(created_at__gte=start)
-            except (ValueError, AttributeError):
-                pass
-
-        if filters.end_date:
-            try:
-                end = datetime.fromisoformat(filters.end_date.replace('Z', '+00:00'))
-                # Add one day to include the entire end date
-                end = end + timedelta(days=1)
-                queryset = queryset.filter(created_at__lt=end)
-            except (ValueError, AttributeError):
-                pass
-
-        # Location filters
-        if filters.location_id:
-            queryset = queryset.filter(location_id=filters.location_id)
-        elif filters.location_code:
-            queryset = queryset.filter(location__code=filters.location_code)
-
-        # Event filters
-        if filters.event_type_id:
-            queryset = queryset.filter(event_type_id=filters.event_type_id)
-        if filters.event_status_id:
-            queryset = queryset.filter(status_id=filters.event_status_id)
-
-        # Request filters
-        if filters.request_status_id:
-            queryset = queryset.filter(status_id=filters.request_status_id)
-        if filters.request_type_id:
-            queryset = queryset.filter(request_type_id=filters.request_type_id)
-        if filters.client_id:
-            queryset = queryset.filter(client_id=filters.client_id)
-        if filters.distributor_id:
-            queryset = queryset.filter(distributor_id=filters.distributor_id)
-        if filters.retailer_id:
-            queryset = queryset.filter(retailer_id=filters.retailer_id)
-
-        return queryset
-
-    def _get_date_range(self, filters: inputs.DashboardFiltersInput | None):
-        """Get date range from filters with defaults."""
-        today = timezone.now().date()
-        
-        if filters and filters.start_date:
-            try:
-                start = datetime.fromisoformat(filters.start_date.replace('Z', '+00:00')).date()
-            except (ValueError, AttributeError):
-                start = today - timedelta(days=30)  # Default to last 30 days
-        else:
-            start = today - timedelta(days=30)
-
-        if filters and filters.end_date:
-            try:
-                end = datetime.fromisoformat(filters.end_date.replace('Z', '+00:00')).date()
-            except (ValueError, AttributeError):
-                end = today
-        else:
-            end = today
-
-        return start, end
 
 
 @strawberry.type
@@ -132,7 +48,8 @@ class DashboardQueries:
 
         # Build base queryset with filters
         base_queryset = event_models.Event.objects.filter(tenant_id=tenant.id)
-        base_queryset = service._apply_filters(base_queryset, filters, tenant.id)
+        base_queryset = service._apply_filters(
+            base_queryset, filters, tenant.id)
 
         # Get today, this week, this month dates
         today = timezone.now().date()
@@ -144,8 +61,10 @@ class DashboardQueries:
             lambda: base_queryset.aggregate(
                 total_events=Count('id'),
                 events_today=Count('id', filter=Q(created_at__date=today)),
-                events_this_week=Count('id', filter=Q(created_at__date__gte=week_start)),
-                events_this_month=Count('id', filter=Q(created_at__date__gte=month_start)),
+                events_this_week=Count('id', filter=Q(
+                    created_at__date__gte=week_start)),
+                events_this_month=Count('id', filter=Q(
+                    created_at__date__gte=month_start)),
             )
         )()
 
@@ -209,7 +128,8 @@ class DashboardQueries:
 
         # Build base queryset with filters
         base_queryset = event_models.Event.objects.filter(tenant_id=tenant.id)
-        base_queryset = service._apply_filters(base_queryset, filters, tenant.id)
+        base_queryset = service._apply_filters(
+            base_queryset, filters, tenant.id)
 
         # Get date range
         start_date, end_date = service._get_date_range(filters)
@@ -241,7 +161,8 @@ class DashboardQueries:
 
         data_points = [
             types.TimeSeriesDataPoint(
-                timestamp=item['truncated_date'].isoformat() if item['truncated_date'] else '',
+                timestamp=item['truncated_date'].isoformat(
+                ) if item['truncated_date'] else '',
                 count=item['count'],
                 value=None
             )
@@ -269,7 +190,8 @@ class DashboardQueries:
 
         # Build base event queryset with filters
         event_queryset = event_models.Event.objects.filter(tenant_id=tenant.id)
-        event_queryset = service._apply_filters(event_queryset, filters, tenant.id)
+        event_queryset = service._apply_filters(
+            event_queryset, filters, tenant.id)
 
         # Get ambassadors through AmbassadorEvent (more direct relationship)
         # Use distinct to count unique ambassadors
@@ -287,14 +209,17 @@ class DashboardQueries:
         # Count unique ambassadors (database-level) - union of both sources
         # Get unique ambassador IDs from both sources
         ambassador_ids_from_events = await sync_to_async(
-            lambda: list(ambassador_events_qs.values_list('ambassador_id', flat=True).distinct())
+            lambda: list(ambassador_events_qs.values_list(
+                'ambassador_id', flat=True).distinct())
         )()
         ambassador_ids_from_jobs = await sync_to_async(
-            lambda: list(ambassador_jobs_qs.values_list('ambassador_id', flat=True).distinct())
+            lambda: list(ambassador_jobs_qs.values_list(
+                'ambassador_id', flat=True).distinct())
         )()
-        
+
         # Total unique ambassadors (union of both sets)
-        total_unique = len(set(ambassador_ids_from_events) | set(ambassador_ids_from_jobs))
+        total_unique = len(set(ambassador_ids_from_events)
+                           | set(ambassador_ids_from_jobs))
 
         # Ambassadors by event (single query with prefetch)
         ambassadors_by_event_data = await sync_to_async(list)(
@@ -352,8 +277,10 @@ class DashboardQueries:
         )
 
         # Build base queryset with filters
-        base_queryset = event_models.Request.objects.filter(tenant_id=tenant.id)
-        base_queryset = service._apply_filters(base_queryset, filters, tenant.id)
+        base_queryset = event_models.Request.objects.filter(
+            tenant_id=tenant.id)
+        base_queryset = service._apply_filters(
+            base_queryset, filters, tenant.id)
 
         # Get approval status (status with create_event=True)
         approval_status = await sync_to_async(
@@ -368,8 +295,10 @@ class DashboardQueries:
             stats = await sync_to_async(
                 lambda: base_queryset.aggregate(
                     total_requests=Count('id'),
-                    approved_count=Count('id', filter=Q(status__create_event=True)),
-                    rejected_count=Count('id', filter=Q(status__create_event=False, status__isnull=False)),
+                    approved_count=Count('id', filter=Q(
+                        status__create_event=True)),
+                    rejected_count=Count('id', filter=Q(
+                        status__create_event=False, status__isnull=False)),
                     pending_count=Count('id', filter=Q(status__isnull=True)),
                 )
             )()
@@ -378,7 +307,8 @@ class DashboardQueries:
             stats = await sync_to_async(
                 lambda: base_queryset.aggregate(
                     total_requests=Count('id'),
-                    approved_count=Count('id', filter=Q(status__isnull=True)),  # No approval status means 0 approved
+                    # No approval status means 0 approved
+                    approved_count=Count('id', filter=Q(status__isnull=True)),
                     rejected_count=Count('id', filter=Q(status__isnull=False)),
                     pending_count=Count('id', filter=Q(status__isnull=True)),
                 )
@@ -399,7 +329,8 @@ class DashboardQueries:
             ).distinct().count()
         )()
 
-        requests_with_jobs_percentage = (requests_with_jobs / total * 100) if total > 0 else 0.0
+        requests_with_jobs_percentage = (
+            requests_with_jobs / total * 100) if total > 0 else 0.0
 
         # Requests by status
         requests_by_status_data = await sync_to_async(list)(
@@ -425,7 +356,8 @@ class DashboardQueries:
             approval_rate=round(approval_rate, 2),
             rejection_rate=round(rejection_rate, 2),
             requests_with_jobs_count=requests_with_jobs,
-            requests_with_jobs_percentage=round(requests_with_jobs_percentage, 2),
+            requests_with_jobs_percentage=round(
+                requests_with_jobs_percentage, 2),
             requests_by_status=request_status_counts if request_status_counts else None,
         )
 
@@ -444,8 +376,10 @@ class DashboardQueries:
         )
 
         # Build base queryset with filters
-        base_queryset = event_models.Request.objects.filter(tenant_id=tenant.id)
-        base_queryset = service._apply_filters(base_queryset, filters, tenant.id)
+        base_queryset = event_models.Request.objects.filter(
+            tenant_id=tenant.id)
+        base_queryset = service._apply_filters(
+            base_queryset, filters, tenant.id)
 
         # Get date range
         start_date, end_date = service._get_date_range(filters)
@@ -493,7 +427,8 @@ class DashboardQueries:
 
         # Rejection trend
         rejection_trend_data = await sync_to_async(list)(
-            base_queryset.filter(status__create_event=False, status__isnull=False)
+            base_queryset.filter(
+                status__create_event=False, status__isnull=False)
             .annotate(truncated_date=trunc_func)
             .values('truncated_date')
             .annotate(count=Count('id'))
@@ -513,7 +448,8 @@ class DashboardQueries:
 
         data_points = [
             types.TimeSeriesDataPoint(
-                timestamp=item['truncated_date'].isoformat() if item['truncated_date'] else '',
+                timestamp=item['truncated_date'].isoformat(
+                ) if item['truncated_date'] else '',
                 count=item['count'],
                 value=None
             )
@@ -522,7 +458,8 @@ class DashboardQueries:
 
         approval_trend = [
             types.TimeSeriesDataPoint(
-                timestamp=item['truncated_date'].isoformat() if item['truncated_date'] else '',
+                timestamp=item['truncated_date'].isoformat(
+                ) if item['truncated_date'] else '',
                 count=item['count'],
                 value=None
             )
@@ -531,7 +468,8 @@ class DashboardQueries:
 
         rejection_trend = [
             types.TimeSeriesDataPoint(
-                timestamp=item['truncated_date'].isoformat() if item['truncated_date'] else '',
+                timestamp=item['truncated_date'].isoformat(
+                ) if item['truncated_date'] else '',
                 count=item['count'],
                 value=None
             )
@@ -540,7 +478,8 @@ class DashboardQueries:
 
         jobs_assigned_trend = [
             types.TimeSeriesDataPoint(
-                timestamp=item['truncated_date'].isoformat() if item['truncated_date'] else '',
+                timestamp=item['truncated_date'].isoformat(
+                ) if item['truncated_date'] else '',
                 count=item['count'],
                 value=None
             )
@@ -608,11 +547,13 @@ class DashboardQueries:
             )()
 
             # Total unique ambassadors
-            total_ambassadors = max(ambassadors_count, ambassadors_from_jobs_count)
+            total_ambassadors = max(
+                ambassadors_count, ambassadors_from_jobs_count)
 
             # Count jobs
             jobs_count = await sync_to_async(
-                lambda: job_models.Job.objects.filter(event_id=event.id).count()
+                lambda: job_models.Job.objects.filter(
+                    event_id=event.id).count()
             )()
 
             active_jobs_count = await sync_to_async(
@@ -624,7 +565,7 @@ class DashboardQueries:
 
             # Get ambassador info (from prefetched data)
             ambassador_info_list = []
-            
+
             # From AmbassadorEvent
             for ambassador_event in event.ambassadors_events.all():
                 ambassador = ambassador_event.ambassador
@@ -634,18 +575,20 @@ class DashboardQueries:
                         ambassador_id=ambassador.id
                     ).count()
                 )()
-                
+
                 ambassador_info_list.append(
                     types.EventAmbassadorInfo(
                         ambassador_id=str(ambassador.id),
-                        ambassador_name=f"{ambassador.user.first_name} {ambassador.user.last_name}".strip() or ambassador.user.email,
+                        ambassador_name=f"{ambassador.user.first_name} {ambassador.user.last_name}".strip(
+                        ) or ambassador.user.email,
                         is_approved=ambassador_event.is_approved,
                         jobs_count=jobs_for_ambassador,
                     )
                 )
 
             # From AmbassadorJob (if not already included)
-            ambassador_ids_in_list = {info.ambassador_id for info in ambassador_info_list}
+            ambassador_ids_in_list = {
+                info.ambassador_id for info in ambassador_info_list}
             for job in event.jobs.all():
                 for ambassador_job in job.ambassador_jobs.all():
                     ambassador_id_str = str(ambassador_job.ambassador.id)
@@ -657,11 +600,12 @@ class DashboardQueries:
                                 ambassador_id=ambassador.id
                             ).count()
                         )()
-                        
+
                         ambassador_info_list.append(
                             types.EventAmbassadorInfo(
                                 ambassador_id=ambassador_id_str,
-                                ambassador_name=f"{ambassador.user.first_name} {ambassador.user.last_name}".strip() or ambassador.user.email,
+                                ambassador_name=f"{ambassador.user.first_name} {ambassador.user.last_name}".strip(
+                                ) or ambassador.user.email,
                                 is_approved=True,  # If they have a job, consider approved
                                 jobs_count=jobs_for_ambassador,
                             )
@@ -674,7 +618,8 @@ class DashboardQueries:
                 location = event.request.location  # Will be converted by strawberry_django
 
             # Statistics
-            approved_ambassadors = sum(1 for info in ambassador_info_list if info.is_approved)
+            approved_ambassadors = sum(
+                1 for info in ambassador_info_list if info.is_approved)
             total_requests = 1 if event.request else 0
 
             statistics = types.EventDetailStatistics(
@@ -688,17 +633,18 @@ class DashboardQueries:
             # strawberry_django automatically converts Django instances to GraphQL types
             # when returned from a field that expects the GraphQL type
             from events.types import Event as EventGraphQLType, Location as LocationGraphQLType
-            
+
             return types.EventDetail(
                 event=event,  # strawberry_django will convert automatically
-                related_request_id=str(event.request.id) if event.request else None,
+                related_request_id=str(
+                    event.request.id) if event.request else None,
                 ambassadors_count=total_ambassadors,
                 jobs_count=jobs_count,
                 ambassadors=ambassador_info_list if ambassador_info_list else None,
-                location=location if location else None,  # strawberry_django will convert automatically
+                # strawberry_django will convert automatically
+                location=location if location else None,
                 statistics=statistics,
             )
 
         except event_models.Event.DoesNotExist:
             return None
-

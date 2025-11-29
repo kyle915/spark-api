@@ -14,4 +14,3 @@ class DashboardQueries(
 ):
     """Dashboard queries for client dashboards."""
     pass
-

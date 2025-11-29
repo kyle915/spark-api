@@ -81,7 +81,8 @@ class BaseMutationService(SparkGraphQLMixin):
         """Set the user and tenant for the service."""
         self.info = info
         self.user = await self.get_user(info)
-        self.is_spark_schema = self.is_spark_schema_request(info, user=self.user)
+        self.is_spark_schema = self.is_spark_schema_request(
+            info, user=self.user)
         tenant_id = getattr(self.input, "tenant_id", None)
         is_update = hasattr(self.input, "id") and self.input.id is not None
 
@@ -121,7 +122,8 @@ class BaseMutationService(SparkGraphQLMixin):
                 request_url_name=request_url_name
             )
         except Tenant.DoesNotExist:
-            raise GraphQLError("Tenant not found for the provided request url name.")
+            raise GraphQLError(
+                "Tenant not found for the provided request url name.")
 
         self.tenant_id = tenant.id
         setattr(self.input, "tenant_id", tenant.id)
@@ -167,7 +169,8 @@ class BaseMutationService(SparkGraphQLMixin):
 
         # get the model
         model_class = self.get_model()
-        is_update: bool = hasattr(self.input, "id") and self.input.id is not None
+        is_update: bool = hasattr(
+            self.input, "id") and self.input.id is not None
         if is_update:
             model = await sync_to_async(model_class.objects.get)(id=self.input.id)
             if self.user:
@@ -988,7 +991,7 @@ class RequestWithDependenciesMutationService(BaseMutationService):
             request = models.Request(**params)
             if self.user:
                 request.created_by = self.user
-            
+
             if self.is_public and self.input.tenant_id:
                 request.tenant_id = self.input.tenant_id
             elif self.tenant_id:
@@ -1017,7 +1020,7 @@ class RequestWithDependenciesMutationService(BaseMutationService):
                     if self.user:
                         product.created_by = self.user
                     product.save()
-            
+
             return request
 
     async def save(self) -> models.Request:
@@ -1102,7 +1105,8 @@ class RequestMutations:
             service: RequestMutationService = RequestMutationService()
             user: User = await service.get_user(info)
             if user.role_id == ROLE_ID.Ambassadors:
-                raise GraphQLError("You are not authorized to approve requests.")
+                raise GraphQLError(
+                    "You are not authorized to approve requests.")
 
             # Get the request first to access its tenant
             request: models.Request = await sync_to_async(models.Request.objects.get)(
