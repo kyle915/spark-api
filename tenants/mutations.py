@@ -34,6 +34,7 @@ class BaseRegisterInput(SparkGraphQLInput):
 @strawberry.enum
 class UserRoleEnum(Enum):
     AMBASSADOR = "ambassador"
+    CLIENT = "client"
 
 
 @strawberry.input
