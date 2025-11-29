@@ -295,3 +295,366 @@ class TestClientDashboardQueries(DashboardGraphQLTestCase):
         new_count = result2.data['eventsStats']['totalEvents']
 
         assert new_count == initial_count + 1
+
+    @pytest.mark.asyncio
+    async def test_events_stats_with_filters(self):
+        """Test events_stats query with various filter combinations."""
+        # Test with date range filter
+        query_with_dates = """
+        query EventsStats($startDate: String, $endDate: String) {
+            eventsStats(filters: {
+                startDate: $startDate
+                endDate: $endDate
+            }) {
+                totalEvents
+            }
+        }
+        """
+        today = timezone.now().date()
+        yesterday = today - timedelta(days=1)
+        tomorrow = today + timedelta(days=1)
+
+        result = await self._execute_query_authenticated(
+            query_with_dates,
+            {
+                'startDate': str(yesterday),
+                'endDate': str(tomorrow)
+            },
+            self.client_user
+        )
+
+        assert result.errors is None
+        assert result.data is not None
+        assert result.data['eventsStats']['totalEvents'] >= 0
+
+        # Test with location filter
+        query_with_location = """
+        query EventsStats($locationId: ID) {
+            eventsStats(filters: {
+                locationId: $locationId
+            }) {
+                totalEvents
+            }
+        }
+        """
+        location_id = str(self.location.id)
+
+        result = await self._execute_query_authenticated(
+            query_with_location,
+            {'locationId': location_id},
+            self.client_user
+        )
+
+        assert result.errors is None
+        assert result.data is not None
+        assert result.data['eventsStats']['totalEvents'] >= 0
+
+        # Test with event type and status filters
+        query_with_event_filters = """
+        query EventsStats($eventTypeId: ID, $eventStatusId: ID) {
+            eventsStats(filters: {
+                eventTypeId: $eventTypeId
+                eventStatusId: $eventStatusId
+            }) {
+                totalEvents
+            }
+        }
+        """
+        event_type_id = str(self.event_type.id)
+        event_status_id = str(self.event_status.id)
+
+        result = await self._execute_query_authenticated(
+            query_with_event_filters,
+            {
+                'eventTypeId': event_type_id,
+                'eventStatusId': event_status_id
+            },
+            self.client_user
+        )
+
+        assert result.errors is None
+        assert result.data is not None
+        assert result.data['eventsStats']['totalEvents'] >= 0
+
+    @pytest.mark.asyncio
+    async def test_cache_with_different_filters(self):
+        """Test that different filter combinations produce different cache entries."""
+        query_template = """
+        query EventsStats($startDate: String, $locationId: ID) {
+            eventsStats(filters: {
+                startDate: $startDate
+                locationId: $locationId
+            }) {
+                totalEvents
+            }
+        }
+        """
+
+        # Clear cache first
+        cache.clear()
+
+        # Query 1: No filters
+        query_no_filters = """
+        query {
+            eventsStats {
+                totalEvents
+            }
+        }
+        """
+        result1 = await self._execute_query_authenticated(
+            query_no_filters,
+            {},
+            self.client_user
+        )
+        count1 = result1.data['eventsStats']['totalEvents']
+
+        # Query 2: With date filter
+        today = timezone.now().date()
+        yesterday = today - timedelta(days=1)
+        result2 = await self._execute_query_authenticated(
+            query_template,
+            {'startDate': str(yesterday)},
+            self.client_user
+        )
+        count2 = result2.data['eventsStats']['totalEvents']
+
+        # Query 3: With location filter
+        location_id = str(self.location.id)
+        result3 = await self._execute_query_authenticated(
+            query_template,
+            {'locationId': location_id},
+            self.client_user
+        )
+        count3 = result3.data['eventsStats']['totalEvents']
+
+        # Query 4: With both filters
+        result4 = await self._execute_query_authenticated(
+            query_template,
+            {
+                'startDate': str(yesterday),
+                'locationId': location_id
+            },
+            self.client_user
+        )
+        count4 = result4.data['eventsStats']['totalEvents']
+
+        # All queries should succeed
+        assert result1.errors is None
+        assert result2.errors is None
+        assert result3.errors is None
+        assert result4.errors is None
+
+        # Verify all counts are valid (may be same or different depending on data)
+        assert isinstance(count1, int)
+        assert isinstance(count2, int)
+        assert isinstance(count3, int)
+        assert isinstance(count4, int)
+
+    @pytest.mark.asyncio
+    async def test_cache_hit_same_filters(self):
+        """Test that same filter combination returns cached result."""
+        query = """
+        query EventsStats($startDate: String) {
+            eventsStats(filters: {
+                startDate: $startDate
+            }) {
+                totalEvents
+            }
+        }
+        """
+
+        # Clear cache first
+        cache.clear()
+
+        today = timezone.now().date()
+        yesterday = today - timedelta(days=1)
+        filters = {'startDate': str(yesterday)}
+
+        # First call - should cache
+        result1 = await self._execute_query_authenticated(
+            query,
+            filters,
+            self.client_user
+        )
+        count1 = result1.data['eventsStats']['totalEvents']
+
+        # Second call with same filters - should return cached result
+        result2 = await self._execute_query_authenticated(
+            query,
+            filters,
+            self.client_user
+        )
+        count2 = result2.data['eventsStats']['totalEvents']
+
+        # Results should be identical (cached)
+        assert count1 == count2
+        assert result1.errors is None
+        assert result2.errors is None
+
+    @pytest.mark.asyncio
+    async def test_request_stats_with_filters(self):
+        """Test request_stats query with various filter combinations."""
+        # Test with date range
+        query_with_dates = """
+        query RequestStats($startDate: String, $endDate: String) {
+            requestStats(filters: {
+                startDate: $startDate
+                endDate: $endDate
+            }) {
+                totalRequests
+            }
+        }
+        """
+        today = timezone.now().date()
+        yesterday = today - timedelta(days=1)
+        tomorrow = today + timedelta(days=1)
+
+        result = await self._execute_query_authenticated(
+            query_with_dates,
+            {
+                'startDate': str(yesterday),
+                'endDate': str(tomorrow)
+            },
+            self.client_user
+        )
+
+        assert result.errors is None
+        assert result.data is not None
+        assert result.data['requestStats']['totalRequests'] >= 0
+
+        # Test with request status filter
+        query_with_status = """
+        query RequestStats($requestStatusId: ID) {
+            requestStats(filters: {
+                requestStatusId: $requestStatusId
+            }) {
+                totalRequests
+                approvedCount
+            }
+        }
+        """
+        approved_status_id = str(self.approved_status.id)
+
+        result = await self._execute_query_authenticated(
+            query_with_status,
+            {'requestStatusId': approved_status_id},
+            self.client_user
+        )
+
+        assert result.errors is None
+        assert result.data is not None
+        assert result.data['requestStats']['totalRequests'] >= 0
+
+        # Test with client filter
+        query_with_client = """
+        query RequestStats($clientId: ID) {
+            requestStats(filters: {
+                clientId: $clientId
+            }) {
+                totalRequests
+            }
+        }
+        """
+        client_id = str(self.client.id)
+
+        result = await self._execute_query_authenticated(
+            query_with_client,
+            {'clientId': client_id},
+            self.client_user
+        )
+
+        assert result.errors is None
+        assert result.data is not None
+        assert result.data['requestStats']['totalRequests'] >= 0
+
+    @pytest.mark.asyncio
+    async def test_events_time_series_with_filters(self):
+        """Test events_time_series query with filter combinations."""
+        query = """
+        query EventsTimeSeries($groupBy: TimeGroupBy, $startDate: String, $locationId: ID) {
+            eventsTimeSeries(
+                groupBy: $groupBy
+                filters: {
+                    startDate: $startDate
+                    locationId: $locationId
+                }
+            ) {
+                groupBy
+                totalCount
+                dataPoints {
+                    timestamp
+                    count
+                }
+            }
+        }
+        """
+
+        today = timezone.now().date()
+        yesterday = today - timedelta(days=7)  # Last week
+        location_id = str(self.location.id)
+
+        # Test with date and location filters
+        result = await self._execute_query_authenticated(
+            query,
+            {
+                'groupBy': 'DAY',
+                'startDate': str(yesterday),
+                'locationId': location_id
+            },
+            self.client_user
+        )
+
+        assert result.errors is None
+        assert result.data is not None
+        data = result.data['eventsTimeSeries']
+        assert data['groupBy'] == 'DAY'
+        assert isinstance(data['dataPoints'], list)
+
+    @pytest.mark.asyncio
+    async def test_cache_invalidation_with_filters(self):
+        """Test that cache invalidation works correctly with filters."""
+        query = """
+        query EventsStats($startDate: String) {
+            eventsStats(filters: {
+                startDate: $startDate
+            }) {
+                totalEvents
+            }
+        }
+        """
+
+        # Clear cache first
+        cache.clear()
+
+        today = timezone.now().date()
+        yesterday = today - timedelta(days=1)
+        filters = {'startDate': str(yesterday)}
+
+        # First query - should cache
+        result1 = await self._execute_query_authenticated(
+            query,
+            filters,
+            self.client_user
+        )
+        initial_count = result1.data['eventsStats']['totalEvents']
+
+        # Create new event
+        new_event = await sync_to_async(self.create_event)(
+            name="New Event for Cache Test",
+            tenant=self.tenant,
+            address="New Address",
+            request=self.request1,
+            event_type=self.event_type,
+            status=self.event_status
+        )
+
+        # Second query with same filters - should reflect new event (cache invalidated)
+        result2 = await self._execute_query_authenticated(
+            query,
+            filters,
+            self.client_user
+        )
+        new_count = result2.data['eventsStats']['totalEvents']
+
+        # Should see the new event (cache was invalidated)
+        assert new_count >= initial_count

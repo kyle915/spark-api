@@ -112,6 +112,55 @@ class DashboardQueriesService(SparkGraphQLMixin):
 
         return start, end
 
+    def _extract_filter_values(
+        self, filters: inputs.DashboardFiltersInput | None
+    ) -> dict[str, str]:
+        """
+        Extract filter values into a dictionary for cache key generation.
+
+        Only includes non-None values. ID fields are converted to strings
+        for consistent hashing.
+
+        Args:
+            filters: Optional filter input
+
+        Returns:
+            Dictionary of filter key-value pairs
+        """
+        if not filters:
+            return {}
+
+        # Mapping of field names to their conversion functions
+        # None means keep as-is, str means convert to string
+        field_mappings = {
+            # Date range filters
+            'start_date': None,
+            'end_date': None,
+            # Location filters
+            'location_id': str,
+            'location_code': None,
+            # Event filters
+            'event_type_id': str,
+            'event_status_id': str,
+            # Request filters
+            'request_status_id': str,
+            'request_type_id': str,
+            # Additional filters
+            'client_id': str,
+            'distributor_id': str,
+            'retailer_id': str,
+            'tenant_id': str,
+        }
+
+        filter_dict = {}
+        for field_name, converter in field_mappings.items():
+            value = getattr(filters, field_name, None)
+            if value is not None:
+                filter_dict[field_name] = converter(
+                    value) if converter else value
+
+        return filter_dict
+
     def _get_cache_version(self, query_name: str, tenant_id: int) -> int:
         """
         Get current cache version for a query and tenant.
@@ -149,33 +198,7 @@ class DashboardQueriesService(SparkGraphQLMixin):
         version = self._get_cache_version(query_name, tenant_id)
 
         # Build filter dict with all parameters (only non-None values)
-        filter_dict = {}
-        if filters:
-            if filters.start_date:
-                filter_dict['start_date'] = filters.start_date
-            if filters.end_date:
-                filter_dict['end_date'] = filters.end_date
-            if filters.location_id:
-                filter_dict['location_id'] = str(filters.location_id)
-            if filters.location_code:
-                filter_dict['location_code'] = filters.location_code
-            if filters.event_type_id:
-                filter_dict['event_type_id'] = str(filters.event_type_id)
-            if filters.event_status_id:
-                filter_dict['event_status_id'] = str(filters.event_status_id)
-            if filters.request_status_id:
-                filter_dict['request_status_id'] = str(
-                    filters.request_status_id)
-            if filters.request_type_id:
-                filter_dict['request_type_id'] = str(filters.request_type_id)
-            if filters.client_id:
-                filter_dict['client_id'] = str(filters.client_id)
-            if filters.distributor_id:
-                filter_dict['distributor_id'] = str(filters.distributor_id)
-            if filters.retailer_id:
-                filter_dict['retailer_id'] = str(filters.retailer_id)
-            if filters.tenant_id:
-                filter_dict['tenant_id'] = str(filters.tenant_id)
+        filter_dict = self._extract_filter_values(filters)
 
         if group_by:
             filter_dict['group_by'] = group_by
