@@ -215,7 +215,7 @@ class BaseGraphQLTestCase:
 
         return roles
 
-    async def _execute_mutation(self, mutation, variables, endpoint_path=None):
+    async def _execute_mutation(self, mutation, variables, endpoint_path=None, user=None):
         """
         Helper method to execute GraphQL mutations.
 
@@ -227,6 +227,7 @@ class BaseGraphQLTestCase:
             variables: Variables dictionary
             endpoint_path: The actual endpoint path being tested (optional,
                           defaults to self.endpoint_path if set)
+            user: Optional user to simulate authentication
 
         Returns:
             ExecutionResult: The result from schema.execute()
@@ -240,7 +241,7 @@ class BaseGraphQLTestCase:
 
         factory = RequestFactory()
         wsgi_request = factory.post(path)
-        wsgi_request.user = AnonymousUser()
+        wsgi_request.user = user or AnonymousUser()
 
         # Create a mock ASGI request object that JwtSchema expects
         # JwtSchema middleware looks for request.scope or request.consumer.scope
@@ -263,14 +264,25 @@ class BaseGraphQLTestCase:
                     "path": path,
                     USER_OR_ERROR_KEY: MockUserOrError(wsgi_request.user),
                 }
+                # Add UserOrError attribute as some permissions might check it directly
+                setattr(self, USER_OR_ERROR_KEY, MockUserOrError(wsgi_request.user))
 
         mock_request = MockASGIRequest(wsgi_request, path)
+
+        class Context:
+            def __init__(self, request):
+                self.request = request
+            
+            def __getitem__(self, key):
+                if key == "request":
+                    return self.request
+                raise KeyError(key)
 
         # Use execute (async) since mutations are async
         # According to Strawberry docs: https://strawberry.rocks/docs/operations/testing
         result = await self.schema.execute(
             mutation,
             variable_values=variables,
-            context_value={"request": mock_request},
+            context_value=Context(mock_request),
         )
         return result
