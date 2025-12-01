@@ -28,6 +28,9 @@ jobs:
         run: uv sync
 
       - name: Run tests (uv)
+        env:
+          SECRET_KEY: ${{ secrets.SECRET_KEY }}
+          DEBUG: "True"
         run: uv run python manage.py test
 
       # ------------------------------------
