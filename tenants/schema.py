@@ -9,10 +9,13 @@ from strawberry_django.permissions import IsAuthenticated
 from utils.graphql.permissions import StrictIsAuthenticated
 
 from .models import Role, Tenant
+from .types import RoleType, TenantType
+from .inputs import TenantFiltersInput
 from .mutations import (
     AmbassadorsCustomRegister,
     ClientsCustomRegister,
     SparkCustomRegister,
+    SparkTenantMutations,
 )
 from utils.graphql.relay import (
     CountableConnection,
@@ -20,21 +23,6 @@ from utils.graphql.relay import (
 )
 
 User = get_user_model()
-
-
-@strawberry_django.type(Role)
-class RoleType:
-    id: strawberry.auto
-    uuid: strawberry.auto
-    name: strawberry.auto
-
-
-# @strawberry.django.type(Tenant)
-@strawberry_django.type(Tenant)
-class TenantType:
-    id: strawberry.auto
-    uuid: strawberry.auto
-    name: strawberry.auto
 
 
 # @strawberry.django.type(model=get_user_model(), name="CustomUserType")
@@ -61,6 +49,7 @@ class QuerySpark:
         self,
         info,
         user_uuid: strawberry.ID | None = None,
+        filters: TenantFiltersInput | None = None,
         first: int | None = None,
         after: str | None = None,
         last: int | None = None,
@@ -72,6 +61,11 @@ class QuerySpark:
                 tenanted_users__is_active=True,
                 tenanted_users__user__uuid=user_uuid,
             )
+        if filters:
+            if filters.name:
+                queryset = queryset.filter(name__icontains=filters.name)
+            if filters.request_url_name:
+                queryset = queryset.filter(request_url_name__icontains=filters.request_url_name)
         queryset = queryset.distinct()
 
         try:
@@ -89,7 +83,7 @@ class QuerySpark:
 
 
 @strawberry.type
-class MutationSpark(SparkCustomRegister):
+class MutationSpark(SparkCustomRegister, SparkTenantMutations):
     verify_token = mutations.VerifyToken.field
     token_auth = mutations.ObtainJSONWebToken.field
     refresh_token = mutations.RefreshToken.field
@@ -126,6 +120,7 @@ class QueryClients:
         self,
         info,
         user_uuid: strawberry.ID | None = None,
+        filters: TenantFiltersInput | None = None,
         first: int | None = None,
         after: str | None = None,
         last: int | None = None,
@@ -133,15 +128,23 @@ class QueryClients:
     ) -> CountableConnection[TenantType]:
         user = info.context.request.user
 
-        filters = {
+        filter_dict = {
             "tenanted_users__is_active": True,
         }
         if user_uuid:
-            filters["tenanted_users__user__uuid"] = user_uuid
+            filter_dict["tenanted_users__user__uuid"] = user_uuid
         else:
-            filters["tenanted_users__user"] = user
+            filter_dict["tenanted_users__user"] = user
 
-        queryset = Tenant.objects.filter(**filters).distinct()
+        queryset = Tenant.objects.filter(**filter_dict)
+        
+        if filters:
+            if filters.name:
+                queryset = queryset.filter(name__icontains=filters.name)
+            if filters.request_url_name:
+                queryset = queryset.filter(request_url_name__icontains=filters.request_url_name)
+        
+        queryset = queryset.distinct()
         try:
             return await connection_from_queryset_async(
                 queryset,

@@ -289,6 +289,12 @@ type CompanyToAmbassadorReviewDetailResponse {
   companyToAmbassadorReview: CompanyToAmbassadorReview
 }
 
+input CoordinatesFilterInput {
+  coordinates: [Float!]!
+  range: Float!
+  unit: DistanceUnit! = KILOMETERS
+}
+
 input CreateAmbassadorJobInput {
   clientMutationId: ID = null
   tenantId: ID = null
@@ -608,6 +614,18 @@ input CreateStatusInput {
   name: String!
 }
 
+input CreateTenantInput {
+  clientMutationId: ID = null
+  name: String!
+}
+
+type CreateTenantResponse {
+  success: Boolean!
+  message: String!
+  tenant: TenantType
+  clientMutationId: ID
+}
+
 """
 User(password, last_login, is_superuser, username, first_name, last_name, email, is_staff, date_joined, id, uuid, role, created_by, updated_by, created_at, updated_at, is_active)
 """
@@ -725,6 +743,7 @@ input EventFiltersInput {
   eventStatusId: ID = null
   requestId: ID = null
   date: String = null
+  coordinates: CoordinatesFilterInput = null
 }
 
 """
@@ -1146,6 +1165,21 @@ input LocationFiltersInput {
   tenantUuid: ID = null
 }
 
+enum ManageAmbassadorJobAssignmentAction {
+  ACCEPT
+  REJECT
+  BLACKLIST
+  WHITELIST
+}
+
+input ManageAmbassadorJobAssignmentInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  ambassadorJobId: ID!
+  action: ManageAmbassadorJobAssignmentAction!
+  statusId: ID = null
+}
+
 type Mutation {
   createRequestByUrl(input: CreateRequestWithDependenciesInput!, requestUrlName: String!): RequestDetailResponse!
   createEventStatus(input: CreateEventStatusInput!): EventStatusDetailResponse!
@@ -1176,6 +1210,8 @@ type Mutation {
   register(input: BaseRegisterInput!): RegisterResponse!
   socialAuthGoogle(input: GoogleSocialAuthInput!): SocialAuthResponse!
   socialAuthApple(input: AppleSocialAuthInput!): SocialAuthResponse!
+  createTenant(input: CreateTenantInput!): CreateTenantResponse!
+  updateTenant(input: UpdateTenantInput!): UpdateTenantResponse!
 
   "### Checks if a token is not expired and correct.\n\n*Note that this is not for refresh tokens.*\n"
   verifyToken(input: VerifyTokenInput!): VerifyTokenType!
@@ -1230,6 +1266,7 @@ type Mutation {
   updateQuestionOption(input: UpdateQuestionOptionInput!): QuestionOptionDetailResponse!
   createJobRequirementAnswer(input: CreateJobRequirementAnswerInput!): JobRequirementAnswerDetailResponse!
   updateJobRequirementAnswer(input: UpdateJobRequirementAnswerInput!): JobRequirementAnswerDetailResponse!
+  manageAmbassadorJobAssignment(input: ManageAmbassadorJobAssignmentInput!): AmbassadorJobDetailResponse!
 }
 
 type MutationNormalOutput {
@@ -1419,7 +1456,7 @@ type Query {
   locations(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: LocationFiltersInput = null): LocationCountableConnection!
   location(id: ID!): Location
   me: CustomUserType!
-  tenants(userUuid: ID = null, first: Int = null, after: String = null, last: Int = null, before: String = null): TenantTypeCountableConnection!
+  tenants(userUuid: ID = null, filters: TenantFiltersInput = null, first: Int = null, after: String = null, last: Int = null, before: String = null): TenantTypeCountableConnection!
   ambassadorJobStatuses(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): StatusCountableConnection!
   ambassadorJobStatus(id: ID!): Status
   companyFiles(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): CompanyFileCountableConnection!
@@ -1451,6 +1488,7 @@ type Query {
   availableJobs(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): JobCountableConnection!
   ambassadorJobs(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): AmbassadorJobCountableConnection!
   ambassadorJob(id: ID!): AmbassadorJob
+  jobApplicants(jobId: ID!, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): AmbassadorJobCountableConnection!
   companyToAmbassadorReviews(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): CompanyToAmbassadorReviewCountableConnection!
   companyToAmbassadorReview(id: ID!): CompanyToAmbassadorReview
   ambassadorToAmbassadorReviews(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): AmbassadorToAmbassadorReviewCountableConnection!
@@ -1882,6 +1920,11 @@ type StatusDetailResponse {
   status: Status
 }
 
+input TenantFiltersInput {
+  name: String = null
+  requestUrlName: String = null
+}
+
 """
 Tenant(id, uuid, name, request_url_name, created_by, updated_by, created_at, updated_at)
 """
@@ -1889,6 +1932,7 @@ type TenantType {
   id: ID!
   uuid: UUID!
   name: String!
+  requestUrlName: String
 }
 
 type TenantTypeCountableConnection {
@@ -2247,6 +2291,19 @@ input UpdateStatusInput {
   tenantId: ID = null
   name: String!
   id: ID!
+}
+
+input UpdateTenantInput {
+  clientMutationId: ID = null
+  id: ID!
+  name: String = null
+}
+
+type UpdateTenantResponse {
+  success: Boolean!
+  message: String!
+  tenant: TenantType
+  clientMutationId: ID
 }
 
 """A helper model that handles user account stuff."""
