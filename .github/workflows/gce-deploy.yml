@@ -60,66 +60,66 @@ jobs:
             mkdir -p $BACKUP_DIR
             mkdir -p $LOG_DIR
 
-            TIMESTAMP=\$(date +%Y%m%d_%H%M%S)
-            BACKUP_FILE="$BACKUP_DIR/spark-api-backup-\$TIMESTAMP.zip"
-            LOG_FILE="$LOG_DIR/deploy-\$TIMESTAMP.log"
+            TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+            BACKUP_FILE="$BACKUP_DIR/spark-api-backup-$TIMESTAMP.zip"
+            LOG_FILE="$LOG_DIR/deploy-$TIMESTAMP.log"
 
-            echo ">>> Starting deploy at \$(date)" | tee -a \$LOG_FILE
-            echo ">>> Log file: \$LOG_FILE" | tee -a \$LOG_FILE
+            echo ">>> Starting deploy at $(date)" | tee -a $LOG_FILE
+            echo ">>> Log file: $LOG_FILE" | tee -a $LOG_FILE
 
-            echo ">>> Creating backup..." | tee -a \$LOG_FILE
+            echo ">>> Creating backup..." | tee -a $LOG_FILE
             cd /home/wern
-            zip -r "\$BACKUP_FILE" spark-api > /dev/null
-            echo ">>> Backup created: \$BACKUP_FILE" | tee -a \$LOG_FILE
+            zip -r "$BACKUP_FILE" spark-api > /dev/null
+            echo ">>> Backup created: $BACKUP_FILE" | tee -a $LOG_FILE
 
-            cd \$APP_DIR
+            cd $APP_DIR
 
-            echo ">>> Ensuring UV is installed..." | tee -a \$LOG_FILE
+            echo ">>> Ensuring UV is installed..." | tee -a $LOG_FILE
             if ! command -v uv &> /dev/null; then
-              echo ">>> UV not found, installing..." | tee -a \$LOG_FILE
-              curl -LsSf https://astral.sh/uv/install.sh | sh 2>&1 | tee -a \$LOG_FILE
+              echo ">>> UV not found, installing..." | tee -a $LOG_FILE
+              curl -LsSf https://astral.sh/uv/install.sh | sh 2>&1 | tee -a $LOG_FILE
             fi
 
-            echo ">>> Fetching latest code..." | tee -a \$LOG_FILE
-            git fetch origin 2>&1 | tee -a \$LOG_FILE
-            git reset --hard origin/develop 2>&1 | tee -a \$LOG_FILE
+            echo ">>> Fetching latest code..." | tee -a $LOG_FILE
+            git fetch origin 2>&1 | tee -a $LOG_FILE
+            git reset --hard origin/develop 2>&1 | tee -a $LOG_FILE
 
-            echo ">>> Syncing dependencies..." | tee -a \$LOG_FILE
-            uv sync 2>&1 | tee -a \$LOG_FILE
+            echo ">>> Syncing dependencies..." | tee -a $LOG_FILE
+            uv sync 2>&1 | tee -a $LOG_FILE
 
-            echo ">>> Running migrations..." | tee -a \$LOG_FILE
-            uv run python manage.py migrate 2>&1 | tee -a \$LOG_FILE
+            echo ">>> Running migrations..." | tee -a $LOG_FILE
+            uv run python manage.py migrate 2>&1 | tee -a $LOG_FILE
 
-            echo ">>> Restarting spark service..." | tee -a \$LOG_FILE
-            sudo systemctl restart spark 2>&1 | tee -a \$LOG_FILE
+            echo ">>> Restarting spark service..." | tee -a $LOG_FILE
+            sudo systemctl restart spark 2>&1 | tee -a $LOG_FILE
 
-            echo ">>> Waiting for health check..." | tee -a \$LOG_FILE
+            echo ">>> Waiting for health check..." | tee -a $LOG_FILE
             sleep 5
 
-            STATUS=\$(curl -s -o /dev/null -w "%{http_code}" http://localhost/health/)
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost/health/)
 
-            if [ "\$STATUS" = "200" ]; then
-              echo ">>> Health check OK (200). Deploy successful." | tee -a \$LOG_FILE
+            if [ "$STATUS" = "200" ]; then
+              echo ">>> Health check OK (200). Deploy successful." | tee -a $LOG_FILE
               exit 0
             fi
 
             # -----------------------------
             # AUTO ROLLBACK ON FAILURE
             # -----------------------------
-            echo ">>> Health check FAILED (\$STATUS). Starting rollback..." | tee -a \$LOG_FILE
+            echo ">>> Health check FAILED ($STATUS). Starting rollback..." | tee -a $LOG_FILE
 
-            echo ">>> Restoring backup..." | tee -a \$LOG_FILE
-            rm -rf \$APP_DIR 2>&1 | tee -a \$LOG_FILE
-            unzip "\$BACKUP_FILE" -d /home/wern/ 2>&1 | tee -a \$LOG_FILE
+            echo ">>> Restoring backup..." | tee -a $LOG_FILE
+            rm -rf $APP_DIR 2>&1 | tee -a $LOG_FILE
+            unzip "$BACKUP_FILE" -d /home/wern/ 2>&1 | tee -a $LOG_FILE
 
-            echo ">>> Resyncing dependencies after rollback..." | tee -a \$LOG_FILE
-            cd \$APP_DIR
-            uv sync 2>&1 | tee -a \$LOG_FILE
+            echo ">>> Resyncing dependencies after rollback..." | tee -a $LOG_FILE
+            cd $APP_DIR
+            uv sync 2>&1 | tee -a $LOG_FILE
 
-            echo ">>> Restarting spark service (rollback)..." | tee -a \$LOG_FILE
-            sudo systemctl restart spark 2>&1 | tee -a \$LOG_FILE
+            echo ">>> Restarting spark service (rollback)..." | tee -a $LOG_FILE
+            sudo systemctl restart spark 2>&1 | tee -a $LOG_FILE
 
-            echo ">>> Rollback complete." | tee -a \$LOG_FILE
+            echo ">>> Rollback complete." | tee -a $LOG_FILE
             exit 1
 
           EOF
