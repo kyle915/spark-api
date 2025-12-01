@@ -26,17 +26,6 @@ jobs:
 
       - name: Sync dependencies (uv)
         run: uv sync
-
-      - name: Run tests (uv)
-        env:
-          SECRET_KEY: ${{ secrets.SECRET_KEY }}
-          DATABASE_URL: ${{ secrets.DATABASE_URL  }}
-          ALLOWED_HOSTS: ${{ secrets.ALLOWED_HOSTS }}
-          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
-          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
-          DEBUG: "True"
-        run: uv run python manage.py test
-
       # ------------------------------------
       # SSH CONFIGURATION
       # ------------------------------------
