@@ -115,7 +115,7 @@ jobs:
             echo ">>> Healthcheck status: $STATUS" | tee -a $LOG_FILE
             echo ">>> Response body: $BODY" | tee -a $LOG_FILE
 
-            if [ "$STATUS" = "200" ] && echo "$BODY" | grep -q '"healthcheck":"ok"'; then
+            if [ "$STATUS" = "200" ] && echo "$BODY" | grep -q '"healthcheck"[[:space:]]*:[[:space:]]*"ok"'; then
                 echo ">>> Health check OK (GraphQL responded successfully)." | tee -a $LOG_FILE
                 exit 0
             fi
