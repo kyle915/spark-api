@@ -40,6 +40,10 @@ class CustomUserType:
 # Spark Schema
 @strawberry.type()
 class QuerySpark:
+    @strawberry.field
+    def healthcheck(self) -> str:
+        return "ok"
+
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     def me(self, info) -> CustomUserType:
         return info.context.request.user
@@ -95,6 +99,10 @@ class MutationSpark(SparkCustomRegister, SparkTenantMutations):
 @strawberry_django.type(User)
 class QueryAmbassadors:
     @strawberry.field
+    def healthcheck(self) -> str:
+        return "ok"
+
+    @strawberry.field
     def me(self, info) -> CustomUserType:
         return info.context.request.user
 
@@ -111,6 +119,10 @@ class MutationAmbassadors(AmbassadorsCustomRegister):
 # @strawberry.django.type(model=get_user_model())
 @strawberry_django.type(User)
 class QueryClients:
+    @strawberry.field
+    def healthcheck(self) -> str:
+        return "ok"
+
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     def me(self, info) -> CustomUserType:
         return info.context.request.user
@@ -171,6 +183,10 @@ class MutationClients(ClientsCustomRegister):
 # @strawberry.django.type(model=get_user_model())
 @strawberry_django.type(User)
 class QueryMobile:
+    @strawberry.field
+    def healthcheck(self) -> str:
+        return "ok"
+
     @strawberry.field
     def me(self, info) -> CustomUserType:
         return info.context.request.user
