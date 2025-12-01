@@ -103,15 +103,21 @@ jobs:
             echo ">>> Waiting for health check..." | tee -a $LOG_FILE
             sleep 5
 
-            HEALTH_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST https://spark-api-dev.wern.co/api/v1/graphql/spark \
-              -H "Content-Type: application/json" \
-              -d '{"query":"query { healthcheck }"}')
+            HEALTH_RESPONSE=$(curl -s -w "\n%{http_code}" \
+            -X POST http://localhost/api/v1/graphql/spark \
+            -H "Host: spark-api-dev.wern.co" \
+            -H "Content-Type: application/json" \
+            -d '{"query":"query { healthcheck }"}')
+
             STATUS=$(echo "$HEALTH_RESPONSE" | tail -n 1)
             BODY=$(echo "$HEALTH_RESPONSE" | sed '$d')
 
+            echo ">>> Healthcheck status: $STATUS" | tee -a $LOG_FILE
+            echo ">>> Response body: $BODY" | tee -a $LOG_FILE
+
             if [ "$STATUS" = "200" ] && echo "$BODY" | grep -q '"healthcheck":"ok"'; then
-              echo ">>> Health check OK (GraphQL healthcheck returned ok)." | tee -a $LOG_FILE
-              exit 0
+                echo ">>> Health check OK (GraphQL responded successfully)." | tee -a $LOG_FILE
+                exit 0
             fi
 
             # -----------------------------
