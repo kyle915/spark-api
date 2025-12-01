@@ -17,6 +17,7 @@ from .mutations import (
     SparkCustomRegister,
     SparkTenantMutations,
 )
+from .dashboard.schema import DashboardQueries
 from utils.graphql.relay import (
     CountableConnection,
     connection_from_queryset_async,
@@ -84,6 +85,9 @@ class QuerySpark:
             )
         except ValueError as exc:
             raise GraphQLError(str(exc)) from exc
+
+
+# Import dashboard queries (moved to top after imports)
 
 
 @strawberry.type
@@ -190,6 +194,18 @@ class QueryMobile:
     @strawberry.field
     def me(self, info) -> CustomUserType:
         return info.context.request.user
+
+
+class AppointmentSlot:
+    pass
+
+
+class Reservation:
+    pass
+
+
+class Customer:
+    pass
 
 
 @strawberry.type

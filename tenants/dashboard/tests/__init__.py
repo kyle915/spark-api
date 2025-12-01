@@ -1,0 +1,4 @@
+"""
+Dashboard tests package.
+"""
+
