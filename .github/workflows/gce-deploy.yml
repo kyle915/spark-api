@@ -49,7 +49,7 @@ jobs:
       # ------------------------------------
       - name: Deploy to GCE (with Auto Rollback + Logging)
         run: |
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ${{ secrets.GCE_USER }}@${{ secrets.GCE_HOST }} << 'EOF'
+          ssh ${{ secrets.GCE_USER }}@${{ secrets.GCE_HOST }} << 'EOF'
 
             set -e
 
