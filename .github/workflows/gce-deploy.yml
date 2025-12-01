@@ -69,7 +69,14 @@ jobs:
 
             echo ">>> Creating backup..." | tee -a $LOG_FILE
             cd /home/wern
-            zip -r "$BACKUP_FILE" spark-api > /dev/null
+            zip -r "$BACKUP_FILE" spark-api \
+              -x "spark-api/*.sock" \
+              -x "spark-api/*.pid" \
+              -x "spark-api/run/*" \
+              -x "spark-api/tmp/*" \
+              -x "spark-api/__pycache__/*" \
+              -x "spark-api/**/*.pyc" \
+            > /dev/null
             echo ">>> Backup created: $BACKUP_FILE" | tee -a $LOG_FILE
 
             cd $APP_DIR
