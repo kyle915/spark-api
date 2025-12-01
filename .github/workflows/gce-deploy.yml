@@ -103,7 +103,7 @@ jobs:
             echo ">>> Waiting for health check..." | tee -a $LOG_FILE
             sleep 5
 
-            HEALTH_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST http://localhost/api/v1/graphql/spark \
+            HEALTH_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST https://spark-api-dev.wern.co/api/v1/graphql/spark \
               -H "Content-Type: application/json" \
               -d '{"query":"query { healthcheck }"}')
             STATUS=$(echo "$HEALTH_RESPONSE" | tail -n 1)
