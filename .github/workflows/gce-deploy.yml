@@ -36,14 +36,6 @@ jobs:
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -H ${{ secrets.GCE_HOST }} >> ~/.ssh/known_hosts
       
-      - name: Debug SSH key injection
-        run: |
-          ls -l ~/.ssh/id_rsa
-          wc -l ~/.ssh/id_rsa
-          file ~/.ssh/id_rsa
-          head -n 1 ~/.ssh/id_rsa || true
-          ssh-keygen -l -f ~/.ssh/id_rsa || true
-
       # ------------------------------------
       # DEPLOY + BACKUP + AUTO ROLLBACK
       # ------------------------------------
@@ -140,3 +132,4 @@ jobs:
             exit 1
 
           EOF
+          true
