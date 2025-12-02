@@ -29,6 +29,7 @@ class EventStatus:
     id: strawberry.ID
     uuid: str
     name: str
+    slug: str
     is_default: bool
     tenant_id: strawberry.ID
     created_at: str
@@ -183,6 +184,7 @@ class RequestStatus:
     id: strawberry.ID
     uuid: str
     name: str
+    slug: str
     create_event: bool
     is_default: bool
     created_at: str
@@ -270,3 +272,12 @@ class ApproveRequestResponse:
     client_mutation_id: strawberry.ID | None = None
     request: Request | None = None
     event: Event | None = None
+
+
+@strawberry.type
+class DeclineRequestResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    request: Request | None = None
+

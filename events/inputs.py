@@ -23,6 +23,7 @@ class EventStatusFiltersInput(BaseTenantInput):
 @strawberry.enum
 class DistanceUnit(str, Enum):
     """Distance unit for coordinate-based queries."""
+
     KILOMETERS = "km"
     MILES = "mi"
 
@@ -102,7 +103,6 @@ class BaseNameableInput(BaseTenantInput):
 @strawberry.input
 class CreateEventInput(BaseNameableInput):
     event_type_id: strawberry.ID
-    status_id: strawberry.ID
     request_id: strawberry.ID
     address: str
     notes: str
@@ -245,6 +245,11 @@ class ApproveRequestInput(SparkGraphQLInput):
 
 
 @strawberry.input
+class DeclineRequestInput(SparkGraphQLInput):
+    id: strawberry.ID
+
+
+@strawberry.input
 class CreateRequestDetailInput(SparkGraphQLInput):
     is_table_needed: bool = False
     table_size: int | None = None
@@ -268,5 +273,3 @@ class CreateRequestWithDependenciesInput(BaseNameableInput):
     request_type_id: strawberry.ID
     details: List[CreateRequestDetailInput]
     products: List[CreateRequestProductInput]
-
-

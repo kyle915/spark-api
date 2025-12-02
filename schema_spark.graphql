@@ -35,6 +35,13 @@ type AmbassadorJobDetailResponse {
   ambassadorJob: AmbassadorJob
 }
 
+type AmbassadorStats {
+  totalAmbassadorsWorking: Int!
+  ambassadorsByEvent: [EventAmbassadorCount!]
+  ambassadorsByLocation: [LocationAmbassadorCount!]
+  uniqueAmbassadorsCount: Int!
+}
+
 """
 AmbassadorToAmbassadorReview(id, uuid, description, rate, tenant, ambassador, created_by, updated_by, created_at, updated_at)
 """
@@ -380,7 +387,6 @@ input CreateEventInput {
   tenantId: ID = null
   name: String!
   eventTypeId: ID!
-  statusId: ID!
   requestId: ID!
   address: String!
   notes: String!
@@ -641,8 +647,36 @@ type CustomUserType {
   role: RoleType!
 }
 
+input DashboardFiltersInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  startDate: String = null
+  endDate: String = null
+  locationId: ID = null
+  locationCode: String = null
+  eventTypeId: ID = null
+  eventStatusId: ID = null
+  requestStatusId: ID = null
+  requestTypeId: ID = null
+  clientId: ID = null
+  distributorId: ID = null
+  retailerId: ID = null
+}
+
 """Date with time (isoformat)"""
 scalar DateTime
+
+input DeclineRequestInput {
+  clientMutationId: ID = null
+  id: ID!
+}
+
+type DeclineRequestResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  request: Request
+}
 
 enum DistanceUnit {
   KILOMETERS
@@ -714,6 +748,19 @@ type Event {
   status: EventStatus
 }
 
+type EventAmbassadorCount {
+  eventId: ID!
+  eventName: String!
+  ambassadorCount: Int!
+}
+
+type EventAmbassadorInfo {
+  ambassadorId: ID!
+  ambassadorName: String!
+  isApproved: Boolean!
+  jobsCount: Int!
+}
+
 type EventCountableConnection {
   pageInfo: PageInfo!
   edges: [EventCountableEdge!]!
@@ -728,11 +775,29 @@ type EventCountableEdge {
   node: Event!
 }
 
+type EventDetail {
+  event: Event!
+  relatedRequestId: ID
+  ambassadorsCount: Int!
+  jobsCount: Int!
+  ambassadors: [EventAmbassadorInfo!]
+  location: Location
+  statistics: EventDetailStatistics
+}
+
 type EventDetailResponse {
   success: Boolean!
   message: String!
   clientMutationId: ID
   event: Event
+}
+
+type EventDetailStatistics {
+  totalAmbassadors: Int!
+  approvedAmbassadors: Int!
+  totalJobs: Int!
+  activeJobs: Int!
+  totalRequests: Int!
 }
 
 input EventFiltersInput {
@@ -746,17 +811,33 @@ input EventFiltersInput {
   coordinates: CoordinatesFilterInput = null
 }
 
+type EventStats {
+  totalEvents: Int!
+  eventsByStatus: [EventStatusCount!]
+  eventsByLocation: [LocationEventCount!]
+  eventsToday: Int!
+  eventsThisWeek: Int!
+  eventsThisMonth: Int!
+}
+
 """
-EventStatus(id, uuid, name, is_default, tenant, created_by, updated_by, created_at, updated_at)
+EventStatus(id, uuid, name, slug, is_default, tenant, created_by, updated_by, created_at, updated_at)
 """
 type EventStatus {
   id: ID!
   uuid: String!
   name: String!
+  slug: String!
   isDefault: Boolean!
   tenantId: ID!
   createdAt: String!
   updatedAt: String!
+}
+
+type EventStatusCount {
+  statusId: ID!
+  statusName: String!
+  count: Int!
 }
 
 type EventStatusCountableConnection {
@@ -784,6 +865,12 @@ input EventStatusFiltersInput {
   clientMutationId: ID = null
   tenantId: ID = null
   tenantUuid: ID = null
+}
+
+type EventTimeSeries {
+  dataPoints: [TimeSeriesDataPoint!]!
+  groupBy: String!
+  totalCount: Int!
 }
 
 """
@@ -1138,6 +1225,13 @@ type Location {
   updatedAt: String!
 }
 
+type LocationAmbassadorCount {
+  locationId: ID!
+  locationName: String!
+  locationCode: String!
+  ambassadorCount: Int!
+}
+
 type LocationCountableConnection {
   pageInfo: PageInfo!
   edges: [LocationCountableEdge!]!
@@ -1157,6 +1251,13 @@ type LocationDetailResponse {
   message: String!
   clientMutationId: ID
   location: Location
+}
+
+type LocationEventCount {
+  locationId: ID!
+  locationName: String!
+  locationCode: String!
+  count: Int!
 }
 
 input LocationFiltersInput {
@@ -1203,6 +1304,7 @@ type Mutation {
   createRequest(input: CreateRequestInput!): RequestDetailResponse!
   updateRequest(input: UpdateRequestInput!): RequestDetailResponse!
   approveRequest(input: ApproveRequestInput!): ApproveRequestResponse!
+  declineRequest(input: DeclineRequestInput!): DeclineRequestResponse!
   createEventType(input: CreateEventTypeInput!): EventTypeDetailResponse!
   updateEventType(input: UpdateEventTypeInput!): EventTypeDetailResponse!
   createEvent(input: CreateEventInput!): EventDetailResponse!
@@ -1455,6 +1557,7 @@ type Query {
   request(uuid: ID!): Request
   locations(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: LocationFiltersInput = null): LocationCountableConnection!
   location(id: ID!): Location
+  healthcheck: String!
   me: CustomUserType!
   tenants(userUuid: ID = null, filters: TenantFiltersInput = null, first: Int = null, after: String = null, last: Int = null, before: String = null): TenantTypeCountableConnection!
   ambassadorJobStatuses(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): StatusCountableConnection!
@@ -1501,6 +1604,12 @@ type Query {
   questionOption(id: ID!): QuestionOption
   jobRequirementAnswers(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): JobRequirementAnswerCountableConnection!
   jobRequirementAnswer(id: ID!): JobRequirementAnswer
+  eventsStats(filters: DashboardFiltersInput = null): EventStats!
+  eventsTimeSeries(filters: DashboardFiltersInput = null, groupBy: TimeGroupBy! = DAY): EventTimeSeries!
+  ambassadorsStats(filters: DashboardFiltersInput = null): AmbassadorStats!
+  requestStats(filters: DashboardFiltersInput = null): RequestStats!
+  requestTimeSeries(filters: DashboardFiltersInput = null, groupBy: TimeGroupBy! = DAY): RequestTimeSeries!
+  eventDetail(id: ID!, filters: DashboardFiltersInput = null): EventDetail
 }
 
 """
@@ -1718,14 +1827,33 @@ input RequestFiltersInput {
   date: String = null
 }
 
+type RequestStats {
+  totalRequests: Int!
+  approvedCount: Int!
+  rejectedCount: Int!
+  pendingCount: Int!
+  approvalRate: Float!
+  rejectionRate: Float!
+  requestsWithJobsCount: Int!
+  requestsWithJobsPercentage: Float!
+  requestsByStatus: [RequestStatusCount!]
+}
+
 type RequestStatus {
   id: ID!
   uuid: String!
   name: String!
+  slug: String!
   createEvent: Boolean!
   isDefault: Boolean!
   createdAt: String!
   updatedAt: String!
+}
+
+type RequestStatusCount {
+  statusId: ID!
+  statusName: String!
+  count: Int!
 }
 
 type RequestStatusCountableConnection {
@@ -1753,6 +1881,15 @@ input RequestStatusFiltersInput {
   clientMutationId: ID = null
   tenantId: ID = null
   tenantUuid: ID = null
+}
+
+type RequestTimeSeries {
+  dataPoints: [TimeSeriesDataPoint!]!
+  groupBy: String!
+  totalCount: Int!
+  approvalTrend: [TimeSeriesDataPoint!]
+  rejectionTrend: [TimeSeriesDataPoint!]
+  jobsAssignedTrend: [TimeSeriesDataPoint!]
 }
 
 """
@@ -1949,6 +2086,19 @@ type TenantTypeCountableEdge {
   node: TenantType!
 }
 
+enum TimeGroupBy {
+  HOUR
+  DAY
+  WEEK
+  MONTH
+}
+
+type TimeSeriesDataPoint {
+  timestamp: String!
+  count: Int!
+  value: Float
+}
+
 "\nthe data that was used to create the token.\n"
 type TokenPayloadType {
   """when the token was created"""
@@ -2062,7 +2212,6 @@ input UpdateEventInput {
   tenantId: ID = null
   name: String!
   eventTypeId: ID!
-  statusId: ID!
   requestId: ID!
   address: String!
   notes: String!

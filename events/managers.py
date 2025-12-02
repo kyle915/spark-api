@@ -43,6 +43,20 @@ class RequestStatusManager(DefaultStatusManager):
 
         return queryset.first()
 
+    def get_by_slug(self, slug: str, tenant=None) -> models.Model | None:
+        """
+        Return the status by slug.
+
+        If a tenant is provided, the lookup will be scoped to that tenant.
+        Returns `None` when no status with the given slug exists.
+        """
+        queryset = self.get_queryset().filter(slug=slug)
+
+        if tenant is not None:
+            queryset = queryset.filter(tenant=tenant)
+
+        return queryset.first()
+
 
 class EventStatusManager(DefaultStatusManager):
     pass
