@@ -193,10 +193,16 @@ class UpdateProductTypeInput(CreateProductTypeInput):
 @strawberry.input
 class CreateProductInput(BaseNameableInput):
     product_type_id: strawberry.ID
+    image: str | None = None
 
 
 @strawberry.input
 class UpdateProductInput(CreateProductInput):
+    id: strawberry.ID
+
+
+@strawberry.input
+class DeleteProductInput(SparkGraphQLInput):
     id: strawberry.ID
 
 

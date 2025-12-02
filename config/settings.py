@@ -49,6 +49,8 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "strawberry_django",
     "corsheaders",
+    "storages",
+
     "gqlauth",
     "tenants",
     "events",
@@ -160,3 +162,33 @@ STATIC_URL = "static/"
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+# Storage Configuration for Google Cloud Storage
+GS_BUCKET_NAME = env("GS_BUCKET_NAME", default="")
+GS_PROJECT_ID = env("GS_PROJECT_ID", default=None)
+
+# GCS Credentials - can be JSON string or file path
+GS_CREDENTIALS_JSON = env("GS_CREDENTIALS", default=None)
+if GS_CREDENTIALS_JSON:
+    import json
+    try:
+        # Parse the JSON credentials
+        GS_CREDENTIALS = json.loads(GS_CREDENTIALS_JSON)
+    except json.JSONDecodeError as e:
+        # Log the error but don't crash - allows development without GCS
+        print(f"Warning: Invalid GCS_CREDENTIALS JSON: {e}")
+        print("GCS functionality will be disabled. Please check your .env file.")
+        GS_CREDENTIALS = None
+else:
+    GS_CREDENTIALS = None
+
+# Make bucket private by default
+GS_DEFAULT_ACL = None  # Use bucket's default ACL (uniform bucket-level access)
+GS_QUERYSTRING_AUTH = True  # Enable signed URLs for private access
+
+# File storage backend
+DEFAULT_FILE_STORAGE = "storages.backends.gcloud.GoogleCloudStorage"
+
+# Media files configuration
+MEDIA_URL = f"https://storage.googleapis.com/{GS_BUCKET_NAME}/"
+MEDIA_ROOT = "media/"

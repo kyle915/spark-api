@@ -506,6 +506,7 @@ input CreateProductInput {
   tenantId: ID = null
   name: String!
   productTypeId: ID!
+  image: String = null
 }
 
 input CreateProductTypeInput {
@@ -633,7 +634,7 @@ type CreateTenantResponse {
 }
 
 """
-User(password, last_login, is_superuser, username, first_name, last_name, email, is_staff, date_joined, id, uuid, role, created_by, updated_by, created_at, updated_at, is_active)
+User(password, last_login, is_superuser, username, first_name, last_name, email, is_staff, date_joined, id, uuid, image, role, created_by, updated_by, created_at, updated_at, is_active)
 """
 type CustomUserType {
   id: ID!
@@ -676,6 +677,11 @@ type DeclineRequestResponse {
   message: String!
   clientMutationId: ID
   request: Request
+}
+
+input DeleteProductInput {
+  clientMutationId: ID = null
+  id: ID!
 }
 
 enum DistanceUnit {
@@ -1297,6 +1303,7 @@ type Mutation {
   updateProductType(input: UpdateProductTypeInput!): ProductTypeDetailResponse!
   createProduct(input: CreateProductInput!): ProductDetailResponse!
   updateProduct(input: UpdateProductInput!): ProductDetailResponse!
+  deleteProduct(input: DeleteProductInput!): ProductDetailResponse!
   createRequestType(input: CreateRequestTypeInput!): RequestTypeDetailResponse!
   updateRequestType(input: UpdateRequestTypeInput!): RequestTypeDetailResponse!
   createRequestStatus(input: CreateRequestStatusInput!): RequestStatusDetailResponse!
@@ -1446,7 +1453,7 @@ type PayTimingDetailResponse {
 }
 
 """
-Product(id, uuid, name, product_type, tenant, created_by, updated_by, created_at, updated_at)
+Product(id, uuid, name, image, product_type, tenant, created_by, updated_by, created_at, updated_at)
 """
 type Product {
   id: ID!
@@ -1456,6 +1463,7 @@ type Product {
   tenantId: ID!
   createdAt: String!
   updatedAt: String!
+  image: String
 }
 
 type ProductCountableConnection {
@@ -1610,6 +1618,8 @@ type Query {
   requestStats(filters: DashboardFiltersInput = null): RequestStats!
   requestTimeSeries(filters: DashboardFiltersInput = null, groupBy: TimeGroupBy! = DAY): RequestTimeSeries!
   eventDetail(id: ID!, filters: DashboardFiltersInput = null): EventDetail
+  getUploadUrl(filePath: String!, contentType: String! = "image/jpeg"): UploadUrlResponse!
+  getDownloadUrl(filePath: String!): String!
 }
 
 """
@@ -2063,7 +2073,7 @@ input TenantFiltersInput {
 }
 
 """
-Tenant(id, uuid, name, request_url_name, created_by, updated_by, created_at, updated_at)
+Tenant(id, uuid, name, image, request_url_name, created_by, updated_by, created_at, updated_at)
 """
 type TenantType {
   id: ID!
@@ -2344,6 +2354,7 @@ input UpdateProductInput {
   tenantId: ID = null
   name: String!
   productTypeId: ID!
+  image: String = null
   id: ID!
 }
 
@@ -2455,6 +2466,11 @@ type UpdateTenantResponse {
   clientMutationId: ID
 }
 
+type UploadUrlResponse {
+  uploadUrl: String!
+  blobName: String!
+}
+
 """A helper model that handles user account stuff."""
 type UserStatusType {
   verified: Boolean!
@@ -2462,7 +2478,7 @@ type UserStatusType {
 }
 
 """
-User(password, last_login, is_superuser, username, first_name, last_name, email, is_staff, date_joined, id, uuid, role, created_by, updated_by, created_at, updated_at, is_active)
+User(password, last_login, is_superuser, username, first_name, last_name, email, is_staff, date_joined, id, uuid, image, role, created_by, updated_by, created_at, updated_at, is_active)
 """
 type UserType {
   logentrySet: [DjangoModelType!]!
@@ -2478,13 +2494,13 @@ type UserType {
   isActive: Boolean!
   dateJoined: DateTime!
   status: UserStatusType!
-  email: String!
   id: ID!
-  lastName: String
 
   """Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only."""
   username: String!
+  lastName: String
   firstName: String
+  email: String!
   archived: Boolean!
   verified: Boolean!
 }
