@@ -6,10 +6,11 @@ from tenants.schema import MutationSpark, QuerySpark
 from tenants.dashboard.schema import DashboardQueries
 from jobs.schema import SparkJobMutations, SparkJobQueries
 from utils.utils import BlockIntrospectionForAnonymous
+from utils.graphql.gcs_schema import GCSQuery
 
 # Spark Schemas
 QuerySpark = merge_types(
-    "Query", (EventQuerySpark, QuerySpark, SparkJobQueries, DashboardQueries))
+    "Query", (EventQuerySpark, QuerySpark, SparkJobQueries, DashboardQueries, GCSQuery))
 MutationSpark = merge_types(
     "Mutation", (EventMutationsSpark, MutationSpark, SparkJobMutations))
 

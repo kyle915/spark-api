@@ -9,6 +9,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.db.models import Model
 from django.db import transaction
+from django.db.models.deletion import RestrictedError
 
 from events import types
 from events import models
@@ -19,6 +20,7 @@ from utils.graphql.relay import ensure_relay_mutation
 from utils.graphql.types import SparkGraphQLErrorResponse
 from utils.graphql.mixins import SparkGraphQLMixin
 from utils.utils import ROLE_ID, build_mutation_response
+from utils.gcs import delete_blob
 from tenants.models import Tenant, User
 
 ensure_relay_mutation()
@@ -824,6 +826,68 @@ class ProductMutations:
                 product=product,
             )
         except GraphQLError as e:
+            return build_mutation_response(
+                types.ProductDetailResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def delete_product(
+        self,
+        info: strawberry.Info,
+        input: inputs.DeleteProductInput,
+    ) -> types.ProductDetailResponse:
+        """Delete a product and its associated image in GCS."""
+        service = ProductMutationService()
+        try:
+            user: User = await service.get_user(info)
+            is_spark_request = service.is_spark_schema_request(info, user=user)
+
+            try:
+                product: models.Product = await sync_to_async(
+                    models.Product.objects.get
+                )(id=input.id)
+            except models.Product.DoesNotExist:
+                raise GraphQLError("Product not found.")
+
+            if not is_spark_request:
+                try:
+                    await sync_to_async(user.get_tenant)(
+                        tenant_id=product.tenant_id
+                    )
+                except Exception:
+                    raise GraphQLError(
+                        "You are not authorized to delete products for this tenant."
+                    )
+
+            image_path = product.image.name if product.image else None
+            if image_path:
+                delete_blob(image_path)
+
+            await sync_to_async(product.delete)()
+            return build_mutation_response(
+                types.ProductDetailResponse,
+                success=True,
+                message="Product deleted successfully.",
+                input_obj=input,
+            )
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.ProductDetailResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+        except RestrictedError:
+            return build_mutation_response(
+                types.ProductDetailResponse,
+                success=False,
+                message="Cannot delete this product because it is in use.",
+                input_obj=input,
+            )
+        except Exception as e:
             return build_mutation_response(
                 types.ProductDetailResponse,
                 success=False,

@@ -151,6 +151,15 @@ class Product:
     tenant_id: strawberry.ID
     created_at: str
     updated_at: str
+    
+    @strawberry.field
+    def image(self) -> str | None:
+        """Return a signed URL for the product image if it exists."""
+        if not self.image:
+            return None
+        from utils.gcs import generate_download_url
+        # The image field contains the path in GCS (e.g., "products/image.jpg")
+        return generate_download_url(self.image.name)
 
 
 @strawberry.type
