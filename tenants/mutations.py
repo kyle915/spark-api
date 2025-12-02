@@ -14,9 +14,22 @@ from utils.utils import ROLE_ID
 from .models import Role, TenantedUser, Tenant
 from .types import TenantType
 from .social_auth import BaseSocialAuthMutations, SocialAuthResponse
+from events.models import RequestStatus, EventStatus
 
 User = get_user_model()
 ensure_relay_mutation()
+
+DEFAULT_TENANT_STATUSES = {
+    "RequestStatus": [
+        {"name": "Pending", "is_default": True},
+        {"name": "Approved", "is_default": False},
+        {"name": "Decline", "is_default": False},
+    ],
+    "EventStatus": [
+        {"name": "Approved", "is_default": True},
+        {"name": "Decline", "is_default": False},
+    ],
+}
 
 
 @strawberry.type
@@ -386,6 +399,18 @@ class SparkTenantMutations:
                     request_url_name=request_url_name,
                     created_by=user,
                 )
+                
+                # Create default statuses
+                for model_name, statuses in DEFAULT_TENANT_STATUSES.items():
+                    ModelClass = RequestStatus if model_name == "RequestStatus" else EventStatus
+                    for status_data in statuses:
+                        ModelClass.objects.create(
+                            name=status_data["name"],
+                            tenant=tenant,
+                            created_by=user,
+                            is_default=status_data["is_default"]
+                        )
+
                 return tenant
 
             tenant = await create_tenant_record()
