@@ -20,7 +20,7 @@ from utils.graphql.relay import ensure_relay_mutation
 from utils.graphql.types import SparkGraphQLErrorResponse
 from utils.graphql.mixins import SparkGraphQLMixin
 from utils.utils import ROLE_ID, build_mutation_response
-from utils.gcs import delete_blob
+from utils.gcs import delete_blob, extract_blob_name_from_url
 from tenants.models import Tenant, User
 
 ensure_relay_mutation()
@@ -784,6 +784,8 @@ class ProductMutations:
         input: inputs.CreateProductInput,
     ) -> types.ProductDetailResponse:
         """Create a new product."""
+        if input.image:
+            input.image = extract_blob_name_from_url(input.image)
         try:
             product: models.Product = (
                 await ProductMutationService.process_create_or_update(
@@ -812,12 +814,35 @@ class ProductMutations:
         input: inputs.UpdateProductInput,
     ) -> types.ProductDetailResponse:
         """Update an existing product."""
+        old_image_path: str | None = None
+        if input.image is not None and input.id:
+            try:
+                existing_product: models.Product = await sync_to_async(
+                    models.Product.objects.get
+                )(id=input.id)
+                old_image_path = (
+                    existing_product.image.name if existing_product.image else None
+                )
+                input.image = extract_blob_name_from_url(input.image)
+            except models.Product.DoesNotExist:
+                return build_mutation_response(
+                    types.ProductDetailResponse,
+                    success=False,
+                    message="Product not found.",
+                    input_obj=input,
+                )
+
         try:
             product: models.Product = (
                 await ProductMutationService.process_create_or_update(
                     input=input, info=info
                 )
             )
+
+            new_image_path = product.image.name if product.image else None
+            if new_image_path and old_image_path and new_image_path != old_image_path:
+                delete_blob(old_image_path)
+
             return build_mutation_response(
                 types.ProductDetailResponse,
                 success=True,
@@ -854,9 +879,7 @@ class ProductMutations:
 
             if not is_spark_request:
                 try:
-                    await sync_to_async(user.get_tenant)(
-                        tenant_id=product.tenant_id
-                    )
+                    await sync_to_async(user.get_tenant)(tenant_id=product.tenant_id)
                 except Exception:
                     raise GraphQLError(
                         "You are not authorized to delete products for this tenant."
