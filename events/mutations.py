@@ -81,8 +81,7 @@ class BaseMutationService(SparkGraphQLMixin):
         """Set the user and tenant for the service."""
         self.info = info
         self.user = await self.get_user(info)
-        self.is_spark_schema = self.is_spark_schema_request(
-            info, user=self.user)
+        self.is_spark_schema = self.is_spark_schema_request(info, user=self.user)
         tenant_id = getattr(self.input, "tenant_id", None)
         is_update = hasattr(self.input, "id") and self.input.id is not None
 
@@ -122,8 +121,7 @@ class BaseMutationService(SparkGraphQLMixin):
                 request_url_name=request_url_name
             )
         except Tenant.DoesNotExist:
-            raise GraphQLError(
-                "Tenant not found for the provided request url name.")
+            raise GraphQLError("Tenant not found for the provided request url name.")
 
         self.tenant_id = tenant.id
         setattr(self.input, "tenant_id", tenant.id)
@@ -169,8 +167,7 @@ class BaseMutationService(SparkGraphQLMixin):
 
         # get the model
         model_class = self.get_model()
-        is_update: bool = hasattr(
-            self.input, "id") and self.input.id is not None
+        is_update: bool = hasattr(self.input, "id") and self.input.id is not None
         if is_update:
             model = await sync_to_async(model_class.objects.get)(id=self.input.id)
             if self.user:
@@ -210,9 +207,38 @@ class EventMutations:
         input: inputs.CreateEventInput,
     ) -> types.EventDetailResponse:
         try:
-            event: models.Event = await EventMutationService.process_create_or_update(
-                input=input, info=info
+            service = EventMutationService.with_input(input)
+            user: User = await service.get_user(info)
+            service.info = info
+            service.user = user
+            service.is_spark_schema = service.is_spark_schema_request(info, user=user)
+
+            # Use the request's tenant to resolve the approved status
+            request: models.Request = await sync_to_async(models.Request.objects.get)(
+                id=input.request_id
             )
+            tenant: Tenant = await sync_to_async(Tenant.objects.get)(
+                id=request.tenant_id
+            )
+
+            is_spark_admin = await user.role.is_spark_admin
+            if not is_spark_admin:
+                try:
+                    await sync_to_async(user.get_tenant)(tenant_id=tenant.id)
+                except Exception:
+                    raise GraphQLError(
+                        "You are not authorized to create events for this tenant."
+                    )
+
+            approved_status = await sync_to_async(models.EventStatus.objects.get)(
+                slug="approved", tenant_id=tenant.id
+            )
+
+            # Force the event to use the approved status for the request's tenant
+            input.status_id = approved_status.id
+            service.tenant_id = tenant.id
+
+            event: models.Event = await service.save()
             return build_mutation_response(
                 types.EventDetailResponse,
                 success=True,
@@ -225,6 +251,13 @@ class EventMutations:
                 types.EventDetailResponse,
                 success=False,
                 message=str(e),
+                input_obj=input,
+            )
+        except models.EventStatus.DoesNotExist:
+            return build_mutation_response(
+                types.EventDetailResponse,
+                success=False,
+                message="Approved event status not found. Please ensure you have a status with slug 'approved' for this tenant.",
                 input_obj=input,
             )
 
@@ -1105,8 +1138,7 @@ class RequestMutations:
             service: RequestMutationService = RequestMutationService()
             user: User = await service.get_user(info)
             if user.role_id == ROLE_ID.Ambassadors:
-                raise GraphQLError(
-                    "You are not authorized to approve requests.")
+                raise GraphQLError("You are not authorized to approve requests.")
 
             # Get the request first to access its tenant
             request: models.Request = await sync_to_async(models.Request.objects.get)(
@@ -1118,7 +1150,7 @@ class RequestMutations:
             )
 
             # Verify user is a member of the request's tenant (unless user is SparkAdmin)
-            is_spark_admin = user.role_id == ROLE_ID.SparkAdmin
+            is_spark_admin = await user.role.is_spark_admin
             if not is_spark_admin:
                 try:
                     await sync_to_async(user.get_tenant)(tenant_id=tenant.id)
@@ -1127,12 +1159,13 @@ class RequestMutations:
                         "You are not authorized to approve requests for this tenant."
                     )
 
+            # Get the approved status for this tenant
             approval_status = await sync_to_async(
-                models.RequestStatus.objects.get_for_approval
-            )(tenant=tenant.id)
+                models.RequestStatus.objects.get_by_slug
+            )(slug="approved", tenant=tenant.id)
             if not approval_status:
                 raise GraphQLError(
-                    "Approval status not found. Please ensure you have a status for approval."
+                    "Approval status not found. Please ensure you have a status with slug 'approved'."
                 )
             request.status = approval_status
             await sync_to_async(request.save)()
@@ -1158,6 +1191,71 @@ class RequestMutations:
         except Exception as e:
             return build_mutation_response(
                 types.ApproveRequestResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def decline_request(
+        self,
+        info: strawberry.Info,
+        input: inputs.DeclineRequestInput,
+    ) -> types.DeclineRequestResponse:
+        """Decline a request."""
+        try:
+            service: RequestMutationService = RequestMutationService()
+            user: User = await service.get_user(info)
+            if user.role_id == ROLE_ID.Ambassadors:
+                raise GraphQLError("You are not authorized to decline requests.")
+
+            # Get the request first to access its tenant
+            request: models.Request = await sync_to_async(models.Request.objects.get)(
+                id=input.id
+            )
+            # Get tenant using tenant_id to avoid async context issues with foreign key access
+            tenant: Tenant = await sync_to_async(Tenant.objects.get)(
+                id=request.tenant_id
+            )
+
+            # Verify user is a member of the request's tenant (unless user is SparkAdmin)
+            is_spark_admin = await user.role.is_spark_admin
+            if not is_spark_admin:
+                try:
+                    await sync_to_async(user.get_tenant)(tenant_id=tenant.id)
+                except Exception:
+                    raise GraphQLError(
+                        "You are not authorized to decline requests for this tenant."
+                    )
+
+            # Get the decline status for this tenant
+            decline_status = await sync_to_async(
+                models.RequestStatus.objects.get_by_slug
+            )(slug="decline", tenant=tenant.id)
+            if not decline_status:
+                raise GraphQLError(
+                    "Decline status not found. Please ensure you have a status with slug 'decline'."
+                )
+            request.status = decline_status
+            await sync_to_async(request.save)()
+
+            return build_mutation_response(
+                types.DeclineRequestResponse,
+                success=True,
+                message="Request declined successfully.",
+                input_obj=input,
+                request=request,
+            )
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.DeclineRequestResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+        except Exception as e:
+            return build_mutation_response(
+                types.DeclineRequestResponse,
                 success=False,
                 message=str(e),
                 input_obj=input,

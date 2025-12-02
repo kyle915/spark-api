@@ -201,6 +201,7 @@ class RequestStatus(WithDefaultAttribute, models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     name = models.CharField(max_length=50)
+    slug = models.SlugField(max_length=50, null=True)
     # This create_event flag is used to know if the event should be created
     # if the status is selected
     create_event = models.BooleanField(default=False)
@@ -231,6 +232,10 @@ class RequestStatus(WithDefaultAttribute, models.Model):
     objects = RequestStatusManager()
 
     def save(self, *args, **kwargs):
+        if not self.slug:
+            from django.utils.text import slugify
+            self.slug = slugify(self.name)
+
         with transaction.atomic():
             super().save(*args, **kwargs)
 
@@ -428,6 +433,7 @@ class EventStatus(WithDefaultAttribute, models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     name = models.CharField(max_length=50)
+    slug = models.SlugField(max_length=50, null=True)
     is_default = models.BooleanField(default=False, db_index=True)
 
     tenant = models.ForeignKey(
@@ -453,6 +459,12 @@ class EventStatus(WithDefaultAttribute, models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     objects = EventStatusManager()
+
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            from django.utils.text import slugify
+            self.slug = slugify(self.name)
+        super().save(*args, **kwargs)
 
 
 class EventType(WithDefaultAttribute, models.Model):

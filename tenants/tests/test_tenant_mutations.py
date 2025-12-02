@@ -56,6 +56,8 @@ class TestTenantMutations(BaseGraphQLTestCase):
             mutation, variables, self.endpoint_path, user=user)
 
         assert result.data is not None
+        if result.data["createTenant"]["success"] is False:
+            print(f"DEBUG: {result.data['createTenant']['message']}")
         assert result.data["createTenant"]["success"] is True
         assert result.data["createTenant"]["tenant"]["name"] == "New Tenant"
         assert result.data["createTenant"]["clientMutationId"] == "test-123"
@@ -63,11 +65,34 @@ class TestTenantMutations(BaseGraphQLTestCase):
         # Verify database
         tenant = await sync_to_async(Tenant.objects.get)(name="New Tenant")
         assert tenant.name == "New Tenant"
-        # Verify request_url_name format: 4 chars + - + slugified name
+        # Verify request_url_name format: slugified name + - + 4 chars
         parts = tenant.request_url_name.split('-')
         assert len(parts) >= 2
-        assert len(parts[0]) == 4
-        assert tenant.request_url_name.endswith("new-tenant")
+        # The last part should be the 4 random chars
+        assert len(parts[-1]) == 4
+        assert tenant.request_url_name.startswith("new-tenant")
+
+        # Verify automatic status creation
+        from events.models import RequestStatus, EventStatus
+        
+        request_statuses = await sync_to_async(list)(RequestStatus.objects.filter(tenant=tenant))
+        assert len(request_statuses) == 3
+        status_names = [s.name for s in request_statuses]
+        assert "Pending" in status_names
+        assert "Approved" in status_names
+        assert "Decline" in status_names
+        
+        # Verify slugs
+        for status in request_statuses:
+            assert status.slug is not None
+            if status.name == "Pending":
+                assert status.slug == "pending"
+
+        event_statuses = await sync_to_async(list)(EventStatus.objects.filter(tenant=tenant))
+        assert len(event_statuses) == 2
+        event_status_names = [s.name for s in event_statuses]
+        assert "Approved" in event_status_names
+        assert "Decline" in event_status_names
 
     @pytest.mark.asyncio
     async def test_create_tenant_not_authenticated(self):
