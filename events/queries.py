@@ -1271,6 +1271,7 @@ class ProductQueries:
         last: int | None = None,
         before: str | None = None,
         q: str | None = None,
+        filters: ProductFiltersInput | None = None,
     ) -> CountableConnection[types.Product]:
         """Get public products filtered by tenant request_url_name."""
         service = ProductQueriesService()
@@ -1285,6 +1286,10 @@ class ProductQueries:
                 before=before,
             )
 
+        queryset = service.get_ordered_queryset(tenant_id=tenant.id, q=q)
+        if filters and filters.product_type_id:
+            queryset = queryset.filter(product_type_id=filters.product_type_id)
+
         return await service.get_connection(
             tenant_id=tenant.id,
             q=q,
@@ -1292,6 +1297,7 @@ class ProductQueries:
             after=after,
             last=last,
             before=before,
+            queryset=queryset,
         )
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
@@ -1326,6 +1332,14 @@ class ProductQueries:
             )
             resolved_tenant_id = tenant.id
 
+        queryset = service.get_ordered_queryset(
+            tenant_id=resolved_tenant_id,
+            q=q,
+        )
+
+        if filters and filters.product_type_id:
+            queryset = queryset.filter(product_type_id=filters.product_type_id)
+
         return await service.get_connection(
             tenant_id=resolved_tenant_id,
             q=q,
@@ -1333,6 +1347,7 @@ class ProductQueries:
             after=after,
             last=last,
             before=before,
+            queryset=queryset,
         )
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
