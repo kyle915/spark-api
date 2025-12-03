@@ -93,6 +93,7 @@ class ProductTypeFiltersInput(BaseTenantInput):
 @strawberry.input
 class ProductFiltersInput(BaseTenantInput):
     tenant_uuid: strawberry.ID | None = None
+    product_type_id: strawberry.ID | None = None
 
 
 @strawberry.input

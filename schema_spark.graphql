@@ -1491,6 +1491,7 @@ input ProductFiltersInput {
   clientMutationId: ID = null
   tenantId: ID = null
   tenantUuid: ID = null
+  productTypeId: ID = null
 }
 
 """
@@ -1553,7 +1554,7 @@ type Query {
   publicProductTypes(requestUrlName: String!, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): ProductTypeCountableConnection!
   productTypes(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: ProductTypeFiltersInput = null): ProductTypeCountableConnection!
   productType(id: ID!): ProductType
-  publicProducts(requestUrlName: String!, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): ProductCountableConnection!
+  publicProducts(requestUrlName: String!, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: ProductFiltersInput = null): ProductCountableConnection!
   products(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: ProductFiltersInput = null): ProductCountableConnection!
   product(id: ID!): Product
   publicRequestType(requestUrlName: String!, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): RequestTypeCountableConnection!
