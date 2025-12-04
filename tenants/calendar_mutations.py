@@ -76,7 +76,7 @@ class DisconnectGoogleCalendarInput(SparkGraphQLInput):
 @strawberry.type
 class GoogleCalendarMutations:
     """Mutations for Google Calendar integration."""
-    
+
     @relay.mutation(permission_classes=[StrictIsAuthenticated])
     async def connect_google_calendar(
         self,
@@ -89,7 +89,7 @@ class GoogleCalendarMutations:
         """
         try:
             user: User = info.context.request.user
-            
+
             # Check if user already has an active connection
             existing_connection = await sync_to_async(
                 GoogleCalendarConnection.objects.filter(
@@ -97,7 +97,7 @@ class GoogleCalendarMutations:
                     is_active=True
                 ).first
             )()
-            
+
             if existing_connection:
                 return build_mutation_response(
                     ConnectGoogleCalendarResponse,
@@ -105,7 +105,7 @@ class GoogleCalendarMutations:
                     message="You already have an active Google Calendar connection. Please disconnect first.",
                     input_obj=input,
                 )
-            
+
             # Create OAuth flow
             flow = Flow.from_client_config(
                 {
@@ -120,14 +120,14 @@ class GoogleCalendarMutations:
                 scopes=SCOPES,
             )
             flow.redirect_uri = settings.GOOGLE_OAUTH_REDIRECT_URI
-            
+
             # Generate state for CSRF protection
             state = secrets.token_urlsafe(32)
-            
+
             # Store state in cache with user ID for validation
             cache_key = f"google_calendar_oauth_state_{state}"
             cache.set(cache_key, user.id, timeout=600)  # 10 minutes
-            
+
             # Get authorization URL
             authorization_url, _ = flow.authorization_url(
                 access_type='offline',
@@ -135,7 +135,7 @@ class GoogleCalendarMutations:
                 state=state,
                 prompt='consent',  # Force consent to get refresh token
             )
-            
+
             return build_mutation_response(
                 ConnectGoogleCalendarResponse,
                 success=True,
@@ -152,7 +152,7 @@ class GoogleCalendarMutations:
                 message=f"Failed to initiate Google Calendar connection: {str(e)}",
                 input_obj=input,
             )
-    
+
     @relay.mutation(permission_classes=[StrictIsAuthenticated])
     async def google_calendar_callback(
         self,
@@ -165,11 +165,11 @@ class GoogleCalendarMutations:
         """
         try:
             user: User = info.context.request.user
-            
+
             # Validate state
             cache_key = f"google_calendar_oauth_state_{input.state}"
             cached_user_id = cache.get(cache_key)
-            
+
             if not cached_user_id or cached_user_id != user.id:
                 return build_mutation_response(
                     GoogleCalendarCallbackResponse,
@@ -177,10 +177,10 @@ class GoogleCalendarMutations:
                     message="Invalid state parameter. Please try connecting again.",
                     input_obj=input,
                 )
-            
+
             # Delete state from cache
             cache.delete(cache_key)
-            
+
             # Create OAuth flow
             flow = Flow.from_client_config(
                 {
@@ -195,11 +195,11 @@ class GoogleCalendarMutations:
                 scopes=SCOPES,
             )
             flow.redirect_uri = settings.GOOGLE_OAUTH_REDIRECT_URI
-            
+
             # Exchange authorization code for tokens
             flow.fetch_token(code=input.code)
             credentials = flow.credentials
-            
+
             # Deactivate any existing connections
             await sync_to_async(
                 GoogleCalendarConnection.objects.filter(
@@ -207,7 +207,7 @@ class GoogleCalendarMutations:
                     is_active=True
                 ).update
             )(is_active=False)
-            
+
             # Create new connection
             connection = GoogleCalendarConnection(
                 user=user,
@@ -220,11 +220,11 @@ class GoogleCalendarMutations:
             connection.set_access_token(credentials.token)
             if credentials.refresh_token:
                 connection.set_refresh_token(credentials.refresh_token)
-            
+
             await sync_to_async(connection.save)()
-            
+
             logger.info(f"Google Calendar connected for user {user.id}")
-            
+
             return build_mutation_response(
                 GoogleCalendarCallbackResponse,
                 success=True,
@@ -239,7 +239,7 @@ class GoogleCalendarMutations:
                 message=f"Failed to connect Google Calendar: {str(e)}",
                 input_obj=input,
             )
-    
+
     @relay.mutation(permission_classes=[StrictIsAuthenticated])
     async def disconnect_google_calendar(
         self,
@@ -251,7 +251,7 @@ class GoogleCalendarMutations:
         """
         try:
             user: User = info.context.request.user
-            
+
             # Get active connection
             connection = await sync_to_async(
                 GoogleCalendarConnection.objects.filter(
@@ -259,7 +259,7 @@ class GoogleCalendarMutations:
                     is_active=True
                 ).first
             )()
-            
+
             if not connection:
                 return build_mutation_response(
                     DisconnectGoogleCalendarResponse,
@@ -267,7 +267,7 @@ class GoogleCalendarMutations:
                     message="No active Google Calendar connection found.",
                     input_obj=input,
                 )
-            
+
             # Revoke token with Google
             try:
                 credentials = Credentials(
@@ -281,14 +281,14 @@ class GoogleCalendarMutations:
             except Exception as e:
                 logger.warning(f"Failed to revoke Google token: {e}")
                 # Continue with deactivation even if revocation fails
-            
+
             # Deactivate connection
             connection.is_active = False
             connection.updated_by = user
             await sync_to_async(connection.save)()
-            
+
             logger.info(f"Google Calendar disconnected for user {user.id}")
-            
+
             return build_mutation_response(
                 DisconnectGoogleCalendarResponse,
                 success=True,
@@ -303,4 +303,3 @@ class GoogleCalendarMutations:
                 message=f"Failed to disconnect Google Calendar: {str(e)}",
                 input_obj=input,
             )
-

@@ -1,0 +1,221 @@
+"""
+Tests for Google Calendar Celery tasks.
+
+This module tests:
+- sync_event_to_google_calendar
+- update_event_in_google_calendar
+- sync_event_to_all_connected_users
+"""
+import pytest
+from unittest.mock import patch, MagicMock
+from datetime import date, time
+from django.contrib.auth import get_user_model
+from tenants.models import Role, Tenant, TenantedUser, GoogleCalendarConnection
+from events.models import Event, EventType, EventStatus, Request, RequestType, RequestStatus
+from events.models import Client, Distributor, Retailer, Location
+from events.tasks import (
+    sync_event_to_google_calendar,
+    update_event_in_google_calendar,
+    sync_event_to_all_connected_users
+)
+from utils.utils import ROLE_ID
+
+User = get_user_model()
+
+
+@pytest.mark.django_db
+class TestGoogleCalendarTasks:
+    """Tests for Google Calendar Celery tasks."""
+
+    def setup_method(self):
+        """Set up test data."""
+        # Create role
+        self.role = Role.objects.create(name="Client", slug="client")
+
+        # Create user
+        self.user = User.objects.create_user(
+            username="testuser",
+            email="test@test.com",
+            password="testpass123",
+            role=self.role
+        )
+
+        # Create tenant
+        self.tenant = Tenant.objects.create(
+            name="Test Tenant",
+            created_by=self.user
+        )
+
+        # Create tenanted user
+        TenantedUser.objects.create(
+            user=self.user,
+            tenant=self.tenant,
+            is_active=True,
+            created_by=self.user
+        )
+
+        # Create Google Calendar connection
+        self.connection = GoogleCalendarConnection.objects.create(
+            user=self.user,
+            created_by=self.user,
+            updated_by=self.user,
+            is_active=True
+        )
+        self.connection.set_access_token("test_token")
+
+        # Create event type and status
+        self.event_type = EventType.objects.create(
+            name="Test Type",
+            tenant=self.tenant,
+            created_by=self.user
+        )
+        self.event_status = EventStatus.objects.create(
+            name="Approved",
+            tenant=self.tenant,
+            created_by=self.user
+        )
+
+        # Create location and related models for request
+        self.location = Location.objects.create(
+            name="Test Location",
+            code="TEST",
+            zip="12345",
+            tenant=self.tenant,
+            created_by=self.user
+        )
+        self.client = Client.objects.create(
+            name="Test Client",
+            email="client@test.com",
+            tenant=self.tenant,
+            created_by=self.user
+        )
+        self.distributor = Distributor.objects.create(
+            name="Test Distributor",
+            email="dist@test.com",
+            location=self.location,
+            tenant=self.tenant,
+            created_by=self.user
+        )
+        self.retailer = Retailer.objects.create(
+            name="Test Retailer",
+            address="123 Test St",
+            store_contact="Contact",
+            location=self.location,
+            tenant=self.tenant,
+            created_by=self.user
+        )
+        self.request_type = RequestType.objects.create(
+            name="Test Request Type",
+            tenant=self.tenant,
+            created_by=self.user
+        )
+        self.request_status = RequestStatus.objects.create(
+            name="Approved",
+            tenant=self.tenant,
+            created_by=self.user
+        )
+        self.request = Request.objects.create(
+            name="Test Request",
+            date=date.today(),
+            address="123 Test St",
+            client=self.client,
+            distributor=self.distributor,
+            retailer=self.retailer,
+            request_type=self.request_type,
+            status=self.request_status,
+            tenant=self.tenant,
+            created_by=self.user
+        )
+
+        # Create event
+        self.event = Event.objects.create(
+            name="Test Event",
+            tenant=self.tenant,
+            event_type=self.event_type,
+            status=self.event_status,
+            address="123 Test St",
+            request=self.request,
+            created_by=self.user
+        )
+
+    @patch('events.tasks.GoogleCalendarService')
+    def test_sync_event_to_google_calendar_success(self, mock_service_class):
+        """Test successful event sync to Google Calendar."""
+        # Mock the service
+        mock_service = MagicMock()
+        mock_service.create_event.return_value = "google_event_123"
+        mock_service_class.return_value = mock_service
+
+        # Execute task
+        result = sync_event_to_google_calendar(self.user.id, self.event.id)
+
+        # Verify service was called
+        mock_service.create_event.assert_called_once()
+        assert result is None  # Task doesn't return value
+
+    @patch('events.tasks.GoogleCalendarService')
+    def test_sync_event_to_google_calendar_no_connection(self, mock_service_class):
+        """Test event sync when user has no connection."""
+        # Deactivate connection
+        self.connection.is_active = False
+        self.connection.save()
+
+        # Mock the service
+        mock_service = MagicMock()
+        mock_service.create_event.return_value = None
+        mock_service_class.return_value = mock_service
+
+        # Execute task - should not raise exception
+        result = sync_event_to_google_calendar(self.user.id, self.event.id)
+        assert result is None
+
+    @patch('events.tasks.GoogleCalendarService')
+    def test_update_event_in_google_calendar_success(self, mock_service_class):
+        """Test successful event update in Google Calendar."""
+        # Mock the service
+        mock_service = MagicMock()
+        mock_service.update_event.return_value = True
+        mock_service_class.return_value = mock_service
+
+        # Execute task
+        result = update_event_in_google_calendar(
+            self.user.id,
+            self.event.id,
+            "google_event_123"
+        )
+
+        # Verify service was called
+        mock_service.update_event.assert_called_once()
+        assert result is None
+
+    @patch('events.tasks.sync_event_to_google_calendar')
+    def test_sync_event_to_all_connected_users(self, mock_sync_task):
+        """Test syncing event to all connected users."""
+        # Create another user with connection
+        user2 = User.objects.create_user(
+            username="testuser2",
+            email="test2@test.com",
+            password="testpass123",
+            role=self.role
+        )
+        TenantedUser.objects.create(
+            user=user2,
+            tenant=self.tenant,
+            is_active=True,
+            created_by=self.user
+        )
+        connection2 = GoogleCalendarConnection.objects.create(
+            user=user2,
+            created_by=user2,
+            updated_by=user2,
+            is_active=True
+        )
+        connection2.set_access_token("test_token")
+
+        # Execute task
+        result = sync_event_to_all_connected_users(
+            self.event.id, self.tenant.id)
+
+        # Verify sync tasks were queued for both users
+        assert mock_sync_task.delay.call_count == 2
+        assert result is None

@@ -17,11 +17,11 @@ logger = logging.getLogger(__name__)
 def sync_event_on_create_or_update(sender, instance: Event, created: bool, **kwargs):
     """
     Signal handler for Event model post_save.
-    
+
     For new events:
     - If user is NOT ambassador: sync to all connected users in tenant
     - If user IS ambassador: skip (handled by AmbassadorEvent signal)
-    
+
     For updates:
     - Sync updates to all connected calendars (if we had stored Google event IDs)
     - For now, we'll just log that an update occurred
@@ -36,32 +36,39 @@ def sync_event_on_create_or_update(sender, instance: Event, created: bool, **kwa
                 # Note: is_ambassador is an async property, so we need to handle it differently
                 role_slug = user.role.slug
                 is_ambassador = role_slug == 'ambassador'
-                
+
                 if not is_ambassador:
                     # Not an ambassador, sync to all connected users in tenant
-                    logger.info(f"Event {instance.id} created by non-ambassador, syncing to all connected users")
-                    sync_event_to_all_connected_users.delay(instance.id, instance.tenant_id)
+                    logger.info(
+                        f"Event {instance.id} created by non-ambassador, syncing to all connected users")
+                    sync_event_to_all_connected_users.delay(
+                        instance.id, instance.tenant_id)
                 else:
                     # Ambassador - will be handled by AmbassadorEvent signal
-                    logger.debug(f"Event {instance.id} created by ambassador, skipping sync (will be handled by AmbassadorEvent)")
+                    logger.debug(
+                        f"Event {instance.id} created by ambassador, skipping sync (will be handled by AmbassadorEvent)")
             else:
                 # No user or role, sync to all connected users as fallback
-                logger.warning(f"Event {instance.id} created without user/role, syncing to all connected users")
-                sync_event_to_all_connected_users.delay(instance.id, instance.tenant_id)
+                logger.warning(
+                    f"Event {instance.id} created without user/role, syncing to all connected users")
+                sync_event_to_all_connected_users.delay(
+                    instance.id, instance.tenant_id)
         except Exception as e:
-            logger.error(f"Error in sync_event_on_create_or_update for event {instance.id}: {e}")
+            logger.error(
+                f"Error in sync_event_on_create_or_update for event {instance.id}: {e}")
     else:
         # Event updated
         # Note: Without storing Google Calendar event IDs, we can't easily update
         # In production, you'd want to store the mapping and update here
-        logger.info(f"Event {instance.id} updated (update sync not implemented without Google event ID storage)")
+        logger.info(
+            f"Event {instance.id} updated (update sync not implemented without Google event ID storage)")
 
 
 @receiver(post_save, sender=AmbassadorEvent)
 def sync_event_for_ambassador(sender, instance: AmbassadorEvent, created: bool, **kwargs):
     """
     Signal handler for AmbassadorEvent model post_save.
-    
+
     When an AmbassadorEvent is created:
     - Check if created_by user is ambassador
     - If yes, sync the event to that ambassador's Google Calendar
@@ -73,15 +80,19 @@ def sync_event_for_ambassador(sender, instance: AmbassadorEvent, created: bool, 
                 # Check if role slug is 'ambassador'
                 role_slug = user.role.slug
                 is_ambassador = role_slug == 'ambassador'
-                
+
                 if is_ambassador:
                     # Sync event to this ambassador's Google Calendar
-                    logger.info(f"AmbassadorEvent {instance.id} created for ambassador {user.id}, syncing event {instance.event_id}")
-                    sync_event_to_google_calendar.delay(user.id, instance.event_id)
+                    logger.info(
+                        f"AmbassadorEvent {instance.id} created for ambassador {user.id}, syncing event {instance.event_id}")
+                    sync_event_to_google_calendar.delay(
+                        user.id, instance.event_id)
                 else:
-                    logger.debug(f"AmbassadorEvent {instance.id} created by non-ambassador user {user.id}, skipping sync")
+                    logger.debug(
+                        f"AmbassadorEvent {instance.id} created by non-ambassador user {user.id}, skipping sync")
             else:
-                logger.warning(f"AmbassadorEvent {instance.id} created without user/role")
+                logger.warning(
+                    f"AmbassadorEvent {instance.id} created without user/role")
         except Exception as e:
-            logger.error(f"Error in sync_event_for_ambassador for AmbassadorEvent {instance.id}: {e}")
-
+            logger.error(
+                f"Error in sync_event_for_ambassador for AmbassadorEvent {instance.id}: {e}")

@@ -60,6 +60,9 @@ GOOGLE_OAUTH_REDIRECT_URI=http://localhost:8000/api/v1/google-calendar/callback
 # Celery Configuration (for background tasks)
 CELERY_BROKER_URL=redis://localhost:6379/0
 CELERY_RESULT_BACKEND=redis://localhost:6379/0
+
+# Test Database (for running tests)
+TEST_DATABASE_URL=postgres:///spark_tests
 ```
 ---
 
@@ -146,6 +149,34 @@ If you need to run periodic tasks, start Celery Beat in another terminal:
 
 ```bash
 uv run celery -A config beat -l info
+```
+
+---
+
+### 9). Running Tests
+
+Tests use a separate database configured via `TEST_DATABASE_URL` in your `.env` file (defaults to `postgres:///spark_tests`).
+
+**First time setup (one-time):**
+
+If you've added new models, you may need to recreate the test database:
+
+```bash
+# Drop the test database (one-time only)
+psql postgres -c "DROP DATABASE IF EXISTS spark_tests;"
+
+# Run tests - database will be recreated automatically
+uv run pytest --create-db
+```
+
+**Running tests:**
+
+```bash
+# Run all tests
+uv run pytest
+
+# Run specific test files
+uv run pytest tenants/tests/test_google_calendar_mutations.py -v
 ```
 
 ---

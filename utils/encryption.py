@@ -10,7 +10,7 @@ import hashlib
 def get_encryption_key() -> bytes:
     """
     Get or generate encryption key from settings.
-    
+
     Uses SECRET_KEY as base for generating a consistent encryption key.
     """
     secret_key = settings.SECRET_KEY.encode('utf-8')
@@ -23,10 +23,10 @@ def get_encryption_key() -> bytes:
 def encrypt_token(token: str) -> str:
     """
     Encrypt a token string.
-    
+
     Args:
         token: The token string to encrypt
-        
+
     Returns:
         Encrypted token as base64 string
     """
@@ -40,10 +40,10 @@ def encrypt_token(token: str) -> str:
 def decrypt_token(encrypted_token: str) -> str:
     """
     Decrypt an encrypted token string.
-    
+
     Args:
         encrypted_token: The encrypted token string
-        
+
     Returns:
         Decrypted token string
     """
@@ -52,4 +52,3 @@ def decrypt_token(encrypted_token: str) -> str:
     f = Fernet(get_encryption_key())
     decrypted = f.decrypt(encrypted_token.encode('utf-8'))
     return decrypted.decode('utf-8')
-

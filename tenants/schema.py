@@ -71,7 +71,8 @@ class QuerySpark:
             if filters.name:
                 queryset = queryset.filter(name__icontains=filters.name)
             if filters.request_url_name:
-                queryset = queryset.filter(request_url_name__icontains=filters.request_url_name)
+                queryset = queryset.filter(
+                    request_url_name__icontains=filters.request_url_name)
         queryset = queryset.distinct()
 
         try:
@@ -154,13 +155,14 @@ class QueryClients:
             filter_dict["tenanted_users__user"] = user
 
         queryset = Tenant.objects.filter(**filter_dict)
-        
+
         if filters:
             if filters.name:
                 queryset = queryset.filter(name__icontains=filters.name)
             if filters.request_url_name:
-                queryset = queryset.filter(request_url_name__icontains=filters.request_url_name)
-        
+                queryset = queryset.filter(
+                    request_url_name__icontains=filters.request_url_name)
+
         queryset = queryset.distinct()
         try:
             return await connection_from_queryset_async(
