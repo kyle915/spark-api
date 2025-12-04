@@ -9,7 +9,7 @@ class RecapFile(models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     name = models.CharField(max_length=100, null=False)
-    url = models.CharField(max_length=2048, null=True)
+    file = models.FileField(upload_to='recap_files/', null=True)
     approved = models.BooleanField(default=False)
 
     file_type = models.ForeignKey(
@@ -62,6 +62,40 @@ class Recap(models.Model):
         on_delete=models.RESTRICT,
         null=True,
         related_name="recaps_updated_by",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+class RecapRecapFile(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    
+    recap_file = models.ForeignKey(
+        RecapFile,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="recap_recap_file",
+    )
+
+    recap = models.ForeignKey(
+        Recap,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="recap_recap_file",
+    )
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="recap_recap_file_created_by",
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="recap_recap_file_updated_by",
     )
 
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
