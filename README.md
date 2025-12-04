@@ -163,10 +163,10 @@ If you've added new models, you may need to recreate the test database:
 
 ```bash
 # Drop the test database (one-time only)
-psql postgres -c "DROP DATABASE IF EXISTS spark_tests;"
+createdb spark_tests
 
 # Run tests - database will be recreated automatically
-uv run pytest --create-db
+uv run pytest
 ```
 
 **Running tests:**
