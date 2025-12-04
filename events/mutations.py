@@ -1256,17 +1256,13 @@ class RequestMutations:
                 )
             request.status = approval_status
             await sync_to_async(request.save)()
-            event: models.Event = await models.Event.objects.from_request(
-                request=request, created_by=user
-            )
-
             return build_mutation_response(
                 types.ApproveRequestResponse,
                 success=True,
                 message="Request approved successfully.",
                 input_obj=input,
                 request=request,
-                event=event,
+                event=None,
             )
         except GraphQLError as e:
             return build_mutation_response(
