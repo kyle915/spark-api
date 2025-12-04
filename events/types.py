@@ -228,6 +228,18 @@ class Request:
     updated_at: str
 
 
+@strawberry_django.type(models.RequestStoreManager)
+class RequestStoreManager:
+    id: strawberry.ID
+    uuid: str
+    name: str
+    phone: str
+    request_id: strawberry.ID
+    tenant_id: strawberry.ID | None = None
+    created_at: str
+    updated_at: str
+
+
 @strawberry.type
 class RequestDetailResponse:
     success: bool
@@ -289,4 +301,3 @@ class DeclineRequestResponse:
     message: str
     client_mutation_id: strawberry.ID | None = None
     request: Request | None = None
-

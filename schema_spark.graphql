@@ -1,4 +1,18 @@
 """
+Ambassador(id, uuid, rating, address, coordinates, user, created_by, updated_by, created_at, updated_at)
+"""
+type Ambassador {
+  id: ID!
+  uuid: String!
+  rating: Int!
+  address: String
+  coordinates: [Float!]!
+  userId: ID!
+  createdAt: String!
+  updatedAt: String!
+}
+
+"""
 AmbassadorJob(id, uuid, appear_as_rfp, tenant, ambassador, job, status, rate, created_by, updated_by, created_at, updated_at)
 """
 type AmbassadorJob {
@@ -541,6 +555,13 @@ input CreateRateTypeInput {
   name: String!
 }
 
+input CreateRecapInput {
+  clientMutationId: ID = null
+  name: String!
+  eventId: ID!
+  files: [String!]!
+}
+
 input CreateRequestDetailInput {
   clientMutationId: ID = null
   isTableNeeded: Boolean! = false
@@ -680,6 +701,16 @@ type DeclineRequestResponse {
 }
 
 input DeleteProductInput {
+  clientMutationId: ID = null
+  id: ID!
+}
+
+input DeleteRecapFileInput {
+  clientMutationId: ID = null
+  id: ID!
+}
+
+input DeleteRecapInput {
   clientMutationId: ID = null
   id: ID!
 }
@@ -921,6 +952,32 @@ input EventTypeFiltersInput {
 
 "\n     Errors messages and codes mapped to\n    fields or non fields errors.\n    Example:\n    {\n        field_name: [\n            {\n                \"message\": \"error message\",\n                \"code\": \"error_code\"\n            }\n        ],\n        other_field: [\n            {\n                \"message\": \"error message\",\n                \"code\": \"error_code\"\n            }\n        ],\n        nonFieldErrors: [\n            {\n                \"message\": \"error message\",\n                \"code\": \"error_code\"\n            }\n        ]\n    }\n    "
 scalar ExpectedError
+
+"""
+FileType(id, uuid, name, extension, created_by, updated_by, created_at, updated_at)
+"""
+type FileType {
+  id: ID!
+  uuid: String!
+  name: String!
+  extension: String
+  createdAt: String!
+  updatedAt: String!
+}
+
+type FileTypeCountableConnection {
+  pageInfo: PageInfo!
+  edges: [FileTypeCountableEdge!]!
+  totalCount: Int!
+}
+
+type FileTypeCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: FileType!
+}
 
 input GoogleSocialAuthInput {
   clientMutationId: ID = null
@@ -1316,6 +1373,10 @@ type Mutation {
   updateEventType(input: UpdateEventTypeInput!): EventTypeDetailResponse!
   createEvent(input: CreateEventInput!): EventDetailResponse!
   updateEvent(input: UpdateEventInput!): EventDetailResponse!
+  createRecap(input: CreateRecapInput!): RecapDetailResponse!
+  updateRecap(input: UpdateRecapInput!): RecapDetailResponse!
+  deleteRecap(input: DeleteRecapInput!): RecapDetailResponse!
+  deleteRecapFile(input: DeleteRecapFileInput!): RecapFileDetailResponse!
   register(input: BaseRegisterInput!): RegisterResponse!
   socialAuthGoogle(input: GoogleSocialAuthInput!): SocialAuthResponse!
   socialAuthApple(input: AppleSocialAuthInput!): SocialAuthResponse!
@@ -1566,6 +1627,10 @@ type Query {
   request(uuid: ID!): Request
   locations(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: LocationFiltersInput = null): LocationCountableConnection!
   location(id: ID!): Location
+  recaps(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: RecapFiltersInput = null): RecapCountableConnection!
+  recap(uuid: ID!): Recap
+  fileTypes(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): FileTypeCountableConnection!
+  fileType(uuid: ID!): FileType
   healthcheck: String!
   me: CustomUserType!
   tenants(userUuid: ID = null, filters: TenantFiltersInput = null, first: Int = null, after: String = null, last: Int = null, before: String = null): TenantTypeCountableConnection!
@@ -1758,6 +1823,71 @@ type RateTypeDetailResponse {
 }
 
 """
+Recap(id, uuid, name, event, recap_file, created_by, updated_by, created_at, updated_at)
+"""
+type Recap {
+  id: ID!
+  uuid: String!
+  name: String!
+  event: Event!
+  eventId: ID!
+  recapFile: RecapFile!
+  recapFileId: ID!
+  createdAt: String!
+  updatedAt: String!
+  recapFiles: [RecapFile!]!
+  ambassadors: [Ambassador!]!
+  requestStoreManagers: [RequestStoreManager!]!
+}
+
+type RecapCountableConnection {
+  pageInfo: PageInfo!
+  edges: [RecapCountableEdge!]!
+  totalCount: Int!
+}
+
+type RecapCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: Recap!
+}
+
+type RecapDetailResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  recap: Recap
+}
+
+"""
+RecapFile(id, uuid, name, file, approved, file_type, created_by, updated_by, created_at, updated_at)
+"""
+type RecapFile {
+  id: ID!
+  uuid: String!
+  name: String!
+  approved: Boolean!
+  fileTypeId: ID!
+  createdAt: String!
+  updatedAt: String!
+  file: String
+}
+
+type RecapFileDetailResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  recapFile: RecapFile
+}
+
+input RecapFiltersInput {
+  clientMutationId: ID = null
+  eventId: ID = null
+}
+
+"""
 If `revoke_refresh_token` is true, revokes to refresh token an creates a new one.
 """
 input RefreshTokenInput {
@@ -1892,6 +2022,20 @@ input RequestStatusFiltersInput {
   clientMutationId: ID = null
   tenantId: ID = null
   tenantUuid: ID = null
+}
+
+"""
+RequestStoreManager(id, uuid, name, phone, request, tenant, created_by, updated_by, created_at, updated_at)
+"""
+type RequestStoreManager {
+  id: ID!
+  uuid: String!
+  name: String!
+  phone: String!
+  requestId: ID!
+  tenantId: ID
+  createdAt: String!
+  updatedAt: String!
 }
 
 type RequestTimeSeries {
@@ -2396,6 +2540,14 @@ input UpdateRateTypeInput {
   id: ID!
 }
 
+input UpdateRecapInput {
+  clientMutationId: ID = null
+  name: String!
+  eventId: ID!
+  files: [String!]!
+  id: ID!
+}
+
 input UpdateRequestInput {
   clientMutationId: ID = null
   tenantId: ID = null
@@ -2495,13 +2647,13 @@ type UserType {
   isActive: Boolean!
   dateJoined: DateTime!
   status: UserStatusType!
+  lastName: String
+  email: String!
   id: ID!
+  firstName: String
 
   """Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only."""
   username: String!
-  lastName: String
-  firstName: String
-  email: String!
   archived: Boolean!
   verified: Boolean!
 }
