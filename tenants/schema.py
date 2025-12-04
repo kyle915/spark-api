@@ -17,6 +17,7 @@ from .mutations import (
     SparkCustomRegister,
     SparkTenantMutations,
 )
+from .calendar_mutations import GoogleCalendarMutations
 from .dashboard.schema import DashboardQueries
 from utils.graphql.relay import (
     CountableConnection,
@@ -91,7 +92,7 @@ class QuerySpark:
 
 
 @strawberry.type
-class MutationSpark(SparkCustomRegister, SparkTenantMutations):
+class MutationSpark(SparkCustomRegister, SparkTenantMutations, GoogleCalendarMutations):
     verify_token = mutations.VerifyToken.field
     token_auth = mutations.ObtainJSONWebToken.field
     refresh_token = mutations.RefreshToken.field
@@ -112,7 +113,7 @@ class QueryAmbassadors:
 
 
 @strawberry.type
-class MutationAmbassadors(AmbassadorsCustomRegister):
+class MutationAmbassadors(AmbassadorsCustomRegister, GoogleCalendarMutations):
     verify_token = mutations.VerifyToken.field
     token_auth = mutations.ObtainJSONWebToken.field
     refresh_token = mutations.RefreshToken.field
@@ -176,7 +177,7 @@ class QueryClients:
 
 
 @strawberry.type
-class MutationClients(ClientsCustomRegister):
+class MutationClients(ClientsCustomRegister, GoogleCalendarMutations):
     verify_token = mutations.VerifyToken.field
     token_auth = mutations.ObtainJSONWebToken.field
     refresh_token = mutations.RefreshToken.field

@@ -211,3 +211,69 @@ class TenantedRole(models.Model):
 
     def __str__(self):
         return f"{self.role.name} @ {self.tenant.name}"
+
+
+class GoogleCalendarConnection(models.Model):
+    """Model to store Google Calendar OAuth connection for users."""
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        null=False,
+        related_name="google_calendar_connections",
+        unique=True,  # One connection per user
+    )
+
+    # Encrypted OAuth tokens
+    access_token = models.TextField(null=False)
+    refresh_token = models.TextField(null=True)
+    token_expiry = models.DateTimeField(null=True)
+
+    calendar_id = models.CharField(max_length=255, default="primary")
+    is_active = models.BooleanField(default=True)
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="google_calendar_connections_created_by",
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="google_calendar_connections_updated_by",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Google Calendar: {self.user.username}"
+
+    def get_access_token(self) -> str:
+        """Get decrypted access token."""
+        from utils.encryption import decrypt_token
+        return decrypt_token(self.access_token)
+
+    def set_access_token(self, token: str):
+        """Set encrypted access token."""
+        from utils.encryption import encrypt_token
+        self.access_token = encrypt_token(token)
+
+    def get_refresh_token(self) -> str | None:
+        """Get decrypted refresh token."""
+        if not self.refresh_token:
+            return None
+        from utils.encryption import decrypt_token
+        return decrypt_token(self.refresh_token)
+
+    def set_refresh_token(self, token: str | None):
+        """Set encrypted refresh token."""
+        if not token:
+            self.refresh_token = None
+            return
+        from utils.encryption import encrypt_token
+        self.refresh_token = encrypt_token(token)
