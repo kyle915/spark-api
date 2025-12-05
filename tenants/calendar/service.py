@@ -11,15 +11,12 @@ from google.auth.transport.requests import Request
 from google_auth_httplib2 import AuthorizedHttp
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
-from asgiref.sync import sync_to_async
 
 from tenants.models import GoogleCalendarConnection, User
 from events.models import Event, GoogleCalendarEvent
+from .constants import GOOGLE_CALENDAR_SCOPES
 
 logger = logging.getLogger(__name__)
-
-# Google Calendar API scopes
-SCOPES = ['https://www.googleapis.com/auth/calendar.events']
 
 
 class GoogleCalendarService:
@@ -74,7 +71,7 @@ class GoogleCalendarService:
             token_uri='https://oauth2.googleapis.com/token',
             client_id=settings.GOOGLE_OAUTH_CLIENT_ID,
             client_secret=settings.GOOGLE_OAUTH_CLIENT_SECRET,
-            scopes=SCOPES
+            scopes=GOOGLE_CALENDAR_SCOPES
         )
 
         # Check if token needs refresh
@@ -213,7 +210,7 @@ class GoogleCalendarService:
                 f"Unexpected error testing Google Calendar connection for user {self.user.id}: {e}")
             return False
 
-    def _format_event_data(self, event, event_type_name: Optional[str] = None,
+    def _format_event_data(self, event: Event, event_type_name: Optional[str] = None,
                            status_name: Optional[str] = None) -> dict:
         """
         Format Event model data for Google Calendar API.

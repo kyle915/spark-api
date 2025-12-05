@@ -45,7 +45,7 @@ class TestGoogleCalendarMutations(BaseGraphQLTestCase):
         self.endpoint_path = "/api/v1/graphql/spark"
 
     @pytest.mark.asyncio
-    @patch('tenants.calendar_mutations.Flow')
+    @patch('tenants.calendar.utils.Flow')
     async def test_connect_google_calendar_success(self, mock_flow_class):
         """Test successful Google Calendar connection initiation."""
         # Mock the OAuth flow
@@ -118,7 +118,7 @@ class TestGoogleCalendarMutations(BaseGraphQLTestCase):
         )
 
     @pytest.mark.asyncio
-    @patch('tenants.calendar_mutations.Flow')
+    @patch('tenants.calendar.utils.Flow')
     async def test_google_calendar_callback_success(self, mock_flow_class):
         """Test successful Google Calendar OAuth callback."""
         # Set up state in cache

@@ -10,7 +10,7 @@ from asgiref.sync import sync_to_async
 from events.models import Event
 from ambassadors.models import AmbassadorEvent
 from tenants.models import User, GoogleCalendarConnection
-from utils.google_calendar import GoogleCalendarService
+from tenants.calendar.service import GoogleCalendarService
 
 logger = logging.getLogger(__name__)
 

@@ -138,7 +138,7 @@ class TestGoogleCalendarTasks:
             created_by=self.user
         )
 
-    @patch('events.tasks.GoogleCalendarService')
+    @patch('tenants.calendar.service.GoogleCalendarService')
     def test_sync_event_to_google_calendar_success(self, mock_service_class):
         """Test successful event sync to Google Calendar."""
         # Mock the service
@@ -153,7 +153,7 @@ class TestGoogleCalendarTasks:
         mock_service.create_event.assert_called_once()
         assert result is None  # Task doesn't return value
 
-    @patch('events.tasks.GoogleCalendarService')
+    @patch('tenants.calendar.service.GoogleCalendarService')
     def test_sync_event_to_google_calendar_no_connection(self, mock_service_class):
         """Test event sync when user has no connection."""
         # Deactivate connection
@@ -169,7 +169,7 @@ class TestGoogleCalendarTasks:
         result = sync_event_to_google_calendar(self.user.id, self.event.id)
         assert result is None
 
-    @patch('events.tasks.GoogleCalendarService')
+    @patch('tenants.calendar.service.GoogleCalendarService')
     def test_update_event_in_google_calendar_success(self, mock_service_class):
         """Test successful event update in Google Calendar."""
         # Mock the service

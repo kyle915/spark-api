@@ -17,8 +17,7 @@ from .mutations import (
     SparkCustomRegister,
     SparkTenantMutations,
 )
-from .calendar_mutations import GoogleCalendarMutations
-from .calendar_queries import GoogleCalendarQueries
+from .calendar import GoogleCalendarMutations, GoogleCalendarQueries
 from .dashboard.schema import DashboardQueries
 from utils.graphql.relay import (
     CountableConnection,

@@ -14,7 +14,7 @@ from django.utils import timezone
 from django.contrib.auth import get_user_model
 from tenants.models import GoogleCalendarConnection, Role, Tenant, TenantedUser
 from events.models import Event, EventType, EventStatus
-from utils.google_calendar import GoogleCalendarService
+from tenants.calendar.service import GoogleCalendarService
 from utils.utils import ROLE_ID
 
 User = get_user_model()
@@ -89,9 +89,9 @@ class TestGoogleCalendarService:
             created_by=self.user
         )
 
-    @patch('utils.google_calendar.build')
-    @patch('utils.google_calendar.AuthorizedHttp')
-    @patch('utils.google_calendar.Credentials')
+    @patch('tenants.calendar.service.build')
+    @patch('tenants.calendar.service.AuthorizedHttp')
+    @patch('tenants.calendar.service.Credentials')
     def test_create_event_success(self, mock_credentials_class, mock_http, mock_build):
         """Test successful event creation."""
         # Mock Google Calendar API
@@ -114,9 +114,9 @@ class TestGoogleCalendarService:
         assert google_event_id == 'google_event_123'
         mock_insert.execute.assert_called_once()
 
-    @patch('utils.google_calendar.build')
-    @patch('utils.google_calendar.AuthorizedHttp')
-    @patch('utils.google_calendar.Credentials')
+    @patch('tenants.calendar.service.build')
+    @patch('tenants.calendar.service.AuthorizedHttp')
+    @patch('tenants.calendar.service.Credentials')
     def test_create_event_no_connection(self, mock_credentials_class, mock_http, mock_build):
         """Test event creation when user has no connection."""
         # Deactivate connection
@@ -128,9 +128,9 @@ class TestGoogleCalendarService:
 
         assert google_event_id is None
 
-    @patch('utils.google_calendar.build')
-    @patch('utils.google_calendar.AuthorizedHttp')
-    @patch('utils.google_calendar.Credentials')
+    @patch('tenants.calendar.service.build')
+    @patch('tenants.calendar.service.AuthorizedHttp')
+    @patch('tenants.calendar.service.Credentials')
     def test_update_event_success(self, mock_credentials_class, mock_http, mock_build):
         """Test successful event update."""
         # Mock Google Calendar API
@@ -165,9 +165,9 @@ class TestGoogleCalendarService:
         assert success is True
         mock_update.execute.assert_called_once()
 
-    @patch('utils.google_calendar.build')
-    @patch('utils.google_calendar.AuthorizedHttp')
-    @patch('utils.google_calendar.Credentials')
+    @patch('tenants.calendar.service.build')
+    @patch('tenants.calendar.service.AuthorizedHttp')
+    @patch('tenants.calendar.service.Credentials')
     def test_delete_event_success(self, mock_credentials_class, mock_http, mock_build):
         """Test successful event deletion."""
         # Mock Google Calendar API

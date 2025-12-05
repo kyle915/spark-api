@@ -6,19 +6,12 @@ import strawberry
 from asgiref.sync import sync_to_async
 
 from utils.graphql.permissions import StrictIsAuthenticated
-from utils.google_calendar import GoogleCalendarService
-from .models import GoogleCalendarConnection, User
+from tenants.models import User
+
+from .types import GoogleCalendarConnectionStatus
+from .service import GoogleCalendarService
 
 logger = logging.getLogger(__name__)
-
-
-@strawberry.type
-class GoogleCalendarConnectionStatus:
-    """Status of Google Calendar connection for a user."""
-    is_connected: bool
-    is_active: bool
-    calendar_id: str | None = None
-    connected_at: str | None = None  # ISO format datetime string
 
 
 @strawberry.type
@@ -41,6 +34,7 @@ class GoogleCalendarQueries:
             user: User = info.context.request.user
 
             # Check for any connection in the database
+            from tenants.models import GoogleCalendarConnection
             connection = await sync_to_async(
                 GoogleCalendarConnection.objects.filter(
                     user=user
@@ -67,10 +61,11 @@ class GoogleCalendarQueries:
             )
         except Exception as e:
             logger.error(
-                f"Error checking Google Calendar connection status: {e}")
+                f"Error checking Google Calendar connection status: {e}", exc_info=True)
             return GoogleCalendarConnectionStatus(
                 is_connected=False,
                 is_active=False,
                 calendar_id=None,
                 connected_at=None,
             )
+
