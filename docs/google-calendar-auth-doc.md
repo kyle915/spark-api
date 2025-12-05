@@ -8,6 +8,8 @@ This document provides comprehensive documentation for the Google Calendar OAuth
 - [Base URLs](#base-urls)
 - [Authentication](#authentication)
 - [OAuth Flow Overview](#oauth-flow-overview)
+- [Queries](#queries)
+  - [googleCalendarConnectionStatus](#googlecalendarconnectionstatus)
 - [Mutations](#mutations)
   - [connectGoogleCalendar](#connectgooglecalendar)
   - [googleCalendarCallback](#googlecalendarcallback)
@@ -39,7 +41,7 @@ The Google Calendar integration allows users to connect their Google Calendar ac
 
 ## Base URLs
 
-The Google Calendar mutations are available on all three GraphQL endpoints:
+The Google Calendar queries and mutations are available on all three GraphQL endpoints:
 
 - **Ambassadors**: `http://localhost:8000/api/v1/graphql/ambassadors`
 - **Spark Admin**: `http://localhost:8000/api/v1/graphql/spark`
@@ -49,9 +51,92 @@ The Google Calendar mutations are available on all three GraphQL endpoints:
 
 ## Authentication
 
-All Google Calendar mutations require authentication. You must include a JWT token in the `Authorization` header:
+All Google Calendar queries and mutations require authentication. You must include a JWT token in the `Authorization` header:
 
 To obtain a token, use the `tokenAuth` mutation available in your GraphQL schema.
+
+---
+
+## Queries
+
+### googleCalendarConnectionStatus
+
+Check if the current user has an active Google Calendar connection. This query performs a **real API call** to Google Calendar to verify that the access tokens are valid and the connection is working.
+
+**Available for**: Ambassadors, Spark Admin, Clients
+
+**GraphQL Query:**
+```graphql
+query GoogleCalendarConnectionStatus {
+  googleCalendarConnectionStatus {
+    isConnected
+    isActive
+    calendarId
+    connectedAt
+  }
+}
+```
+
+**Response Fields:**
+- `isConnected` (Boolean): Whether the user has a Google Calendar connection record in the database (regardless of whether tokens are valid)
+- `isActive` (Boolean): Whether the connection is active AND working (verified by making an API call to Google Calendar). This will be `false` if tokens are expired, revoked, or invalid.
+- `calendarId` (String, nullable): The Google Calendar ID (usually "primary")
+- `connectedAt` (String, nullable): ISO format datetime string of when the connection was created
+
+**Important Notes:**
+- This query makes a real API call to Google Calendar to verify the connection works
+- If tokens are expired, the service will attempt to refresh them automatically
+- If the API call fails (e.g., tokens revoked, invalid credentials), `isActive` will be `false` even if `isConnected` is `true`
+
+**Success Response (Connected):**
+```json
+{
+  "data": {
+    "googleCalendarConnectionStatus": {
+      "isConnected": true,
+      "isActive": true,
+      "calendarId": "primary",
+      "connectedAt": "2024-01-15T10:30:00Z"
+    }
+  }
+}
+```
+
+**Success Response (Not Connected):**
+```json
+{
+  "data": {
+    "googleCalendarConnectionStatus": {
+      "isConnected": false,
+      "isActive": false,
+      "calendarId": null,
+      "connectedAt": null
+    }
+  }
+}
+```
+
+**Use Cases:**
+- Check connection status before showing connect/disconnect buttons
+- Display connection status in user settings
+- Conditionally show Google Calendar features based on connection status
+- Verify that stored tokens are still valid and working
+
+**Example Response (Connection exists but tokens are invalid):**
+```json
+{
+  "data": {
+    "googleCalendarConnectionStatus": {
+      "isConnected": true,
+      "isActive": false,
+      "calendarId": "primary",
+      "connectedAt": "2024-01-15T10:30:00Z"
+    }
+  }
+}
+```
+
+This indicates a connection record exists, but the API call failed (tokens may be expired or revoked).
 
 ---
 
@@ -378,6 +463,19 @@ mutation DisconnectGoogleCalendar($input: DisconnectGoogleCalendarInput!) {
 ---
 
 ## Types
+
+### GoogleCalendarConnectionStatus
+
+Response type for the `googleCalendarConnectionStatus` query.
+
+```graphql
+type GoogleCalendarConnectionStatus {
+  isConnected: Boolean!
+  isActive: Boolean!
+  calendarId: String
+  connectedAt: String
+}
+```
 
 ### ConnectGoogleCalendarResponse
 

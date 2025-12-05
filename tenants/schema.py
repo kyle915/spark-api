@@ -18,6 +18,7 @@ from .mutations import (
     SparkTenantMutations,
 )
 from .calendar_mutations import GoogleCalendarMutations
+from .calendar_queries import GoogleCalendarQueries
 from .dashboard.schema import DashboardQueries
 from utils.graphql.relay import (
     CountableConnection,
@@ -41,7 +42,7 @@ class CustomUserType:
 
 # Spark Schema
 @strawberry.type()
-class QuerySpark:
+class QuerySpark(GoogleCalendarQueries):
     @strawberry.field
     def healthcheck(self) -> str:
         return "ok"
@@ -103,7 +104,7 @@ class MutationSpark(SparkCustomRegister, SparkTenantMutations, GoogleCalendarMut
 # Ambassadors Schema
 # @strawberry.django.type(model=get_user_model())
 @strawberry_django.type(User)
-class QueryAmbassadors:
+class QueryAmbassadors(GoogleCalendarQueries):
     @strawberry.field
     def healthcheck(self) -> str:
         return "ok"
@@ -124,7 +125,7 @@ class MutationAmbassadors(AmbassadorsCustomRegister, GoogleCalendarMutations):
 # Clients Schemas
 # @strawberry.django.type(model=get_user_model())
 @strawberry_django.type(User)
-class QueryClients:
+class QueryClients(GoogleCalendarQueries):
     @strawberry.field
     def healthcheck(self) -> str:
         return "ok"

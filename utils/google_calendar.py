@@ -7,6 +7,7 @@ from typing import Optional
 from django.conf import settings
 from django.utils import timezone
 from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
 from google_auth_httplib2 import AuthorizedHttp
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -79,7 +80,7 @@ class GoogleCalendarService:
         if connection.token_expiry and connection.token_expiry <= timezone.now():
             if refresh_token:
                 try:
-                    credentials.refresh(AuthorizedHttp(credentials))
+                    credentials.refresh(Request())
                     # Update stored tokens
                     connection.set_access_token(credentials.token)
                     if credentials.refresh_token:
@@ -107,6 +108,45 @@ class GoogleCalendarService:
 
         http = AuthorizedHttp(credentials)
         return build('calendar', 'v3', http=http)
+
+    def test_connection(self) -> bool:
+        """
+        Test if the Google Calendar connection is working by making a test API call.
+
+        Returns:
+            True if connection is valid and working, False otherwise
+        """
+        service = self._get_service()
+        if not service:
+            return False
+
+        connection = self._get_connection()
+        if not connection:
+            return False
+
+        try:
+            # Make a lightweight API call to verify the connection works
+            # Use events().list() which works with calendar.events scope
+            # Limit to 1 result to keep it minimal
+            events_result = service.events().list(
+                calendarId=connection.calendar_id,
+                maxResults=1,
+                singleEvents=True,
+                orderBy='startTime'
+            ).execute()
+
+            # If we get here, the API call succeeded
+            logger.info(
+                f"Google Calendar connection test successful for user {self.user.id}")
+            return True
+        except HttpError as e:
+            logger.warning(
+                f"Google Calendar connection test failed for user {self.user.id}: {e}")
+            return False
+        except Exception as e:
+            logger.error(
+                f"Unexpected error testing Google Calendar connection for user {self.user.id}: {e}")
+            return False
 
     def _format_event_data(self, event, event_type_name: Optional[str] = None,
                            status_name: Optional[str] = None) -> dict:
