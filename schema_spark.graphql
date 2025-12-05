@@ -310,6 +310,18 @@ type CompanyToAmbassadorReviewDetailResponse {
   companyToAmbassadorReview: CompanyToAmbassadorReview
 }
 
+input ConnectGoogleCalendarInput {
+  clientMutationId: ID = null
+}
+
+type ConnectGoogleCalendarResponse {
+  success: Boolean!
+  message: String!
+  authorizationUrl: String
+  state: String
+  clientMutationId: ID
+}
+
 input CoordinatesFilterInput {
   coordinates: [Float!]!
   range: Float!
@@ -715,6 +727,16 @@ input DeleteRecapInput {
   id: ID!
 }
 
+input DisconnectGoogleCalendarInput {
+  clientMutationId: ID = null
+}
+
+type DisconnectGoogleCalendarResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+}
+
 enum DistanceUnit {
   KILOMETERS
   MILES
@@ -977,6 +999,25 @@ type FileTypeCountableEdge {
 
   """The item at the end of the edge"""
   node: FileType!
+}
+
+input GoogleCalendarCallbackInput {
+  clientMutationId: ID = null
+  code: String!
+  state: String!
+}
+
+type GoogleCalendarCallbackResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+}
+
+type GoogleCalendarConnectionStatus {
+  isConnected: Boolean!
+  isActive: Boolean!
+  calendarId: String
+  connectedAt: String
 }
 
 input GoogleSocialAuthInput {
@@ -1382,6 +1423,9 @@ type Mutation {
   socialAuthApple(input: AppleSocialAuthInput!): SocialAuthResponse!
   createTenant(input: CreateTenantInput!): CreateTenantResponse!
   updateTenant(input: UpdateTenantInput!): UpdateTenantResponse!
+  connectGoogleCalendar(input: ConnectGoogleCalendarInput!): ConnectGoogleCalendarResponse!
+  googleCalendarCallback(input: GoogleCalendarCallbackInput!): GoogleCalendarCallbackResponse!
+  disconnectGoogleCalendar(input: DisconnectGoogleCalendarInput!): DisconnectGoogleCalendarResponse!
 
   "### Checks if a token is not expired and correct.\n\n*Note that this is not for refresh tokens.*\n"
   verifyToken(input: VerifyTokenInput!): VerifyTokenType!
@@ -1631,6 +1675,7 @@ type Query {
   recap(uuid: ID!): Recap
   fileTypes(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): FileTypeCountableConnection!
   fileType(uuid: ID!): FileType
+  googleCalendarConnectionStatus: GoogleCalendarConnectionStatus!
   healthcheck: String!
   me: CustomUserType!
   tenants(userUuid: ID = null, filters: TenantFiltersInput = null, first: Int = null, after: String = null, last: Int = null, before: String = null): TenantTypeCountableConnection!
@@ -2647,13 +2692,13 @@ type UserType {
   isActive: Boolean!
   dateJoined: DateTime!
   status: UserStatusType!
-  lastName: String
-  email: String!
-  id: ID!
   firstName: String
 
   """Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only."""
   username: String!
+  id: ID!
+  lastName: String
+  email: String!
   archived: Boolean!
   verified: Boolean!
 }

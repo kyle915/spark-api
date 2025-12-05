@@ -1,4 +1,18 @@
 """
+Ambassador(id, uuid, rating, address, coordinates, user, created_by, updated_by, created_at, updated_at)
+"""
+type Ambassador {
+  id: ID!
+  uuid: String!
+  rating: Int!
+  address: String
+  coordinates: [Float!]!
+  userId: ID!
+  createdAt: String!
+  updatedAt: String!
+}
+
+"""
 AmbassadorJob(id, uuid, appear_as_rfp, tenant, ambassador, job, status, rate, created_by, updated_by, created_at, updated_at)
 """
 type AmbassadorJob {
@@ -33,6 +47,13 @@ type AmbassadorJobDetailResponse {
   message: String!
   clientMutationId: ID
   ambassadorJob: AmbassadorJob
+}
+
+type AmbassadorStats {
+  totalAmbassadorsWorking: Int!
+  ambassadorsByEvent: [EventAmbassadorCount!]
+  ambassadorsByLocation: [LocationAmbassadorCount!]
+  uniqueAmbassadorsCount: Int!
 }
 
 """
@@ -291,6 +312,18 @@ type CompanyToAmbassadorReviewDetailResponse {
   companyToAmbassadorReview: CompanyToAmbassadorReview
 }
 
+input ConnectGoogleCalendarInput {
+  clientMutationId: ID = null
+}
+
+type ConnectGoogleCalendarResponse {
+  success: Boolean!
+  message: String!
+  authorizationUrl: String
+  state: String
+  clientMutationId: ID
+}
+
 input CoordinatesFilterInput {
   coordinates: [Float!]!
   range: Float!
@@ -481,6 +514,7 @@ input CreateProductInput {
   tenantId: ID = null
   name: String!
   productTypeId: ID!
+  image: String = null
 }
 
 input CreateProductTypeInput {
@@ -513,6 +547,13 @@ input CreateRateTypeInput {
   clientMutationId: ID = null
   tenantId: ID = null
   name: String!
+}
+
+input CreateRecapInput {
+  clientMutationId: ID = null
+  name: String!
+  eventId: ID!
+  files: [String!]!
 }
 
 input CreateRequestDetailInput {
@@ -596,7 +637,7 @@ input CreateStatusInput {
 }
 
 """
-User(password, last_login, is_superuser, username, first_name, last_name, email, is_staff, date_joined, id, uuid, role, created_by, updated_by, created_at, updated_at, is_active)
+User(password, last_login, is_superuser, username, first_name, last_name, email, is_staff, date_joined, id, uuid, image, role, created_by, updated_by, created_at, updated_at, is_active)
 """
 type CustomUserType {
   id: ID!
@@ -610,8 +651,61 @@ type CustomUserType {
   role: RoleType!
 }
 
+input DashboardFiltersInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  startDate: String = null
+  endDate: String = null
+  locationId: ID = null
+  locationCode: String = null
+  eventTypeId: ID = null
+  eventStatusId: ID = null
+  requestStatusId: ID = null
+  requestTypeId: ID = null
+  clientId: ID = null
+  distributorId: ID = null
+  retailerId: ID = null
+}
+
 """Date with time (isoformat)"""
 scalar DateTime
+
+input DeclineRequestInput {
+  clientMutationId: ID = null
+  id: ID!
+}
+
+type DeclineRequestResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  request: Request
+}
+
+input DeleteProductInput {
+  clientMutationId: ID = null
+  id: ID!
+}
+
+input DeleteRecapFileInput {
+  clientMutationId: ID = null
+  id: ID!
+}
+
+input DeleteRecapInput {
+  clientMutationId: ID = null
+  id: ID!
+}
+
+input DisconnectGoogleCalendarInput {
+  clientMutationId: ID = null
+}
+
+type DisconnectGoogleCalendarResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+}
 
 enum DistanceUnit {
   KILOMETERS
@@ -683,6 +777,19 @@ type Event {
   status: EventStatus
 }
 
+type EventAmbassadorCount {
+  eventId: ID!
+  eventName: String!
+  ambassadorCount: Int!
+}
+
+type EventAmbassadorInfo {
+  ambassadorId: ID!
+  ambassadorName: String!
+  isApproved: Boolean!
+  jobsCount: Int!
+}
+
 type EventCountableConnection {
   pageInfo: PageInfo!
   edges: [EventCountableEdge!]!
@@ -697,6 +804,24 @@ type EventCountableEdge {
   node: Event!
 }
 
+type EventDetail {
+  event: Event!
+  relatedRequestId: ID
+  ambassadorsCount: Int!
+  jobsCount: Int!
+  ambassadors: [EventAmbassadorInfo!]
+  location: Location
+  statistics: EventDetailStatistics
+}
+
+type EventDetailStatistics {
+  totalAmbassadors: Int!
+  approvedAmbassadors: Int!
+  totalJobs: Int!
+  activeJobs: Int!
+  totalRequests: Int!
+}
+
 input EventFiltersInput {
   clientMutationId: ID = null
   tenantId: ID = null
@@ -708,17 +833,33 @@ input EventFiltersInput {
   coordinates: CoordinatesFilterInput = null
 }
 
+type EventStats {
+  totalEvents: Int!
+  eventsByStatus: [EventStatusCount!]
+  eventsByLocation: [LocationEventCount!]
+  eventsToday: Int!
+  eventsThisWeek: Int!
+  eventsThisMonth: Int!
+}
+
 """
-EventStatus(id, uuid, name, is_default, tenant, created_by, updated_by, created_at, updated_at)
+EventStatus(id, uuid, name, slug, is_default, tenant, created_by, updated_by, created_at, updated_at)
 """
 type EventStatus {
   id: ID!
   uuid: String!
   name: String!
+  slug: String!
   isDefault: Boolean!
   tenantId: ID!
   createdAt: String!
   updatedAt: String!
+}
+
+type EventStatusCount {
+  statusId: ID!
+  statusName: String!
+  count: Int!
 }
 
 type EventStatusCountableConnection {
@@ -746,6 +887,12 @@ input EventStatusFiltersInput {
   clientMutationId: ID = null
   tenantId: ID = null
   tenantUuid: ID = null
+}
+
+type EventTimeSeries {
+  dataPoints: [TimeSeriesDataPoint!]!
+  groupBy: String!
+  totalCount: Int!
 }
 
 """
@@ -783,6 +930,51 @@ input EventTypeFiltersInput {
 
 "\n     Errors messages and codes mapped to\n    fields or non fields errors.\n    Example:\n    {\n        field_name: [\n            {\n                \"message\": \"error message\",\n                \"code\": \"error_code\"\n            }\n        ],\n        other_field: [\n            {\n                \"message\": \"error message\",\n                \"code\": \"error_code\"\n            }\n        ],\n        nonFieldErrors: [\n            {\n                \"message\": \"error message\",\n                \"code\": \"error_code\"\n            }\n        ]\n    }\n    "
 scalar ExpectedError
+
+"""
+FileType(id, uuid, name, extension, created_by, updated_by, created_at, updated_at)
+"""
+type FileType {
+  id: ID!
+  uuid: String!
+  name: String!
+  extension: String
+  createdAt: String!
+  updatedAt: String!
+}
+
+type FileTypeCountableConnection {
+  pageInfo: PageInfo!
+  edges: [FileTypeCountableEdge!]!
+  totalCount: Int!
+}
+
+type FileTypeCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: FileType!
+}
+
+input GoogleCalendarCallbackInput {
+  clientMutationId: ID = null
+  code: String!
+  state: String!
+}
+
+type GoogleCalendarCallbackResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+}
+
+type GoogleCalendarConnectionStatus {
+  isConnected: Boolean!
+  isActive: Boolean!
+  calendarId: String
+  connectedAt: String
+}
 
 input GoogleSocialAuthInput {
   clientMutationId: ID = null
@@ -1093,6 +1285,13 @@ type Location {
   updatedAt: String!
 }
 
+type LocationAmbassadorCount {
+  locationId: ID!
+  locationName: String!
+  locationCode: String!
+  ambassadorCount: Int!
+}
+
 type LocationCountableConnection {
   pageInfo: PageInfo!
   edges: [LocationCountableEdge!]!
@@ -1112,6 +1311,13 @@ type LocationDetailResponse {
   message: String!
   clientMutationId: ID
   location: Location
+}
+
+type LocationEventCount {
+  locationId: ID!
+  locationName: String!
+  locationCode: String!
+  count: Int!
 }
 
 input LocationFiltersInput {
@@ -1151,6 +1357,7 @@ type Mutation {
   updateProductType(input: UpdateProductTypeInput!): ProductTypeDetailResponse!
   createProduct(input: CreateProductInput!): ProductDetailResponse!
   updateProduct(input: UpdateProductInput!): ProductDetailResponse!
+  deleteProduct(input: DeleteProductInput!): ProductDetailResponse!
   createRequestType(input: CreateRequestTypeInput!): RequestTypeDetailResponse!
   updateRequestType(input: UpdateRequestTypeInput!): RequestTypeDetailResponse!
   createRequestStatus(input: CreateRequestStatusInput!): RequestStatusDetailResponse!
@@ -1158,9 +1365,17 @@ type Mutation {
   createRequest(input: CreateRequestInput!): RequestDetailResponse!
   updateRequest(input: UpdateRequestInput!): RequestDetailResponse!
   approveRequest(input: ApproveRequestInput!): ApproveRequestResponse!
+  declineRequest(input: DeclineRequestInput!): DeclineRequestResponse!
+  createRecap(input: CreateRecapInput!): RecapDetailResponse!
+  updateRecap(input: UpdateRecapInput!): RecapDetailResponse!
+  deleteRecap(input: DeleteRecapInput!): RecapDetailResponse!
+  deleteRecapFile(input: DeleteRecapFileInput!): RecapFileDetailResponse!
   register(input: ClientRegisterInput!): RegisterResponse!
   socialAuthGoogle(input: GoogleSocialAuthInput!): SocialAuthResponse!
   socialAuthApple(input: AppleSocialAuthInput!): SocialAuthResponse!
+  connectGoogleCalendar(input: ConnectGoogleCalendarInput!): ConnectGoogleCalendarResponse!
+  googleCalendarCallback(input: GoogleCalendarCallbackInput!): GoogleCalendarCallbackResponse!
+  disconnectGoogleCalendar(input: DisconnectGoogleCalendarInput!): DisconnectGoogleCalendarResponse!
 
   "### Checks if a token is not expired and correct.\n\n*Note that this is not for refresh tokens.*\n"
   verifyToken(input: VerifyTokenInput!): VerifyTokenType!
@@ -1293,7 +1508,7 @@ type PayTimingDetailResponse {
 }
 
 """
-Product(id, uuid, name, product_type, tenant, created_by, updated_by, created_at, updated_at)
+Product(id, uuid, name, image, product_type, tenant, created_by, updated_by, created_at, updated_at)
 """
 type Product {
   id: ID!
@@ -1303,6 +1518,7 @@ type Product {
   tenantId: ID!
   createdAt: String!
   updatedAt: String!
+  image: String
 }
 
 type ProductCountableConnection {
@@ -1330,6 +1546,7 @@ input ProductFiltersInput {
   clientMutationId: ID = null
   tenantId: ID = null
   tenantUuid: ID = null
+  productTypeId: ID = null
 }
 
 """
@@ -1392,7 +1609,7 @@ type Query {
   publicProductTypes(requestUrlName: String!, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): ProductTypeCountableConnection!
   productTypes(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: ProductTypeFiltersInput = null): ProductTypeCountableConnection!
   productType(id: ID!): ProductType
-  publicProducts(requestUrlName: String!, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): ProductCountableConnection!
+  publicProducts(requestUrlName: String!, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: ProductFiltersInput = null): ProductCountableConnection!
   products(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: ProductFiltersInput = null): ProductCountableConnection!
   product(id: ID!): Product
   publicRequestType(requestUrlName: String!, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): RequestTypeCountableConnection!
@@ -1404,8 +1621,14 @@ type Query {
   request(uuid: ID!): Request
   locations(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: LocationFiltersInput = null): LocationCountableConnection!
   location(id: ID!): Location
+  recaps(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: RecapFiltersInput = null): RecapCountableConnection!
+  recap(uuid: ID!): Recap
+  fileTypes(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): FileTypeCountableConnection!
+  fileType(uuid: ID!): FileType
+  googleCalendarConnectionStatus: GoogleCalendarConnectionStatus!
+  healthcheck: String!
   me: CustomUserType!
-  tenants(userUuid: ID = null, first: Int = null, after: String = null, last: Int = null, before: String = null): TenantTypeCountableConnection!
+  tenants(userUuid: ID = null, filters: TenantFiltersInput = null, first: Int = null, after: String = null, last: Int = null, before: String = null): TenantTypeCountableConnection!
   ambassadorJobStatuses(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): StatusCountableConnection!
   ambassadorJobStatus(id: ID!): Status
   companyFiles(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): CompanyFileCountableConnection!
@@ -1450,6 +1673,12 @@ type Query {
   questionOption(id: ID!): QuestionOption
   jobRequirementAnswers(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): JobRequirementAnswerCountableConnection!
   jobRequirementAnswer(id: ID!): JobRequirementAnswer
+  eventsStats(filters: DashboardFiltersInput = null): EventStats!
+  eventsTimeSeries(filters: DashboardFiltersInput = null, groupBy: TimeGroupBy! = DAY): EventTimeSeries!
+  ambassadorsStats(filters: DashboardFiltersInput = null): AmbassadorStats!
+  requestStats(filters: DashboardFiltersInput = null): RequestStats!
+  requestTimeSeries(filters: DashboardFiltersInput = null, groupBy: TimeGroupBy! = DAY): RequestTimeSeries!
+  eventDetail(id: ID!, filters: DashboardFiltersInput = null): EventDetail
 }
 
 """
@@ -1587,6 +1816,71 @@ type RateTypeDetailResponse {
 }
 
 """
+Recap(id, uuid, name, event, recap_file, created_by, updated_by, created_at, updated_at)
+"""
+type Recap {
+  id: ID!
+  uuid: String!
+  name: String!
+  event: Event!
+  eventId: ID!
+  recapFile: RecapFile!
+  recapFileId: ID!
+  createdAt: String!
+  updatedAt: String!
+  recapFiles: [RecapFile!]!
+  ambassadors: [Ambassador!]!
+  requestStoreManagers: [RequestStoreManager!]!
+}
+
+type RecapCountableConnection {
+  pageInfo: PageInfo!
+  edges: [RecapCountableEdge!]!
+  totalCount: Int!
+}
+
+type RecapCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: Recap!
+}
+
+type RecapDetailResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  recap: Recap
+}
+
+"""
+RecapFile(id, uuid, name, file, approved, file_type, created_by, updated_by, created_at, updated_at)
+"""
+type RecapFile {
+  id: ID!
+  uuid: String!
+  name: String!
+  approved: Boolean!
+  fileTypeId: ID!
+  createdAt: String!
+  updatedAt: String!
+  file: String
+}
+
+type RecapFileDetailResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  recapFile: RecapFile
+}
+
+input RecapFiltersInput {
+  clientMutationId: ID = null
+  eventId: ID = null
+}
+
+"""
 If `revoke_refresh_token` is true, revokes to refresh token an creates a new one.
 """
 input RefreshTokenInput {
@@ -1667,14 +1961,33 @@ input RequestFiltersInput {
   date: String = null
 }
 
+type RequestStats {
+  totalRequests: Int!
+  approvedCount: Int!
+  rejectedCount: Int!
+  pendingCount: Int!
+  approvalRate: Float!
+  rejectionRate: Float!
+  requestsWithJobsCount: Int!
+  requestsWithJobsPercentage: Float!
+  requestsByStatus: [RequestStatusCount!]
+}
+
 type RequestStatus {
   id: ID!
   uuid: String!
   name: String!
+  slug: String!
   createEvent: Boolean!
   isDefault: Boolean!
   createdAt: String!
   updatedAt: String!
+}
+
+type RequestStatusCount {
+  statusId: ID!
+  statusName: String!
+  count: Int!
 }
 
 type RequestStatusCountableConnection {
@@ -1702,6 +2015,29 @@ input RequestStatusFiltersInput {
   clientMutationId: ID = null
   tenantId: ID = null
   tenantUuid: ID = null
+}
+
+"""
+RequestStoreManager(id, uuid, name, phone, request, tenant, created_by, updated_by, created_at, updated_at)
+"""
+type RequestStoreManager {
+  id: ID!
+  uuid: String!
+  name: String!
+  phone: String!
+  requestId: ID!
+  tenantId: ID
+  createdAt: String!
+  updatedAt: String!
+}
+
+type RequestTimeSeries {
+  dataPoints: [TimeSeriesDataPoint!]!
+  groupBy: String!
+  totalCount: Int!
+  approvalTrend: [TimeSeriesDataPoint!]
+  rejectionTrend: [TimeSeriesDataPoint!]
+  jobsAssignedTrend: [TimeSeriesDataPoint!]
 }
 
 """
@@ -1869,13 +2205,19 @@ type StatusDetailResponse {
   status: Status
 }
 
+input TenantFiltersInput {
+  name: String = null
+  requestUrlName: String = null
+}
+
 """
-Tenant(id, uuid, name, request_url_name, created_by, updated_by, created_at, updated_at)
+Tenant(id, uuid, name, image, request_url_name, created_by, updated_by, created_at, updated_at)
 """
 type TenantType {
   id: ID!
   uuid: UUID!
   name: String!
+  requestUrlName: String
 }
 
 type TenantTypeCountableConnection {
@@ -1890,6 +2232,19 @@ type TenantTypeCountableEdge {
 
   """The item at the end of the edge"""
   node: TenantType!
+}
+
+enum TimeGroupBy {
+  HOUR
+  DAY
+  WEEK
+  MONTH
+}
+
+type TimeSeriesDataPoint {
+  timestamp: String!
+  count: Int!
+  value: Float
 }
 
 "\nthe data that was used to create the token.\n"
@@ -2115,6 +2470,7 @@ input UpdateProductInput {
   tenantId: ID = null
   name: String!
   productTypeId: ID!
+  image: String = null
   id: ID!
 }
 
@@ -2152,6 +2508,14 @@ input UpdateRateTypeInput {
   clientMutationId: ID = null
   tenantId: ID = null
   name: String!
+  id: ID!
+}
+
+input UpdateRecapInput {
+  clientMutationId: ID = null
+  name: String!
+  eventId: ID!
+  files: [String!]!
   id: ID!
 }
 
@@ -2215,6 +2579,7 @@ input UpdateStatusInput {
 
 enum UserRoleEnum {
   AMBASSADOR
+  CLIENT
 }
 
 """A helper model that handles user account stuff."""
@@ -2224,7 +2589,7 @@ type UserStatusType {
 }
 
 """
-User(password, last_login, is_superuser, username, first_name, last_name, email, is_staff, date_joined, id, uuid, role, created_by, updated_by, created_at, updated_at, is_active)
+User(password, last_login, is_superuser, username, first_name, last_name, email, is_staff, date_joined, id, uuid, image, role, created_by, updated_by, created_at, updated_at, is_active)
 """
 type UserType {
   logentrySet: [DjangoModelType!]!
@@ -2240,13 +2605,13 @@ type UserType {
   isActive: Boolean!
   dateJoined: DateTime!
   status: UserStatusType!
-  email: String!
-  id: ID!
-  lastName: String
+  firstName: String
 
   """Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only."""
   username: String!
-  firstName: String
+  id: ID!
+  lastName: String
+  email: String!
   archived: Boolean!
   verified: Boolean!
 }
