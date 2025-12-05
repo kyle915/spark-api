@@ -14,6 +14,9 @@ from tenants.calendar.service import GoogleCalendarService
 
 logger = logging.getLogger(__name__)
 
+# Batch size for processing connections to avoid memory issues
+CONNECTION_BATCH_SIZE = 50
+
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
 def sync_event_to_google_calendar(self, user_id: int, event_id: int):
@@ -181,26 +184,37 @@ def sync_event_to_all_connected_users(self, event_id: int, tenant_id: int = None
         tenant_id: Optional tenant ID to filter users (if None, syncs to all users)
     """
     try:
-        event = Event.objects.get(id=event_id)
-
-        # Get all users with active Google Calendar connections
-        connections = GoogleCalendarConnection.objects.filter(is_active=True)
+        connections_qs = GoogleCalendarConnection.objects.filter(
+            is_active=True
+        ).values_list('user_id', flat=True)
 
         if tenant_id:
-            # Filter by tenant if provided
-            from tenants.models import TenantedUser
-            tenant_user_ids = TenantedUser.objects.filter(
-                tenant_id=tenant_id,
-                is_active=True
-            ).values_list('user_id', flat=True)
-            connections = connections.filter(user_id__in=tenant_user_ids)
+            connections_qs = connections_qs.filter(
+                user__tenanted_users__tenant_id=tenant_id,
+                user__tenanted_users__is_active=True
+            ).distinct()
 
-        # Sync to each connected user
-        for connection in connections:
-            sync_event_to_google_calendar.delay(connection.user_id, event_id)
+        offset = 0
+        total_queued = 0
+        while True:
+            user_ids_page = list(
+                connections_qs[offset:offset + CONNECTION_BATCH_SIZE]
+            )
+
+            if not user_ids_page:
+                break
+
+            for user_id in user_ids_page:
+                sync_event_to_google_calendar.delay(user_id, event_id)
+            total_queued += len(user_ids_page)
+            offset += CONNECTION_BATCH_SIZE
+
+            logger.debug(
+                f"Queued batch of {len(user_ids_page)} users for event {event_id} "
+                f"(total queued: {total_queued})")
 
         logger.info(
-            f"Queued sync for event {event_id} to {connections.count()} users")
+            f"Queued sync for event {event_id} to {total_queued} users with active Google Calendar connections")
 
     except Event.DoesNotExist:
         logger.error(f"Event {event_id} not found")
