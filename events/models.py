@@ -243,7 +243,8 @@ class RequestStatus(WithDefaultAttribute, models.Model):
             # Set the create event flag to false if the current status is set to true
             if self.create_event:
                 (
-                    RequestStatus.objects.filter(tenant=self.tenant, create_event=True)
+                    RequestStatus.objects.filter(
+                        tenant=self.tenant, create_event=True)
                     .exclude(pk=self.pk)
                     .update(create_event=False)
                 )
@@ -558,3 +559,36 @@ class Event(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     objects = EventManager()
+
+
+class GoogleCalendarEvent(models.Model):
+    """Model to store Google Calendar event ID mapping for events per user."""
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+
+    event = models.ForeignKey(
+        Event,
+        on_delete=models.CASCADE,
+        null=False,
+        related_name="google_calendar_events",
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        null=False,
+        related_name="google_calendar_event_mappings",
+    )
+
+    google_event_id = models.CharField(max_length=255, null=False)
+
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = [['event', 'user']]
+        indexes = [
+            models.Index(fields=['event', 'user']),
+        ]
+
+    def __str__(self):
+        return f"Event {self.event.id} -> Google Calendar {self.google_event_id} for user {self.user.id}"

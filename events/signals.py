@@ -57,11 +57,27 @@ def sync_event_on_create_or_update(sender, instance: Event, created: bool, **kwa
             logger.error(
                 f"Error in sync_event_on_create_or_update for event {instance.id}: {e}")
     else:
-        # Event updated
-        # Note: Without storing Google Calendar event IDs, we can't easily update
-        # In production, you'd want to store the mapping and update here
-        logger.info(
-            f"Event {instance.id} updated (update sync not implemented without Google event ID storage)")
+        # Event updated - sync to all users who have this event in their calendar
+        try:
+            from events.models import GoogleCalendarEvent
+
+            # Get all users who have this event synced to their calendar
+            mappings = GoogleCalendarEvent.objects.filter(event=instance)
+
+            if mappings.exists():
+                logger.info(
+                    f"Event {instance.id} updated, syncing to {mappings.count()} users with this event in their calendar")
+
+                # Sync update to each user who has this event
+                for mapping in mappings:
+                    sync_event_to_google_calendar.delay(
+                        mapping.user_id, instance.id)
+            else:
+                logger.debug(
+                    f"Event {instance.id} updated but no users have it synced to their calendar")
+        except Exception as e:
+            logger.error(
+                f"Error syncing event update for event {instance.id}: {e}")
 
 
 @receiver(post_save, sender=AmbassadorEvent)

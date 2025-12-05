@@ -48,9 +48,15 @@ def sync_event_to_google_calendar(self, user_id: int, event_id: int):
         if event.status:
             status_name = event.status.name
 
-        # Create calendar service and sync event
+        # Validate event has request
+        if not event.request:
+            logger.error(
+                f"Event {event_id} must have a request to sync to Google Calendar")
+            return
+
+        # Create calendar service and sync event (creates or updates)
         service = GoogleCalendarService(user)
-        google_event_id = service.create_event(
+        google_event_id = service.sync_event(
             event,
             event_type_name=event_type_name,
             status_name=status_name
@@ -62,9 +68,13 @@ def sync_event_to_google_calendar(self, user_id: int, event_id: int):
         else:
             logger.error(
                 f"Failed to sync event {event_id} to Google Calendar for user {user_id}")
-            # Retry the task
-            raise self.retry(exc=Exception(
-                "Failed to create Google Calendar event"))
+            # Retry the task if we haven't exceeded max retries
+            if self.request.retries < self.max_retries:
+                raise self.retry(exc=Exception(
+                    "Failed to create Google Calendar event"))
+            else:
+                logger.error(
+                    f"Max retries ({self.max_retries}) exceeded for event {event_id}. Giving up.")
 
     except User.DoesNotExist:
         logger.error(f"User {user_id} not found")
@@ -73,24 +83,25 @@ def sync_event_to_google_calendar(self, user_id: int, event_id: int):
     except Exception as exc:
         logger.error(
             f"Error syncing event {event_id} to Google Calendar for user {user_id}: {exc}")
-        # Retry with exponential backoff
-        raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
+        # Retry with exponential backoff if we haven't exceeded max retries
+        if self.request.retries < self.max_retries:
+            raise self.retry(exc=exc, countdown=60 *
+                             (2 ** self.request.retries))
+        else:
+            logger.error(
+                f"Max retries ({self.max_retries}) exceeded for event {event_id}. Giving up.")
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
-def update_event_in_google_calendar(self, user_id: int, event_id: int, google_event_id: str):
+def update_event_in_google_calendar(self, user_id: int, event_id: int, google_event_id: str = None):
     """
     Update an event in a user's Google Calendar.
-
-    Note: This task requires the Google Calendar event ID, which we're not storing.
-    For now, this is a placeholder. In production, you might want to:
-    1. Store the Google Calendar event ID when creating events
-    2. Or search for the event by summary/description and update it
+    Uses sync_event which will update if mapping exists, or create if it doesn't.
 
     Args:
         user_id: ID of the user whose calendar to update
         event_id: ID of the event to update
-        google_event_id: Google Calendar event ID (optional, will search if not provided)
+        google_event_id: Google Calendar event ID (optional, will use mapping if not provided)
     """
     try:
         user = User.objects.get(id=user_id)
@@ -107,6 +118,12 @@ def update_event_in_google_calendar(self, user_id: int, event_id: int, google_ev
                 f"User {user_id} does not have active Google Calendar connection")
             return
 
+        # Validate event has request
+        if not event.request:
+            logger.error(
+                f"Event {event_id} must have a request to sync to Google Calendar")
+            return
+
         # Get event type and status names
         event_type_name = None
         status_name = None
@@ -116,32 +133,27 @@ def update_event_in_google_calendar(self, user_id: int, event_id: int, google_ev
         if event.status:
             status_name = event.status.name
 
-        # Create calendar service and update event
+        # Create calendar service and sync event (will update if mapping exists)
         service = GoogleCalendarService(user)
-
-        # If google_event_id is not provided, we can't update
-        # In a production system, you'd want to store this mapping
-        if not google_event_id:
-            logger.warning(
-                f"Cannot update event {event_id} without Google Calendar event ID")
-            return
-
-        success = service.update_event(
-            google_event_id,
+        google_event_id = service.sync_event(
             event,
             event_type_name=event_type_name,
             status_name=status_name
         )
 
-        if success:
+        if google_event_id:
             logger.info(
-                f"Successfully updated event {event_id} in Google Calendar for user {user_id}")
+                f"Successfully synced/updated event {event_id} in Google Calendar for user {user_id}")
         else:
             logger.error(
-                f"Failed to update event {event_id} in Google Calendar for user {user_id}")
-            # Retry the task
-            raise self.retry(exc=Exception(
-                "Failed to update Google Calendar event"))
+                f"Failed to sync/update event {event_id} in Google Calendar for user {user_id}")
+            # Retry the task if we haven't exceeded max retries
+            if self.request.retries < self.max_retries:
+                raise self.retry(exc=Exception(
+                    "Failed to update Google Calendar event"))
+            else:
+                logger.error(
+                    f"Max retries ({self.max_retries}) exceeded for event {event_id}. Giving up.")
 
     except User.DoesNotExist:
         logger.error(f"User {user_id} not found")
@@ -150,8 +162,13 @@ def update_event_in_google_calendar(self, user_id: int, event_id: int, google_ev
     except Exception as exc:
         logger.error(
             f"Error updating event {event_id} in Google Calendar for user {user_id}: {exc}")
-        # Retry with exponential backoff
-        raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
+        # Retry with exponential backoff if we haven't exceeded max retries
+        if self.request.retries < self.max_retries:
+            raise self.retry(exc=exc, countdown=60 *
+                             (2 ** self.request.retries))
+        else:
+            logger.error(
+                f"Max retries ({self.max_retries}) exceeded for event {event_id}. Giving up.")
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
@@ -189,4 +206,10 @@ def sync_event_to_all_connected_users(self, event_id: int, tenant_id: int = None
         logger.error(f"Event {event_id} not found")
     except Exception as exc:
         logger.error(f"Error syncing event {event_id} to all users: {exc}")
-        raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
+        # Retry with exponential backoff if we haven't exceeded max retries
+        if self.request.retries < self.max_retries:
+            raise self.retry(exc=exc, countdown=60 *
+                             (2 ** self.request.retries))
+        else:
+            logger.error(
+                f"Max retries ({self.max_retries}) exceeded for event {event_id}. Giving up.")
