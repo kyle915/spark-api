@@ -3,7 +3,7 @@ Google Calendar API service for creating, updating, and deleting calendar events
 """
 import logging
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, Tuple
 from django.conf import settings
 from django.utils import timezone
 from google.oauth2.credentials import Credentials
@@ -14,8 +14,7 @@ from googleapiclient.errors import HttpError
 from asgiref.sync import sync_to_async
 
 from tenants.models import GoogleCalendarConnection, User
-from events.models import GoogleCalendarEvent, Event
-from events.models import GoogleCalendarEvent
+from events.models import Event, GoogleCalendarEvent
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +110,75 @@ class GoogleCalendarService:
         http = AuthorizedHttp(credentials)
         return build('calendar', 'v3', http=http)
 
+    def _ensure_service_and_connection(self) -> Tuple[Optional[object], Optional[GoogleCalendarConnection]]:
+        """
+        Ensure both service and connection are available.
+
+        Returns:
+            tuple: (service, connection) if both are available, (None, None) otherwise
+
+        Note:
+            This method logs errors if service or connection is unavailable
+        """
+        service = self._get_service()
+        if not service:
+            logger.error(
+                f"Cannot perform operation: no service for user {self.user.id}")
+            return None, None
+
+        connection = self._get_connection()
+        if not connection:
+            logger.error(
+                f"Cannot perform operation: no active connection for user {self.user.id}")
+            return None, None
+
+        return service, connection
+
+    @staticmethod
+    def _build_datetime(date, time_value) -> Optional[datetime]:
+        """
+        Build a timezone-aware datetime from date and time values.
+
+        Args:
+            date: Date object
+            time_value: Time object or None
+
+        Returns:
+            Timezone-aware datetime or None if time_value is None
+        """
+        if not time_value:
+            return None
+
+        dt = datetime.combine(date, time_value)
+        if timezone.is_aware(timezone.now()):
+            dt = timezone.make_aware(dt)
+        return dt
+
+    def _handle_http_error(self, error: HttpError, operation: str, google_event_id: Optional[str] = None,
+                           treat_404_as_success: bool = False) -> bool:
+        """
+        Handle HttpError exceptions consistently.
+
+        Args:
+            error: The HttpError exception
+            operation: Description of the operation being performed
+            google_event_id: Optional Google Calendar event ID for context
+            treat_404_as_success: Whether to treat 404 errors as success (e.g., for delete operations)
+
+        Returns:
+            True if operation should be considered successful, False otherwise
+        """
+        event_id_context = f" {google_event_id}" if google_event_id else ""
+
+        if error.resp.status == 404:
+            logger.warning(
+                f"Google Calendar event{event_id_context} not found for user {self.user.id} during {operation}")
+            return treat_404_as_success
+        else:
+            logger.error(
+                f"Failed to {operation} Google Calendar event{event_id_context} for user {self.user.id}: {error}")
+            return False
+
     def test_connection(self) -> bool:
         """
         Test if the Google Calendar connection is working by making a test API call.
@@ -118,26 +186,21 @@ class GoogleCalendarService:
         Returns:
             True if connection is valid and working, False otherwise
         """
-        service = self._get_service()
-        if not service:
-            return False
-
-        connection = self._get_connection()
-        if not connection:
+        service, connection = self._ensure_service_and_connection()
+        if not service or not connection:
             return False
 
         try:
             # Make a lightweight API call to verify the connection works
             # Use events().list() which works with calendar.events scope
             # Limit to 1 result to keep it minimal
-            events_result = service.events().list(
+            service.events().list(
                 calendarId=connection.calendar_id,
                 maxResults=1,
                 singleEvents=True,
                 orderBy='startTime'
             ).execute()
 
-            # If we get here, the API call succeeded
             logger.info(
                 f"Google Calendar connection test successful for user {self.user.id}")
             return True
@@ -188,26 +251,16 @@ class GoogleCalendarService:
         event_date = event.request.date
 
         # Get start and end times from request
-        start_datetime = None
-        end_datetime = None
-
-        # Use request.start_time (required)
-        if event.request.start_time:
-            start_datetime = datetime.combine(
-                event_date, event.request.start_time)
-            if timezone.is_aware(timezone.now()):
-                start_datetime = timezone.make_aware(start_datetime)
-        else:
+        if not event.request.start_time:
             raise ValueError(
                 f"Request {event.request.id} must have a start_time to sync event to Google Calendar")
 
+        start_datetime = self._build_datetime(
+            event_date, event.request.start_time)
+
         # Use request.end_time if available, otherwise default to 1 hour after start
-        if event.request.end_time:
-            end_datetime = datetime.combine(event_date, event.request.end_time)
-            if timezone.is_aware(timezone.now()):
-                end_datetime = timezone.make_aware(end_datetime)
-        else:
-            # Default to 1 hour duration if no end time
+        end_datetime = self._build_datetime(event_date, event.request.end_time)
+        if not end_datetime:
             end_datetime = start_datetime + timedelta(hours=1)
 
         event_data = {
@@ -280,14 +333,8 @@ class GoogleCalendarService:
         Returns:
             Google Calendar event ID or None if creation failed
         """
-        service = self._get_service()
-        if not service:
-            logger.error(
-                f"Cannot create event: no service for user {self.user.id}")
-            return None
-
-        connection = self._get_connection()
-        if not connection:
+        service, connection = self._ensure_service_and_connection()
+        if not service or not connection:
             return None
 
         try:
@@ -321,7 +368,7 @@ class GoogleCalendarService:
                 f"Unexpected error creating Google Calendar event for user {self.user.id}: {e}")
             return None
 
-    def update_event(self, google_event_id: str, event,
+    def update_event(self, google_event_id: str, event: Event,
                      event_type_name: Optional[str] = None,
                      status_name: Optional[str] = None) -> bool:
         """
@@ -336,14 +383,8 @@ class GoogleCalendarService:
         Returns:
             True if update successful, False otherwise
         """
-        service = self._get_service()
-        if not service:
-            logger.error(
-                f"Cannot update event: no service for user {self.user.id}")
-            return False
-
-        connection = self._get_connection()
-        if not connection:
+        service, connection = self._ensure_service_and_connection()
+        if not service or not connection:
             return False
 
         try:
@@ -368,13 +409,7 @@ class GoogleCalendarService:
                 f"Updated Google Calendar event {google_event_id} for user {self.user.id}")
             return True
         except HttpError as e:
-            if e.resp.status == 404:
-                logger.warning(
-                    f"Google Calendar event {google_event_id} not found for user {self.user.id}")
-            else:
-                logger.error(
-                    f"Failed to update Google Calendar event {google_event_id} for user {self.user.id}: {e}")
-            return False
+            return self._handle_http_error(e, "update", google_event_id, treat_404_as_success=False)
         except Exception as e:
             logger.error(
                 f"Unexpected error updating Google Calendar event for user {self.user.id}: {e}")
@@ -390,14 +425,8 @@ class GoogleCalendarService:
         Returns:
             True if deletion successful, False otherwise
         """
-        service = self._get_service()
-        if not service:
-            logger.error(
-                f"Cannot delete event: no service for user {self.user.id}")
-            return False
-
-        connection = self._get_connection()
-        if not connection:
+        service, connection = self._ensure_service_and_connection()
+        if not service or not connection:
             return False
 
         try:
@@ -410,14 +439,7 @@ class GoogleCalendarService:
                 f"Deleted Google Calendar event {google_event_id} for user {self.user.id}")
             return True
         except HttpError as e:
-            if e.resp.status == 404:
-                logger.warning(
-                    f"Google Calendar event {google_event_id} not found for user {self.user.id}")
-                return True  # Consider it successful if already deleted
-            else:
-                logger.error(
-                    f"Failed to delete Google Calendar event {google_event_id} for user {self.user.id}: {e}")
-            return False
+            return self._handle_http_error(e, "delete", google_event_id, treat_404_as_success=True)
         except Exception as e:
             logger.error(
                 f"Unexpected error deleting Google Calendar event for user {self.user.id}: {e}")
