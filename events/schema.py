@@ -14,6 +14,8 @@ from .mutations import (
     RequestTypeMutations,
     RequestMutations,
     PublicRequestMutations,
+    RequestStoreManagerMutations,
+    TimeZoneMutations,
 )
 from events import queries
 
@@ -23,6 +25,7 @@ class EventQueryAmbassadors(
     queries.EventQueries,
     queries.EventTypeQueries,
     queries.EventStatusQueries,
+    queries.TimeZoneQueries,
 ):
     pass
 
@@ -40,7 +43,9 @@ class EventQueryClient(
     queries.RequestTypeQueries,
     queries.RequestStatusQueries,
     queries.RequestQueries,
+    queries.RequestStoreManagerQueries,
     queries.LocationQueries,
+    queries.TimeZoneQueries,
 ):
     pass
 
@@ -55,6 +60,7 @@ class EventQueryMobile(
     queries.EventQueries,
     queries.EventTypeQueries,
     queries.EventStatusQueries,
+    queries.TimeZoneQueries,
 ):
     pass
 
@@ -74,6 +80,7 @@ class EventsMutations(
     RequestTypeMutations,
     RequestStatusMutations,
     RequestMutations,
+    RequestStoreManagerMutations,
 ):
     pass
 
@@ -98,13 +105,23 @@ class EventMutationsClient(
     RequestTypeMutations,
     RequestStatusMutations,
     RequestMutations,
+    RequestStoreManagerMutations,
+    TimeZoneMutations,
 ):
     pass
 
 
 @strawberry.type
+class EventMutationsAmbassadors(
+    PublicRequestMutations,
+):
+    pass
+
+
+
+@strawberry.type
 class EventMutationsSpark(
-    EventMutationsAmbassadors, EventMutationsClient, EventTypeMutations, EventMutations
+    EventMutationsAmbassadors, EventMutationsClient, EventTypeMutations, EventMutations, TimeZoneMutations
 ):
     pass
 

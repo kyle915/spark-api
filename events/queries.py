@@ -28,6 +28,7 @@ from events.inputs import (
     RequestStatusFiltersInput,
     ProductTypeFiltersInput,
     ProductFiltersInput,
+    RequestStoreManagerFiltersInput,
     DistanceUnit,
 )
 
@@ -552,6 +553,14 @@ class RequestQueriesService(BaseEventQueriesService):
         return models.Request
 
 
+class RequestStoreManagerQueriesService(BaseEventQueriesService):
+    """Service for request store manager queries."""
+
+    def get_model(self) -> Model:
+        """Get the model for the service."""
+        return models.RequestStoreManager
+
+
 @strawberry.type
 class RequestQueries:
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
@@ -627,6 +636,71 @@ class RequestQueries:
             return request
         except GraphQLError:
             raise GraphQLError
+
+
+@strawberry.type
+class RequestStoreManagerQueries:
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def request_store_managers(
+        self,
+        info: strawberry.Info,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        q: str | None = None,
+        filters: RequestStoreManagerFiltersInput | None = None,
+    ) -> CountableConnection[types.RequestStoreManager]:
+        """Get all request store managers."""
+        service = RequestStoreManagerQueriesService()
+        user = await service.get_user(info)
+        is_spark_request = service.is_spark_schema_request(info, user=user)
+
+        tenant_id: strawberry.ID | None = filters.tenant_id if filters else None
+        tenant_uuid: strawberry.ID | None = filters.tenant_uuid if filters else None
+        resolved_tenant_id: int | None = None
+
+        should_filter_by_tenant = (
+            not is_spark_request or tenant_id is not None or tenant_uuid is not None
+        )
+        if should_filter_by_tenant:
+            tenant = await service.get_user_tenant(
+                info,
+                tenant_id=tenant_id,
+                tenant_uuid=tenant_uuid,
+                user=user,
+            )
+            resolved_tenant_id = tenant.id
+
+        queryset = service.get_ordered_queryset(tenant_id=resolved_tenant_id, q=q)
+
+        return await service.get_connection(
+            tenant_id=resolved_tenant_id,
+            q=q,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+            queryset=queryset,
+        )
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def request_store_manager(
+        self, info: strawberry.Info, id: strawberry.ID
+    ) -> types.RequestStoreManager | None:
+        """Get a single request store manager."""
+        try:
+            service = RequestStoreManagerQueriesService()
+            user = await service.get_user(info)
+            tenant_id: int | None = None
+            if not service.is_spark_schema_request(info, user=user):
+                tenant = await service.get_user_tenant(info, user=user)
+                tenant_id = tenant.id
+
+            manager = await service.get_record(id, tenant_id)
+            return manager
+        except GraphQLError:
+            return None
 
 
 class ClientQueriesService(BaseEventQueriesService):
@@ -1361,3 +1435,67 @@ class ProductQueries:
             return await service.get_record(id, tenant.id)
         except GraphQLError:
             return None
+
+
+class TimeZoneQueriesService(BaseEventQueriesService):
+    """Service for timezone queries."""
+
+    ordering: tuple[str, ...] = ("name",)
+
+    def get_model(self) -> Model:
+        """Get the model for the service."""
+        return models.TimeZone
+
+    def get_filtered_queryset(
+        self, tenant_id: int | None = None, q: str | None = None
+    ) -> QuerySet:
+        """Get the filtered queryset for the service."""
+        queryset = self.get_queryset()
+        if q:
+            queryset = queryset.filter(name__icontains=q)
+        return queryset
+
+
+@strawberry.type
+class TimeZoneQueries:
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def timezones(
+        self,
+        info: strawberry.Info,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        q: str | None = None,
+    ) -> CountableConnection[types.TimeZone]:
+        """Get all timezones."""
+        service = TimeZoneQueriesService()
+        return await service.get_connection(
+            q=q,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+            default_limit=100,
+        )
+
+    @strawberry.field
+    async def public_timezones(
+        self,
+        info: strawberry.Info,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        q: str | None = None,
+    ) -> CountableConnection[types.TimeZone]:
+        """Get public timezones."""
+        service = TimeZoneQueriesService()
+        return await service.get_connection(
+            q=q,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+            default_limit=100,
+        )
