@@ -548,6 +548,11 @@ class Event(models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     name = models.CharField(max_length=50)
+    coordinates = ArrayField(
+        models.FloatField(),
+        size=2,
+        null=True,
+    )
 
     tenant = models.ForeignKey(
         Tenant,

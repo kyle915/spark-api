@@ -26,6 +26,18 @@ class Ambassador:
     updated_at: str
 
 
+@strawberry_django.type(models.AmbassadorEvent)
+class AmbassadorEventType:
+    id: strawberry.ID
+    uuid: str
+    is_approved: bool
+    ambassador: Ambassador
+    tenant_id: strawberry.ID
+    event_id: strawberry.ID
+    created_at: str
+    updated_at: str
+
+
 @strawberry.type
 class FileTypeDetailResponse:
     success: bool
