@@ -113,6 +113,7 @@ class CreateEventInput(BaseNameableInput):
     address: str
     notes: str
     is_national: bool = False
+    coordinates: List[float] | None = None
     start_time: str
     end_time: str
 

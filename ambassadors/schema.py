@@ -1,6 +1,6 @@
 import strawberry
 
-from ambassadors import queries
+from ambassadors import queries, mutations
 
 
 @strawberry.type
@@ -13,5 +13,12 @@ class AmbassadorQuerySpark(
 @strawberry.type
 class AmbassadorQueryClient(
     queries.FileTypeQueries,
+):
+    pass
+
+
+@strawberry.type
+class AmbassadorMutations(
+    mutations.AmbassadorMutations,
 ):
     pass

@@ -4,7 +4,7 @@ from gqlauth.core.middlewares import JwtSchema
 from events.schema import EventQueryMobile, EventMutationsMobile
 from tenants.schema import MutationMobile, QueryMobile
 from utils.utils import BlockIntrospectionForAnonymous
-
+from ambassadors.schema import AmbassadorMutations
 
 QueryMobile = merge_types("Query", (EventQueryMobile, QueryMobile))
 MutationMobile = merge_types(
@@ -12,6 +12,7 @@ MutationMobile = merge_types(
     (
         EventMutationsMobile,
         MutationMobile,
+        AmbassadorMutations,
     ),
 )
 

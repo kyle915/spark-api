@@ -297,6 +297,7 @@ class Event:
     id: strawberry.ID
     uuid: str
     name: str
+    coordinates: List[float]
     start_time: str | None = None
     end_time: str | None = None
     address: str
