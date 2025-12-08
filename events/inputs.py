@@ -46,6 +46,13 @@ class EventFiltersInput(BaseTenantInput):
 
 
 @strawberry.input
+class AmbassadorEventFiltersInput:
+    start_date: str | None = None
+    end_date: str | None = None
+
+
+
+@strawberry.input
 class RequestFiltersInput(BaseTenantInput):
     tenant_uuid: strawberry.ID | None = None
     status_id: strawberry.ID | None = None
