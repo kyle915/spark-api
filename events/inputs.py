@@ -51,7 +51,6 @@ class AmbassadorEventFiltersInput:
     end_date: str | None = None
 
 
-
 @strawberry.input
 class RequestFiltersInput(BaseTenantInput):
     tenant_uuid: strawberry.ID | None = None
@@ -294,14 +293,12 @@ class UpdateRequestInput(BaseNameableInput):
     coordinates: List[float]
     timezone_id: strawberry.ID
     request_type_id: strawberry.ID
-    client_id: strawberry.ID
     distributor_id: strawberry.ID
     retailer_id: strawberry.ID
     store_manager_name: str
     store_manager_phone: str
     details: List[CreateRequestDetailInput]
     products: List[CreateRequestProductInput]
-
 
 
 @strawberry.input

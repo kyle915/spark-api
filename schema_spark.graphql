@@ -12,6 +12,25 @@ type Ambassador {
   updatedAt: String!
 }
 
+input AmbassadorEventFiltersInput {
+  startDate: String = null
+  endDate: String = null
+}
+
+"""
+AmbassadorEvent(id, uuid, is_approved, ambassador, tenant, event, created_by, updated_by, created_at, updated_at)
+"""
+type AmbassadorEventType {
+  id: ID!
+  uuid: String!
+  isApproved: Boolean!
+  ambassador: Ambassador!
+  tenantId: ID!
+  eventId: ID!
+  createdAt: String!
+  updatedAt: String!
+}
+
 """
 AmbassadorJob(id, uuid, appear_as_rfp, tenant, ambassador, job, status, rate, created_by, updated_by, created_at, updated_at)
 """
@@ -94,6 +113,12 @@ type AmbassadorToAmbassadorReviewDetailResponse {
 input AppleSocialAuthInput {
   clientMutationId: ID = null
   identityToken: String!
+}
+
+type ApplyAmbassadorEventResponse {
+  success: Boolean!
+  message: String!
+  application: AmbassadorEventType
 }
 
 input ApproveRequestInput {
@@ -405,6 +430,7 @@ input CreateEventInput {
   address: String!
   notes: String!
   isNational: Boolean! = false
+  coordinates: [Float!] = null
   startTime: String!
   endTime: String!
 }
@@ -798,12 +824,13 @@ type DjangoModelType {
 }
 
 """
-Event(id, uuid, name, tenant, request, event_type, status, start_time, end_time, address, notes, is_national, created_by, updated_by, created_at, updated_at)
+Event(id, uuid, name, coordinates, tenant, request, event_type, status, start_time, end_time, address, notes, is_national, created_by, updated_by, created_at, updated_at)
 """
 type Event {
   id: ID!
   uuid: String!
   name: String!
+  coordinates: [Float!]!
   startTime: String
   endTime: String
   address: String!
@@ -1473,6 +1500,7 @@ type Mutation {
   createJobRequirementAnswer(input: CreateJobRequirementAnswerInput!): JobRequirementAnswerDetailResponse!
   updateJobRequirementAnswer(input: UpdateJobRequirementAnswerInput!): JobRequirementAnswerDetailResponse!
   manageAmbassadorJobAssignment(input: ManageAmbassadorJobAssignmentInput!): AmbassadorJobDetailResponse!
+  applyAmbassadorEvent(eventId: ID!): ApplyAmbassadorEventResponse!
 }
 
 type MutationNormalOutput {
@@ -1635,6 +1663,7 @@ type Query {
   event(uuid: ID!): Event
   todayEvents(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: EventFiltersInput = null): EventCountableConnection!
   todayEventsCoordinates(coordinates: [Float!]!, range: Float!, unit: DistanceUnit! = KILOMETERS, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: EventFiltersInput = null): EventCountableConnection!
+  ambassadorEvents(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: AmbassadorEventFiltersInput = null): EventCountableConnection!
   eventTypes(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: EventTypeFiltersInput = null): EventTypeCountableConnection!
   eventType(id: ID!): EventType
   eventStatuses(first: Int = null, after: String = null, last: Int = null, before: String = null, filters: EventStatusFiltersInput = null): EventStatusCountableConnection!
@@ -2483,6 +2512,7 @@ input UpdateEventInput {
   address: String!
   notes: String!
   isNational: Boolean! = false
+  coordinates: [Float!] = null
   startTime: String!
   endTime: String!
   id: ID!
@@ -2672,7 +2702,6 @@ input UpdateRequestInput {
   coordinates: [Float!]!
   timezoneId: ID!
   requestTypeId: ID!
-  clientId: ID!
   distributorId: ID!
   retailerId: ID!
   storeManagerName: String!
@@ -2782,13 +2811,13 @@ type UserType {
   isActive: Boolean!
   dateJoined: DateTime!
   status: UserStatusType!
-  lastName: String
-  email: String!
-  id: ID!
-  firstName: String
 
   """Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only."""
   username: String!
+  lastName: String
+  firstName: String
+  email: String!
+  id: ID!
   archived: Boolean!
   verified: Boolean!
 }
