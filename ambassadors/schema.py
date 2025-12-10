@@ -20,7 +20,22 @@ class AmbassadorQueryClient(
 
 
 @strawberry.type
+class AmbassadorQueryMobile(
+    queries.FileTypeQueries,
+    queries.AmbassadorEventQueries,
+):
+    pass
+
+
+@strawberry.type
 class AmbassadorMutations(
+    mutations.AmbassadorMutations,
+):
+    pass
+
+
+@strawberry.type
+class AmbassadorMutationsMobile(
     mutations.AmbassadorMutations,
 ):
     pass

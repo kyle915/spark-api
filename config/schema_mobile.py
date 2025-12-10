@@ -4,17 +4,20 @@ from gqlauth.core.middlewares import JwtSchema
 from events.schema import EventQueryMobile, EventMutationsMobile
 from tenants.schema import MutationMobile, QueryMobile
 from utils.utils import BlockIntrospectionForAnonymous
-from ambassadors.schema import AmbassadorMutations
+from ambassadors.schema import AmbassadorMutationsMobile, AmbassadorQueryMobile
 from recaps.schema import RecapQueryMobile, RecapMutationsMobile
 from utils.graphql.gcs_schema import GCSQuery
 
-QueryMobile = merge_types("Query", (EventQueryMobile, QueryMobile, RecapQueryMobile, GCSQuery))
+QueryMobile = merge_types(
+    "Query",
+    (EventQueryMobile, QueryMobile, RecapQueryMobile, AmbassadorQueryMobile, GCSQuery),
+)
 MutationMobile = merge_types(
     "Mutation",
     (
         EventMutationsMobile,
         MutationMobile,
-        AmbassadorMutations,
+        AmbassadorMutationsMobile,
         RecapMutationsMobile,
     ),
 )
