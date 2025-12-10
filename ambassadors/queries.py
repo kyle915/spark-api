@@ -1,4 +1,5 @@
 import strawberry
+from enum import Enum
 from asgiref.sync import sync_to_async
 from graphql import GraphQLError
 
@@ -16,12 +17,21 @@ from utils.graphql.relay import (
 )
 
 
+@strawberry.enum
+class AmbassadorEventStatus(str, Enum):
+    APPROVED = "approved"
+    DECLINED = "declined"
+    CANCELED = "canceled"
+
+
 @strawberry.input
 class AmbassadorEventsFiltersInput:
     """Filters for ambassador-scoped events."""
 
     types: list[strawberry.ID] | None = None
-    status_slugs: list[str] | None = None
+    statuses: list[AmbassadorEventStatus] | None = None
+    start_date: str | None = None
+    end_date: str | None = None
 
 
 class BaseAmbassadorQueriesService(SparkGraphQLMixin):
@@ -189,8 +199,13 @@ class AmbassadorEventQueries:
         if filters:
             if filters.types:
                 queryset = queryset.filter(event_type_id__in=filters.types)
-            if filters.status_slugs:
-                queryset = queryset.filter(status__slug__in=filters.status_slugs)
+            if filters.statuses:
+                status_slugs = [status.value for status in filters.statuses]
+                queryset = queryset.filter(status__slug__in=status_slugs)
+            if filters.start_date:
+                queryset = queryset.filter(request__date__gte=filters.start_date)
+            if filters.end_date:
+                queryset = queryset.filter(request__date__lte=filters.end_date)
 
         queryset = queryset.order_by(*service.ordering)
 
