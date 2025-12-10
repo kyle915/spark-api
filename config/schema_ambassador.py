@@ -4,13 +4,14 @@ from gqlauth.core.middlewares import JwtSchema
 from events.schema import EventQueryAmbassadors, EventMutationsAmbassadors
 from tenants.schema import MutationAmbassadors, QueryAmbassadors
 from jobs.schema import AmbassadorJobQueries, AmbassadorJobMutations
+from ambassadors.schema import AmbassadorMutations
 from utils.utils import BlockIntrospectionForAnonymous
 
 
 QueryAmbassadors = merge_types(
     "Query", (EventQueryAmbassadors, QueryAmbassadors, AmbassadorJobQueries))
 MutationAmbassadors = merge_types(
-    "Mutation", (EventMutationsAmbassadors, MutationAmbassadors, AmbassadorJobMutations))
+    "Mutation", (EventMutationsAmbassadors, MutationAmbassadors, AmbassadorJobMutations, AmbassadorMutations))
 
 schema_ambassador = JwtSchema(
     query=QueryAmbassadors,

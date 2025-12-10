@@ -4,9 +4,6 @@ Pytest configuration for tenants app tests.
 This file configures the test database to use PostgreSQL (spark_tests database)
 to avoid affecting the development PostgreSQL database.
 """
-# Ensure strawberry_django is imported before any schema imports
-# This must happen at the very top to ensure strawberry.django is available
-import strawberry_django  # noqa: F401
 
 import pytest
 from django.conf import settings
@@ -32,26 +29,16 @@ def django_db_modify_db_settings():
     # DATABASE_URL format: postgres:///spark_tests
     # This means: localhost, default port (5432), default user, database=spark_tests
     import os
-    # Temporarily override DATABASE_URL to parse it
-    original_db_url = os.environ.get('DATABASE_URL')
-    os.environ['DATABASE_URL'] = 'postgres:///spark_tests'
-    try:
-        test_db_config = env.db()
-        # Update only the connection parameters
-        db_config.update({
-            'ENGINE': test_db_config.get('ENGINE', db_config.get('ENGINE')),
-            'NAME': test_db_config.get('NAME', 'spark_tests'),
-            'USER': test_db_config.get('USER', db_config.get('USER', '')),
-            'PASSWORD': test_db_config.get('PASSWORD', db_config.get('PASSWORD', '')),
-            'HOST': test_db_config.get('HOST', db_config.get('HOST', '')),
-            'PORT': test_db_config.get('PORT', db_config.get('PORT', '')),
-        })
-    finally:
-        # Restore original DATABASE_URL if it existed
-        if original_db_url:
-            os.environ['DATABASE_URL'] = original_db_url
-        elif 'DATABASE_URL' in os.environ:
-            del os.environ['DATABASE_URL']
+    os.environ['DATABASE_URL'] = os.environ.get('TEST_DATABASE_URL')
+    test_db_config = env.db()
+    db_config.update({
+        'ENGINE': test_db_config.get('ENGINE', db_config.get('ENGINE')),
+        'NAME': test_db_config.get('NAME', 'spark_tests'),
+        'USER': test_db_config.get('USER', db_config.get('USER', '')),
+        'PASSWORD': test_db_config.get('PASSWORD', db_config.get('PASSWORD', '')),
+        'HOST': test_db_config.get('HOST', db_config.get('HOST', '')),
+        'PORT': test_db_config.get('PORT', db_config.get('PORT', '')),
+    })
 
     # Add test-specific connection settings
     db_config['CONN_MAX_AGE'] = 0  # Disable persistent connections for tests

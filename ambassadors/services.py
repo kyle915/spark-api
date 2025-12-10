@@ -234,11 +234,12 @@ class AcceptInvitationService:
 
         # Get and validate invitation
         try:
-            invitation = await sync_to_async(
-                AmbassadorInvitation.objects.select_related("tenant", "invited_by").get(
+            @sync_to_async
+            def get_invitation():
+                return AmbassadorInvitation.objects.select_related("tenant", "invited_by").get(
                     token=input.token
                 )
-            )
+            invitation = await get_invitation()
         except AmbassadorInvitation.DoesNotExist:
             return build_mutation_response(
                 AcceptInvitationResponse,
@@ -366,7 +367,12 @@ class ApproveAmbassadorService:
         user = info.context.request.user
 
         # Validate user has permission (client or spark-admin)
-        if user.role.is_ambassador:
+        # Access role asynchronously to avoid sync DB calls
+        @sync_to_async
+        def get_role_slug():
+            return getattr(user.role, "slug", "").lower() if user.role else ""
+        role_slug = await get_role_slug()
+        if role_slug == "ambassador":
             return build_mutation_response(
                 ApproveAmbassadorResponse,
                 success=False,
@@ -375,10 +381,12 @@ class ApproveAmbassadorService:
             )
 
         try:
-            ambassador = await sync_to_async(
-                Ambassador.objects.select_related(
-                    "user").get(pk=int(input.ambassador_id))
-            )
+            @sync_to_async
+            def get_ambassador():
+                return Ambassador.objects.select_related("user").get(
+                    pk=int(input.ambassador_id)
+                )
+            ambassador = await get_ambassador()
         except (Ambassador.DoesNotExist, ValueError, TypeError):
             return build_mutation_response(
                 ApproveAmbassadorResponse,

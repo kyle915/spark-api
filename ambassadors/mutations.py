@@ -6,7 +6,13 @@ from events.models import Event
 from utils.graphql.permissions import StrictIsAuthenticated
 
 from .models import Ambassador, AmbassadorEvent
-from .types import AmbassadorEventType
+from .types import (
+    AmbassadorEventType,
+    PublicAmbassadorCreationResponse,
+    AmbassadorInvitationResponse,
+    AcceptInvitationResponse,
+    ApproveAmbassadorResponse,
+)
 from . import inputs
 from .services import (
     PublicAmbassadorCreationService,
@@ -71,8 +77,7 @@ class AmbassadorMutations:
         self,
         info: strawberry.Info,
         input: inputs.CreatePublicAmbassadorInput,
-    ):
-        from .types import PublicAmbassadorCreationResponse
+    ) -> PublicAmbassadorCreationResponse:
         return await PublicAmbassadorCreationService.create(input, info)
 
     @relay.mutation(permission_classes=[StrictIsAuthenticated])
@@ -80,8 +85,7 @@ class AmbassadorMutations:
         self,
         info: strawberry.Info,
         input: inputs.CreateAmbassadorInvitationInput,
-    ):
-        from .types import AmbassadorInvitationResponse
+    ) -> AmbassadorInvitationResponse:
         return await AmbassadorInvitationService.create(input, info)
 
     @relay.mutation  # Public with token validation
@@ -89,8 +93,7 @@ class AmbassadorMutations:
         self,
         info: strawberry.Info,
         input: inputs.AcceptAmbassadorInvitationInput,
-    ):
-        from .types import AcceptInvitationResponse
+    ) -> AcceptInvitationResponse:
         return await AcceptInvitationService.accept(input, info)
 
     @relay.mutation(permission_classes=[StrictIsAuthenticated])
@@ -98,6 +101,5 @@ class AmbassadorMutations:
         self,
         info: strawberry.Info,
         input: inputs.ApproveAmbassadorInput,
-    ):
-        from .types import ApproveAmbassadorResponse
+    ) -> ApproveAmbassadorResponse:
         return await ApproveAmbassadorService.approve(input, info)

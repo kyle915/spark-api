@@ -1,31 +1,51 @@
+"""
+Tests for apply_ambassador_event mutation.
+
+This module tests:
+- apply_ambassador_event (authenticated mutation)
+"""
 import pytest
-from events.tests.base import EventsGraphQLTestCase
+import strawberry_django  # noqa: F401
+import uuid
+from asgiref.sync import sync_to_async
 from events.models import Event, Request, RequestStatus, RequestType
 from ambassadors.models import Ambassador, AmbassadorEvent
+from ambassadors.tests.base import AmbassadorsGraphQLTestCase
 from config.schema_spark import schema_spark
 
 
 @pytest.mark.django_db(transaction=True)
-class TestApplyAmbassadorEvent(EventsGraphQLTestCase):
+class TestApplyAmbassadorEvent(AmbassadorsGraphQLTestCase):
+    """Tests for apply_ambassador_event mutation."""
+
     @pytest.fixture(autouse=True)
-    def setup(self):
+    def setup(self, db):
+        """Set up test data."""
         self.schema = schema_spark
+        self.endpoint_path = "/api/v1/graphql/spark"
         self.system_user = self.get_system_user()
 
-        self.tenant = self.create_tenant()
-        self.user_role = self.create_role("Ambassador", 3)
-        self.user = self.create_user("ambassador", "ambassador@spark.local", self.user_role)
-        self.tenanted_user = self.create_tenanted_user(self.user, self.tenant)
-        
+        self.roles = self.setup_default_roles()
+        self.tenant = self.create_tenant(name="Apply Event Test Tenant")
+        # Use UUID for user to ensure uniqueness across test runs
+        unique_id = str(uuid.uuid4())[:8]
+        self.user = self.create_user(
+            username=f"ambassador_apply_{unique_id}@spark.local",
+            email=f"ambassador_apply_{unique_id}@spark.local",
+            role=self.roles['ambassador']
+        )
+        self.create_tenanted_user(self.user, self.tenant)
+
         # Create Ambassador profile
-        self.ambassador = Ambassador.objects.create(
-            user=self.user, created_by=self.system_user
+        self.ambassador = self.create_ambassador(
+            user=self.user,
+            created_by=self.system_user,
         )
 
         self.request_status = self.create_request_status("Pending", self.tenant)
         self.request_type = self.create_request_type("Demo", self.tenant)
-        
-        # Create Request manually as the helper seems to require many dependencies
+
+        # Create Request manually (helper requires client/distributor/retailer we don't need)
         self.request = Request.objects.create(
             name="Test Request",
             date="2023-10-27",
@@ -36,6 +56,7 @@ class TestApplyAmbassadorEvent(EventsGraphQLTestCase):
             created_by=self.system_user,
         )
 
+        # Create Event manually
         self.event = Event.objects.create(
             name="Test Event",
             tenant=self.tenant,
@@ -59,9 +80,10 @@ class TestApplyAmbassadorEvent(EventsGraphQLTestCase):
 
     @pytest.mark.asyncio
     async def test_apply_ambassador_event_success(self):
+        """Test successful ambassador event application."""
         variables = {"eventId": str(self.event.id)}
         response = await self._execute_mutation_authenticated(
-            self.mutation, variables=variables, user=self.user
+            self.mutation, variables=variables, user=self.user, endpoint_path=self.endpoint_path
         )
 
         assert response.errors is None
@@ -71,15 +93,18 @@ class TestApplyAmbassadorEvent(EventsGraphQLTestCase):
         assert response.data["applyAmbassadorEvent"]["application"]["isApproved"] is False
 
         # Verify DB
-        exists = await AmbassadorEvent.objects.filter(
-            ambassador=self.ambassador, event=self.event
-        ).aexists()
+        exists = await sync_to_async(
+            AmbassadorEvent.objects.filter(
+                ambassador=self.ambassador, event=self.event
+            ).exists
+        )()
         assert exists is True
 
     @pytest.mark.asyncio
     async def test_apply_ambassador_event_already_applied(self):
+        """Test applying to an event that was already applied to."""
         # Create existing application
-        await AmbassadorEvent.objects.acreate(
+        await sync_to_async(AmbassadorEvent.objects.create)(
             ambassador=self.ambassador,
             event=self.event,
             tenant=self.tenant,
@@ -88,18 +113,9 @@ class TestApplyAmbassadorEvent(EventsGraphQLTestCase):
 
         variables = {"eventId": str(self.event.id)}
         response = await self._execute_mutation_authenticated(
-            self.mutation, variables=variables, user=self.user
+            self.mutation, variables=variables, user=self.user, endpoint_path=self.endpoint_path
         )
 
         assert response.data["applyAmbassadorEvent"]["success"] is False
         assert response.data["applyAmbassadorEvent"]["message"] == "Already applied to this event"
 
-    @pytest.mark.asyncio
-    async def test_apply_ambassador_event_not_authenticated(self):
-        # Use simple unauthenticated execution (passing None user or just empty context if helper allows)
-        # But _execute_mutation usually takes a user.
-        # Let's try passing no user if supported, or mocking context.
-        # Actually _execute_mutation in base usually relies on user to build context.
-        # If I want unauthenticated, I might need to look at how base handles it or just pass AnonymousUser?
-        # For now let's skip explicit unauthenticated test via helper if unsure, or try passing None.
-        pass
