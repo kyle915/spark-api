@@ -31,11 +31,6 @@ type Ambassador {
   updatedAt: String!
 }
 
-input AmbassadorEventFiltersInput {
-  startDate: String = null
-  endDate: String = null
-}
-
 """
 AmbassadorEvent(id, uuid, is_approved, ambassador, tenant, event, created_by, updated_by, created_at, updated_at)
 """
@@ -150,6 +145,12 @@ type ApplyAmbassadorEventResponse {
   success: Boolean!
   message: String!
   application: AmbassadorEventType
+}
+
+type ApplyAmbassadorJobResponse {
+  success: Boolean!
+  message: String!
+  application: AmbassadorJob
 }
 
 input ApproveAmbassadorInput {
@@ -349,7 +350,7 @@ type Event {
   id: ID!
   uuid: String!
   name: String!
-  coordinates: [Float!]!
+  coordinates: [Float!]
   startTime: String
   endTime: String
   address: String!
@@ -464,7 +465,7 @@ input GoogleSocialAuthInput {
 }
 
 """
-Job(id, uuid, name, description, code, address, start_date, end_date, public, closed, national, ongoing, job_title, other_title, company, event, location, tenant, rate, created_by, updated_by, created_at, updated_at)
+Job(id, uuid, name, description, code, address, start_date, end_date, public, closed, national, ongoing, coordinates, job_title, other_title, company, event, tenant, rate, created_by, updated_by, created_at, updated_at)
 """
 type Job {
   id: ID!
@@ -579,6 +580,7 @@ type Mutation {
   createAmbassadorToAmbassadorReview(input: CreateAmbassadorToAmbassadorReviewInput!): AmbassadorToAmbassadorReviewDetailResponse!
   updateAmbassadorToAmbassadorReview(input: UpdateAmbassadorToAmbassadorReviewInput!): AmbassadorToAmbassadorReviewDetailResponse!
   applyAmbassadorEvent(eventId: ID!): ApplyAmbassadorEventResponse!
+  applyAmbassadorJob(jobId: ID!): ApplyAmbassadorJobResponse!
   createPublicAmbassador(input: CreatePublicAmbassadorInput!): PublicAmbassadorCreationResponse!
   createAmbassadorInvitation(input: CreateAmbassadorInvitationInput!): AmbassadorInvitationResponse!
   acceptAmbassadorInvitation(input: AcceptAmbassadorInvitationInput!): AcceptInvitationResponse!
@@ -639,7 +641,6 @@ type Query {
   event(uuid: ID!): Event
   todayEvents(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: EventFiltersInput = null): EventCountableConnection!
   todayEventsCoordinates(coordinates: [Float!]!, range: Float!, unit: DistanceUnit! = KILOMETERS, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: EventFiltersInput = null): EventCountableConnection!
-  ambassadorEvents(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: AmbassadorEventFiltersInput = null): EventCountableConnection!
   eventTypes(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: EventTypeFiltersInput = null): EventTypeCountableConnection!
   eventType(id: ID!): EventType
   eventStatuses(first: Int = null, after: String = null, last: Int = null, before: String = null, filters: EventStatusFiltersInput = null): EventStatusCountableConnection!
@@ -922,12 +923,12 @@ type UserType {
   isActive: Boolean!
   dateJoined: DateTime!
   status: UserStatusType!
+  email: String!
+  lastName: String
 
   """Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only."""
   username: String!
   id: ID!
-  lastName: String
-  email: String!
   firstName: String
   archived: Boolean!
   verified: Boolean!
