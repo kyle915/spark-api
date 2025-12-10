@@ -1,5 +1,7 @@
 import graphql.utilities.lexicographic_sort_schema
 from uuid6 import uuid7
+from asgiref.sync import sync_to_async
+
 from django.utils.text import slugify
 from django.db import models
 from django.contrib.auth.models import AbstractUser
@@ -72,6 +74,18 @@ class Role(models.Model):
     @property
     async def is_client(self) -> bool:
         return self.slug == 'client'
+
+    @staticmethod
+    async def get_ambassador_role() -> 'Role':
+        return await sync_to_async(Role.objects.get)(slug='ambassador')
+
+    @staticmethod
+    async def get_spark_admin_role() -> 'Role':
+        return await sync_to_async(Role.objects.get)(slug='spark-admin')
+
+    @staticmethod
+    async def get_client_role() -> 'Role':
+        return await sync_to_async(Role.objects.get)(slug='client')
 
 
 class User(AbstractUser):

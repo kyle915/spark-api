@@ -1,11 +1,19 @@
 import strawberry
+from strawberry import relay
 from strawberry.types import Info
+
 from events.models import Event
+from utils.graphql.permissions import StrictIsAuthenticated
+
 from .models import Ambassador, AmbassadorEvent
 from .types import AmbassadorEventType
-
-
-from utils.graphql.permissions import StrictIsAuthenticated
+from . import inputs
+from .services import (
+    PublicAmbassadorCreationService,
+    AmbassadorInvitationService,
+    AcceptInvitationService,
+    ApproveAmbassadorService,
+)
 
 
 @strawberry.type
@@ -57,3 +65,39 @@ class AmbassadorMutations:
         return ApplyAmbassadorEventResponse(
             success=True, message="Application successful", application=application
         )
+
+    @relay.mutation  # Public - no permission_classes
+    async def create_public_ambassador(
+        self,
+        info: strawberry.Info,
+        input: inputs.CreatePublicAmbassadorInput,
+    ):
+        from .types import PublicAmbassadorCreationResponse
+        return await PublicAmbassadorCreationService.create(input, info)
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def create_ambassador_invitation(
+        self,
+        info: strawberry.Info,
+        input: inputs.CreateAmbassadorInvitationInput,
+    ):
+        from .types import AmbassadorInvitationResponse
+        return await AmbassadorInvitationService.create(input, info)
+
+    @relay.mutation  # Public with token validation
+    async def accept_ambassador_invitation(
+        self,
+        info: strawberry.Info,
+        input: inputs.AcceptAmbassadorInvitationInput,
+    ):
+        from .types import AcceptInvitationResponse
+        return await AcceptInvitationService.accept(input, info)
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def approve_ambassador(
+        self,
+        info: strawberry.Info,
+        input: inputs.ApproveAmbassadorInput,
+    ):
+        from .types import ApproveAmbassadorResponse
+        return await ApproveAmbassadorService.approve(input, info)
