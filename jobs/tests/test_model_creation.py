@@ -116,7 +116,8 @@ class TestJobsModelCreation(JobsGraphQLTestCase):
     def test_create_job_title(self):
         """Test creating a job title directly."""
         tenant = self.create_tenant(name="Test Tenant")
-        job_title = self.create_job_title(name="Software Engineer", tenant=tenant)
+        job_title = self.create_job_title(
+            name="Software Engineer", tenant=tenant)
 
         assert job_title.id is not None
         assert job_title.name == "Software Engineer"
@@ -137,7 +138,8 @@ class TestJobsModelCreation(JobsGraphQLTestCase):
         """Test creating a rate directly."""
         tenant = self.create_tenant(name="Test Tenant")
         rate_type = self.create_rate_type(name="Hourly", tenant=tenant)
-        rate = self.create_rate(amount=50.0, rate_type=rate_type, tenant=tenant)
+        rate = self.create_rate(
+            amount=50.0, rate_type=rate_type, tenant=tenant)
 
         assert rate.id is not None
         assert rate.amount == 50.0
@@ -165,7 +167,8 @@ class TestJobsModelCreation(JobsGraphQLTestCase):
             tenant=tenant,
             address="123 Event St"
         )
-        job_title = self.create_job_title(name="Software Engineer", tenant=tenant)
+        job_title = self.create_job_title(
+            name="Software Engineer", tenant=tenant)
 
         job = self.create_job(
             name="Test Job",
@@ -173,7 +176,6 @@ class TestJobsModelCreation(JobsGraphQLTestCase):
             address="123 Job St",
             company=company,
             event=event,
-            location=location,
             job_title=job_title,
             tenant=tenant
         )
@@ -183,7 +185,6 @@ class TestJobsModelCreation(JobsGraphQLTestCase):
         assert job.code == "JOB-001"
         assert job.company == company
         assert job.event == event
-        assert job.location == location
         assert job.job_title == job_title
         assert job.tenant == tenant
         assert job.created_by is not None
@@ -208,14 +209,14 @@ class TestJobsModelCreation(JobsGraphQLTestCase):
             tenant=tenant,
             address="123 Event St"
         )
-        job_title = self.create_job_title(name="Software Engineer", tenant=tenant)
+        job_title = self.create_job_title(
+            name="Software Engineer", tenant=tenant)
         job = self.create_job(
             name="Test Job",
             code="JOB-001",
             address="123 Job St",
             company=company,
             event=event,
-            location=location,
             job_title=job_title,
             tenant=tenant
         )
@@ -268,14 +269,14 @@ class TestJobsModelCreation(JobsGraphQLTestCase):
             tenant=tenant,
             address="123 Event St"
         )
-        job_title = self.create_job_title(name="Software Engineer", tenant=tenant)
+        job_title = self.create_job_title(
+            name="Software Engineer", tenant=tenant)
         job = self.create_job(
             name="Test Job",
             code="JOB-001",
             address="123 Job St",
             company=company,
             event=event,
-            location=location,
             job_title=job_title,
             tenant=tenant
         )
@@ -295,4 +296,3 @@ class TestJobsModelCreation(JobsGraphQLTestCase):
         assert job_requirement.job == job
         assert job_requirement.job_requirement_type == job_requirement_type
         assert job_requirement.created_by is not None
-

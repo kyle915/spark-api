@@ -35,7 +35,7 @@ class TestClientJobQueries(JobsGraphQLTestCase):
         )
         # Create tenanted user relationship
         self.create_tenanted_user(user=self.client_user, tenant=self.tenant)
-        
+
         # Create prerequisite data for jobs
         self.company = self.create_company(
             name="Test Company",
@@ -58,7 +58,7 @@ class TestClientJobQueries(JobsGraphQLTestCase):
             name="Software Engineer",
             tenant=self.tenant
         )
-        
+
         # Create test jobs
         self.job1 = self.create_job(
             name="Job 1",
@@ -66,7 +66,6 @@ class TestClientJobQueries(JobsGraphQLTestCase):
             address="Address 1",
             company=self.company,
             event=self.event,
-            location=self.location,
             job_title=self.job_title,
             tenant=self.tenant
         )
@@ -76,11 +75,10 @@ class TestClientJobQueries(JobsGraphQLTestCase):
             address="Address 2",
             company=self.company,
             event=self.event,
-            location=self.location,
             job_title=self.job_title,
             tenant=self.tenant
         )
-        
+
         self.schema = schema_clients
         self.endpoint_path = "/api/v1/graphql/clients"
 
@@ -118,9 +116,10 @@ class TestClientJobQueries(JobsGraphQLTestCase):
         assert result.data["jobs"] is not None
         assert result.data["jobs"]["totalCount"] >= 2
         assert len(result.data["jobs"]["edges"]) >= 2
-        
+
         # Verify we can find our test jobs
-        job_names = [edge["node"]["name"] for edge in result.data["jobs"]["edges"]]
+        job_names = [edge["node"]["name"]
+                     for edge in result.data["jobs"]["edges"]]
         assert "Job 1" in job_names or "Job 2" in job_names
 
     @pytest.mark.asyncio
@@ -170,7 +169,7 @@ class TestSparkJobQueries(JobsGraphQLTestCase):
         )
         # Create tenanted user relationship
         self.create_tenanted_user(user=self.spark_user, tenant=self.tenant)
-        
+
         # Create prerequisite data for jobs
         self.company = self.create_company(
             name="Test Company",
@@ -193,7 +192,7 @@ class TestSparkJobQueries(JobsGraphQLTestCase):
             name="Software Engineer",
             tenant=self.tenant
         )
-        
+
         # Create test job
         self.job = self.create_job(
             name="Spark Job",
@@ -201,11 +200,10 @@ class TestSparkJobQueries(JobsGraphQLTestCase):
             address="Spark Address",
             company=self.company,
             event=self.event,
-            location=self.location,
             job_title=self.job_title,
             tenant=self.tenant
         )
-        
+
         self.schema = schema_spark
         self.endpoint_path = "/api/v1/graphql/spark"
 
@@ -283,8 +281,9 @@ class TestAmbassadorJobQueries(JobsGraphQLTestCase):
         # Create ambassador profile
         self.ambassador = self.create_ambassador(user=self.ambassador_user)
         # Create tenanted user relationship
-        self.create_tenanted_user(user=self.ambassador_user, tenant=self.tenant)
-        
+        self.create_tenanted_user(
+            user=self.ambassador_user, tenant=self.tenant)
+
         # Create prerequisite data for jobs
         self.company = self.create_company(
             name="Test Company",
@@ -307,7 +306,7 @@ class TestAmbassadorJobQueries(JobsGraphQLTestCase):
             name="Software Engineer",
             tenant=self.tenant
         )
-        
+
         # Create a public, ongoing, not-closed job (available for ambassadors)
         self.available_job = self.create_job(
             name="Available Job",
@@ -315,14 +314,13 @@ class TestAmbassadorJobQueries(JobsGraphQLTestCase):
             address="Available Address",
             company=self.company,
             event=self.event,
-            location=self.location,
             job_title=self.job_title,
             tenant=self.tenant,
             public=True,
             ongoing=True,
             closed=False
         )
-        
+
         self.schema = schema_ambassador
         self.endpoint_path = "/api/v1/graphql/ambassadors"
 
@@ -354,4 +352,3 @@ class TestAmbassadorJobQueries(JobsGraphQLTestCase):
         assert result.data is not None, f"Result data is None. Errors: {result.errors}"
         assert result.data["availableJobs"] is not None
         assert result.data["availableJobs"]["totalCount"] >= 1
-

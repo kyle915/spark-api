@@ -315,7 +315,6 @@ class JobsGraphQLTestCase(BaseGraphQLTestCase):
         address: str,
         company: models.Company,
         event: Event,
-        location: Location,
         job_title: models.JobTitle,
         tenant: Tenant,
         **kwargs
@@ -329,10 +328,9 @@ class JobsGraphQLTestCase(BaseGraphQLTestCase):
             address: Address of the job
             company: Company instance
             event: Event instance
-            location: Location instance
             job_title: JobTitle instance
             tenant: Tenant instance
-            **kwargs: Additional fields to set on the job
+            **kwargs: Additional fields to set on the job (e.g., coordinates, rate)
 
         Returns:
             Job: The created job instance
@@ -345,7 +343,6 @@ class JobsGraphQLTestCase(BaseGraphQLTestCase):
             address=address,
             company=company,
             event=event,
-            location=location,
             job_title=job_title,
             tenant=tenant,
             created_by=system_user,

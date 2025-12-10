@@ -24,12 +24,10 @@ class TestApplyAmbassadorJob(JobsGraphQLTestCase):
         self.rate_type = self.create_rate_type("Hourly", self.tenant)
         self.rate = self.create_rate(25, self.rate_type, self.tenant)
 
-        self.location = self.create_location(
-            "Main HQ", "MAIN", "00000", self.tenant)
         self.event = self.create_event(
             "Launch", tenant=self.tenant, address="123 St")
         self.company = self.create_company(
-            "ACME", "contact@acme.local", "123456789", self.tenant, location=self.location
+            "ACME", "contact@acme.local", "123456789", self.tenant
         )
         self.job_title = self.create_job_title("Promoter", self.tenant)
         self.job = self.create_job(
@@ -38,7 +36,6 @@ class TestApplyAmbassadorJob(JobsGraphQLTestCase):
             address="123 St",
             company=self.company,
             event=self.event,
-            location=self.location,
             job_title=self.job_title,
             tenant=self.tenant,
             rate=self.rate,

@@ -35,7 +35,7 @@ class TestClientJobMutations(JobsGraphQLTestCase):
         )
         # Create tenanted user relationship
         self.create_tenanted_user(user=self.client_user, tenant=self.tenant)
-        
+
         # Create prerequisite data for jobs
         self.company = self.create_company(
             name="Test Company",
@@ -58,7 +58,7 @@ class TestClientJobMutations(JobsGraphQLTestCase):
             name="Software Engineer",
             tenant=self.tenant
         )
-        
+
         self.schema = schema_clients
         self.endpoint_path = "/api/v1/graphql/clients"
 
@@ -125,7 +125,6 @@ class TestClientJobMutations(JobsGraphQLTestCase):
             address="Original Address",
             company=self.company,
             event=self.event,
-            location=self.location,
             job_title=self.job_title,
             tenant=self.tenant
         )
@@ -192,7 +191,7 @@ class TestSparkJobMutations(JobsGraphQLTestCase):
         )
         # Create tenanted user relationship
         self.create_tenanted_user(user=self.spark_user, tenant=self.tenant)
-        
+
         # Create prerequisite data for jobs
         self.company = self.create_company(
             name="Test Company",
@@ -215,7 +214,7 @@ class TestSparkJobMutations(JobsGraphQLTestCase):
             name="Software Engineer",
             tenant=self.tenant
         )
-        
+
         self.schema = schema_spark
         self.endpoint_path = "/api/v1/graphql/spark"
 
@@ -276,7 +275,6 @@ class TestSparkJobMutations(JobsGraphQLTestCase):
             address="Original Address",
             company=self.company,
             event=self.event,
-            location=self.location,
             job_title=self.job_title,
             tenant=self.tenant
         )
@@ -319,4 +317,3 @@ class TestSparkJobMutations(JobsGraphQLTestCase):
         # Verify job was updated
         updated_job = await sync_to_async(models.Job.objects.get)(pk=job.id)
         assert updated_job.name == "Updated Spark Job"
-

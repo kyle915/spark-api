@@ -203,7 +203,8 @@ class AmbassadorEventQueries:
                 status_slugs = [status.value for status in filters.statuses]
                 queryset = queryset.filter(status__slug__in=status_slugs)
             if filters.start_date:
-                queryset = queryset.filter(request__date__gte=filters.start_date)
+                queryset = queryset.filter(
+                    request__date__gte=filters.start_date)
             if filters.end_date:
                 queryset = queryset.filter(request__date__lte=filters.end_date)
 
