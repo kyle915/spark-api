@@ -29,7 +29,6 @@ from events.inputs import (
     ProductTypeFiltersInput,
     ProductFiltersInput,
     RequestStoreManagerFiltersInput,
-    AmbassadorEventFiltersInput,
     DistanceUnit,
 )
 
@@ -383,74 +382,6 @@ class EventQueries:
             before=before,
             queryset=queryset,
         )
-
-    @strawberry.field(permission_classes=[StrictIsAuthenticated])
-    async def ambassador_events(
-        self,
-        info: strawberry.Info,
-        first: int | None = None,
-        after: str | None = None,
-        last: int | None = None,
-        before: str | None = None,
-        q: str | None = None,
-        filters: AmbassadorEventFiltersInput | None = None,
-    ) -> CountableConnection[types.Event]:
-        """Get events for the logged-in ambassador with canceled or approved status."""
-        service = EventQueriesService()
-        user = await service.get_user(info)
-
-        queryset = models.Event.objects.filter(
-            ambassadors_events__ambassador__user=user,
-            status__slug__in=["canceled", "approved"],
-        ).distinct()
-
-        if q:
-            queryset = queryset.filter(name__icontains=q)
-
-        # Apply date range filters
-        if filters:
-            if filters.start_date:
-                queryset = queryset.filter(request__date__gte=filters.start_date)
-            if filters.end_date:
-                queryset = queryset.filter(request__date__lte=filters.end_date)
-
-        queryset = queryset.order_by("start_time")
-
-        return await service.get_connection(
-            queryset=queryset,
-            first=first,
-            after=after,
-            last=last,
-            before=before,
-        )
-
-    # @strawberry.field(permission_classes=[StrictIsAuthenticated])
-    # async def tenant_events(
-    #     self,
-    #     info: strawberry.Info,
-    #     first: int | None = None,
-    #     after: str | None = None,
-    #     last: int | None = None,
-    #     before: str | None = None,
-    #     q: str | None = None,
-    #     tenant_uuid: strawberry.ID | None = None,
-    # ) -> CountableConnection[types.Event]:
-    #     """Get tenant events using Relay pagination."""
-    #     service = EventQueriesService()
-    #     tenant = await service.get_user_tenant(
-    #         info,
-    #         tenant_uuid=tenant_uuid,
-    #     )
-
-    #     return await service.get_connection(
-    #         tenant_id=tenant.id,
-    #         q=q,
-    #         first=first,
-    #         after=after,
-    #         last=last,
-    #         before=before,
-    #     )
-
 
 class EventTypeQueriesService(BaseEventQueriesService):
     """Service for event type queries."""

@@ -1,4 +1,5 @@
 import strawberry
+from enum import Enum
 from asgiref.sync import sync_to_async
 from graphql import GraphQLError
 from django.db.models import QuerySet, Model
@@ -7,11 +8,30 @@ from ambassadors import types
 from ambassadors import models
 from ambassadors import inputs
 from utils.graphql.permissions import StrictIsAuthenticated, IsClientOrSparkAdmin
+from events import models as event_models
+from events import types as event_types
 from utils.graphql.mixins import SparkGraphQLMixin
 from utils.graphql.relay import (
     CountableConnection,
     connection_from_queryset_async,
 )
+
+
+@strawberry.enum
+class AmbassadorEventStatus(str, Enum):
+    APPROVED = "approved"
+    DECLINED = "declined"
+    CANCELED = "canceled"
+
+
+@strawberry.input
+class AmbassadorEventsFiltersInput:
+    """Filters for ambassador-scoped events."""
+
+    types: list[strawberry.ID] | None = None
+    statuses: list[AmbassadorEventStatus] | None = None
+    start_date: str | None = None
+    end_date: str | None = None
 
 
 class BaseAmbassadorQueriesService(SparkGraphQLMixin):
@@ -98,6 +118,22 @@ class FileTypeQueriesService(BaseAmbassadorQueriesService):
         return models.FileType
 
 
+class AmbassadorEventQueriesService(BaseAmbassadorQueriesService):
+    """Service for ambassador event queries."""
+
+    def get_model(self) -> type[event_models.Event]:
+        """Get the model for the service."""
+        return event_models.Event
+
+    def get_ambassador_queryset(self, user) -> QuerySet:
+        """Return events belonging to the given ambassador user."""
+        return (
+            self.get_model()
+            .objects.filter(ambassadors_events__ambassador__user=user)
+            .distinct()
+        )
+
+
 @strawberry.type
 class FileTypeQueries:
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
@@ -137,6 +173,49 @@ class FileTypeQueries:
             return file_type
         except GraphQLError:
             return None
+
+
+@strawberry.type
+class AmbassadorEventQueries:
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def ambassador_events(
+        self,
+        info: strawberry.Info,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        q: str | None = None,
+        filters: AmbassadorEventsFiltersInput | None = None,
+    ) -> CountableConnection[event_types.Event]:
+        """Return events scoped to the logged ambassador with optional filters."""
+        service = AmbassadorEventQueriesService()
+        user = await service.get_user(info)
+
+        queryset = service.get_ambassador_queryset(user)
+        if q:
+            queryset = queryset.filter(name__icontains=q)
+
+        if filters:
+            if filters.types:
+                queryset = queryset.filter(event_type_id__in=filters.types)
+            if filters.statuses:
+                status_slugs = [status.value for status in filters.statuses]
+                queryset = queryset.filter(status__slug__in=status_slugs)
+            if filters.start_date:
+                queryset = queryset.filter(request__date__gte=filters.start_date)
+            if filters.end_date:
+                queryset = queryset.filter(request__date__lte=filters.end_date)
+
+        queryset = queryset.order_by(*service.ordering)
+
+        return await service.get_connection(
+            queryset=queryset,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+        )
 
 
 @strawberry.type

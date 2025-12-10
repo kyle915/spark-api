@@ -330,6 +330,7 @@ class Job(models.Model):
     closed = models.BooleanField(default=False)
     national = models.BooleanField(default=False)
     ongoing = models.BooleanField(default=False)
+    coordinates = ArrayField(models.FloatField(), size=2, null=True)
 
     job_title = models.ForeignKey(
         JobTitle,
@@ -351,13 +352,6 @@ class Job(models.Model):
 
     event = models.ForeignKey(
         Event, on_delete=models.RESTRICT, null=False, related_name="jobs"
-    )
-
-    location = models.ForeignKey(
-        Location,
-        on_delete=models.RESTRICT,
-        null=False,
-        related_name="jobs",
     )
 
     tenant = models.ForeignKey(

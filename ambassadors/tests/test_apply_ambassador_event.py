@@ -42,7 +42,8 @@ class TestApplyAmbassadorEvent(AmbassadorsGraphQLTestCase):
             created_by=self.system_user,
         )
 
-        self.request_status = self.create_request_status("Pending", self.tenant)
+        self.request_status = self.create_request_status(
+            "Pending", self.tenant)
         self.request_type = self.create_request_type("Demo", self.tenant)
 
         # Create Request manually (helper requires client/distributor/retailer we don't need)
@@ -118,4 +119,3 @@ class TestApplyAmbassadorEvent(AmbassadorsGraphQLTestCase):
 
         assert response.data["applyAmbassadorEvent"]["success"] is False
         assert response.data["applyAmbassadorEvent"]["message"] == "Already applied to this event"
-
