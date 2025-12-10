@@ -41,11 +41,11 @@ class Ambassador(models.Model):
     )
     is_active = models.BooleanField(default=False)
 
-    user = models.ForeignKey(
+    user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=False,
-        related_name="ambassadors",
+        related_name="ambassador",
     )
 
     created_by = models.ForeignKey(

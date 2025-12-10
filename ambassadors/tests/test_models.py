@@ -70,6 +70,48 @@ class TestAmbassadorModel(AmbassadorsGraphQLTestCase):
         ambassador = await sync_to_async(Ambassador.objects.get)(pk=ambassador.pk)
         assert ambassador.coordinates == coordinates
 
+    @pytest.mark.asyncio
+    async def test_ambassador_user_onetoone_relationship(self):
+        """Test that Ambassador-User relationship is one-to-one."""
+        # Create ambassador
+        ambassador = await sync_to_async(self.create_ambassador)(
+            user=self.ambassador_user,
+        )
+        
+        # Verify user.ambassador (singular) works
+        @sync_to_async
+        def get_user_ambassador():
+            return self.ambassador_user.ambassador
+        user_ambassador = await get_user_ambassador()
+        assert user_ambassador == ambassador
+        assert user_ambassador.id == ambassador.id
+        
+        # Verify Ambassador.objects.get(user=user) works
+        ambassador_from_get = await sync_to_async(Ambassador.objects.get)(
+            user=self.ambassador_user
+        )
+        assert ambassador_from_get == ambassador
+
+    @pytest.mark.asyncio
+    async def test_ambassador_user_unique_constraint(self):
+        """Test that creating duplicate ambassador for same user raises IntegrityError."""
+        # Create first ambassador
+        await sync_to_async(self.create_ambassador)(
+            user=self.ambassador_user,
+        )
+        
+        # Try to create second ambassador for same user - should raise IntegrityError
+        from django.db import IntegrityError
+        from asgiref.sync import sync_to_async as stoa
+        system_user = await stoa(self.get_system_user)()
+        
+        with pytest.raises(IntegrityError):
+            await stoa(Ambassador.objects.create)(
+                user=self.ambassador_user,
+                created_by=system_user,
+                updated_by=system_user,
+            )
+
 
 @pytest.mark.django_db(transaction=True)
 class TestAmbassadorInvitationModel(AmbassadorsGraphQLTestCase):
