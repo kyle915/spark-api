@@ -1,5 +1,23 @@
+input AcceptAmbassadorInvitationInput {
+  clientMutationId: ID = null
+  token: String!
+  firstName: String!
+  password1: String!
+  password2: String!
+  address: String = null
+  coordinates: [Float!] = null
+}
+
+type AcceptInvitationResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  ambassador: Ambassador
+  activationToken: String
+}
+
 """
-Ambassador(id, uuid, rating, address, coordinates, user, created_by, updated_by, created_at, updated_at)
+Ambassador(id, uuid, rating, address, coordinates, is_active, user, created_by, updated_by, created_at, updated_at)
 """
 type Ambassador {
   id: ID!
@@ -7,9 +25,99 @@ type Ambassador {
   rating: Int!
   address: String
   coordinates: [Float!]!
+  isActive: Boolean!
   userId: ID!
   createdAt: String!
   updatedAt: String!
+}
+
+type AmbassadorCountableConnection {
+  pageInfo: PageInfo!
+  edges: [AmbassadorCountableEdge!]!
+  totalCount: Int!
+}
+
+type AmbassadorCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: Ambassador!
+}
+
+input AmbassadorEventFiltersInput {
+  startDate: String = null
+  endDate: String = null
+}
+
+"""
+AmbassadorEvent(id, uuid, is_approved, ambassador, tenant, event, created_by, updated_by, created_at, updated_at)
+"""
+type AmbassadorEventType {
+  id: ID!
+  uuid: String!
+  isApproved: Boolean!
+  ambassador: Ambassador!
+  tenantId: ID!
+  eventId: ID!
+  createdAt: String!
+  updatedAt: String!
+}
+
+input AmbassadorFiltersInput {
+  tenantId: ID = null
+  tenantUuid: ID = null
+  isActive: Boolean = null
+  email: String = null
+  name: String = null
+  address: String = null
+  search: String = null
+}
+
+input AmbassadorInvitationFiltersInput {
+  tenantId: ID = null
+  tenantUuid: ID = null
+  isExpired: Boolean = null
+  isUsed: Boolean = null
+  email: String = null
+  search: String = null
+}
+
+type AmbassadorInvitationResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  invitation: AmbassadorInvitationType
+}
+
+"""Model to track ambassador invitations sent by clients or spark-admins."""
+type AmbassadorInvitationType {
+  id: ID!
+  uuid: String!
+  email: String!
+  token: String!
+  expiresAt: String!
+  isUsed: Boolean!
+  usedAt: String
+  invitedById: ID!
+  tenantId: ID!
+  ambassadorId: ID
+  createdAt: String!
+  updatedAt: String!
+}
+
+type AmbassadorInvitationTypeCountableConnection {
+  pageInfo: PageInfo!
+  edges: [AmbassadorInvitationTypeCountableEdge!]!
+  totalCount: Int!
+}
+
+type AmbassadorInvitationTypeCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: AmbassadorInvitationType!
 }
 
 """
@@ -94,6 +202,25 @@ type AmbassadorToAmbassadorReviewDetailResponse {
 input AppleSocialAuthInput {
   clientMutationId: ID = null
   identityToken: String!
+}
+
+type ApplyAmbassadorEventResponse {
+  success: Boolean!
+  message: String!
+  application: AmbassadorEventType
+}
+
+input ApproveAmbassadorInput {
+  clientMutationId: ID = null
+  ambassadorId: ID!
+  tenantId: ID = null
+}
+
+type ApproveAmbassadorResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  ambassador: Ambassador
 }
 
 input ApproveRequestInput {
@@ -318,6 +445,12 @@ input CoordinatesFilterInput {
   unit: DistanceUnit! = KILOMETERS
 }
 
+input CreateAmbassadorInvitationInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  email: String!
+}
+
 input CreateAmbassadorJobInput {
   clientMutationId: ID = null
   tenantId: ID = null
@@ -511,6 +644,16 @@ input CreateProductTypeInput {
   name: String!
 }
 
+input CreatePublicAmbassadorInput {
+  clientMutationId: ID = null
+  firstName: String!
+  email: String!
+  password1: String!
+  password2: String!
+  address: String = null
+  coordinates: [Float!] = null
+}
+
 input CreateQuestionOptionInput {
   clientMutationId: ID = null
   tenantId: ID = null
@@ -702,6 +845,17 @@ type DeclineRequestResponse {
   request: Request
 }
 
+input DeleteInvitationInput {
+  clientMutationId: ID = null
+  invitationId: ID!
+}
+
+type DeleteInvitationResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+}
+
 input DeleteProductInput {
   clientMutationId: ID = null
   id: ID!
@@ -768,12 +922,13 @@ type DjangoModelType {
 }
 
 """
-Event(id, uuid, name, tenant, request, event_type, status, start_time, end_time, address, notes, is_national, created_by, updated_by, created_at, updated_at)
+Event(id, uuid, name, coordinates, tenant, request, event_type, status, start_time, end_time, address, notes, is_national, created_by, updated_by, created_at, updated_at)
 """
 type Event {
   id: ID!
   uuid: String!
   name: String!
+  coordinates: [Float!]!
   startTime: String
   endTime: String
   address: String!
@@ -1423,6 +1578,13 @@ type Mutation {
   createJobRequirementAnswer(input: CreateJobRequirementAnswerInput!): JobRequirementAnswerDetailResponse!
   updateJobRequirementAnswer(input: UpdateJobRequirementAnswerInput!): JobRequirementAnswerDetailResponse!
   manageAmbassadorJobAssignment(input: ManageAmbassadorJobAssignmentInput!): AmbassadorJobDetailResponse!
+  applyAmbassadorEvent(eventId: ID!): ApplyAmbassadorEventResponse!
+  createPublicAmbassador(input: CreatePublicAmbassadorInput!): PublicAmbassadorCreationResponse!
+  createAmbassadorInvitation(input: CreateAmbassadorInvitationInput!): AmbassadorInvitationResponse!
+  acceptAmbassadorInvitation(input: AcceptAmbassadorInvitationInput!): AcceptInvitationResponse!
+  approveAmbassador(input: ApproveAmbassadorInput!): ApproveAmbassadorResponse!
+  updateAmbassador(input: UpdateAmbassadorInput!): UpdateAmbassadorResponse!
+  deleteInvitation(input: DeleteInvitationInput!): DeleteInvitationResponse!
 }
 
 type MutationNormalOutput {
@@ -1580,11 +1742,20 @@ input ProductTypeFiltersInput {
   tenantUuid: ID = null
 }
 
+type PublicAmbassadorCreationResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  ambassador: Ambassador
+  activationToken: String
+}
+
 type Query {
   events(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: EventFiltersInput = null): EventCountableConnection!
   event(uuid: ID!): Event
   todayEvents(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: EventFiltersInput = null): EventCountableConnection!
   todayEventsCoordinates(coordinates: [Float!]!, range: Float!, unit: DistanceUnit! = KILOMETERS, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: EventFiltersInput = null): EventCountableConnection!
+  ambassadorEvents(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: AmbassadorEventFiltersInput = null): EventCountableConnection!
   eventTypes(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: EventTypeFiltersInput = null): EventTypeCountableConnection!
   eventType(id: ID!): EventType
   eventStatuses(first: Int = null, after: String = null, last: Int = null, before: String = null, filters: EventStatusFiltersInput = null): EventStatusCountableConnection!
@@ -1621,6 +1792,8 @@ type Query {
   recap(uuid: ID!): Recap
   fileTypes(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): FileTypeCountableConnection!
   fileType(uuid: ID!): FileType
+  sentInvitations(first: Int = null, after: String = null, last: Int = null, before: String = null, filters: AmbassadorInvitationFiltersInput = null): AmbassadorInvitationTypeCountableConnection!
+  availableAmbassadors(first: Int = null, after: String = null, last: Int = null, before: String = null, filters: AmbassadorFiltersInput = null): AmbassadorCountableConnection!
   healthcheck: String!
   me: CustomUserType!
   tenants(userUuid: ID = null, filters: TenantFiltersInput = null, first: Int = null, after: String = null, last: Int = null, before: String = null): TenantTypeCountableConnection!
@@ -2334,6 +2507,15 @@ type TokenType {
 
 scalar UUID
 
+input UpdateAmbassadorInput {
+  clientMutationId: ID = null
+  ambassadorId: ID!
+  address: String = null
+  coordinates: [Float!] = null
+  isActive: Boolean = null
+  tenantId: ID = null
+}
+
 input UpdateAmbassadorJobInput {
   clientMutationId: ID = null
   tenantId: ID = null
@@ -2343,6 +2525,13 @@ input UpdateAmbassadorJobInput {
   statusId: ID!
   rateId: ID!
   id: ID!
+}
+
+type UpdateAmbassadorResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  ambassador: Ambassador
 }
 
 input UpdateAmbassadorToAmbassadorReviewInput {
@@ -2598,7 +2787,6 @@ input UpdateRequestInput {
   coordinates: [Float!]!
   timezoneId: ID!
   requestTypeId: ID!
-  clientId: ID!
   distributorId: ID!
   retailerId: ID!
   storeManagerName: String!
@@ -2695,13 +2883,13 @@ type UserType {
   isActive: Boolean!
   dateJoined: DateTime!
   status: UserStatusType!
-  lastName: String
-  email: String!
-  id: ID!
-  firstName: String
 
   """Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only."""
   username: String!
+  id: ID!
+  lastName: String
+  email: String!
+  firstName: String
   archived: Boolean!
   verified: Boolean!
 }

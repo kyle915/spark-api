@@ -1,46 +1,361 @@
-"""
-Can only be resolved by authenticated users.
+input AcceptAmbassadorInvitationInput {
+  clientMutationId: ID = null
+  token: String!
+  firstName: String!
+  password1: String!
+  password2: String!
+  address: String = null
+  coordinates: [Float!] = null
+}
 
-When the condition fails, the following can be returned (following this priority):
-1) `OperationInfo`/`OperationMessage` if those types are allowed at the return type
-2) `null` in case the field is not mandatory (e.g. `String` or `[String]`)
-3) An empty list in case the field is a list (e.g. `[String]!`)
-4) An empty `Connection` in case the return type is a relay connection
-2) Otherwise, an error will be raised
-"""
-directive @isAuthenticated repeatable on FIELD_DEFINITION
+type AcceptInvitationResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  ambassador: Ambassador
+  activationToken: String
+}
 
-input CreateEventInput {
+"""
+Ambassador(id, uuid, rating, address, coordinates, is_active, user, created_by, updated_by, created_at, updated_at)
+"""
+type Ambassador {
+  id: ID!
+  uuid: String!
+  rating: Int!
+  address: String
+  coordinates: [Float!]!
+  isActive: Boolean!
+  userId: ID!
+  createdAt: String!
+  updatedAt: String!
+}
+
+input AmbassadorEventFiltersInput {
+  startDate: String = null
+  endDate: String = null
+}
+
+"""
+AmbassadorEvent(id, uuid, is_approved, ambassador, tenant, event, created_by, updated_by, created_at, updated_at)
+"""
+type AmbassadorEventType {
+  id: ID!
+  uuid: String!
+  isApproved: Boolean!
+  ambassador: Ambassador!
+  tenantId: ID!
+  eventId: ID!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type AmbassadorInvitationResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  invitation: AmbassadorInvitationType
+}
+
+"""Model to track ambassador invitations sent by clients or spark-admins."""
+type AmbassadorInvitationType {
+  id: ID!
+  uuid: String!
+  email: String!
+  token: String!
+  expiresAt: String!
+  isUsed: Boolean!
+  usedAt: String
+  invitedById: ID!
+  tenantId: ID!
+  ambassadorId: ID
+  createdAt: String!
+  updatedAt: String!
+}
+
+"""
+AmbassadorJob(id, uuid, appear_as_rfp, tenant, ambassador, job, status, rate, created_by, updated_by, created_at, updated_at)
+"""
+type AmbassadorJob {
+  id: ID!
+  uuid: String!
+  appearAsRfp: Boolean!
+  tenantId: ID!
+  ambassadorId: ID!
+  job: Job!
+  status: Status!
+  rate: Rate!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type AmbassadorJobCountableConnection {
+  pageInfo: PageInfo!
+  edges: [AmbassadorJobCountableEdge!]!
+  totalCount: Int!
+}
+
+type AmbassadorJobCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: AmbassadorJob!
+}
+
+type AmbassadorJobDetailResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  ambassadorJob: AmbassadorJob
+}
+
+input AmbassadorRegisterInput {
+  clientMutationId: ID = null
+  firstName: String!
+  email: String!
+  password1: String!
+  password2: String!
+  role: UserRoleEnum!
+  tenantId: ID = null
+}
+
+"""
+AmbassadorToAmbassadorReview(id, uuid, description, rate, tenant, ambassador, created_by, updated_by, created_at, updated_at)
+"""
+type AmbassadorToAmbassadorReview {
+  id: ID!
+  uuid: String!
+  description: String!
+  rate: Float!
+  tenantId: ID!
+  ambassadorId: ID!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type AmbassadorToAmbassadorReviewDetailResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  ambassadorToAmbassadorReview: AmbassadorToAmbassadorReview
+}
+
+input AppleSocialAuthInput {
+  clientMutationId: ID = null
+  identityToken: String!
+}
+
+type ApplyAmbassadorEventResponse {
+  success: Boolean!
+  message: String!
+  application: AmbassadorEventType
+}
+
+input ApproveAmbassadorInput {
+  clientMutationId: ID = null
+  ambassadorId: ID!
+  tenantId: ID = null
+}
+
+type ApproveAmbassadorResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  ambassador: Ambassador
+}
+
+"""
+Client(id, uuid, name, email, tenant, created_by, updated_by, created_at, updated_at)
+"""
+type Client {
+  id: ID!
+  uuid: String!
   name: String!
-  eventTypeId: ID!
+  email: String!
+  tenantId: ID!
+  createdAt: String!
+  updatedAt: String!
+}
+
+"""
+Company(id, name, uuid, email, website_url, founding_date, phone, address, about_us, company_size_min, company_size_max, approved, tenant, location, cover, profile_image, created_by, updated_by, created_at, updated_at)
+"""
+type Company {
+  id: ID!
+  uuid: String!
+  name: String!
+  email: String!
+  websiteUrl: String
+  foundingDate: String
+  phone: String!
+  address: String
+  aboutUs: String
+  companySizeMin: Int
+  companySizeMax: Int
+  approved: Boolean!
+  tenantId: ID
+  location: Location
+  cover: CompanyFile
+  profileImage: CompanyFile
+  createdAt: String!
+  updatedAt: String!
+}
+
+"""
+CompanyFile(id, uuid, name, url, file_type, created_by, updated_by, created_at, updated_at)
+"""
+type CompanyFile {
+  id: ID!
+  uuid: String!
+  name: String!
+  url: String
+  fileTypeId: ID!
+  createdAt: String!
+  updatedAt: String!
+}
+
+input CoordinatesFilterInput {
+  coordinates: [Float!]!
+  range: Float!
+  unit: DistanceUnit! = KILOMETERS
+}
+
+input CreateAmbassadorInvitationInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  email: String!
+}
+
+input CreateAmbassadorJobInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  appearAsRfp: Boolean! = true
+  ambassadorId: ID!
+  jobId: ID!
   statusId: ID!
-  tenantId: ID = null
+  rateId: ID!
 }
 
-input CreateEventStatusInput {
-  name: String!
+input CreateAmbassadorToAmbassadorReviewInput {
+  clientMutationId: ID = null
   tenantId: ID = null
+  description: String!
+  rate: Float!
+  ambassadorId: ID!
 }
 
-input CreateEventTypeInput {
-  name: String!
+input CreatePublicAmbassadorInput {
+  clientMutationId: ID = null
+  firstName: String!
+  email: String!
+  password1: String!
+  password2: String!
+  address: String = null
+  coordinates: [Float!] = null
+}
+
+input CreateRequestDetailInput {
+  clientMutationId: ID = null
+  isTableNeeded: Boolean! = false
+  tableSize: Int = null
+}
+
+input CreateRequestProductInput {
+  clientMutationId: ID = null
+  productId: ID!
+}
+
+input CreateRequestWithDependenciesInput {
+  clientMutationId: ID = null
   tenantId: ID = null
+  name: String!
+  date: String!
+  startTime: String!
+  endTime: String!
+  address: String!
+  coordinates: [Float!]!
+  timezoneId: ID!
+  requestTypeId: ID!
+  clientName: String!
+  clientEmail: String!
+  distributorName: String!
+  distributorEmail: String!
+  retailerName: String!
+  retailerAddress: String!
+  retailerStoreContact: String!
+  storeManagerName: String!
+  storeManagerPhone: String!
+  details: [CreateRequestDetailInput!]!
+  products: [CreateRequestProductInput!]!
+}
+
+"""
+User(password, last_login, is_superuser, username, first_name, last_name, email, is_staff, date_joined, id, uuid, image, role, created_by, updated_by, created_at, updated_at, is_active)
+"""
+type CustomUserType {
+  id: ID!
+  uuid: UUID!
+
+  """Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only."""
+  username: String!
+  email: String!
+  firstName: String!
+  lastName: String!
+  role: RoleType!
 }
 
 """Date with time (isoformat)"""
 scalar DateTime
+
+input DeleteInvitationInput {
+  clientMutationId: ID = null
+  invitationId: ID!
+}
+
+type DeleteInvitationResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+}
+
+enum DistanceUnit {
+  KILOMETERS
+  MILES
+}
+
+"""
+Distributor(id, uuid, name, email, location, tenant, created_by, updated_by, created_at, updated_at)
+"""
+type Distributor {
+  id: ID!
+  uuid: String!
+  name: String!
+  email: String!
+  tenantId: ID!
+  location: Location
+  createdAt: String!
+  updatedAt: String!
+}
 
 type DjangoModelType {
   pk: ID!
 }
 
 """
-Event(id, uuid, name, tenant, event_type, status, created_by, updated_by, created_at, updated_at)
+Event(id, uuid, name, coordinates, tenant, request, event_type, status, start_time, end_time, address, notes, is_national, created_by, updated_by, created_at, updated_at)
 """
 type Event {
   id: ID!
   uuid: String!
   name: String!
+  coordinates: [Float!]!
+  startTime: String
+  endTime: String
+  address: String!
+  isNational: Boolean!
+  notes: String
+  request: Request
   createdAt: String!
   updatedAt: String!
   tenantId: ID!
@@ -48,34 +363,166 @@ type Event {
   status: EventStatus
 }
 
-type EventDetailResponse {
-  success: Boolean!
-  message: String!
-  event: Event
+type EventCountableConnection {
+  pageInfo: PageInfo!
+  edges: [EventCountableEdge!]!
+  totalCount: Int!
+}
+
+type EventCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: Event!
+}
+
+input EventFiltersInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  tenantUuid: ID = null
+  eventTypeId: ID = null
+  eventStatusId: ID = null
+  requestId: ID = null
+  date: String = null
+  coordinates: CoordinatesFilterInput = null
 }
 
 """
-EventStatus(id, uuid, name, tenant, created_by, updated_by, created_at, updated_at)
+EventStatus(id, uuid, name, slug, is_default, tenant, created_by, updated_by, created_at, updated_at)
 """
 type EventStatus {
   id: ID!
   uuid: String!
   name: String!
+  slug: String!
+  isDefault: Boolean!
   tenantId: ID!
   createdAt: String!
   updatedAt: String!
 }
 
-type EventStatusDetailResponse {
-  success: Boolean!
-  message: String!
-  eventStatus: EventStatus
+type EventStatusCountableConnection {
+  pageInfo: PageInfo!
+  edges: [EventStatusCountableEdge!]!
+  totalCount: Int!
+}
+
+type EventStatusCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: EventStatus!
+}
+
+input EventStatusFiltersInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  tenantUuid: ID = null
 }
 
 """
-EventType(id, uuid, name, tenant, created_by, updated_by, created_at, updated_at)
+EventType(id, uuid, name, is_default, tenant, created_by, updated_by, created_at, updated_at)
 """
 type EventType {
+  id: ID!
+  uuid: String!
+  name: String!
+  isDefault: Boolean!
+  tenantId: ID!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type EventTypeCountableConnection {
+  pageInfo: PageInfo!
+  edges: [EventTypeCountableEdge!]!
+  totalCount: Int!
+}
+
+type EventTypeCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: EventType!
+}
+
+input EventTypeFiltersInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  tenantUuid: ID = null
+}
+
+"\n     Errors messages and codes mapped to\n    fields or non fields errors.\n    Example:\n    {\n        field_name: [\n            {\n                \"message\": \"error message\",\n                \"code\": \"error_code\"\n            }\n        ],\n        other_field: [\n            {\n                \"message\": \"error message\",\n                \"code\": \"error_code\"\n            }\n        ],\n        nonFieldErrors: [\n            {\n                \"message\": \"error message\",\n                \"code\": \"error_code\"\n            }\n        ]\n    }\n    "
+scalar ExpectedError
+
+input GoogleSocialAuthInput {
+  clientMutationId: ID = null
+  accessToken: String!
+}
+
+"""
+Job(id, uuid, name, description, code, address, start_date, end_date, public, closed, national, ongoing, job_title, other_title, company, event, location, tenant, rate, created_by, updated_by, created_at, updated_at)
+"""
+type Job {
+  id: ID!
+  uuid: String!
+  name: String!
+  description: String
+  code: String!
+  address: String!
+  startDate: String
+  endDate: String
+  public: Boolean!
+  closed: Boolean!
+  national: Boolean!
+  ongoing: Boolean!
+  jobTitle: JobTitle!
+  otherTitle: JobTitle
+  company: Company!
+  event: Event!
+  location: Location!
+  tenantId: ID!
+  rate: Rate!
+  jobRequirements: [JobRequirement!]!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type JobCountableConnection {
+  pageInfo: PageInfo!
+  edges: [JobCountableEdge!]!
+  totalCount: Int!
+}
+
+type JobCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: Job!
+}
+
+"""
+JobRequirement(id, uuid, name, tenant, job_requirement_type, job, created_by, updated_by, created_at, updated_at)
+"""
+type JobRequirement {
+  id: ID!
+  uuid: String!
+  name: String!
+  tenantId: ID!
+  jobRequirementType: JobRequirementType!
+  job: Job!
+  createdAt: String!
+  updatedAt: String!
+}
+
+"""
+JobRequirementType(id, uuid, name, tenant, created_by, updated_by, created_at, updated_at)
+"""
+type JobRequirementType {
   id: ID!
   uuid: String!
   name: String!
@@ -84,25 +531,37 @@ type EventType {
   updatedAt: String!
 }
 
-type EventTypeDetailResponse {
-  success: Boolean!
-  message: String!
-  eventType: EventType
+"""
+JobTitle(id, uuid, name, tenant, created_by, updated_by, created_at, updated_at)
+"""
+type JobTitle {
+  id: ID!
+  uuid: String!
+  name: String
+  tenantId: ID!
+  createdAt: String!
+  updatedAt: String!
 }
 
-"\n     Errors messages and codes mapped to\n    fields or non fields errors.\n    Example:\n    {\n        field_name: [\n            {\n                \"message\": \"error message\",\n                \"code\": \"error_code\"\n            }\n        ],\n        other_field: [\n            {\n                \"message\": \"error message\",\n                \"code\": \"error_code\"\n            }\n        ],\n        nonFieldErrors: [\n            {\n                \"message\": \"error message\",\n                \"code\": \"error_code\"\n            }\n        ]\n    }\n    "
-scalar ExpectedError
+"""
+Location(id, uuid, name, code, zip, tenant, created_by, updated_by, created_at, updated_at)
+"""
+type Location {
+  id: ID!
+  uuid: String!
+  name: String!
+  code: String!
+  zip: String!
+  tenantId: ID!
+  createdAt: String!
+  updatedAt: String!
+}
 
 type Mutation {
-  createEvent(input: CreateEventInput!): EventDetailResponse! @isAuthenticated
-  updateEvent(input: UpdateEventInput!): EventDetailResponse! @isAuthenticated
-  createEventType(input: CreateEventTypeInput!): EventTypeDetailResponse! @isAuthenticated
-  updateEventType(input: UpdateEventTypeInput!): EventTypeDetailResponse! @isAuthenticated
-  createEventStatus(input: CreateEventStatusInput!): EventStatusDetailResponse! @isAuthenticated
-  updateEventStatus(input: UpdateEventStatusInput!): EventStatusDetailResponse! @isAuthenticated
-  register(firstName: String!, email: String!, password1: String!, password2: String!): RegisterResponse!
-  socialAuthGoogle(accessToken: String!): SocialAuthResponse!
-  socialAuthApple(identityToken: String!): SocialAuthResponse!
+  createRequestByUrl(input: CreateRequestWithDependenciesInput!, requestUrlName: String!): RequestDetailResponse!
+  register(input: AmbassadorRegisterInput!): RegisterResponse!
+  socialAuthGoogle(input: GoogleSocialAuthInput!): SocialAuthResponse!
+  socialAuthApple(input: AppleSocialAuthInput!): SocialAuthResponse!
 
   "### Checks if a token is not expired and correct.\n\n*Note that this is not for refresh tokens.*\n"
   verifyToken(input: VerifyTokenInput!): VerifyTokenType!
@@ -115,6 +574,17 @@ type Mutation {
 
   "Verify user account.\n\nReceive the token that was sent by email. If the token is valid,\nmake the user verified by making the `user.status.verified` field\ntrue.\n"
   verifyAccount(input: VerifyAccountInput!): MutationNormalOutput!
+  createAmbassadorJob(input: CreateAmbassadorJobInput!): AmbassadorJobDetailResponse!
+  updateAmbassadorJob(input: UpdateAmbassadorJobInput!): AmbassadorJobDetailResponse!
+  createAmbassadorToAmbassadorReview(input: CreateAmbassadorToAmbassadorReviewInput!): AmbassadorToAmbassadorReviewDetailResponse!
+  updateAmbassadorToAmbassadorReview(input: UpdateAmbassadorToAmbassadorReviewInput!): AmbassadorToAmbassadorReviewDetailResponse!
+  applyAmbassadorEvent(eventId: ID!): ApplyAmbassadorEventResponse!
+  createPublicAmbassador(input: CreatePublicAmbassadorInput!): PublicAmbassadorCreationResponse!
+  createAmbassadorInvitation(input: CreateAmbassadorInvitationInput!): AmbassadorInvitationResponse!
+  acceptAmbassadorInvitation(input: AcceptAmbassadorInvitationInput!): AcceptInvitationResponse!
+  approveAmbassador(input: ApproveAmbassadorInput!): ApproveAmbassadorResponse!
+  updateAmbassador(input: UpdateAmbassadorInput!): UpdateAmbassadorResponse!
+  deleteInvitation(input: DeleteInvitationInput!): DeleteInvitationResponse!
 }
 
 type MutationNormalOutput {
@@ -141,17 +611,71 @@ interface OutputInterface {
   errors: ExpectedError
 }
 
-type Query {
-  events(limit: Int! = 10, offset: Int! = 0, q: String = null): [Event!]! @isAuthenticated
-  event(id: ID!): Event @isAuthenticated
-  eventTypes(limit: Int! = 10, offset: Int! = 0, q: String = null): [EventType!]! @isAuthenticated
-  eventType(id: ID!): EventType @isAuthenticated
-  eventStatuses(limit: Int! = 10, offset: Int! = 0, q: String = null): [EventStatus!]! @isAuthenticated
-  eventStatus(id: ID!): EventStatus @isAuthenticated
-  me: UserType!
+"""Information to aid in pagination."""
+type PageInfo {
+  """When paginating forwards, are there more items?"""
+  hasNextPage: Boolean!
 
-  """Returns the current user if he is not anonymous."""
-  public: UserType
+  """When paginating backwards, are there more items?"""
+  hasPreviousPage: Boolean!
+
+  """When paginating backwards, the cursor to continue."""
+  startCursor: String
+
+  """When paginating forwards, the cursor to continue."""
+  endCursor: String
+}
+
+type PublicAmbassadorCreationResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  ambassador: Ambassador
+  activationToken: String
+}
+
+type Query {
+  events(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: EventFiltersInput = null): EventCountableConnection!
+  event(uuid: ID!): Event
+  todayEvents(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: EventFiltersInput = null): EventCountableConnection!
+  todayEventsCoordinates(coordinates: [Float!]!, range: Float!, unit: DistanceUnit! = KILOMETERS, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: EventFiltersInput = null): EventCountableConnection!
+  ambassadorEvents(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: AmbassadorEventFiltersInput = null): EventCountableConnection!
+  eventTypes(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: EventTypeFiltersInput = null): EventTypeCountableConnection!
+  eventType(id: ID!): EventType
+  eventStatuses(first: Int = null, after: String = null, last: Int = null, before: String = null, filters: EventStatusFiltersInput = null): EventStatusCountableConnection!
+  eventStatus(id: ID!): EventStatus
+  timezones(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): TimeZoneCountableConnection!
+  publicTimezones(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): TimeZoneCountableConnection!
+  healthcheck: String!
+  me: CustomUserType!
+  availableJobs(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): JobCountableConnection!
+  ambassadorJobs(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): AmbassadorJobCountableConnection!
+  ambassadorJob(id: ID!): AmbassadorJob
+}
+
+"""
+Rate(id, uuid, amount, tenant, rate_type, created_by, updated_by, created_at, updated_at)
+"""
+type Rate {
+  id: ID!
+  uuid: String!
+  amount: Float!
+  tenantId: ID!
+  rateType: RateType!
+  createdAt: String!
+  updatedAt: String!
+}
+
+"""
+RateType(id, uuid, name, tenant, created_by, updated_by, created_at, updated_at)
+"""
+type RateType {
+  id: ID!
+  uuid: String!
+  name: String!
+  tenantId: ID!
+  createdAt: String!
+  updatedAt: String!
 }
 
 """
@@ -178,6 +702,93 @@ type RegisterResponse {
   success: Boolean!
   message: String!
   activationToken: String
+  clientMutationId: ID
+}
+
+"""
+Request(id, uuid, name, date, start_time, end_time, address, coordinates, client_name, client_email, distributor_name, distributor_email, retailer_name, retailer_address, retailer_store_contact, store_manager_name, store_manager_phone, timezone, client, distributor, retailer, request_type, status, tenant, created_by, updated_by, created_at, updated_at)
+"""
+type Request {
+  id: ID!
+  uuid: String!
+  name: String!
+  date: String!
+  startTime: String
+  endTime: String
+  address: String!
+  coordinates: [Float!]!
+  clientName: String
+  clientEmail: String
+  distributorName: String
+  distributorEmail: String
+  retailerName: String
+  retailerAddress: String
+  retailerStoreContact: String
+  storeManagerName: String
+  storeManagerPhone: String
+  timezone: TimeZone
+  client: Client
+  distributor: Distributor
+  retailer: Retailer
+  requestType: RequestType
+  status: RequestStatus
+  tenantId: ID!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type RequestDetailResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  request: Request
+}
+
+type RequestStatus {
+  id: ID!
+  uuid: String!
+  name: String!
+  slug: String!
+  createEvent: Boolean!
+  isDefault: Boolean!
+  createdAt: String!
+  updatedAt: String!
+}
+
+"""
+RequestType(id, uuid, name, tenant, created_by, updated_by, created_at, updated_at)
+"""
+type RequestType {
+  id: ID!
+  uuid: String!
+  name: String!
+  tenantId: ID!
+  createdAt: String!
+  updatedAt: String!
+}
+
+"""
+Retailer(id, uuid, name, address, store_contact, location, tenant, created_by, updated_by, created_at, updated_at)
+"""
+type Retailer {
+  id: ID!
+  uuid: String!
+  name: String!
+  address: String!
+  storeContact: String!
+  tenantId: ID!
+  location: Location
+  createdAt: String!
+  updatedAt: String!
+}
+
+"""
+Role(id, uuid, name, slug, created_by, updated_by, created_at, updated_at)
+"""
+type RoleType {
+  id: ID!
+  uuid: UUID!
+  name: String!
 }
 
 type SocialAuthResponse {
@@ -185,6 +796,46 @@ type SocialAuthResponse {
   message: String!
   token: String
   refreshToken: String
+  clientMutationId: ID
+}
+
+"""
+Status(id, uuid, name, tenant, created_by, updated_by, created_at, updated_at)
+"""
+type Status {
+  id: ID!
+  uuid: String!
+  name: String!
+  tenantId: ID!
+  createdAt: String!
+  updatedAt: String!
+}
+
+"""
+TimeZone(id, uuid, name, code, offset, created_by, updated_by, created_at, updated_at)
+"""
+type TimeZone {
+  id: ID!
+  uuid: String!
+  name: String!
+  code: String!
+  offset: Int!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type TimeZoneCountableConnection {
+  pageInfo: PageInfo!
+  edges: [TimeZoneCountableEdge!]!
+  totalCount: Int!
+}
+
+type TimeZoneCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: TimeZone!
 }
 
 "\nthe data that was used to create the token.\n"
@@ -205,24 +856,47 @@ type TokenType {
   token: String!
 }
 
-input UpdateEventInput {
-  name: String!
-  eventTypeId: ID!
+scalar UUID
+
+input UpdateAmbassadorInput {
+  clientMutationId: ID = null
+  ambassadorId: ID!
+  address: String = null
+  coordinates: [Float!] = null
+  isActive: Boolean = null
+  tenantId: ID = null
+}
+
+input UpdateAmbassadorJobInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  appearAsRfp: Boolean! = true
+  ambassadorId: ID!
+  jobId: ID!
   statusId: ID!
-  tenantId: ID = null
+  rateId: ID!
   id: ID!
 }
 
-input UpdateEventStatusInput {
-  name: String!
+type UpdateAmbassadorResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  ambassador: Ambassador
+}
+
+input UpdateAmbassadorToAmbassadorReviewInput {
+  clientMutationId: ID = null
   tenantId: ID = null
+  description: String!
+  rate: Float!
+  ambassadorId: ID!
   id: ID!
 }
 
-input UpdateEventTypeInput {
-  name: String!
-  tenantId: ID = null
-  id: ID!
+enum UserRoleEnum {
+  AMBASSADOR
+  CLIENT
 }
 
 """A helper model that handles user account stuff."""
@@ -232,7 +906,7 @@ type UserStatusType {
 }
 
 """
-User(password, last_login, is_superuser, username, first_name, last_name, email, is_staff, date_joined, id, uuid, role, created_by, updated_by, created_at, updated_at, is_active)
+User(password, last_login, is_superuser, username, first_name, last_name, email, is_staff, date_joined, id, uuid, image, role, created_by, updated_by, created_at, updated_at, is_active)
 """
 type UserType {
   logentrySet: [DjangoModelType!]!
@@ -248,13 +922,13 @@ type UserType {
   isActive: Boolean!
   dateJoined: DateTime!
   status: UserStatusType!
-  id: ID!
 
   """Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only."""
   username: String!
+  id: ID!
   lastName: String
-  firstName: String
   email: String!
+  firstName: String
   archived: Boolean!
   verified: Boolean!
 }
