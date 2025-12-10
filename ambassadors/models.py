@@ -39,6 +39,7 @@ class Ambassador(models.Model):
         size=2,
         default=list,
     )
+    is_active = models.BooleanField(default=False)
 
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -62,6 +63,73 @@ class Ambassador(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
     updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['is_active']),
+            models.Index(fields=['user', 'is_active']),
+        ]
+
+
+class AmbassadorInvitation(models.Model):
+    """Model to track ambassador invitations sent by clients or spark-admins."""
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+
+    email = models.EmailField(null=False)
+    token = models.CharField(max_length=255, unique=True, null=False)
+    expires_at = models.DateTimeField(null=False)
+    is_used = models.BooleanField(default=False)
+    used_at = models.DateTimeField(null=True)
+
+    # Who created the invitation (client or spark-admin)
+    invited_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="ambassador_invitations_sent",
+    )
+
+    # Tenant for which the ambassador is being invited
+    tenant = models.ForeignKey(
+        Tenant,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="ambassador_invitations",
+    )
+
+    # The ambassador created from this invitation (if used)
+    ambassador = models.ForeignKey(
+        'Ambassador',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="invitation",
+    )
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="ambassador_invitations_created_by",
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="ambassador_invitations_updated_by",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['email', 'is_used']),
+            models.Index(fields=['email', 'is_used', 'expires_at']),
+            models.Index(fields=['token']),
+            models.Index(fields=['expires_at']),
+        ]
 
 
 class AmbassadorReview(models.Model):
