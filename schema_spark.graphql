@@ -115,10 +115,10 @@ input AppleSocialAuthInput {
   identityToken: String!
 }
 
-type ApplyAmbassadorEventResponse {
+type ApplyAmbassadorJobResponse {
   success: Boolean!
   message: String!
-  application: AmbassadorEventType
+  application: AmbassadorJob
 }
 
 input ApproveRequestInput {
@@ -1500,7 +1500,7 @@ type Mutation {
   createJobRequirementAnswer(input: CreateJobRequirementAnswerInput!): JobRequirementAnswerDetailResponse!
   updateJobRequirementAnswer(input: UpdateJobRequirementAnswerInput!): JobRequirementAnswerDetailResponse!
   manageAmbassadorJobAssignment(input: ManageAmbassadorJobAssignmentInput!): AmbassadorJobDetailResponse!
-  applyAmbassadorEvent(eventId: ID!): ApplyAmbassadorEventResponse!
+  applyAmbassadorJob(jobId: ID!): ApplyAmbassadorJobResponse!
 }
 
 type MutationNormalOutput {
