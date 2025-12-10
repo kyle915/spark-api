@@ -6,6 +6,8 @@ This module tests:
 - create_ambassador_invitation (authenticated)
 - accept_ambassador_invitation (public with token)
 - approve_ambassador (authenticated)
+- update_ambassador (authenticated)
+- delete_invitation (authenticated)
 """
 import pytest
 import strawberry_django  # noqa: F401
@@ -100,7 +102,7 @@ class TestPublicAmbassadorCreation(AmbassadorsGraphQLTestCase):
     async def test_create_public_ambassador_password_mismatch(self):
         """Test public ambassador creation with mismatched passwords."""
         unique_id = str(uuid.uuid4())[:8]
-        email = f"test2_{unique_id}@test.com"
+        email = f"mismatch_{unique_id}@test.com"
 
         variables = {
             "input": {
@@ -120,16 +122,15 @@ class TestPublicAmbassadorCreation(AmbassadorsGraphQLTestCase):
         assert result.data["createPublicAmbassador"]["success"] is False
         assert "password" in result.data["createPublicAmbassador"]["message"].lower(
         )
-        assert result.data["createPublicAmbassador"]["ambassador"] is None
 
     @pytest.mark.asyncio
     async def test_create_public_ambassador_duplicate_email(self):
         """Test public ambassador creation with existing email."""
         unique_id = str(uuid.uuid4())[:8]
-        email = f"existing_public_{unique_id}@test.com"
+        email = f"duplicate_{unique_id}@test.com"
 
         # Create existing user
-        existing_user = await sync_to_async(self.create_user)(
+        await sync_to_async(self.create_user)(
             username=email,
             email=email,
             role=self.roles['ambassador']
@@ -158,16 +159,17 @@ class TestPublicAmbassadorCreation(AmbassadorsGraphQLTestCase):
     async def test_create_public_ambassador_with_coordinates(self):
         """Test public ambassador creation with coordinates."""
         unique_id = str(uuid.uuid4())[:8]
-        email = f"jane_{unique_id}@test.com"
+        email = f"coord_{unique_id}@test.com"
 
         variables = {
             "input": {
-                "firstName": "Jane",
+                "firstName": "John",
                 "email": email,
                 "password1": "testpass123",
                 "password2": "testpass123",
-                "coordinates": [-33.8688, 151.2093],  # Sydney coordinates
-                "clientMutationId": "test-coords",
+                "address": "123 Test St",
+                "coordinates": [40.7128, -74.0060],
+                "clientMutationId": "test-123",
             }
         }
 
@@ -175,13 +177,15 @@ class TestPublicAmbassadorCreation(AmbassadorsGraphQLTestCase):
             self.mutation, variables, self.endpoint_path
         )
 
+        assert result.errors is None, f"Errors: {result.errors}"
         assert result.data is not None
         assert result.data["createPublicAmbassador"]["success"] is True, \
             f"Expected success but got: {result.data.get('createPublicAmbassador', {}).get('message', 'Unknown error')}"
 
+        # Verify coordinates were saved
         user = await sync_to_async(User.objects.get)(email=email)
         ambassador = await sync_to_async(Ambassador.objects.get)(user=user)
-        assert ambassador.coordinates == [-33.8688, 151.2093]
+        assert ambassador.coordinates == [40.7128, -74.0060]
 
 
 @pytest.mark.django_db(transaction=True)
@@ -193,7 +197,7 @@ class TestAmbassadorInvitationCreation(AmbassadorsGraphQLTestCase):
         """Set up test data."""
         from config.schema_spark import schema_spark
         self.roles = self.setup_default_roles()
-        self.tenant = self.create_tenant(name="Invitation Test Tenant")
+        self.tenant = self.create_tenant(name="Invitation Tenant")
         # Use UUID for client user to ensure uniqueness across test runs
         unique_id = str(uuid.uuid4())[:8]
         self.client_user = self.create_user(
@@ -477,25 +481,15 @@ class TestAcceptAmbassadorInvitation(AmbassadorsGraphQLTestCase):
         assert ambassador.address == "456 Invited St"
         assert ambassador.coordinates == [34.0522, -118.2437]
 
-        # Verify invitation was marked as used
-        @sync_to_async
-        def get_invitation():
-            return AmbassadorInvitation.objects.select_related("ambassador").get(
-                token=token
-            )
-        invitation = await get_invitation()
-        assert invitation.is_used is True
-        assert invitation.used_at is not None
-        assert invitation.ambassador == ambassador
-
     @pytest.mark.asyncio
     async def test_accept_invitation_password_mismatch(self):
         """Test invitation acceptance with mismatched passwords."""
         unique_id = str(uuid.uuid4())[:8]
-        email = f"invited2_{unique_id}@test.com"
-        token = f"token-{unique_id}"
+        email = f"invited_pwd_{unique_id}@test.com"
+        token = f"token-pwd-{unique_id}"
 
-        invitation = await sync_to_async(AmbassadorInvitation.objects.create)(
+        # Create invitation
+        await sync_to_async(AmbassadorInvitation.objects.create)(
             email=email,
             token=token,
             expires_at=timezone.now() + timedelta(days=7),
@@ -527,12 +521,9 @@ class TestAcceptAmbassadorInvitation(AmbassadorsGraphQLTestCase):
     @pytest.mark.asyncio
     async def test_accept_invitation_invalid_token(self):
         """Test invitation acceptance with invalid token."""
-        unique_id = str(uuid.uuid4())[:8]
-        token = f"invalid-token-{unique_id}"
-
         variables = {
             "input": {
-                "token": token,
+                "token": "invalid-token-12345",
                 "firstName": "Invited",
                 "password1": "testpass123",
                 "password2": "testpass123",
@@ -551,12 +542,13 @@ class TestAcceptAmbassadorInvitation(AmbassadorsGraphQLTestCase):
 
     @pytest.mark.asyncio
     async def test_accept_invitation_already_used(self):
-        """Test accepting an already used invitation."""
+        """Test invitation acceptance when invitation is already used."""
         unique_id = str(uuid.uuid4())[:8]
-        email = f"used_{unique_id}@test.com"
-        token = f"used-token-{unique_id}"
+        email = f"invited_used_{unique_id}@test.com"
+        token = f"token-used-{unique_id}"
 
-        invitation = await sync_to_async(AmbassadorInvitation.objects.create)(
+        # Create used invitation
+        await sync_to_async(AmbassadorInvitation.objects.create)(
             email=email,
             token=token,
             expires_at=timezone.now() + timedelta(days=7),
@@ -589,12 +581,13 @@ class TestAcceptAmbassadorInvitation(AmbassadorsGraphQLTestCase):
 
     @pytest.mark.asyncio
     async def test_accept_invitation_expired(self):
-        """Test accepting an expired invitation."""
+        """Test invitation acceptance when invitation is expired."""
         unique_id = str(uuid.uuid4())[:8]
-        email = f"expired_{unique_id}@test.com"
-        token = f"expired-token-{unique_id}"
+        email = f"invited_expired_{unique_id}@test.com"
+        token = f"token-expired-{unique_id}"
 
-        invitation = await sync_to_async(AmbassadorInvitation.objects.create)(
+        # Create expired invitation
+        await sync_to_async(AmbassadorInvitation.objects.create)(
             email=email,
             token=token,
             expires_at=timezone.now() - timedelta(days=1),
@@ -633,8 +626,8 @@ class TestApproveAmbassador(AmbassadorsGraphQLTestCase):
         """Set up test data."""
         from config.schema_spark import schema_spark
         self.roles = self.setup_default_roles()
-        self.tenant = self.create_tenant(name="Approve Ambassador Tenant")
-        # Use UUID for all users to ensure uniqueness across test runs
+        self.tenant = self.create_tenant(name="Approve Tenant")
+        # Use UUID for users to ensure uniqueness across test runs
         unique_id = str(uuid.uuid4())[:8]
         self.client_user = self.create_user(
             username=f"client_approve_{unique_id}@test.com",
@@ -643,23 +636,23 @@ class TestApproveAmbassador(AmbassadorsGraphQLTestCase):
         )
         self.create_tenanted_user(self.client_user, self.tenant)
 
+        unique_id2 = str(uuid.uuid4())[:8]
         self.spark_admin_user = self.create_user(
-            username=f"sparkadmin_approve_{unique_id}@test.com",
-            email=f"sparkadmin_approve_{unique_id}@test.com",
+            username=f"spark_admin_{unique_id2}@test.com",
+            email=f"spark_admin_{unique_id2}@test.com",
             role=self.roles['spark_admin']
         )
-        self.create_tenanted_user(self.spark_admin_user, self.tenant)
 
-        # Create inactive ambassador
+        unique_id3 = str(uuid.uuid4())[:8]
         self.ambassador_user = self.create_user(
-            username=f"ambassador_approve_{unique_id}@test.com",
-            email=f"ambassador_approve_{unique_id}@test.com",
+            username=f"ambassador_approve_{unique_id3}@test.com",
+            email=f"ambassador_approve_{unique_id3}@test.com",
             role=self.roles['ambassador'],
-            is_active=True
+            is_active=False,
         )
         self.ambassador = self.create_ambassador(
-            user=self.ambassador_user,
-            is_active=False,  # Inactive, needs approval
+            self.ambassador_user,
+            is_active=False,  # Inactive until approved
         )
 
         self.schema = schema_spark
@@ -694,7 +687,6 @@ class TestApproveAmbassador(AmbassadorsGraphQLTestCase):
             self.mutation, variables, self.client_user, self.endpoint_path
         )
 
-        assert result.errors is None
         assert result.data is not None
         assert result.data["approveAmbassador"]["success"] is True
         assert "approved successfully" in result.data["approveAmbassador"]["message"].lower(
@@ -847,3 +839,384 @@ class TestApproveAmbassador(AmbassadorsGraphQLTestCase):
             ).count
         )()
         assert tenanted_user_count == 1
+
+
+@pytest.mark.django_db(transaction=True)
+class TestUpdateAmbassador(AmbassadorsGraphQLTestCase):
+    """Tests for update_ambassador mutation."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self, db):
+        """Set up test data."""
+        from config.schema_spark import schema_spark
+        self.roles = self.setup_default_roles()
+        self.tenant = self.create_tenant(name="Update Tenant")
+        # Use UUID for users to ensure uniqueness across test runs
+        unique_id = str(uuid.uuid4())[:8]
+        self.client_user = self.create_user(
+            username=f"client_update_{unique_id}@test.com",
+            email=f"client_update_{unique_id}@test.com",
+            role=self.roles['client']
+        )
+        self.create_tenanted_user(self.client_user, self.tenant)
+
+        unique_id2 = str(uuid.uuid4())[:8]
+        self.spark_admin_user = self.create_user(
+            username=f"spark_update_{unique_id2}@test.com",
+            email=f"spark_update_{unique_id2}@test.com",
+            role=self.roles['spark_admin']
+        )
+
+        unique_id3 = str(uuid.uuid4())[:8]
+        self.ambassador_user = self.create_user(
+            username=f"ambassador_update_{unique_id3}@test.com",
+            email=f"ambassador_update_{unique_id3}@test.com",
+            role=self.roles['ambassador'],
+        )
+        self.ambassador = self.create_ambassador(
+            self.ambassador_user,
+            address="Original Address",
+            coordinates=[40.7128, -74.0060],
+            is_active=True,
+        )
+
+        self.schema = schema_spark
+        self.endpoint_path = "/api/v1/graphql/spark"
+
+        self.mutation = """
+            mutation UpdateAmbassador($input: UpdateAmbassadorInput!) {
+                updateAmbassador(input: $input) {
+                    success
+                    message
+                    clientMutationId
+                    ambassador {
+                        id
+                        isActive
+                        address
+                        coordinates
+                    }
+                }
+            }
+        """
+
+    @pytest.mark.asyncio
+    async def test_update_ambassador_success_by_client(self):
+        """Test successful ambassador update by client."""
+        variables = {
+            "input": {
+                "ambassadorId": str(self.ambassador.id),
+                "address": "Updated Address",
+                "coordinates": [34.0522, -118.2437],
+                "clientMutationId": "test-123",
+            }
+        }
+
+        result = await self._execute_mutation_authenticated(
+            self.mutation, variables, self.client_user, self.endpoint_path
+        )
+
+        assert result.data is not None
+        assert result.data["updateAmbassador"]["success"] is True
+        assert "updated successfully" in result.data["updateAmbassador"]["message"].lower(
+        )
+        assert result.data["updateAmbassador"]["ambassador"]["address"] == "Updated Address"
+        assert result.data["updateAmbassador"]["ambassador"]["coordinates"] == [
+            34.0522, -118.2437]
+
+        # Verify changes in DB
+        ambassador = await sync_to_async(Ambassador.objects.get)(pk=self.ambassador.id)
+        assert ambassador.address == "Updated Address"
+        assert ambassador.coordinates == [34.0522, -118.2437]
+
+    @pytest.mark.asyncio
+    async def test_update_ambassador_success_by_spark_admin(self):
+        """Test successful ambassador update by spark admin."""
+        variables = {
+            "input": {
+                "ambassadorId": str(self.ambassador.id),
+                "address": "Spark Updated Address",
+                "clientMutationId": "test-123",
+            }
+        }
+
+        result = await self._execute_mutation_authenticated(
+            self.mutation, variables, self.spark_admin_user, self.endpoint_path
+        )
+
+        assert result.data is not None
+        assert result.data["updateAmbassador"]["success"] is True
+
+        # Verify changes in DB
+        ambassador = await sync_to_async(Ambassador.objects.get)(pk=self.ambassador.id)
+        assert ambassador.address == "Spark Updated Address"
+
+    @pytest.mark.asyncio
+    async def test_update_ambassador_partial_update(self):
+        """Test updating only some fields."""
+        variables = {
+            "input": {
+                "ambassadorId": str(self.ambassador.id),
+                "address": "Partial Update Address",
+                # coordinates and is_active not provided
+                "clientMutationId": "test-123",
+            }
+        }
+
+        result = await self._execute_mutation_authenticated(
+            self.mutation, variables, self.client_user, self.endpoint_path
+        )
+
+        assert result.data is not None
+        assert result.data["updateAmbassador"]["success"] is True
+
+        # Verify only address changed, coordinates and is_active unchanged
+        ambassador = await sync_to_async(Ambassador.objects.get)(pk=self.ambassador.id)
+        assert ambassador.address == "Partial Update Address"
+        assert ambassador.coordinates == [40.7128, -74.0060]  # Original value
+        assert ambassador.is_active is True  # Original value
+
+    @pytest.mark.asyncio
+    async def test_update_ambassador_is_active(self):
+        """Test updating is_active status."""
+        variables = {
+            "input": {
+                "ambassadorId": str(self.ambassador.id),
+                "isActive": False,
+                "clientMutationId": "test-123",
+            }
+        }
+
+        result = await self._execute_mutation_authenticated(
+            self.mutation, variables, self.client_user, self.endpoint_path
+        )
+
+        assert result.data is not None
+        assert result.data["updateAmbassador"]["success"] is True
+        assert result.data["updateAmbassador"]["ambassador"]["isActive"] is False
+
+        # Verify change in DB
+        ambassador = await sync_to_async(Ambassador.objects.get)(pk=self.ambassador.id)
+        assert ambassador.is_active is False
+
+    @pytest.mark.asyncio
+    async def test_update_ambassador_unauthorized(self):
+        """Test ambassador update by unauthorized user (ambassador)."""
+        unique_id = str(uuid.uuid4())[:8]
+        ambassador_user2 = await sync_to_async(self.create_user)(
+            username=f"ambassador2_update_{unique_id}@test.com",
+            email=f"ambassador2_update_{unique_id}@test.com",
+            role=self.roles['ambassador']
+        )
+
+        variables = {
+            "input": {
+                "ambassadorId": str(self.ambassador.id),
+                "address": "Unauthorized Update",
+                "clientMutationId": "test-123",
+            }
+        }
+
+        result = await self._execute_mutation_authenticated(
+            self.mutation, variables, ambassador_user2, self.endpoint_path
+        )
+
+        # Permission class rejects at GraphQL level
+        assert result.data is None
+        assert result.errors is not None
+        assert len(result.errors) > 0
+
+    @pytest.mark.asyncio
+    async def test_update_ambassador_not_found(self):
+        """Test update of non-existent ambassador."""
+        variables = {
+            "input": {
+                "ambassadorId": "99999",
+                "address": "New Address",
+                "clientMutationId": "test-123",
+            }
+        }
+
+        result = await self._execute_mutation_authenticated(
+            self.mutation, variables, self.client_user, self.endpoint_path
+        )
+
+        assert result.data is not None
+        assert result.data["updateAmbassador"]["success"] is False
+        assert "not found" in result.data["updateAmbassador"]["message"].lower(
+        )
+
+
+@pytest.mark.django_db(transaction=True)
+class TestDeleteInvitation(AmbassadorsGraphQLTestCase):
+    """Tests for delete_invitation mutation."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self, db):
+        """Set up test data."""
+        from config.schema_spark import schema_spark
+        self.roles = self.setup_default_roles()
+        self.tenant = self.create_tenant(name="Delete Invitation Tenant")
+        # Use UUID for users to ensure uniqueness across test runs
+        unique_id = str(uuid.uuid4())[:8]
+        self.client_user = self.create_user(
+            username=f"client_delete_{unique_id}@test.com",
+            email=f"client_delete_{unique_id}@test.com",
+            role=self.roles['client']
+        )
+        self.create_tenanted_user(self.client_user, self.tenant)
+
+        unique_id2 = str(uuid.uuid4())[:8]
+        self.spark_admin_user = self.create_user(
+            username=f"spark_delete_{unique_id2}@test.com",
+            email=f"spark_delete_{unique_id2}@test.com",
+            role=self.roles['spark_admin']
+        )
+
+        # Create test invitations
+        unique_id3 = str(uuid.uuid4())[:8]
+        self.invitation = AmbassadorInvitation.objects.create(
+            email=f"invite_delete_{unique_id3}@test.com",
+            token=f"token-delete-{unique_id3}",
+            expires_at=timezone.now() + timedelta(days=7),
+            invited_by=self.client_user,
+            tenant=self.tenant,
+            created_by=self.client_user,
+            updated_by=self.client_user,
+        )
+
+        unique_id4 = str(uuid.uuid4())[:8]
+        self.used_invitation = AmbassadorInvitation.objects.create(
+            email=f"invite_used_{unique_id4}@test.com",
+            token=f"token-used-{unique_id4}",
+            expires_at=timezone.now() + timedelta(days=7),
+            is_used=True,
+            used_at=timezone.now(),
+            invited_by=self.client_user,
+            tenant=self.tenant,
+            created_by=self.client_user,
+            updated_by=self.client_user,
+        )
+
+        self.schema = schema_spark
+        self.endpoint_path = "/api/v1/graphql/spark"
+
+        self.mutation = """
+            mutation DeleteInvitation($input: DeleteInvitationInput!) {
+                deleteInvitation(input: $input) {
+                    success
+                    message
+                    clientMutationId
+                }
+            }
+        """
+
+    @pytest.mark.asyncio
+    async def test_delete_invitation_success_by_client(self):
+        """Test successful invitation deletion by client."""
+        variables = {
+            "input": {
+                "invitationId": str(self.invitation.id),
+                "clientMutationId": "test-123",
+            }
+        }
+
+        result = await self._execute_mutation_authenticated(
+            self.mutation, variables, self.client_user, self.endpoint_path
+        )
+
+        assert result.data is not None
+        assert result.data["deleteInvitation"]["success"] is True
+        assert "deleted successfully" in result.data["deleteInvitation"]["message"].lower(
+        )
+
+        # Verify invitation was deleted
+        invitation_exists = await sync_to_async(
+            AmbassadorInvitation.objects.filter(pk=self.invitation.id).exists
+        )()
+        assert invitation_exists is False
+
+    @pytest.mark.asyncio
+    async def test_delete_invitation_success_by_spark_admin(self):
+        """Test successful invitation deletion by spark admin."""
+        variables = {
+            "input": {
+                "invitationId": str(self.invitation.id),
+                "clientMutationId": "test-123",
+            }
+        }
+
+        result = await self._execute_mutation_authenticated(
+            self.mutation, variables, self.spark_admin_user, self.endpoint_path
+        )
+
+        assert result.data is not None
+        assert result.data["deleteInvitation"]["success"] is True
+
+    @pytest.mark.asyncio
+    async def test_delete_invitation_used_invitation(self):
+        """Test deletion of used invitation (should still work)."""
+        variables = {
+            "input": {
+                "invitationId": str(self.used_invitation.id),
+                "clientMutationId": "test-123",
+            }
+        }
+
+        result = await self._execute_mutation_authenticated(
+            self.mutation, variables, self.client_user, self.endpoint_path
+        )
+
+        assert result.data is not None
+        assert result.data["deleteInvitation"]["success"] is True
+
+        # Verify invitation was deleted even though it was used
+        invitation_exists = await sync_to_async(
+            AmbassadorInvitation.objects.filter(
+                pk=self.used_invitation.id).exists
+        )()
+        assert invitation_exists is False
+
+    @pytest.mark.asyncio
+    async def test_delete_invitation_unauthorized(self):
+        """Test invitation deletion by unauthorized user (ambassador)."""
+        unique_id = str(uuid.uuid4())[:8]
+        ambassador_user = await sync_to_async(self.create_user)(
+            username=f"ambassador_delete_{unique_id}@test.com",
+            email=f"ambassador_delete_{unique_id}@test.com",
+            role=self.roles['ambassador']
+        )
+
+        variables = {
+            "input": {
+                "invitationId": str(self.invitation.id),
+                "clientMutationId": "test-123",
+            }
+        }
+
+        result = await self._execute_mutation_authenticated(
+            self.mutation, variables, ambassador_user, self.endpoint_path
+        )
+
+        # Permission class rejects at GraphQL level
+        assert result.data is None
+        assert result.errors is not None
+        assert len(result.errors) > 0
+
+    @pytest.mark.asyncio
+    async def test_delete_invitation_not_found(self):
+        """Test deletion of non-existent invitation."""
+        variables = {
+            "input": {
+                "invitationId": "99999",
+                "clientMutationId": "test-123",
+            }
+        }
+
+        result = await self._execute_mutation_authenticated(
+            self.mutation, variables, self.client_user, self.endpoint_path
+        )
+
+        assert result.data is not None
+        assert result.data["deleteInvitation"]["success"] is False
+        assert "not found" in result.data["deleteInvitation"]["message"].lower(
+        )

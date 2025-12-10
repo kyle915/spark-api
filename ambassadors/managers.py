@@ -32,6 +32,9 @@ class AmbassadorManager(BaseManager, models.Manager):
 
 
 class AmbassadorInvitationManager(BaseManager, models.Manager):
+    def by_id(self, id: int | str | strawberry.ID):
+        """Return by ID."""
+        return self.select_related("tenant", "invited_by").get(pk=int(id))
 
     def by_token(self, token: str):
         """Return ambassador invitation by token."""

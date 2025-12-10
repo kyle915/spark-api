@@ -108,7 +108,7 @@ class AmbassadorMutations:
     ) -> ApproveAmbassadorResponse:
         return await ApproveAmbassadorService.approve(input, info)
 
-    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
     async def update_ambassador(
         self,
         info: strawberry.Info,
@@ -116,7 +116,7 @@ class AmbassadorMutations:
     ) -> UpdateAmbassadorResponse:
         return await UpdateAmbassadorService.update(input, info)
 
-    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
     async def delete_invitation(
         self,
         info: strawberry.Info,
