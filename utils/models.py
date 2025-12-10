@@ -1,4 +1,5 @@
 from django.db import transaction
+from asgiref.sync import sync_to_async
 
 
 class WithDefaultAttribute:
@@ -24,3 +25,35 @@ class WithDefaultAttribute:
                     .exclude(pk=self.pk)
                     .update(is_default=False)
                 )
+
+
+class BaseManager:
+    """Base manager class."""
+
+    def _get(self, *args, **kwargs):
+        """Get the model."""
+        return sync_to_async(self.get)(*args, **kwargs)
+
+    def _filter(self, *args, **kwargs):
+        """Filter the model."""
+        return sync_to_async(self.filter)(*args, **kwargs)
+
+    def _exists(self, *args, **kwargs):
+        """Check if the model exists."""
+        return sync_to_async(self.exists)(*args, **kwargs)
+
+    def _create(self, *args, **kwargs):
+        """Create the model."""
+        return sync_to_async(self.create)(*args, **kwargs)
+
+
+class Asyncable:
+    """Make regular methods async."""
+
+    def _save(self, *args, **kwargs):
+        """Save the model."""
+        return sync_to_async(self.save)(*args, **kwargs)
+
+    def _delete(self):
+        """Delete the model."""
+        return sync_to_async(self.delete)()

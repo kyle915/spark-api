@@ -95,3 +95,18 @@ class ApproveAmbassadorResponse:
     message: str
     client_mutation_id: strawberry.ID | None = None
     ambassador: Ambassador | None = None
+
+
+@strawberry.type
+class UpdateAmbassadorResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    ambassador: Ambassador | None = None
+
+
+@strawberry.type
+class DeleteInvitationResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None

@@ -1,17 +1,20 @@
-"""Services for ambassador mutations."""
+"""Services for ambassador mutations and queries."""
 
 import strawberry
 from typing import Any
 from asgiref.sync import sync_to_async
 from django.contrib.auth import get_user_model
 from django.utils import timezone
-from datetime import timedelta
+from datetime import timedelta, datetime
 import secrets
+from django.db.models import Q
 
 from tenants.models import Role, Tenant, TenantedUser
 from gqlauth.core.utils import get_token
 from utils.utils import build_mutation_response
 from utils.graphql.inputs import SparkGraphQLInput
+from utils.graphql.mixins import SparkGraphQLMixin
+from utils.graphql.relay import CountableConnection
 
 from .models import Ambassador, AmbassadorInvitation
 from .types import (
@@ -19,6 +22,10 @@ from .types import (
     AmbassadorInvitationResponse,
     AcceptInvitationResponse,
     ApproveAmbassadorResponse,
+    UpdateAmbassadorResponse,
+    DeleteInvitationResponse,
+    AmbassadorInvitationType,
+    Ambassador as AmbassadorType,
 )
 from . import inputs
 from .constants import INVITATION_EXPIRY_DAYS
@@ -46,7 +53,126 @@ def validate_passwords_match(
     return None
 
 
-class PublicAmbassadorCreationService:
+class BaseAmbassadorService(SparkGraphQLMixin):
+    """Base service class for ambassador operations."""
+
+    @staticmethod
+    async def check_email_exists(email: str) -> bool:
+        """Check if a user with the given email exists."""
+        return await sync_to_async(User.objects.filter(email=email).exists)()
+
+    @staticmethod
+    async def check_active_invitation_exists(email: str) -> bool:
+        """
+        Check if an active invitation exists for the given email.
+
+        Args:
+            email: The email to check
+
+        Returns:
+            True if an active invitation exists, False otherwise
+        """
+        now = timezone.now()
+        return await sync_to_async(
+            AmbassadorInvitation.objects.filter(
+                email=email,
+                is_used=False,
+                expires_at__gt=now,
+            ).exists
+        )()
+
+    @staticmethod
+    async def mark_invitation_used(
+        invitation: AmbassadorInvitation,
+        ambassador: Ambassador,
+        used_by: User,
+    ) -> None:
+        """
+        Mark an invitation as used.
+
+        Args:
+            invitation: The invitation to mark as used
+            ambassador: The ambassador associated with the invitation
+            used_by: The user who used the invitation
+        """
+        @sync_to_async
+        def _mark_invitation_used():
+            invitation.is_used = True
+            invitation.used_at = timezone.now()
+            invitation.ambassador = ambassador
+            invitation.updated_by = used_by
+            invitation.save()
+        await _mark_invitation_used()
+
+    @staticmethod
+    async def create_ambassador_user(
+        first_name: str,
+        email: str,
+        role: Any,
+        password: str,
+        is_active: bool,
+    ) -> User:
+        """
+        Create a new user for an ambassador.
+
+        Args:
+            first_name: The user's first name
+            email: The user's email (used as username)
+            role: The user's role
+            password: The user's password
+            is_active: Whether the user is active
+
+        Returns:
+            The created user instance
+        """
+        @sync_to_async
+        def _create_ambassador_user():
+            user = User.objects.create(
+                first_name=first_name,
+                username=email,
+                email=email,
+                role=role,
+                is_active=is_active,
+            )
+            user.set_password(password)
+            user.save()
+            return user
+        return await _create_ambassador_user()
+
+    @staticmethod
+    async def assign_user_to_tenant(
+        user: User,
+        tenant: Tenant,
+        created_by: User,
+    ) -> TenantedUser | None:
+        """
+        Assign a user to a tenant if not already assigned.
+
+        Args:
+            user: The user to assign
+            tenant: The tenant to assign to
+            created_by: The user performing the action
+
+        Returns:
+            The created TenantedUser instance, or None if already exists
+        """
+        @sync_to_async
+        def _assign_user_to_tenant():
+            # Check if TenantedUser already exists
+            if TenantedUser.objects.filter(user=user, tenant=tenant).exists():
+                return None
+
+            return TenantedUser.objects.create(
+                user=user,
+                tenant=tenant,
+                is_active=True,
+                created_by=created_by,
+                updated_by=created_by,
+            )
+        return await _assign_user_to_tenant()
+
+
+class PublicAmbassadorCreationService(BaseAmbassadorService):
     """Service for public ambassador creation."""
 
     @classmethod
@@ -63,7 +189,7 @@ class PublicAmbassadorCreationService:
             return password_error
 
         # Validate email doesn't exist
-        if await sync_to_async(User.objects.filter(email=input.email).exists)():
+        if await cls.check_email_exists(input.email):
             return build_mutation_response(
                 PublicAmbassadorCreationResponse,
                 success=False,
@@ -76,34 +202,23 @@ class PublicAmbassadorCreationService:
 
         try:
             # Create user
-            @sync_to_async
-            def create_user():
-                user = User.objects.create(
-                    first_name=input.first_name,
-                    username=input.email,
-                    email=input.email,
-                    role=role,
-                    is_active=False,
-                )
-                user.set_password(input.password1)
-                user.save()
-                return user
-
-            user = await create_user()
+            user = await cls.create_ambassador_user(
+                first_name=input.first_name,
+                email=input.email,
+                role=role,
+                password=input.password1,
+                is_active=False,
+            )
 
             # Create ambassador (inactive by default)
-            @sync_to_async
-            def create_ambassador():
-                return Ambassador.objects.create(
-                    user=user,
-                    address=input.address,
-                    coordinates=input.coordinates or [],
-                    is_active=False,  # Requires manual approval
-                    created_by=user,
-                    updated_by=user,
-                )
-
-            ambassador = await create_ambassador()
+            ambassador = await Ambassador.objects._create(
+                user=user,
+                address=input.address,
+                coordinates=input.coordinates or [],
+                is_active=False,  # Requires manual approval
+                created_by=user,
+                updated_by=user,
+            )
 
             # Generate activation token
             activation_token = await sync_to_async(get_token)(user, "activation")
@@ -125,7 +240,7 @@ class PublicAmbassadorCreationService:
             )
 
 
-class AmbassadorInvitationService:
+class AmbassadorInvitationService(BaseAmbassadorService):
     """Service for creating ambassador invitations."""
 
     @classmethod
@@ -138,13 +253,7 @@ class AmbassadorInvitationService:
         user = info.context.request.user
 
         # Validate user doesn't exist
-        recipient: User | None = None
-        try:
-            recipient = await sync_to_async(User.objects.get)(email=input.email)
-        except User.DoesNotExist:
-            pass
-
-        if await sync_to_async(User.objects.filter(email=input.email).exists)():
+        if await cls.check_email_exists(input.email):
             return build_mutation_response(
                 AmbassadorInvitationResponse,
                 success=False,
@@ -153,15 +262,7 @@ class AmbassadorInvitationService:
             )
 
         # Validate no active invitation exists
-        now = timezone.now()
-        active_invitation_exists = await sync_to_async(
-            AmbassadorInvitation.objects.filter(
-                email=input.email,
-                is_used=False,
-                expires_at__gt=now,
-            ).exists
-        )()
-        if active_invitation_exists:
+        if await cls.check_active_invitation_exists(input.email):
             return build_mutation_response(
                 AmbassadorInvitationResponse,
                 success=False,
@@ -171,7 +272,7 @@ class AmbassadorInvitationService:
 
         try:
             # Get tenant
-            tenant = await sync_to_async(Tenant.objects.get)(pk=int(input.tenant_id))
+            tenant = await Tenant.objects._get(id=input.tenant_id)
         except (Tenant.DoesNotExist, ValueError, TypeError):
             return build_mutation_response(
                 AmbassadorInvitationResponse,
@@ -182,23 +283,20 @@ class AmbassadorInvitationService:
 
         try:
             # Generate secure token
+            now = timezone.now()
             token = secrets.token_urlsafe(32)
             expires_at = now + timedelta(days=INVITATION_EXPIRY_DAYS)
 
             # Create invitation
-            @sync_to_async
-            def create_invitation():
-                return AmbassadorInvitation.objects.create(
-                    email=input.email,
-                    token=token,
-                    expires_at=expires_at,
-                    invited_by=user,
-                    tenant=tenant,
-                    created_by=user,
-                    updated_by=user,
-                )
-
-            invitation = await create_invitation()
+            invitation = await AmbassadorInvitation.objects._create(
+                email=input.email,
+                token=token,
+                expires_at=expires_at,
+                invited_by=user,
+                tenant=tenant,
+                created_by=user,
+                updated_by=user,
+            )
 
             return build_mutation_response(
                 AmbassadorInvitationResponse,
@@ -216,7 +314,7 @@ class AmbassadorInvitationService:
             )
 
 
-class AcceptInvitationService:
+class AcceptInvitationService(BaseAmbassadorService):
     """Service for accepting ambassador invitations."""
 
     @classmethod
@@ -234,12 +332,7 @@ class AcceptInvitationService:
 
         # Get and validate invitation
         try:
-            @sync_to_async
-            def get_invitation():
-                return AmbassadorInvitation.objects.select_related("tenant", "invited_by").get(
-                    token=input.token
-                )
-            invitation = await get_invitation()
+            invitation = await AmbassadorInvitation.objects._by_token(input.token)
         except AmbassadorInvitation.DoesNotExist:
             return build_mutation_response(
                 AcceptInvitationResponse,
@@ -268,7 +361,7 @@ class AcceptInvitationService:
             )
 
         # Validate email doesn't already have user
-        if await sync_to_async(User.objects.filter(email=invitation.email).exists)():
+        if await cls.check_email_exists(invitation.email):
             return build_mutation_response(
                 AcceptInvitationResponse,
                 success=False,
@@ -281,58 +374,45 @@ class AcceptInvitationService:
 
         try:
             # Create user
-            @sync_to_async
-            def create_user():
-                user = User.objects.create(
-                    first_name=input.first_name,
-                    username=invitation.email,
-                    email=invitation.email,
-                    role=role,
-                    is_active=True,  # Active since invited
-                )
-                user.set_password(input.password1)
-                user.save()
-                return user
+            user = await cls.create_ambassador_user(
+                first_name=input.first_name,
+                email=invitation.email,
+                role=role,
+                password=input.password1,
+                is_active=True,
+            )
 
-            user = await create_user()
-
-            # Create TenantedUser
-            @sync_to_async
-            def create_tenanted_user():
-                return TenantedUser.objects.create(
-                    user=user,
-                    tenant=invitation.tenant,
-                    is_active=True,
-                    created_by=invitation.invited_by,
-                    updated_by=invitation.invited_by,
-                )
-
-            await create_tenanted_user()
+            # Assign to tenant
+            await cls.assign_user_to_tenant(
+                user=user,
+                tenant=invitation.tenant,
+                created_by=invitation.invited_by,
+            )
 
             # Create ambassador (active by default for invitations)
-            @sync_to_async
-            def create_ambassador():
-                return Ambassador.objects.create(
-                    user=user,
-                    address=input.address,
-                    coordinates=input.coordinates or [],
-                    is_active=True,  # Active since invited
-                    created_by=invitation.invited_by,
-                    updated_by=invitation.invited_by,
-                )
-
-            ambassador = await create_ambassador()
+            # ambassador = await cls.create_ambassador(
+            #     user=user,
+            #     address=input.address,
+            #     coordinates=input.coordinates,
+            #     is_active=True,  # Active since invited
+            #     created_by=invitation.invited_by,
+            #     updated_by=invitation.invited_by,
+            # )
+            ambassador = await Ambassador.objects._create(
+                user=user,
+                address=input.address,
+                coordinates=input.coordinates,
+                is_active=True,  # Active since invited
+                created_by=invitation.invited_by,
+                updated_by=invitation.invited_by,
+            )
 
             # Mark invitation as used
-            @sync_to_async
-            def mark_invitation_used():
-                invitation.is_used = True
-                invitation.used_at = now
-                invitation.ambassador = ambassador
-                invitation.updated_by = invitation.invited_by
-                invitation.save()
-
-            await mark_invitation_used()
+            await cls.mark_invitation_used(
+                invitation=invitation,
+                ambassador=ambassador,
+                used_by=invitation.invited_by,
+            )
 
             # Generate activation token
             activation_token = await sync_to_async(get_token)(user, "activation")
@@ -354,7 +434,7 @@ class AcceptInvitationService:
             )
 
 
-class ApproveAmbassadorService:
+class ApproveAmbassadorService(BaseAmbassadorService):
     """Service for approving ambassadors."""
 
     @classmethod
@@ -366,27 +446,8 @@ class ApproveAmbassadorService:
         """Approve an ambassador and optionally assign to tenant."""
         user = info.context.request.user
 
-        # Validate user has permission (client or spark-admin)
-        # Access role asynchronously to avoid sync DB calls
-        @sync_to_async
-        def get_role_slug():
-            return getattr(user.role, "slug", "").lower() if user.role else ""
-        role_slug = await get_role_slug()
-        if role_slug == "ambassador":
-            return build_mutation_response(
-                ApproveAmbassadorResponse,
-                success=False,
-                message="You do not have permission to approve ambassadors.",
-                input_obj=input,
-            )
-
         try:
-            @sync_to_async
-            def get_ambassador():
-                return Ambassador.objects.select_related("user").get(
-                    pk=int(input.ambassador_id)
-                )
-            ambassador = await get_ambassador()
+            ambassador = await Ambassador.objects._by_id(input.ambassador_id)
         except (Ambassador.DoesNotExist, ValueError, TypeError):
             return build_mutation_response(
                 ApproveAmbassadorResponse,
@@ -409,27 +470,13 @@ class ApproveAmbassadorService:
             # Assign to tenant if provided
             if input.tenant_id:
                 try:
-                    tenant = await sync_to_async(Tenant.objects.get)(pk=int(input.tenant_id))
+                    tenant = await Tenant.objects._get(id=input.tenant_id)
 
-                    # Check if TenantedUser already exists
-                    tenanted_user_exists = await sync_to_async(
-                        TenantedUser.objects.filter(
-                            user=ambassador.user, tenant=tenant
-                        ).exists
-                    )()
-
-                    if not tenanted_user_exists:
-                        @sync_to_async
-                        def create_tenanted_user():
-                            return TenantedUser.objects.create(
-                                user=ambassador.user,
-                                tenant=tenant,
-                                is_active=True,
-                                created_by=user,
-                                updated_by=user,
-                            )
-
-                        await create_tenanted_user()
+                    await cls.assign_user_to_tenant(
+                        user=ambassador.user,
+                        tenant=tenant,
+                        created_by=user,
+                    )
                 except (Tenant.DoesNotExist, ValueError, TypeError):
                     return build_mutation_response(
                         ApproveAmbassadorResponse,
@@ -452,3 +499,294 @@ class ApproveAmbassadorService:
                 message=f"Error approving ambassador: {str(e)}",
                 input_obj=input,
             )
+
+
+class UpdateAmbassadorService(BaseAmbassadorService):
+    """Service for updating ambassadors."""
+
+    @classmethod
+    async def update(
+        cls,
+        input: inputs.UpdateAmbassadorInput,
+        info: strawberry.Info,
+    ) -> UpdateAmbassadorResponse:
+        """Update an ambassador (client/spark-admin only)."""
+        user = info.context.request.user
+        try:
+            ambassador = await Ambassador.objects._by_id(input.ambassador_id)
+        except (Ambassador.DoesNotExist, ValueError, TypeError):
+            return build_mutation_response(
+                UpdateAmbassadorResponse,
+                success=False,
+                message="Ambassador not found.",
+                input_obj=input,
+            )
+
+        try:
+            # Update fields if provided
+            @sync_to_async
+            def update_ambassador():
+                if input.address is not None:
+                    ambassador.address = input.address
+                if input.coordinates is not None:
+                    ambassador.coordinates = input.coordinates
+                if input.is_active is not None:
+                    ambassador.is_active = input.is_active
+                ambassador.updated_by = user
+                ambassador.save()
+                return ambassador
+
+            ambassador = await update_ambassador()
+
+            return build_mutation_response(
+                UpdateAmbassadorResponse,
+                success=True,
+                message="Ambassador updated successfully.",
+                input_obj=input,
+                ambassador=ambassador,
+            )
+        except Exception as e:
+            return build_mutation_response(
+                UpdateAmbassadorResponse,
+                success=False,
+                message=f"Error updating ambassador: {str(e)}",
+                input_obj=input,
+            )
+
+
+class DeleteInvitationService(BaseAmbassadorService):
+    """Service for deleting invitations."""
+
+    @classmethod
+    async def delete(
+        cls,
+        input: inputs.DeleteInvitationInput,
+        info: strawberry.Info,
+    ) -> DeleteInvitationResponse:
+        """Delete an invitation (client/spark-admin only)."""
+        user = info.context.request.user
+
+        # Validate user has permission (client or spark-admin)
+        # No need to validate because we have IsClientOrSparkAdmin permission class
+
+        try:
+            invitation = await AmbassadorInvitation.objects._by_id(input.invitation_id)
+        except (AmbassadorInvitation.DoesNotExist, ValueError, TypeError):
+            return build_mutation_response(
+                DeleteInvitationResponse,
+                success=False,
+                message="Invitation not found.",
+                input_obj=input,
+            )
+
+        # Warn if invitation is used, but allow deletion
+        if invitation.is_used:
+            # Still allow deletion but log it
+            pass
+
+        try:
+            await invitation._delete()
+
+            return build_mutation_response(
+                DeleteInvitationResponse,
+                success=True,
+                message="Invitation deleted successfully.",
+                input_obj=input,
+            )
+        except Exception as e:
+            return build_mutation_response(
+                DeleteInvitationResponse,
+                success=False,
+                message=f"Error deleting invitation: {str(e)}",
+                input_obj=input,
+            )
+
+
+class AmbassadorInvitationQueriesService(SparkGraphQLMixin):
+    """Service for ambassador invitation queries."""
+
+    async def get_sent_invitations(
+        self,
+        info: strawberry.Info,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        filters: inputs.AmbassadorInvitationFiltersInput | None = None,
+    ) -> CountableConnection[AmbassadorInvitationType]:
+        """Get sent invitations for a tenant (client/spark-admin only)."""
+        user = await self.get_user(info)
+        is_spark_request = self.is_spark_schema_request(info, user=user)
+
+        # Resolve tenant
+        tenant_id: int | None = None
+        tenant_id_input = filters.tenant_id if filters else None
+        tenant_uuid_input = filters.tenant_uuid if filters else None
+
+        should_filter_by_tenant = (
+            not is_spark_request or tenant_id_input is not None or tenant_uuid_input is not None
+        )
+        if should_filter_by_tenant:
+            tenant = await self.get_user_tenant(
+                info,
+                tenant_id=tenant_id_input,
+                tenant_uuid=tenant_uuid_input,
+                user=user,
+            )
+            tenant_id = tenant.id
+
+        queryset = await self._get_filtered_invitations_queryset(tenant_id, filters)
+
+        from utils.graphql.relay import connection_from_queryset_async
+        return await connection_from_queryset_async(
+            queryset,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+            default_limit=10,
+            max_limit=50,
+        )
+
+    async def _get_filtered_invitations_queryset(
+        self,
+        tenant_id: int | None = None,
+        filters: inputs.AmbassadorInvitationFiltersInput | None = None,
+    ):
+        """Get filtered queryset for invitations."""
+        @sync_to_async
+        def get_queryset():
+            queryset = AmbassadorInvitation.objects.select_related(
+                "tenant", "invited_by")
+
+            # Filter by tenant
+            if tenant_id:
+                queryset = queryset.filter(tenant_id=tenant_id)
+
+            if filters:
+                # Filter by expired status
+                if filters.is_expired is not None:
+                    now = timezone.now()
+                    if filters.is_expired:
+                        queryset = queryset.filter(expires_at__lt=now)
+                    else:
+                        queryset = queryset.filter(expires_at__gte=now)
+
+                # Filter by used status
+                if filters.is_used is not None:
+                    queryset = queryset.filter(is_used=filters.is_used)
+
+                # Search by email
+                if filters.email:
+                    queryset = queryset.filter(email__icontains=filters.email)
+
+                # General search (email or invited_by name)
+                if filters.search:
+                    queryset = queryset.filter(
+                        Q(email__icontains=filters.search)
+                        | Q(invited_by__first_name__icontains=filters.search)
+                        | Q(invited_by__last_name__icontains=filters.search)
+                    )
+
+            return queryset.order_by("-created_at")
+
+        return await get_queryset()
+
+
+class AmbassadorQueriesService(SparkGraphQLMixin):
+    """Service for ambassador queries."""
+
+    async def get_available_ambassadors(
+        self,
+        info: strawberry.Info,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        filters: inputs.AmbassadorFiltersInput | None = None,
+    ) -> CountableConnection[AmbassadorType]:
+        """Get available ambassadors for a tenant (client/spark-admin only)."""
+        user = await self.get_user(info)
+        is_spark_request = self.is_spark_schema_request(info, user=user)
+
+        # Resolve tenant
+        tenant_id: int | None = None
+        tenant_id_input = filters.tenant_id if filters else None
+        tenant_uuid_input = filters.tenant_uuid if filters else None
+
+        should_filter_by_tenant = (
+            not is_spark_request or tenant_id_input is not None or tenant_uuid_input is not None
+        )
+        if should_filter_by_tenant:
+            tenant = await self.get_user_tenant(
+                info,
+                tenant_id=tenant_id_input,
+                tenant_uuid=tenant_uuid_input,
+                user=user,
+            )
+            tenant_id = tenant.id
+
+        queryset = await self._get_filtered_ambassadors_queryset(tenant_id, filters)
+
+        from utils.graphql.relay import connection_from_queryset_async
+        return await connection_from_queryset_async(
+            queryset,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+            default_limit=10,
+            max_limit=50,
+        )
+
+    async def _get_filtered_ambassadors_queryset(
+        self,
+        tenant_id: int | None = None,
+        filters: inputs.AmbassadorFiltersInput | None = None,
+    ):
+        """Get filtered queryset for ambassadors."""
+        @sync_to_async
+        def get_queryset():
+            queryset = Ambassador.objects.select_related("user")
+
+            # Filter by tenant via TenantedUser
+            if tenant_id:
+                queryset = queryset.filter(
+                    user__tenanted_users__tenant_id=tenant_id,
+                    user__tenanted_users__is_active=True,
+                ).distinct()
+
+            if filters:
+                # Filter by active status
+                if filters.is_active is not None:
+                    queryset = queryset.filter(is_active=filters.is_active)
+
+                # Search by user email
+                if filters.email:
+                    queryset = queryset.filter(
+                        user__email__icontains=filters.email)
+
+                # Search by user name
+                if filters.name:
+                    queryset = queryset.filter(
+                        Q(user__first_name__icontains=filters.name)
+                        | Q(user__last_name__icontains=filters.name)
+                    )
+
+                # Search by address
+                if filters.address:
+                    queryset = queryset.filter(
+                        address__icontains=filters.address)
+
+                # General search across email, name, and address
+                if filters.search:
+                    queryset = queryset.filter(
+                        Q(user__email__icontains=filters.search)
+                        | Q(user__first_name__icontains=filters.search)
+                        | Q(user__last_name__icontains=filters.search)
+                        | Q(address__icontains=filters.search)
+                    )
+
+            return queryset.order_by("-created_at")
+
+        return await get_queryset()

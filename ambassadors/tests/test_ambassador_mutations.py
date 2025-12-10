@@ -772,10 +772,12 @@ class TestApproveAmbassador(AmbassadorsGraphQLTestCase):
             self.mutation, variables, ambassador_user2, self.endpoint_path
         )
 
-        assert result.data is not None
-        assert result.data["approveAmbassador"]["success"] is False
-        assert "permission" in result.data["approveAmbassador"]["message"].lower(
-        )
+        # Permission class rejects at GraphQL level, so data is None and errors contain the rejection
+        assert result.data is None
+        assert result.errors is not None
+        assert len(result.errors) > 0
+        assert "permission" in str(result.errors[0].message).lower(
+        ) or "client or spark admin" in str(result.errors[0].message).lower()
 
     @pytest.mark.asyncio
     async def test_approve_ambassador_not_found(self):

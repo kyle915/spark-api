@@ -1,12 +1,12 @@
 import strawberry
 from asgiref.sync import sync_to_async
 from graphql import GraphQLError
-
 from django.db.models import QuerySet, Model
 
 from ambassadors import types
 from ambassadors import models
-from utils.graphql.permissions import StrictIsAuthenticated
+from ambassadors import inputs
+from utils.graphql.permissions import StrictIsAuthenticated, IsClientOrSparkAdmin
 from utils.graphql.mixins import SparkGraphQLMixin
 from utils.graphql.relay import (
     CountableConnection,
@@ -137,3 +137,52 @@ class FileTypeQueries:
             return file_type
         except GraphQLError:
             return None
+
+
+@strawberry.type
+class AmbassadorManagementQueries:
+    """Queries for managing ambassadors and invitations (client/spark-admin only)."""
+
+    @strawberry.field(permission_classes=[IsClientOrSparkAdmin])
+    async def sent_invitations(
+        self,
+        info: strawberry.Info,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        filters: inputs.AmbassadorInvitationFiltersInput | None = None,
+    ) -> CountableConnection[types.AmbassadorInvitationType]:
+        """Get sent invitations for a tenant (client/spark-admin only)."""
+        from .services import AmbassadorInvitationQueriesService
+        service = AmbassadorInvitationQueriesService()
+        return await service.get_sent_invitations(
+            info=info,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+            filters=filters,
+        )
+
+    @strawberry.field(permission_classes=[IsClientOrSparkAdmin])
+    async def available_ambassadors(
+        self,
+        info: strawberry.Info,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        filters: inputs.AmbassadorFiltersInput | None = None,
+    ) -> CountableConnection[types.Ambassador]:
+        """Get available ambassadors for a tenant (client/spark-admin only)."""
+        from .services import AmbassadorQueriesService
+        service = AmbassadorQueriesService()
+        return await service.get_available_ambassadors(
+            info=info,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+            filters=filters,
+        )

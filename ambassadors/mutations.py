@@ -3,7 +3,7 @@ from strawberry import relay
 from strawberry.types import Info
 
 from events.models import Event
-from utils.graphql.permissions import StrictIsAuthenticated
+from utils.graphql.permissions import StrictIsAuthenticated, IsClientOrSparkAdmin
 
 from .models import Ambassador, AmbassadorEvent
 from .types import (
@@ -12,6 +12,8 @@ from .types import (
     AmbassadorInvitationResponse,
     AcceptInvitationResponse,
     ApproveAmbassadorResponse,
+    UpdateAmbassadorResponse,
+    DeleteInvitationResponse,
 )
 from . import inputs
 from .services import (
@@ -19,6 +21,8 @@ from .services import (
     AmbassadorInvitationService,
     AcceptInvitationService,
     ApproveAmbassadorService,
+    UpdateAmbassadorService,
+    DeleteInvitationService,
 )
 
 
@@ -96,10 +100,26 @@ class AmbassadorMutations:
     ) -> AcceptInvitationResponse:
         return await AcceptInvitationService.accept(input, info)
 
-    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
     async def approve_ambassador(
         self,
         info: strawberry.Info,
         input: inputs.ApproveAmbassadorInput,
     ) -> ApproveAmbassadorResponse:
         return await ApproveAmbassadorService.approve(input, info)
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def update_ambassador(
+        self,
+        info: strawberry.Info,
+        input: inputs.UpdateAmbassadorInput,
+    ) -> UpdateAmbassadorResponse:
+        return await UpdateAmbassadorService.update(input, info)
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def delete_invitation(
+        self,
+        info: strawberry.Info,
+        input: inputs.DeleteInvitationInput,
+    ) -> DeleteInvitationResponse:
+        return await DeleteInvitationService.delete(input, info)

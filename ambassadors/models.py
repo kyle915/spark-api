@@ -1,9 +1,13 @@
 from uuid6 import uuid7
+
 from django.db import models
 from django.conf import settings
+from django.contrib.postgres.fields import ArrayField
+
 from tenants.models import Tenant
 from events.models import Client, Event, Location
-from django.contrib.postgres.fields import ArrayField
+from ambassadors.managers import AmbassadorManager, AmbassadorInvitationManager
+from utils.models import Asyncable
 
 
 class FileType(models.Model):
@@ -29,7 +33,7 @@ class FileType(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
 
-class Ambassador(models.Model):
+class Ambassador(Asyncable, models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     rating = models.IntegerField(default=0)
@@ -64,6 +68,8 @@ class Ambassador(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
     updated_at = models.DateTimeField(auto_now=True)
 
+    objects = AmbassadorManager()
+
     class Meta:
         indexes = [
             models.Index(fields=['is_active']),
@@ -71,7 +77,7 @@ class Ambassador(models.Model):
         ]
 
 
-class AmbassadorInvitation(models.Model):
+class AmbassadorInvitation(Asyncable, models.Model):
     """Model to track ambassador invitations sent by clients or spark-admins."""
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
@@ -122,6 +128,8 @@ class AmbassadorInvitation(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
     updated_at = models.DateTimeField(auto_now=True)
+
+    objects = AmbassadorInvitationManager()
 
     class Meta:
         indexes = [
