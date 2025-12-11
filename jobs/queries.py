@@ -449,11 +449,9 @@ class JobQueries:
     ) -> CountableConnection[types.Job]:
         """Get all jobs."""
         service = JobQueriesService()
-        tenant = await service.get_user_tenant(
-            info, tenant_id=filters.tenant_id if filters else None
-        )
+        tenant_id = await service.resolve_tenant_id(info, filters)
         queryset = service.get_ordered_queryset(
-            tenant_id=tenant.id,
+            tenant_id=tenant_id,
             q=q,
         )
 
@@ -461,7 +459,7 @@ class JobQueries:
             queryset = queryset.filter(event_id=filters.event_id)
 
         return await service.get_connection(
-            tenant_id=tenant.id,
+            tenant_id=tenant_id,
             q=q,
             first=first,
             after=after,
@@ -477,8 +475,10 @@ class JobQueries:
         """Get a single job."""
         try:
             service = JobQueriesService()
-            tenant = await service.get_user_tenant(info)
-            return await service.get_record(id, tenant.id)
+            tenant_id = await service.resolve_tenant_id(info)
+            if tenant_id:
+                return await service.get_record(id, tenant_id)
+            return await service.get_record(id)
         except GraphQLError:
             return None
 
@@ -693,17 +693,15 @@ class AmbassadorJobQueries:
     ) -> CountableConnection[types.Job]:
         """Get all available jobs."""
         service = JobQueriesService()
-        tenant = await service.get_user_tenant(
-            info, tenant_id=filters.tenant_id if filters else None
-        )
+        tenant_id = await service.resolve_tenant_id(info, filters)
         queryset = service.get_ordered_queryset(
-            tenant_id=tenant.id, q=q, ordering=("start_date",))
+            tenant_id=tenant_id, q=q, ordering=("start_date",))
         queryset = queryset.filter(ongoing=True, closed=False, public=True)\
             .prefetch_related("job_requirements")
         if filters and filters.event_id:
             queryset = queryset.filter(event_id=filters.event_id)
         return await service.get_connection(
-            tenant_id=tenant.id,
+            tenant_id=tenant_id,
             first=first,
             after=after,
             last=last,

@@ -17,6 +17,12 @@ User = get_user_model()
 class SparkGraphQLMixin:
     """Mixin for Spark GraphQL operations."""
 
+    @staticmethod
+    def get_role_slug(user: User | None) -> str:
+        """Return normalized role slug for a user."""
+        role = getattr(user, "role", None)
+        return (getattr(role, "slug", None) or "").lower()
+
     def is_spark_schema_request(
         self,
         info: strawberry.Info,
@@ -131,6 +137,22 @@ class SparkGraphQLMixin:
             return await sync_to_async(Tenant.objects.get)(**filters)
         except Tenant.DoesNotExist:
             raise GraphQLError("Tenant not found.")
+
+    async def resolve_tenant_id(
+        self,
+        info: strawberry.Info,
+        filters: SparkGraphQLInput | None = None,
+    ) -> int | str | None:
+        """Resolve tenant id for queries; restrict only for client role."""
+        filters_tenant_id = getattr(filters, "tenant_id", None)
+        user = await self.get_user(info)
+        role_slug = self.get_role_slug(user)
+
+        if role_slug == "client":
+            tenant = await self.get_user_tenant(info, tenant_id=filters_tenant_id)
+            return tenant.id
+
+        return filters_tenant_id
 
 
 class BaseMutationService(SparkGraphQLMixin):
