@@ -1,6 +1,10 @@
-import strawberry_django
-import strawberry
 from typing import List
+
+import strawberry
+import strawberry_django
+
+from tenants.types import TenantType
+from utils.gcs import extract_blob_name_from_url, generate_download_url
 
 from . import models
 
@@ -308,8 +312,21 @@ class Event:
     created_at: str
     updated_at: str
     tenant_id: strawberry.ID
+    tenant: TenantType | None = None
     event_type: EventType | None = None
     status: EventStatus | None = None
+
+    @strawberry.field
+    def tenant_image(self) -> str | None:
+        """Return a signed URL for the tenant image if it exists."""
+        if not self.tenant or not self.tenant.image:
+            return None
+
+        blob_name = extract_blob_name_from_url(self.tenant.image.name)
+        if not blob_name:
+            return None
+
+        return generate_download_url(blob_name)
 
 
 @strawberry.type

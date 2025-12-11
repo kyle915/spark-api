@@ -3,13 +3,14 @@ from django.db import models
 from django.conf import settings
 from ambassadors.models import FileType
 from events.models import Event
+from jobs.models import Job
 
 
 class RecapFile(models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     name = models.CharField(max_length=100, null=False)
-    file = models.FileField(upload_to='recap_files/', null=True)
+    file = models.FileField(upload_to="recap_files/", null=True)
     approved = models.BooleanField(default=False)
 
     file_type = models.ForeignKey(
@@ -51,6 +52,13 @@ class Recap(models.Model):
         related_name="recaps",
     )
 
+    job = models.ForeignKey(
+        Job,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="recaps",
+    )
+
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
@@ -67,10 +75,11 @@ class Recap(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
     updated_at = models.DateTimeField(auto_now=True)
 
+
 class RecapRecapFile(models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
-    
+
     recap_file = models.ForeignKey(
         RecapFile,
         on_delete=models.RESTRICT,
