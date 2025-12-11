@@ -121,6 +121,28 @@ class RecapQueriesService(BaseRecapQueriesService):
         """Get the model for the service."""
         return models.Recap
 
+    def get_ambassador_queryset(
+        self,
+        *,
+        user,
+        event_id: int | None = None,
+        q: str | None = None,
+        ordering: tuple[str, ...] | None = None,
+    ) -> QuerySet:
+        """Return recaps linked to events assigned to the ambassador user."""
+        queryset = self.get_ordered_queryset(event_id=event_id, q=q, ordering=ordering)
+        return queryset.filter(
+            event__ambassadors_events__ambassador__user=user
+        ).distinct()
+
+    async def get_ambassador_record_by_uuid(self, *, user, uuid: str) -> Model:
+        """Return a single recap linked to the ambassador user by UUID."""
+        try:
+            queryset = self.get_ambassador_queryset(user=user)
+            return await sync_to_async(queryset.get)(uuid=uuid)
+        except self.get_model().DoesNotExist:
+            raise GraphQLError("Record not found.")
+
 
 @strawberry.type
 class RecapQueries:
@@ -139,7 +161,9 @@ class RecapQueries:
         service = RecapQueriesService()
         user = await service.get_user(info)
 
-        event_id: int | None = int(filters.event_id) if filters and filters.event_id else None
+        event_id: int | None = (
+            int(filters.event_id) if filters and filters.event_id else None
+        )
         queryset = service.get_ordered_queryset(event_id=event_id, q=q)
 
         return await service.get_connection(
@@ -161,6 +185,65 @@ class RecapQueries:
             service = RecapQueriesService()
             user = await service.get_user(info)
             recap = await service.get_record_by_uuid(str(uuid))
+            return recap
+        except GraphQLError:
+            return None
+
+@strawberry.type
+class RecapMobileQueries:
+    @strawberry.field(
+        permission_classes=[StrictIsAuthenticated],
+        description="Recaps scoped to the authenticated ambassador (mobile).",
+    )
+    async def recaps_mobile(
+        self,
+        info: strawberry.Info,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        q: str | None = None,
+        filters: RecapFiltersInput | None = None,
+    ) -> CountableConnection[types.Recap]:
+        """Get recaps for the logged ambassador using Relay pagination."""
+        service = RecapQueriesService()
+        user = await service.get_user(info)
+
+        event_id: int | None = (
+            int(filters.event_id) if filters and filters.event_id else None
+        )
+        queryset = service.get_ambassador_queryset(
+            user=user,
+            event_id=event_id,
+            q=q,
+        )
+
+        return await service.get_connection(
+            event_id=event_id,
+            q=q,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+            queryset=queryset,
+        )
+
+    @strawberry.field(
+        permission_classes=[StrictIsAuthenticated],
+        description="Single recap scoped to the authenticated ambassador (mobile).",
+    )
+    async def recap_mobile(
+        self,
+        info: strawberry.Info,
+        uuid: strawberry.ID,
+    ) -> types.Recap | None:
+        """Get a single recap for the logged ambassador by UUID."""
+        try:
+            service = RecapQueriesService()
+            user = await service.get_user(info)
+            recap = await service.get_ambassador_record_by_uuid(
+                user=user, uuid=str(uuid)
+            )
             return recap
         except GraphQLError:
             return None
