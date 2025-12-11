@@ -50,7 +50,7 @@ class TestAmbassadorsRegistration(BaseGraphQLTestCase):
         # Roles are created by the setup fixture
         # The transaction=True marker ensures proper transaction handling
         mutation = """
-        mutation RegisterAmbassador($input: BaseRegisterInput!) {
+        mutation RegisterAmbassador($input: AmbassadorRegisterInput!) {
             register(input: $input) {
                 success
                 message
@@ -66,6 +66,7 @@ class TestAmbassadorsRegistration(BaseGraphQLTestCase):
                 "email": "ambassador@test.com",
                 "password1": "testpass123",
                 "password2": "testpass123",
+                "role": "AMBASSADOR",
                 "clientMutationId": "test-123"
             }
         }
@@ -91,7 +92,7 @@ class TestAmbassadorsRegistration(BaseGraphQLTestCase):
     async def test_register_ambassador_password_mismatch(self):
         """Test ambassador registration with mismatched passwords."""
         mutation = """
-        mutation RegisterAmbassador($input: BaseRegisterInput!) {
+        mutation RegisterAmbassador($input: AmbassadorRegisterInput!) {
             register(input: $input) {
                 success
                 message
@@ -106,6 +107,7 @@ class TestAmbassadorsRegistration(BaseGraphQLTestCase):
                 "email": "ambassador2@test.com",
                 "password1": "testpass123",
                 "password2": "differentpass",
+                "role": "AMBASSADOR",
                 "clientMutationId": "test-123"
             }
         }
@@ -133,7 +135,7 @@ class TestAmbassadorsRegistration(BaseGraphQLTestCase):
         await create_existing_user()
 
         mutation = """
-        mutation RegisterAmbassador($input: BaseRegisterInput!) {
+        mutation RegisterAmbassador($input: AmbassadorRegisterInput!) {
             register(input: $input) {
                 success
                 message
@@ -148,6 +150,7 @@ class TestAmbassadorsRegistration(BaseGraphQLTestCase):
                 "email": "existing@test.com",
                 "password1": "testpass123",
                 "password2": "testpass123",
+                "role": "AMBASSADOR",
             }
         }
         result = await self._execute_mutation(
