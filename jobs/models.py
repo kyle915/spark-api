@@ -324,8 +324,8 @@ class Job(models.Model):
     description = models.TextField(null=True)
     code = models.CharField(max_length=100)
     address = models.CharField(max_length=255)
-    start_date = models.DateField(null=True, blank=True)
-    end_date = models.DateField(null=True, blank=True)
+    start_date = models.DateTimeField(null=True)
+    end_date = models.DateTimeField(null=True)
     public = models.BooleanField(default=False)
     closed = models.BooleanField(default=False)
     national = models.BooleanField(default=False)
@@ -531,6 +531,7 @@ class JobRequirementFile(models.Model):
 class AmbassadorJob(models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    recap_uploaded = models.BooleanField(default=False)
     appear_as_rfp = models.BooleanField(
         default=True
     )  # This bool is for record purposes that it was an invitation.

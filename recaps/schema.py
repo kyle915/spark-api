@@ -20,7 +20,7 @@ class RecapQueryClient(
 
 @strawberry.type
 class RecapQueryMobile(
-    queries.RecapQueries,
+    queries.RecapMobileQueries,
 ):
     pass
 
