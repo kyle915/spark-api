@@ -184,6 +184,8 @@ class BaseMutationService(SparkGraphQLMixin):
         # set the parameters
         params: dict[str, Any] = self.input.to_dict(["tenant_id", "id"])
         for key, value in params.items():
+            if not hasattr(model, key):
+                continue
             setattr(model, key, value)
 
         # set the tenant id
@@ -1061,6 +1063,98 @@ class RequestMutationService(BaseMutationService):
         return models.Request
 
 
+class RequestStoreManagerMutationService(BaseMutationService):
+    """Service for request store manager mutations."""
+
+    _request: models.Request | None = None
+    _manager: models.RequestStoreManager | None = None
+
+    def get_model(self) -> Model:
+        """Get the model for the service."""
+        return models.RequestStoreManager
+
+    async def _get_manager(self) -> models.RequestStoreManager | None:
+        """Fetch the store manager if an id was provided."""
+        if self._manager:
+            return self._manager
+        manager_id = getattr(self.input, "id", None)
+        if not manager_id:
+            return None
+        try:
+            self._manager = await sync_to_async(
+                models.RequestStoreManager.objects.select_related("request").get
+            )(id=manager_id)
+            return self._manager
+        except models.RequestStoreManager.DoesNotExist:
+            raise GraphQLError("Request store manager not found.")
+
+    async def _get_request(self) -> models.Request:
+        """Resolve the request linked to the manager."""
+        if self._request:
+            return self._request
+
+        request_id = getattr(self.input, "request_id", None)
+        if request_id:
+            try:
+                request = await sync_to_async(models.Request.objects.get)(
+                    id=request_id
+                )
+            except models.Request.DoesNotExist:
+                raise GraphQLError("Request not found.")
+        else:
+            manager = await self._get_manager()
+            if not manager:
+                raise GraphQLError("Request ID is required.")
+            request = manager.request
+            setattr(self.input, "request_id", manager.request_id)
+
+        self._request = request
+        return request
+
+    async def set_user_and_tenant(self, info: strawberry.Info) -> "BaseMutationService":
+        """Set user/tenant using the related request instead of tenant_id input."""
+        self.info = info
+        self.user = await self.get_user(info)
+        self.is_spark_schema = self.is_spark_schema_request(info, user=self.user)
+        request = await self._get_request()
+        self.tenant_id = request.tenant_id
+        return self
+
+    async def _ensure_tenant_access(self, tenant_id: int) -> bool:
+        """Validate that the user can operate on the request's tenant."""
+        role = getattr(self.user, "role", None)
+        is_spark_admin = await role.is_spark_admin if role else False
+        if self.is_spark_schema or is_spark_admin:
+            return True
+
+        try:
+            await sync_to_async(self.user.get_tenant)(tenant_id=tenant_id)
+        except Exception:
+            raise GraphQLError(
+                "You are not authorized to manage store managers for this tenant."
+            )
+        return False
+
+    async def validations(self):
+        """Validate request existence and tenant membership."""
+        await super().validations()
+        await self._get_manager()
+        request = await self._get_request()
+        self.tenant_id = request.tenant_id
+        is_admin = await self._ensure_tenant_access(request.tenant_id)
+
+        manager = await self._get_manager()
+        if (
+            manager
+            and manager.tenant_id
+            and manager.tenant_id != request.tenant_id
+            and not is_admin
+        ):
+            raise GraphQLError(
+                "You cannot move store managers to a different tenant."
+            )
+
+
 @strawberry.type
 class PublicRequestMutations:
     @relay.mutation
@@ -1167,7 +1261,7 @@ class RequestMutations:
         """Create a new request as an authenticated user."""
         try:
             request: models.Request = (
-                await RequestMutationService.process_create_or_update(
+                await RequestWithDependenciesMutationService.process_create_or_update(
                     input=input, info=info
                 )
             )
@@ -1342,4 +1436,122 @@ class RequestMutations:
                 success=False,
                 message=str(e),
                 input_obj=input,
+            )
+
+
+@strawberry.type
+class RequestStoreManagerMutations:
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def create_request_store_manager(
+        self,
+        info: strawberry.Info,
+        input: inputs.CreateRequestStoreManagerInput,
+    ) -> types.RequestStoreManagerDetailResponse:
+        """Create a new request store manager."""
+        service = RequestStoreManagerMutationService.with_input(input)
+        try:
+            await service.set_user_and_tenant(info)
+            manager: models.RequestStoreManager = await service.save()
+            return build_mutation_response(
+                types.RequestStoreManagerDetailResponse,
+                success=True,
+                message="Request store manager created successfully.",
+                input_obj=input,
+                request_store_manager=manager,
+            )
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.RequestStoreManagerDetailResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def update_request_store_manager(
+        self,
+        info: strawberry.Info,
+        input: inputs.UpdateRequestStoreManagerInput,
+    ) -> types.RequestStoreManagerDetailResponse:
+        """Update an existing request store manager."""
+        service = RequestStoreManagerMutationService.with_input(input)
+        try:
+            await service.set_user_and_tenant(info)
+            manager: models.RequestStoreManager = await service.save()
+            return build_mutation_response(
+                types.RequestStoreManagerDetailResponse,
+                success=True,
+                message="Request store manager updated successfully.",
+                input_obj=input,
+                request_store_manager=manager,
+            )
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.RequestStoreManagerDetailResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
+
+@strawberry.type
+class TimeZoneMutations:
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def create_timezone(
+        self, info: strawberry.Info, input: inputs.CreateTimeZoneInput
+    ) -> types.TimeZoneResponse:
+        """Create a new timezone."""
+        service = EventMutationService()
+        user = await service.get_user(info)
+
+        try:
+            timezone = await sync_to_async(models.TimeZone.objects.create)(
+                name=input.name,
+                code=input.code,
+                offset=input.offset,
+                created_by=user,
+            )
+            return types.TimeZoneResponse(
+                success=True,
+                message="Timezone created successfully.",
+                timezone=timezone,
+            )
+        except Exception as e:
+            return types.TimeZoneResponse(
+                success=False,
+                message=f"Error creating timezone: {str(e)}",
+            )
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def update_timezone(
+        self, info: strawberry.Info, input: inputs.UpdateTimeZoneInput
+    ) -> types.TimeZoneResponse:
+        """Update an existing timezone."""
+        service = EventMutationService()
+        user = await service.get_user(info)
+
+        try:
+            timezone = await sync_to_async(models.TimeZone.objects.get)(id=input.id)
+            
+            timezone.name = input.name
+            timezone.code = input.code
+            timezone.offset = input.offset
+            timezone.updated_by = user
+            
+            await sync_to_async(timezone.save)()
+
+            return types.TimeZoneResponse(
+                success=True,
+                message="Timezone updated successfully.",
+                timezone=timezone,
+            )
+        except models.TimeZone.DoesNotExist:
+             return types.TimeZoneResponse(
+                success=False,
+                message="Timezone not found.",
+            )
+        except Exception as e:
+            return types.TimeZoneResponse(
+                success=False,
+                message=f"Error updating timezone: {str(e)}",
             )

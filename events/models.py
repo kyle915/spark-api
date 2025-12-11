@@ -12,6 +12,28 @@ from .managers import (
 )
 from utils.models import WithDefaultAttribute
 
+class TimeZone(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    name = models.CharField(max_length=50)
+    code = models.CharField(max_length=10)
+    offset = models.IntegerField()
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="timezone_created_by",
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="timezone_updated_by",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
 
 class Location(models.Model):
     id = models.BigAutoField(primary_key=True)
@@ -235,6 +257,7 @@ class RequestStatus(WithDefaultAttribute, models.Model):
     def save(self, *args, **kwargs):
         if not self.slug:
             from django.utils.text import slugify
+
             self.slug = slugify(self.name)
 
         with transaction.atomic():
@@ -264,22 +287,42 @@ class Request(models.Model):
         default=list,
     )
 
+    client_name = models.CharField(max_length=50, null=True)
+    client_email = models.CharField(max_length=254, null=True)
+
+    distributor_name = models.CharField(max_length=50, null=True)
+    distributor_email = models.CharField(max_length=254, null=True)
+
+    retailer_name = models.CharField(max_length=50, null=True)
+    retailer_address = models.CharField(max_length=100, null=True)
+    retailer_store_contact = models.CharField(max_length=50, null=True)
+
+    store_manager_name = models.CharField(max_length=50, null=True)
+    store_manager_phone = models.CharField(max_length=20, null=True)
+
+    timezone = models.ForeignKey(
+        TimeZone, 
+        on_delete=models.RESTRICT, 
+        null=True, 
+        related_name="requests"
+    )
+
     client = models.ForeignKey(
         Client,
         on_delete=models.RESTRICT,
-        null=False,
+        null=True,
         related_name="requests",
     )
     distributor = models.ForeignKey(
         Distributor,
         on_delete=models.RESTRICT,
-        null=False,
+        null=True,
         related_name="requests",
     )
     retailer = models.ForeignKey(
         Retailer,
         on_delete=models.RESTRICT,
-        null=False,
+        null=True,
         related_name="requests",
     )
     request_type = models.ForeignKey(
@@ -465,6 +508,7 @@ class EventStatus(WithDefaultAttribute, models.Model):
     def save(self, *args, **kwargs):
         if not self.slug:
             from django.utils.text import slugify
+
             self.slug = slugify(self.name)
         super().save(*args, **kwargs)
 
@@ -505,6 +549,11 @@ class Event(models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     name = models.CharField(max_length=50)
+    coordinates = ArrayField(
+        models.FloatField(),
+        size=2,
+        null=True,
+    )
 
     tenant = models.ForeignKey(
         Tenant,

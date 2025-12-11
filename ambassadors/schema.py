@@ -1,11 +1,12 @@
 import strawberry
 
-from ambassadors import queries
+from ambassadors import queries, mutations
 
 
 @strawberry.type
 class AmbassadorQuerySpark(
     queries.FileTypeQueries,
+    queries.AmbassadorEventQueries,
 ):
     pass
 
@@ -13,5 +14,28 @@ class AmbassadorQuerySpark(
 @strawberry.type
 class AmbassadorQueryClient(
     queries.FileTypeQueries,
+    queries.AmbassadorEventQueries,
+):
+    pass
+
+
+@strawberry.type
+class AmbassadorQueryMobile(
+    queries.FileTypeQueries,
+    queries.AmbassadorEventQueries,
+):
+    pass
+
+
+@strawberry.type
+class AmbassadorMutations(
+    mutations.AmbassadorMutations,
+):
+    pass
+
+
+@strawberry.type
+class AmbassadorMutationsMobile(
+    mutations.AmbassadorMutations,
 ):
     pass

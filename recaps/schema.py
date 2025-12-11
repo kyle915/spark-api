@@ -19,6 +19,13 @@ class RecapQueryClient(
 
 
 @strawberry.type
+class RecapQueryMobile(
+    queries.RecapQueries,
+):
+    pass
+
+
+@strawberry.type
 class RecapMutationsSpark(
     RecapMutations,
 ):
@@ -27,6 +34,13 @@ class RecapMutationsSpark(
 
 @strawberry.type
 class RecapMutationsClient(
+    RecapMutations,
+):
+    pass
+
+
+@strawberry.type
+class RecapMutationsMobile(
     RecapMutations,
 ):
     pass

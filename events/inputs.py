@@ -46,6 +46,12 @@ class EventFiltersInput(BaseTenantInput):
 
 
 @strawberry.input
+class AmbassadorEventFiltersInput:
+    start_date: str | None = None
+    end_date: str | None = None
+
+
+@strawberry.input
 class RequestFiltersInput(BaseTenantInput):
     tenant_uuid: strawberry.ID | None = None
     status_id: strawberry.ID | None = None
@@ -53,6 +59,11 @@ class RequestFiltersInput(BaseTenantInput):
     retailer_id: strawberry.ID | None = None
     distributor_id: strawberry.ID | None = None
     date: str | None = None
+
+
+@strawberry.input
+class RequestStoreManagerFiltersInput(BaseTenantInput):
+    tenant_uuid: strawberry.ID | None = None
 
 
 @strawberry.input
@@ -108,6 +119,7 @@ class CreateEventInput(BaseNameableInput):
     address: str
     notes: str
     is_national: bool = False
+    coordinates: List[float] | None = None
     start_time: str
     end_time: str
 
@@ -229,24 +241,6 @@ class UpdateRequestTypeInput(CreateRequestTypeInput):
 
 
 @strawberry.input
-class CreateRequestInput(BaseNameableInput):
-    date: str
-    start_time: str
-    end_time: str
-    address: str
-    coordinates: List[float]
-    client_id: strawberry.ID
-    distributor_id: strawberry.ID
-    retailer_id: strawberry.ID
-    request_type_id: strawberry.ID
-
-
-@strawberry.input
-class UpdateRequestInput(CreateRequestInput):
-    id: strawberry.ID
-
-
-@strawberry.input
 class ApproveRequestInput(SparkGraphQLInput):
     id: strawberry.ID
 
@@ -268,15 +262,85 @@ class CreateRequestProductInput(SparkGraphQLInput):
 
 
 @strawberry.input
+class CreateRequestInput(BaseNameableInput):
+    date: str
+    start_time: str
+    end_time: str
+    address: str
+    coordinates: List[float]
+    timezone_id: strawberry.ID
+    request_type_id: strawberry.ID
+    client_name: str
+    client_email: str
+    distributor_name: str
+    distributor_email: str
+    retailer_name: str
+    retailer_address: str
+    retailer_store_contact: str
+    store_manager_name: str
+    store_manager_phone: str
+    details: List[CreateRequestDetailInput]
+    products: List[CreateRequestProductInput]
+
+
+@strawberry.input
+class UpdateRequestInput(BaseNameableInput):
+    id: strawberry.ID
+    date: str
+    start_time: str
+    end_time: str
+    address: str
+    coordinates: List[float]
+    timezone_id: strawberry.ID
+    request_type_id: strawberry.ID
+    distributor_id: strawberry.ID
+    retailer_id: strawberry.ID
+    store_manager_name: str
+    store_manager_phone: str
+    details: List[CreateRequestDetailInput]
+    products: List[CreateRequestProductInput]
+
+
+@strawberry.input
 class CreateRequestWithDependenciesInput(BaseNameableInput):
     date: str
     start_time: str
     end_time: str
     address: str
     coordinates: List[float]
-    client_id: strawberry.ID
-    distributor_id: strawberry.ID
-    retailer_id: strawberry.ID
+    timezone_id: strawberry.ID
     request_type_id: strawberry.ID
+    client_name: str
+    client_email: str
+    distributor_name: str
+    distributor_email: str
+    retailer_name: str
+    retailer_address: str
+    retailer_store_contact: str
+    store_manager_name: str
+    store_manager_phone: str
     details: List[CreateRequestDetailInput]
     products: List[CreateRequestProductInput]
+
+
+@strawberry.input
+class CreateRequestStoreManagerInput(BaseTenantInput):
+    name: str
+    phone: str
+    request_id: strawberry.ID
+
+
+@strawberry.input
+class UpdateRequestStoreManagerInput(CreateRequestStoreManagerInput):
+    id: strawberry.ID
+
+
+@strawberry.input
+class CreateTimeZoneInput(BaseNameableInput):
+    code: str
+    offset: int
+
+
+@strawberry.input
+class UpdateTimeZoneInput(CreateTimeZoneInput):
+    id: strawberry.ID

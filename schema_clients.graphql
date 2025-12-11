@@ -571,10 +571,19 @@ input CreateRequestInput {
   endTime: String!
   address: String!
   coordinates: [Float!]!
-  clientId: ID!
-  distributorId: ID!
-  retailerId: ID!
+  timezoneId: ID!
   requestTypeId: ID!
+  clientName: String!
+  clientEmail: String!
+  distributorName: String!
+  distributorEmail: String!
+  retailerName: String!
+  retailerAddress: String!
+  retailerStoreContact: String!
+  storeManagerName: String!
+  storeManagerPhone: String!
+  details: [CreateRequestDetailInput!]!
+  products: [CreateRequestProductInput!]!
 }
 
 input CreateRequestProductInput {
@@ -588,6 +597,14 @@ input CreateRequestStatusInput {
   name: String!
   createEvent: Boolean! = false
   isDefault: Boolean! = false
+}
+
+input CreateRequestStoreManagerInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  name: String!
+  phone: String!
+  requestId: ID!
 }
 
 input CreateRequestTypeInput {
@@ -605,10 +622,17 @@ input CreateRequestWithDependenciesInput {
   endTime: String!
   address: String!
   coordinates: [Float!]!
-  clientId: ID!
-  distributorId: ID!
-  retailerId: ID!
+  timezoneId: ID!
   requestTypeId: ID!
+  clientName: String!
+  clientEmail: String!
+  distributorName: String!
+  distributorEmail: String!
+  retailerName: String!
+  retailerAddress: String!
+  retailerStoreContact: String!
+  storeManagerName: String!
+  storeManagerPhone: String!
   details: [CreateRequestDetailInput!]!
   products: [CreateRequestProductInput!]!
 }
@@ -634,6 +658,14 @@ input CreateStatusInput {
   clientMutationId: ID = null
   tenantId: ID = null
   name: String!
+}
+
+input CreateTimeZoneInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  name: String!
+  code: String!
+  offset: Int!
 }
 
 """
@@ -1366,6 +1398,10 @@ type Mutation {
   updateRequest(input: UpdateRequestInput!): RequestDetailResponse!
   approveRequest(input: ApproveRequestInput!): ApproveRequestResponse!
   declineRequest(input: DeclineRequestInput!): DeclineRequestResponse!
+  createRequestStoreManager(input: CreateRequestStoreManagerInput!): RequestStoreManagerDetailResponse!
+  updateRequestStoreManager(input: UpdateRequestStoreManagerInput!): RequestStoreManagerDetailResponse!
+  createTimezone(input: CreateTimeZoneInput!): TimeZoneResponse!
+  updateTimezone(input: UpdateTimeZoneInput!): TimeZoneResponse!
   createRecap(input: CreateRecapInput!): RecapDetailResponse!
   updateRecap(input: UpdateRecapInput!): RecapDetailResponse!
   deleteRecap(input: DeleteRecapInput!): RecapDetailResponse!
@@ -1619,8 +1655,12 @@ type Query {
   requestStatus(id: ID!): RequestStatus
   requests(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: RequestFiltersInput = null): RequestCountableConnection!
   request(uuid: ID!): Request
+  requestStoreManagers(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: RequestStoreManagerFiltersInput = null): RequestStoreManagerCountableConnection!
+  requestStoreManager(id: ID!): RequestStoreManager
   locations(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: LocationFiltersInput = null): LocationCountableConnection!
   location(id: ID!): Location
+  timezones(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): TimeZoneCountableConnection!
+  publicTimezones(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): TimeZoneCountableConnection!
   recaps(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: RecapFiltersInput = null): RecapCountableConnection!
   recap(uuid: ID!): Recap
   fileTypes(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): FileTypeCountableConnection!
@@ -1908,7 +1948,7 @@ type RegisterResponse {
 }
 
 """
-Request(id, uuid, name, date, start_time, end_time, address, coordinates, client, distributor, retailer, request_type, status, tenant, created_by, updated_by, created_at, updated_at)
+Request(id, uuid, name, date, start_time, end_time, address, coordinates, client_name, client_email, distributor_name, distributor_email, retailer_name, retailer_address, retailer_store_contact, store_manager_name, store_manager_phone, timezone, client, distributor, retailer, request_type, status, tenant, created_by, updated_by, created_at, updated_at)
 """
 type Request {
   id: ID!
@@ -1919,6 +1959,16 @@ type Request {
   endTime: String
   address: String!
   coordinates: [Float!]!
+  clientName: String
+  clientEmail: String
+  distributorName: String
+  distributorEmail: String
+  retailerName: String
+  retailerAddress: String
+  retailerStoreContact: String
+  storeManagerName: String
+  storeManagerPhone: String
+  timezone: TimeZone
   client: Client
   distributor: Distributor
   retailer: Retailer
@@ -2026,9 +2076,37 @@ type RequestStoreManager {
   name: String!
   phone: String!
   requestId: ID!
+  request: Request
   tenantId: ID
   createdAt: String!
   updatedAt: String!
+}
+
+type RequestStoreManagerCountableConnection {
+  pageInfo: PageInfo!
+  edges: [RequestStoreManagerCountableEdge!]!
+  totalCount: Int!
+}
+
+type RequestStoreManagerCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: RequestStoreManager!
+}
+
+type RequestStoreManagerDetailResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  requestStoreManager: RequestStoreManager
+}
+
+input RequestStoreManagerFiltersInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  tenantUuid: ID = null
 }
 
 type RequestTimeSeries {
@@ -2245,6 +2323,40 @@ type TimeSeriesDataPoint {
   timestamp: String!
   count: Int!
   value: Float
+}
+
+"""
+TimeZone(id, uuid, name, code, offset, created_by, updated_by, created_at, updated_at)
+"""
+type TimeZone {
+  id: ID!
+  uuid: String!
+  name: String!
+  code: String!
+  offset: Int!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type TimeZoneCountableConnection {
+  pageInfo: PageInfo!
+  edges: [TimeZoneCountableEdge!]!
+  totalCount: Int!
+}
+
+type TimeZoneCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: TimeZone!
+}
+
+type TimeZoneResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  timezone: TimeZone
 }
 
 "\nthe data that was used to create the token.\n"
@@ -2523,16 +2635,21 @@ input UpdateRequestInput {
   clientMutationId: ID = null
   tenantId: ID = null
   name: String!
+  id: ID!
   date: String!
   startTime: String!
   endTime: String!
   address: String!
   coordinates: [Float!]!
+  timezoneId: ID!
+  requestTypeId: ID!
   clientId: ID!
   distributorId: ID!
   retailerId: ID!
-  requestTypeId: ID!
-  id: ID!
+  storeManagerName: String!
+  storeManagerPhone: String!
+  details: [CreateRequestDetailInput!]!
+  products: [CreateRequestProductInput!]!
 }
 
 input UpdateRequestStatusInput {
@@ -2541,6 +2658,15 @@ input UpdateRequestStatusInput {
   name: String!
   createEvent: Boolean! = false
   isDefault: Boolean! = false
+  id: ID!
+}
+
+input UpdateRequestStoreManagerInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  name: String!
+  phone: String!
+  requestId: ID!
   id: ID!
 }
 
@@ -2574,6 +2700,15 @@ input UpdateStatusInput {
   clientMutationId: ID = null
   tenantId: ID = null
   name: String!
+  id: ID!
+}
+
+input UpdateTimeZoneInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  name: String!
+  code: String!
+  offset: Int!
   id: ID!
 }
 

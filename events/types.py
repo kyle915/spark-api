@@ -24,6 +24,25 @@ class EventTypeDetailResponse:
     event_type: EventType | None = None
 
 
+@strawberry_django.type(models.TimeZone)
+class TimeZone:
+    id: strawberry.ID
+    uuid: str
+    name: str
+    code: str
+    offset: int
+    created_at: str
+    updated_at: str
+
+
+@strawberry.type
+class TimeZoneResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    timezone: TimeZone | None = None
+
+
 @strawberry_django.type(models.EventStatus)
 class EventStatus:
     id: strawberry.ID
@@ -151,13 +170,14 @@ class Product:
     tenant_id: strawberry.ID
     created_at: str
     updated_at: str
-    
+
     @strawberry.field
     def image(self) -> str | None:
         """Return a signed URL for the product image if it exists."""
         if not self.image:
             return None
         from utils.gcs import generate_download_url
+
         # The image field contains the path in GCS (e.g., "products/image.jpg")
         return generate_download_url(self.image.name)
 
@@ -218,6 +238,16 @@ class Request:
     end_time: str | None = None
     address: str
     coordinates: List[float]
+    client_name: str | None = None
+    client_email: str | None = None
+    distributor_name: str | None = None
+    distributor_email: str | None = None
+    retailer_name: str | None = None
+    retailer_address: str | None = None
+    retailer_store_contact: str | None = None
+    store_manager_name: str | None = None
+    store_manager_phone: str | None = None
+    timezone: TimeZone | None = None
     client: Client | None = None
     distributor: Distributor | None = None
     retailer: Retailer | None = None
@@ -235,9 +265,18 @@ class RequestStoreManager:
     name: str
     phone: str
     request_id: strawberry.ID
+    request: Request | None = None
     tenant_id: strawberry.ID | None = None
     created_at: str
     updated_at: str
+
+
+@strawberry.type
+class RequestStoreManagerDetailResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    request_store_manager: RequestStoreManager | None = None
 
 
 @strawberry.type
@@ -259,6 +298,7 @@ class Event:
     id: strawberry.ID
     uuid: str
     name: str
+    coordinates: List[float] | None = None
     start_time: str | None = None
     end_time: str | None = None
     address: str
