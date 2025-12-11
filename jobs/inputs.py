@@ -147,6 +147,11 @@ class UpdateJobInput(CreateJobInput):
 
 
 @strawberry.input
+class JobFiltersInput(BaseTenantInput):
+    event_id: strawberry.ID | None = None
+
+
+@strawberry.input
 class CreateJobFileInput(BaseNameableInput):
     url: str
     job_id: strawberry.ID
