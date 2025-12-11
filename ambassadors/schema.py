@@ -8,6 +8,7 @@ class AmbassadorQuerySpark(
     queries.FileTypeQueries,
     queries.AmbassadorEventQueries,
     queries.AmbassadorManagementQueries,
+    queries.AmbassadorReviewQueries,
 ):
     pass
 
@@ -17,6 +18,7 @@ class AmbassadorQueryClient(
     queries.FileTypeQueries,
     queries.AmbassadorEventQueries,
     queries.AmbassadorManagementQueries,
+    queries.AmbassadorReviewQueries,
 ):
     pass
 
@@ -25,6 +27,7 @@ class AmbassadorQueryClient(
 class AmbassadorQueryMobile(
     queries.FileTypeQueries,
     queries.AmbassadorEventQueries,
+    queries.AmbassadorReviewQueries,
 ):
     pass
 

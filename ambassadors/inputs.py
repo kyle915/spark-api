@@ -76,3 +76,40 @@ class UpdateAmbassadorInput(SparkGraphQLInput):
 class DeleteInvitationInput(SparkGraphQLInput):
     """Input for deleting an invitation."""
     invitation_id: strawberry.ID
+
+
+@strawberry.input
+class CreateAmbassadorReviewInput(BaseTenantInput):
+    """Input for creating an ambassador review."""
+    ambassador_id: strawberry.ID
+    client_id: strawberry.ID | None = None
+    review: str | None = None
+    score: int | None = None
+
+
+@strawberry.input
+class UpdateAmbassadorReviewInput(SparkGraphQLInput):
+    """Input for updating an ambassador review."""
+    review_id: strawberry.ID
+    review: str | None = None
+    score: int | None = None
+
+
+@strawberry.input
+class DeleteAmbassadorReviewInput(SparkGraphQLInput):
+    """Input for deleting an ambassador review."""
+    review_id: strawberry.ID
+
+
+@strawberry.input
+class AmbassadorReviewFiltersInput:
+    """Filters for ambassador review queries."""
+    ambassador_id: strawberry.ID | None = None
+    client_id: strawberry.ID | None = None
+    tenant_id: strawberry.ID | None = None
+    tenant_uuid: strawberry.ID | None = None
+    min_score: int | None = None
+    max_score: int | None = None
+    start_date: str | None = None
+    end_date: str | None = None
+    search: str | None = None

@@ -22,6 +22,9 @@ from .types import (
     ApproveAmbassadorResponse,
     UpdateAmbassadorResponse,
     DeleteInvitationResponse,
+    CreateAmbassadorReviewResponse,
+    UpdateAmbassadorReviewResponse,
+    DeleteAmbassadorReviewResponse,
 )
 from . import inputs
 from .services import (
@@ -31,6 +34,9 @@ from .services import (
     ApproveAmbassadorService,
     UpdateAmbassadorService,
     DeleteInvitationService,
+    CreateAmbassadorReviewService,
+    UpdateAmbassadorReviewService,
+    DeleteAmbassadorReviewService,
 )
 
 
@@ -208,3 +214,27 @@ class AmbassadorMutations:
         input: inputs.DeleteInvitationInput,
     ) -> DeleteInvitationResponse:
         return await DeleteInvitationService.delete(input, info)
+
+    @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
+    async def create_ambassador_review(
+        self,
+        info: strawberry.Info,
+        input: inputs.CreateAmbassadorReviewInput,
+    ) -> CreateAmbassadorReviewResponse:
+        return await CreateAmbassadorReviewService.create(input, info)
+
+    @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
+    async def update_ambassador_review(
+        self,
+        info: strawberry.Info,
+        input: inputs.UpdateAmbassadorReviewInput,
+    ) -> UpdateAmbassadorReviewResponse:
+        return await UpdateAmbassadorReviewService.update(input, info)
+
+    @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
+    async def delete_ambassador_review(
+        self,
+        info: strawberry.Info,
+        input: inputs.DeleteAmbassadorReviewInput,
+    ) -> DeleteAmbassadorReviewResponse:
+        return await DeleteAmbassadorReviewService.delete(input, info)

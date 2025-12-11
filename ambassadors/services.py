@@ -16,7 +16,7 @@ from utils.graphql.inputs import SparkGraphQLInput
 from utils.graphql.mixins import SparkGraphQLMixin
 from utils.graphql.relay import CountableConnection
 
-from .models import Ambassador, AmbassadorInvitation
+from .models import Ambassador, AmbassadorInvitation, AmbassadorReview
 from .types import (
     PublicAmbassadorCreationResponse,
     AmbassadorInvitationResponse,
@@ -26,7 +26,11 @@ from .types import (
     DeleteInvitationResponse,
     AmbassadorInvitationType,
     Ambassador as AmbassadorType,
+    CreateAmbassadorReviewResponse,
+    UpdateAmbassadorReviewResponse,
+    DeleteAmbassadorReviewResponse,
 )
+from events.models import Client
 from . import inputs
 from .constants import INVITATION_EXPIRY_DAYS
 
@@ -786,6 +790,328 @@ class AmbassadorQueriesService(SparkGraphQLMixin):
                         | Q(user__last_name__icontains=filters.search)
                         | Q(address__icontains=filters.search)
                     )
+
+            return queryset.order_by("-created_at")
+
+        return await get_queryset()
+
+
+class CreateAmbassadorReviewService(BaseAmbassadorService):
+    """Service for creating ambassador reviews."""
+
+    @classmethod
+    async def create(
+        cls,
+        input: inputs.CreateAmbassadorReviewInput,
+        info: strawberry.Info,
+    ) -> CreateAmbassadorReviewResponse:
+        """Create an ambassador review (client/spark-admin only)."""
+        user = info.context.request.user
+
+        # Validate score range if provided
+        if input.score is not None:
+            if input.score < 1 or input.score > 5:
+                return build_mutation_response(
+                    CreateAmbassadorReviewResponse,
+                    success=False,
+                    message="Score must be between 1 and 5.",
+                    input_obj=input,
+                )
+
+        # Validate ambassador exists
+        try:
+            ambassador = await Ambassador.objects._by_id(input.ambassador_id)
+        except (Ambassador.DoesNotExist, ValueError, TypeError):
+            return build_mutation_response(
+                CreateAmbassadorReviewResponse,
+                success=False,
+                message="Ambassador not found.",
+                input_obj=input,
+            )
+
+        # Validate client exists if provided
+        client = None
+        if input.client_id:
+            try:
+                @sync_to_async
+                def get_client():
+                    return Client.objects.get(pk=int(input.client_id))
+                client = await get_client()
+            except (Client.DoesNotExist, ValueError, TypeError):
+                return build_mutation_response(
+                    CreateAmbassadorReviewResponse,
+                    success=False,
+                    message="Client not found.",
+                    input_obj=input,
+                )
+
+        # Resolve tenant
+        tenant = await cls.get_user_tenant(
+            info,
+            tenant_id=input.tenant_id,
+            tenant_uuid=None,
+            user=user,
+        )
+
+        # Check for duplicate review (same client + ambassador)
+        if client:
+            @sync_to_async
+            def check_duplicate():
+                return AmbassadorReview.objects.filter(
+                    ambassador=ambassador,
+                    client=client,
+                ).exists()
+            if await check_duplicate():
+                return build_mutation_response(
+                    CreateAmbassadorReviewResponse,
+                    success=False,
+                    message="A review for this ambassador and client already exists.",
+                    input_obj=input,
+                )
+
+        # Create review
+        try:
+            @sync_to_async
+            def create_review():
+                return AmbassadorReview.objects.create(
+                    ambassador=ambassador,
+                    client=client,
+                    tenant=tenant,
+                    review=input.review,
+                    score=input.score,
+                    created_by=user,
+                    updated_by=user,
+                )
+
+            review = await create_review()
+
+            return build_mutation_response(
+                CreateAmbassadorReviewResponse,
+                success=True,
+                message="Review created successfully.",
+                input_obj=input,
+                ambassador_review=review,
+            )
+        except Exception as e:
+            return build_mutation_response(
+                CreateAmbassadorReviewResponse,
+                success=False,
+                message=f"Error creating review: {str(e)}",
+                input_obj=input,
+            )
+
+
+class UpdateAmbassadorReviewService(BaseAmbassadorService):
+    """Service for updating ambassador reviews."""
+
+    @classmethod
+    async def update(
+        cls,
+        input: inputs.UpdateAmbassadorReviewInput,
+        info: strawberry.Info,
+    ) -> UpdateAmbassadorReviewResponse:
+        """Update an ambassador review (client/spark-admin only)."""
+        user = info.context.request.user
+
+        # Validate review exists
+        try:
+            @sync_to_async
+            def get_review():
+                return AmbassadorReview.objects.select_related(
+                    "ambassador", "client", "tenant"
+                ).get(pk=int(input.review_id))
+            review = await get_review()
+        except (AmbassadorReview.DoesNotExist, ValueError, TypeError):
+            return build_mutation_response(
+                UpdateAmbassadorReviewResponse,
+                success=False,
+                message="Review not found.",
+                input_obj=input,
+            )
+
+        # Validate score range if provided
+        if input.score is not None:
+            if input.score < 1 or input.score > 5:
+                return build_mutation_response(
+                    UpdateAmbassadorReviewResponse,
+                    success=False,
+                    message="Score must be between 1 and 5.",
+                    input_obj=input,
+                )
+
+        # Update fields if provided
+        try:
+            @sync_to_async
+            def update_review():
+                if input.review is not None:
+                    review.review = input.review
+                if input.score is not None:
+                    review.score = input.score
+                review.updated_by = user
+                review.save()
+                return review
+
+            review = await update_review()
+
+            return build_mutation_response(
+                UpdateAmbassadorReviewResponse,
+                success=True,
+                message="Review updated successfully.",
+                input_obj=input,
+                ambassador_review=review,
+            )
+        except Exception as e:
+            return build_mutation_response(
+                UpdateAmbassadorReviewResponse,
+                success=False,
+                message=f"Error updating review: {str(e)}",
+                input_obj=input,
+            )
+
+
+class DeleteAmbassadorReviewService(BaseAmbassadorService):
+    """Service for deleting ambassador reviews."""
+
+    @classmethod
+    async def delete(
+        cls,
+        input: inputs.DeleteAmbassadorReviewInput,
+        info: strawberry.Info,
+    ) -> DeleteAmbassadorReviewResponse:
+        """Delete an ambassador review (client/spark-admin only)."""
+        user = info.context.request.user
+
+        # Validate review exists
+        try:
+            @sync_to_async
+            def get_review():
+                return AmbassadorReview.objects.get(pk=int(input.review_id))
+            review = await get_review()
+        except (AmbassadorReview.DoesNotExist, ValueError, TypeError):
+            return build_mutation_response(
+                DeleteAmbassadorReviewResponse,
+                success=False,
+                message="Review not found.",
+                input_obj=input,
+            )
+
+        try:
+            @sync_to_async
+            def delete_review():
+                review.delete()
+
+            await delete_review()
+
+            return build_mutation_response(
+                DeleteAmbassadorReviewResponse,
+                success=True,
+                message="Review deleted successfully.",
+                input_obj=input,
+            )
+        except Exception as e:
+            return build_mutation_response(
+                DeleteAmbassadorReviewResponse,
+                success=False,
+                message=f"Error deleting review: {str(e)}",
+                input_obj=input,
+            )
+
+
+class AmbassadorReviewQueriesService(SparkGraphQLMixin):
+    """Service for ambassador review queries."""
+
+    async def get_ambassador_reviews(
+        self,
+        info: strawberry.Info,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        filters: inputs.AmbassadorReviewFiltersInput | None = None,
+    ) -> CountableConnection:
+        """Get ambassador reviews with filters (authenticated users only)."""
+        user = await self.get_user(info)
+        is_spark_request = self.is_spark_schema_request(info, user=user)
+
+        # Resolve tenant
+        tenant_id: int | None = None
+        tenant_id_input = filters.tenant_id if filters else None
+        tenant_uuid_input = filters.tenant_uuid if filters else None
+
+        should_filter_by_tenant = (
+            not is_spark_request or tenant_id_input is not None or tenant_uuid_input is not None
+        )
+        if should_filter_by_tenant:
+            tenant = await self.get_user_tenant(
+                info,
+                tenant_id=tenant_id_input,
+                tenant_uuid=tenant_uuid_input,
+                user=user,
+            )
+            tenant_id = tenant.id
+
+        queryset = await self._get_filtered_reviews_queryset(tenant_id, filters)
+
+        from utils.graphql.relay import connection_from_queryset_async
+        from ambassadors.types import AmbassadorReviewType
+        return await connection_from_queryset_async(
+            queryset,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+            default_limit=10,
+            max_limit=50,
+        )
+
+    async def _get_filtered_reviews_queryset(
+        self,
+        tenant_id: int | None = None,
+        filters: inputs.AmbassadorReviewFiltersInput | None = None,
+    ):
+        """Get filtered queryset for reviews."""
+        @sync_to_async
+        def get_queryset():
+            queryset = AmbassadorReview.objects.select_related(
+                "ambassador", "client", "tenant"
+            )
+
+            # Filter by tenant
+            if tenant_id:
+                queryset = queryset.filter(tenant_id=tenant_id)
+
+            if filters:
+                # Filter by ambassador
+                if filters.ambassador_id:
+                    queryset = queryset.filter(ambassador_id=int(filters.ambassador_id))
+
+                # Filter by client
+                if filters.client_id:
+                    queryset = queryset.filter(client_id=int(filters.client_id))
+
+                # Filter by score range
+                if filters.min_score is not None:
+                    queryset = queryset.filter(score__gte=filters.min_score)
+                if filters.max_score is not None:
+                    queryset = queryset.filter(score__lte=filters.max_score)
+
+                # Filter by date range
+                if filters.start_date:
+                    try:
+                        start_datetime = datetime.fromisoformat(filters.start_date.replace('Z', '+00:00'))
+                        queryset = queryset.filter(created_at__gte=start_datetime)
+                    except (ValueError, AttributeError):
+                        pass  # Invalid date format, skip filter
+                if filters.end_date:
+                    try:
+                        end_datetime = datetime.fromisoformat(filters.end_date.replace('Z', '+00:00'))
+                        queryset = queryset.filter(created_at__lte=end_datetime)
+                    except (ValueError, AttributeError):
+                        pass  # Invalid date format, skip filter
+
+                # Search in review text
+                if filters.search:
+                    queryset = queryset.filter(review__icontains=filters.search)
 
             return queryset.order_by("-created_at")
 

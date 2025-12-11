@@ -266,3 +266,48 @@ class AmbassadorManagementQueries:
             before=before,
             filters=filters,
         )
+
+
+@strawberry.type
+class AmbassadorReviewQueries:
+    """Queries for ambassador reviews."""
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def ambassador_reviews(
+        self,
+        info: strawberry.Info,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        filters: inputs.AmbassadorReviewFiltersInput | None = None,
+    ) -> CountableConnection[types.AmbassadorReviewType]:
+        """Get ambassador reviews with filters (authenticated users only)."""
+        from .services import AmbassadorReviewQueriesService
+        service = AmbassadorReviewQueriesService()
+        return await service.get_ambassador_reviews(
+            info=info,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+            filters=filters,
+        )
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def ambassador_review(
+        self,
+        info: strawberry.Info,
+        review_id: strawberry.ID,
+    ) -> types.AmbassadorReviewType | None:
+        """Get a single ambassador review by ID (authenticated users only)."""
+        from .models import AmbassadorReview
+        try:
+            @sync_to_async
+            def get_review():
+                return AmbassadorReview.objects.select_related(
+                    "ambassador", "client", "tenant"
+                ).get(pk=int(review_id))
+            return await get_review()
+        except (AmbassadorReview.DoesNotExist, ValueError, TypeError):
+            return None

@@ -110,3 +110,39 @@ class DeleteInvitationResponse:
     success: bool
     message: str
     client_mutation_id: strawberry.ID | None = None
+
+
+@strawberry_django.type(models.AmbassadorReview)
+class AmbassadorReviewType:
+    id: strawberry.ID
+    uuid: str
+    review: str | None
+    score: int | None
+    ambassador_id: strawberry.ID | None
+    client_id: strawberry.ID | None
+    tenant_id: strawberry.ID | None
+    created_at: str
+    updated_at: str
+
+
+@strawberry.type
+class CreateAmbassadorReviewResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    ambassador_review: AmbassadorReviewType | None = None
+
+
+@strawberry.type
+class UpdateAmbassadorReviewResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    ambassador_review: AmbassadorReviewType | None = None
+
+
+@strawberry.type
+class DeleteAmbassadorReviewResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None

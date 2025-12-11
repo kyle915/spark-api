@@ -6,7 +6,11 @@ from django.contrib.postgres.fields import ArrayField
 
 from tenants.models import Tenant
 from events.models import Client, Event, Location
-from ambassadors.managers import AmbassadorManager, AmbassadorInvitationManager
+from ambassadors.managers import (
+    AmbassadorManager,
+    AmbassadorInvitationManager,
+    AmbassadorReviewManager,
+)
 from utils.models import Asyncable
 
 
@@ -182,6 +186,13 @@ class AmbassadorReview(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
     updated_at = models.DateTimeField(auto_now=True)
+
+    objects = AmbassadorReviewManager()
+
+    class Meta:
+        verbose_name = "Ambassador Review"
+        verbose_name_plural = "Ambassador Reviews"
+        unique_together = ("ambassador", "client")
 
 
 class AmbassadorEvent(models.Model):
