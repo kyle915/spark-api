@@ -144,7 +144,7 @@ class AmbassadorInvitation(Asyncable, models.Model):
         ]
 
 
-class AmbassadorReview(models.Model):
+class AmbassadorReview(Asyncable, models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     review = models.TextField(null=True)

@@ -846,7 +846,8 @@ class CreateAmbassadorReviewService(BaseAmbassadorService):
                 )
 
         # Resolve tenant
-        tenant = await cls.get_user_tenant(
+        service_instance = cls()
+        tenant = await service_instance.get_user_tenant(
             info,
             tenant_id=input.tenant_id,
             tenant_uuid=None,
@@ -1083,11 +1084,13 @@ class AmbassadorReviewQueriesService(SparkGraphQLMixin):
             if filters:
                 # Filter by ambassador
                 if filters.ambassador_id:
-                    queryset = queryset.filter(ambassador_id=int(filters.ambassador_id))
+                    queryset = queryset.filter(
+                        ambassador_id=int(filters.ambassador_id))
 
                 # Filter by client
                 if filters.client_id:
-                    queryset = queryset.filter(client_id=int(filters.client_id))
+                    queryset = queryset.filter(
+                        client_id=int(filters.client_id))
 
                 # Filter by score range
                 if filters.min_score is not None:
@@ -1098,20 +1101,25 @@ class AmbassadorReviewQueriesService(SparkGraphQLMixin):
                 # Filter by date range
                 if filters.start_date:
                     try:
-                        start_datetime = datetime.fromisoformat(filters.start_date.replace('Z', '+00:00'))
-                        queryset = queryset.filter(created_at__gte=start_datetime)
+                        start_datetime = datetime.fromisoformat(
+                            filters.start_date.replace('Z', '+00:00'))
+                        queryset = queryset.filter(
+                            created_at__gte=start_datetime)
                     except (ValueError, AttributeError):
                         pass  # Invalid date format, skip filter
                 if filters.end_date:
                     try:
-                        end_datetime = datetime.fromisoformat(filters.end_date.replace('Z', '+00:00'))
-                        queryset = queryset.filter(created_at__lte=end_datetime)
+                        end_datetime = datetime.fromisoformat(
+                            filters.end_date.replace('Z', '+00:00'))
+                        queryset = queryset.filter(
+                            created_at__lte=end_datetime)
                     except (ValueError, AttributeError):
                         pass  # Invalid date format, skip filter
 
                 # Search in review text
                 if filters.search:
-                    queryset = queryset.filter(review__icontains=filters.search)
+                    queryset = queryset.filter(
+                        review__icontains=filters.search)
 
             return queryset.order_by("-created_at")
 
