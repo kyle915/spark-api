@@ -1,73 +1,3 @@
-input AcceptAmbassadorInvitationInput {
-  clientMutationId: ID = null
-  token: String!
-  firstName: String!
-  password1: String!
-  password2: String!
-  address: String = null
-  coordinates: [Float!] = null
-}
-
-type AcceptInvitationResponse {
-  success: Boolean!
-  message: String!
-  clientMutationId: ID
-  ambassador: Ambassador
-  activationToken: String
-}
-
-"""
-Ambassador(id, uuid, rating, address, coordinates, is_active, user, created_by, updated_by, created_at, updated_at)
-"""
-type Ambassador {
-  id: ID!
-  uuid: String!
-  rating: Int!
-  address: String
-  coordinates: [Float!]!
-  isActive: Boolean!
-  userId: ID!
-  createdAt: String!
-  updatedAt: String!
-}
-
-"""
-AmbassadorEvent(id, uuid, is_approved, ambassador, tenant, event, created_by, updated_by, created_at, updated_at)
-"""
-type AmbassadorEventType {
-  id: ID!
-  uuid: String!
-  isApproved: Boolean!
-  ambassador: Ambassador!
-  tenantId: ID!
-  eventId: ID!
-  createdAt: String!
-  updatedAt: String!
-}
-
-type AmbassadorInvitationResponse {
-  success: Boolean!
-  message: String!
-  clientMutationId: ID
-  invitation: AmbassadorInvitationType
-}
-
-"""Model to track ambassador invitations sent by clients or spark-admins."""
-type AmbassadorInvitationType {
-  id: ID!
-  uuid: String!
-  email: String!
-  token: String!
-  expiresAt: String!
-  isUsed: Boolean!
-  usedAt: String
-  invitedById: ID!
-  tenantId: ID!
-  ambassadorId: ID
-  createdAt: String!
-  updatedAt: String!
-}
-
 """
 AmbassadorJob(id, uuid, appear_as_rfp, tenant, ambassador, job, status, rate, created_by, updated_by, created_at, updated_at)
 """
@@ -141,31 +71,6 @@ input AppleSocialAuthInput {
   identityToken: String!
 }
 
-type ApplyAmbassadorEventResponse {
-  success: Boolean!
-  message: String!
-  application: AmbassadorEventType
-}
-
-type ApplyAmbassadorJobResponse {
-  success: Boolean!
-  message: String!
-  application: AmbassadorJob
-}
-
-input ApproveAmbassadorInput {
-  clientMutationId: ID = null
-  ambassadorId: ID!
-  tenantId: ID = null
-}
-
-type ApproveAmbassadorResponse {
-  success: Boolean!
-  message: String!
-  clientMutationId: ID
-  ambassador: Ambassador
-}
-
 """
 Client(id, uuid, name, email, tenant, created_by, updated_by, created_at, updated_at)
 """
@@ -216,16 +121,22 @@ type CompanyFile {
   updatedAt: String!
 }
 
+input ConnectGoogleCalendarInput {
+  clientMutationId: ID = null
+}
+
+type ConnectGoogleCalendarResponse {
+  success: Boolean!
+  message: String!
+  authorizationUrl: String
+  state: String
+  clientMutationId: ID
+}
+
 input CoordinatesFilterInput {
   coordinates: [Float!]!
   range: Float!
   unit: DistanceUnit! = KILOMETERS
-}
-
-input CreateAmbassadorInvitationInput {
-  clientMutationId: ID = null
-  tenantId: ID = null
-  email: String!
 }
 
 input CreateAmbassadorJobInput {
@@ -244,16 +155,6 @@ input CreateAmbassadorToAmbassadorReviewInput {
   description: String!
   rate: Float!
   ambassadorId: ID!
-}
-
-input CreatePublicAmbassadorInput {
-  clientMutationId: ID = null
-  firstName: String!
-  email: String!
-  password1: String!
-  password2: String!
-  address: String = null
-  coordinates: [Float!] = null
 }
 
 input CreateRequestDetailInput {
@@ -276,17 +177,10 @@ input CreateRequestWithDependenciesInput {
   endTime: String!
   address: String!
   coordinates: [Float!]!
-  timezoneId: ID!
+  clientId: ID!
+  distributorId: ID!
+  retailerId: ID!
   requestTypeId: ID!
-  clientName: String!
-  clientEmail: String!
-  distributorName: String!
-  distributorEmail: String!
-  retailerName: String!
-  retailerAddress: String!
-  retailerStoreContact: String!
-  storeManagerName: String!
-  storeManagerPhone: String!
   details: [CreateRequestDetailInput!]!
   products: [CreateRequestProductInput!]!
 }
@@ -309,12 +203,11 @@ type CustomUserType {
 """Date with time (isoformat)"""
 scalar DateTime
 
-input DeleteInvitationInput {
+input DisconnectGoogleCalendarInput {
   clientMutationId: ID = null
-  invitationId: ID!
 }
 
-type DeleteInvitationResponse {
+type DisconnectGoogleCalendarResponse {
   success: Boolean!
   message: String!
   clientMutationId: ID
@@ -344,13 +237,12 @@ type DjangoModelType {
 }
 
 """
-Event(id, uuid, name, coordinates, tenant, request, event_type, status, start_time, end_time, address, notes, is_national, created_by, updated_by, created_at, updated_at)
+Event(id, uuid, name, tenant, request, event_type, status, start_time, end_time, address, notes, is_national, created_by, updated_by, created_at, updated_at)
 """
 type Event {
   id: ID!
   uuid: String!
   name: String!
-  coordinates: [Float!]
   startTime: String
   endTime: String
   address: String!
@@ -459,13 +351,32 @@ input EventTypeFiltersInput {
 "\n     Errors messages and codes mapped to\n    fields or non fields errors.\n    Example:\n    {\n        field_name: [\n            {\n                \"message\": \"error message\",\n                \"code\": \"error_code\"\n            }\n        ],\n        other_field: [\n            {\n                \"message\": \"error message\",\n                \"code\": \"error_code\"\n            }\n        ],\n        nonFieldErrors: [\n            {\n                \"message\": \"error message\",\n                \"code\": \"error_code\"\n            }\n        ]\n    }\n    "
 scalar ExpectedError
 
+input GoogleCalendarCallbackInput {
+  clientMutationId: ID = null
+  code: String!
+  state: String!
+}
+
+type GoogleCalendarCallbackResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+}
+
+type GoogleCalendarConnectionStatus {
+  isConnected: Boolean!
+  isActive: Boolean!
+  calendarId: String
+  connectedAt: String
+}
+
 input GoogleSocialAuthInput {
   clientMutationId: ID = null
   accessToken: String!
 }
 
 """
-Job(id, uuid, name, description, code, address, start_date, end_date, public, closed, national, ongoing, coordinates, job_title, other_title, company, event, tenant, rate, created_by, updated_by, created_at, updated_at)
+Job(id, uuid, name, description, code, address, start_date, end_date, public, closed, national, ongoing, job_title, other_title, company, event, location, tenant, rate, created_by, updated_by, created_at, updated_at)
 """
 type Job {
   id: ID!
@@ -563,6 +474,9 @@ type Mutation {
   register(input: AmbassadorRegisterInput!): RegisterResponse!
   socialAuthGoogle(input: GoogleSocialAuthInput!): SocialAuthResponse!
   socialAuthApple(input: AppleSocialAuthInput!): SocialAuthResponse!
+  connectGoogleCalendar(input: ConnectGoogleCalendarInput!): ConnectGoogleCalendarResponse!
+  googleCalendarCallback(input: GoogleCalendarCallbackInput!): GoogleCalendarCallbackResponse!
+  disconnectGoogleCalendar(input: DisconnectGoogleCalendarInput!): DisconnectGoogleCalendarResponse!
 
   "### Checks if a token is not expired and correct.\n\n*Note that this is not for refresh tokens.*\n"
   verifyToken(input: VerifyTokenInput!): VerifyTokenType!
@@ -579,14 +493,6 @@ type Mutation {
   updateAmbassadorJob(input: UpdateAmbassadorJobInput!): AmbassadorJobDetailResponse!
   createAmbassadorToAmbassadorReview(input: CreateAmbassadorToAmbassadorReviewInput!): AmbassadorToAmbassadorReviewDetailResponse!
   updateAmbassadorToAmbassadorReview(input: UpdateAmbassadorToAmbassadorReviewInput!): AmbassadorToAmbassadorReviewDetailResponse!
-  applyAmbassadorEvent(eventId: ID!): ApplyAmbassadorEventResponse!
-  applyAmbassadorJob(jobId: ID!): ApplyAmbassadorJobResponse!
-  createPublicAmbassador(input: CreatePublicAmbassadorInput!): PublicAmbassadorCreationResponse!
-  createAmbassadorInvitation(input: CreateAmbassadorInvitationInput!): AmbassadorInvitationResponse!
-  acceptAmbassadorInvitation(input: AcceptAmbassadorInvitationInput!): AcceptInvitationResponse!
-  approveAmbassador(input: ApproveAmbassadorInput!): ApproveAmbassadorResponse!
-  updateAmbassador(input: UpdateAmbassadorInput!): UpdateAmbassadorResponse!
-  deleteInvitation(input: DeleteInvitationInput!): DeleteInvitationResponse!
 }
 
 type MutationNormalOutput {
@@ -628,14 +534,6 @@ type PageInfo {
   endCursor: String
 }
 
-type PublicAmbassadorCreationResponse {
-  success: Boolean!
-  message: String!
-  clientMutationId: ID
-  ambassador: Ambassador
-  activationToken: String
-}
-
 type Query {
   events(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: EventFiltersInput = null): EventCountableConnection!
   event(uuid: ID!): Event
@@ -645,8 +543,7 @@ type Query {
   eventType(id: ID!): EventType
   eventStatuses(first: Int = null, after: String = null, last: Int = null, before: String = null, filters: EventStatusFiltersInput = null): EventStatusCountableConnection!
   eventStatus(id: ID!): EventStatus
-  timezones(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): TimeZoneCountableConnection!
-  publicTimezones(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): TimeZoneCountableConnection!
+  googleCalendarConnectionStatus: GoogleCalendarConnectionStatus!
   healthcheck: String!
   me: CustomUserType!
   availableJobs(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): JobCountableConnection!
@@ -707,7 +604,7 @@ type RegisterResponse {
 }
 
 """
-Request(id, uuid, name, date, start_time, end_time, address, coordinates, client_name, client_email, distributor_name, distributor_email, retailer_name, retailer_address, retailer_store_contact, store_manager_name, store_manager_phone, timezone, client, distributor, retailer, request_type, status, tenant, created_by, updated_by, created_at, updated_at)
+Request(id, uuid, name, date, start_time, end_time, address, coordinates, client, distributor, retailer, request_type, status, tenant, created_by, updated_by, created_at, updated_at)
 """
 type Request {
   id: ID!
@@ -718,16 +615,6 @@ type Request {
   endTime: String
   address: String!
   coordinates: [Float!]!
-  clientName: String
-  clientEmail: String
-  distributorName: String
-  distributorEmail: String
-  retailerName: String
-  retailerAddress: String
-  retailerStoreContact: String
-  storeManagerName: String
-  storeManagerPhone: String
-  timezone: TimeZone
   client: Client
   distributor: Distributor
   retailer: Retailer
@@ -812,33 +699,6 @@ type Status {
   updatedAt: String!
 }
 
-"""
-TimeZone(id, uuid, name, code, offset, created_by, updated_by, created_at, updated_at)
-"""
-type TimeZone {
-  id: ID!
-  uuid: String!
-  name: String!
-  code: String!
-  offset: Int!
-  createdAt: String!
-  updatedAt: String!
-}
-
-type TimeZoneCountableConnection {
-  pageInfo: PageInfo!
-  edges: [TimeZoneCountableEdge!]!
-  totalCount: Int!
-}
-
-type TimeZoneCountableEdge {
-  """A cursor for use in pagination"""
-  cursor: String!
-
-  """The item at the end of the edge"""
-  node: TimeZone!
-}
-
 "\nthe data that was used to create the token.\n"
 type TokenPayloadType {
   """when the token was created"""
@@ -859,15 +719,6 @@ type TokenType {
 
 scalar UUID
 
-input UpdateAmbassadorInput {
-  clientMutationId: ID = null
-  ambassadorId: ID!
-  address: String = null
-  coordinates: [Float!] = null
-  isActive: Boolean = null
-  tenantId: ID = null
-}
-
 input UpdateAmbassadorJobInput {
   clientMutationId: ID = null
   tenantId: ID = null
@@ -879,13 +730,6 @@ input UpdateAmbassadorJobInput {
   id: ID!
 }
 
-type UpdateAmbassadorResponse {
-  success: Boolean!
-  message: String!
-  clientMutationId: ID
-  ambassador: Ambassador
-}
-
 input UpdateAmbassadorToAmbassadorReviewInput {
   clientMutationId: ID = null
   tenantId: ID = null
@@ -893,6 +737,11 @@ input UpdateAmbassadorToAmbassadorReviewInput {
   rate: Float!
   ambassadorId: ID!
   id: ID!
+}
+
+enum UserRoleEnum {
+  AMBASSADOR
+  CLIENT
 }
 
 enum UserRoleEnum {
@@ -923,13 +772,13 @@ type UserType {
   isActive: Boolean!
   dateJoined: DateTime!
   status: UserStatusType!
-  email: String!
-  lastName: String
+  firstName: String
 
   """Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only."""
   username: String!
   id: ID!
-  firstName: String
+  lastName: String
+  email: String!
   archived: Boolean!
   verified: Boolean!
 }

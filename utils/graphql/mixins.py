@@ -340,10 +340,11 @@ class BaseMutationService(SparkGraphQLMixin):
         tenant_id = getattr(self.input, "tenant_id", None)
         if self.is_public and not tenant_id:
             raise GraphQLError("Tenant ID is required.")
+        is_spark_admin = await self.user.role.is_spark_admin if self.user and self.user.role else False
         if (
             not self.is_public
             and not self.is_spark_schema
-            and self.user.role.is_spark_admin
+            and is_spark_admin
             and tenant_id
         ):
             raise GraphQLError("Tenant ID should not be provided.")

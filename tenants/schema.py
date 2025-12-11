@@ -17,6 +17,7 @@ from .mutations import (
     SparkCustomRegister,
     SparkTenantMutations,
 )
+from .calendar import GoogleCalendarMutations, GoogleCalendarQueries
 from .dashboard.schema import DashboardQueries
 from utils.graphql.relay import (
     CountableConnection,
@@ -40,7 +41,7 @@ class CustomUserType:
 
 # Spark Schema
 @strawberry.type()
-class QuerySpark:
+class QuerySpark(GoogleCalendarQueries):
     @strawberry.field
     def healthcheck(self) -> str:
         return "ok"
@@ -70,7 +71,8 @@ class QuerySpark:
             if filters.name:
                 queryset = queryset.filter(name__icontains=filters.name)
             if filters.request_url_name:
-                queryset = queryset.filter(request_url_name__icontains=filters.request_url_name)
+                queryset = queryset.filter(
+                    request_url_name__icontains=filters.request_url_name)
         queryset = queryset.distinct()
 
         try:
@@ -91,7 +93,7 @@ class QuerySpark:
 
 
 @strawberry.type
-class MutationSpark(SparkCustomRegister, SparkTenantMutations):
+class MutationSpark(SparkCustomRegister, SparkTenantMutations, GoogleCalendarMutations):
     verify_token = mutations.VerifyToken.field
     token_auth = mutations.ObtainJSONWebToken.field
     refresh_token = mutations.RefreshToken.field
@@ -101,7 +103,7 @@ class MutationSpark(SparkCustomRegister, SparkTenantMutations):
 # Ambassadors Schema
 # @strawberry.django.type(model=get_user_model())
 @strawberry_django.type(User)
-class QueryAmbassadors:
+class QueryAmbassadors(GoogleCalendarQueries):
     @strawberry.field
     def healthcheck(self) -> str:
         return "ok"
@@ -112,7 +114,7 @@ class QueryAmbassadors:
 
 
 @strawberry.type
-class MutationAmbassadors(AmbassadorsCustomRegister):
+class MutationAmbassadors(AmbassadorsCustomRegister, GoogleCalendarMutations):
     verify_token = mutations.VerifyToken.field
     token_auth = mutations.ObtainJSONWebToken.field
     refresh_token = mutations.RefreshToken.field
@@ -122,7 +124,7 @@ class MutationAmbassadors(AmbassadorsCustomRegister):
 # Clients Schemas
 # @strawberry.django.type(model=get_user_model())
 @strawberry_django.type(User)
-class QueryClients:
+class QueryClients(GoogleCalendarQueries):
     @strawberry.field
     def healthcheck(self) -> str:
         return "ok"
@@ -153,13 +155,14 @@ class QueryClients:
             filter_dict["tenanted_users__user"] = user
 
         queryset = Tenant.objects.filter(**filter_dict)
-        
+
         if filters:
             if filters.name:
                 queryset = queryset.filter(name__icontains=filters.name)
             if filters.request_url_name:
-                queryset = queryset.filter(request_url_name__icontains=filters.request_url_name)
-        
+                queryset = queryset.filter(
+                    request_url_name__icontains=filters.request_url_name)
+
         queryset = queryset.distinct()
         try:
             return await connection_from_queryset_async(
@@ -176,7 +179,7 @@ class QueryClients:
 
 
 @strawberry.type
-class MutationClients(ClientsCustomRegister):
+class MutationClients(ClientsCustomRegister, GoogleCalendarMutations):
     verify_token = mutations.VerifyToken.field
     token_auth = mutations.ObtainJSONWebToken.field
     refresh_token = mutations.RefreshToken.field

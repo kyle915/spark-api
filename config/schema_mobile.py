@@ -6,11 +6,19 @@ from tenants.schema import MutationMobile, QueryMobile
 from utils.utils import BlockIntrospectionForAnonymous
 from ambassadors.schema import AmbassadorMutationsMobile, AmbassadorQueryMobile
 from recaps.schema import RecapQueryMobile, RecapMutationsMobile
+from jobs.schema import MobileJobQueries
 from utils.graphql.gcs_schema import GCSQuery
 
 QueryMobile = merge_types(
     "Query",
-    (EventQueryMobile, QueryMobile, RecapQueryMobile, AmbassadorQueryMobile, GCSQuery),
+    (
+        EventQueryMobile,
+        QueryMobile,
+        RecapQueryMobile,
+        AmbassadorQueryMobile,
+        MobileJobQueries,
+        GCSQuery,
+    ),
 )
 MutationMobile = merge_types(
     "Mutation",
