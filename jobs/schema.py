@@ -4,9 +4,7 @@ from jobs import mutations, queries
 
 
 @strawberry.type
-class AmbassadorJobQueries(
-    queries.AmbassadorJobQueries
-):
+class AmbassadorJobQueries(queries.AmbassadorJobQueries):
     pass
 
 
@@ -39,9 +37,7 @@ class ClientJobQueries(
 
 
 @strawberry.type
-class SparkJobQueries(
-    ClientJobQueries
-):
+class SparkJobQueries(ClientJobQueries):
     pass
 
 
@@ -81,7 +77,10 @@ class ClientJobMutations(
 
 
 @strawberry.type
-class SparkJobMutations(
-    ClientJobMutations
-):
+class SparkJobMutations(ClientJobMutations):
+    pass
+
+
+@strawberry.type
+class MobileJobQueries(ClientJobQueries):
     pass

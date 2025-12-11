@@ -8,6 +8,7 @@ from jobs import models
 from django.db.models import QuerySet
 from django.db.models import Model
 from jobs import types
+from jobs.inputs import JobFiltersInput
 
 
 # Status Queries
@@ -444,10 +445,21 @@ class JobQueries:
         last: int | None = None,
         before: str | None = None,
         q: str | None = None,
+        filters: JobFiltersInput | None = None,
     ) -> CountableConnection[types.Job]:
         """Get all jobs."""
         service = JobQueriesService()
-        tenant = await service.get_user_tenant(info)
+        tenant = await service.get_user_tenant(
+            info, tenant_id=filters.tenant_id if filters else None
+        )
+        queryset = service.get_ordered_queryset(
+            tenant_id=tenant.id,
+            q=q,
+        )
+
+        if filters and filters.event_id:
+            queryset = queryset.filter(event_id=filters.event_id)
+
         return await service.get_connection(
             tenant_id=tenant.id,
             q=q,
@@ -455,6 +467,7 @@ class JobQueries:
             after=after,
             last=last,
             before=before,
+            queryset=queryset,
         )
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
@@ -676,14 +689,19 @@ class AmbassadorJobQueries:
         last: int | None = None,
         before: str | None = None,
         q: str | None = None,
+        filters: JobFiltersInput | None = None,
     ) -> CountableConnection[types.Job]:
         """Get all available jobs."""
         service = JobQueriesService()
-        tenant = await service.get_user_tenant(info)
+        tenant = await service.get_user_tenant(
+            info, tenant_id=filters.tenant_id if filters else None
+        )
         queryset = service.get_ordered_queryset(
             tenant_id=tenant.id, q=q, ordering=("start_date",))
         queryset = queryset.filter(ongoing=True, closed=False, public=True)\
             .prefetch_related("job_requirements")
+        if filters and filters.event_id:
+            queryset = queryset.filter(event_id=filters.event_id)
         return await service.get_connection(
             tenant_id=tenant.id,
             first=first,
