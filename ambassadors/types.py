@@ -110,3 +110,80 @@ class DeleteInvitationResponse:
     success: bool
     message: str
     client_mutation_id: strawberry.ID | None = None
+
+
+@strawberry_django.type(models.AttendanceType)
+class AttendanceType:
+    id: strawberry.ID
+    uuid: str
+    name: str
+    created_at: str
+    updated_at: str
+
+
+@strawberry.type
+class AttendanceTypeDetailResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    attendance_type: AttendanceType | None = None
+
+
+@strawberry_django.type(models.AttendanceStatus)
+class AttendanceStatus:
+    id: strawberry.ID
+    uuid: str
+    name: str
+    tenant_id: strawberry.ID | None
+    created_at: str
+    updated_at: str
+
+
+@strawberry.type
+class AttendanceStatusDetailResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    attendance_status: AttendanceStatus | None = None
+
+
+@strawberry_django.type(models.Source)
+class Source:
+    id: strawberry.ID
+    uuid: str
+    name: str
+    created_at: str
+    updated_at: str
+
+
+@strawberry.type
+class SourceDetailResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    source: Source | None = None
+
+
+@strawberry_django.type(models.Attendance)
+class Attendance:
+    id: strawberry.ID
+    uuid: str
+    clock_time: str
+    coordinates: list[float] | None
+    ambassador_id: strawberry.ID | None
+    job_id: strawberry.ID | None
+    event_id: strawberry.ID | None
+    attendace_type_id: strawberry.ID | None
+    attendance_status_id: strawberry.ID | None
+    source_id: strawberry.ID | None
+    timezone_id: strawberry.ID | None
+    created_at: str
+    updated_at: str
+
+
+@strawberry.type
+class AttendanceDetailResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    attendance: Attendance | None = None

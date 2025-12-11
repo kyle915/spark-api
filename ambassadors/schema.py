@@ -8,6 +8,7 @@ class AmbassadorQuerySpark(
     queries.FileTypeQueries,
     queries.AmbassadorEventQueries,
     queries.AmbassadorManagementQueries,
+    queries.AttendanceQueries,
 ):
     pass
 
@@ -17,6 +18,7 @@ class AmbassadorQueryClient(
     queries.FileTypeQueries,
     queries.AmbassadorEventQueries,
     queries.AmbassadorManagementQueries,
+    queries.AttendanceQueries,
 ):
     pass
 
@@ -25,6 +27,7 @@ class AmbassadorQueryClient(
 class AmbassadorQueryMobile(
     queries.FileTypeQueries,
     queries.AmbassadorEventQueries,
+    queries.AttendanceMobileQueries,
 ):
     pass
 
@@ -32,6 +35,7 @@ class AmbassadorQueryMobile(
 @strawberry.type
 class AmbassadorMutations(
     mutations.AmbassadorMutations,
+    mutations.AttendanceMutations,
 ):
     pass
 
@@ -39,5 +43,6 @@ class AmbassadorMutations(
 @strawberry.type
 class AmbassadorMutationsMobile(
     mutations.AmbassadorMutations,
+    mutations.AttendanceMutations,
 ):
     pass

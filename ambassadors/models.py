@@ -5,7 +5,7 @@ from django.conf import settings
 from django.contrib.postgres.fields import ArrayField
 
 from tenants.models import Tenant
-from events.models import Client, Event, Location
+from events.models import Client, Event, Location, TimeZone
 from ambassadors.managers import AmbassadorManager, AmbassadorInvitationManager
 from utils.models import Asyncable
 
@@ -72,13 +72,14 @@ class Ambassador(Asyncable, models.Model):
 
     class Meta:
         indexes = [
-            models.Index(fields=['is_active']),
-            models.Index(fields=['user', 'is_active']),
+            models.Index(fields=["is_active"]),
+            models.Index(fields=["user", "is_active"]),
         ]
 
 
 class AmbassadorInvitation(Asyncable, models.Model):
     """Model to track ambassador invitations sent by clients or spark-admins."""
+
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
 
@@ -106,7 +107,7 @@ class AmbassadorInvitation(Asyncable, models.Model):
 
     # The ambassador created from this invitation (if used)
     ambassador = models.ForeignKey(
-        'Ambassador',
+        "Ambassador",
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
@@ -133,10 +134,10 @@ class AmbassadorInvitation(Asyncable, models.Model):
 
     class Meta:
         indexes = [
-            models.Index(fields=['email', 'is_used']),
-            models.Index(fields=['email', 'is_used', 'expires_at']),
-            models.Index(fields=['token']),
-            models.Index(fields=['expires_at']),
+            models.Index(fields=["email", "is_used"]),
+            models.Index(fields=["email", "is_used", "expires_at"]),
+            models.Index(fields=["token"]),
+            models.Index(fields=["expires_at"]),
         ]
 
 
@@ -615,6 +616,139 @@ class Review(models.Model):
         on_delete=models.RESTRICT,
         null=True,
         related_name="reviews_updated_by",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
+class AttendanceType(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    name = models.CharField(max_length=255)
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="attendance_types_created_by",
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="attendance_types_updated_by",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
+class AttendanceStatus(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    name = models.CharField(max_length=255)
+
+    tenant = models.ForeignKey(
+        Tenant,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="attendance_status",
+    )
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="attendance_status_created_by",
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="attendance_status_updated_by",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
+class Source(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    name = models.CharField(max_length=255)
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="source_created_by",
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="source_updated_by",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
+class Attendance(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    clock_time = models.DateTimeField()
+    coordinates = ArrayField(models.FloatField(), size=2, null=True)
+
+    ambassador = models.ForeignKey(
+        Ambassador, on_delete=models.RESTRICT, null=True, related_name="attendance"
+    )
+
+    job = models.ForeignKey(
+        "jobs.Job", on_delete=models.RESTRICT, null=True, related_name="attendance"
+    )
+
+    event = models.ForeignKey(
+        Event, on_delete=models.RESTRICT, null=True, related_name="attendance"
+    )
+
+    attendace_type = models.ForeignKey(
+        AttendanceType, on_delete=models.RESTRICT, null=True, related_name="attendance"
+    )
+
+    attendance_status = models.ForeignKey(
+        AttendanceStatus,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="attendance",
+    )
+
+    source = models.ForeignKey(
+        Source,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="attendance",
+    )
+
+    timezone = models.ForeignKey(
+        TimeZone,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="attendance",
+    )
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="attendance_created_by",
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="attendance_updated_by",
     )
 
     created_at = models.DateTimeField(auto_now_add=True, editable=False)

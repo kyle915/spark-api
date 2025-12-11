@@ -11,6 +11,7 @@ from utils.graphql.permissions import StrictIsAuthenticated, IsClientOrSparkAdmi
 from events import models as event_models
 from events import types as event_types
 from utils.graphql.mixins import SparkGraphQLMixin
+from utils.graphql.queries import BaseQueriesService
 from utils.graphql.relay import (
     CountableConnection,
     connection_from_queryset_async,
@@ -203,8 +204,7 @@ class AmbassadorEventQueries:
                 status_slugs = [status.value for status in filters.statuses]
                 queryset = queryset.filter(status__slug__in=status_slugs)
             if filters.start_date:
-                queryset = queryset.filter(
-                    request__date__gte=filters.start_date)
+                queryset = queryset.filter(request__date__gte=filters.start_date)
             if filters.end_date:
                 queryset = queryset.filter(request__date__lte=filters.end_date)
 
@@ -235,6 +235,7 @@ class AmbassadorManagementQueries:
     ) -> CountableConnection[types.AmbassadorInvitationType]:
         """Get sent invitations for a tenant (client/spark-admin only)."""
         from .services import AmbassadorInvitationQueriesService
+
         service = AmbassadorInvitationQueriesService()
         return await service.get_sent_invitations(
             info=info,
@@ -257,6 +258,7 @@ class AmbassadorManagementQueries:
     ) -> CountableConnection[types.Ambassador]:
         """Get available ambassadors for a tenant (client/spark-admin only)."""
         from .services import AmbassadorQueriesService
+
         service = AmbassadorQueriesService()
         return await service.get_available_ambassadors(
             info=info,
@@ -266,3 +268,258 @@ class AmbassadorManagementQueries:
             before=before,
             filters=filters,
         )
+
+
+class AttendanceTypeQueriesService(BaseQueriesService):
+    """Service for attendance type queries."""
+
+    def get_model(self) -> Model:
+        """Get the model for the service."""
+        return models.AttendanceType
+
+
+class AttendanceStatusQueriesService(BaseQueriesService):
+    """Service for attendance status queries."""
+
+    def get_model(self) -> Model:
+        """Get the model for the service."""
+        return models.AttendanceStatus
+
+
+class SourceQueriesService(BaseQueriesService):
+    """Service for source queries."""
+
+    def get_model(self) -> Model:
+        """Get the model for the service."""
+        return models.Source
+
+
+class AttendanceQueriesService(BaseQueriesService):
+    """Service for attendance queries."""
+
+    def get_model(self) -> Model:
+        """Get the model for the service."""
+        return models.Attendance
+
+    def get_filtered_queryset(
+        self, tenant_id: int | None = None, q: str | None = None
+    ) -> QuerySet:
+        """
+        Override default filtering to avoid name__icontains lookups.
+
+        Attendance has no name field, so we just return the base queryset.
+        """
+        return self.get_queryset()
+
+    def apply_filters(
+        self,
+        queryset: QuerySet,
+        filters: inputs.AttendanceFiltersInput | None,
+    ) -> QuerySet:
+        """Apply attendance filters to queryset."""
+        if not filters:
+            return queryset
+
+        if filters.tenant_id:
+            queryset = queryset.filter(tenant_id=filters.tenant_id)
+        if filters.job_id:
+            queryset = queryset.filter(job_id=filters.job_id)
+        if filters.event_id:
+            queryset = queryset.filter(event_id=filters.event_id)
+        if filters.attendance_status_id:
+            queryset = queryset.filter(
+                attendance_status_id=filters.attendance_status_id
+            )
+        if filters.source_id:
+            queryset = queryset.filter(source_id=filters.source_id)
+        if filters.attendace_type_id:
+            queryset = queryset.filter(attendace_type_id=filters.attendace_type_id)
+        return queryset
+
+
+@strawberry.type
+class AttendanceQueries:
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def attendance_types(
+        self,
+        info: strawberry.Info,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        q: str | None = None,
+    ) -> CountableConnection[types.AttendanceType]:
+        service = AttendanceTypeQueriesService()
+        await service.get_user(info)
+        return await service.get_connection(
+            q=q,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+        )
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def attendance_type(
+        self, info: strawberry.Info, id: strawberry.ID
+    ) -> types.AttendanceType | None:
+        try:
+            service = AttendanceTypeQueriesService()
+            await service.get_user(info)
+            return await service.get_record(id)
+        except GraphQLError:
+            return None
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def attendance_statuses(
+        self,
+        info: strawberry.Info,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        q: str | None = None,
+    ) -> CountableConnection[types.AttendanceStatus]:
+        service = AttendanceStatusQueriesService()
+        tenant = await service.get_user_tenant(info)
+        return await service.get_connection(
+            tenant_id=tenant.id,
+            q=q,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+        )
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def attendance_status(
+        self, info: strawberry.Info, id: strawberry.ID
+    ) -> types.AttendanceStatus | None:
+        try:
+            service = AttendanceStatusQueriesService()
+            tenant = await service.get_user_tenant(info)
+            return await service.get_record(id, tenant.id)
+        except GraphQLError:
+            return None
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def sources(
+        self,
+        info: strawberry.Info,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        q: str | None = None,
+    ) -> CountableConnection[types.Source]:
+        service = SourceQueriesService()
+        await service.get_user(info)
+        return await service.get_connection(
+            q=q,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+        )
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def source(
+        self, info: strawberry.Info, id: strawberry.ID
+    ) -> types.Source | None:
+        try:
+            service = SourceQueriesService()
+            await service.get_user(info)
+            return await service.get_record(id)
+        except GraphQLError:
+            return None
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def attendances(
+        self,
+        info: strawberry.Info,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        filters: inputs.AttendanceFiltersInput | None = None,
+    ) -> CountableConnection[types.Attendance]:
+        service = AttendanceQueriesService()
+        await service.get_user(info)
+        queryset = service.get_queryset()
+        queryset = service.apply_filters(queryset, filters)
+        queryset = queryset.order_by(*service.ordering)
+
+        return await service.get_connection(
+            queryset=queryset,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+        )
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def attendance(
+        self, info: strawberry.Info, id: strawberry.ID
+    ) -> types.Attendance | None:
+        try:
+            service = AttendanceQueriesService()
+            await service.get_user(info)
+            return await service.get_record(id)
+        except GraphQLError:
+            return None
+
+
+@strawberry.type
+class AttendanceMobileQueries:
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def attendances_mobile(
+        self,
+        info: strawberry.Info,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        filters: inputs.AttendanceFiltersInput | None = None,
+    ) -> CountableConnection[types.Attendance]:
+        service = AttendanceQueriesService()
+        user = await service.get_user(info)
+
+        try:
+            ambassador = await models.Ambassador.objects.aget(user=user)
+        except models.Ambassador.DoesNotExist:
+            queryset = service.get_queryset().none()
+        else:
+            queryset = service.get_queryset().filter(ambassador=ambassador)
+
+        queryset = service.apply_filters(queryset, filters)
+        queryset = queryset.order_by(*service.ordering)
+
+        return await service.get_connection(
+            queryset=queryset,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+        )
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def attendance_mobile(
+        self, info: strawberry.Info, id: strawberry.ID
+    ) -> types.Attendance | None:
+        service = AttendanceQueriesService()
+        user = await service.get_user(info)
+
+        try:
+            ambassador = await models.Ambassador.objects.aget(user=user)
+        except models.Ambassador.DoesNotExist:
+            return None
+
+        try:
+            return await sync_to_async(service.get_model().objects.get)(
+                id=id,
+                ambassador=ambassador,
+            )
+        except GraphQLError:
+            return None
+        except service.get_model().DoesNotExist:
+            return None
