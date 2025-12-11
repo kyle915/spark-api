@@ -67,7 +67,6 @@ class TestClientManageAmbassadorJobMutations(JobsGraphQLTestCase):
             address="123 Main St",
             company=self.company,
             event=self.event,
-            location=self.location,
             job_title=self.job_title,
             tenant=self.tenant
         )
@@ -419,7 +418,6 @@ class TestSparkManageAmbassadorJobMutations(JobsGraphQLTestCase):
             address="456 Spark St",
             company=self.company,
             event=self.event,
-            location=self.location,
             job_title=self.job_title,
             tenant=self.tenant
         )

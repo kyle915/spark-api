@@ -1,14 +1,17 @@
 import graphql.utilities.lexicographic_sort_schema
 from uuid6 import uuid7
+from asgiref.sync import sync_to_async
+
 from django.utils.text import slugify
 from django.db import models
 from django.contrib.auth.models import AbstractUser
 from django.conf import settings
 
-from .managers import UserManager, TenantedUserManager
+from .managers import UserManager, TenantedUserManager, TenantManager
+from utils.models import Asyncable
 
 
-class Tenant(models.Model):
+class Tenant(Asyncable, models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     name = models.CharField(max_length=100)
@@ -29,6 +32,8 @@ class Tenant(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
     updated_at = models.DateTimeField(auto_now=True)
+
+    objects = TenantManager()
 
 
 class Role(models.Model):
@@ -72,6 +77,18 @@ class Role(models.Model):
     @property
     async def is_client(self) -> bool:
         return self.slug == 'client'
+
+    @staticmethod
+    async def get_ambassador_role() -> 'Role':
+        return await sync_to_async(Role.objects.get)(slug='ambassador')
+
+    @staticmethod
+    async def get_spark_admin_role() -> 'Role':
+        return await sync_to_async(Role.objects.get)(slug='spark-admin')
+
+    @staticmethod
+    async def get_client_role() -> 'Role':
+        return await sync_to_async(Role.objects.get)(slug='client')
 
 
 class User(AbstractUser):

@@ -1,9 +1,13 @@
 from uuid6 import uuid7
+
 from django.db import models
 from django.conf import settings
+from django.contrib.postgres.fields import ArrayField
+
 from tenants.models import Tenant
 from events.models import Client, Event, Location
-from django.contrib.postgres.fields import ArrayField
+from ambassadors.managers import AmbassadorManager, AmbassadorInvitationManager
+from utils.models import Asyncable
 
 
 class FileType(models.Model):
@@ -29,7 +33,7 @@ class FileType(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
 
-class Ambassador(models.Model):
+class Ambassador(Asyncable, models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     rating = models.IntegerField(default=0)
@@ -39,12 +43,13 @@ class Ambassador(models.Model):
         size=2,
         default=list,
     )
+    is_active = models.BooleanField(default=False)
 
-    user = models.ForeignKey(
+    user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
         null=False,
-        related_name="ambassadors",
+        related_name="ambassador",
     )
 
     created_by = models.ForeignKey(
@@ -62,6 +67,77 @@ class Ambassador(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
     updated_at = models.DateTimeField(auto_now=True)
+
+    objects = AmbassadorManager()
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['is_active']),
+            models.Index(fields=['user', 'is_active']),
+        ]
+
+
+class AmbassadorInvitation(Asyncable, models.Model):
+    """Model to track ambassador invitations sent by clients or spark-admins."""
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+
+    email = models.EmailField(null=False)
+    token = models.CharField(max_length=255, unique=True, null=False)
+    expires_at = models.DateTimeField(null=False)
+    is_used = models.BooleanField(default=False)
+    used_at = models.DateTimeField(null=True)
+
+    # Who created the invitation (client or spark-admin)
+    invited_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="ambassador_invitations_sent",
+    )
+
+    # Tenant for which the ambassador is being invited
+    tenant = models.ForeignKey(
+        Tenant,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="ambassador_invitations",
+    )
+
+    # The ambassador created from this invitation (if used)
+    ambassador = models.ForeignKey(
+        'Ambassador',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="invitation",
+    )
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="ambassador_invitations_created_by",
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="ambassador_invitations_updated_by",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    objects = AmbassadorInvitationManager()
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['email', 'is_used']),
+            models.Index(fields=['email', 'is_used', 'expires_at']),
+            models.Index(fields=['token']),
+            models.Index(fields=['expires_at']),
+        ]
 
 
 class AmbassadorReview(models.Model):

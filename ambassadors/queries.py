@@ -2,14 +2,14 @@ import strawberry
 from enum import Enum
 from asgiref.sync import sync_to_async
 from graphql import GraphQLError
-
 from django.db.models import QuerySet, Model
 
 from ambassadors import types
 from ambassadors import models
+from ambassadors import inputs
+from utils.graphql.permissions import StrictIsAuthenticated, IsClientOrSparkAdmin
 from events import models as event_models
 from events import types as event_types
-from utils.graphql.permissions import StrictIsAuthenticated
 from utils.graphql.mixins import SparkGraphQLMixin
 from utils.graphql.relay import (
     CountableConnection,
@@ -203,7 +203,8 @@ class AmbassadorEventQueries:
                 status_slugs = [status.value for status in filters.statuses]
                 queryset = queryset.filter(status__slug__in=status_slugs)
             if filters.start_date:
-                queryset = queryset.filter(request__date__gte=filters.start_date)
+                queryset = queryset.filter(
+                    request__date__gte=filters.start_date)
             if filters.end_date:
                 queryset = queryset.filter(request__date__lte=filters.end_date)
 
@@ -215,4 +216,53 @@ class AmbassadorEventQueries:
             after=after,
             last=last,
             before=before,
+        )
+
+
+@strawberry.type
+class AmbassadorManagementQueries:
+    """Queries for managing ambassadors and invitations (client/spark-admin only)."""
+
+    @strawberry.field(permission_classes=[IsClientOrSparkAdmin])
+    async def sent_invitations(
+        self,
+        info: strawberry.Info,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        filters: inputs.AmbassadorInvitationFiltersInput | None = None,
+    ) -> CountableConnection[types.AmbassadorInvitationType]:
+        """Get sent invitations for a tenant (client/spark-admin only)."""
+        from .services import AmbassadorInvitationQueriesService
+        service = AmbassadorInvitationQueriesService()
+        return await service.get_sent_invitations(
+            info=info,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+            filters=filters,
+        )
+
+    @strawberry.field(permission_classes=[IsClientOrSparkAdmin])
+    async def available_ambassadors(
+        self,
+        info: strawberry.Info,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        filters: inputs.AmbassadorFiltersInput | None = None,
+    ) -> CountableConnection[types.Ambassador]:
+        """Get available ambassadors for a tenant (client/spark-admin only)."""
+        from .services import AmbassadorQueriesService
+        service = AmbassadorQueriesService()
+        return await service.get_available_ambassadors(
+            info=info,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+            filters=filters,
         )

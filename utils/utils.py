@@ -10,7 +10,9 @@ class BlockIntrospectionForAnonymous(SchemaExtension):
         "SocialAuthGoogle",
         "SocialAuthApple",
         "CreateRequest",
-        "UpdateRequest"
+        "UpdateRequest",
+        "CreatePublicAmbassador",
+        "AcceptAmbassadorInvitation",
     ]
 
     def on_request_start(self):

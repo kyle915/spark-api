@@ -7,6 +7,7 @@ from ambassadors import queries, mutations
 class AmbassadorQuerySpark(
     queries.FileTypeQueries,
     queries.AmbassadorEventQueries,
+    queries.AmbassadorManagementQueries,
 ):
     pass
 
@@ -15,6 +16,7 @@ class AmbassadorQuerySpark(
 class AmbassadorQueryClient(
     queries.FileTypeQueries,
     queries.AmbassadorEventQueries,
+    queries.AmbassadorManagementQueries,
 ):
     pass
 

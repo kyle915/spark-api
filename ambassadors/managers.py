@@ -1,0 +1,45 @@
+from asgiref.sync import sync_to_async
+import strawberry
+
+from django.db import models
+
+from tenants.models import Tenant
+from utils.models import BaseManager as UtilsBaseManager
+
+
+class BaseManager(UtilsBaseManager):
+    def by_tenant(self, tenant: Tenant):
+        """Return by tenant."""
+        return self.filter(tenant=tenant)
+
+    def by_id(self, id: int | str | strawberry.ID):
+        """Return by ID."""
+        return self.select_related("user").get(pk=int(id))
+
+    async def _by_id(self, id: int | str | strawberry.ID):
+        """Return by ID but in async way."""
+        return await sync_to_async(self.by_id)(int(id))
+
+
+class AmbassadorManager(BaseManager, models.Manager):
+    def active(self):
+        """Return active ambassadors."""
+        return self.filter(is_active=True)
+
+    def inactive(self):
+        """Return inactive ambassadors."""
+        return self.filter(is_active=False)
+
+
+class AmbassadorInvitationManager(BaseManager, models.Manager):
+    def by_id(self, id: int | str | strawberry.ID):
+        """Return by ID."""
+        return self.select_related("tenant", "invited_by").get(pk=int(id))
+
+    def by_token(self, token: str):
+        """Return ambassador invitation by token."""
+        return self.select_related("tenant", "invited_by").get(token=token)
+
+    async def _by_token(self, token: str):
+        """Return ambassador invitation by token but in async way."""
+        return await sync_to_async(self.by_token)(token)

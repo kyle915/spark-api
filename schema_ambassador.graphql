@@ -744,6 +744,11 @@ enum UserRoleEnum {
   CLIENT
 }
 
+enum UserRoleEnum {
+  AMBASSADOR
+  CLIENT
+}
+
 """A helper model that handles user account stuff."""
 type UserStatusType {
   verified: Boolean!
