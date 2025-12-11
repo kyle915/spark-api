@@ -53,3 +53,10 @@ class AmbassadorReviewManager(BaseManager, models.Manager):
     def by_ambassador_and_client(self, ambassador_id: int, client_id: int):
         """Check if a review exists for this ambassador and client combination."""
         return self.filter(ambassador_id=ambassador_id, client_id=client_id).first()
+
+    async def _exists_by_ambassador_and_client(self, ambassador_id: int, client_id: int):
+        """Check if a review exists for this ambassador and client combination (async)."""
+        return await sync_to_async(
+            lambda: self.filter(ambassador_id=ambassador_id,
+                                client_id=client_id).exists()
+        )()

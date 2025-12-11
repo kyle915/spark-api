@@ -833,10 +833,7 @@ class CreateAmbassadorReviewService(BaseAmbassadorService):
         client = None
         if input.client_id:
             try:
-                @sync_to_async
-                def get_client():
-                    return Client.objects.get(pk=int(input.client_id))
-                client = await get_client()
+                client = await Client.objects._get(pk=int(input.client_id))
             except (Client.DoesNotExist, ValueError, TypeError):
                 return build_mutation_response(
                     CreateAmbassadorReviewResponse,
@@ -856,13 +853,10 @@ class CreateAmbassadorReviewService(BaseAmbassadorService):
 
         # Check for duplicate review (same client + ambassador)
         if client:
-            @sync_to_async
-            def check_duplicate():
-                return AmbassadorReview.objects.filter(
-                    ambassador=ambassador,
-                    client=client,
-                ).exists()
-            if await check_duplicate():
+            if await AmbassadorReview.objects._exists_by_ambassador_and_client(
+                ambassador.id,
+                client.id,
+            ):
                 return build_mutation_response(
                     CreateAmbassadorReviewResponse,
                     success=False,
@@ -872,19 +866,15 @@ class CreateAmbassadorReviewService(BaseAmbassadorService):
 
         # Create review
         try:
-            @sync_to_async
-            def create_review():
-                return AmbassadorReview.objects.create(
-                    ambassador=ambassador,
-                    client=client,
-                    tenant=tenant,
-                    review=input.review,
-                    score=input.score,
-                    created_by=user,
-                    updated_by=user,
-                )
-
-            review = await create_review()
+            review = await AmbassadorReview.objects._create(
+                ambassador=ambassador,
+                client=client,
+                tenant=tenant,
+                review=input.review,
+                score=input.score,
+                created_by=user,
+                updated_by=user,
+            )
 
             return build_mutation_response(
                 CreateAmbassadorReviewResponse,
@@ -916,12 +906,7 @@ class UpdateAmbassadorReviewService(BaseAmbassadorService):
 
         # Validate review exists
         try:
-            @sync_to_async
-            def get_review():
-                return AmbassadorReview.objects.select_related(
-                    "ambassador", "client", "tenant"
-                ).get(pk=int(input.review_id))
-            review = await get_review()
+            review = await AmbassadorReview.objects._by_id(input.review_id)
         except (AmbassadorReview.DoesNotExist, ValueError, TypeError):
             return build_mutation_response(
                 UpdateAmbassadorReviewResponse,
@@ -942,17 +927,12 @@ class UpdateAmbassadorReviewService(BaseAmbassadorService):
 
         # Update fields if provided
         try:
-            @sync_to_async
-            def update_review():
-                if input.review is not None:
-                    review.review = input.review
-                if input.score is not None:
-                    review.score = input.score
-                review.updated_by = user
-                review.save()
-                return review
-
-            review = await update_review()
+            if input.review is not None:
+                review.review = input.review
+            if input.score is not None:
+                review.score = input.score
+            review.updated_by = user
+            await review._save()
 
             return build_mutation_response(
                 UpdateAmbassadorReviewResponse,
@@ -984,10 +964,7 @@ class DeleteAmbassadorReviewService(BaseAmbassadorService):
 
         # Validate review exists
         try:
-            @sync_to_async
-            def get_review():
-                return AmbassadorReview.objects.get(pk=int(input.review_id))
-            review = await get_review()
+            review = await AmbassadorReview.objects._by_id(input.review_id)
         except (AmbassadorReview.DoesNotExist, ValueError, TypeError):
             return build_mutation_response(
                 DeleteAmbassadorReviewResponse,
@@ -997,11 +974,7 @@ class DeleteAmbassadorReviewService(BaseAmbassadorService):
             )
 
         try:
-            @sync_to_async
-            def delete_review():
-                review.delete()
-
-            await delete_review()
+            await review._delete()
 
             return build_mutation_response(
                 DeleteAmbassadorReviewResponse,

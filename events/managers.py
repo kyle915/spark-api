@@ -2,6 +2,7 @@ from django.db import models
 from asgiref.sync import sync_to_async
 
 from tenants.models import User
+from utils.models import BaseManager
 
 
 class DefaultStatusManager(models.Manager):
@@ -22,6 +23,11 @@ class DefaultStatusManager(models.Manager):
             queryset = queryset.filter(tenant_id=tenant_id)
 
         return queryset.first()
+
+
+class ClientManager(BaseManager, models.Manager):
+    """Manager for Client model with async support."""
+    pass
 
 
 class RequestStatusManager(DefaultStatusManager):
