@@ -115,7 +115,7 @@ class BaseNameableInput(BaseTenantInput):
 @strawberry.input
 class CreateEventInput(BaseNameableInput):
     event_type_id: strawberry.ID
-    request_id: strawberry.ID
+    request_id: strawberry.ID | None = None
     address: str
     notes: str
     is_national: bool = False

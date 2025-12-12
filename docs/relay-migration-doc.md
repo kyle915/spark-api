@@ -72,10 +72,18 @@ mutation CreateEvent($input: CreateEventInput!) {
     "clientMutationId": "create-evt-1",
     "name": "Launch Party",
     "eventTypeId": "RXZlbnRUeXBlOjE=",
-    "statusId": "RXZlbnRTdGF0dXM6MQ=="
+    "requestId": "UmVxdWVzdDox",
+    "address": "123 Main St, Springfield",
+    "notes": "Invite VIP clients and capture photos.",
+    "isNational": false,
+    "coordinates": [-74.006, 40.7128],
+    "startTime": "2024-10-01T17:00:00Z",
+    "endTime": "2024-10-01T19:00:00Z"
   }
 }
 ```
+
+`requestId` is optional; omit it to create standalone events and use `tenantId` (Spark Admin) or the authenticated user's tenant context instead.
 
 ## Final considerations
 - Always send **only one** of `first` or `last`. If both are omitted, the resolver falls back to `default_limit`.

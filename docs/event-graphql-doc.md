@@ -1803,14 +1803,20 @@ Represents a request in the system.
 **Fields:**
 - `name` (string, required): Event name (max 50 characters)
 - `eventTypeId` (ID, required): Event type ID
-- `statusId` (ID, required): Event status ID
-- `tenantId` (ID, optional): Tenant ID (only for Spark Admin)
+- `requestId` (ID, optional): Request ID to link the event to (also used to infer tenant)
+- `address` (string, required): Event address
+- `notes` (string, required): Additional notes for the event
+- `isNational` (boolean, optional): Marks the event as national (default: false)
+- `coordinates` (array of floats, optional): Location coordinates `[lng, lat]`
+- `startTime` (string, required): Event start datetime (ISO-8601)
+- `endTime` (string, required): Event end datetime (ISO-8601)
+- `tenantId` (ID, optional): Tenant ID (only for Spark Admin when not using `requestId`)
 
 **Validation:**
-- Name is required and cannot be empty
-- Event type ID is required
-- Status ID is required
-- Tenant ID validation depends on user role
+- Name and address are required and cannot be empty
+- Event type ID, start time, and end time are required
+- `requestId` is optional; when omitted, tenant context must be provided via `tenantId` (Spark Admin) or the authenticated user's tenant
+- Status is auto-set to the approved status for the tenant; it is not part of the input
 
 ---
 
@@ -2401,4 +2407,3 @@ print(response.json())
 ## Support
 
 For issues or questions, please refer to the main project documentation or contact the development team.
-

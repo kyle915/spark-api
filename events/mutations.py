@@ -217,30 +217,46 @@ class EventMutations:
             service.user = user
             service.is_spark_schema = service.is_spark_schema_request(info, user=user)
 
-            # Use the request's tenant to resolve the approved status
-            request: models.Request = await sync_to_async(models.Request.objects.get)(
-                id=input.request_id
-            )
-            tenant: Tenant = await sync_to_async(Tenant.objects.get)(
-                id=request.tenant_id
-            )
+            request_id = getattr(input, "request_id", None)
+            tenant_id: int | None = None
 
-            is_spark_admin = await user.role.is_spark_admin
-            if not is_spark_admin:
-                try:
-                    await sync_to_async(user.get_tenant)(tenant_id=tenant.id)
-                except Exception:
-                    raise GraphQLError(
-                        "You are not authorized to create events for this tenant."
+            if request_id:
+                request: models.Request = await sync_to_async(
+                    models.Request.objects.get
+                )(id=request_id)
+                tenant_id = request.tenant_id
+
+                is_spark_admin = await user.role.is_spark_admin
+                if not service.is_spark_schema and not is_spark_admin:
+                    try:
+                        await sync_to_async(user.get_tenant)(tenant_id=tenant_id)
+                    except Exception:
+                        raise GraphQLError(
+                            "You are not authorized to create events for this tenant."
+                        )
+            else:
+                input_tenant_id = getattr(input, "tenant_id", None)
+                if service.is_spark_schema and input_tenant_id:
+                    tenant_id = await service._resolve_tenant_without_membership(
+                        input_tenant_id
                     )
+                    setattr(input, "tenant_id", tenant_id)
+                else:
+                    tenant = await service.get_tenant(user, input_tenant_id)
+                    tenant_id = tenant.id
+
+            if tenant_id is None:
+                raise GraphQLError(
+                    "Tenant ID is required when creating an event without a request."
+                )
 
             approved_status = await sync_to_async(models.EventStatus.objects.get)(
-                slug="approved", tenant_id=tenant.id
+                slug="approved", tenant_id=tenant_id
             )
 
-            # Force the event to use the approved status for the request's tenant
+            # Force the event to use the approved status for the tenant
             input.status_id = approved_status.id
-            service.tenant_id = tenant.id
+            service.tenant_id = tenant_id
 
             event: models.Event = await service.save()
             return build_mutation_response(
@@ -255,6 +271,13 @@ class EventMutations:
                 types.EventDetailResponse,
                 success=False,
                 message=str(e),
+                input_obj=input,
+            )
+        except models.Request.DoesNotExist:
+            return build_mutation_response(
+                types.EventDetailResponse,
+                success=False,
+                message="Request not found.",
                 input_obj=input,
             )
         except models.EventStatus.DoesNotExist:

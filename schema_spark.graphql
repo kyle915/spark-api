@@ -859,7 +859,7 @@ input CreateEventInput {
   tenantId: ID = null
   name: String!
   eventTypeId: ID!
-  requestId: ID!
+  requestId: ID = null
   address: String!
   notes: String!
   isNational: Boolean! = false
@@ -3254,7 +3254,7 @@ input UpdateEventInput {
   tenantId: ID = null
   name: String!
   eventTypeId: ID!
-  requestId: ID!
+  requestId: ID = null
   address: String!
   notes: String!
   isNational: Boolean! = false
@@ -3578,13 +3578,13 @@ type UserType {
   isActive: Boolean!
   dateJoined: DateTime!
   status: UserStatusType!
+  lastName: String
+  email: String!
+  id: ID!
+  firstName: String
 
   """Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only."""
   username: String!
-  firstName: String
-  id: ID!
-  email: String!
-  lastName: String
   archived: Boolean!
   verified: Boolean!
 }
