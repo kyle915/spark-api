@@ -148,6 +148,42 @@ class DeleteAmbassadorReviewResponse:
     client_mutation_id: strawberry.ID | None = None
 
 
+@strawberry_django.type(models.AmbassadorNote)
+class AmbassadorNoteType:
+    id: strawberry.ID
+    uuid: str
+    note: str
+    ambassador_id: strawberry.ID
+    tenant_id: strawberry.ID
+    created_by_id: strawberry.ID
+    updated_by_id: strawberry.ID | None
+    created_at: str
+    updated_at: str
+
+
+@strawberry.type
+class CreateAmbassadorNoteResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    ambassador_note: AmbassadorNoteType | None = None
+
+
+@strawberry.type
+class UpdateAmbassadorNoteResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    ambassador_note: AmbassadorNoteType | None = None
+
+
+@strawberry.type
+class DeleteAmbassadorNoteResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+
+
 @strawberry_django.type(models.Skill)
 class SkillType:
     id: strawberry.ID

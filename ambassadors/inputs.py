@@ -116,6 +116,38 @@ class AmbassadorReviewFiltersInput:
 
 
 @strawberry.input
+class CreateAmbassadorNoteInput(BaseTenantInput):
+    """Input for creating an ambassador note."""
+    ambassador_id: strawberry.ID
+    note: str
+
+
+@strawberry.input
+class UpdateAmbassadorNoteInput(SparkGraphQLInput):
+    """Input for updating an ambassador note."""
+    note_id: strawberry.ID
+    note: str | None = None
+
+
+@strawberry.input
+class DeleteAmbassadorNoteInput(SparkGraphQLInput):
+    """Input for deleting an ambassador note."""
+    note_id: strawberry.ID
+
+
+@strawberry.input
+class AmbassadorNoteFiltersInput:
+    """Filters for ambassador note queries."""
+    ambassador_id: strawberry.ID | None = None
+    tenant_id: strawberry.ID | None = None
+    tenant_uuid: strawberry.ID | None = None
+    created_by_id: strawberry.ID | None = None
+    start_date: str | None = None
+    end_date: str | None = None
+    search: str | None = None
+
+
+@strawberry.input
 class CreateSkillInput(BaseNameableInput):
     """Input for creating a skill."""
     pass  # name and tenant_id inherited from BaseNameableInput

@@ -34,6 +34,9 @@ from .types import (
     CreateAmbassadorReviewResponse,
     UpdateAmbassadorReviewResponse,
     DeleteAmbassadorReviewResponse,
+    CreateAmbassadorNoteResponse,
+    UpdateAmbassadorNoteResponse,
+    DeleteAmbassadorNoteResponse,
     CreateSkillResponse,
     UpdateSkillResponse,
     DeleteSkillResponse,
@@ -55,6 +58,9 @@ from .services import (
     CreateAmbassadorReviewService,
     UpdateAmbassadorReviewService,
     DeleteAmbassadorReviewService,
+    CreateAmbassadorNoteService,
+    UpdateAmbassadorNoteService,
+    DeleteAmbassadorNoteService,
     CreateSkillService,
     UpdateSkillService,
     DeleteSkillService,
@@ -290,6 +296,30 @@ class AmbassadorMutations:
         input: inputs.DeleteAmbassadorReviewInput,
     ) -> DeleteAmbassadorReviewResponse:
         return await DeleteAmbassadorReviewService.delete(input, info)
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def create_ambassador_note(
+        self,
+        info: strawberry.Info,
+        input: inputs.CreateAmbassadorNoteInput,
+    ) -> CreateAmbassadorNoteResponse:
+        return await CreateAmbassadorNoteService.create(input, info)
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def update_ambassador_note(
+        self,
+        info: strawberry.Info,
+        input: inputs.UpdateAmbassadorNoteInput,
+    ) -> UpdateAmbassadorNoteResponse:
+        return await UpdateAmbassadorNoteService.update(input, info)
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def delete_ambassador_note(
+        self,
+        info: strawberry.Info,
+        input: inputs.DeleteAmbassadorNoteInput,
+    ) -> DeleteAmbassadorNoteResponse:
+        return await DeleteAmbassadorNoteService.delete(input, info)
 
     @relay.mutation(permission_classes=[StrictIsAuthenticated])
     async def create_skill(

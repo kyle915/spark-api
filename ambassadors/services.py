@@ -16,7 +16,7 @@ from utils.graphql.inputs import SparkGraphQLInput
 from utils.graphql.mixins import SparkGraphQLMixin
 from utils.graphql.relay import CountableConnection
 
-from .models import Ambassador, AmbassadorInvitation, AmbassadorReview, Skill, AmbassadorSkill
+from .models import Ambassador, AmbassadorInvitation, AmbassadorReview, AmbassadorNote, Skill, AmbassadorSkill
 from .types import (
     PublicAmbassadorCreationResponse,
     AmbassadorInvitationResponse,
@@ -29,6 +29,9 @@ from .types import (
     CreateAmbassadorReviewResponse,
     UpdateAmbassadorReviewResponse,
     DeleteAmbassadorReviewResponse,
+    CreateAmbassadorNoteResponse,
+    UpdateAmbassadorNoteResponse,
+    DeleteAmbassadorNoteResponse,
     CreateSkillResponse,
     UpdateSkillResponse,
     DeleteSkillResponse,
@@ -1098,6 +1101,253 @@ class AmbassadorReviewQueriesService(SparkGraphQLMixin):
                 if filters.search:
                     queryset = queryset.filter(
                         review__icontains=filters.search)
+
+            return queryset.order_by("-created_at")
+
+        return await get_queryset()
+
+
+class CreateAmbassadorNoteService(BaseAmbassadorService):
+    """Service for creating ambassador notes."""
+
+    @classmethod
+    async def create(
+        cls,
+        input: inputs.CreateAmbassadorNoteInput,
+        info: strawberry.Info,
+    ) -> CreateAmbassadorNoteResponse:
+        """Create an ambassador note (authenticated users only)."""
+        user = info.context.request.user
+
+        # Validate ambassador exists
+        try:
+            ambassador = await Ambassador.objects._by_id(input.ambassador_id)
+        except (Ambassador.DoesNotExist, ValueError, TypeError):
+            return build_mutation_response(
+                CreateAmbassadorNoteResponse,
+                success=False,
+                message="Ambassador not found.",
+                input_obj=input,
+            )
+
+        # Resolve tenant
+        service_instance = cls()
+        tenant = await service_instance.get_user_tenant(
+            info,
+            tenant_id=input.tenant_id,
+            tenant_uuid=None,
+            user=user,
+        )
+
+        # Create note
+        try:
+            note = await AmbassadorNote.objects.acreate(
+                ambassador=ambassador,
+                tenant=tenant,
+                note=input.note,
+                created_by=user,
+                updated_by=user,
+            )
+
+            return build_mutation_response(
+                CreateAmbassadorNoteResponse,
+                success=True,
+                message="Note created successfully.",
+                input_obj=input,
+                ambassador_note=note,
+            )
+        except Exception as e:
+            return build_mutation_response(
+                CreateAmbassadorNoteResponse,
+                success=False,
+                message=f"Error creating note: {str(e)}",
+                input_obj=input,
+            )
+
+
+class UpdateAmbassadorNoteService(BaseAmbassadorService):
+    """Service for updating ambassador notes."""
+
+    @classmethod
+    async def update(
+        cls,
+        input: inputs.UpdateAmbassadorNoteInput,
+        info: strawberry.Info,
+    ) -> UpdateAmbassadorNoteResponse:
+        """Update an ambassador note (authenticated users only)."""
+        user = info.context.request.user
+
+        # Validate note exists
+        try:
+            note = await AmbassadorNote.objects.aget(id=int(input.note_id))
+        except (AmbassadorNote.DoesNotExist, ValueError, TypeError):
+            return build_mutation_response(
+                UpdateAmbassadorNoteResponse,
+                success=False,
+                message="Note not found.",
+                input_obj=input,
+            )
+
+        # Update fields if provided
+        try:
+            if input.note is not None:
+                note.note = input.note
+            note.updated_by = user
+            await sync_to_async(note.save)()
+
+            return build_mutation_response(
+                UpdateAmbassadorNoteResponse,
+                success=True,
+                message="Note updated successfully.",
+                input_obj=input,
+                ambassador_note=note,
+            )
+        except Exception as e:
+            return build_mutation_response(
+                UpdateAmbassadorNoteResponse,
+                success=False,
+                message=f"Error updating note: {str(e)}",
+                input_obj=input,
+            )
+
+
+class DeleteAmbassadorNoteService(BaseAmbassadorService):
+    """Service for deleting ambassador notes."""
+
+    @classmethod
+    async def delete(
+        cls,
+        input: inputs.DeleteAmbassadorNoteInput,
+        info: strawberry.Info,
+    ) -> DeleteAmbassadorNoteResponse:
+        """Delete an ambassador note (authenticated users only)."""
+        user = info.context.request.user
+
+        # Validate note exists
+        try:
+            note = await AmbassadorNote.objects.aget(id=int(input.note_id))
+        except (AmbassadorNote.DoesNotExist, ValueError, TypeError):
+            return build_mutation_response(
+                DeleteAmbassadorNoteResponse,
+                success=False,
+                message="Note not found.",
+                input_obj=input,
+            )
+
+        try:
+            await sync_to_async(note.delete)()
+
+            return build_mutation_response(
+                DeleteAmbassadorNoteResponse,
+                success=True,
+                message="Note deleted successfully.",
+                input_obj=input,
+            )
+        except Exception as e:
+            return build_mutation_response(
+                DeleteAmbassadorNoteResponse,
+                success=False,
+                message=f"Error deleting note: {str(e)}",
+                input_obj=input,
+            )
+
+
+class AmbassadorNoteQueriesService(SparkGraphQLMixin):
+    """Service for ambassador note queries."""
+
+    async def get_ambassador_notes(
+        self,
+        info: strawberry.Info,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        filters: inputs.AmbassadorNoteFiltersInput | None = None,
+    ) -> CountableConnection:
+        """Get ambassador notes with filters (authenticated users only)."""
+        user = await self.get_user(info)
+        is_spark_request = self.is_spark_schema_request(info, user=user)
+
+        # Resolve tenant
+        tenant_id: int | None = None
+        tenant_id_input = filters.tenant_id if filters else None
+        tenant_uuid_input = filters.tenant_uuid if filters else None
+
+        should_filter_by_tenant = (
+            not is_spark_request or tenant_id_input is not None or tenant_uuid_input is not None
+        )
+        if should_filter_by_tenant:
+            tenant = await self.get_user_tenant(
+                info,
+                tenant_id=tenant_id_input,
+                tenant_uuid=tenant_uuid_input,
+                user=user,
+            )
+            tenant_id = tenant.id
+
+        queryset = await self._get_filtered_notes_queryset(tenant_id, filters)
+
+        from utils.graphql.relay import connection_from_queryset_async
+        from ambassadors.types import AmbassadorNoteType
+        return await connection_from_queryset_async(
+            queryset,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+            default_limit=10,
+            max_limit=50,
+        )
+
+    async def _get_filtered_notes_queryset(
+        self,
+        tenant_id: int | None = None,
+        filters: inputs.AmbassadorNoteFiltersInput | None = None,
+    ):
+        """Get filtered queryset for notes."""
+        @sync_to_async
+        def get_queryset():
+            queryset = AmbassadorNote.objects.select_related(
+                "ambassador", "tenant", "created_by", "updated_by"
+            )
+
+            # Filter by tenant
+            if tenant_id:
+                queryset = queryset.filter(tenant_id=tenant_id)
+
+            if filters:
+                # Filter by ambassador
+                if filters.ambassador_id:
+                    queryset = queryset.filter(
+                        ambassador_id=int(filters.ambassador_id))
+
+                # Filter by created_by
+                if filters.created_by_id:
+                    queryset = queryset.filter(
+                        created_by_id=int(filters.created_by_id))
+
+                # Filter by date range
+                if filters.start_date:
+                    try:
+                        start_datetime = datetime.fromisoformat(
+                            filters.start_date.replace('Z', '+00:00'))
+                        queryset = queryset.filter(
+                            created_at__gte=start_datetime)
+                    except (ValueError, AttributeError):
+                        pass  # Invalid date format, skip filter
+                if filters.end_date:
+                    try:
+                        end_datetime = datetime.fromisoformat(
+                            filters.end_date.replace('Z', '+00:00'))
+                        queryset = queryset.filter(
+                            created_at__lte=end_datetime)
+                    except (ValueError, AttributeError):
+                        pass  # Invalid date format, skip filter
+
+                # Search in note text
+                if filters.search:
+                    queryset = queryset.filter(
+                        note__icontains=filters.search)
 
             return queryset.order_by("-created_at")
 

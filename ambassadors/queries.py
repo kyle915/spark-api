@@ -316,6 +316,51 @@ class AmbassadorReviewQueries:
 
 
 @strawberry.type
+class AmbassadorNoteQueries:
+    """Queries for ambassador notes."""
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def ambassador_notes(
+        self,
+        info: strawberry.Info,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        filters: inputs.AmbassadorNoteFiltersInput | None = None,
+    ) -> CountableConnection[types.AmbassadorNoteType]:
+        """Get ambassador notes with filters (authenticated users only)."""
+        from .services import AmbassadorNoteQueriesService
+        service = AmbassadorNoteQueriesService()
+        return await service.get_ambassador_notes(
+            info=info,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+            filters=filters,
+        )
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def ambassador_note(
+        self,
+        info: strawberry.Info,
+        note_id: strawberry.ID,
+    ) -> types.AmbassadorNoteType | None:
+        """Get a single ambassador note by ID (authenticated users only)."""
+        from .models import AmbassadorNote
+        try:
+            @sync_to_async
+            def get_note():
+                return AmbassadorNote.objects.select_related(
+                    "ambassador", "tenant", "created_by", "updated_by"
+                ).get(pk=int(note_id))
+            return await get_note()
+        except (AmbassadorNote.DoesNotExist, ValueError, TypeError):
+            return None
+
+
+@strawberry.type
 class SkillQueries:
     """Queries for skills."""
 
