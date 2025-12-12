@@ -31,6 +31,17 @@ from .types import (
     ApproveAmbassadorResponse,
     UpdateAmbassadorResponse,
     DeleteInvitationResponse,
+    CreateAmbassadorReviewResponse,
+    UpdateAmbassadorReviewResponse,
+    DeleteAmbassadorReviewResponse,
+    CreateAmbassadorNoteResponse,
+    UpdateAmbassadorNoteResponse,
+    DeleteAmbassadorNoteResponse,
+    CreateSkillResponse,
+    UpdateSkillResponse,
+    DeleteSkillResponse,
+    CreateAmbassadorSkillResponse,
+    DeleteAmbassadorSkillResponse,
     AttendanceTypeDetailResponse,
     AttendanceStatusDetailResponse,
     SourceDetailResponse,
@@ -44,6 +55,17 @@ from .services import (
     ApproveAmbassadorService,
     UpdateAmbassadorService,
     DeleteInvitationService,
+    CreateAmbassadorReviewService,
+    UpdateAmbassadorReviewService,
+    DeleteAmbassadorReviewService,
+    CreateAmbassadorNoteService,
+    UpdateAmbassadorNoteService,
+    DeleteAmbassadorNoteService,
+    CreateSkillService,
+    UpdateSkillService,
+    DeleteSkillService,
+    CreateAmbassadorSkillService,
+    DeleteAmbassadorSkillService,
 )
 
 
@@ -55,7 +77,8 @@ class TenantOptionalMutationService(BaseMutationService):
         await self.validations()
 
         model_class = self.get_model()
-        is_update: bool = hasattr(self.input, "id") and self.input.id is not None
+        is_update: bool = hasattr(
+            self.input, "id") and self.input.id is not None
         if is_update:
             model = await sync_to_async(model_class.objects.get)(id=self.input.id)
             if self.user and hasattr(model, "updated_by"):
@@ -96,7 +119,8 @@ async def _get_default_application_status(tenant_id: int) -> JobStatus | None:
     """Pick a sensible default status for a new application."""
     for pattern in ("apply", "pending"):
         status = await sync_to_async(
-            JobStatus.objects.filter(tenant_id=tenant_id, name__icontains=pattern).first
+            JobStatus.objects.filter(
+                tenant_id=tenant_id, name__icontains=pattern).first
         )()
         if status:
             return status
@@ -248,6 +272,94 @@ class AmbassadorMutations:
         input: inputs.DeleteInvitationInput,
     ) -> DeleteInvitationResponse:
         return await DeleteInvitationService.delete(input, info)
+
+    @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
+    async def create_ambassador_review(
+        self,
+        info: strawberry.Info,
+        input: inputs.CreateAmbassadorReviewInput,
+    ) -> CreateAmbassadorReviewResponse:
+        return await CreateAmbassadorReviewService.create(input, info)
+
+    @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
+    async def update_ambassador_review(
+        self,
+        info: strawberry.Info,
+        input: inputs.UpdateAmbassadorReviewInput,
+    ) -> UpdateAmbassadorReviewResponse:
+        return await UpdateAmbassadorReviewService.update(input, info)
+
+    @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
+    async def delete_ambassador_review(
+        self,
+        info: strawberry.Info,
+        input: inputs.DeleteAmbassadorReviewInput,
+    ) -> DeleteAmbassadorReviewResponse:
+        return await DeleteAmbassadorReviewService.delete(input, info)
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def create_ambassador_note(
+        self,
+        info: strawberry.Info,
+        input: inputs.CreateAmbassadorNoteInput,
+    ) -> CreateAmbassadorNoteResponse:
+        return await CreateAmbassadorNoteService.create(input, info)
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def update_ambassador_note(
+        self,
+        info: strawberry.Info,
+        input: inputs.UpdateAmbassadorNoteInput,
+    ) -> UpdateAmbassadorNoteResponse:
+        return await UpdateAmbassadorNoteService.update(input, info)
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def delete_ambassador_note(
+        self,
+        info: strawberry.Info,
+        input: inputs.DeleteAmbassadorNoteInput,
+    ) -> DeleteAmbassadorNoteResponse:
+        return await DeleteAmbassadorNoteService.delete(input, info)
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def create_skill(
+        self,
+        info: strawberry.Info,
+        input: inputs.CreateSkillInput,
+    ) -> CreateSkillResponse:
+        return await CreateSkillService.create(input, info)
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def update_skill(
+        self,
+        info: strawberry.Info,
+        input: inputs.UpdateSkillInput,
+    ) -> UpdateSkillResponse:
+        return await UpdateSkillService.update(input, info)
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def delete_skill(
+        self,
+        info: strawberry.Info,
+        input: inputs.DeleteSkillInput,
+    ) -> DeleteSkillResponse:
+        return await DeleteSkillService.delete(input, info)
+
+    @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
+    async def create_ambassador_skill(
+        self,
+        info: strawberry.Info,
+        input: inputs.CreateAmbassadorSkillInput,
+    ) -> CreateAmbassadorSkillResponse:
+        return await CreateAmbassadorSkillService.create(input, info)
+
+    @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
+    async def delete_ambassador_skill(
+        self,
+        info: strawberry.Info,
+        input: inputs.DeleteAmbassadorSkillInput,
+    ) -> DeleteAmbassadorSkillResponse:
+        return await DeleteAmbassadorSkillService.delete(input, info)
 
 
 class AttendanceTypeMutationService(TenantOptionalMutationService):

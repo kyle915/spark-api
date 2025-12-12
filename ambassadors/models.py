@@ -6,7 +6,13 @@ from django.contrib.postgres.fields import ArrayField
 
 from tenants.models import Tenant
 from events.models import Client, Event, Location, TimeZone
-from ambassadors.managers import AmbassadorManager, AmbassadorInvitationManager
+from ambassadors.managers import (
+    AmbassadorManager,
+    AmbassadorInvitationManager,
+    AmbassadorReviewManager,
+    SkillManager,
+    AmbassadorSkillManager,
+)
 from utils.models import Asyncable
 
 
@@ -141,7 +147,7 @@ class AmbassadorInvitation(Asyncable, models.Model):
         ]
 
 
-class AmbassadorReview(models.Model):
+class AmbassadorReview(Asyncable, models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     review = models.TextField(null=True)
@@ -183,6 +189,13 @@ class AmbassadorReview(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
     updated_at = models.DateTimeField(auto_now=True)
+
+    objects = AmbassadorReviewManager()
+
+    class Meta:
+        verbose_name = "Ambassador Review"
+        verbose_name_plural = "Ambassador Reviews"
+        unique_together = ("ambassador", "client")
 
 
 class AmbassadorEvent(models.Model):
@@ -298,7 +311,7 @@ class AmbassadorTrait(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
 
-class Skill(models.Model):
+class Skill(Asyncable, models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     name = models.CharField(max_length=50)
@@ -326,8 +339,10 @@ class Skill(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
     updated_at = models.DateTimeField(auto_now=True)
 
+    objects = SkillManager()
 
-class AmbassadorSkill(models.Model):
+
+class AmbassadorSkill(Asyncable, models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
 
@@ -365,6 +380,11 @@ class AmbassadorSkill(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
     updated_at = models.DateTimeField(auto_now=True)
+
+    objects = AmbassadorSkillManager()
+
+    class Meta:
+        unique_together = ("ambassador", "skill")
 
 
 class AmbassadorNote(models.Model):

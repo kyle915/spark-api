@@ -79,6 +79,123 @@ class DeleteInvitationInput(SparkGraphQLInput):
 
 
 @strawberry.input
+class CreateAmbassadorReviewInput(BaseTenantInput):
+    """Input for creating an ambassador review."""
+    ambassador_id: strawberry.ID
+    client_id: strawberry.ID | None = None
+    review: str | None = None
+    score: int | None = None
+
+
+@strawberry.input
+class UpdateAmbassadorReviewInput(SparkGraphQLInput):
+    """Input for updating an ambassador review."""
+    review_id: strawberry.ID
+    review: str | None = None
+    score: int | None = None
+
+
+@strawberry.input
+class DeleteAmbassadorReviewInput(SparkGraphQLInput):
+    """Input for deleting an ambassador review."""
+    review_id: strawberry.ID
+
+
+@strawberry.input
+class AmbassadorReviewFiltersInput:
+    """Filters for ambassador review queries."""
+    ambassador_id: strawberry.ID | None = None
+    client_id: strawberry.ID | None = None
+    tenant_id: strawberry.ID | None = None
+    tenant_uuid: strawberry.ID | None = None
+    min_score: int | None = None
+    max_score: int | None = None
+    start_date: str | None = None
+    end_date: str | None = None
+    search: str | None = None
+
+
+@strawberry.input
+class CreateAmbassadorNoteInput(BaseTenantInput):
+    """Input for creating an ambassador note."""
+    ambassador_id: strawberry.ID
+    note: str
+
+
+@strawberry.input
+class UpdateAmbassadorNoteInput(SparkGraphQLInput):
+    """Input for updating an ambassador note."""
+    note_id: strawberry.ID
+    note: str | None = None
+
+
+@strawberry.input
+class DeleteAmbassadorNoteInput(SparkGraphQLInput):
+    """Input for deleting an ambassador note."""
+    note_id: strawberry.ID
+
+
+@strawberry.input
+class AmbassadorNoteFiltersInput:
+    """Filters for ambassador note queries."""
+    ambassador_id: strawberry.ID | None = None
+    tenant_id: strawberry.ID | None = None
+    tenant_uuid: strawberry.ID | None = None
+    created_by_id: strawberry.ID | None = None
+    start_date: str | None = None
+    end_date: str | None = None
+    search: str | None = None
+
+
+@strawberry.input
+class CreateSkillInput(BaseNameableInput):
+    """Input for creating a skill."""
+    pass  # name and tenant_id inherited from BaseNameableInput
+
+
+@strawberry.input
+class UpdateSkillInput(CreateSkillInput):
+    """Input for updating a skill."""
+    id: strawberry.ID
+
+
+@strawberry.input
+class DeleteSkillInput(SparkGraphQLInput):
+    """Input for deleting a skill."""
+    id: strawberry.ID
+
+
+@strawberry.input
+class SkillFiltersInput:
+    """Filters for skill queries."""
+    tenant_id: strawberry.ID | None = None
+    tenant_uuid: strawberry.ID | None = None
+    search: str | None = None
+
+
+@strawberry.input
+class CreateAmbassadorSkillInput(BaseTenantInput):
+    """Input for creating an ambassador skill."""
+    ambassador_id: strawberry.ID
+    skill_id: strawberry.ID
+
+
+@strawberry.input
+class DeleteAmbassadorSkillInput(SparkGraphQLInput):
+    """Input for deleting an ambassador skill."""
+    ambassador_skill_id: strawberry.ID
+
+
+@strawberry.input
+class AmbassadorSkillFiltersInput:
+    """Filters for ambassador skill queries."""
+    ambassador_id: strawberry.ID | None = None
+    skill_id: strawberry.ID | None = None
+    tenant_id: strawberry.ID | None = None
+    tenant_uuid: strawberry.ID | None = None
+
+
+@strawberry.input
 class CreateAttendanceTypeInput(BaseNameableInput):
     pass
 

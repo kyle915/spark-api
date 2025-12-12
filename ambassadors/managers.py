@@ -43,3 +43,43 @@ class AmbassadorInvitationManager(BaseManager, models.Manager):
     async def _by_token(self, token: str):
         """Return ambassador invitation by token but in async way."""
         return await sync_to_async(self.by_token)(token)
+
+
+class AmbassadorReviewManager(BaseManager, models.Manager):
+    def by_id(self, id: int | str | strawberry.ID):
+        """Return by ID with select_related."""
+        return self.select_related("ambassador", "client", "tenant").get(pk=int(id))
+
+    def by_ambassador_and_client(self, ambassador_id: int, client_id: int):
+        """Check if a review exists for this ambassador and client combination."""
+        return self.filter(ambassador_id=ambassador_id, client_id=client_id).first()
+
+    async def _exists_by_ambassador_and_client(self, ambassador_id: int, client_id: int):
+        """Check if a review exists for this ambassador and client combination (async)."""
+        return await sync_to_async(
+            lambda: self.filter(ambassador_id=ambassador_id,
+                                client_id=client_id).exists()
+        )()
+
+
+class SkillManager(BaseManager, models.Manager):
+    """Manager for Skill model with async support."""
+
+    def by_id(self, id: int | str | strawberry.ID):
+        """Return by ID with select_related."""
+        return self.select_related("tenant").get(pk=int(id))
+
+
+class AmbassadorSkillManager(BaseManager, models.Manager):
+    """Manager for AmbassadorSkill model with async support."""
+
+    def by_id(self, id: int | str | strawberry.ID):
+        """Return by ID with select_related."""
+        return self.select_related("ambassador", "skill", "tenant").get(pk=int(id))
+
+    async def _exists_by_ambassador_and_skill(self, ambassador_id: int, skill_id: int):
+        """Check if an AmbassadorSkill exists for this ambassador and skill combination (async)."""
+        return await sync_to_async(
+            lambda: self.filter(ambassador_id=ambassador_id,
+                                skill_id=skill_id).exists()
+        )()

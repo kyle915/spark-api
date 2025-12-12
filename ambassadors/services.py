@@ -16,7 +16,7 @@ from utils.graphql.inputs import SparkGraphQLInput
 from utils.graphql.mixins import SparkGraphQLMixin
 from utils.graphql.relay import CountableConnection
 
-from .models import Ambassador, AmbassadorInvitation
+from .models import Ambassador, AmbassadorInvitation, AmbassadorReview, AmbassadorNote, Skill, AmbassadorSkill
 from .types import (
     PublicAmbassadorCreationResponse,
     AmbassadorInvitationResponse,
@@ -26,7 +26,19 @@ from .types import (
     DeleteInvitationResponse,
     AmbassadorInvitationType,
     Ambassador as AmbassadorType,
+    CreateAmbassadorReviewResponse,
+    UpdateAmbassadorReviewResponse,
+    DeleteAmbassadorReviewResponse,
+    CreateAmbassadorNoteResponse,
+    UpdateAmbassadorNoteResponse,
+    DeleteAmbassadorNoteResponse,
+    CreateSkillResponse,
+    UpdateSkillResponse,
+    DeleteSkillResponse,
+    CreateAmbassadorSkillResponse,
+    DeleteAmbassadorSkillResponse,
 )
+from events.models import Client
 from . import inputs
 from .constants import INVITATION_EXPIRY_DAYS
 
@@ -786,6 +798,979 @@ class AmbassadorQueriesService(SparkGraphQLMixin):
                         | Q(user__last_name__icontains=filters.search)
                         | Q(address__icontains=filters.search)
                     )
+
+            return queryset.order_by("-created_at")
+
+        return await get_queryset()
+
+
+class CreateAmbassadorReviewService(BaseAmbassadorService):
+    """Service for creating ambassador reviews."""
+
+    @classmethod
+    async def create(
+        cls,
+        input: inputs.CreateAmbassadorReviewInput,
+        info: strawberry.Info,
+    ) -> CreateAmbassadorReviewResponse:
+        """Create an ambassador review (client/spark-admin only)."""
+        user = info.context.request.user
+
+        # Validate score range if provided
+        if input.score is not None:
+            if input.score < 1 or input.score > 5:
+                return build_mutation_response(
+                    CreateAmbassadorReviewResponse,
+                    success=False,
+                    message="Score must be between 1 and 5.",
+                    input_obj=input,
+                )
+
+        # Validate ambassador exists
+        try:
+            ambassador = await Ambassador.objects._by_id(input.ambassador_id)
+        except (Ambassador.DoesNotExist, ValueError, TypeError):
+            return build_mutation_response(
+                CreateAmbassadorReviewResponse,
+                success=False,
+                message="Ambassador not found.",
+                input_obj=input,
+            )
+
+        # Validate client exists if provided
+        client = None
+        if input.client_id:
+            try:
+                client = await Client.objects._get(pk=int(input.client_id))
+            except (Client.DoesNotExist, ValueError, TypeError):
+                return build_mutation_response(
+                    CreateAmbassadorReviewResponse,
+                    success=False,
+                    message="Client not found.",
+                    input_obj=input,
+                )
+
+        # Resolve tenant
+        service_instance = cls()
+        tenant = await service_instance.get_user_tenant(
+            info,
+            tenant_id=input.tenant_id,
+            tenant_uuid=None,
+            user=user,
+        )
+
+        # Check for duplicate review (same client + ambassador)
+        if client:
+            if await AmbassadorReview.objects._exists_by_ambassador_and_client(
+                ambassador.id,
+                client.id,
+            ):
+                return build_mutation_response(
+                    CreateAmbassadorReviewResponse,
+                    success=False,
+                    message="A review for this ambassador and client already exists.",
+                    input_obj=input,
+                )
+
+        # Create review
+        try:
+            review = await AmbassadorReview.objects._create(
+                ambassador=ambassador,
+                client=client,
+                tenant=tenant,
+                review=input.review,
+                score=input.score,
+                created_by=user,
+                updated_by=user,
+            )
+
+            return build_mutation_response(
+                CreateAmbassadorReviewResponse,
+                success=True,
+                message="Review created successfully.",
+                input_obj=input,
+                ambassador_review=review,
+            )
+        except Exception as e:
+            return build_mutation_response(
+                CreateAmbassadorReviewResponse,
+                success=False,
+                message=f"Error creating review: {str(e)}",
+                input_obj=input,
+            )
+
+
+class UpdateAmbassadorReviewService(BaseAmbassadorService):
+    """Service for updating ambassador reviews."""
+
+    @classmethod
+    async def update(
+        cls,
+        input: inputs.UpdateAmbassadorReviewInput,
+        info: strawberry.Info,
+    ) -> UpdateAmbassadorReviewResponse:
+        """Update an ambassador review (client/spark-admin only)."""
+        user = info.context.request.user
+
+        # Validate review exists
+        try:
+            review = await AmbassadorReview.objects._by_id(input.review_id)
+        except (AmbassadorReview.DoesNotExist, ValueError, TypeError):
+            return build_mutation_response(
+                UpdateAmbassadorReviewResponse,
+                success=False,
+                message="Review not found.",
+                input_obj=input,
+            )
+
+        # Validate score range if provided
+        if input.score is not None:
+            if input.score < 1 or input.score > 5:
+                return build_mutation_response(
+                    UpdateAmbassadorReviewResponse,
+                    success=False,
+                    message="Score must be between 1 and 5.",
+                    input_obj=input,
+                )
+
+        # Update fields if provided
+        try:
+            if input.review is not None:
+                review.review = input.review
+            if input.score is not None:
+                review.score = input.score
+            review.updated_by = user
+            await review._save()
+
+            return build_mutation_response(
+                UpdateAmbassadorReviewResponse,
+                success=True,
+                message="Review updated successfully.",
+                input_obj=input,
+                ambassador_review=review,
+            )
+        except Exception as e:
+            return build_mutation_response(
+                UpdateAmbassadorReviewResponse,
+                success=False,
+                message=f"Error updating review: {str(e)}",
+                input_obj=input,
+            )
+
+
+class DeleteAmbassadorReviewService(BaseAmbassadorService):
+    """Service for deleting ambassador reviews."""
+
+    @classmethod
+    async def delete(
+        cls,
+        input: inputs.DeleteAmbassadorReviewInput,
+        info: strawberry.Info,
+    ) -> DeleteAmbassadorReviewResponse:
+        """Delete an ambassador review (client/spark-admin only)."""
+        user = info.context.request.user
+
+        # Validate review exists
+        try:
+            review = await AmbassadorReview.objects._by_id(input.review_id)
+        except (AmbassadorReview.DoesNotExist, ValueError, TypeError):
+            return build_mutation_response(
+                DeleteAmbassadorReviewResponse,
+                success=False,
+                message="Review not found.",
+                input_obj=input,
+            )
+
+        try:
+            await review._delete()
+
+            return build_mutation_response(
+                DeleteAmbassadorReviewResponse,
+                success=True,
+                message="Review deleted successfully.",
+                input_obj=input,
+            )
+        except Exception as e:
+            return build_mutation_response(
+                DeleteAmbassadorReviewResponse,
+                success=False,
+                message=f"Error deleting review: {str(e)}",
+                input_obj=input,
+            )
+
+
+class AmbassadorReviewQueriesService(SparkGraphQLMixin):
+    """Service for ambassador review queries."""
+
+    async def get_ambassador_reviews(
+        self,
+        info: strawberry.Info,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        filters: inputs.AmbassadorReviewFiltersInput | None = None,
+    ) -> CountableConnection:
+        """Get ambassador reviews with filters (authenticated users only)."""
+        user = await self.get_user(info)
+        is_spark_request = self.is_spark_schema_request(info, user=user)
+
+        # Resolve tenant
+        tenant_id: int | None = None
+        tenant_id_input = filters.tenant_id if filters else None
+        tenant_uuid_input = filters.tenant_uuid if filters else None
+
+        should_filter_by_tenant = (
+            not is_spark_request or tenant_id_input is not None or tenant_uuid_input is not None
+        )
+        if should_filter_by_tenant:
+            tenant = await self.get_user_tenant(
+                info,
+                tenant_id=tenant_id_input,
+                tenant_uuid=tenant_uuid_input,
+                user=user,
+            )
+            tenant_id = tenant.id
+
+        queryset = await self._get_filtered_reviews_queryset(tenant_id, filters)
+
+        from utils.graphql.relay import connection_from_queryset_async
+        from ambassadors.types import AmbassadorReviewType
+        return await connection_from_queryset_async(
+            queryset,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+            default_limit=10,
+            max_limit=50,
+        )
+
+    async def _get_filtered_reviews_queryset(
+        self,
+        tenant_id: int | None = None,
+        filters: inputs.AmbassadorReviewFiltersInput | None = None,
+    ):
+        """Get filtered queryset for reviews."""
+        @sync_to_async
+        def get_queryset():
+            queryset = AmbassadorReview.objects.select_related(
+                "ambassador", "client", "tenant"
+            )
+
+            # Filter by tenant
+            if tenant_id:
+                queryset = queryset.filter(tenant_id=tenant_id)
+
+            if filters:
+                # Filter by ambassador
+                if filters.ambassador_id:
+                    queryset = queryset.filter(
+                        ambassador_id=int(filters.ambassador_id))
+
+                # Filter by client
+                if filters.client_id:
+                    queryset = queryset.filter(
+                        client_id=int(filters.client_id))
+
+                # Filter by score range
+                if filters.min_score is not None:
+                    queryset = queryset.filter(score__gte=filters.min_score)
+                if filters.max_score is not None:
+                    queryset = queryset.filter(score__lte=filters.max_score)
+
+                # Filter by date range
+                if filters.start_date:
+                    try:
+                        start_datetime = datetime.fromisoformat(
+                            filters.start_date.replace('Z', '+00:00'))
+                        queryset = queryset.filter(
+                            created_at__gte=start_datetime)
+                    except (ValueError, AttributeError):
+                        pass  # Invalid date format, skip filter
+                if filters.end_date:
+                    try:
+                        end_datetime = datetime.fromisoformat(
+                            filters.end_date.replace('Z', '+00:00'))
+                        queryset = queryset.filter(
+                            created_at__lte=end_datetime)
+                    except (ValueError, AttributeError):
+                        pass  # Invalid date format, skip filter
+
+                # Search in review text
+                if filters.search:
+                    queryset = queryset.filter(
+                        review__icontains=filters.search)
+
+            return queryset.order_by("-created_at")
+
+        return await get_queryset()
+
+
+class CreateAmbassadorNoteService(BaseAmbassadorService):
+    """Service for creating ambassador notes."""
+
+    @classmethod
+    async def create(
+        cls,
+        input: inputs.CreateAmbassadorNoteInput,
+        info: strawberry.Info,
+    ) -> CreateAmbassadorNoteResponse:
+        """Create an ambassador note (authenticated users only)."""
+        user = info.context.request.user
+
+        # Validate ambassador exists
+        try:
+            ambassador = await Ambassador.objects._by_id(input.ambassador_id)
+        except (Ambassador.DoesNotExist, ValueError, TypeError):
+            return build_mutation_response(
+                CreateAmbassadorNoteResponse,
+                success=False,
+                message="Ambassador not found.",
+                input_obj=input,
+            )
+
+        # Resolve tenant
+        service_instance = cls()
+        tenant = await service_instance.get_user_tenant(
+            info,
+            tenant_id=input.tenant_id,
+            tenant_uuid=None,
+            user=user,
+        )
+
+        # Create note
+        try:
+            note = await AmbassadorNote.objects.acreate(
+                ambassador=ambassador,
+                tenant=tenant,
+                note=input.note,
+                created_by=user,
+                updated_by=user,
+            )
+
+            return build_mutation_response(
+                CreateAmbassadorNoteResponse,
+                success=True,
+                message="Note created successfully.",
+                input_obj=input,
+                ambassador_note=note,
+            )
+        except Exception as e:
+            return build_mutation_response(
+                CreateAmbassadorNoteResponse,
+                success=False,
+                message=f"Error creating note: {str(e)}",
+                input_obj=input,
+            )
+
+
+class UpdateAmbassadorNoteService(BaseAmbassadorService):
+    """Service for updating ambassador notes."""
+
+    @classmethod
+    async def update(
+        cls,
+        input: inputs.UpdateAmbassadorNoteInput,
+        info: strawberry.Info,
+    ) -> UpdateAmbassadorNoteResponse:
+        """Update an ambassador note (authenticated users only)."""
+        user = info.context.request.user
+
+        # Validate note exists
+        try:
+            note = await AmbassadorNote.objects.aget(id=int(input.note_id))
+        except (AmbassadorNote.DoesNotExist, ValueError, TypeError):
+            return build_mutation_response(
+                UpdateAmbassadorNoteResponse,
+                success=False,
+                message="Note not found.",
+                input_obj=input,
+            )
+
+        # Update fields if provided
+        try:
+            if input.note is not None:
+                note.note = input.note
+            note.updated_by = user
+            await sync_to_async(note.save)()
+
+            return build_mutation_response(
+                UpdateAmbassadorNoteResponse,
+                success=True,
+                message="Note updated successfully.",
+                input_obj=input,
+                ambassador_note=note,
+            )
+        except Exception as e:
+            return build_mutation_response(
+                UpdateAmbassadorNoteResponse,
+                success=False,
+                message=f"Error updating note: {str(e)}",
+                input_obj=input,
+            )
+
+
+class DeleteAmbassadorNoteService(BaseAmbassadorService):
+    """Service for deleting ambassador notes."""
+
+    @classmethod
+    async def delete(
+        cls,
+        input: inputs.DeleteAmbassadorNoteInput,
+        info: strawberry.Info,
+    ) -> DeleteAmbassadorNoteResponse:
+        """Delete an ambassador note (authenticated users only)."""
+        user = info.context.request.user
+
+        # Validate note exists
+        try:
+            note = await AmbassadorNote.objects.aget(id=int(input.note_id))
+        except (AmbassadorNote.DoesNotExist, ValueError, TypeError):
+            return build_mutation_response(
+                DeleteAmbassadorNoteResponse,
+                success=False,
+                message="Note not found.",
+                input_obj=input,
+            )
+
+        try:
+            await sync_to_async(note.delete)()
+
+            return build_mutation_response(
+                DeleteAmbassadorNoteResponse,
+                success=True,
+                message="Note deleted successfully.",
+                input_obj=input,
+            )
+        except Exception as e:
+            return build_mutation_response(
+                DeleteAmbassadorNoteResponse,
+                success=False,
+                message=f"Error deleting note: {str(e)}",
+                input_obj=input,
+            )
+
+
+class AmbassadorNoteQueriesService(SparkGraphQLMixin):
+    """Service for ambassador note queries."""
+
+    async def get_ambassador_notes(
+        self,
+        info: strawberry.Info,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        filters: inputs.AmbassadorNoteFiltersInput | None = None,
+    ) -> CountableConnection:
+        """Get ambassador notes with filters (authenticated users only)."""
+        user = await self.get_user(info)
+        is_spark_request = self.is_spark_schema_request(info, user=user)
+
+        # Resolve tenant
+        tenant_id: int | None = None
+        tenant_id_input = filters.tenant_id if filters else None
+        tenant_uuid_input = filters.tenant_uuid if filters else None
+
+        should_filter_by_tenant = (
+            not is_spark_request or tenant_id_input is not None or tenant_uuid_input is not None
+        )
+        if should_filter_by_tenant:
+            tenant = await self.get_user_tenant(
+                info,
+                tenant_id=tenant_id_input,
+                tenant_uuid=tenant_uuid_input,
+                user=user,
+            )
+            tenant_id = tenant.id
+
+        queryset = await self._get_filtered_notes_queryset(tenant_id, filters)
+
+        from utils.graphql.relay import connection_from_queryset_async
+        from ambassadors.types import AmbassadorNoteType
+        return await connection_from_queryset_async(
+            queryset,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+            default_limit=10,
+            max_limit=50,
+        )
+
+    async def _get_filtered_notes_queryset(
+        self,
+        tenant_id: int | None = None,
+        filters: inputs.AmbassadorNoteFiltersInput | None = None,
+    ):
+        """Get filtered queryset for notes."""
+        @sync_to_async
+        def get_queryset():
+            queryset = AmbassadorNote.objects.select_related(
+                "ambassador", "tenant", "created_by", "updated_by"
+            )
+
+            # Filter by tenant
+            if tenant_id:
+                queryset = queryset.filter(tenant_id=tenant_id)
+
+            if filters:
+                # Filter by ambassador
+                if filters.ambassador_id:
+                    queryset = queryset.filter(
+                        ambassador_id=int(filters.ambassador_id))
+
+                # Filter by created_by
+                if filters.created_by_id:
+                    queryset = queryset.filter(
+                        created_by_id=int(filters.created_by_id))
+
+                # Filter by date range
+                if filters.start_date:
+                    try:
+                        start_datetime = datetime.fromisoformat(
+                            filters.start_date.replace('Z', '+00:00'))
+                        queryset = queryset.filter(
+                            created_at__gte=start_datetime)
+                    except (ValueError, AttributeError):
+                        pass  # Invalid date format, skip filter
+                if filters.end_date:
+                    try:
+                        end_datetime = datetime.fromisoformat(
+                            filters.end_date.replace('Z', '+00:00'))
+                        queryset = queryset.filter(
+                            created_at__lte=end_datetime)
+                    except (ValueError, AttributeError):
+                        pass  # Invalid date format, skip filter
+
+                # Search in note text
+                if filters.search:
+                    queryset = queryset.filter(
+                        note__icontains=filters.search)
+
+            return queryset.order_by("-created_at")
+
+        return await get_queryset()
+
+
+class CreateSkillService(BaseAmbassadorService):
+    """Service for creating skills."""
+
+    @classmethod
+    async def create(
+        cls,
+        input: inputs.CreateSkillInput,
+        info: strawberry.Info,
+    ) -> CreateSkillResponse:
+        """Create a skill (authenticated users only)."""
+        user = info.context.request.user
+
+        # Resolve tenant
+        service_instance = cls()
+        tenant = await service_instance.get_user_tenant(
+            info,
+            tenant_id=input.tenant_id,
+            tenant_uuid=None,
+            user=user,
+        )
+
+        # Create skill
+        try:
+            skill = await Skill.objects._create(
+                name=input.name,
+                tenant=tenant,
+                created_by=user,
+                updated_by=user,
+            )
+
+            return build_mutation_response(
+                CreateSkillResponse,
+                success=True,
+                message="Skill created successfully.",
+                input_obj=input,
+                skill=skill,
+            )
+        except Exception as e:
+            return build_mutation_response(
+                CreateSkillResponse,
+                success=False,
+                message=f"Error creating skill: {str(e)}",
+                input_obj=input,
+            )
+
+
+class UpdateSkillService(BaseAmbassadorService):
+    """Service for updating skills."""
+
+    @classmethod
+    async def update(
+        cls,
+        input: inputs.UpdateSkillInput,
+        info: strawberry.Info,
+    ) -> UpdateSkillResponse:
+        """Update a skill (authenticated users only)."""
+        user = info.context.request.user
+
+        # Validate skill exists
+        try:
+            skill = await Skill.objects._by_id(input.id)
+        except (Skill.DoesNotExist, ValueError, TypeError):
+            return build_mutation_response(
+                UpdateSkillResponse,
+                success=False,
+                message="Skill not found.",
+                input_obj=input,
+            )
+
+        # Update fields if provided
+        try:
+            if input.name is not None:
+                skill.name = input.name
+            skill.updated_by = user
+            await skill._save()
+
+            return build_mutation_response(
+                UpdateSkillResponse,
+                success=True,
+                message="Skill updated successfully.",
+                input_obj=input,
+                skill=skill,
+            )
+        except Exception as e:
+            return build_mutation_response(
+                UpdateSkillResponse,
+                success=False,
+                message=f"Error updating skill: {str(e)}",
+                input_obj=input,
+            )
+
+
+class DeleteSkillService(BaseAmbassadorService):
+    """Service for deleting skills."""
+
+    @classmethod
+    async def delete(
+        cls,
+        input: inputs.DeleteSkillInput,
+        info: strawberry.Info,
+    ) -> DeleteSkillResponse:
+        """Delete a skill (authenticated users only)."""
+        user = info.context.request.user
+
+        # Validate skill exists
+        try:
+            skill = await Skill.objects._by_id(input.id)
+        except (Skill.DoesNotExist, ValueError, TypeError):
+            return build_mutation_response(
+                DeleteSkillResponse,
+                success=False,
+                message="Skill not found.",
+                input_obj=input,
+            )
+
+        try:
+            await skill._delete()
+
+            return build_mutation_response(
+                DeleteSkillResponse,
+                success=True,
+                message="Skill deleted successfully.",
+                input_obj=input,
+            )
+        except Exception as e:
+            return build_mutation_response(
+                DeleteSkillResponse,
+                success=False,
+                message=f"Error deleting skill: {str(e)}",
+                input_obj=input,
+            )
+
+
+class SkillQueriesService(SparkGraphQLMixin):
+    """Service for skill queries."""
+
+    async def get_skills(
+        self,
+        info: strawberry.Info,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        filters: inputs.SkillFiltersInput | None = None,
+    ) -> CountableConnection:
+        """Get skills with filters (authenticated users only)."""
+        user = await self.get_user(info)
+        is_spark_request = self.is_spark_schema_request(info, user=user)
+
+        # Resolve tenant
+        tenant_id: int | None = None
+        tenant_id_input = filters.tenant_id if filters else None
+        tenant_uuid_input = filters.tenant_uuid if filters else None
+
+        should_filter_by_tenant = (
+            not is_spark_request or tenant_id_input is not None or tenant_uuid_input is not None
+        )
+        if should_filter_by_tenant:
+            tenant = await self.get_user_tenant(
+                info,
+                tenant_id=tenant_id_input,
+                tenant_uuid=tenant_uuid_input,
+                user=user,
+            )
+            tenant_id = tenant.id
+
+        queryset = await self._get_filtered_skills_queryset(tenant_id, filters)
+
+        from utils.graphql.relay import connection_from_queryset_async
+        from ambassadors.types import SkillType
+        return await connection_from_queryset_async(
+            queryset,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+            default_limit=10,
+            max_limit=50,
+        )
+
+    async def _get_filtered_skills_queryset(
+        self,
+        tenant_id: int | None = None,
+        filters: inputs.SkillFiltersInput | None = None,
+    ):
+        """Get filtered queryset for skills."""
+        @sync_to_async
+        def get_queryset():
+            queryset = Skill.objects.select_related("tenant")
+
+            # Filter by tenant
+            if tenant_id:
+                queryset = queryset.filter(tenant_id=tenant_id)
+
+            if filters:
+                # Search in name
+                if filters.search:
+                    queryset = queryset.filter(name__icontains=filters.search)
+
+            return queryset.order_by("name")
+
+        return await get_queryset()
+
+
+class CreateAmbassadorSkillService(BaseAmbassadorService):
+    """Service for creating ambassador skills."""
+
+    @classmethod
+    async def create(
+        cls,
+        input: inputs.CreateAmbassadorSkillInput,
+        info: strawberry.Info,
+    ) -> CreateAmbassadorSkillResponse:
+        """Create an ambassador skill (client/spark-admin only)."""
+        user = info.context.request.user
+
+        # Validate ambassador exists
+        try:
+            ambassador = await Ambassador.objects._by_id(input.ambassador_id)
+        except (Ambassador.DoesNotExist, ValueError, TypeError):
+            return build_mutation_response(
+                CreateAmbassadorSkillResponse,
+                success=False,
+                message="Ambassador not found.",
+                input_obj=input,
+            )
+
+        # Validate skill exists
+        try:
+            skill = await Skill.objects._by_id(input.skill_id)
+        except (Skill.DoesNotExist, ValueError, TypeError):
+            return build_mutation_response(
+                CreateAmbassadorSkillResponse,
+                success=False,
+                message="Skill not found.",
+                input_obj=input,
+            )
+
+        # Resolve tenant
+        service_instance = cls()
+        tenant = await service_instance.get_user_tenant(
+            info,
+            tenant_id=input.tenant_id,
+            tenant_uuid=None,
+            user=user,
+        )
+
+        # Validate ambassador and skill belong to same tenant
+        # Check if ambassador's user belongs to the resolved tenant
+        @sync_to_async
+        def check_ambassador_tenant():
+            return TenantedUser.objects.filter(
+                user=ambassador.user,
+                tenant=tenant,
+                is_active=True,
+            ).exists()
+
+        ambassador_belongs_to_tenant = await check_ambassador_tenant()
+        if not ambassador_belongs_to_tenant or skill.tenant_id != tenant.id:
+            return build_mutation_response(
+                CreateAmbassadorSkillResponse,
+                success=False,
+                message="Ambassador and skill must belong to the same tenant.",
+                input_obj=input,
+            )
+
+        # Check for duplicate (ambassador + skill combination)
+        if await AmbassadorSkill.objects._exists_by_ambassador_and_skill(
+            ambassador.id,
+            skill.id,
+        ):
+            return build_mutation_response(
+                CreateAmbassadorSkillResponse,
+                success=False,
+                message="This ambassador already has this skill.",
+                input_obj=input,
+            )
+
+        # Create ambassador skill
+        try:
+            ambassador_skill = await AmbassadorSkill.objects._create(
+                ambassador=ambassador,
+                skill=skill,
+                tenant=tenant,
+                created_by=user,
+                updated_by=user,
+            )
+
+            return build_mutation_response(
+                CreateAmbassadorSkillResponse,
+                success=True,
+                message="Ambassador skill created successfully.",
+                input_obj=input,
+                ambassador_skill=ambassador_skill,
+            )
+        except Exception as e:
+            return build_mutation_response(
+                CreateAmbassadorSkillResponse,
+                success=False,
+                message=f"Error creating ambassador skill: {str(e)}",
+                input_obj=input,
+            )
+
+
+class DeleteAmbassadorSkillService(BaseAmbassadorService):
+    """Service for deleting ambassador skills."""
+
+    @classmethod
+    async def delete(
+        cls,
+        input: inputs.DeleteAmbassadorSkillInput,
+        info: strawberry.Info,
+    ) -> DeleteAmbassadorSkillResponse:
+        """Delete an ambassador skill (client/spark-admin only)."""
+        user = info.context.request.user
+
+        # Validate ambassador skill exists
+        try:
+            ambassador_skill = await AmbassadorSkill.objects._by_id(input.ambassador_skill_id)
+        except (AmbassadorSkill.DoesNotExist, ValueError, TypeError):
+            return build_mutation_response(
+                DeleteAmbassadorSkillResponse,
+                success=False,
+                message="Ambassador skill not found.",
+                input_obj=input,
+            )
+
+        try:
+            await ambassador_skill._delete()
+
+            return build_mutation_response(
+                DeleteAmbassadorSkillResponse,
+                success=True,
+                message="Ambassador skill deleted successfully.",
+                input_obj=input,
+            )
+        except Exception as e:
+            return build_mutation_response(
+                DeleteAmbassadorSkillResponse,
+                success=False,
+                message=f"Error deleting ambassador skill: {str(e)}",
+                input_obj=input,
+            )
+
+
+class AmbassadorSkillQueriesService(SparkGraphQLMixin):
+    """Service for ambassador skill queries."""
+
+    async def get_ambassador_skills(
+        self,
+        info: strawberry.Info,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        filters: inputs.AmbassadorSkillFiltersInput | None = None,
+    ) -> CountableConnection:
+        """Get ambassador skills with filters (authenticated users only)."""
+        user = await self.get_user(info)
+        is_spark_request = self.is_spark_schema_request(info, user=user)
+
+        # Resolve tenant
+        tenant_id: int | None = None
+        tenant_id_input = filters.tenant_id if filters else None
+        tenant_uuid_input = filters.tenant_uuid if filters else None
+
+        should_filter_by_tenant = (
+            not is_spark_request or tenant_id_input is not None or tenant_uuid_input is not None
+        )
+        if should_filter_by_tenant:
+            tenant = await self.get_user_tenant(
+                info,
+                tenant_id=tenant_id_input,
+                tenant_uuid=tenant_uuid_input,
+                user=user,
+            )
+            tenant_id = tenant.id
+
+        queryset = await self._get_filtered_ambassador_skills_queryset(tenant_id, filters)
+
+        from utils.graphql.relay import connection_from_queryset_async
+        from ambassadors.types import AmbassadorSkillType
+        return await connection_from_queryset_async(
+            queryset,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+            default_limit=10,
+            max_limit=50,
+        )
+
+    async def _get_filtered_ambassador_skills_queryset(
+        self,
+        tenant_id: int | None = None,
+        filters: inputs.AmbassadorSkillFiltersInput | None = None,
+    ):
+        """Get filtered queryset for ambassador skills."""
+        @sync_to_async
+        def get_queryset():
+            queryset = AmbassadorSkill.objects.select_related(
+                "ambassador", "skill", "tenant"
+            )
+
+            # Filter by tenant
+            if tenant_id:
+                queryset = queryset.filter(tenant_id=tenant_id)
+
+            if filters:
+                # Filter by ambassador
+                if filters.ambassador_id:
+                    queryset = queryset.filter(
+                        ambassador_id=int(filters.ambassador_id))
+
+                # Filter by skill
+                if filters.skill_id:
+                    queryset = queryset.filter(skill_id=int(filters.skill_id))
 
             return queryset.order_by("-created_at")
 

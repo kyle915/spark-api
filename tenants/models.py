@@ -235,12 +235,11 @@ class GoogleCalendarConnection(models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
 
-    user = models.ForeignKey(
+    user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
+        on_delete=models.RESTRICT,
         null=False,
-        related_name="google_calendar_connections",
-        unique=True,  # One connection per user
+        related_name="google_calendar_connection",
     )
 
     # Encrypted OAuth tokens

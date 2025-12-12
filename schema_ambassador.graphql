@@ -1,5 +1,75 @@
+input AcceptAmbassadorInvitationInput {
+  clientMutationId: ID = null
+  token: String!
+  firstName: String!
+  password1: String!
+  password2: String!
+  address: String = null
+  coordinates: [Float!] = null
+}
+
+type AcceptInvitationResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  ambassador: Ambassador
+  activationToken: String
+}
+
 """
-AmbassadorJob(id, uuid, appear_as_rfp, tenant, ambassador, job, status, rate, created_by, updated_by, created_at, updated_at)
+Ambassador(id, uuid, rating, address, coordinates, is_active, user, created_by, updated_by, created_at, updated_at)
+"""
+type Ambassador {
+  id: ID!
+  uuid: String!
+  rating: Int!
+  address: String
+  coordinates: [Float!]!
+  isActive: Boolean!
+  userId: ID!
+  createdAt: String!
+  updatedAt: String!
+}
+
+"""
+AmbassadorEvent(id, uuid, is_approved, ambassador, tenant, event, created_by, updated_by, created_at, updated_at)
+"""
+type AmbassadorEventType {
+  id: ID!
+  uuid: String!
+  isApproved: Boolean!
+  ambassador: Ambassador!
+  tenantId: ID!
+  eventId: ID!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type AmbassadorInvitationResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  invitation: AmbassadorInvitationType
+}
+
+"""Model to track ambassador invitations sent by clients or spark-admins."""
+type AmbassadorInvitationType {
+  id: ID!
+  uuid: String!
+  email: String!
+  token: String!
+  expiresAt: String!
+  isUsed: Boolean!
+  usedAt: String
+  invitedById: ID!
+  tenantId: ID!
+  ambassadorId: ID
+  createdAt: String!
+  updatedAt: String!
+}
+
+"""
+AmbassadorJob(id, uuid, recap_uploaded, appear_as_rfp, tenant, ambassador, job, status, rate, created_by, updated_by, created_at, updated_at)
 """
 type AmbassadorJob {
   id: ID!
@@ -35,6 +105,21 @@ type AmbassadorJobDetailResponse {
   ambassadorJob: AmbassadorJob
 }
 
+"""
+AmbassadorNote(id, uuid, note, tenant, ambassador, created_by, updated_by, created_at, updated_at)
+"""
+type AmbassadorNoteType {
+  id: ID!
+  uuid: String!
+  note: String!
+  ambassadorId: ID!
+  tenantId: ID!
+  createdById: ID!
+  updatedById: ID
+  createdAt: String!
+  updatedAt: String!
+}
+
 input AmbassadorRegisterInput {
   clientMutationId: ID = null
   firstName: String!
@@ -43,6 +128,34 @@ input AmbassadorRegisterInput {
   password2: String!
   role: UserRoleEnum!
   tenantId: ID = null
+}
+
+"""
+AmbassadorReview(id, uuid, review, score, ambassador, client, tenant, created_by, updated_by, created_at, updated_at)
+"""
+type AmbassadorReviewType {
+  id: ID!
+  uuid: String!
+  review: String
+  score: Int
+  ambassadorId: ID
+  clientId: ID
+  tenantId: ID
+  createdAt: String!
+  updatedAt: String!
+}
+
+"""
+AmbassadorSkill(id, uuid, tenant, ambassador, skill, created_by, updated_by, created_at, updated_at)
+"""
+type AmbassadorSkillType {
+  id: ID!
+  uuid: String!
+  ambassadorId: ID!
+  skillId: ID!
+  tenantId: ID!
+  createdAt: String!
+  updatedAt: String!
 }
 
 """
@@ -69,6 +182,94 @@ type AmbassadorToAmbassadorReviewDetailResponse {
 input AppleSocialAuthInput {
   clientMutationId: ID = null
   identityToken: String!
+}
+
+type ApplyAmbassadorEventResponse {
+  success: Boolean!
+  message: String!
+  application: AmbassadorEventType
+}
+
+type ApplyAmbassadorJobResponse {
+  success: Boolean!
+  message: String!
+  application: AmbassadorJob
+}
+
+input ApproveAmbassadorInput {
+  clientMutationId: ID = null
+  ambassadorId: ID!
+  tenantId: ID = null
+}
+
+type ApproveAmbassadorResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  ambassador: Ambassador
+}
+
+"""
+Attendance(id, uuid, clock_time, coordinates, ambassador, job, event, attendace_type, attendance_status, source, timezone, created_by, updated_by, created_at, updated_at)
+"""
+type Attendance {
+  id: ID!
+  uuid: String!
+  clockTime: String!
+  coordinates: [Float!]
+  ambassadorId: ID
+  jobId: ID
+  eventId: ID
+  attendaceTypeId: ID
+  attendanceStatusId: ID
+  sourceId: ID
+  timezoneId: ID
+  createdAt: String!
+  updatedAt: String!
+}
+
+type AttendanceDetailResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  attendance: Attendance
+}
+
+"""
+AttendanceStatus(id, uuid, name, tenant, created_by, updated_by, created_at, updated_at)
+"""
+type AttendanceStatus {
+  id: ID!
+  uuid: String!
+  name: String!
+  tenantId: ID
+  createdAt: String!
+  updatedAt: String!
+}
+
+type AttendanceStatusDetailResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  attendanceStatus: AttendanceStatus
+}
+
+"""
+AttendanceType(id, uuid, name, created_by, updated_by, created_at, updated_at)
+"""
+type AttendanceType {
+  id: ID!
+  uuid: String!
+  name: String!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type AttendanceTypeDetailResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  attendanceType: AttendanceType
 }
 
 """
@@ -139,6 +340,12 @@ input CoordinatesFilterInput {
   unit: DistanceUnit! = KILOMETERS
 }
 
+input CreateAmbassadorInvitationInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  email: String!
+}
+
 input CreateAmbassadorJobInput {
   clientMutationId: ID = null
   tenantId: ID = null
@@ -149,12 +356,92 @@ input CreateAmbassadorJobInput {
   rateId: ID!
 }
 
+input CreateAmbassadorNoteInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  ambassadorId: ID!
+  note: String!
+}
+
+type CreateAmbassadorNoteResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  ambassadorNote: AmbassadorNoteType
+}
+
+input CreateAmbassadorReviewInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  ambassadorId: ID!
+  clientId: ID = null
+  review: String = null
+  score: Int = null
+}
+
+type CreateAmbassadorReviewResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  ambassadorReview: AmbassadorReviewType
+}
+
+input CreateAmbassadorSkillInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  ambassadorId: ID!
+  skillId: ID!
+}
+
+type CreateAmbassadorSkillResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  ambassadorSkill: AmbassadorSkillType
+}
+
 input CreateAmbassadorToAmbassadorReviewInput {
   clientMutationId: ID = null
   tenantId: ID = null
   description: String!
   rate: Float!
   ambassadorId: ID!
+}
+
+input CreateAttendanceInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  clockTime: String!
+  coordinates: [Float!] = null
+  ambassadorId: ID = null
+  jobId: ID = null
+  eventId: ID = null
+  attendaceTypeId: ID = null
+  attendanceStatusId: ID = null
+  sourceId: ID = null
+  timezoneId: ID = null
+}
+
+input CreateAttendanceStatusInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  name: String!
+}
+
+input CreateAttendanceTypeInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  name: String!
+}
+
+input CreatePublicAmbassadorInput {
+  clientMutationId: ID = null
+  firstName: String!
+  email: String!
+  password1: String!
+  password2: String!
+  address: String = null
+  coordinates: [Float!] = null
 }
 
 input CreateRequestDetailInput {
@@ -177,12 +464,38 @@ input CreateRequestWithDependenciesInput {
   endTime: String!
   address: String!
   coordinates: [Float!]!
-  clientId: ID!
-  distributorId: ID!
-  retailerId: ID!
+  timezoneId: ID!
   requestTypeId: ID!
+  clientName: String!
+  clientEmail: String!
+  distributorName: String!
+  distributorEmail: String!
+  retailerName: String!
+  retailerAddress: String!
+  retailerStoreContact: String!
+  storeManagerName: String!
+  storeManagerPhone: String!
   details: [CreateRequestDetailInput!]!
   products: [CreateRequestProductInput!]!
+}
+
+input CreateSkillInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  name: String!
+}
+
+type CreateSkillResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  skill: SkillType
+}
+
+input CreateSourceInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  name: String!
 }
 
 """
@@ -202,6 +515,61 @@ type CustomUserType {
 
 """Date with time (isoformat)"""
 scalar DateTime
+
+input DeleteAmbassadorNoteInput {
+  clientMutationId: ID = null
+  noteId: ID!
+}
+
+type DeleteAmbassadorNoteResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+}
+
+input DeleteAmbassadorReviewInput {
+  clientMutationId: ID = null
+  reviewId: ID!
+}
+
+type DeleteAmbassadorReviewResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+}
+
+input DeleteAmbassadorSkillInput {
+  clientMutationId: ID = null
+  ambassadorSkillId: ID!
+}
+
+type DeleteAmbassadorSkillResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+}
+
+input DeleteInvitationInput {
+  clientMutationId: ID = null
+  invitationId: ID!
+}
+
+type DeleteInvitationResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+}
+
+input DeleteSkillInput {
+  clientMutationId: ID = null
+  id: ID!
+}
+
+type DeleteSkillResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+}
 
 input DisconnectGoogleCalendarInput {
   clientMutationId: ID = null
@@ -237,12 +605,14 @@ type DjangoModelType {
 }
 
 """
-Event(id, uuid, name, tenant, request, event_type, status, start_time, end_time, address, notes, is_national, created_by, updated_by, created_at, updated_at)
+Event(id, uuid, name, date, coordinates, tenant, request, event_type, status, start_time, end_time, address, notes, is_national, created_by, updated_by, created_at, updated_at)
 """
 type Event {
   id: ID!
   uuid: String!
   name: String!
+  date: String
+  coordinates: [Float!]
   startTime: String
   endTime: String
   address: String!
@@ -252,8 +622,10 @@ type Event {
   createdAt: String!
   updatedAt: String!
   tenantId: ID!
+  tenant: TenantType
   eventType: EventType
   status: EventStatus
+  tenantImage: String
 }
 
 type EventCountableConnection {
@@ -376,7 +748,7 @@ input GoogleSocialAuthInput {
 }
 
 """
-Job(id, uuid, name, description, code, address, start_date, end_date, public, closed, national, ongoing, job_title, other_title, company, event, location, tenant, rate, created_by, updated_by, created_at, updated_at)
+Job(id, uuid, name, description, code, address, start_date, end_date, public, closed, national, ongoing, coordinates, job_title, other_title, company, event, tenant, rate, created_by, updated_by, created_at, updated_at)
 """
 type Job {
   id: ID!
@@ -415,6 +787,12 @@ type JobCountableEdge {
 
   """The item at the end of the edge"""
   node: Job!
+}
+
+input JobFiltersInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  eventId: ID = null
 }
 
 """
@@ -493,6 +871,33 @@ type Mutation {
   updateAmbassadorJob(input: UpdateAmbassadorJobInput!): AmbassadorJobDetailResponse!
   createAmbassadorToAmbassadorReview(input: CreateAmbassadorToAmbassadorReviewInput!): AmbassadorToAmbassadorReviewDetailResponse!
   updateAmbassadorToAmbassadorReview(input: UpdateAmbassadorToAmbassadorReviewInput!): AmbassadorToAmbassadorReviewDetailResponse!
+  applyAmbassadorEvent(eventId: ID!): ApplyAmbassadorEventResponse!
+  applyAmbassadorJob(jobId: ID!): ApplyAmbassadorJobResponse!
+  createPublicAmbassador(input: CreatePublicAmbassadorInput!): PublicAmbassadorCreationResponse!
+  createAmbassadorInvitation(input: CreateAmbassadorInvitationInput!): AmbassadorInvitationResponse!
+  acceptAmbassadorInvitation(input: AcceptAmbassadorInvitationInput!): AcceptInvitationResponse!
+  approveAmbassador(input: ApproveAmbassadorInput!): ApproveAmbassadorResponse!
+  updateAmbassador(input: UpdateAmbassadorInput!): UpdateAmbassadorResponse!
+  deleteInvitation(input: DeleteInvitationInput!): DeleteInvitationResponse!
+  createAmbassadorReview(input: CreateAmbassadorReviewInput!): CreateAmbassadorReviewResponse!
+  updateAmbassadorReview(input: UpdateAmbassadorReviewInput!): UpdateAmbassadorReviewResponse!
+  deleteAmbassadorReview(input: DeleteAmbassadorReviewInput!): DeleteAmbassadorReviewResponse!
+  createAmbassadorNote(input: CreateAmbassadorNoteInput!): CreateAmbassadorNoteResponse!
+  updateAmbassadorNote(input: UpdateAmbassadorNoteInput!): UpdateAmbassadorNoteResponse!
+  deleteAmbassadorNote(input: DeleteAmbassadorNoteInput!): DeleteAmbassadorNoteResponse!
+  createSkill(input: CreateSkillInput!): CreateSkillResponse!
+  updateSkill(input: UpdateSkillInput!): UpdateSkillResponse!
+  deleteSkill(input: DeleteSkillInput!): DeleteSkillResponse!
+  createAmbassadorSkill(input: CreateAmbassadorSkillInput!): CreateAmbassadorSkillResponse!
+  deleteAmbassadorSkill(input: DeleteAmbassadorSkillInput!): DeleteAmbassadorSkillResponse!
+  createAttendanceType(input: CreateAttendanceTypeInput!): AttendanceTypeDetailResponse!
+  updateAttendanceType(input: UpdateAttendanceTypeInput!): AttendanceTypeDetailResponse!
+  createAttendanceStatus(input: CreateAttendanceStatusInput!): AttendanceStatusDetailResponse!
+  updateAttendanceStatus(input: UpdateAttendanceStatusInput!): AttendanceStatusDetailResponse!
+  createSource(input: CreateSourceInput!): SourceDetailResponse!
+  updateSource(input: UpdateSourceInput!): SourceDetailResponse!
+  createAttendance(input: CreateAttendanceInput!): AttendanceDetailResponse!
+  updateAttendance(input: UpdateAttendanceInput!): AttendanceDetailResponse!
 }
 
 type MutationNormalOutput {
@@ -534,6 +939,14 @@ type PageInfo {
   endCursor: String
 }
 
+type PublicAmbassadorCreationResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  ambassador: Ambassador
+  activationToken: String
+}
+
 type Query {
   events(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: EventFiltersInput = null): EventCountableConnection!
   event(uuid: ID!): Event
@@ -543,10 +956,12 @@ type Query {
   eventType(id: ID!): EventType
   eventStatuses(first: Int = null, after: String = null, last: Int = null, before: String = null, filters: EventStatusFiltersInput = null): EventStatusCountableConnection!
   eventStatus(id: ID!): EventStatus
+  timezones(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): TimeZoneCountableConnection!
+  publicTimezones(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): TimeZoneCountableConnection!
   googleCalendarConnectionStatus: GoogleCalendarConnectionStatus!
   healthcheck: String!
   me: CustomUserType!
-  availableJobs(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): JobCountableConnection!
+  availableJobs(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: JobFiltersInput = null): JobCountableConnection!
   ambassadorJobs(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): AmbassadorJobCountableConnection!
   ambassadorJob(id: ID!): AmbassadorJob
 }
@@ -604,7 +1019,7 @@ type RegisterResponse {
 }
 
 """
-Request(id, uuid, name, date, start_time, end_time, address, coordinates, client, distributor, retailer, request_type, status, tenant, created_by, updated_by, created_at, updated_at)
+Request(id, uuid, name, date, start_time, end_time, address, coordinates, client_name, client_email, distributor_name, distributor_email, retailer_name, retailer_address, retailer_store_contact, store_manager_name, store_manager_phone, timezone, client, distributor, retailer, request_type, status, tenant, created_by, updated_by, created_at, updated_at)
 """
 type Request {
   id: ID!
@@ -615,6 +1030,16 @@ type Request {
   endTime: String
   address: String!
   coordinates: [Float!]!
+  clientName: String
+  clientEmail: String
+  distributorName: String
+  distributorEmail: String
+  retailerName: String
+  retailerAddress: String
+  retailerStoreContact: String
+  storeManagerName: String
+  storeManagerPhone: String
+  timezone: TimeZone
   client: Client
   distributor: Distributor
   retailer: Retailer
@@ -679,12 +1104,40 @@ type RoleType {
   name: String!
 }
 
+"""
+Skill(id, uuid, name, tenant, created_by, updated_by, created_at, updated_at)
+"""
+type SkillType {
+  id: ID!
+  uuid: String!
+  name: String!
+  tenantId: ID!
+  createdAt: String!
+  updatedAt: String!
+}
+
 type SocialAuthResponse {
   success: Boolean!
   message: String!
   token: String
   refreshToken: String
   clientMutationId: ID
+}
+
+"""Source(id, uuid, name, created_by, updated_by, created_at, updated_at)"""
+type Source {
+  id: ID!
+  uuid: String!
+  name: String!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type SourceDetailResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  source: Source
 }
 
 """
@@ -697,6 +1150,44 @@ type Status {
   tenantId: ID!
   createdAt: String!
   updatedAt: String!
+}
+
+"""
+Tenant(id, uuid, name, image, request_url_name, created_by, updated_by, created_at, updated_at)
+"""
+type TenantType {
+  id: ID!
+  uuid: UUID!
+  name: String!
+  requestUrlName: String
+  image: String
+}
+
+"""
+TimeZone(id, uuid, name, code, offset, created_by, updated_by, created_at, updated_at)
+"""
+type TimeZone {
+  id: ID!
+  uuid: String!
+  name: String!
+  code: String!
+  offset: Int!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type TimeZoneCountableConnection {
+  pageInfo: PageInfo!
+  edges: [TimeZoneCountableEdge!]!
+  totalCount: Int!
+}
+
+type TimeZoneCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: TimeZone!
 }
 
 "\nthe data that was used to create the token.\n"
@@ -719,6 +1210,15 @@ type TokenType {
 
 scalar UUID
 
+input UpdateAmbassadorInput {
+  clientMutationId: ID = null
+  ambassadorId: ID!
+  address: String = null
+  coordinates: [Float!] = null
+  isActive: Boolean = null
+  tenantId: ID = null
+}
+
 input UpdateAmbassadorJobInput {
   clientMutationId: ID = null
   tenantId: ID = null
@@ -730,6 +1230,40 @@ input UpdateAmbassadorJobInput {
   id: ID!
 }
 
+input UpdateAmbassadorNoteInput {
+  clientMutationId: ID = null
+  noteId: ID!
+  note: String = null
+}
+
+type UpdateAmbassadorNoteResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  ambassadorNote: AmbassadorNoteType
+}
+
+type UpdateAmbassadorResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  ambassador: Ambassador
+}
+
+input UpdateAmbassadorReviewInput {
+  clientMutationId: ID = null
+  reviewId: ID!
+  review: String = null
+  score: Int = null
+}
+
+type UpdateAmbassadorReviewResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  ambassadorReview: AmbassadorReviewType
+}
+
 input UpdateAmbassadorToAmbassadorReviewInput {
   clientMutationId: ID = null
   tenantId: ID = null
@@ -739,9 +1273,54 @@ input UpdateAmbassadorToAmbassadorReviewInput {
   id: ID!
 }
 
-enum UserRoleEnum {
-  AMBASSADOR
-  CLIENT
+input UpdateAttendanceInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  clockTime: String!
+  coordinates: [Float!] = null
+  ambassadorId: ID = null
+  jobId: ID = null
+  eventId: ID = null
+  attendaceTypeId: ID = null
+  attendanceStatusId: ID = null
+  sourceId: ID = null
+  timezoneId: ID = null
+  id: ID!
+}
+
+input UpdateAttendanceStatusInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  name: String!
+  id: ID!
+}
+
+input UpdateAttendanceTypeInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  name: String!
+  id: ID!
+}
+
+input UpdateSkillInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  name: String!
+  id: ID!
+}
+
+type UpdateSkillResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  skill: SkillType
+}
+
+input UpdateSourceInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  name: String!
+  id: ID!
 }
 
 enum UserRoleEnum {
@@ -772,13 +1351,13 @@ type UserType {
   isActive: Boolean!
   dateJoined: DateTime!
   status: UserStatusType!
-  firstName: String
 
   """Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only."""
   username: String!
+  firstName: String
   id: ID!
-  lastName: String
   email: String!
+  lastName: String
   archived: Boolean!
   verified: Boolean!
 }

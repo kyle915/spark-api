@@ -112,6 +112,137 @@ class DeleteInvitationResponse:
     client_mutation_id: strawberry.ID | None = None
 
 
+@strawberry_django.type(models.AmbassadorReview)
+class AmbassadorReviewType:
+    id: strawberry.ID
+    uuid: str
+    review: str | None
+    score: int | None
+    ambassador_id: strawberry.ID | None
+    client_id: strawberry.ID | None
+    tenant_id: strawberry.ID | None
+    created_at: str
+    updated_at: str
+
+
+@strawberry.type
+class CreateAmbassadorReviewResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    ambassador_review: AmbassadorReviewType | None = None
+
+
+@strawberry.type
+class UpdateAmbassadorReviewResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    ambassador_review: AmbassadorReviewType | None = None
+
+
+@strawberry.type
+class DeleteAmbassadorReviewResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+
+
+@strawberry_django.type(models.AmbassadorNote)
+class AmbassadorNoteType:
+    id: strawberry.ID
+    uuid: str
+    note: str
+    ambassador_id: strawberry.ID
+    tenant_id: strawberry.ID
+    created_by_id: strawberry.ID
+    updated_by_id: strawberry.ID | None
+    created_at: str
+    updated_at: str
+
+
+@strawberry.type
+class CreateAmbassadorNoteResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    ambassador_note: AmbassadorNoteType | None = None
+
+
+@strawberry.type
+class UpdateAmbassadorNoteResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    ambassador_note: AmbassadorNoteType | None = None
+
+
+@strawberry.type
+class DeleteAmbassadorNoteResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+
+
+@strawberry_django.type(models.Skill)
+class SkillType:
+    id: strawberry.ID
+    uuid: str
+    name: str
+    tenant_id: strawberry.ID
+    created_at: str
+    updated_at: str
+
+
+@strawberry.type
+class CreateSkillResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    skill: SkillType | None = None
+
+
+@strawberry.type
+class UpdateSkillResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    skill: SkillType | None = None
+
+
+@strawberry.type
+class DeleteSkillResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+
+
+@strawberry_django.type(models.AmbassadorSkill)
+class AmbassadorSkillType:
+    id: strawberry.ID
+    uuid: str
+    ambassador_id: strawberry.ID
+    skill_id: strawberry.ID
+    tenant_id: strawberry.ID
+    created_at: str
+    updated_at: str
+
+
+@strawberry.type
+class CreateAmbassadorSkillResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    ambassador_skill: AmbassadorSkillType | None = None
+
+
+@strawberry.type
+class DeleteAmbassadorSkillResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+
+
 @strawberry_django.type(models.AttendanceType)
 class AttendanceType:
     id: strawberry.ID

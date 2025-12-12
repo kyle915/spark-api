@@ -5,12 +5,13 @@ from django.conf import settings
 from tenants.models import Tenant
 
 from .managers import (
+    ClientManager,
     RequestStatusManager,
     EventStatusManager,
     EventTypeManager,
     EventManager,
 )
-from utils.models import WithDefaultAttribute
+from utils.models import WithDefaultAttribute, Asyncable
 
 
 class TimeZone(models.Model):
@@ -64,7 +65,7 @@ class Location(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
 
-class Client(models.Model):
+class Client(Asyncable, models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     name = models.CharField(max_length=50)
@@ -88,6 +89,8 @@ class Client(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
     updated_at = models.DateTimeField(auto_now=True)
+
+    objects = ClientManager()
 
 
 class Distributor(models.Model):
