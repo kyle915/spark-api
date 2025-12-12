@@ -13,6 +13,7 @@ from .managers import (
 )
 from utils.models import WithDefaultAttribute, Asyncable
 
+
 class TimeZone(models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
@@ -35,6 +36,7 @@ class TimeZone(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
     updated_at = models.DateTimeField(auto_now=True)
+
 
 class Location(models.Model):
     id = models.BigAutoField(primary_key=True)
@@ -269,8 +271,7 @@ class RequestStatus(WithDefaultAttribute, models.Model):
             # Set the create event flag to false if the current status is set to true
             if self.create_event:
                 (
-                    RequestStatus.objects.filter(
-                        tenant=self.tenant, create_event=True)
+                    RequestStatus.objects.filter(tenant=self.tenant, create_event=True)
                     .exclude(pk=self.pk)
                     .update(create_event=False)
                 )
@@ -280,9 +281,9 @@ class Request(models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     name = models.CharField(max_length=50)
-    date = models.DateField()
-    start_time = models.TimeField(null=True, db_index=True)
-    end_time = models.TimeField(null=True, blank=True)
+    date = models.DateTimeField(null=True)
+    start_time = models.DateTimeField(null=True, db_index=True)
+    end_time = models.DateTimeField(null=True, blank=True)
     address = models.CharField(max_length=100)
     coordinates = ArrayField(
         models.FloatField(),
@@ -304,10 +305,7 @@ class Request(models.Model):
     store_manager_phone = models.CharField(max_length=20, null=True)
 
     timezone = models.ForeignKey(
-        TimeZone, 
-        on_delete=models.RESTRICT, 
-        null=True, 
-        related_name="requests"
+        TimeZone, on_delete=models.RESTRICT, null=True, related_name="requests"
     )
 
     client = models.ForeignKey(
@@ -552,6 +550,7 @@ class Event(models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     name = models.CharField(max_length=50)
+    date = models.DateTimeField(null=True)
     coordinates = ArrayField(
         models.FloatField(),
         size=2,
@@ -588,8 +587,8 @@ class Event(models.Model):
         related_name="events",
     )
 
-    start_time = models.TimeField(null=True, db_index=True)
-    end_time = models.TimeField(null=True, blank=True)
+    start_time = models.DateTimeField(null=True, db_index=True)
+    end_time = models.DateTimeField(null=True)
     address = models.CharField(max_length=100, null=False, default="")
     notes = models.TextField(null=True, blank=True)
     is_national = models.BooleanField(default=False)
@@ -615,6 +614,7 @@ class Event(models.Model):
 
 class GoogleCalendarEvent(models.Model):
     """Model to store Google Calendar event ID mapping for events per user."""
+
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
 
@@ -637,9 +637,9 @@ class GoogleCalendarEvent(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        unique_together = [['event', 'user']]
+        unique_together = [["event", "user"]]
         indexes = [
-            models.Index(fields=['event', 'user']),
+            models.Index(fields=["event", "user"]),
         ]
 
     def __str__(self):

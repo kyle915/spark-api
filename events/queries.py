@@ -140,6 +140,10 @@ class EventQueriesService(BaseEventQueriesService):
         """Get the model for the service."""
         return models.Event
 
+    def get_queryset(self) -> QuerySet:
+        """Get the queryset for the service."""
+        return self.get_model().objects.select_related("tenant")
+
 
 @strawberry.type
 class EventQueries:

@@ -161,3 +161,61 @@ class AmbassadorSkillFiltersInput:
     skill_id: strawberry.ID | None = None
     tenant_id: strawberry.ID | None = None
     tenant_uuid: strawberry.ID | None = None
+
+
+@strawberry.input
+class CreateAttendanceTypeInput(BaseNameableInput):
+    pass
+
+
+@strawberry.input
+class UpdateAttendanceTypeInput(CreateAttendanceTypeInput):
+    id: strawberry.ID
+
+
+@strawberry.input
+class CreateAttendanceStatusInput(BaseNameableInput):
+    pass
+
+
+@strawberry.input
+class UpdateAttendanceStatusInput(CreateAttendanceStatusInput):
+    id: strawberry.ID
+
+
+@strawberry.input
+class CreateSourceInput(BaseNameableInput):
+    pass
+
+
+@strawberry.input
+class UpdateSourceInput(CreateSourceInput):
+    id: strawberry.ID
+
+
+@strawberry.input
+class CreateAttendanceInput(BaseTenantInput):
+    clock_time: str
+    coordinates: List[float] | None = None
+    ambassador_id: strawberry.ID | None = None
+    job_id: strawberry.ID | None = None
+    event_id: strawberry.ID | None = None
+    attendace_type_id: strawberry.ID | None = None
+    attendance_status_id: strawberry.ID | None = None
+    source_id: strawberry.ID | None = None
+    timezone_id: strawberry.ID | None = None
+
+
+@strawberry.input
+class UpdateAttendanceInput(CreateAttendanceInput):
+    id: strawberry.ID
+
+
+@strawberry.input
+class AttendanceFiltersInput(BaseTenantInput):
+    """Filtros para attendances."""
+    job_id: strawberry.ID | None = None
+    event_id: strawberry.ID | None = None
+    attendance_status_id: strawberry.ID | None = None
+    source_id: strawberry.ID | None = None
+    attendace_type_id: strawberry.ID | None = None

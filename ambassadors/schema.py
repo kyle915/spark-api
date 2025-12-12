@@ -11,6 +11,7 @@ class AmbassadorQuerySpark(
     queries.AmbassadorReviewQueries,
     queries.SkillQueries,
     queries.AmbassadorSkillQueries,
+    queries.AttendanceQueries,
 ):
     pass
 
@@ -23,6 +24,7 @@ class AmbassadorQueryClient(
     queries.AmbassadorReviewQueries,
     queries.SkillQueries,
     queries.AmbassadorSkillQueries,
+    queries.AttendanceQueries,
 ):
     pass
 
@@ -34,6 +36,7 @@ class AmbassadorQueryMobile(
     queries.AmbassadorReviewQueries,
     queries.SkillQueries,
     queries.AmbassadorSkillQueries,
+    queries.AttendanceMobileQueries,
 ):
     pass
 
@@ -41,6 +44,7 @@ class AmbassadorQueryMobile(
 @strawberry.type
 class AmbassadorMutations(
     mutations.AmbassadorMutations,
+    mutations.AttendanceMutations,
 ):
     pass
 
@@ -48,5 +52,6 @@ class AmbassadorMutations(
 @strawberry.type
 class AmbassadorMutationsMobile(
     mutations.AmbassadorMutations,
+    mutations.AttendanceMutations,
 ):
     pass
