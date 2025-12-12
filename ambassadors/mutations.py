@@ -25,6 +25,11 @@ from .types import (
     CreateAmbassadorReviewResponse,
     UpdateAmbassadorReviewResponse,
     DeleteAmbassadorReviewResponse,
+    CreateSkillResponse,
+    UpdateSkillResponse,
+    DeleteSkillResponse,
+    CreateAmbassadorSkillResponse,
+    DeleteAmbassadorSkillResponse,
 )
 from . import inputs
 from .services import (
@@ -37,6 +42,11 @@ from .services import (
     CreateAmbassadorReviewService,
     UpdateAmbassadorReviewService,
     DeleteAmbassadorReviewService,
+    CreateSkillService,
+    UpdateSkillService,
+    DeleteSkillService,
+    CreateAmbassadorSkillService,
+    DeleteAmbassadorSkillService,
 )
 
 
@@ -238,3 +248,43 @@ class AmbassadorMutations:
         input: inputs.DeleteAmbassadorReviewInput,
     ) -> DeleteAmbassadorReviewResponse:
         return await DeleteAmbassadorReviewService.delete(input, info)
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def create_skill(
+        self,
+        info: strawberry.Info,
+        input: inputs.CreateSkillInput,
+    ) -> CreateSkillResponse:
+        return await CreateSkillService.create(input, info)
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def update_skill(
+        self,
+        info: strawberry.Info,
+        input: inputs.UpdateSkillInput,
+    ) -> UpdateSkillResponse:
+        return await UpdateSkillService.update(input, info)
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def delete_skill(
+        self,
+        info: strawberry.Info,
+        input: inputs.DeleteSkillInput,
+    ) -> DeleteSkillResponse:
+        return await DeleteSkillService.delete(input, info)
+
+    @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
+    async def create_ambassador_skill(
+        self,
+        info: strawberry.Info,
+        input: inputs.CreateAmbassadorSkillInput,
+    ) -> CreateAmbassadorSkillResponse:
+        return await CreateAmbassadorSkillService.create(input, info)
+
+    @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
+    async def delete_ambassador_skill(
+        self,
+        info: strawberry.Info,
+        input: inputs.DeleteAmbassadorSkillInput,
+    ) -> DeleteAmbassadorSkillResponse:
+        return await DeleteAmbassadorSkillService.delete(input, info)

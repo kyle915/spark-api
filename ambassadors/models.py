@@ -10,6 +10,8 @@ from ambassadors.managers import (
     AmbassadorManager,
     AmbassadorInvitationManager,
     AmbassadorReviewManager,
+    SkillManager,
+    AmbassadorSkillManager,
 )
 from utils.models import Asyncable
 
@@ -308,7 +310,7 @@ class AmbassadorTrait(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
 
-class Skill(models.Model):
+class Skill(Asyncable, models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     name = models.CharField(max_length=50)
@@ -336,8 +338,10 @@ class Skill(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
     updated_at = models.DateTimeField(auto_now=True)
 
+    objects = SkillManager()
 
-class AmbassadorSkill(models.Model):
+
+class AmbassadorSkill(Asyncable, models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
 
@@ -375,6 +379,11 @@ class AmbassadorSkill(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
     updated_at = models.DateTimeField(auto_now=True)
+
+    objects = AmbassadorSkillManager()
+
+    class Meta:
+        unique_together = ("ambassador", "skill")
 
 
 class AmbassadorNote(models.Model):

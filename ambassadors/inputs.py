@@ -1,7 +1,7 @@
 import strawberry
 from typing import List
 
-from utils.graphql.inputs import SparkGraphQLInput, BaseTenantInput
+from utils.graphql.inputs import SparkGraphQLInput, BaseTenantInput, BaseNameableInput
 
 
 @strawberry.input
@@ -113,3 +113,51 @@ class AmbassadorReviewFiltersInput:
     start_date: str | None = None
     end_date: str | None = None
     search: str | None = None
+
+
+@strawberry.input
+class CreateSkillInput(BaseNameableInput):
+    """Input for creating a skill."""
+    pass  # name and tenant_id inherited from BaseNameableInput
+
+
+@strawberry.input
+class UpdateSkillInput(CreateSkillInput):
+    """Input for updating a skill."""
+    id: strawberry.ID
+
+
+@strawberry.input
+class DeleteSkillInput(SparkGraphQLInput):
+    """Input for deleting a skill."""
+    id: strawberry.ID
+
+
+@strawberry.input
+class SkillFiltersInput:
+    """Filters for skill queries."""
+    tenant_id: strawberry.ID | None = None
+    tenant_uuid: strawberry.ID | None = None
+    search: str | None = None
+
+
+@strawberry.input
+class CreateAmbassadorSkillInput(BaseTenantInput):
+    """Input for creating an ambassador skill."""
+    ambassador_id: strawberry.ID
+    skill_id: strawberry.ID
+
+
+@strawberry.input
+class DeleteAmbassadorSkillInput(SparkGraphQLInput):
+    """Input for deleting an ambassador skill."""
+    ambassador_skill_id: strawberry.ID
+
+
+@strawberry.input
+class AmbassadorSkillFiltersInput:
+    """Filters for ambassador skill queries."""
+    ambassador_id: strawberry.ID | None = None
+    skill_id: strawberry.ID | None = None
+    tenant_id: strawberry.ID | None = None
+    tenant_uuid: strawberry.ID | None = None

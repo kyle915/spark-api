@@ -311,3 +311,85 @@ class AmbassadorReviewQueries:
             return await get_review()
         except (AmbassadorReview.DoesNotExist, ValueError, TypeError):
             return None
+
+
+@strawberry.type
+class SkillQueries:
+    """Queries for skills."""
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def skills(
+        self,
+        info: strawberry.Info,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        filters: inputs.SkillFiltersInput | None = None,
+    ) -> CountableConnection[types.SkillType]:
+        """Get skills with filters (authenticated users only)."""
+        from .services import SkillQueriesService
+        service = SkillQueriesService()
+        return await service.get_skills(
+            info=info,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+            filters=filters,
+        )
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def skill(
+        self,
+        info: strawberry.Info,
+        skill_id: strawberry.ID,
+    ) -> types.SkillType | None:
+        """Get a single skill by ID (authenticated users only)."""
+        from .models import Skill
+        try:
+            skill = await Skill.objects._by_id(skill_id)
+            return skill
+        except (Skill.DoesNotExist, ValueError, TypeError):
+            return None
+
+
+@strawberry.type
+class AmbassadorSkillQueries:
+    """Queries for ambassador skills."""
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def ambassador_skills(
+        self,
+        info: strawberry.Info,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        filters: inputs.AmbassadorSkillFiltersInput | None = None,
+    ) -> CountableConnection[types.AmbassadorSkillType]:
+        """Get ambassador skills with filters (authenticated users only)."""
+        from .services import AmbassadorSkillQueriesService
+        service = AmbassadorSkillQueriesService()
+        return await service.get_ambassador_skills(
+            info=info,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+            filters=filters,
+        )
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def ambassador_skill(
+        self,
+        info: strawberry.Info,
+        ambassador_skill_id: strawberry.ID,
+    ) -> types.AmbassadorSkillType | None:
+        """Get a single ambassador skill by ID (authenticated users only)."""
+        from .models import AmbassadorSkill
+        try:
+            ambassador_skill = await AmbassadorSkill.objects._by_id(ambassador_skill_id)
+            return ambassador_skill
+        except (AmbassadorSkill.DoesNotExist, ValueError, TypeError):
+            return None
