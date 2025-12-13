@@ -40,6 +40,7 @@ from utils.graphql.relay import (
 
 logger = logging.getLogger(__name__)
 
+
 class BaseEventQueriesService(SparkGraphQLMixin):
     """Service for event queries."""
 
@@ -108,15 +109,24 @@ class BaseEventQueriesService(SparkGraphQLMixin):
             raise GraphQLError(str(exc)) from exc
 
     async def get_record(
-        self, id: strawberry.ID, tenant_id: strawberry.ID | None = None
+        self,
+        id: strawberry.ID | None = None,
+        tenant_id: strawberry.ID | None = None,
+        uuid: str | None = None,
     ) -> Model | None:
-        """Get a single record."""
+        """Get a single record using id or uuid."""
+        filters: dict[str, object] = {}
+        if id not in (None, ""):
+            filters["id"] = id
+        if uuid not in (None, ""):
+            filters["uuid"] = uuid
+        if tenant_id:
+            filters["tenant_id"] = tenant_id
+        if "id" not in filters and "uuid" not in filters:
+            raise GraphQLError("Record not found.")
+
         try:
-            if tenant_id:
-                return await sync_to_async(self.get_model().objects.get)(
-                    id=id, tenant_id=tenant_id
-                )
-            return await sync_to_async(self.get_model().objects.get)(id=id)
+            return await sync_to_async(self.get_model().objects.get)(**filters)
         except self.get_model().DoesNotExist:
             raise GraphQLError("Record not found.")
 
@@ -124,13 +134,7 @@ class BaseEventQueriesService(SparkGraphQLMixin):
         self, uuid: str, tenant_id: strawberry.ID | None = None
     ) -> Model | None:
         """Get a single record by UUID."""
-        filters = {"uuid": uuid}
-        if tenant_id:
-            filters["tenant_id"] = tenant_id
-        try:
-            return await sync_to_async(self.get_model().objects.get)(**filters)
-        except self.get_model().DoesNotExist:
-            raise GraphQLError("Record not found.")
+        return await self.get_record(uuid=uuid, tenant_id=tenant_id)
 
 
 class EventQueriesService(BaseEventQueriesService):
@@ -193,7 +197,7 @@ class EventQueries:
                 queryset = queryset.filter(request_id=filters.request_id)
             if filters.date:
                 queryset = queryset.filter(request__date=filters.date)
-            
+
             if filters.coordinates:
                 from django.db.models import F
                 from django.db.models.functions import ACos, Cos, Radians, Sin
@@ -205,7 +209,7 @@ class EventQueries:
 
                 # Earth radius: 6371 km or 3959 miles
                 earth_radius = 6371 if unit == DistanceUnit.KILOMETERS else 3959
-                
+
                 distance_expr = earth_radius * ACos(
                     Cos(Radians(lat))
                     * Cos(Radians(F("request__coordinates__0")))
@@ -213,7 +217,9 @@ class EventQueries:
                     + Sin(Radians(lat)) * Sin(Radians(F("request__coordinates__0")))
                 )
 
-                queryset = queryset.annotate(distance=distance_expr).filter(distance__lte=range_val)
+                queryset = queryset.annotate(distance=distance_expr).filter(
+                    distance__lte=range_val
+                )
                 queryset = queryset.order_by("distance", "start_time")
 
         return await service.get_connection(
@@ -228,9 +234,12 @@ class EventQueries:
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def event(
-        self, info: strawberry.Info, uuid: strawberry.ID
+        self,
+        info: strawberry.Info,
+        id: strawberry.ID | None = None,
+        uuid: strawberry.ID | None = None,
     ) -> types.Event | None:
-        """Get a single event by UUID.
+        """Get a single event by id or UUID.
         Spark admins can view any tenant; other roles are limited to their tenant.
         """
         try:
@@ -242,7 +251,9 @@ class EventQueries:
                 tenant = await service.get_user_tenant(info, user=user)
                 tenant_id = tenant.id
 
-            event = await service.get_record_by_uuid(str(uuid), tenant_id)
+            event = await service.get_record(
+                id=id, uuid=str(uuid) if uuid else None, tenant_id=tenant_id
+            )
             return event
         except GraphQLError:
             return None
@@ -317,7 +328,7 @@ class EventQueries:
         filters: EventFiltersInput | None = None,
     ) -> CountableConnection[types.Event]:
         """Get today's events within a radius of the coordinates.
-        
+
         Args:
             coordinates: [latitude, longitude]
             range: Search radius
@@ -366,7 +377,7 @@ class EventQueries:
 
         # Earth radius: 6371 km or 3959 miles
         earth_radius = 6371 if unit == DistanceUnit.KILOMETERS else 3959
-        
+
         distance_expr = earth_radius * ACos(
             Cos(Radians(lat))
             * Cos(Radians(F("request__coordinates__0")))
@@ -386,6 +397,7 @@ class EventQueries:
             before=before,
             queryset=queryset,
         )
+
 
 class EventTypeQueriesService(BaseEventQueriesService):
     """Service for event type queries."""
@@ -440,7 +452,10 @@ class EventTypeQueries:
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def event_type(
-        self, info: strawberry.Info, id: strawberry.ID
+        self,
+        info: strawberry.Info,
+        id: strawberry.ID | None = None,
+        uuid: strawberry.ID | None = None,
     ) -> types.EventType | None:
         """Get a single event type."""
         try:
@@ -451,7 +466,9 @@ class EventTypeQueries:
                 tenant = await service.get_user_tenant(info, user=user)
                 tenant_id = tenant.id
 
-            event_type = await service.get_record(id, tenant_id)
+            event_type = await service.get_record(
+                id=id, uuid=str(uuid) if uuid else None, tenant_id=tenant_id
+            )
             return event_type
         except GraphQLError:
             return None
@@ -509,13 +526,22 @@ class EventStatusQueries:
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def event_status(
-        self, info: strawberry.Info, id: strawberry.ID
+        self,
+        info: strawberry.Info,
+        id: strawberry.ID | None = None,
+        uuid: strawberry.ID | None = None,
     ) -> types.EventStatus | None:
         """Get a single event status."""
         try:
             service = EventStatusQueriesService()
-            tenant = await service.get_user_tenant(info)
-            event_status = await service.get_record(id, tenant.id)
+            user = await service.get_user(info)
+            tenant_id: int | None = None
+            if not service.is_spark_schema_request(info, user=user):
+                tenant = await service.get_user_tenant(info, user=user)
+                tenant_id = tenant.id
+            event_status = await service.get_record(
+                id=id, uuid=str(uuid) if uuid else None, tenant_id=tenant_id
+            )
             return event_status
         except GraphQLError:
             return None
@@ -597,7 +623,10 @@ class RequestQueries:
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def request(
-        self, info: strawberry.Info, uuid: strawberry.ID
+        self,
+        info: strawberry.Info,
+        id: strawberry.ID | None = None,
+        uuid: strawberry.ID | None = None,
     ) -> types.Request | None:
         """Get a single request."""
         try:
@@ -608,7 +637,9 @@ class RequestQueries:
                 tenant = await service.get_user_tenant(info, user=user)
                 tenant_id = tenant.id
 
-            request = await service.get_record_by_uuid(str(uuid), tenant_id)
+            request = await service.get_record(
+                id=id, uuid=str(uuid) if uuid else None, tenant_id=tenant_id
+            )
             return request
         except GraphQLError:
             raise GraphQLError
@@ -662,7 +693,10 @@ class RequestStoreManagerQueries:
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def request_store_manager(
-        self, info: strawberry.Info, id: strawberry.ID
+        self,
+        info: strawberry.Info,
+        id: strawberry.ID | None = None,
+        uuid: strawberry.ID | None = None,
     ) -> types.RequestStoreManager | None:
         """Get a single request store manager."""
         try:
@@ -673,7 +707,9 @@ class RequestStoreManagerQueries:
                 tenant = await service.get_user_tenant(info, user=user)
                 tenant_id = tenant.id
 
-            manager = await service.get_record(id, tenant_id)
+            manager = await service.get_record(
+                id=id, uuid=str(uuid) if uuid else None, tenant_id=tenant_id
+            )
             return manager
         except GraphQLError:
             return None
@@ -703,7 +739,9 @@ class ClientQueries:
         """Get public clients filtered by tenant request_url_name."""
         service = ClientQueriesService()
         try:
-            tenant = await sync_to_async(Tenant.objects.get)(request_url_name=request_url_name)
+            tenant = await sync_to_async(Tenant.objects.get)(
+                request_url_name=request_url_name
+            )
         except Tenant.DoesNotExist:
             return await service.get_connection(
                 queryset=service.get_model().objects.none(),
@@ -765,13 +803,22 @@ class ClientQueries:
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def client(
-        self, info: strawberry.Info, id: strawberry.ID
+        self,
+        info: strawberry.Info,
+        id: strawberry.ID | None = None,
+        uuid: strawberry.ID | None = None,
     ) -> types.Client | None:
         """Get a single client."""
         try:
             service = ClientQueriesService()
-            tenant = await service.get_user_tenant(info)
-            client = await service.get_record(id, tenant.id)
+            user = await service.get_user(info)
+            tenant_id: int | None = None
+            if not service.is_spark_schema_request(info, user=user):
+                tenant = await service.get_user_tenant(info, user=user)
+                tenant_id = tenant.id
+            client = await service.get_record(
+                id=id, uuid=str(uuid) if uuid else None, tenant_id=tenant_id
+            )
             return client
         except GraphQLError:
             return None
@@ -832,13 +879,22 @@ class LocationQueries:
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def location(
-        self, info: strawberry.Info, id: strawberry.ID
+        self,
+        info: strawberry.Info,
+        id: strawberry.ID | None = None,
+        uuid: strawberry.ID | None = None,
     ) -> types.Location | None:
         """Get a single location."""
         try:
             service = LocationQueriesService()
-            tenant = await service.get_user_tenant(info)
-            location = await service.get_record(id, tenant.id)
+            user = await service.get_user(info)
+            tenant_id: int | None = None
+            if not service.is_spark_schema_request(info, user=user):
+                tenant = await service.get_user_tenant(info, user=user)
+                tenant_id = tenant.id
+            location = await service.get_record(
+                id=id, uuid=str(uuid) if uuid else None, tenant_id=tenant_id
+            )
             return location
         except GraphQLError:
             return None
@@ -868,7 +924,9 @@ class DistributorQueries:
         """Get public distributors filtered by tenant request_url_name."""
         service = DistributorQueriesService()
         try:
-            tenant = await sync_to_async(Tenant.objects.get)(request_url_name=request_url_name)
+            tenant = await sync_to_async(Tenant.objects.get)(
+                request_url_name=request_url_name
+            )
         except Tenant.DoesNotExist:
             return await service.get_connection(
                 queryset=service.get_model().objects.none(),
@@ -930,13 +988,22 @@ class DistributorQueries:
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def distributor(
-        self, info: strawberry.Info, id: strawberry.ID
+        self,
+        info: strawberry.Info,
+        id: strawberry.ID | None = None,
+        uuid: strawberry.ID | None = None,
     ) -> types.Distributor | None:
         """Get a single distributor."""
         try:
             service = DistributorQueriesService()
-            tenant = await service.get_user_tenant(info)
-            distributor = await service.get_record(id, tenant.id)
+            user = await service.get_user(info)
+            tenant_id: int | None = None
+            if not service.is_spark_schema_request(info, user=user):
+                tenant = await service.get_user_tenant(info, user=user)
+                tenant_id = tenant.id
+            distributor = await service.get_record(
+                id=id, uuid=str(uuid) if uuid else None, tenant_id=tenant_id
+            )
             return distributor
         except GraphQLError:
             return None
@@ -966,7 +1033,9 @@ class RetailerQueries:
         """Get public retailers filtered by tenant request_url_name."""
         service = RetailerQueriesService()
         try:
-            tenant = await sync_to_async(Tenant.objects.get)(request_url_name=request_url_name)
+            tenant = await sync_to_async(Tenant.objects.get)(
+                request_url_name=request_url_name
+            )
         except Tenant.DoesNotExist:
             return await service.get_connection(
                 queryset=service.get_model().objects.none(),
@@ -1028,13 +1097,22 @@ class RetailerQueries:
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def retailer(
-        self, info: strawberry.Info, id: strawberry.ID
+        self,
+        info: strawberry.Info,
+        id: strawberry.ID | None = None,
+        uuid: strawberry.ID | None = None,
     ) -> types.Retailer | None:
         """Get a single retailer."""
         try:
             service = RetailerQueriesService()
-            tenant = await service.get_user_tenant(info)
-            retailer = await service.get_record(id, tenant.id)
+            user = await service.get_user(info)
+            tenant_id: int | None = None
+            if not service.is_spark_schema_request(info, user=user):
+                tenant = await service.get_user_tenant(info, user=user)
+                tenant_id = tenant.id
+            retailer = await service.get_record(
+                id=id, uuid=str(uuid) if uuid else None, tenant_id=tenant_id
+            )
             return retailer
         except GraphQLError:
             return None
@@ -1064,7 +1142,9 @@ class RequestTypeQueries:
         """Get public request types filtered by tenant request_url_name."""
         service = RequestTypeQueriesService()
         try:
-            tenant = await sync_to_async(Tenant.objects.get)(request_url_name=request_url_name)
+            tenant = await sync_to_async(Tenant.objects.get)(
+                request_url_name=request_url_name
+            )
         except Tenant.DoesNotExist:
             return await service.get_connection(
                 queryset=service.get_model().objects.none(),
@@ -1126,13 +1206,22 @@ class RequestTypeQueries:
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def request_type(
-        self, info: strawberry.Info, id: strawberry.ID
+        self,
+        info: strawberry.Info,
+        id: strawberry.ID | None = None,
+        uuid: strawberry.ID | None = None,
     ) -> types.RequestType | None:
         """Get a single request type."""
         try:
             service = RequestTypeQueriesService()
-            tenant = await service.get_user_tenant(info)
-            request_type = await service.get_record(id, tenant.id)
+            user = await service.get_user(info)
+            tenant_id: int | None = None
+            if not service.is_spark_schema_request(info, user=user):
+                tenant = await service.get_user_tenant(info, user=user)
+                tenant_id = tenant.id
+            request_type = await service.get_record(
+                id=id, uuid=str(uuid) if uuid else None, tenant_id=tenant_id
+            )
             return request_type
         except GraphQLError:
             return None
@@ -1191,13 +1280,22 @@ class RequestStatusQueries:
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def request_status(
-        self, info: strawberry.Info, id: strawberry.ID
+        self,
+        info: strawberry.Info,
+        id: strawberry.ID | None = None,
+        uuid: strawberry.ID | None = None,
     ) -> types.RequestStatus | None:
         """Get a single request status."""
         try:
             service = RequestStatusQueriesService()
-            tenant = await service.get_user_tenant(info)
-            return await service.get_record(id, tenant.id)
+            user = await service.get_user(info)
+            tenant_id: int | None = None
+            if not service.is_spark_schema_request(info, user=user):
+                tenant = await service.get_user_tenant(info, user=user)
+                tenant_id = tenant.id
+            return await service.get_record(
+                id=id, uuid=str(uuid) if uuid else None, tenant_id=tenant_id
+            )
         except GraphQLError:
             return None
 
@@ -1226,7 +1324,9 @@ class ProductTypeQueries:
         """Get public product types filtered by tenant request_url_name."""
         service = ProductTypeQueriesService()
         try:
-            tenant = await sync_to_async(Tenant.objects.get)(request_url_name=request_url_name)
+            tenant = await sync_to_async(Tenant.objects.get)(
+                request_url_name=request_url_name
+            )
         except Tenant.DoesNotExist:
             return await service.get_connection(
                 queryset=service.get_model().objects.none(),
@@ -1290,13 +1390,22 @@ class ProductTypeQueries:
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def product_type(
-        self, info: strawberry.Info, id: strawberry.ID
+        self,
+        info: strawberry.Info,
+        id: strawberry.ID | None = None,
+        uuid: strawberry.ID | None = None,
     ) -> types.ProductType | None:
         """Get a single product type."""
         try:
             service = ProductTypeQueriesService()
-            tenant = await service.get_user_tenant(info)
-            return await service.get_record(id, tenant.id)
+            user = await service.get_user(info)
+            tenant_id: int | None = None
+            if not service.is_spark_schema_request(info, user=user):
+                tenant = await service.get_user_tenant(info, user=user)
+                tenant_id = tenant.id
+            return await service.get_record(
+                id=id, uuid=str(uuid) if uuid else None, tenant_id=tenant_id
+            )
         except GraphQLError:
             return None
 
@@ -1326,7 +1435,9 @@ class ProductQueries:
         """Get public products filtered by tenant request_url_name."""
         service = ProductQueriesService()
         try:
-            tenant = await sync_to_async(Tenant.objects.get)(request_url_name=request_url_name)
+            tenant = await sync_to_async(Tenant.objects.get)(
+                request_url_name=request_url_name
+            )
         except Tenant.DoesNotExist:
             return await service.get_connection(
                 queryset=service.get_model().objects.none(),
@@ -1402,13 +1513,22 @@ class ProductQueries:
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def product(
-        self, info: strawberry.Info, id: strawberry.ID
+        self,
+        info: strawberry.Info,
+        id: strawberry.ID | None = None,
+        uuid: strawberry.ID | None = None,
     ) -> types.Product | None:
         """Get a single product."""
         try:
             service = ProductQueriesService()
-            tenant = await service.get_user_tenant(info)
-            return await service.get_record(id, tenant.id)
+            user = await service.get_user(info)
+            tenant_id: int | None = None
+            if not service.is_spark_schema_request(info, user=user):
+                tenant = await service.get_user_tenant(info, user=user)
+                tenant_id = tenant.id
+            return await service.get_record(
+                id=id, uuid=str(uuid) if uuid else None, tenant_id=tenant_id
+            )
         except GraphQLError:
             return None
 

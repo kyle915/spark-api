@@ -42,7 +42,7 @@ class Location(models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     name = models.CharField(max_length=50)
-    code = models.CharField(max_length=50, unique=True)
+    code = models.CharField(max_length=50)
     zip = models.CharField(max_length=10)
 
     tenant = models.ForeignKey(
