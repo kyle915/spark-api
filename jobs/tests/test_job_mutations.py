@@ -43,12 +43,6 @@ class TestClientJobMutations(JobsGraphQLTestCase):
             phone="123-456-7890",
             tenant=self.tenant
         )
-        self.location = self.create_location(
-            name="Test Location",
-            code="TEST",
-            zip_code="12345",
-            tenant=self.tenant
-        )
         self.event = self.create_event(
             name="Test Event",
             tenant=self.tenant,
@@ -65,6 +59,7 @@ class TestClientJobMutations(JobsGraphQLTestCase):
     @pytest.mark.asyncio
     async def test_create_job_success(self):
         """Test successful job creation."""
+        coordinates = [12.34, -56.78]
         mutation = """
         mutation CreateJob($input: CreateJobInput!) {
             createJob(input: $input) {
@@ -90,7 +85,7 @@ class TestClientJobMutations(JobsGraphQLTestCase):
                 "jobTitleId": str(self.job_title.id),
                 "companyId": str(self.company.id),
                 "eventId": str(self.event.id),
-                "locationId": str(self.location.id),
+                "coordinates": coordinates,
             }
         }
 
@@ -111,7 +106,7 @@ class TestClientJobMutations(JobsGraphQLTestCase):
         # Compare IDs to avoid async database access
         assert job.company_id == self.company.id
         assert job.event_id == self.event.id
-        assert job.location_id == self.location.id
+        assert job.coordinates == coordinates
         assert job.job_title_id == self.job_title.id
         assert job.tenant_id == self.tenant.id
 
@@ -119,6 +114,7 @@ class TestClientJobMutations(JobsGraphQLTestCase):
     async def test_update_job_success(self):
         """Test successful job update."""
         # Create a job first
+        original_coordinates = [10.0, 20.0]
         job = await sync_to_async(self.create_job)(
             name="Original Job",
             code="JOB-ORIG",
@@ -126,8 +122,10 @@ class TestClientJobMutations(JobsGraphQLTestCase):
             company=self.company,
             event=self.event,
             job_title=self.job_title,
-            tenant=self.tenant
+            tenant=self.tenant,
+            coordinates=original_coordinates,
         )
+        new_coordinates = [30.0, 40.0]
 
         mutation = """
         mutation UpdateJob($input: UpdateJobInput!) {
@@ -154,7 +152,7 @@ class TestClientJobMutations(JobsGraphQLTestCase):
                 "jobTitleId": str(self.job_title.id),
                 "companyId": str(self.company.id),
                 "eventId": str(self.event.id),
-                "locationId": str(self.location.id),
+                "coordinates": new_coordinates,
             }
         }
 
@@ -170,6 +168,7 @@ class TestClientJobMutations(JobsGraphQLTestCase):
         updated_job = await sync_to_async(models.Job.objects.get)(pk=job.id)
         assert updated_job.name == "Updated Job"
         assert updated_job.code == "JOB-UPD"
+        assert updated_job.coordinates == new_coordinates
 
 
 @pytest.mark.django_db(transaction=True)
@@ -199,12 +198,6 @@ class TestSparkJobMutations(JobsGraphQLTestCase):
             phone="123-456-7890",
             tenant=self.tenant
         )
-        self.location = self.create_location(
-            name="Test Location",
-            code="TEST",
-            zip_code="12345",
-            tenant=self.tenant
-        )
         self.event = self.create_event(
             name="Test Event",
             tenant=self.tenant,
@@ -221,6 +214,7 @@ class TestSparkJobMutations(JobsGraphQLTestCase):
     @pytest.mark.asyncio
     async def test_create_job_success(self):
         """Test successful job creation (Spark schema)."""
+        coordinates = [-12.34, 56.78]
         mutation = """
         mutation CreateJob($input: CreateJobInput!) {
             createJob(input: $input) {
@@ -245,7 +239,7 @@ class TestSparkJobMutations(JobsGraphQLTestCase):
                 "jobTitleId": str(self.job_title.id),
                 "companyId": str(self.company.id),
                 "eventId": str(self.event.id),
-                "locationId": str(self.location.id),
+                "coordinates": coordinates,
             }
         }
 
@@ -261,6 +255,7 @@ class TestSparkJobMutations(JobsGraphQLTestCase):
         job_id = result.data["createJob"]["job"]["id"]
         job = await sync_to_async(models.Job.objects.get)(pk=job_id)
         assert job.name == "Spark Job"
+        assert job.coordinates == coordinates
         # Compare tenant IDs to avoid async database access
         tenant_id = await sync_to_async(lambda: self.tenant.id)()
         assert job.tenant_id == tenant_id
@@ -269,6 +264,7 @@ class TestSparkJobMutations(JobsGraphQLTestCase):
     async def test_update_job_success(self):
         """Test successful job update (Spark schema)."""
         # Create a job first
+        original_coordinates = [11.11, 22.22]
         job = await sync_to_async(self.create_job)(
             name="Original Spark Job",
             code="SPARK-ORIG",
@@ -276,8 +272,10 @@ class TestSparkJobMutations(JobsGraphQLTestCase):
             company=self.company,
             event=self.event,
             job_title=self.job_title,
-            tenant=self.tenant
+            tenant=self.tenant,
+            coordinates=original_coordinates,
         )
+        new_coordinates = [33.33, 44.44]
 
         mutation = """
         mutation UpdateJob($input: UpdateJobInput!) {
@@ -303,7 +301,7 @@ class TestSparkJobMutations(JobsGraphQLTestCase):
                 "jobTitleId": str(self.job_title.id),
                 "companyId": str(self.company.id),
                 "eventId": str(self.event.id),
-                "locationId": str(self.location.id),
+                "coordinates": new_coordinates,
             }
         }
 
@@ -317,3 +315,4 @@ class TestSparkJobMutations(JobsGraphQLTestCase):
         # Verify job was updated
         updated_job = await sync_to_async(models.Job.objects.get)(pk=job.id)
         assert updated_job.name == "Updated Spark Job"
+        assert updated_job.coordinates == new_coordinates

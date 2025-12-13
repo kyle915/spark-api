@@ -34,9 +34,9 @@ class StatusQueries:
     ) -> CountableConnection[types.Status]:
         """Get all statuses."""
         service = StatusQueriesService()
-        tenant = await service.get_user_tenant(info)
+        tenant_id = await service.resolve_query_tenant_id(info)
         return await service.get_connection(
-            tenant_id=tenant.id,
+            tenant_id=tenant_id,
             q=q,
             first=first,
             after=after,
@@ -46,13 +46,17 @@ class StatusQueries:
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def ambassador_job_status(
-        self, info: strawberry.Info, id: strawberry.ID
+        self,
+        info: strawberry.Info,
+        id: strawberry.ID | None = None,
+        uuid: strawberry.ID | None = None,
     ) -> types.Status | None:
         """Get a single status."""
         try:
             service = StatusQueriesService()
-            tenant = await service.get_user_tenant(info)
-            return await service.get_record(id, tenant.id)
+            return await service.get_single_record(
+                info, id=id, uuid=str(uuid) if uuid else None
+            )
         except GraphQLError:
             return None
 
@@ -80,9 +84,9 @@ class CompanyFileQueries:
     ) -> CountableConnection[types.CompanyFile]:
         """Get all company files."""
         service = CompanyFileQueriesService()
-        tenant = await service.get_user_tenant(info)
+        tenant_id = await service.resolve_query_tenant_id(info)
         return await service.get_connection(
-            tenant_id=tenant.id,
+            tenant_id=tenant_id,
             q=q,
             first=first,
             after=after,
@@ -92,13 +96,17 @@ class CompanyFileQueries:
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def company_file(
-        self, info: strawberry.Info, id: strawberry.ID
+        self,
+        info: strawberry.Info,
+        id: strawberry.ID | None = None,
+        uuid: strawberry.ID | None = None,
     ) -> types.CompanyFile | None:
         """Get a single company file."""
         try:
             service = CompanyFileQueriesService()
-            tenant = await service.get_user_tenant(info)
-            return await service.get_record(id, tenant.id)
+            return await service.get_single_record(
+                info, id=id, uuid=str(uuid) if uuid else None
+            )
         except GraphQLError:
             return None
 
@@ -110,6 +118,13 @@ class CompanyQueriesService(BaseQueriesService):
     def get_model(self) -> Model:
         """Get the model for the service."""
         return models.Company
+
+    def get_filtered_queryset(
+        self, tenant_id: int | None = None, q: str | None = None
+    ) -> QuerySet:
+        """Filter companies; exclude entries without name to satisfy GraphQL non-null."""
+        queryset = super().get_filtered_queryset(tenant_id, q)
+        return queryset.exclude(name__isnull=True)
 
 
 @strawberry.type
@@ -126,9 +141,9 @@ class CompanyQueries:
     ) -> CountableConnection[types.Company]:
         """Get all companies."""
         service = CompanyQueriesService()
-        tenant = await service.get_user_tenant(info)
+        tenant_id = await service.resolve_query_tenant_id(info)
         return await service.get_connection(
-            tenant_id=tenant.id,
+            tenant_id=tenant_id,
             q=q,
             first=first,
             after=after,
@@ -138,13 +153,17 @@ class CompanyQueries:
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def company(
-        self, info: strawberry.Info, id: strawberry.ID
+        self,
+        info: strawberry.Info,
+        id: strawberry.ID | None = None,
+        uuid: strawberry.ID | None = None,
     ) -> types.Company | None:
         """Get a single company."""
         try:
             service = CompanyQueriesService()
-            tenant = await service.get_user_tenant(info)
-            return await service.get_record(id, tenant.id)
+            return await service.get_single_record(
+                info, id=id, uuid=str(uuid) if uuid else None
+            )
         except GraphQLError:
             return None
 
@@ -172,9 +191,9 @@ class CompanyReviewQueries:
     ) -> CountableConnection[types.CompanyReview]:
         """Get all company reviews."""
         service = CompanyReviewQueriesService()
-        tenant = await service.get_user_tenant(info)
+        tenant_id = await service.resolve_query_tenant_id(info)
         return await service.get_connection(
-            tenant_id=tenant.id,
+            tenant_id=tenant_id,
             q=q,
             first=first,
             after=after,
@@ -184,13 +203,17 @@ class CompanyReviewQueries:
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def company_review(
-        self, info: strawberry.Info, id: strawberry.ID
+        self,
+        info: strawberry.Info,
+        id: strawberry.ID | None = None,
+        uuid: strawberry.ID | None = None,
     ) -> types.CompanyReview | None:
         """Get a single company review."""
         try:
             service = CompanyReviewQueriesService()
-            tenant = await service.get_user_tenant(info)
-            return await service.get_record(id, tenant.id)
+            return await service.get_single_record(
+                info, id=id, uuid=str(uuid) if uuid else None
+            )
         except GraphQLError:
             return None
 
@@ -218,9 +241,9 @@ class PayTimingQueries:
     ) -> CountableConnection[types.PayTiming]:
         """Get all pay timings."""
         service = PayTimingQueriesService()
-        tenant = await service.get_user_tenant(info)
+        tenant_id = await service.resolve_query_tenant_id(info)
         return await service.get_connection(
-            tenant_id=tenant.id,
+            tenant_id=tenant_id,
             q=q,
             first=first,
             after=after,
@@ -230,13 +253,17 @@ class PayTimingQueries:
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def pay_timing(
-        self, info: strawberry.Info, id: strawberry.ID
+        self,
+        info: strawberry.Info,
+        id: strawberry.ID | None = None,
+        uuid: strawberry.ID | None = None,
     ) -> types.PayTiming | None:
         """Get a single pay timing."""
         try:
             service = PayTimingQueriesService()
-            tenant = await service.get_user_tenant(info)
-            return await service.get_record(id, tenant.id)
+            return await service.get_single_record(
+                info, id=id, uuid=str(uuid) if uuid else None
+            )
         except GraphQLError:
             return None
 
@@ -264,9 +291,9 @@ class ReviewScoreQueries:
     ) -> CountableConnection[types.ReviewScore]:
         """Get all review scores."""
         service = ReviewScoreQueriesService()
-        tenant = await service.get_user_tenant(info)
+        tenant_id = await service.resolve_query_tenant_id(info)
         return await service.get_connection(
-            tenant_id=tenant.id,
+            tenant_id=tenant_id,
             q=q,
             first=first,
             after=after,
@@ -276,13 +303,17 @@ class ReviewScoreQueries:
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def review_score(
-        self, info: strawberry.Info, id: strawberry.ID
+        self,
+        info: strawberry.Info,
+        id: strawberry.ID | None = None,
+        uuid: strawberry.ID | None = None,
     ) -> types.ReviewScore | None:
         """Get a single review score."""
         try:
             service = ReviewScoreQueriesService()
-            tenant = await service.get_user_tenant(info)
-            return await service.get_record(id, tenant.id)
+            return await service.get_single_record(
+                info, id=id, uuid=str(uuid) if uuid else None
+            )
         except GraphQLError:
             return None
 
@@ -310,9 +341,9 @@ class JobTitleQueries:
     ) -> CountableConnection[types.JobTitle]:
         """Get all job titles."""
         service = JobTitleQueriesService()
-        tenant = await service.get_user_tenant(info)
+        tenant_id = await service.resolve_query_tenant_id(info)
         return await service.get_connection(
-            tenant_id=tenant.id,
+            tenant_id=tenant_id,
             q=q,
             first=first,
             after=after,
@@ -322,13 +353,17 @@ class JobTitleQueries:
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def job_title(
-        self, info: strawberry.Info, id: strawberry.ID
+        self,
+        info: strawberry.Info,
+        id: strawberry.ID | None = None,
+        uuid: strawberry.ID | None = None,
     ) -> types.JobTitle | None:
         """Get a single job title."""
         try:
             service = JobTitleQueriesService()
-            tenant = await service.get_user_tenant(info)
-            return await service.get_record(id, tenant.id)
+            return await service.get_single_record(
+                info, id=id, uuid=str(uuid) if uuid else None
+            )
         except GraphQLError:
             return None
 
@@ -356,9 +391,9 @@ class RateTypeQueries:
     ) -> CountableConnection[types.RateType]:
         """Get all rate types."""
         service = RateTypeQueriesService()
-        tenant = await service.get_user_tenant(info)
+        tenant_id = await service.resolve_query_tenant_id(info)
         return await service.get_connection(
-            tenant_id=tenant.id,
+            tenant_id=tenant_id,
             q=q,
             first=first,
             after=after,
@@ -368,13 +403,17 @@ class RateTypeQueries:
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def rate_type(
-        self, info: strawberry.Info, id: strawberry.ID
+        self,
+        info: strawberry.Info,
+        id: strawberry.ID | None = None,
+        uuid: strawberry.ID | None = None,
     ) -> types.RateType | None:
         """Get a single rate type."""
         try:
             service = RateTypeQueriesService()
-            tenant = await service.get_user_tenant(info)
-            return await service.get_record(id, tenant.id)
+            return await service.get_single_record(
+                info, id=id, uuid=str(uuid) if uuid else None
+            )
         except GraphQLError:
             return None
 
@@ -402,9 +441,9 @@ class RateQueries:
     ) -> CountableConnection[types.Rate]:
         """Get all rates."""
         service = RateQueriesService()
-        tenant = await service.get_user_tenant(info)
+        tenant_id = await service.resolve_query_tenant_id(info)
         return await service.get_connection(
-            tenant_id=tenant.id,
+            tenant_id=tenant_id,
             q=q,
             first=first,
             after=after,
@@ -414,13 +453,17 @@ class RateQueries:
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def rate(
-        self, info: strawberry.Info, id: strawberry.ID
+        self,
+        info: strawberry.Info,
+        id: strawberry.ID | None = None,
+        uuid: strawberry.ID | None = None,
     ) -> types.Rate | None:
         """Get a single rate."""
         try:
             service = RateQueriesService()
-            tenant = await service.get_user_tenant(info)
-            return await service.get_record(id, tenant.id)
+            return await service.get_single_record(
+                info, id=id, uuid=str(uuid) if uuid else None
+            )
         except GraphQLError:
             return None
 
@@ -449,7 +492,7 @@ class JobQueries:
     ) -> CountableConnection[types.Job]:
         """Get all jobs."""
         service = JobQueriesService()
-        tenant_id = await service.resolve_tenant_id(info, filters)
+        tenant_id = await service.resolve_query_tenant_id(info, filters=filters)
         queryset = service.get_ordered_queryset(
             tenant_id=tenant_id,
             q=q,
@@ -470,15 +513,17 @@ class JobQueries:
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def job(
-        self, info: strawberry.Info, id: strawberry.ID
+        self,
+        info: strawberry.Info,
+        id: strawberry.ID | None = None,
+        uuid: strawberry.ID | None = None,
     ) -> types.Job | None:
         """Get a single job."""
         try:
             service = JobQueriesService()
-            tenant_id = await service.resolve_tenant_id(info)
-            if tenant_id:
-                return await service.get_record(id, tenant_id)
-            return await service.get_record(id)
+            return await service.get_single_record(
+                info, id=id, uuid=str(uuid) if uuid else None
+            )
         except GraphQLError:
             return None
 
@@ -508,9 +553,9 @@ class JobFileQueries:
     ) -> CountableConnection[types.JobFile]:
         """Get all job files."""
         service = JobFileQueriesService()
-        tenant = await service.get_user_tenant(info)
+        tenant_id = await service.resolve_query_tenant_id(info)
         return await service.get_connection(
-            tenant_id=tenant.id,
+            tenant_id=tenant_id,
             q=q,
             first=first,
             after=after,
@@ -520,13 +565,17 @@ class JobFileQueries:
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def job_file(
-        self, info: strawberry.Info, id: strawberry.ID
+        self,
+        info: strawberry.Info,
+        id: strawberry.ID | None = None,
+        uuid: strawberry.ID | None = None,
     ) -> types.JobFile | None:
         """Get a single job file."""
         try:
             service = JobFileQueriesService()
-            tenant = await service.get_user_tenant(info)
-            return await service.get_record(id, tenant.id)
+            return await service.get_single_record(
+                info, id=id, uuid=str(uuid) if uuid else None
+            )
         except GraphQLError:
             return None
 
@@ -554,9 +603,9 @@ class JobRequirementTypeQueries:
     ) -> CountableConnection[types.JobRequirementType]:
         """Get all job requirement types."""
         service = JobRequirementTypeQueriesService()
-        tenant = await service.get_user_tenant(info)
+        tenant_id = await service.resolve_query_tenant_id(info)
         return await service.get_connection(
-            tenant_id=tenant.id,
+            tenant_id=tenant_id,
             q=q,
             first=first,
             after=after,
@@ -566,13 +615,17 @@ class JobRequirementTypeQueries:
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def job_requirement_type(
-        self, info: strawberry.Info, id: strawberry.ID
+        self,
+        info: strawberry.Info,
+        id: strawberry.ID | None = None,
+        uuid: strawberry.ID | None = None,
     ) -> types.JobRequirementType | None:
         """Get a single job requirement type."""
         try:
             service = JobRequirementTypeQueriesService()
-            tenant = await service.get_user_tenant(info)
-            return await service.get_record(id, tenant.id)
+            return await service.get_single_record(
+                info, id=id, uuid=str(uuid) if uuid else None
+            )
         except GraphQLError:
             return None
 
@@ -600,9 +653,9 @@ class JobRequirementQueries:
     ) -> CountableConnection[types.JobRequirement]:
         """Get all job requirements."""
         service = JobRequirementQueriesService()
-        tenant = await service.get_user_tenant(info)
+        tenant_id = await service.resolve_query_tenant_id(info)
         return await service.get_connection(
-            tenant_id=tenant.id,
+            tenant_id=tenant_id,
             q=q,
             first=first,
             after=after,
@@ -612,13 +665,17 @@ class JobRequirementQueries:
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def job_requirement(
-        self, info: strawberry.Info, id: strawberry.ID
+        self,
+        info: strawberry.Info,
+        id: strawberry.ID | None = None,
+        uuid: strawberry.ID | None = None,
     ) -> types.JobRequirement | None:
         """Get a single job requirement."""
         try:
             service = JobRequirementQueriesService()
-            tenant = await service.get_user_tenant(info)
-            return await service.get_record(id, tenant.id)
+            return await service.get_single_record(
+                info, id=id, uuid=str(uuid) if uuid else None
+            )
         except GraphQLError:
             return None
 
@@ -646,9 +703,9 @@ class JobRequirementFileQueries:
     ) -> CountableConnection[types.JobRequirementFile]:
         """Get all job requirement files."""
         service = JobRequirementFileQueriesService()
-        tenant = await service.get_user_tenant(info)
+        tenant_id = await service.resolve_query_tenant_id(info)
         return await service.get_connection(
-            tenant_id=tenant.id,
+            tenant_id=tenant_id,
             q=q,
             first=first,
             after=after,
@@ -658,13 +715,17 @@ class JobRequirementFileQueries:
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def job_requirement_file(
-        self, info: strawberry.Info, id: strawberry.ID
+        self,
+        info: strawberry.Info,
+        id: strawberry.ID | None = None,
+        uuid: strawberry.ID | None = None,
     ) -> types.JobRequirementFile | None:
         """Get a single job requirement file."""
         try:
             service = JobRequirementFileQueriesService()
-            tenant = await service.get_user_tenant(info)
-            return await service.get_record(id, tenant.id)
+            return await service.get_single_record(
+                info, id=id, uuid=str(uuid) if uuid else None
+            )
         except GraphQLError:
             return None
 
@@ -693,7 +754,7 @@ class AmbassadorJobQueries:
     ) -> CountableConnection[types.Job]:
         """Get all available jobs."""
         service = JobQueriesService()
-        tenant_id = await service.resolve_tenant_id(info, filters)
+        tenant_id = await service.resolve_query_tenant_id(info, filters=filters)
         queryset = service.get_ordered_queryset(
             tenant_id=tenant_id, q=q, ordering=("start_date",))
         queryset = queryset.filter(ongoing=True, closed=False, public=True)\
@@ -721,9 +782,9 @@ class AmbassadorJobQueries:
     ) -> CountableConnection[types.AmbassadorJob]:
         """Get all ambassador jobs."""
         service = AmbassadorJobQueriesService()
-        tenant = await service.get_user_tenant(info)
+        tenant_id = await service.resolve_query_tenant_id(info)
         return await service.get_connection(
-            tenant_id=tenant.id,
+            tenant_id=tenant_id,
             q=q,
             first=first,
             after=after,
@@ -733,13 +794,17 @@ class AmbassadorJobQueries:
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def ambassador_job(
-        self, info: strawberry.Info, id: strawberry.ID
+        self,
+        info: strawberry.Info,
+        id: strawberry.ID | None = None,
+        uuid: strawberry.ID | None = None,
     ) -> types.AmbassadorJob | None:
         """Get a single ambassador job."""
         try:
             service = AmbassadorJobQueriesService()
-            tenant = await service.get_user_tenant(info)
-            return await service.get_record(id, tenant.id)
+            return await service.get_single_record(
+                info, id=id, uuid=str(uuid) if uuid else None
+            )
         except GraphQLError:
             return None
 
@@ -760,10 +825,12 @@ class ClientSparkAmbassadorJobQueries:
     ) -> CountableConnection[types.AmbassadorJob]:
         """Get all ambassadors for a specific job."""
         service = AmbassadorJobQueriesService()
-        tenant = await service.get_user_tenant(info)
+        tenant_id = await service.resolve_query_tenant_id(info)
 
         # Get base queryset filtered by tenant
-        queryset = service.get_queryset().filter(tenant_id=tenant.id)
+        queryset = service.get_queryset()
+        if tenant_id:
+            queryset = queryset.filter(tenant_id=tenant_id)
 
         # Filter by job_id
         queryset = queryset.filter(job_id=job_id)
@@ -775,7 +842,7 @@ class ClientSparkAmbassadorJobQueries:
         queryset = queryset.order_by(*service.ordering)
 
         return await service.get_connection(
-            tenant_id=tenant.id,
+            tenant_id=tenant_id,
             first=first,
             after=after,
             last=last,
@@ -807,9 +874,9 @@ class CompanyToAmbassadorReviewQueries:
     ) -> CountableConnection[types.CompanyToAmbassadorReview]:
         """Get all company to ambassador reviews."""
         service = CompanyToAmbassadorReviewQueriesService()
-        tenant = await service.get_user_tenant(info)
+        tenant_id = await service.resolve_query_tenant_id(info)
         return await service.get_connection(
-            tenant_id=tenant.id,
+            tenant_id=tenant_id,
             q=q,
             first=first,
             after=after,
@@ -819,13 +886,17 @@ class CompanyToAmbassadorReviewQueries:
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def company_to_ambassador_review(
-        self, info: strawberry.Info, id: strawberry.ID
+        self,
+        info: strawberry.Info,
+        id: strawberry.ID | None = None,
+        uuid: strawberry.ID | None = None,
     ) -> types.CompanyToAmbassadorReview | None:
         """Get a single company to ambassador review."""
         try:
             service = CompanyToAmbassadorReviewQueriesService()
-            tenant = await service.get_user_tenant(info)
-            return await service.get_record(id, tenant.id)
+            return await service.get_single_record(
+                info, id=id, uuid=str(uuid) if uuid else None
+            )
         except GraphQLError:
             return None
 
@@ -853,9 +924,9 @@ class AmbassadorToAmbassadorReviewQueries:
     ) -> CountableConnection[types.AmbassadorToAmbassadorReview]:
         """Get all ambassador to ambassador reviews."""
         service = AmbassadorToAmbassadorReviewQueriesService()
-        tenant = await service.get_user_tenant(info)
+        tenant_id = await service.resolve_query_tenant_id(info)
         return await service.get_connection(
-            tenant_id=tenant.id,
+            tenant_id=tenant_id,
             q=q,
             first=first,
             after=after,
@@ -865,13 +936,17 @@ class AmbassadorToAmbassadorReviewQueries:
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def ambassador_to_ambassador_review(
-        self, info: strawberry.Info, id: strawberry.ID
+        self,
+        info: strawberry.Info,
+        id: strawberry.ID | None = None,
+        uuid: strawberry.ID | None = None,
     ) -> types.AmbassadorToAmbassadorReview | None:
         """Get a single ambassador to ambassador review."""
         try:
             service = AmbassadorToAmbassadorReviewQueriesService()
-            tenant = await service.get_user_tenant(info)
-            return await service.get_record(id, tenant.id)
+            return await service.get_single_record(
+                info, id=id, uuid=str(uuid) if uuid else None
+            )
         except GraphQLError:
             return None
 
@@ -899,9 +974,9 @@ class QuestionTypeQueries:
     ) -> CountableConnection[types.QuestionType]:
         """Get all question types."""
         service = QuestionTypeQueriesService()
-        tenant = await service.get_user_tenant(info)
+        tenant_id = await service.resolve_query_tenant_id(info)
         return await service.get_connection(
-            tenant_id=tenant.id,
+            tenant_id=tenant_id,
             q=q,
             first=first,
             after=after,
@@ -911,13 +986,17 @@ class QuestionTypeQueries:
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def question_type(
-        self, info: strawberry.Info, id: strawberry.ID
+        self,
+        info: strawberry.Info,
+        id: strawberry.ID | None = None,
+        uuid: strawberry.ID | None = None,
     ) -> types.QuestionType | None:
         """Get a single question type."""
         try:
             service = QuestionTypeQueriesService()
-            tenant = await service.get_user_tenant(info)
-            return await service.get_record(id, tenant.id)
+            return await service.get_single_record(
+                info, id=id, uuid=str(uuid) if uuid else None
+            )
         except GraphQLError:
             return None
 
@@ -945,9 +1024,9 @@ class JobRequirementQuestionQueries:
     ) -> CountableConnection[types.JobRequirementQuestion]:
         """Get all job requirement questions."""
         service = JobRequirementQuestionQueriesService()
-        tenant = await service.get_user_tenant(info)
+        tenant_id = await service.resolve_query_tenant_id(info)
         return await service.get_connection(
-            tenant_id=tenant.id,
+            tenant_id=tenant_id,
             q=q,
             first=first,
             after=after,
@@ -957,13 +1036,17 @@ class JobRequirementQuestionQueries:
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def job_requirement_question(
-        self, info: strawberry.Info, id: strawberry.ID
+        self,
+        info: strawberry.Info,
+        id: strawberry.ID | None = None,
+        uuid: strawberry.ID | None = None,
     ) -> types.JobRequirementQuestion | None:
         """Get a single job requirement question."""
         try:
             service = JobRequirementQuestionQueriesService()
-            tenant = await service.get_user_tenant(info)
-            return await service.get_record(id, tenant.id)
+            return await service.get_single_record(
+                info, id=id, uuid=str(uuid) if uuid else None
+            )
         except GraphQLError:
             return None
 
@@ -991,9 +1074,9 @@ class QuestionOptionQueries:
     ) -> CountableConnection[types.QuestionOption]:
         """Get all question options."""
         service = QuestionOptionQueriesService()
-        tenant = await service.get_user_tenant(info)
+        tenant_id = await service.resolve_query_tenant_id(info)
         return await service.get_connection(
-            tenant_id=tenant.id,
+            tenant_id=tenant_id,
             q=q,
             first=first,
             after=after,
@@ -1003,13 +1086,17 @@ class QuestionOptionQueries:
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def question_option(
-        self, info: strawberry.Info, id: strawberry.ID
+        self,
+        info: strawberry.Info,
+        id: strawberry.ID | None = None,
+        uuid: strawberry.ID | None = None,
     ) -> types.QuestionOption | None:
         """Get a single question option."""
         try:
             service = QuestionOptionQueriesService()
-            tenant = await service.get_user_tenant(info)
-            return await service.get_record(id, tenant.id)
+            return await service.get_single_record(
+                info, id=id, uuid=str(uuid) if uuid else None
+            )
         except GraphQLError:
             return None
 
@@ -1037,9 +1124,9 @@ class JobRequirementAnswerQueries:
     ) -> CountableConnection[types.JobRequirementAnswer]:
         """Get all job requirement answers."""
         service = JobRequirementAnswerQueriesService()
-        tenant = await service.get_user_tenant(info)
+        tenant_id = await service.resolve_query_tenant_id(info)
         return await service.get_connection(
-            tenant_id=tenant.id,
+            tenant_id=tenant_id,
             q=q,
             first=first,
             after=after,
@@ -1049,12 +1136,16 @@ class JobRequirementAnswerQueries:
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def job_requirement_answer(
-        self, info: strawberry.Info, id: strawberry.ID
+        self,
+        info: strawberry.Info,
+        id: strawberry.ID | None = None,
+        uuid: strawberry.ID | None = None,
     ) -> types.JobRequirementAnswer | None:
         """Get a single job requirement answer."""
         try:
             service = JobRequirementAnswerQueriesService()
-            tenant = await service.get_user_tenant(info)
-            return await service.get_record(id, tenant.id)
+            return await service.get_single_record(
+                info, id=id, uuid=str(uuid) if uuid else None
+            )
         except GraphQLError:
             return None

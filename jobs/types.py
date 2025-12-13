@@ -13,6 +13,7 @@ class Status:
     id: strawberry.ID
     uuid: str
     name: str
+    slug: str
     tenant_id: strawberry.ID
     created_at: str
     updated_at: str
@@ -206,11 +207,11 @@ class Job:
     closed: bool
     national: bool
     ongoing: bool
+    coordinates: List[float] | None
     job_title: JobTitle
     other_title: JobTitle | None
     company: Company
     event: Event
-    location: Location
     tenant_id: strawberry.ID
     rate: Rate
     job_requirements: List[JobRequirement]
