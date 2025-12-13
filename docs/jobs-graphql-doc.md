@@ -173,6 +173,7 @@ query {
         id
         uuid
         name
+        slug
         tenantId
         createdAt
         updatedAt
@@ -195,6 +196,7 @@ query {
     id
     uuid
     name
+    slug
     tenantId
     createdAt
     updatedAt
@@ -536,6 +538,7 @@ Create a new ambassador job status.
 mutation {
   createAmbassadorJobStatus(input: {
     name: "Active"
+    slug: "active"
     tenantId: "1"
     clientMutationId: "unique-id-123"
   }) {
@@ -546,6 +549,7 @@ mutation {
       id
       uuid
       name
+      slug
       tenantId
       createdAt
       updatedAt
@@ -556,6 +560,7 @@ mutation {
 
 **Input Fields:**
 - `name` (string, required): Status name
+- `slug` (string, optional): Custom slug (defaults to slugified name when omitted)
 - `tenantId` (ID, optional): Tenant ID (only Spark Admin can provide this)
 - `clientMutationId` (ID, optional): Client mutation ID for tracking
 
@@ -571,6 +576,7 @@ mutation {
         "id": "1",
         "uuid": "01234567-89ab-cdef-0123-456789abcdef",
         "name": "Active",
+        "slug": "active",
         "tenantId": "1",
         "createdAt": "2025-01-15T10:00:00Z",
         "updatedAt": "2025-01-15T10:00:00Z"
@@ -594,6 +600,7 @@ mutation {
   updateAmbassadorJobStatus(input: {
     id: "1"
     name: "Updated Status Name"
+    slug: "updated-status-name"
     tenantId: "1"
     clientMutationId: "unique-id-456"
   }) {
@@ -604,6 +611,7 @@ mutation {
       id
       uuid
       name
+      slug
       updatedAt
     }
   }
@@ -613,6 +621,7 @@ mutation {
 **Input Fields:**
 - `id` (ID, required): The ID of the status to update
 - `name` (string, required): Updated status name
+- `slug` (string, optional): Custom slug (defaults to existing or slugified name when omitted)
 - `tenantId` (ID, optional): Tenant ID (only Spark Admin can provide this)
 - `clientMutationId` (ID, optional): Client mutation ID for tracking
 
@@ -1577,4 +1586,3 @@ print(response.json())
 ## Support
 
 For issues or questions, please refer to the main project documentation or contact the development team.
-

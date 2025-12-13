@@ -19,6 +19,7 @@ class Status(models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     name = models.CharField(max_length=100)
+    slug = models.SlugField(max_length=50, null=True)
 
     tenant = models.ForeignKey(
         Tenant,
@@ -41,6 +42,14 @@ class Status(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
     updated_at = models.DateTimeField(auto_now=True)
+
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            from django.utils.text import slugify
+
+            self.slug = slugify(self.name)
+
+        super().save(*args, **kwargs)
 
 
 class CompanyFile(models.Model):

@@ -1141,12 +1141,13 @@ type SourceDetailResponse {
 }
 
 """
-Status(id, uuid, name, tenant, created_by, updated_by, created_at, updated_at)
+Status(id, uuid, name, slug, tenant, created_by, updated_by, created_at, updated_at)
 """
 type Status {
   id: ID!
   uuid: String!
   name: String!
+  slug: String!
   tenantId: ID!
   createdAt: String!
   updatedAt: String!

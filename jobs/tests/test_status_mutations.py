@@ -5,13 +5,14 @@ This module tests:
 - create_ambassador_job_status
 - update_ambassador_job_status
 """
+
 import pytest
 import strawberry_django  # noqa: F401
 from asgiref.sync import sync_to_async
 from django.contrib.auth import get_user_model
+from django.utils.text import slugify
 from jobs.tests.base import JobsGraphQLTestCase
 from jobs import models
-from utils.utils import ROLE_ID
 
 User = get_user_model()
 
@@ -24,14 +25,15 @@ class TestClientStatusMutations(JobsGraphQLTestCase):
     def setup(self, db):
         """Set up test data before each test."""
         from config.schema_client import schema_clients
+
         self.roles = self.setup_default_roles()
         self.tenant = self.create_tenant(name="Test Company")
         # Create a client user for authentication
         self.client_user = self.create_user(
             username="client@test.com",
             email="client@test.com",
-            role=self.roles['client'],
-            password="testpass123"
+            role=self.roles["client"],
+            password="testpass123",
         )
         # Create tenanted user relationship
         self.create_tenanted_user(user=self.client_user, tenant=self.tenant)
@@ -50,6 +52,7 @@ class TestClientStatusMutations(JobsGraphQLTestCase):
                     id
                     uuid
                     name
+                    slug
                 }
             }
         }
@@ -62,12 +65,18 @@ class TestClientStatusMutations(JobsGraphQLTestCase):
         }
 
         result = await self._execute_mutation_authenticated(
-            mutation, variables, self.client_user, self.endpoint_path)
+            mutation, variables, self.client_user, self.endpoint_path
+        )
 
         assert result.data is not None, f"Result data is None. Errors: {result.errors}"
         assert result.data["createAmbassadorJobStatus"]["success"] is True
         assert result.data["createAmbassadorJobStatus"]["status"] is not None
-        assert result.data["createAmbassadorJobStatus"]["status"]["name"] == "Test Status"
+        assert (
+            result.data["createAmbassadorJobStatus"]["status"]["name"] == "Test Status"
+        )
+        assert result.data["createAmbassadorJobStatus"]["status"]["slug"] == slugify(
+            "Test Status"
+        )
 
         # Verify status was created
         status_id = result.data["createAmbassadorJobStatus"]["status"]["id"]
@@ -82,7 +91,8 @@ class TestClientStatusMutations(JobsGraphQLTestCase):
         """Test successful status update."""
         # Create a status first
         status = await sync_to_async(self.create_status)(
-            name="Original Status", tenant=self.tenant)
+            name="Original Status", tenant=self.tenant
+        )
 
         mutation = """
         mutation UpdateStatus($input: UpdateStatusInput!) {
@@ -92,6 +102,7 @@ class TestClientStatusMutations(JobsGraphQLTestCase):
                 status {
                     id
                     name
+                    slug
                 }
             }
         }
@@ -105,13 +116,20 @@ class TestClientStatusMutations(JobsGraphQLTestCase):
         }
 
         result = await self._execute_mutation_authenticated(
-            mutation, variables, self.client_user, self.endpoint_path)
+            mutation, variables, self.client_user, self.endpoint_path
+        )
 
         assert result.data is not None
         assert result.data["updateAmbassadorJobStatus"]["success"] is True
-        assert result.data["updateAmbassadorJobStatus"]["status"]["name"] == "Updated Status"
+        assert (
+            result.data["updateAmbassadorJobStatus"]["status"]["name"]
+            == "Updated Status"
+        )
+        assert result.data["updateAmbassadorJobStatus"]["status"]["slug"] == slugify(
+            "Original Status"
+        )
 
         # Verify status was updated
         updated_status = await sync_to_async(models.Status.objects.get)(pk=status.id)
         assert updated_status.name == "Updated Status"
-
+        assert updated_status.slug == slugify("Original Status")

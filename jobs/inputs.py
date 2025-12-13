@@ -10,7 +10,7 @@ from utils.graphql.inputs import BaseNameableInput, BaseTenantInput
 
 @strawberry.input
 class CreateStatusInput(BaseNameableInput):
-    pass
+    slug: str | None = None
 
 
 @strawberry.input
@@ -133,11 +133,11 @@ class CreateJobInput(BaseNameableInput):
     closed: bool = False
     national: bool = False
     ongoing: bool = False
+    coordinates: List[float] | None = None
     job_title_id: strawberry.ID
     other_title_id: strawberry.ID | None = None
     company_id: strawberry.ID
     event_id: strawberry.ID
-    location_id: strawberry.ID
     rate_id: strawberry.ID | None = None
 
 
