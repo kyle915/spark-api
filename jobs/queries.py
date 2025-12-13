@@ -1,6 +1,7 @@
 import strawberry
 from graphql import GraphQLError
 
+from utils.graphql.inputs import SparkGraphQLInput
 from utils.graphql.permissions import StrictIsAuthenticated
 from utils.graphql.relay import CountableConnection
 from utils.graphql.queries import BaseQueriesService
@@ -11,8 +12,51 @@ from jobs import types
 from jobs.inputs import JobFiltersInput
 
 
+class JobsBaseQueriesService(BaseQueriesService):
+    """Jobs-specific base service to adjust tenant error handling."""
+
+    async def resolve_query_tenant_id(
+        self,
+        info: strawberry.Info,
+        *,
+        filters: SparkGraphQLInput | None = None,
+    ) -> int | None:
+        user = await self.get_user(info)
+        filters_tenant_id = getattr(filters, "tenant_id", None) if filters else None
+        role_slug = self.get_role_slug(user)
+
+        if role_slug in {"spark-admin", "ambassador"}:
+            if filters_tenant_id is None:
+                return None
+            tenant = await self._get_tenant_without_membership(
+                tenant_id=filters_tenant_id
+            )
+            return tenant.id
+
+        if role_slug == "client":
+            tenant = await self.get_user_tenant(
+                info,
+                tenant_id=filters_tenant_id,
+                user=user,
+            )
+            return tenant.id
+
+        try:
+            tenant = await self.get_user_tenant(
+                info,
+                tenant_id=filters_tenant_id,
+                user=user,
+            )
+            return tenant.id
+        except GraphQLError as exc:
+            membership_error = "not a member of this tenant" in str(exc).lower()
+            if membership_error:
+                raise GraphQLError("Tenant access denied.") from exc
+            raise
+
+
 # Status Queries
-class StatusQueriesService(BaseQueriesService):
+class StatusQueriesService(JobsBaseQueriesService):
     """Service for status queries."""
 
     def get_model(self) -> Model:
@@ -62,7 +106,7 @@ class StatusQueries:
 
 
 # CompanyFile Queries
-class CompanyFileQueriesService(BaseQueriesService):
+class CompanyFileQueriesService(JobsBaseQueriesService):
     """Service for company file queries."""
 
     def get_model(self) -> Model:
@@ -112,7 +156,7 @@ class CompanyFileQueries:
 
 
 # Company Queries
-class CompanyQueriesService(BaseQueriesService):
+class CompanyQueriesService(JobsBaseQueriesService):
     """Service for company queries."""
 
     def get_model(self) -> Model:
@@ -169,7 +213,7 @@ class CompanyQueries:
 
 
 # CompanyReview Queries
-class CompanyReviewQueriesService(BaseQueriesService):
+class CompanyReviewQueriesService(JobsBaseQueriesService):
     """Service for company review queries."""
 
     def get_model(self) -> Model:
@@ -219,7 +263,7 @@ class CompanyReviewQueries:
 
 
 # PayTiming Queries
-class PayTimingQueriesService(BaseQueriesService):
+class PayTimingQueriesService(JobsBaseQueriesService):
     """Service for pay timing queries."""
 
     def get_model(self) -> Model:
@@ -269,7 +313,7 @@ class PayTimingQueries:
 
 
 # ReviewScore Queries
-class ReviewScoreQueriesService(BaseQueriesService):
+class ReviewScoreQueriesService(JobsBaseQueriesService):
     """Service for review score queries."""
 
     def get_model(self) -> Model:
@@ -319,7 +363,7 @@ class ReviewScoreQueries:
 
 
 # JobTitle Queries
-class JobTitleQueriesService(BaseQueriesService):
+class JobTitleQueriesService(JobsBaseQueriesService):
     """Service for job title queries."""
 
     def get_model(self) -> Model:
@@ -369,7 +413,7 @@ class JobTitleQueries:
 
 
 # RateType Queries
-class RateTypeQueriesService(BaseQueriesService):
+class RateTypeQueriesService(JobsBaseQueriesService):
     """Service for rate type queries."""
 
     def get_model(self) -> Model:
@@ -419,7 +463,7 @@ class RateTypeQueries:
 
 
 # Rate Queries
-class RateQueriesService(BaseQueriesService):
+class RateQueriesService(JobsBaseQueriesService):
     """Service for rate queries."""
 
     def get_model(self) -> Model:
@@ -469,7 +513,7 @@ class RateQueries:
 
 
 # Job Queries
-class JobQueriesService(BaseQueriesService):
+class JobQueriesService(JobsBaseQueriesService):
     """Service for job queries."""
 
     def get_model(self) -> Model:
@@ -531,7 +575,7 @@ class JobQueries:
 # JobFile Queries
 
 
-class JobFileQueriesService(BaseQueriesService):
+class JobFileQueriesService(JobsBaseQueriesService):
     """Service for job file queries."""
 
     def get_model(self) -> Model:
@@ -581,7 +625,7 @@ class JobFileQueries:
 
 
 # JobRequirementType Queries
-class JobRequirementTypeQueriesService(BaseQueriesService):
+class JobRequirementTypeQueriesService(JobsBaseQueriesService):
     """Service for job requirement type queries."""
 
     def get_model(self) -> Model:
@@ -631,7 +675,7 @@ class JobRequirementTypeQueries:
 
 
 # JobRequirement Queries
-class JobRequirementQueriesService(BaseQueriesService):
+class JobRequirementQueriesService(JobsBaseQueriesService):
     """Service for job requirement queries."""
 
     def get_model(self) -> Model:
@@ -681,7 +725,7 @@ class JobRequirementQueries:
 
 
 # JobRequirementFile Queries
-class JobRequirementFileQueriesService(BaseQueriesService):
+class JobRequirementFileQueriesService(JobsBaseQueriesService):
     """Service for job requirement file queries."""
 
     def get_model(self) -> Model:
@@ -731,7 +775,7 @@ class JobRequirementFileQueries:
 
 
 # AmbassadorJob Queries
-class AmbassadorJobQueriesService(BaseQueriesService):
+class AmbassadorJobQueriesService(JobsBaseQueriesService):
     """Service for ambassador job queries."""
 
     def get_model(self) -> Model:
@@ -756,9 +800,11 @@ class AmbassadorJobQueries:
         service = JobQueriesService()
         tenant_id = await service.resolve_query_tenant_id(info, filters=filters)
         queryset = service.get_ordered_queryset(
-            tenant_id=tenant_id, q=q, ordering=("start_date",))
-        queryset = queryset.filter(ongoing=True, closed=False, public=True)\
-            .prefetch_related("job_requirements")
+            tenant_id=tenant_id, q=q, ordering=("start_date",)
+        )
+        queryset = queryset.filter(
+            ongoing=True, closed=False, public=True
+        ).prefetch_related("job_requirements")
         if filters and filters.event_id:
             queryset = queryset.filter(event_id=filters.event_id)
         return await service.get_connection(
@@ -852,7 +898,7 @@ class ClientSparkAmbassadorJobQueries:
 
 
 # CompanyToAmbassadorReview Queries
-class CompanyToAmbassadorReviewQueriesService(BaseQueriesService):
+class CompanyToAmbassadorReviewQueriesService(JobsBaseQueriesService):
     """Service for company to ambassador review queries."""
 
     def get_model(self) -> Model:
@@ -902,7 +948,7 @@ class CompanyToAmbassadorReviewQueries:
 
 
 # AmbassadorToAmbassadorReview Queries
-class AmbassadorToAmbassadorReviewQueriesService(BaseQueriesService):
+class AmbassadorToAmbassadorReviewQueriesService(JobsBaseQueriesService):
     """Service for ambassador to ambassador review queries."""
 
     def get_model(self) -> Model:
@@ -952,7 +998,7 @@ class AmbassadorToAmbassadorReviewQueries:
 
 
 # QuestionType Queries
-class QuestionTypeQueriesService(BaseQueriesService):
+class QuestionTypeQueriesService(JobsBaseQueriesService):
     """Service for question type queries."""
 
     def get_model(self) -> Model:
@@ -1002,7 +1048,7 @@ class QuestionTypeQueries:
 
 
 # JobRequirementQuestion Queries
-class JobRequirementQuestionQueriesService(BaseQueriesService):
+class JobRequirementQuestionQueriesService(JobsBaseQueriesService):
     """Service for job requirement question queries."""
 
     def get_model(self) -> Model:
@@ -1052,7 +1098,7 @@ class JobRequirementQuestionQueries:
 
 
 # QuestionOption Queries
-class QuestionOptionQueriesService(BaseQueriesService):
+class QuestionOptionQueriesService(JobsBaseQueriesService):
     """Service for question option queries."""
 
     def get_model(self) -> Model:
@@ -1102,7 +1148,7 @@ class QuestionOptionQueries:
 
 
 # JobRequirementAnswer Queries
-class JobRequirementAnswerQueriesService(BaseQueriesService):
+class JobRequirementAnswerQueriesService(JobsBaseQueriesService):
     """Service for job requirement answer queries."""
 
     def get_model(self) -> Model:
