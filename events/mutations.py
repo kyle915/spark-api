@@ -1126,10 +1126,11 @@ class RequestStoreManagerMutationService(BaseMutationService):
                 raise GraphQLError("Request not found.")
         else:
             manager = await self._get_manager()
-            if not manager:
-                raise GraphQLError("Request ID is required.")
-            request = manager.request
-            setattr(self.input, "request_id", manager.request_id)
+            if manager and manager.request_id:
+                request = manager.request
+                setattr(self.input, "request_id", manager.request_id)
+            else:
+                request = None
 
         self._request = request
         return request
@@ -1140,7 +1141,25 @@ class RequestStoreManagerMutationService(BaseMutationService):
         self.user = await self.get_user(info)
         self.is_spark_schema = self.is_spark_schema_request(info, user=self.user)
         request = await self._get_request()
-        self.tenant_id = request.tenant_id
+
+        if request:
+            self.tenant_id = request.tenant_id
+        else:
+            tenant_id = getattr(self.input, "tenant_id", None)
+            if self.is_spark_schema and tenant_id:
+                tenant_id = await self._resolve_tenant_without_membership(tenant_id)
+                setattr(self.input, "tenant_id", tenant_id)
+            else:
+                tenant = await self.get_tenant(self.user, tenant_id)
+                tenant_id = tenant.id
+
+            if tenant_id is None:
+                raise GraphQLError(
+                    "Tenant ID is required when creating/updating a store manager without a request."
+                )
+
+            self.tenant_id = tenant_id
+
         return self
 
     async def _ensure_tenant_access(self, tenant_id: int) -> bool:
@@ -1163,14 +1182,18 @@ class RequestStoreManagerMutationService(BaseMutationService):
         await super().validations()
         await self._get_manager()
         request = await self._get_request()
-        self.tenant_id = request.tenant_id
-        is_admin = await self._ensure_tenant_access(request.tenant_id)
+        tenant_id = request.tenant_id if request else self.tenant_id
+        if tenant_id is None:
+            raise GraphQLError("Tenant could not be resolved for store manager.")
+        is_admin = await self._ensure_tenant_access(tenant_id)
+        self.tenant_id = tenant_id
 
         manager = await self._get_manager()
         if (
             manager
             and manager.tenant_id
-            and manager.tenant_id != request.tenant_id
+            and tenant_id
+            and manager.tenant_id != tenant_id
             and not is_admin
         ):
             raise GraphQLError(

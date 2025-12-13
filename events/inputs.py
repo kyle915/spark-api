@@ -327,7 +327,7 @@ class CreateRequestWithDependenciesInput(BaseNameableInput):
 class CreateRequestStoreManagerInput(BaseTenantInput):
     name: str
     phone: str
-    request_id: strawberry.ID
+    request_id: strawberry.ID | None = None
 
 
 @strawberry.input

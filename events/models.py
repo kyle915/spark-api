@@ -449,7 +449,7 @@ class RequestStoreManager(models.Model):
     request = models.ForeignKey(
         Request,
         on_delete=models.RESTRICT,
-        null=False,
+        null=True,
         related_name="requests_stores_manager",
     )
     tenant = models.ForeignKey(

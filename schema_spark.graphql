@@ -1079,7 +1079,7 @@ input CreateRequestStoreManagerInput {
   tenantId: ID = null
   name: String!
   phone: String!
-  requestId: ID!
+  requestId: ID = null
 }
 
 input CreateRequestTypeInput {
@@ -1960,6 +1960,8 @@ input ManageAmbassadorJobAssignmentInput {
 
 type Mutation {
   createRequestByUrl(input: CreateRequestWithDependenciesInput!, requestUrlName: String!): RequestDetailResponse!
+  createEventType(input: CreateEventTypeInput!): EventTypeDetailResponse!
+  updateEventType(input: UpdateEventTypeInput!): EventTypeDetailResponse!
   createEventStatus(input: CreateEventStatusInput!): EventStatusDetailResponse!
   updateEventStatus(input: UpdateEventStatusInput!): EventStatusDetailResponse!
   createLocation(input: CreateLocationInput!): LocationDetailResponse!
@@ -1987,8 +1989,6 @@ type Mutation {
   updateRequestStoreManager(input: UpdateRequestStoreManagerInput!): RequestStoreManagerDetailResponse!
   createTimezone(input: CreateTimeZoneInput!): TimeZoneResponse!
   updateTimezone(input: UpdateTimeZoneInput!): TimeZoneResponse!
-  createEventType(input: CreateEventTypeInput!): EventTypeDetailResponse!
-  updateEventType(input: UpdateEventTypeInput!): EventTypeDetailResponse!
   createEvent(input: CreateEventInput!): EventDetailResponse!
   updateEvent(input: UpdateEventInput!): EventDetailResponse!
   createRecap(input: CreateRecapInput!): RecapDetailResponse!
@@ -2722,7 +2722,7 @@ type RequestStoreManager {
   uuid: String!
   name: String!
   phone: String!
-  requestId: ID!
+  requestId: ID
   request: Request
   tenantId: ID
   createdAt: String!
@@ -3470,7 +3470,7 @@ input UpdateRequestStoreManagerInput {
   tenantId: ID = null
   name: String!
   phone: String!
-  requestId: ID!
+  requestId: ID = null
   id: ID!
 }
 

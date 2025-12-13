@@ -268,7 +268,7 @@ class RequestStoreManager:
     uuid: str
     name: str
     phone: str
-    request_id: strawberry.ID
+    request_id: strawberry.ID | None = None
     request: Request | None = None
     tenant_id: strawberry.ID | None = None
     created_at: str
