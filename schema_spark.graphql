@@ -1079,7 +1079,7 @@ input CreateRequestStoreManagerInput {
   tenantId: ID = null
   name: String!
   phone: String!
-  requestId: ID!
+  requestId: ID = null
 }
 
 input CreateRequestTypeInput {
@@ -1960,6 +1960,8 @@ input ManageAmbassadorJobAssignmentInput {
 
 type Mutation {
   createRequestByUrl(input: CreateRequestWithDependenciesInput!, requestUrlName: String!): RequestDetailResponse!
+  createEventType(input: CreateEventTypeInput!): EventTypeDetailResponse!
+  updateEventType(input: UpdateEventTypeInput!): EventTypeDetailResponse!
   createEventStatus(input: CreateEventStatusInput!): EventStatusDetailResponse!
   updateEventStatus(input: UpdateEventStatusInput!): EventStatusDetailResponse!
   createLocation(input: CreateLocationInput!): LocationDetailResponse!
@@ -1987,8 +1989,6 @@ type Mutation {
   updateRequestStoreManager(input: UpdateRequestStoreManagerInput!): RequestStoreManagerDetailResponse!
   createTimezone(input: CreateTimeZoneInput!): TimeZoneResponse!
   updateTimezone(input: UpdateTimeZoneInput!): TimeZoneResponse!
-  createEventType(input: CreateEventTypeInput!): EventTypeDetailResponse!
-  updateEventType(input: UpdateEventTypeInput!): EventTypeDetailResponse!
   createEvent(input: CreateEventInput!): EventDetailResponse!
   updateEvent(input: UpdateEventInput!): EventDetailResponse!
   createRecap(input: CreateRecapInput!): RecapDetailResponse!
@@ -2252,39 +2252,39 @@ type PublicAmbassadorCreationResponse {
 
 type Query {
   events(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: EventFiltersInput = null): EventCountableConnection!
-  event(uuid: ID!): Event
+  event(id: ID = null, uuid: ID = null): Event
   todayEvents(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: EventFiltersInput = null): EventCountableConnection!
   todayEventsCoordinates(coordinates: [Float!]!, range: Float!, unit: DistanceUnit! = KILOMETERS, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: EventFiltersInput = null): EventCountableConnection!
   eventTypes(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: EventTypeFiltersInput = null): EventTypeCountableConnection!
-  eventType(id: ID!): EventType
+  eventType(id: ID = null, uuid: ID = null): EventType
   eventStatuses(first: Int = null, after: String = null, last: Int = null, before: String = null, filters: EventStatusFiltersInput = null): EventStatusCountableConnection!
-  eventStatus(id: ID!): EventStatus
+  eventStatus(id: ID = null, uuid: ID = null): EventStatus
   publicClients(requestUrlName: String!, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): ClientCountableConnection!
   clients(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: ClientFiltersInput = null): ClientCountableConnection!
-  client(id: ID!): Client
+  client(id: ID = null, uuid: ID = null): Client
   publicDistributors(requestUrlName: String!, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): DistributorCountableConnection!
   distributors(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: DistributorFiltersInput = null): DistributorCountableConnection!
-  distributor(id: ID!): Distributor
+  distributor(id: ID = null, uuid: ID = null): Distributor
   publicRetailer(requestUrlName: String!, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): RetailerCountableConnection!
   retailers(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: RetailerFiltersInput = null): RetailerCountableConnection!
-  retailer(id: ID!): Retailer
+  retailer(id: ID = null, uuid: ID = null): Retailer
   publicProductTypes(requestUrlName: String!, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): ProductTypeCountableConnection!
   productTypes(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: ProductTypeFiltersInput = null): ProductTypeCountableConnection!
-  productType(id: ID!): ProductType
+  productType(id: ID = null, uuid: ID = null): ProductType
   publicProducts(requestUrlName: String!, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: ProductFiltersInput = null): ProductCountableConnection!
   products(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: ProductFiltersInput = null): ProductCountableConnection!
-  product(id: ID!): Product
+  product(id: ID = null, uuid: ID = null): Product
   publicRequestType(requestUrlName: String!, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): RequestTypeCountableConnection!
   requestTypes(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: RequestTypeFiltersInput = null): RequestTypeCountableConnection!
-  requestType(id: ID!): RequestType
+  requestType(id: ID = null, uuid: ID = null): RequestType
   requestStatuses(first: Int = null, after: String = null, last: Int = null, before: String = null, filters: RequestStatusFiltersInput = null): RequestStatusCountableConnection!
-  requestStatus(id: ID!): RequestStatus
+  requestStatus(id: ID = null, uuid: ID = null): RequestStatus
   requests(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: RequestFiltersInput = null): RequestCountableConnection!
-  request(uuid: ID!): Request
+  request(id: ID = null, uuid: ID = null): Request
   requestStoreManagers(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: RequestStoreManagerFiltersInput = null): RequestStoreManagerCountableConnection!
-  requestStoreManager(id: ID!): RequestStoreManager
+  requestStoreManager(id: ID = null, uuid: ID = null): RequestStoreManager
   locations(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: LocationFiltersInput = null): LocationCountableConnection!
-  location(id: ID!): Location
+  location(id: ID = null, uuid: ID = null): Location
   timezones(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): TimeZoneCountableConnection!
   publicTimezones(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): TimeZoneCountableConnection!
   recaps(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: RecapFiltersInput = null): RecapCountableConnection!
@@ -2722,7 +2722,7 @@ type RequestStoreManager {
   uuid: String!
   name: String!
   phone: String!
-  requestId: ID!
+  requestId: ID
   request: Request
   tenantId: ID
   createdAt: String!
@@ -3470,7 +3470,7 @@ input UpdateRequestStoreManagerInput {
   tenantId: ID = null
   name: String!
   phone: String!
-  requestId: ID!
+  requestId: ID = null
   id: ID!
 }
 

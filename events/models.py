@@ -42,7 +42,7 @@ class Location(models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     name = models.CharField(max_length=50)
-    code = models.CharField(max_length=50, unique=True)
+    code = models.CharField(max_length=50)
     zip = models.CharField(max_length=10)
 
     tenant = models.ForeignKey(
@@ -449,7 +449,7 @@ class RequestStoreManager(models.Model):
     request = models.ForeignKey(
         Request,
         on_delete=models.RESTRICT,
-        null=False,
+        null=True,
         related_name="requests_stores_manager",
     )
     tenant = models.ForeignKey(

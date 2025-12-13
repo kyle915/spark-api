@@ -1060,7 +1060,7 @@ input CreateRequestStoreManagerInput {
   tenantId: ID = null
   name: String!
   phone: String!
-  requestId: ID!
+  requestId: ID = null
 }
 
 input CreateRequestTypeInput {
@@ -2669,7 +2669,7 @@ type RequestStoreManager {
   uuid: String!
   name: String!
   phone: String!
-  requestId: ID!
+  requestId: ID
   request: Request
   tenantId: ID
   createdAt: String!
@@ -3394,7 +3394,7 @@ input UpdateRequestStoreManagerInput {
   tenantId: ID = null
   name: String!
   phone: String!
-  requestId: ID!
+  requestId: ID = null
   id: ID!
 }
 
