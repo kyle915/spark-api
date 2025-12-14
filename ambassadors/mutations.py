@@ -116,11 +116,10 @@ class ApplyAmbassadorJobResponse:
 
 
 async def _get_default_application_status(tenant_id: int) -> JobStatus | None:
-    """Pick a sensible default status for a new application."""
-    for pattern in ("apply", "pending"):
+    """Pick a sensible default status for a new application using the status slug."""
+    for slug in ("pending", "apply"):
         status = await sync_to_async(
-            JobStatus.objects.filter(
-                tenant_id=tenant_id, name__icontains=pattern).first
+            JobStatus.objects.filter(tenant_id=tenant_id, slug=slug).first
         )()
         if status:
             return status
