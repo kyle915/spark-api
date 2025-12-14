@@ -136,6 +136,47 @@ class BaseEventQueriesService(SparkGraphQLMixin):
         """Get a single record by UUID."""
         return await self.get_record(uuid=uuid, tenant_id=tenant_id)
 
+    def has_unrestricted_tenant_access(self, user) -> bool:
+        """Return True when role can query any tenant without membership."""
+        return self.get_role_slug(user) in {"spark-admin", "ambassador"}
+
+    async def resolve_tenant_id(
+        self,
+        info: strawberry.Info,
+        *,
+        tenant_id: strawberry.ID | None = None,
+        tenant_uuid: strawberry.ID | None = None,
+    ) -> int | None:
+        """Resolve tenant id honoring unrestricted roles and error messaging."""
+        user = await self.get_user(info)
+        unrestricted = self.has_unrestricted_tenant_access(user)
+        has_explicit_tenant = tenant_id is not None or tenant_uuid is not None
+
+        should_filter = not unrestricted or has_explicit_tenant
+        if not should_filter:
+            return None
+
+        if unrestricted and has_explicit_tenant:
+            tenant = await self._get_tenant_without_membership(
+                tenant_id=tenant_id,
+                tenant_uuid=tenant_uuid,
+            )
+            return tenant.id
+
+        try:
+            tenant = await self.get_user_tenant(
+                info,
+                tenant_id=tenant_id,
+                tenant_uuid=tenant_uuid,
+                user=user,
+            )
+            return tenant.id
+        except GraphQLError as exc:
+            membership_error = "not a member of this tenant" in str(exc).lower()
+            if membership_error and not self.get_role_slug(user) == "client":
+                raise GraphQLError("Tenant access denied.") from exc
+            raise
+
 
 class EventQueriesService(BaseEventQueriesService):
     """Service for event queries."""
@@ -164,27 +205,15 @@ class EventQueries:
     ) -> CountableConnection[types.Event]:
         """Get all events using Relay pagination."""
         service = EventQueriesService()
-        user = await service.get_user(info)
-        is_spark_request = service.is_spark_schema_request(info, user=user)
-
-        resolved_tenant_id: int | None = None
         filters_tenant_id: strawberry.ID | None = filters.tenant_id if filters else None
         filters_tenant_uuid: strawberry.ID | None = (
             filters.tenant_uuid if filters else None
         )
-        should_filter_by_tenant = (
-            not is_spark_request
-            or filters_tenant_id is not None
-            or filters_tenant_uuid is not None
+        resolved_tenant_id = await service.resolve_tenant_id(
+            info,
+            tenant_id=filters_tenant_id,
+            tenant_uuid=filters_tenant_uuid,
         )
-        if should_filter_by_tenant:
-            tenant = await service.get_user_tenant(
-                info,
-                tenant_id=filters_tenant_id,
-                tenant_uuid=filters_tenant_uuid,
-                user=user,
-            )
-            resolved_tenant_id = tenant.id
 
         queryset = service.get_ordered_queryset(tenant_id=resolved_tenant_id, q=q)
 
@@ -240,17 +269,11 @@ class EventQueries:
         uuid: strawberry.ID | None = None,
     ) -> types.Event | None:
         """Get a single event by id or UUID.
-        Spark admins can view any tenant; other roles are limited to their tenant.
+        Spark admins and ambassadors can view any tenant; other roles are limited to their tenant.
         """
         try:
             service = EventQueriesService()
-            user = await service.get_user(info)
-            tenant_id: int | None = None
-
-            if not service.is_spark_schema_request(info, user=user):
-                tenant = await service.get_user_tenant(info, user=user)
-                tenant_id = tenant.id
-
+            tenant_id = await service.resolve_tenant_id(info)
             event = await service.get_record(
                 id=id, uuid=str(uuid) if uuid else None, tenant_id=tenant_id
             )
@@ -271,24 +294,13 @@ class EventQueries:
     ) -> CountableConnection[types.Event]:
         """Get today's events for the current tenant."""
         service = EventQueriesService()
-        user = await service.get_user(info)
-        is_spark_request = service.is_spark_schema_request(info, user=user)
-
         tenant_id: strawberry.ID | None = filters.tenant_id if filters else None
         tenant_uuid: strawberry.ID | None = filters.tenant_uuid if filters else None
-        resolved_tenant_id: int | None = None
-
-        should_filter_by_tenant = (
-            not is_spark_request or tenant_id is not None or tenant_uuid is not None
+        resolved_tenant_id = await service.resolve_tenant_id(
+            info,
+            tenant_id=tenant_id,
+            tenant_uuid=tenant_uuid,
         )
-        if should_filter_by_tenant:
-            tenant = await service.get_user_tenant(
-                info,
-                tenant_id=tenant_id,
-                tenant_uuid=tenant_uuid,
-                user=user,
-            )
-            resolved_tenant_id = tenant.id
 
         today = timezone.localdate()
         queryset = service.get_filtered_queryset(resolved_tenant_id, q)
@@ -338,24 +350,13 @@ class EventQueries:
         from django.db.models.functions import ACos, Cos, Radians, Sin
 
         service = EventQueriesService()
-        user = await service.get_user(info)
-        is_spark_request = service.is_spark_schema_request(info, user=user)
-
         tenant_id: strawberry.ID | None = filters.tenant_id if filters else None
         tenant_uuid: strawberry.ID | None = filters.tenant_uuid if filters else None
-        resolved_tenant_id: int | None = None
-
-        should_filter_by_tenant = (
-            not is_spark_request or tenant_id is not None or tenant_uuid is not None
+        resolved_tenant_id = await service.resolve_tenant_id(
+            info,
+            tenant_id=tenant_id,
+            tenant_uuid=tenant_uuid,
         )
-        if should_filter_by_tenant:
-            tenant = await service.get_user_tenant(
-                info,
-                tenant_id=tenant_id,
-                tenant_uuid=tenant_uuid,
-                user=user,
-            )
-            resolved_tenant_id = tenant.id
 
         today = timezone.localdate()
         queryset = service.get_filtered_queryset(resolved_tenant_id, q)
@@ -422,24 +423,13 @@ class EventTypeQueries:
     ) -> CountableConnection[types.EventType]:
         """Get all event types."""
         service = EventTypeQueriesService()
-        user = await service.get_user(info)
-        is_spark_request = service.is_spark_schema_request(info, user=user)
-
         tenant_id: strawberry.ID | None = filters.tenant_id if filters else None
         tenant_uuid: strawberry.ID | None = filters.tenant_uuid if filters else None
-        resolved_tenant_id: int | None = None
-
-        should_filter_by_tenant = (
-            not is_spark_request or tenant_id is not None or tenant_uuid is not None
+        resolved_tenant_id = await service.resolve_tenant_id(
+            info,
+            tenant_id=tenant_id,
+            tenant_uuid=tenant_uuid,
         )
-        if should_filter_by_tenant:
-            tenant = await service.get_user_tenant(
-                info,
-                tenant_id=tenant_id,
-                tenant_uuid=tenant_uuid,
-                user=user,
-            )
-            resolved_tenant_id = tenant.id
 
         return await service.get_connection(
             tenant_id=resolved_tenant_id,
@@ -460,12 +450,7 @@ class EventTypeQueries:
         """Get a single event type."""
         try:
             service = EventTypeQueriesService()
-            user = await service.get_user(info)
-            tenant_id: int | None = None
-            if not service.is_spark_schema_request(info, user=user):
-                tenant = await service.get_user_tenant(info, user=user)
-                tenant_id = tenant.id
-
+            tenant_id = await service.resolve_tenant_id(info)
             event_type = await service.get_record(
                 id=id, uuid=str(uuid) if uuid else None, tenant_id=tenant_id
             )
@@ -496,23 +481,13 @@ class EventStatusQueries:
     ) -> CountableConnection[types.EventStatus]:
         """Get all event statuses."""
         service = EventStatusQueriesService()
-        user = await service.get_user(info)
-        is_spark_request = service.is_spark_schema_request(info, user=user)
-
         tenant_id: strawberry.ID | None = filters.tenant_id if filters else None
         tenant_uuid: strawberry.ID | None = filters.tenant_uuid if filters else None
-        resolved_tenant_id: int | None = None
-        should_filter_by_tenant = (
-            not is_spark_request or tenant_id is not None or tenant_uuid is not None
+        resolved_tenant_id = await service.resolve_tenant_id(
+            info,
+            tenant_id=tenant_id,
+            tenant_uuid=tenant_uuid,
         )
-        if should_filter_by_tenant:
-            tenant = await service.get_user_tenant(
-                info,
-                tenant_id=tenant_id,
-                tenant_uuid=tenant_uuid,
-                user=user,
-            )
-            resolved_tenant_id = tenant.id
 
         return await service.get_connection(
             tenant_id=resolved_tenant_id,
@@ -534,11 +509,7 @@ class EventStatusQueries:
         """Get a single event status."""
         try:
             service = EventStatusQueriesService()
-            user = await service.get_user(info)
-            tenant_id: int | None = None
-            if not service.is_spark_schema_request(info, user=user):
-                tenant = await service.get_user_tenant(info, user=user)
-                tenant_id = tenant.id
+            tenant_id = await service.resolve_tenant_id(info)
             event_status = await service.get_record(
                 id=id, uuid=str(uuid) if uuid else None, tenant_id=tenant_id
             )
@@ -578,24 +549,13 @@ class RequestQueries:
     ) -> CountableConnection[types.Request]:
         """Get all requests."""
         service = RequestQueriesService()
-        user = await service.get_user(info)
-        is_spark_request = service.is_spark_schema_request(info, user=user)
-
         tenant_id: strawberry.ID | None = filters.tenant_id if filters else None
         tenant_uuid: strawberry.ID | None = filters.tenant_uuid if filters else None
-        resolved_tenant_id: int | None = None
-
-        should_filter_by_tenant = (
-            not is_spark_request or tenant_id is not None or tenant_uuid is not None
+        resolved_tenant_id = await service.resolve_tenant_id(
+            info,
+            tenant_id=tenant_id,
+            tenant_uuid=tenant_uuid,
         )
-        if should_filter_by_tenant:
-            tenant = await service.get_user_tenant(
-                info,
-                tenant_id=tenant_id,
-                tenant_uuid=tenant_uuid,
-                user=user,
-            )
-            resolved_tenant_id = tenant.id
 
         queryset = service.get_ordered_queryset(tenant_id=resolved_tenant_id, q=q)
 
@@ -631,11 +591,7 @@ class RequestQueries:
         """Get a single request."""
         try:
             service = RequestQueriesService()
-            user = await service.get_user(info)
-            tenant_id: int | None = None
-            if not service.is_spark_schema_request(info, user=user):
-                tenant = await service.get_user_tenant(info, user=user)
-                tenant_id = tenant.id
+            tenant_id = await service.resolve_tenant_id(info)
 
             request = await service.get_record(
                 id=id, uuid=str(uuid) if uuid else None, tenant_id=tenant_id
@@ -660,24 +616,13 @@ class RequestStoreManagerQueries:
     ) -> CountableConnection[types.RequestStoreManager]:
         """Get all request store managers."""
         service = RequestStoreManagerQueriesService()
-        user = await service.get_user(info)
-        is_spark_request = service.is_spark_schema_request(info, user=user)
-
         tenant_id: strawberry.ID | None = filters.tenant_id if filters else None
         tenant_uuid: strawberry.ID | None = filters.tenant_uuid if filters else None
-        resolved_tenant_id: int | None = None
-
-        should_filter_by_tenant = (
-            not is_spark_request or tenant_id is not None or tenant_uuid is not None
+        resolved_tenant_id = await service.resolve_tenant_id(
+            info,
+            tenant_id=tenant_id,
+            tenant_uuid=tenant_uuid,
         )
-        if should_filter_by_tenant:
-            tenant = await service.get_user_tenant(
-                info,
-                tenant_id=tenant_id,
-                tenant_uuid=tenant_uuid,
-                user=user,
-            )
-            resolved_tenant_id = tenant.id
 
         queryset = service.get_ordered_queryset(tenant_id=resolved_tenant_id, q=q)
 
@@ -701,11 +646,7 @@ class RequestStoreManagerQueries:
         """Get a single request store manager."""
         try:
             service = RequestStoreManagerQueriesService()
-            user = await service.get_user(info)
-            tenant_id: int | None = None
-            if not service.is_spark_schema_request(info, user=user):
-                tenant = await service.get_user_tenant(info, user=user)
-                tenant_id = tenant.id
+            tenant_id = await service.resolve_tenant_id(info)
 
             manager = await service.get_record(
                 id=id, uuid=str(uuid) if uuid else None, tenant_id=tenant_id
@@ -773,24 +714,13 @@ class ClientQueries:
     ) -> CountableConnection[types.Client]:
         """Get all clients."""
         service = ClientQueriesService()
-        user = await service.get_user(info)
-        is_spark_request = service.is_spark_schema_request(info, user=user)
-
         tenant_id: strawberry.ID | None = filters.tenant_id if filters else None
         tenant_uuid: strawberry.ID | None = filters.tenant_uuid if filters else None
-        resolved_tenant_id: int | None = None
-
-        should_filter_by_tenant = (
-            not is_spark_request or tenant_id is not None or tenant_uuid is not None
+        resolved_tenant_id = await service.resolve_tenant_id(
+            info,
+            tenant_id=tenant_id,
+            tenant_uuid=tenant_uuid,
         )
-        if should_filter_by_tenant:
-            tenant = await service.get_user_tenant(
-                info,
-                tenant_id=tenant_id,
-                tenant_uuid=tenant_uuid,
-                user=user,
-            )
-            resolved_tenant_id = tenant.id
 
         return await service.get_connection(
             tenant_id=resolved_tenant_id,
@@ -811,11 +741,7 @@ class ClientQueries:
         """Get a single client."""
         try:
             service = ClientQueriesService()
-            user = await service.get_user(info)
-            tenant_id: int | None = None
-            if not service.is_spark_schema_request(info, user=user):
-                tenant = await service.get_user_tenant(info, user=user)
-                tenant_id = tenant.id
+            tenant_id = await service.resolve_tenant_id(info)
             client = await service.get_record(
                 id=id, uuid=str(uuid) if uuid else None, tenant_id=tenant_id
             )
@@ -847,24 +773,13 @@ class LocationQueries:
     ) -> CountableConnection[types.Location]:
         """Get all locations."""
         service = LocationQueriesService()
-        user = await service.get_user(info)
-        is_spark_request = service.is_spark_schema_request(info, user=user)
-
         tenant_id: strawberry.ID | None = filters.tenant_id if filters else None
         tenant_uuid: strawberry.ID | None = filters.tenant_uuid if filters else None
-        resolved_tenant_id: int | None = None
-
-        should_filter_by_tenant = (
-            not is_spark_request or tenant_id is not None or tenant_uuid is not None
+        resolved_tenant_id = await service.resolve_tenant_id(
+            info,
+            tenant_id=tenant_id,
+            tenant_uuid=tenant_uuid,
         )
-        if should_filter_by_tenant:
-            tenant = await service.get_user_tenant(
-                info,
-                tenant_id=tenant_id,
-                tenant_uuid=tenant_uuid,
-                user=user,
-            )
-            resolved_tenant_id = tenant.id
 
         return await service.get_connection(
             tenant_id=resolved_tenant_id,
@@ -887,11 +802,7 @@ class LocationQueries:
         """Get a single location."""
         try:
             service = LocationQueriesService()
-            user = await service.get_user(info)
-            tenant_id: int | None = None
-            if not service.is_spark_schema_request(info, user=user):
-                tenant = await service.get_user_tenant(info, user=user)
-                tenant_id = tenant.id
+            tenant_id = await service.resolve_tenant_id(info)
             location = await service.get_record(
                 id=id, uuid=str(uuid) if uuid else None, tenant_id=tenant_id
             )
@@ -958,24 +869,13 @@ class DistributorQueries:
     ) -> CountableConnection[types.Distributor]:
         """Get all distributors."""
         service = DistributorQueriesService()
-        user = await service.get_user(info)
-        is_spark_request = service.is_spark_schema_request(info, user=user)
-
         tenant_id: strawberry.ID | None = filters.tenant_id if filters else None
         tenant_uuid: strawberry.ID | None = filters.tenant_uuid if filters else None
-        resolved_tenant_id: int | None = None
-
-        should_filter_by_tenant = (
-            not is_spark_request or tenant_id is not None or tenant_uuid is not None
+        resolved_tenant_id = await service.resolve_tenant_id(
+            info,
+            tenant_id=tenant_id,
+            tenant_uuid=tenant_uuid,
         )
-        if should_filter_by_tenant:
-            tenant = await service.get_user_tenant(
-                info,
-                tenant_id=tenant_id,
-                tenant_uuid=tenant_uuid,
-                user=user,
-            )
-            resolved_tenant_id = tenant.id
 
         return await service.get_connection(
             tenant_id=resolved_tenant_id,
@@ -996,11 +896,7 @@ class DistributorQueries:
         """Get a single distributor."""
         try:
             service = DistributorQueriesService()
-            user = await service.get_user(info)
-            tenant_id: int | None = None
-            if not service.is_spark_schema_request(info, user=user):
-                tenant = await service.get_user_tenant(info, user=user)
-                tenant_id = tenant.id
+            tenant_id = await service.resolve_tenant_id(info)
             distributor = await service.get_record(
                 id=id, uuid=str(uuid) if uuid else None, tenant_id=tenant_id
             )
@@ -1067,24 +963,13 @@ class RetailerQueries:
     ) -> CountableConnection[types.Retailer]:
         """Get all retailers."""
         service = RetailerQueriesService()
-        user = await service.get_user(info)
-        is_spark_request = service.is_spark_schema_request(info, user=user)
-
         tenant_id: strawberry.ID | None = filters.tenant_id if filters else None
         tenant_uuid: strawberry.ID | None = filters.tenant_uuid if filters else None
-        resolved_tenant_id: int | None = None
-
-        should_filter_by_tenant = (
-            not is_spark_request or tenant_id is not None or tenant_uuid is not None
+        resolved_tenant_id = await service.resolve_tenant_id(
+            info,
+            tenant_id=tenant_id,
+            tenant_uuid=tenant_uuid,
         )
-        if should_filter_by_tenant:
-            tenant = await service.get_user_tenant(
-                info,
-                tenant_id=tenant_id,
-                tenant_uuid=tenant_uuid,
-                user=user,
-            )
-            resolved_tenant_id = tenant.id
 
         return await service.get_connection(
             tenant_id=resolved_tenant_id,
@@ -1105,11 +990,7 @@ class RetailerQueries:
         """Get a single retailer."""
         try:
             service = RetailerQueriesService()
-            user = await service.get_user(info)
-            tenant_id: int | None = None
-            if not service.is_spark_schema_request(info, user=user):
-                tenant = await service.get_user_tenant(info, user=user)
-                tenant_id = tenant.id
+            tenant_id = await service.resolve_tenant_id(info)
             retailer = await service.get_record(
                 id=id, uuid=str(uuid) if uuid else None, tenant_id=tenant_id
             )
@@ -1176,24 +1057,13 @@ class RequestTypeQueries:
     ) -> CountableConnection[types.RequestType]:
         """Get all request types."""
         service = RequestTypeQueriesService()
-        user = await service.get_user(info)
-        is_spark_request = service.is_spark_schema_request(info, user=user)
-
         tenant_id: strawberry.ID | None = filters.tenant_id if filters else None
         tenant_uuid: strawberry.ID | None = filters.tenant_uuid if filters else None
-        resolved_tenant_id: int | None = None
-
-        should_filter_by_tenant = (
-            not is_spark_request or tenant_id is not None or tenant_uuid is not None
+        resolved_tenant_id = await service.resolve_tenant_id(
+            info,
+            tenant_id=tenant_id,
+            tenant_uuid=tenant_uuid,
         )
-        if should_filter_by_tenant:
-            tenant = await service.get_user_tenant(
-                info,
-                tenant_id=tenant_id,
-                tenant_uuid=tenant_uuid,
-                user=user,
-            )
-            resolved_tenant_id = tenant.id
 
         return await service.get_connection(
             tenant_id=resolved_tenant_id,
@@ -1214,11 +1084,7 @@ class RequestTypeQueries:
         """Get a single request type."""
         try:
             service = RequestTypeQueriesService()
-            user = await service.get_user(info)
-            tenant_id: int | None = None
-            if not service.is_spark_schema_request(info, user=user):
-                tenant = await service.get_user_tenant(info, user=user)
-                tenant_id = tenant.id
+            tenant_id = await service.resolve_tenant_id(info)
             request_type = await service.get_record(
                 id=id, uuid=str(uuid) if uuid else None, tenant_id=tenant_id
             )
@@ -1249,24 +1115,13 @@ class RequestStatusQueries:
     ) -> CountableConnection[types.RequestStatus]:
         """Get all request statuses."""
         service = RequestStatusQueriesService()
-        user = await service.get_user(info)
-        is_spark_request = service.is_spark_schema_request(info, user=user)
-
         tenant_id: strawberry.ID | None = filters.tenant_id if filters else None
         tenant_uuid: strawberry.ID | None = filters.tenant_uuid if filters else None
-        resolved_tenant_id: int | None = None
-
-        should_filter_by_tenant = (
-            not is_spark_request or tenant_id is not None or tenant_uuid is not None
+        resolved_tenant_id = await service.resolve_tenant_id(
+            info,
+            tenant_id=tenant_id,
+            tenant_uuid=tenant_uuid,
         )
-        if should_filter_by_tenant:
-            tenant = await service.get_user_tenant(
-                info,
-                tenant_id=tenant_id,
-                tenant_uuid=tenant_uuid,
-                user=user,
-            )
-            resolved_tenant_id = tenant.id
 
         return await service.get_connection(
             tenant_id=resolved_tenant_id,
@@ -1288,11 +1143,7 @@ class RequestStatusQueries:
         """Get a single request status."""
         try:
             service = RequestStatusQueriesService()
-            user = await service.get_user(info)
-            tenant_id: int | None = None
-            if not service.is_spark_schema_request(info, user=user):
-                tenant = await service.get_user_tenant(info, user=user)
-                tenant_id = tenant.id
+            tenant_id = await service.resolve_tenant_id(info)
             return await service.get_record(
                 id=id, uuid=str(uuid) if uuid else None, tenant_id=tenant_id
             )
@@ -1358,24 +1209,13 @@ class ProductTypeQueries:
     ) -> CountableConnection[types.ProductType]:
         """Get all product types."""
         service = ProductTypeQueriesService()
-        user = await service.get_user(info)
-        is_spark_request = service.is_spark_schema_request(info, user=user)
-
         tenant_id: strawberry.ID | None = filters.tenant_id if filters else None
         tenant_uuid: strawberry.ID | None = filters.tenant_uuid if filters else None
-        resolved_tenant_id: int | None = None
-
-        should_filter_by_tenant = (
-            not is_spark_request or tenant_id is not None or tenant_uuid is not None
+        resolved_tenant_id = await service.resolve_tenant_id(
+            info,
+            tenant_id=tenant_id,
+            tenant_uuid=tenant_uuid,
         )
-        if should_filter_by_tenant:
-            tenant = await service.get_user_tenant(
-                info,
-                tenant_id=tenant_id,
-                tenant_uuid=tenant_uuid,
-                user=user,
-            )
-            resolved_tenant_id = tenant.id
 
         return await service.get_connection(
             tenant_id=resolved_tenant_id,
@@ -1398,11 +1238,7 @@ class ProductTypeQueries:
         """Get a single product type."""
         try:
             service = ProductTypeQueriesService()
-            user = await service.get_user(info)
-            tenant_id: int | None = None
-            if not service.is_spark_schema_request(info, user=user):
-                tenant = await service.get_user_tenant(info, user=user)
-                tenant_id = tenant.id
+            tenant_id = await service.resolve_tenant_id(info)
             return await service.get_record(
                 id=id, uuid=str(uuid) if uuid else None, tenant_id=tenant_id
             )
@@ -1474,24 +1310,13 @@ class ProductQueries:
     ) -> CountableConnection[types.Product]:
         """Get all products."""
         service = ProductQueriesService()
-        user = await service.get_user(info)
-        is_spark_request = service.is_spark_schema_request(info, user=user)
-
         tenant_id: strawberry.ID | None = filters.tenant_id if filters else None
         tenant_uuid: strawberry.ID | None = filters.tenant_uuid if filters else None
-        resolved_tenant_id: int | None = None
-
-        should_filter_by_tenant = (
-            not is_spark_request or tenant_id is not None or tenant_uuid is not None
+        resolved_tenant_id = await service.resolve_tenant_id(
+            info,
+            tenant_id=tenant_id,
+            tenant_uuid=tenant_uuid,
         )
-        if should_filter_by_tenant:
-            tenant = await service.get_user_tenant(
-                info,
-                tenant_id=tenant_id,
-                tenant_uuid=tenant_uuid,
-                user=user,
-            )
-            resolved_tenant_id = tenant.id
 
         queryset = service.get_ordered_queryset(
             tenant_id=resolved_tenant_id,
@@ -1521,11 +1346,7 @@ class ProductQueries:
         """Get a single product."""
         try:
             service = ProductQueriesService()
-            user = await service.get_user(info)
-            tenant_id: int | None = None
-            if not service.is_spark_schema_request(info, user=user):
-                tenant = await service.get_user_tenant(info, user=user)
-                tenant_id = tenant.id
+            tenant_id = await service.resolve_tenant_id(info)
             return await service.get_record(
                 id=id, uuid=str(uuid) if uuid else None, tenant_id=tenant_id
             )
