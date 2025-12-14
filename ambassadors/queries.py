@@ -12,6 +12,7 @@ from events import models as event_models
 from events import types as event_types
 from utils.graphql.mixins import SparkGraphQLMixin
 from utils.graphql.queries import BaseQueriesService
+from utils.graphql.inputs import SparkGraphQLInput
 from utils.graphql.relay import (
     CountableConnection,
     connection_from_queryset_async,
@@ -109,6 +110,42 @@ class BaseAmbassadorQueriesService(SparkGraphQLMixin):
             return await sync_to_async(self.get_model().objects.get)(uuid=uuid)
         except self.get_model().DoesNotExist:
             raise GraphQLError("Record not found.")
+
+
+class AmbassadorsTenantQueriesService(BaseQueriesService):
+    """Base service with tenant resolution adjusted for ambassador role."""
+
+    async def resolve_query_tenant_id(
+        self,
+        info: strawberry.Info,
+        *,
+        filters: SparkGraphQLInput | None = None,
+    ) -> int | None:
+        """Allow spark-admin/ambassador to query any tenant; clients stay restricted."""
+        user = await self.get_user(info)
+        filters_tenant_id = getattr(filters, "tenant_id", None) if filters else None
+        role_slug = self.get_role_slug(user)
+
+        if role_slug in {"spark-admin", "ambassador"}:
+            if filters_tenant_id is None:
+                return None
+            tenant = await self._get_tenant_without_membership(
+                tenant_id=filters_tenant_id
+            )
+            return tenant.id
+
+        try:
+            tenant = await self.get_user_tenant(
+                info,
+                tenant_id=filters_tenant_id,
+                user=user,
+            )
+            return tenant.id
+        except GraphQLError as exc:
+            membership_error = "not a member of this tenant" in str(exc).lower()
+            if membership_error and role_slug != "client":
+                raise GraphQLError("Tenant access denied.") from exc
+            raise
 
 
 class FileTypeQueriesService(BaseAmbassadorQueriesService):
@@ -450,7 +487,7 @@ class AttendanceTypeQueriesService(BaseQueriesService):
         return models.AttendanceType
 
 
-class AttendanceStatusQueriesService(BaseQueriesService):
+class AttendanceStatusQueriesService(AmbassadorsTenantQueriesService):
     """Service for attendance status queries."""
 
     def get_model(self) -> Model:
@@ -553,9 +590,9 @@ class AttendanceQueries:
         q: str | None = None,
     ) -> CountableConnection[types.AttendanceStatus]:
         service = AttendanceStatusQueriesService()
-        tenant = await service.get_user_tenant(info)
+        tenant_id = await service.resolve_query_tenant_id(info)
         return await service.get_connection(
-            tenant_id=tenant.id,
+            tenant_id=tenant_id,
             q=q,
             first=first,
             after=after,
@@ -569,8 +606,8 @@ class AttendanceQueries:
     ) -> types.AttendanceStatus | None:
         try:
             service = AttendanceStatusQueriesService()
-            tenant = await service.get_user_tenant(info)
-            return await service.get_record(id, tenant.id)
+            tenant_id = await service.resolve_query_tenant_id(info)
+            return await service.get_record(id, tenant_id)
         except GraphQLError:
             return None
 
