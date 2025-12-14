@@ -565,8 +565,13 @@ class JobQueries:
         """Get a single job."""
         try:
             service = JobQueriesService()
+            user = await service.get_user(info)
+            role_slug = service.get_role_slug(user)
             return await service.get_single_record(
-                info, id=id, uuid=str(uuid) if uuid else None
+                info,
+                id=id,
+                uuid=str(uuid) if uuid else None,
+                enforce_tenant=role_slug != "ambassador",
             )
         except GraphQLError:
             return None

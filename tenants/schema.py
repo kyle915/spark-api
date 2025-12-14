@@ -72,7 +72,8 @@ class QuerySpark(GoogleCalendarQueries):
                 queryset = queryset.filter(name__icontains=filters.name)
             if filters.request_url_name:
                 queryset = queryset.filter(
-                    request_url_name__icontains=filters.request_url_name)
+                    request_url_name__icontains=filters.request_url_name
+                )
         queryset = queryset.distinct()
 
         try:
@@ -161,7 +162,8 @@ class QueryClients(GoogleCalendarQueries):
                 queryset = queryset.filter(name__icontains=filters.name)
             if filters.request_url_name:
                 queryset = queryset.filter(
-                    request_url_name__icontains=filters.request_url_name)
+                    request_url_name__icontains=filters.request_url_name
+                )
 
         queryset = queryset.distinct()
         try:
@@ -212,7 +214,7 @@ class Customer:
 
 
 @strawberry.type
-class MutationMobile(ClientsCustomRegister):
+class MutationMobile(AmbassadorsCustomRegister):
     verify_token = mutations.VerifyToken.field
     token_auth = mutations.ObtainJSONWebToken.field
     refresh_token = mutations.RefreshToken.field
