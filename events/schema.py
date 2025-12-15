@@ -94,6 +94,7 @@ class EventMutationsAmbassadors(
 
 @strawberry.type
 class EventMutationsClient(
+    EventMutations,
     PublicRequestMutations,
     EventTypeMutations,
     EventStatusMutations,
@@ -124,7 +125,6 @@ class EventMutationsSpark(
     EventMutationsAmbassadors,
     EventMutationsClient,
     EventTypeMutations,
-    EventMutations,
     TimeZoneMutations,
 ):
     pass

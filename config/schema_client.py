@@ -8,12 +8,31 @@ from tenants.schema import QueryClients, MutationClients
 from tenants.dashboard.schema import DashboardQueries
 from jobs.schema import ClientJobMutations, ClientJobQueries
 from utils.utils import BlockIntrospectionForAnonymous
+from utils.graphql.gcs_schema import GCSQuery
 
 # Clients Schemas
 QueryClients = merge_types(
-    "Query", (EventQueryClient, RecapQueryClient, AmbassadorQueryClient, QueryClients, ClientJobQueries, DashboardQueries))
+    "Query",
+    (
+        EventQueryClient,
+        RecapQueryClient,
+        AmbassadorQueryClient,
+        QueryClients,
+        ClientJobQueries,
+        DashboardQueries,
+        GCSQuery,
+    ),
+)
 MutationClients = merge_types(
-    "Mutation", (EventMutationsClient, RecapMutationsClient, MutationClients, ClientJobMutations, AmbassadorMutations))
+    "Mutation",
+    (
+        EventMutationsClient,
+        RecapMutationsClient,
+        MutationClients,
+        ClientJobMutations,
+        AmbassadorMutations,
+    ),
+)
 
 schema_clients = JwtSchema(
     query=QueryClients,
