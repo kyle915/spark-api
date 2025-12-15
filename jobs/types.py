@@ -6,6 +6,7 @@ from typing import List, Optional
 
 from . import models
 from events.types import Location, Event
+from tenants.types import TenantType as Tenant
 
 
 @strawberry_django.type(models.Status)
@@ -213,6 +214,7 @@ class Job:
     company: Company
     event: Event
     tenant_id: strawberry.ID
+    tenant: Tenant | None = None
     rate: Rate
     job_requirements: List[JobRequirement]
     created_at: str
