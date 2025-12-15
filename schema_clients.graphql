@@ -863,6 +863,13 @@ input CreateEventStatusInput {
   isDefault: Boolean! = false
 }
 
+input CreateEventTypeInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  name: String!
+  isDefault: Boolean! = false
+}
+
 input CreateJobFileInput {
   clientMutationId: ID = null
   tenantId: ID = null
@@ -885,11 +892,11 @@ input CreateJobInput {
   closed: Boolean! = false
   national: Boolean! = false
   ongoing: Boolean! = false
+  coordinates: [Float!] = null
   jobTitleId: ID!
   otherTitleId: ID = null
   companyId: ID!
   eventId: ID!
-  locationId: ID!
   rateId: ID = null
 }
 
@@ -1489,6 +1496,13 @@ type EventTypeCountableEdge {
   node: EventType!
 }
 
+type EventTypeDetailResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  eventType: EventType
+}
+
 input EventTypeFiltersInput {
   clientMutationId: ID = null
   tenantId: ID = null
@@ -1564,11 +1578,11 @@ type Job {
   closed: Boolean!
   national: Boolean!
   ongoing: Boolean!
+  coordinates: [Float!]
   jobTitle: JobTitle!
   otherTitle: JobTitle
   company: Company!
   event: Event!
-  location: Location!
   tenantId: ID!
   rate: Rate!
   jobRequirements: [JobRequirement!]!
@@ -1916,6 +1930,8 @@ input ManageAmbassadorJobAssignmentInput {
 
 type Mutation {
   createRequestByUrl(input: CreateRequestWithDependenciesInput!, requestUrlName: String!): RequestDetailResponse!
+  createEventType(input: CreateEventTypeInput!): EventTypeDetailResponse!
+  updateEventType(input: UpdateEventTypeInput!): EventTypeDetailResponse!
   createEventStatus(input: CreateEventStatusInput!): EventStatusDetailResponse!
   updateEventStatus(input: UpdateEventStatusInput!): EventStatusDetailResponse!
   createLocation(input: CreateLocationInput!): LocationDetailResponse!
@@ -2202,39 +2218,39 @@ type PublicAmbassadorCreationResponse {
 
 type Query {
   events(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: EventFiltersInput = null): EventCountableConnection!
-  event(uuid: ID!): Event
+  event(id: ID = null, uuid: ID = null): Event
   todayEvents(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: EventFiltersInput = null): EventCountableConnection!
   todayEventsCoordinates(coordinates: [Float!]!, range: Float!, unit: DistanceUnit! = KILOMETERS, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: EventFiltersInput = null): EventCountableConnection!
   eventTypes(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: EventTypeFiltersInput = null): EventTypeCountableConnection!
-  eventType(id: ID!): EventType
+  eventType(id: ID = null, uuid: ID = null): EventType
   eventStatuses(first: Int = null, after: String = null, last: Int = null, before: String = null, filters: EventStatusFiltersInput = null): EventStatusCountableConnection!
-  eventStatus(id: ID!): EventStatus
+  eventStatus(id: ID = null, uuid: ID = null): EventStatus
   publicClients(requestUrlName: String!, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): ClientCountableConnection!
   clients(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: ClientFiltersInput = null): ClientCountableConnection!
-  client(id: ID!): Client
+  client(id: ID = null, uuid: ID = null): Client
   publicDistributors(requestUrlName: String!, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): DistributorCountableConnection!
   distributors(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: DistributorFiltersInput = null): DistributorCountableConnection!
-  distributor(id: ID!): Distributor
+  distributor(id: ID = null, uuid: ID = null): Distributor
   publicRetailer(requestUrlName: String!, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): RetailerCountableConnection!
   retailers(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: RetailerFiltersInput = null): RetailerCountableConnection!
-  retailer(id: ID!): Retailer
+  retailer(id: ID = null, uuid: ID = null): Retailer
   publicProductTypes(requestUrlName: String!, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): ProductTypeCountableConnection!
   productTypes(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: ProductTypeFiltersInput = null): ProductTypeCountableConnection!
-  productType(id: ID!): ProductType
+  productType(id: ID = null, uuid: ID = null): ProductType
   publicProducts(requestUrlName: String!, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: ProductFiltersInput = null): ProductCountableConnection!
   products(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: ProductFiltersInput = null): ProductCountableConnection!
-  product(id: ID!): Product
+  product(id: ID = null, uuid: ID = null): Product
   publicRequestType(requestUrlName: String!, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): RequestTypeCountableConnection!
   requestTypes(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: RequestTypeFiltersInput = null): RequestTypeCountableConnection!
-  requestType(id: ID!): RequestType
+  requestType(id: ID = null, uuid: ID = null): RequestType
   requestStatuses(first: Int = null, after: String = null, last: Int = null, before: String = null, filters: RequestStatusFiltersInput = null): RequestStatusCountableConnection!
-  requestStatus(id: ID!): RequestStatus
+  requestStatus(id: ID = null, uuid: ID = null): RequestStatus
   requests(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: RequestFiltersInput = null): RequestCountableConnection!
-  request(uuid: ID!): Request
+  request(id: ID = null, uuid: ID = null): Request
   requestStoreManagers(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: RequestStoreManagerFiltersInput = null): RequestStoreManagerCountableConnection!
-  requestStoreManager(id: ID!): RequestStoreManager
+  requestStoreManager(id: ID = null, uuid: ID = null): RequestStoreManager
   locations(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: LocationFiltersInput = null): LocationCountableConnection!
-  location(id: ID!): Location
+  location(id: ID = null, uuid: ID = null): Location
   timezones(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): TimeZoneCountableConnection!
   publicTimezones(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): TimeZoneCountableConnection!
   recaps(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: RecapFiltersInput = null): RecapCountableConnection!
@@ -2265,49 +2281,49 @@ type Query {
   me: CustomUserType!
   tenants(userUuid: ID = null, filters: TenantFiltersInput = null, first: Int = null, after: String = null, last: Int = null, before: String = null): TenantTypeCountableConnection!
   ambassadorJobStatuses(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): StatusCountableConnection!
-  ambassadorJobStatus(id: ID!): Status
+  ambassadorJobStatus(id: ID = null, uuid: ID = null): Status
   companyFiles(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): CompanyFileCountableConnection!
-  companyFile(id: ID!): CompanyFile
+  companyFile(id: ID = null, uuid: ID = null): CompanyFile
   companies(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): CompanyCountableConnection!
-  company(id: ID!): Company
+  company(id: ID = null, uuid: ID = null): Company
   companyReviews(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): CompanyReviewCountableConnection!
-  companyReview(id: ID!): CompanyReview
+  companyReview(id: ID = null, uuid: ID = null): CompanyReview
   payTimings(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): PayTimingCountableConnection!
-  payTiming(id: ID!): PayTiming
+  payTiming(id: ID = null, uuid: ID = null): PayTiming
   reviewScores(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): ReviewScoreCountableConnection!
-  reviewScore(id: ID!): ReviewScore
+  reviewScore(id: ID = null, uuid: ID = null): ReviewScore
   jobTitles(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): JobTitleCountableConnection!
-  jobTitle(id: ID!): JobTitle
+  jobTitle(id: ID = null, uuid: ID = null): JobTitle
   rateTypes(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): RateTypeCountableConnection!
-  rateType(id: ID!): RateType
+  rateType(id: ID = null, uuid: ID = null): RateType
   rates(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): RateCountableConnection!
-  rate(id: ID!): Rate
+  rate(id: ID = null, uuid: ID = null): Rate
   jobs(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: JobFiltersInput = null): JobCountableConnection!
-  job(id: ID!): Job
+  job(id: ID = null, uuid: ID = null): Job
   jobFiles(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): JobFileCountableConnection!
-  jobFile(id: ID!): JobFile
+  jobFile(id: ID = null, uuid: ID = null): JobFile
   jobRequirementTypes(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): JobRequirementTypeCountableConnection!
-  jobRequirementType(id: ID!): JobRequirementType
+  jobRequirementType(id: ID = null, uuid: ID = null): JobRequirementType
   jobRequirements(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): JobRequirementCountableConnection!
-  jobRequirement(id: ID!): JobRequirement
+  jobRequirement(id: ID = null, uuid: ID = null): JobRequirement
   jobRequirementFiles(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): JobRequirementFileCountableConnection!
-  jobRequirementFile(id: ID!): JobRequirementFile
+  jobRequirementFile(id: ID = null, uuid: ID = null): JobRequirementFile
   availableJobs(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: JobFiltersInput = null): JobCountableConnection!
   ambassadorJobs(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): AmbassadorJobCountableConnection!
-  ambassadorJob(id: ID!): AmbassadorJob
+  ambassadorJob(id: ID = null, uuid: ID = null): AmbassadorJob
   jobApplicants(jobId: ID!, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): AmbassadorJobCountableConnection!
   companyToAmbassadorReviews(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): CompanyToAmbassadorReviewCountableConnection!
-  companyToAmbassadorReview(id: ID!): CompanyToAmbassadorReview
+  companyToAmbassadorReview(id: ID = null, uuid: ID = null): CompanyToAmbassadorReview
   ambassadorToAmbassadorReviews(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): AmbassadorToAmbassadorReviewCountableConnection!
-  ambassadorToAmbassadorReview(id: ID!): AmbassadorToAmbassadorReview
+  ambassadorToAmbassadorReview(id: ID = null, uuid: ID = null): AmbassadorToAmbassadorReview
   questionTypes(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): QuestionTypeCountableConnection!
-  questionType(id: ID!): QuestionType
+  questionType(id: ID = null, uuid: ID = null): QuestionType
   jobRequirementQuestions(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): JobRequirementQuestionCountableConnection!
-  jobRequirementQuestion(id: ID!): JobRequirementQuestion
+  jobRequirementQuestion(id: ID = null, uuid: ID = null): JobRequirementQuestion
   questionOptions(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): QuestionOptionCountableConnection!
-  questionOption(id: ID!): QuestionOption
+  questionOption(id: ID = null, uuid: ID = null): QuestionOption
   jobRequirementAnswers(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): JobRequirementAnswerCountableConnection!
-  jobRequirementAnswer(id: ID!): JobRequirementAnswer
+  jobRequirementAnswer(id: ID = null, uuid: ID = null): JobRequirementAnswer
   eventsStats(filters: DashboardFiltersInput = null): EventStats!
   eventsTimeSeries(filters: DashboardFiltersInput = null, groupBy: TimeGroupBy! = DAY): EventTimeSeries!
   ambassadorsStats(filters: DashboardFiltersInput = null): AmbassadorStats!
@@ -3206,6 +3222,14 @@ input UpdateEventStatusInput {
   id: ID!
 }
 
+input UpdateEventTypeInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  name: String!
+  isDefault: Boolean! = false
+  id: ID!
+}
+
 input UpdateJobFileInput {
   clientMutationId: ID = null
   tenantId: ID = null
@@ -3229,11 +3253,11 @@ input UpdateJobInput {
   closed: Boolean! = false
   national: Boolean! = false
   ongoing: Boolean! = false
+  coordinates: [Float!] = null
   jobTitleId: ID!
   otherTitleId: ID = null
   companyId: ID!
   eventId: ID!
-  locationId: ID!
   rateId: ID = null
   id: ID!
 }
@@ -3492,13 +3516,13 @@ type UserType {
   isActive: Boolean!
   dateJoined: DateTime!
   status: UserStatusType!
+  id: ID!
+  firstName: String
 
   """Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only."""
   username: String!
-  firstName: String
-  id: ID!
-  email: String!
   lastName: String
+  email: String!
   archived: Boolean!
   verified: Boolean!
 }
