@@ -1,7 +1,9 @@
 import strawberry_django
 import strawberry
 
+
 from . import models
+from tenants.types import SparkUserType
 
 
 @strawberry_django.type(models.FileType)
@@ -22,7 +24,7 @@ class Ambassador:
     address: str | None
     coordinates: list[float]
     is_active: bool
-    user_id: strawberry.ID
+    user: SparkUserType
     created_at: str
     updated_at: str
 

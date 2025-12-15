@@ -72,6 +72,8 @@ class ClientJobMutations(
     mutations.QuestionOptionMutations,
     mutations.JobRequirementAnswerMutations,
     mutations.ManageAmbassadorJobMutations,
+    mutations.ApproveAmbassadorJobMutations,
+    mutations.DeclineAmbassadorJobMutations,
 ):
     pass
 

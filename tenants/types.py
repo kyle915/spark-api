@@ -2,7 +2,7 @@ import django.contrib.sites.requests
 import strawberry
 import strawberry_django
 from utils.gcs import extract_blob_name_from_url, generate_download_url
-from .models import Tenant, Role
+from .models import Tenant, Role, User
 
 @strawberry_django.type(Role)
 class RoleType:
@@ -28,3 +28,14 @@ class TenantType:
             return None
 
         return generate_download_url(blob_name)
+
+
+@strawberry_django.type(User)
+class SparkUserType:
+    id: strawberry.auto
+    uuid: strawberry.auto
+    username: strawberry.auto
+    email: strawberry.auto
+    first_name: strawberry.auto
+    last_name: strawberry.auto
+    image: strawberry.auto

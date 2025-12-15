@@ -303,3 +303,20 @@ class ManageAmbassadorJobAssignmentInput(BaseTenantInput):
     ambassador_job_id: strawberry.ID
     action: ManageAmbassadorJobAssignmentAction
     status_id: strawberry.ID | None = None
+
+
+@strawberry.enum
+class AmbassadorJobStatusEnum(Enum):
+    APPROVED = "approved"
+    DECLINED = "declined"
+    PENDING = "pending"
+
+
+@strawberry.input
+class ApproveAmbassadorJobInput(BaseTenantInput):
+    ambassador_job_id: strawberry.ID
+
+
+@strawberry.input
+class DeclineAmbassadorJobInput(BaseTenantInput):
+    ambassador_job_id: strawberry.ID
