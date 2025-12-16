@@ -1,6 +1,10 @@
 import django_rq
+from django_rq.queues import DjangoRQ
+import logging
 
 from typing import Callable
+
+logger = logging.getLogger(__name__)
 
 
 class Queue:
@@ -9,12 +13,28 @@ class Queue:
         self.name = name
 
     def add(self, func: Callable, *args, **kwargs):
-        django_rq.enqueue(self.name, func, *args, **kwargs)
+        """
+        Enqueue a callable into this queue.
 
-    def get_all(self):
-        return django_rq.get_all_queues()
+        Note: `django_rq.enqueue` expects the callable as the first argument,
+        and optionally a specific queue name via the `queue` kwarg. Our
+        previous implementation was passing the queue name as the first
+        positional argument, which resulted in RQ trying to import a function
+        named `self.name` (e.g. \"default\") and raising
+        `ValueError: Invalid attribute name: default`.
 
-    def get_queue(self):
+        To ensure the job is enqueued on the right queue without confusing
+        RQ's API, we fetch the concrete queue instance and call its
+        `enqueue` method directly.
+        """
+        try:
+            return self.get_queue().enqueue(func, *args, **kwargs)
+        except Exception as e:
+            logger.error(
+                f"Error enqueuing job {func} to queue {self.name}: {e}")
+            raise e
+
+    def get_queue(self) -> DjangoRQ:
         return django_rq.get_queue(self.name)
 
 

@@ -4,20 +4,80 @@ RQ jobs for Google Calendar synchronization.
 import logging
 from django_rq import job
 from rq import Retry
-from django.utils import timezone
-from asgiref.sync import sync_to_async
-import django_rq
 
 from events.models import Event
 from ambassadors.models import AmbassadorEvent
 from tenants.models import User, GoogleCalendarConnection
 from tenants.calendar.service import GoogleCalendarService
 from utils.queues import Queues
+from utils.utils import ROLE_ID
 
 logger = logging.getLogger(__name__)
 
 # Batch size for processing connections to avoid memory issues
 CONNECTION_BATCH_SIZE = 50
+
+
+def _user_should_receive_event(user: User, event: Event) -> bool:
+    """
+    Determine whether a user should receive a calendar event for the given Event.
+
+    Rules:
+    1. Spark Admin or Client:
+       - Event must be approved (status.slug == 'approved')
+       - Event must have an associated request
+    2. Ambassador:
+       - There must be an approved AmbassadorEvent relationship for this
+         user and this event in the current tenant (is_approved=True).
+    """
+    role = getattr(user, "role", None)
+    if not role:
+        logger.info(
+            "Skipping Google Calendar sync for user %s and event %s: "
+            "user has no role assigned.",
+            user.id,
+            event.id,
+        )
+        return False
+
+    # Check if event has a request
+    if not event.request:
+        logger.info(
+            "Skipping Google Calendar sync for user %s and event %s: "
+            "event has no request.",
+            user.id,
+            event.id,
+        )
+        return False
+
+    # Check if event has an approved status
+    if not event.status or event.status.slug != "approved":
+        logger.info(
+            "Skipping Google Calendar sync for user %s and event %s: "
+            "event is not approved.",
+            user.id,
+            event.id,
+        )
+        return False
+
+    # Ambassador
+    if role._is_ambassador:
+        has_approved_link = AmbassadorEvent.objects.filter(
+            ambassador__user=user,
+            event_id=event.id,
+            tenant_id=event.tenant_id,
+            is_approved=True,
+        ).exists()
+        if not has_approved_link:
+            logger.info(
+                "Skipping Google Calendar sync for ambassador user %s and event %s: "
+                "no approved AmbassadorEvent found for this tenant.",
+                user.id,
+                event.id,
+            )
+            return False
+
+    return True
 
 
 @job('default', retry=Retry(max=3, interval=[60, 120, 240]))
@@ -44,6 +104,10 @@ def sync_event_to_google_calendar(user_id: int, event_id: int):
                 f"User {user_id} does not have active Google Calendar connection")
             return
 
+        # Role and business rules: decide if this user should receive this event
+        if not _user_should_receive_event(user, event):
+            return
+
         # Get event type and status names
         event_type_name = None
         status_name = None
@@ -53,7 +117,7 @@ def sync_event_to_google_calendar(user_id: int, event_id: int):
         if event.status:
             status_name = event.status.name
 
-        # Validate event has request
+        # Validate event has request (required for building calendar payload)
         if not event.request:
             logger.error(
                 f"Event {event_id} must have a request to sync to Google Calendar")
@@ -115,6 +179,10 @@ def update_event_in_google_calendar(user_id: int, event_id: int, google_event_id
         except GoogleCalendarConnection.DoesNotExist:
             logger.warning(
                 f"User {user_id} does not have active Google Calendar connection")
+            return
+
+        # Role and business rules: decide if this user should receive this event
+        if not _user_should_receive_event(user, event):
             return
 
         # Validate event has request

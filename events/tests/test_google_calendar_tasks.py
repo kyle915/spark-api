@@ -30,8 +30,14 @@ class TestGoogleCalendarTasks:
 
     def setup_method(self):
         """Set up test data."""
-        # Create role
-        self.role = Role.objects.create(name="Client", slug="client")
+        # Create role with canonical client ID so ROLE_ID checks work
+        self.role, _ = Role.objects.update_or_create(
+            pk=ROLE_ID.Client,
+            defaults={
+                "name": "Client",
+                "slug": "client",
+            },
+        )
 
         # Create user
         self.user = User.objects.create_user(
@@ -120,10 +126,13 @@ class TestGoogleCalendarTasks:
             created_by=self.user
         )
         # Request model uses DateTimeField, so convert date/time to datetime
-        request_date = timezone.make_aware(datetime.combine(date.today(), time.min))
-        start_datetime = timezone.make_aware(datetime.combine(date.today(), time(10, 0)))
-        end_datetime = timezone.make_aware(datetime.combine(date.today(), time(12, 0)))
-        
+        request_date = timezone.make_aware(
+            datetime.combine(date.today(), time.min))
+        start_datetime = timezone.make_aware(
+            datetime.combine(date.today(), time(10, 0)))
+        end_datetime = timezone.make_aware(
+            datetime.combine(date.today(), time(12, 0)))
+
         self.request = Request.objects.create(
             name="Test Request",
             date=request_date,
@@ -176,7 +185,7 @@ class TestGoogleCalendarTasks:
 
         # Execute task - should return early without calling service
         result = sync_event_to_google_calendar(self.user.id, self.event.id)
-        
+
         # Service should not be instantiated if connection check fails early
         assert result is None
         # Note: Service won't be called if connection check fails, so no need to verify mock
@@ -202,8 +211,8 @@ class TestGoogleCalendarTasks:
         mock_service.sync_event.assert_called_once()
         assert result is None
 
-    @patch('events.tasks.django_rq.enqueue')
-    def test_sync_event_to_all_connected_users(self, mock_enqueue):
+    @patch('events.tasks.Queues')
+    def test_sync_event_to_all_connected_users(self, mock_queues_class):
         """Test syncing event to all connected users."""
         # Create another user with connection
         user2 = User.objects.create_user(
@@ -229,14 +238,18 @@ class TestGoogleCalendarTasks:
         connection2.token_expiry = timezone.now() + timedelta(hours=1)
         connection2.save()
 
+        # Mock Queues instance
+        mock_queues = MagicMock()
+        mock_queues_class.return_value = mock_queues
+
         # Execute task
         result = sync_event_to_all_connected_users(
             self.event.id, self.tenant.id)
 
-        # Verify sync jobs were enqueued for both users
-        assert mock_enqueue.call_count == 2
-        # Verify correct function and arguments were enqueued
-        calls = mock_enqueue.call_args_list
-        assert all(call[0][0] == 'default' for call in calls)  # All use 'default' queue
-        assert all(call[0][1] == sync_event_to_google_calendar for call in calls)  # All call sync function
+        # Verify sync jobs were enqueued for both users via our Queues helper
+        assert mock_queues.default.add.call_count == 2
+        calls = mock_queues.default.add.call_args_list
+        # All calls should target sync_event_to_google_calendar with event id
+        assert all(
+            call[0][0] == sync_event_to_google_calendar for call in calls)
         assert result is None

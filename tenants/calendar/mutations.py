@@ -4,7 +4,6 @@ GraphQL mutations for Google Calendar OAuth integration.
 import logging
 import strawberry
 from strawberry import relay
-from django.conf import settings
 from asgiref.sync import sync_to_async
 from google.auth.transport.requests import Request
 
@@ -13,6 +12,7 @@ from utils.graphql.relay import ensure_relay_mutation
 from utils.utils import build_mutation_response
 from tenants.models import User
 
+from .service import GoogleCalendarService
 from .types import (
     ConnectGoogleCalendarResponse,
     GoogleCalendarCallbackResponse,
@@ -50,12 +50,24 @@ class GoogleCalendarMutations:
             # Check if user already has an active connection
             existing_connection = await GoogleCalendarOAuthHelper.get_active_connection(user)
             if existing_connection:
-                return build_mutation_response(
-                    ConnectGoogleCalendarResponse,
-                    success=False,
-                    message="You already have an active Google Calendar connection. Please disconnect first.",
-                    input_obj=input,
-                )
+                # Determine if the existing connection is actually working
+                service = GoogleCalendarService(user)
+                is_working = await sync_to_async(service.test_connection)()
+
+                if is_working:
+                    # Active and working connection - require explicit disconnect first
+                    return build_mutation_response(
+                        ConnectGoogleCalendarResponse,
+                        success=False,
+                        message="You already have an active Google Calendar connection. Please disconnect first.",
+                        input_obj=input,
+                    )
+
+                # Connection exists but is not working (tokens expired/revoked)
+                # Mark it as inactive so the user can reconnect cleanly
+                existing_connection.is_active = False
+                existing_connection.updated_by = user
+                await sync_to_async(existing_connection.save)()
 
             # Create OAuth flow and generate state
             flow = GoogleCalendarOAuthHelper.create_oauth_flow()
@@ -199,4 +211,3 @@ class GoogleCalendarMutations:
                 message=f"Failed to disconnect Google Calendar: {str(e)}",
                 input_obj=input,
             )
-
