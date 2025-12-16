@@ -4,7 +4,8 @@ Base test class for events app tests.
 This module provides helper methods for creating event-related models
 (Client, Distributor, Retailer, Request, Event, etc.) for testing.
 """
-from datetime import date, time
+from datetime import date as date_type, time, datetime
+from django.utils import timezone
 from jobs.tests.base import JobsGraphQLTestCase
 from events import models as event_models
 from tenants.models import Tenant
@@ -98,31 +99,71 @@ class EventsGraphQLTestCase(JobsGraphQLTestCase):
     def create_request(
         self,
         name: str,
-        date: date,
+        date: date_type | datetime,
         address: str,
         client: event_models.Client,
         distributor: event_models.Distributor,
         retailer: event_models.Retailer,
         request_type: event_models.RequestType,
         tenant: Tenant,
-        start_time: time | None = None,
-        end_time: time | None = None,
+        start_time: time | datetime | None = None,
+        end_time: time | datetime | None = None,
         status: event_models.RequestStatus | None = None,
         **kwargs
     ):
         """Create a Request instance."""
         system_user = self.get_system_user()
+
+        # Convert date to datetime if needed (Request.date is now DateTimeField)
+        # datetime is a subclass of date, so check specifically for date but not datetime
+        if isinstance(date, date_type) and not isinstance(date, datetime):
+            date_value = timezone.make_aware(datetime.combine(date, time.min))
+        elif isinstance(date, datetime):
+            date_value = date
+        else:
+            date_value = date
+
+        # Convert start_time to datetime if needed (Request.start_time is now DateTimeField)
+        if start_time is not None:
+            if isinstance(start_time, time) and not isinstance(start_time, datetime):
+                # Combine with the date
+                if isinstance(date_value, datetime):
+                    date_only = date_value.date()
+                else:
+                    date_only = date_value
+                start_time_value = timezone.make_aware(
+                    datetime.combine(date_only, start_time))
+            else:
+                start_time_value = start_time
+        else:
+            start_time_value = None
+
+        # Convert end_time to datetime if needed (Request.end_time is now DateTimeField)
+        if end_time is not None:
+            if isinstance(end_time, time) and not isinstance(end_time, datetime):
+                # Combine with the date
+                if isinstance(date_value, datetime):
+                    date_only = date_value.date()
+                else:
+                    date_only = date_value
+                end_time_value = timezone.make_aware(
+                    datetime.combine(date_only, end_time))
+            else:
+                end_time_value = end_time
+        else:
+            end_time_value = None
+
         return event_models.Request.objects.create(
             name=name,
-            date=date,
+            date=date_value,
             address=address,
             client=client,
             distributor=distributor,
             retailer=retailer,
             request_type=request_type,
             tenant=tenant,
-            start_time=start_time,
-            end_time=end_time,
+            start_time=start_time_value,
+            end_time=end_time_value,
             status=status,
             created_by=system_user,
             **kwargs
