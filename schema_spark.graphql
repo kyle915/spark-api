@@ -26,7 +26,7 @@ type Ambassador {
   address: String
   coordinates: [Float!]!
   isActive: Boolean!
-  userId: ID!
+  user: SparkUserType!
   createdAt: String!
   updatedAt: String!
 }
@@ -137,6 +137,7 @@ type AmbassadorJob {
   appearAsRfp: Boolean!
   tenantId: ID!
   ambassadorId: ID!
+  ambassador: Ambassador!
   job: Job!
   status: Status!
   rate: Rate!
@@ -163,6 +164,18 @@ type AmbassadorJobDetailResponse {
   message: String!
   clientMutationId: ID
   ambassadorJob: AmbassadorJob
+}
+
+input AmbassadorJobFiltersInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  status: AmbassadorJobStatusFilter = null
+}
+
+enum AmbassadorJobStatusFilter {
+  APPROVED
+  DECLINED
+  PENDING
 }
 
 input AmbassadorNoteFiltersInput {
@@ -342,6 +355,12 @@ input ApproveAmbassadorInput {
   clientMutationId: ID = null
   ambassadorId: ID!
   tenantId: ID = null
+}
+
+input ApproveAmbassadorJobInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  ambassadorJobId: ID!
 }
 
 type ApproveAmbassadorResponse {
@@ -1209,6 +1228,12 @@ input DashboardFiltersInput {
 """Date with time (isoformat)"""
 scalar DateTime
 
+input DeclineAmbassadorJobInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  ambassadorJobId: ID!
+}
+
 input DeclineRequestInput {
   clientMutationId: ID = null
   id: ID!
@@ -1345,6 +1370,15 @@ input DistributorFiltersInput {
   clientMutationId: ID = null
   tenantId: ID = null
   tenantUuid: ID = null
+}
+
+type DjangoImageType {
+  name: String!
+  path: String!
+  size: Int!
+  url: String!
+  width: Int!
+  height: Int!
 }
 
 type DjangoModelType {
@@ -1615,6 +1649,7 @@ type Job {
   company: Company!
   event: Event!
   tenantId: ID!
+  tenant: TenantType
   rate: Rate!
   jobRequirements: [JobRequirement!]!
   createdAt: String!
@@ -1961,6 +1996,8 @@ input ManageAmbassadorJobAssignmentInput {
 
 type Mutation {
   createRequestByUrl(input: CreateRequestWithDependenciesInput!, requestUrlName: String!): RequestDetailResponse!
+  createEvent(input: CreateEventInput!): EventDetailResponse!
+  updateEvent(input: UpdateEventInput!): EventDetailResponse!
   createEventType(input: CreateEventTypeInput!): EventTypeDetailResponse!
   updateEventType(input: UpdateEventTypeInput!): EventTypeDetailResponse!
   createEventStatus(input: CreateEventStatusInput!): EventStatusDetailResponse!
@@ -1990,8 +2027,6 @@ type Mutation {
   updateRequestStoreManager(input: UpdateRequestStoreManagerInput!): RequestStoreManagerDetailResponse!
   createTimezone(input: CreateTimeZoneInput!): TimeZoneResponse!
   updateTimezone(input: UpdateTimeZoneInput!): TimeZoneResponse!
-  createEvent(input: CreateEventInput!): EventDetailResponse!
-  updateEvent(input: UpdateEventInput!): EventDetailResponse!
   createRecap(input: CreateRecapInput!): RecapDetailResponse!
   updateRecap(input: UpdateRecapInput!): RecapDetailResponse!
   deleteRecap(input: DeleteRecapInput!): RecapDetailResponse!
@@ -2059,6 +2094,8 @@ type Mutation {
   createJobRequirementAnswer(input: CreateJobRequirementAnswerInput!): JobRequirementAnswerDetailResponse!
   updateJobRequirementAnswer(input: UpdateJobRequirementAnswerInput!): JobRequirementAnswerDetailResponse!
   manageAmbassadorJobAssignment(input: ManageAmbassadorJobAssignmentInput!): AmbassadorJobDetailResponse!
+  approveAmbassadorJob(input: ApproveAmbassadorJobInput!): AmbassadorJobDetailResponse!
+  declineAmbassadorJob(input: DeclineAmbassadorJobInput!): AmbassadorJobDetailResponse!
   applyAmbassadorEvent(eventId: ID!): ApplyAmbassadorEventResponse!
   applyAmbassadorJob(jobId: ID!): ApplyAmbassadorJobResponse!
   createPublicAmbassador(input: CreatePublicAmbassadorInput!): PublicAmbassadorCreationResponse!
@@ -2344,7 +2381,7 @@ type Query {
   jobRequirementFiles(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): JobRequirementFileCountableConnection!
   jobRequirementFile(id: ID = null, uuid: ID = null): JobRequirementFile
   availableJobs(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: JobFiltersInput = null): JobCountableConnection!
-  ambassadorJobs(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): AmbassadorJobCountableConnection!
+  ambassadorJobs(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: AmbassadorJobFiltersInput = null): AmbassadorJobCountableConnection!
   ambassadorJob(id: ID = null, uuid: ID = null): AmbassadorJob
   jobApplicants(jobId: ID!, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): AmbassadorJobCountableConnection!
   companyToAmbassadorReviews(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): CompanyToAmbassadorReviewCountableConnection!
@@ -2958,6 +2995,21 @@ type SourceDetailResponse {
   message: String!
   clientMutationId: ID
   source: Source
+}
+
+"""
+User(password, last_login, is_superuser, username, first_name, last_name, email, is_staff, date_joined, id, uuid, image, role, created_by, updated_by, created_at, updated_at, is_active)
+"""
+type SparkUserType {
+  id: ID!
+  uuid: UUID!
+
+  """Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only."""
+  username: String!
+  email: String!
+  firstName: String!
+  lastName: String!
+  image: DjangoImageType
 }
 
 """

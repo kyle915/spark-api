@@ -774,3 +774,138 @@ class JobRequirementAnswerMutations:
         input: inputs.UpdateJobRequirementAnswerInput,
     ) -> types.JobRequirementAnswerDetailResponse:
         return await JobRequirementAnswerMutationService.update(input, info)
+
+
+# Approve Ambassador Job Mutation
+class ApproveAmbassadorJobMutationService(SparkGraphQLMixin):
+    """Service for approving ambassador job."""
+
+    @classmethod
+    async def approve(
+        cls,
+        input: inputs.ApproveAmbassadorJobInput,
+        info: strawberry.Info,
+    ) -> types.AmbassadorJobDetailResponse:
+        service = cls()
+        user = await service.get_user(info)
+        tenant = await service.get_user_tenant(
+            info,
+            tenant_id=input.tenant_id,
+            user=user,
+        )
+
+        try:
+            ambassador_job = await sync_to_async(models.AmbassadorJob.objects.get)(
+                id=input.ambassador_job_id, tenant_id=tenant.id
+            )
+        except models.AmbassadorJob.DoesNotExist:
+            return build_mutation_response(
+                types.AmbassadorJobDetailResponse,
+                success=False,
+                message="Ambassador job not found.",
+                input_obj=input,
+            )
+
+        # Find status with slug 'approved'
+        try:
+            status = await sync_to_async(models.Status.objects.get)(
+                slug=inputs.AmbassadorJobStatusEnum.APPROVED.value,
+                tenant_id=tenant.id
+            )
+        except models.Status.DoesNotExist:
+            return build_mutation_response(
+                types.AmbassadorJobDetailResponse,
+                success=False,
+                message=f"Status with slug '{inputs.AmbassadorJobStatusEnum.APPROVED.value}' not found.",
+                input_obj=input,
+            )
+
+        ambassador_job.status = status
+        ambassador_job.updated_by = user
+        await sync_to_async(ambassador_job.save)()
+
+        return build_mutation_response(
+            types.AmbassadorJobDetailResponse,
+            success=True,
+            message="Ambassador job approved.",
+            input_obj=input,
+            ambassador_job=ambassador_job,
+        )
+
+
+@strawberry.type
+class ApproveAmbassadorJobMutations:
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def approve_ambassador_job(
+        self,
+        info: strawberry.Info,
+        input: inputs.ApproveAmbassadorJobInput,
+    ) -> types.AmbassadorJobDetailResponse:
+        return await ApproveAmbassadorJobMutationService.approve(input, info)
+
+# Decline Ambassador Job Mutation
+class DeclineAmbassadorJobMutationService(SparkGraphQLMixin):
+    """Service for declining ambassador job."""
+
+    @classmethod
+    async def decline(
+        cls,
+        input: inputs.DeclineAmbassadorJobInput,
+        info: strawberry.Info,
+    ) -> types.AmbassadorJobDetailResponse:
+        service = cls()
+        user = await service.get_user(info)
+        tenant = await service.get_user_tenant(
+            info,
+            tenant_id=input.tenant_id,
+            user=user,
+        )
+
+        try:
+            ambassador_job = await sync_to_async(models.AmbassadorJob.objects.get)(
+                id=input.ambassador_job_id, tenant_id=tenant.id
+            )
+        except models.AmbassadorJob.DoesNotExist:
+            return build_mutation_response(
+                types.AmbassadorJobDetailResponse,
+                success=False,
+                message="Ambassador job not found.",
+                input_obj=input,
+            )
+
+        # Find status with slug 'declined'
+        try:
+            status = await sync_to_async(models.Status.objects.get)(
+                slug=inputs.AmbassadorJobStatusEnum.DECLINED.value,
+                tenant_id=tenant.id
+            )
+        except models.Status.DoesNotExist:
+            return build_mutation_response(
+                types.AmbassadorJobDetailResponse,
+                success=False,
+                message=f"Status with slug '{inputs.AmbassadorJobStatusEnum.DECLINED.value}' not found.",
+                input_obj=input,
+            )
+
+        ambassador_job.status = status
+        ambassador_job.updated_by = user
+        await sync_to_async(ambassador_job.save)()
+
+        return build_mutation_response(
+            types.AmbassadorJobDetailResponse,
+            success=True,
+            message="Ambassador job declined.",
+            input_obj=input,
+            ambassador_job=ambassador_job,
+        )
+
+
+@strawberry.type
+class DeclineAmbassadorJobMutations:
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def decline_ambassador_job(
+        self,
+        info: strawberry.Info,
+        input: inputs.DeclineAmbassadorJobInput,
+    ) -> types.AmbassadorJobDetailResponse:
+        return await DeclineAmbassadorJobMutationService.decline(input, info)

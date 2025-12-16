@@ -7,6 +7,7 @@ from typing import List, Optional
 from . import models
 from events.types import Location, Event
 from tenants.types import TenantType as Tenant
+from ambassadors.types import Ambassador
 
 
 @strawberry_django.type(models.Status)
@@ -314,6 +315,7 @@ class AmbassadorJob:
     appear_as_rfp: bool
     tenant_id: strawberry.ID
     ambassador_id: strawberry.ID
+    ambassador: Ambassador
     job: Job
     status: Status
     rate: Rate

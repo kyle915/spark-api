@@ -1,7 +1,8 @@
 import strawberry
+from enum import Enum
 from graphql import GraphQLError
 
-from utils.graphql.inputs import SparkGraphQLInput
+from utils.graphql.inputs import BaseTenantInput, SparkGraphQLInput
 from utils.graphql.permissions import StrictIsAuthenticated
 from utils.graphql.relay import CountableConnection
 from utils.graphql.queries import BaseQueriesService
@@ -788,6 +789,18 @@ class AmbassadorJobQueriesService(JobsBaseQueriesService):
         return models.AmbassadorJob
 
 
+@strawberry.enum
+class AmbassadorJobStatusFilter(str, Enum):
+    APPROVED = "approved"
+    DECLINED = "declined"
+    PENDING = "pending"
+
+
+@strawberry.input
+class AmbassadorJobFiltersInput(BaseTenantInput):
+    status: AmbassadorJobStatusFilter | None = None
+
+
 @strawberry.type
 class AmbassadorJobQueries:
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
@@ -830,10 +843,22 @@ class AmbassadorJobQueries:
         last: int | None = None,
         before: str | None = None,
         q: str | None = None,
+        filters: AmbassadorJobFiltersInput | None = None,
     ) -> CountableConnection[types.AmbassadorJob]:
         """Get all ambassador jobs."""
         service = AmbassadorJobQueriesService()
-        tenant_id = await service.resolve_query_tenant_id(info)
+        tenant_id = await service.resolve_query_tenant_id(info, filters=filters)
+        queryset = service.get_ordered_queryset(
+            tenant_id=tenant_id,
+            q=q,
+        )
+
+        if filters and filters.status:
+            status_filter_kwargs = {"status__slug": filters.status.value}
+            if tenant_id:
+                status_filter_kwargs["status__tenant_id"] = tenant_id
+            queryset = queryset.filter(**status_filter_kwargs)
+
         return await service.get_connection(
             tenant_id=tenant_id,
             q=q,
@@ -841,6 +866,7 @@ class AmbassadorJobQueries:
             after=after,
             last=last,
             before=before,
+            queryset=queryset,
         )
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
