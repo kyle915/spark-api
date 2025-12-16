@@ -445,7 +445,9 @@ class TestAvailableAmbassadorsQuery(AmbassadorsGraphQLTestCase):
                             isActive
                             address
                             coordinates
-                            userId
+                            user {
+                                id
+                            }
                         }
                     }
                     totalCount
@@ -573,7 +575,7 @@ class TestAvailableAmbassadorsQuery(AmbassadorsGraphQLTestCase):
         assert result.errors is None
         assert result.data is not None
         edges = result.data["availableAmbassadors"]["edges"]
-        # Should find ambassadors matching email (we can only verify by userId since email is not exposed)
+        # Should find ambassadors matching email (we can only verify by user.id since email is not exposed)
         assert len(edges) >= 0
 
     @pytest.mark.asyncio
@@ -593,7 +595,7 @@ class TestAvailableAmbassadorsQuery(AmbassadorsGraphQLTestCase):
         assert result.errors is None
         assert result.data is not None
         edges = result.data["availableAmbassadors"]["edges"]
-        # Should find ambassadors matching name (we can only verify by userId since name is not exposed)
+        # Should find ambassadors matching name (we can only verify by user.id since name is not exposed)
         assert len(edges) >= 0
 
     @pytest.mark.asyncio
