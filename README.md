@@ -57,9 +57,8 @@ GOOGLE_OAUTH_CLIENT_ID=your_google_oauth_client_id
 GOOGLE_OAUTH_CLIENT_SECRET=your_google_oauth_client_secret
 GOOGLE_OAUTH_REDIRECT_URI=http://localhost:8000/api/v1/google-calendar/callback
 
-# Celery Configuration (for background tasks)
+# Redis Configuration (for django-rq background tasks)
 CELERY_BROKER_URL=redis://localhost:6379/0
-CELERY_RESULT_BACKEND=redis://localhost:6379/0
 
 # Test Database (for running tests)
 TEST_DATABASE_URL=postgres:///spark_tests
@@ -97,9 +96,9 @@ Visit the project at:
 
 ---
 
-### 6). Start Redis (Required for Celery)
+### 6). Start Redis (Required for django-rq)
 
-Celery requires Redis as a message broker. Make sure Redis is running:
+django-rq requires Redis as a message queue. Make sure Redis is running:
 
 **macOS (using Homebrew):**
 ```bash
@@ -126,30 +125,19 @@ redis-cli ping
 
 ---
 
-### 7). Start Celery Worker (For Background Tasks)
+### 7). Start RQ Worker (For Background Tasks)
 
-The Google Calendar integration uses Celery for asynchronous task processing. Start the Celery worker in a separate terminal:
-
-```bash
-uv run celery -A config worker -l info
-```
-
-For development with auto-reload on code changes:
-```bash
-uv run celery -A config worker -l info --reload
-```
-
-**Note:** The Celery worker must be running for Google Calendar sync tasks to execute. Events will be queued but not processed if the worker is not running.
-
----
-
-### 8). Start Celery Beat (Optional - For Scheduled Tasks)
-
-If you need to run periodic tasks, start Celery Beat in another terminal:
+The Google Calendar integration uses django-rq for asynchronous task processing. Start the RQ worker in a separate terminal:
 
 ```bash
-uv run celery -A config beat -l info
+uv run python manage.py rqworker high default low
 ```
+
+This starts a worker that processes jobs from the `high`, `default`, and `low` queues (in that priority order).
+
+**Note:** The RQ worker must be running for Google Calendar sync tasks to execute. Events will be queued but not processed if the worker is not running.
+
+**For production deployment**, you can create a systemd service or use a process manager like supervisor. See the [django-rq documentation](https://github.com/rq/django-rq) for deployment examples.
 
 ---
 
@@ -188,9 +176,7 @@ uv run pytest tenants/tests/test_google_calendar_mutations.py -v
 | `uv sync` | Create environment and install dependencies |
 | `uv run python manage.py migrate` | Apply migrations |
 | `uv run python manage.py runserver` | Start development server |
-| `uv run celery -A config worker -l info` | Start Celery worker for background tasks |
-| `uv run celery -A config worker -l info --reload` | Start Celery worker with auto-reload |
-| `uv run celery -A config beat -l info` | Start Celery beat for scheduled tasks |
+| `uv run python manage.py rqworker high default low` | Start RQ worker for background tasks |
 | `redis-cli ping` | Check if Redis is running |
 
 ---

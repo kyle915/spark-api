@@ -1,5 +1,6 @@
-from django.urls import path
+from django.urls import path, include
 from django.views.decorators.csrf import csrf_exempt
+from django.conf import settings
 from strawberry.django.views import AsyncGraphQLView
 
 from .schema_ambassador import schema_ambassador
@@ -25,3 +26,9 @@ urlpatterns = [
         csrf_exempt(AsyncGraphQLView.as_view(schema=schema_mobile)),
     ),
 ]
+
+# Add RQ dashboard in DEBUG mode
+if settings.DEBUG:
+    urlpatterns += [
+        path('django-rq/', include('django_rq.urls')),
+    ]

@@ -1,5 +1,5 @@
 """
-Tests for Google Calendar Celery tasks.
+Tests for Google Calendar RQ jobs.
 
 This module tests:
 - sync_event_to_google_calendar
@@ -8,7 +8,7 @@ This module tests:
 """
 import pytest
 from unittest.mock import patch, MagicMock
-from datetime import date, time, timedelta
+from datetime import date, time, timedelta, datetime
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 from tenants.models import Role, Tenant, TenantedUser, GoogleCalendarConnection
@@ -26,7 +26,7 @@ User = get_user_model()
 
 @pytest.mark.django_db
 class TestGoogleCalendarTasks:
-    """Tests for Google Calendar Celery tasks."""
+    """Tests for Google Calendar RQ jobs."""
 
     def setup_method(self):
         """Set up test data."""
@@ -119,11 +119,16 @@ class TestGoogleCalendarTasks:
             tenant=self.tenant,
             created_by=self.user
         )
+        # Request model uses DateTimeField, so convert date/time to datetime
+        request_date = timezone.make_aware(datetime.combine(date.today(), time.min))
+        start_datetime = timezone.make_aware(datetime.combine(date.today(), time(10, 0)))
+        end_datetime = timezone.make_aware(datetime.combine(date.today(), time(12, 0)))
+        
         self.request = Request.objects.create(
             name="Test Request",
-            date=date.today(),
-            start_time=time(10, 0),  # Required for Google Calendar sync
-            end_time=time(12, 0),    # Required for Google Calendar sync
+            date=request_date,
+            start_time=start_datetime,  # Required for Google Calendar sync
+            end_time=end_datetime,    # Required for Google Calendar sync
             address="123 Test St",
             client=self.client,
             distributor=self.distributor,
@@ -197,8 +202,8 @@ class TestGoogleCalendarTasks:
         mock_service.sync_event.assert_called_once()
         assert result is None
 
-    @patch('events.tasks.sync_event_to_google_calendar')
-    def test_sync_event_to_all_connected_users(self, mock_sync_task):
+    @patch('events.tasks.django_rq.enqueue')
+    def test_sync_event_to_all_connected_users(self, mock_enqueue):
         """Test syncing event to all connected users."""
         # Create another user with connection
         user2 = User.objects.create_user(
@@ -228,6 +233,10 @@ class TestGoogleCalendarTasks:
         result = sync_event_to_all_connected_users(
             self.event.id, self.tenant.id)
 
-        # Verify sync tasks were queued for both users
-        assert mock_sync_task.delay.call_count == 2
+        # Verify sync jobs were enqueued for both users
+        assert mock_enqueue.call_count == 2
+        # Verify correct function and arguments were enqueued
+        calls = mock_enqueue.call_args_list
+        assert all(call[0][0] == 'default' for call in calls)  # All use 'default' queue
+        assert all(call[0][1] == sync_event_to_google_calendar for call in calls)  # All call sync function
         assert result is None
