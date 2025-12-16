@@ -12,7 +12,8 @@ from recaps import types
 from recaps import models
 from recaps import inputs
 from ambassadors.models import FileType
-from events.models import Event
+from events.models import Event, Retailer
+from jobs.models import Job
 from utils.graphql.inputs import SparkGraphQLInput
 from utils.graphql.permissions import StrictIsAuthenticated
 from utils.graphql.relay import ensure_relay_mutation
@@ -61,6 +62,20 @@ class RecapMutationService(SparkGraphQLMixin):
         except Event.DoesNotExist:
             raise GraphQLError("Event not found.")
 
+        job = None
+        if self.input.job_id:
+            try:
+                job = await sync_to_async(Job.objects.get)(id=self.input.job_id)
+            except Job.DoesNotExist:
+                raise GraphQLError("Job not found.")
+
+        retailer = None
+        if self.input.retailer_id:
+            try:
+                retailer = await sync_to_async(Retailer.objects.get)(id=self.input.retailer_id)
+            except Retailer.DoesNotExist:
+                raise GraphQLError("Retailer not found.")
+
         if not self.input.files or len(self.input.files) == 0:
             raise GraphQLError("At least one file is required.")
 
@@ -89,23 +104,82 @@ class RecapMutationService(SparkGraphQLMixin):
                     recap_file.save()
                     recap_files.append(recap_file)
 
-                # Create the Recap instance with the first file as the main file
+                # Create the Recap instance
+                total_engagements = 0
+                if self.input.consumer_engagements:
+                    total_engagements = self.input.consumer_engagements.total_consumer
+
                 recap = models.Recap(
                     name=self.input.name,
                     event=event,
                     recap_file=recap_files[0],
                     created_by=self.user,
+                    total_engagements=total_engagements,
+                    products_sold=self.input.products_sold,
+                    total_earnings=self.input.total_earnings,
+                    job=job,
+                    retailer=retailer,
                 )
                 recap.save()
 
                 # Create RecapRecapFile entries for ALL files
                 for recap_file in recap_files:
-                    recap_recap_file = models.RecapRecapFile(
+                    models.RecapRecapFile.objects.create(
                         recap=recap,
                         recap_file=recap_file,
                         created_by=self.user,
                     )
-                    recap_recap_file.save()
+
+                # Create related objects
+                if self.input.consumer_engagements:
+                    models.ConsumerEngagements.objects.create(
+                        recap=recap,
+                        created_by=self.user,
+                        total_consumer=self.input.consumer_engagements.total_consumer,
+                        first_time_consumers=self.input.consumer_engagements.first_time_consumers,
+                        brand_aware_consumers=self.input.consumer_engagements.brand_aware_consumers,
+                        willing_to_purchase_consumers=self.input.consumer_engagements.willing_to_purchase_consumers,
+                        not_willing_consumers=self.input.consumer_engagements.not_willing_consumers,
+                    )
+
+                if self.input.product_samples:
+                    for sample in self.input.product_samples:
+                        models.ProductSamples.objects.create(
+                            recap=recap,
+                            created_by=self.user,
+                            product_id=sample.product_id,
+                            quantity=sample.quantity,
+                        )
+
+                if self.input.sales_performance:
+                    for sale in self.input.sales_performance:
+                        models.SalesPerformance.objects.create(
+                            recap=recap,
+                            created_by=self.user,
+                            product_id=sale.product_id,
+                            type_of_good_id=sale.type_of_good_id,
+                            price=sale.price,
+                        )
+
+                if self.input.consumer_feedback:
+                    models.ConsumerFeedback.objects.create(
+                        recap=recap,
+                        created_by=self.user,
+                        demographics=self.input.consumer_feedback.demographics,
+                        feedback=self.input.consumer_feedback.feedback,
+                        quotes=self.input.consumer_feedback.quotes,
+                        positive_stories=self.input.consumer_feedback.positive_stories,
+                        reasons_to_decline=self.input.consumer_feedback.reasons_to_decline,
+                    )
+
+                if self.input.account_feedback:
+                    models.AccountFeedback.objects.create(
+                        recap=recap,
+                        created_by=self.user,
+                        do_differently_feedback=self.input.account_feedback.do_differently_feedback,
+                        feedback=self.input.account_feedback.feedback,
+                        corpo_card=self.input.account_feedback.corpo_card,
+                    )
                 
                 return recap
         

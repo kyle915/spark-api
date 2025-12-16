@@ -37,6 +37,73 @@ class RecapFileDetailResponse:
     recap_file: RecapFile | None = None
 
 
+@strawberry_django.type(models.ConsumerEngagements)
+class ConsumerEngagements:
+    id: strawberry.ID
+    uuid: str
+    total_consumer: int
+    first_time_consumers: int
+    brand_aware_consumers: int
+    willing_to_purchase_consumers: int
+    not_willing_consumers: int
+    created_at: str
+    updated_at: str
+
+
+@strawberry_django.type(models.ProductSamples)
+class ProductSamples:
+    id: strawberry.ID
+    uuid: str
+    product: event_types.Product
+    quantity: int
+    created_at: str
+    updated_at: str
+
+
+@strawberry_django.type(models.TypeOfGood)
+class TypeOfGood:
+    id: strawberry.ID
+    uuid: str
+    name: str
+    created_at: str
+    updated_at: str
+
+
+@strawberry_django.type(models.SalesPerformance)
+class SalesPerformance:
+    id: strawberry.ID
+    uuid: str
+    product: event_types.Product
+    type_of_good: TypeOfGood
+    price: float
+    created_at: str
+    updated_at: str
+
+
+@strawberry_django.type(models.ConsumerFeedback)
+class ConsumerFeedback:
+    id: strawberry.ID
+    uuid: str
+    demographics: str | None
+    feedback: str | None
+    quotes: str | None
+    positive_stories: str | None
+    reasons_to_decline: str | None
+    created_at: str
+    updated_at: str
+
+
+@strawberry_django.type(models.AccountFeedback)
+class AccountFeedback:
+    id: strawberry.ID
+    uuid: str
+    do_differently_feedback: str | None
+    feedback: str | None
+    corpo_card: str | None
+    created_at: str
+    updated_at: str
+
+
 @strawberry_django.type(models.Recap)
 class Recap:
     id: strawberry.ID
@@ -48,6 +115,17 @@ class Recap:
     recap_file_id: strawberry.ID
     created_at: str
     updated_at: str
+    
+    total_engagements: int | None
+    products_sold: int | None
+    total_earnings: float | None
+    
+    # Relationships
+    consumer_engagements: List[ConsumerEngagements]
+    product_samples: List[ProductSamples]
+    sales_performance: List[SalesPerformance]
+    consumer_feedback: List[ConsumerFeedback]
+    account_feedback: List[AccountFeedback]
 
     @strawberry.field
     def recap_files(self) -> List[RecapFile]:
