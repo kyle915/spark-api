@@ -10,11 +10,41 @@ class RecapFiltersInput(SparkGraphQLInput):
 
 
 @strawberry.input
-class CreateRecapFileInput(SparkGraphQLInput):
-    name: str
-    file: str
-    file_type_id: strawberry.ID
-    approved: bool = False
+class ConsumerEngagementsInput(SparkGraphQLInput):
+    total_consumer: int
+    first_time_consumers: int
+    brand_aware_consumers: int
+    willing_to_purchase_consumers: int
+    not_willing_consumers: int
+
+
+@strawberry.input
+class ProductSampleInput(SparkGraphQLInput):
+    product_id: strawberry.ID
+    quantity: int
+
+
+@strawberry.input
+class SalesPerformanceInput(SparkGraphQLInput):
+    product_id: strawberry.ID
+    type_of_good_id: strawberry.ID
+    price: float
+
+
+@strawberry.input
+class ConsumerFeedbackInput(SparkGraphQLInput):
+    demographics: str | None = None
+    feedback: str | None = None
+    quotes: str | None = None
+    positive_stories: str | None = None
+    reasons_to_decline: str | None = None
+
+
+@strawberry.input
+class AccountFeedbackInput(SparkGraphQLInput):
+    do_differently_feedback: str | None = None
+    feedback: str | None = None
+    corpo_card: str | None = None
 
 
 @strawberry.input
@@ -22,6 +52,18 @@ class CreateRecapInput(SparkGraphQLInput):
     name: str
     event_id: strawberry.ID
     files: List[str]  # List of file URLs/paths from GCS
+    
+    products_sold: int | None = None
+    total_earnings: float | None = None
+    
+    job_id: strawberry.ID | None = None
+    retailer_id: strawberry.ID | None = None
+    
+    consumer_engagements: ConsumerEngagementsInput | None = None
+    product_samples: List[ProductSampleInput] | None = None
+    sales_performance: List[SalesPerformanceInput] | None = None
+    consumer_feedback: ConsumerFeedbackInput | None = None
+    account_feedback: AccountFeedbackInput | None = None
 
 
 @strawberry.input

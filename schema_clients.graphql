@@ -26,7 +26,7 @@ type Ambassador {
   address: String
   coordinates: [Float!]!
   isActive: Boolean!
-  userId: ID!
+  user: SparkUserType!
   createdAt: String!
   updatedAt: String!
 }
@@ -137,6 +137,7 @@ type AmbassadorJob {
   appearAsRfp: Boolean!
   tenantId: ID!
   ambassadorId: ID!
+  ambassador: Ambassador!
   job: Job!
   status: Status!
   rate: Rate!
@@ -163,6 +164,18 @@ type AmbassadorJobDetailResponse {
   message: String!
   clientMutationId: ID
   ambassadorJob: AmbassadorJob
+}
+
+input AmbassadorJobFiltersInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  status: AmbassadorJobStatusFilter = null
+}
+
+enum AmbassadorJobStatusFilter {
+  APPROVED
+  DECLINED
+  PENDING
 }
 
 input AmbassadorNoteFiltersInput {
@@ -342,6 +355,12 @@ input ApproveAmbassadorInput {
   clientMutationId: ID = null
   ambassadorId: ID!
   tenantId: ID = null
+}
+
+input ApproveAmbassadorJobInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  ambassadorJobId: ID!
 }
 
 type ApproveAmbassadorResponse {
@@ -856,6 +875,20 @@ input CreateDistributorInput {
   locationId: ID!
 }
 
+input CreateEventInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  name: String!
+  eventTypeId: ID!
+  requestId: ID = null
+  address: String!
+  notes: String!
+  isNational: Boolean! = false
+  coordinates: [Float!] = null
+  startTime: String!
+  endTime: String!
+}
+
 input CreateEventStatusInput {
   clientMutationId: ID = null
   tenantId: ID = null
@@ -1185,6 +1218,12 @@ input DashboardFiltersInput {
 """Date with time (isoformat)"""
 scalar DateTime
 
+input DeclineAmbassadorJobInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  ambassadorJobId: ID!
+}
+
 input DeclineRequestInput {
   clientMutationId: ID = null
   id: ID!
@@ -1323,6 +1362,15 @@ input DistributorFiltersInput {
   tenantUuid: ID = null
 }
 
+type DjangoImageType {
+  name: String!
+  path: String!
+  size: Int!
+  url: String!
+  width: Int!
+  height: Int!
+}
+
 type DjangoModelType {
   pk: ID!
 }
@@ -1386,6 +1434,13 @@ type EventDetail {
   ambassadors: [EventAmbassadorInfo!]
   location: Location
   statistics: EventDetailStatistics
+}
+
+type EventDetailResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  event: Event
 }
 
 type EventDetailStatistics {
@@ -1584,6 +1639,7 @@ type Job {
   company: Company!
   event: Event!
   tenantId: ID!
+  tenant: TenantType
   rate: Rate!
   jobRequirements: [JobRequirement!]!
   createdAt: String!
@@ -1929,6 +1985,8 @@ input ManageAmbassadorJobAssignmentInput {
 }
 
 type Mutation {
+  createEvent(input: CreateEventInput!): EventDetailResponse!
+  updateEvent(input: UpdateEventInput!): EventDetailResponse!
   createRequestByUrl(input: CreateRequestWithDependenciesInput!, requestUrlName: String!): RequestDetailResponse!
   createEventType(input: CreateEventTypeInput!): EventTypeDetailResponse!
   updateEventType(input: UpdateEventTypeInput!): EventTypeDetailResponse!
@@ -2024,6 +2082,8 @@ type Mutation {
   createJobRequirementAnswer(input: CreateJobRequirementAnswerInput!): JobRequirementAnswerDetailResponse!
   updateJobRequirementAnswer(input: UpdateJobRequirementAnswerInput!): JobRequirementAnswerDetailResponse!
   manageAmbassadorJobAssignment(input: ManageAmbassadorJobAssignmentInput!): AmbassadorJobDetailResponse!
+  approveAmbassadorJob(input: ApproveAmbassadorJobInput!): AmbassadorJobDetailResponse!
+  declineAmbassadorJob(input: DeclineAmbassadorJobInput!): AmbassadorJobDetailResponse!
   applyAmbassadorEvent(eventId: ID!): ApplyAmbassadorEventResponse!
   applyAmbassadorJob(jobId: ID!): ApplyAmbassadorJobResponse!
   createPublicAmbassador(input: CreatePublicAmbassadorInput!): PublicAmbassadorCreationResponse!
@@ -2309,7 +2369,7 @@ type Query {
   jobRequirementFiles(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): JobRequirementFileCountableConnection!
   jobRequirementFile(id: ID = null, uuid: ID = null): JobRequirementFile
   availableJobs(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: JobFiltersInput = null): JobCountableConnection!
-  ambassadorJobs(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): AmbassadorJobCountableConnection!
+  ambassadorJobs(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: AmbassadorJobFiltersInput = null): AmbassadorJobCountableConnection!
   ambassadorJob(id: ID = null, uuid: ID = null): AmbassadorJob
   jobApplicants(jobId: ID!, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): AmbassadorJobCountableConnection!
   companyToAmbassadorReviews(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): CompanyToAmbassadorReviewCountableConnection!
@@ -2330,6 +2390,8 @@ type Query {
   requestStats(filters: DashboardFiltersInput = null): RequestStats!
   requestTimeSeries(filters: DashboardFiltersInput = null, groupBy: TimeGroupBy! = DAY): RequestTimeSeries!
   eventDetail(id: ID!, filters: DashboardFiltersInput = null): EventDetail
+  getUploadUrl(filePath: String!, contentType: String! = "image/jpeg"): UploadUrlResponse!
+  getDownloadUrl(filePath: String!): String!
 }
 
 """
@@ -2924,6 +2986,21 @@ type SourceDetailResponse {
 }
 
 """
+User(password, last_login, is_superuser, username, first_name, last_name, email, is_staff, date_joined, id, uuid, image, role, created_by, updated_by, created_at, updated_at, is_active)
+"""
+type SparkUserType {
+  id: ID!
+  uuid: UUID!
+
+  """Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only."""
+  username: String!
+  email: String!
+  firstName: String!
+  lastName: String!
+  image: DjangoImageType
+}
+
+"""
 Status(id, uuid, name, slug, tenant, created_by, updated_by, created_at, updated_at)
 """
 type Status {
@@ -3214,6 +3291,21 @@ input UpdateDistributorInput {
   id: ID!
 }
 
+input UpdateEventInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  name: String!
+  eventTypeId: ID!
+  requestId: ID = null
+  address: String!
+  notes: String!
+  isNational: Boolean! = false
+  coordinates: [Float!] = null
+  startTime: String!
+  endTime: String!
+  id: ID!
+}
+
 input UpdateEventStatusInput {
   clientMutationId: ID = null
   tenantId: ID = null
@@ -3486,6 +3578,11 @@ input UpdateTimeZoneInput {
   code: String!
   offset: Int!
   id: ID!
+}
+
+type UploadUrlResponse {
+  uploadUrl: String!
+  blobName: String!
 }
 
 enum UserRoleEnum {

@@ -33,6 +33,11 @@ class BaseRecapQueriesService(SparkGraphQLMixin):
             .objects.select_related("event", "recap_file")
             .prefetch_related(
                 "recap_recap_file__recap_file",
+                "consumer_engagements",
+                "product_samples",
+                "sales_performance",
+                "consumer_feedback",
+                "account_feedback",
                 Prefetch(
                     "event__ambassadors_events",
                     queryset=ambassador_models.AmbassadorEvent.objects.select_related(
