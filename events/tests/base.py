@@ -96,6 +96,51 @@ class EventsGraphQLTestCase(JobsGraphQLTestCase):
             **kwargs
         )
 
+    @staticmethod
+    def _normalize_to_datetime(value: date_type | datetime) -> datetime:
+        """
+        Convert a date or datetime to a timezone-aware datetime.
+
+        Args:
+            value: A date or datetime object
+
+        Returns:
+            A timezone-aware datetime object
+        """
+        if isinstance(value, datetime):
+            return value if timezone.is_aware(value) else timezone.make_aware(value)
+        if isinstance(value, date_type):
+            return timezone.make_aware(datetime.combine(value, time.min))
+        return value
+
+    @staticmethod
+    def _normalize_time_to_datetime(
+        time_value: time | datetime | None,
+        reference_date: date_type | datetime
+    ) -> datetime | None:
+        """
+        Convert a time or datetime to a timezone-aware datetime using a reference date.
+
+        Args:
+            time_value: A time or datetime object, or None
+            reference_date: The date to use when combining with a time object
+
+        Returns:
+            A timezone-aware datetime object, or None if time_value is None
+        """
+        if time_value is None:
+            return None
+
+        if isinstance(time_value, datetime):
+            return time_value if timezone.is_aware(time_value) else timezone.make_aware(time_value)
+
+        if isinstance(time_value, time):
+            date_part = reference_date.date() if isinstance(
+                reference_date, datetime) else reference_date
+            return timezone.make_aware(datetime.combine(date_part, time_value))
+
+        return time_value
+
     def create_request(
         self,
         name: str,
@@ -110,61 +155,49 @@ class EventsGraphQLTestCase(JobsGraphQLTestCase):
         end_time: time | datetime | None = None,
         status: event_models.RequestStatus | None = None,
         **kwargs
-    ):
-        """Create a Request instance."""
-        system_user = self.get_system_user()
+    ) -> event_models.Request:
+        """
+        Create a Request instance.
 
-        # Convert date to datetime if needed (Request.date is now DateTimeField)
-        # datetime is a subclass of date, so check specifically for date but not datetime
-        if isinstance(date, date_type) and not isinstance(date, datetime):
-            date_value = timezone.make_aware(datetime.combine(date, time.min))
-        elif isinstance(date, datetime):
-            date_value = date
-        else:
-            date_value = date
+        Note: The Request model uses DateTimeField for date, start_time, and end_time.
+        This method automatically converts date and time objects to timezone-aware datetime
+        objects to maintain compatibility with existing test code.
 
-        # Convert start_time to datetime if needed (Request.start_time is now DateTimeField)
-        if start_time is not None:
-            if isinstance(start_time, time) and not isinstance(start_time, datetime):
-                # Combine with the date
-                if isinstance(date_value, datetime):
-                    date_only = date_value.date()
-                else:
-                    date_only = date_value
-                start_time_value = timezone.make_aware(
-                    datetime.combine(date_only, start_time))
-            else:
-                start_time_value = start_time
-        else:
-            start_time_value = None
+        Args:
+            name: Name of the request
+            date: Date or datetime for the request (will be normalized to datetime)
+            address: Address of the request
+            client: Client instance
+            distributor: Distributor instance
+            retailer: Retailer instance
+            request_type: RequestType instance
+            tenant: Tenant instance
+            start_time: Optional time or datetime for start time
+            end_time: Optional time or datetime for end time
+            status: Optional RequestStatus instance
+            **kwargs: Additional fields to set on the request
 
-        # Convert end_time to datetime if needed (Request.end_time is now DateTimeField)
-        if end_time is not None:
-            if isinstance(end_time, time) and not isinstance(end_time, datetime):
-                # Combine with the date
-                if isinstance(date_value, datetime):
-                    date_only = date_value.date()
-                else:
-                    date_only = date_value
-                end_time_value = timezone.make_aware(
-                    datetime.combine(date_only, end_time))
-            else:
-                end_time_value = end_time
-        else:
-            end_time_value = None
+        Returns:
+            The created Request instance
+        """
+        normalized_date = self._normalize_to_datetime(date)
+        normalized_start_time = self._normalize_time_to_datetime(
+            start_time, normalized_date)
+        normalized_end_time = self._normalize_time_to_datetime(
+            end_time, normalized_date)
 
         return event_models.Request.objects.create(
             name=name,
-            date=date_value,
+            date=normalized_date,
             address=address,
             client=client,
             distributor=distributor,
             retailer=retailer,
             request_type=request_type,
             tenant=tenant,
-            start_time=start_time_value,
-            end_time=end_time_value,
+            start_time=normalized_start_time,
+            end_time=normalized_end_time,
             status=status,
-            created_by=system_user,
+            created_by=self.get_system_user(),
             **kwargs
         )
