@@ -1,4 +1,3 @@
-import graphql.utilities.lexicographic_sort_schema
 from uuid6 import uuid7
 from asgiref.sync import sync_to_async
 
@@ -9,6 +8,7 @@ from django.conf import settings
 
 from .managers import UserManager, TenantedUserManager, TenantManager
 from utils.models import Asyncable
+from utils.utils import default_tenant_theme
 
 
 class Tenant(Asyncable, models.Model):
@@ -34,6 +34,59 @@ class Tenant(Asyncable, models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     objects = TenantManager()
+
+
+class TenantTheme(models.Model):
+    """
+    Per-tenant visual theme configuration compatible with DaisyUI.
+
+    The frontend can use `css_variables` directly to construct a theme
+    definition or apply CSS custom properties.
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    tenant = models.ForeignKey(
+        Tenant,
+        on_delete=models.CASCADE,
+        related_name="themes",
+    )
+
+    # Optional human-readable / daisyUI theme name
+    name = models.CharField(max_length=64, default="default")
+
+    # High-level color scheme hint (e.g. for prefers-color-scheme)
+    color_scheme = models.CharField(
+        max_length=16,
+        choices=[("light", "Light"), ("dark", "Dark")],
+        default="dark",
+    )
+
+    # Raw DaisyUI-compatible variables
+    css_variables = models.JSONField(default=default_tenant_theme)
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="tenant_themes_created",
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="tenant_themes_updated",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        # Each tenant may have multiple themes (e.g. light/dark) but only
+        # one per color_scheme.
+        unique_together = ("tenant", "color_scheme")
+
+    def __str__(self) -> str:
+        return f"Theme '{self.name}' ({self.color_scheme}) for tenant {self.tenant_id}"
 
 
 class Role(models.Model):
