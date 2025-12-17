@@ -4,6 +4,7 @@ import strawberry
 
 from . import models
 from tenants.types import SparkUserType
+from events.types import Event
 
 
 @strawberry_django.type(models.FileType)
@@ -35,6 +36,7 @@ class AmbassadorEventType:
     uuid: str
     is_approved: bool
     ambassador: Ambassador
+    event: Event
     tenant_id: strawberry.ID
     event_id: strawberry.ID
     created_at: str
@@ -93,6 +95,14 @@ class AcceptInvitationResponse:
 
 @strawberry.type
 class ApproveAmbassadorResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    ambassador: Ambassador | None = None
+
+
+@strawberry.type
+class CreateAmbassadorResponse:
     success: bool
     message: str
     client_mutation_id: strawberry.ID | None = None
@@ -226,6 +236,7 @@ class AmbassadorSkillType:
     ambassador_id: strawberry.ID
     skill_id: strawberry.ID
     tenant_id: strawberry.ID
+    skill: SkillType
     created_at: str
     updated_at: str
 
@@ -243,6 +254,60 @@ class DeleteAmbassadorSkillResponse:
     success: bool
     message: str
     client_mutation_id: strawberry.ID | None = None
+
+
+@strawberry_django.type(models.AmbassadorFile)
+class AmbassadorFileType:
+    id: strawberry.ID
+    uuid: str
+    name: str
+    url: str | None
+    main_resume: bool
+    profile_pic: bool
+    is_public: bool
+    ambassador_id: strawberry.ID
+    file_type: FileType | None
+    created_at: str
+    updated_at: str
+
+
+@strawberry_django.type(models.AmbassadorTrait)
+class AmbassadorTraitType:
+    id: strawberry.ID
+    uuid: str
+    ambassador_id: strawberry.ID
+    user_id: strawberry.ID
+    created_at: str
+    updated_at: str
+
+
+@strawberry_django.type(models.AmbassadorWorkHistory)
+class AmbassadorWorkHistoryType:
+    id: strawberry.ID
+    uuid: str
+    ambassador_id: strawberry.ID
+    user_id: strawberry.ID
+    created_at: str
+    updated_at: str
+
+
+@strawberry.type
+class AmbassadorProfile:
+    ambassador: Ambassador
+    reviews: list[AmbassadorReviewType]
+    files: list[AmbassadorFileType]
+    traits: list[AmbassadorTraitType]
+    skills: list[AmbassadorSkillType]
+    notes: list[AmbassadorNoteType]
+    work_history: list[AmbassadorWorkHistoryType]
+
+
+@strawberry.type
+class UpsertAmbassadorProfileResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    profile: AmbassadorProfile | None = None
 
 
 @strawberry_django.type(models.AttendanceType)

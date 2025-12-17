@@ -1,13 +1,16 @@
 """Services for ambassador mutations and queries."""
 
-import strawberry
+import asyncio
+import secrets
+from datetime import timedelta, datetime
 from typing import Any
+
+import strawberry
 from asgiref.sync import sync_to_async
 from django.contrib.auth import get_user_model
-from django.utils import timezone
-from datetime import timedelta, datetime
-import secrets
+from django.db import transaction
 from django.db.models import Q
+from django.utils import timezone
 
 from tenants.models import Role, Tenant, TenantedUser
 from gqlauth.core.utils import get_token
@@ -16,12 +19,23 @@ from utils.graphql.inputs import SparkGraphQLInput
 from utils.graphql.mixins import SparkGraphQLMixin
 from utils.graphql.relay import CountableConnection
 
-from .models import Ambassador, AmbassadorInvitation, AmbassadorReview, AmbassadorNote, Skill, AmbassadorSkill
+from .models import (
+    Ambassador,
+    AmbassadorInvitation,
+    AmbassadorReview,
+    AmbassadorNote,
+    AmbassadorFile,
+    AmbassadorTrait,
+    AmbassadorWorkHistory,
+    Skill,
+    AmbassadorSkill,
+)
 from .types import (
     PublicAmbassadorCreationResponse,
     AmbassadorInvitationResponse,
     AcceptInvitationResponse,
     ApproveAmbassadorResponse,
+    CreateAmbassadorResponse,
     UpdateAmbassadorResponse,
     DeleteInvitationResponse,
     AmbassadorInvitationType,
@@ -37,6 +51,8 @@ from .types import (
     DeleteSkillResponse,
     CreateAmbassadorSkillResponse,
     DeleteAmbassadorSkillResponse,
+    UpsertAmbassadorProfileResponse,
+    AmbassadorProfile,
 )
 from events.models import Client
 from . import inputs
@@ -513,6 +529,62 @@ class ApproveAmbassadorService(BaseAmbassadorService):
             )
 
 
+class CreateAmbassadorService(BaseAmbassadorService):
+    """Service for creating ambassadors (client/spark-admin)."""
+
+    @classmethod
+    async def create(
+        cls,
+        input: inputs.CreateAmbassadorInput,
+        info: strawberry.Info,
+    ) -> CreateAmbassadorResponse:
+        user = info.context.request.user
+
+        try:
+            target_user = await sync_to_async(User.objects.get)(pk=int(input.user_id))
+        except (User.DoesNotExist, ValueError, TypeError):
+            return build_mutation_response(
+                CreateAmbassadorResponse,
+                success=False,
+                message="Usuario no encontrado.",
+                input_obj=input,
+            )
+
+        existing = await Ambassador.objects.filter(user=target_user).aexists()
+        if existing:
+            return build_mutation_response(
+                CreateAmbassadorResponse,
+                success=False,
+                message="Este usuario ya tiene un perfil de embajador.",
+                input_obj=input,
+            )
+
+        @sync_to_async
+        @transaction.atomic
+        def _create():
+            ambassador = Ambassador(
+                user=target_user,
+                address=input.address,
+                coordinates=input.coordinates or [],
+                is_active=input.is_active or False,
+                rating=input.rating or 0,
+                created_by=user,
+                updated_by=user,
+            )
+            ambassador.save()
+            return ambassador
+
+        ambassador = await _create()
+
+        return build_mutation_response(
+            CreateAmbassadorResponse,
+            success=True,
+            message="Ambassador creado exitosamente.",
+            input_obj=input,
+            ambassador=ambassador,
+        )
+
+
 class UpdateAmbassadorService(BaseAmbassadorService):
     """Service for updating ambassadors."""
 
@@ -564,6 +636,260 @@ class UpdateAmbassadorService(BaseAmbassadorService):
                 message=f"Error updating ambassador: {str(e)}",
                 input_obj=input,
             )
+
+
+class UpsertAmbassadorProfileService(BaseAmbassadorService):
+    """Service to update ambassador and related profile data in one call."""
+
+    @classmethod
+    async def upsert(
+        cls,
+        input: inputs.UpsertAmbassadorProfileInput,
+        info: strawberry.Info,
+    ) -> UpsertAmbassadorProfileResponse:
+        user = info.context.request.user
+
+        ambassador = None
+        if input.ambassador_id or input.ambassador_uuid:
+            filters = {}
+            if input.ambassador_id is not None:
+                filters["id"] = input.ambassador_id
+            if input.ambassador_uuid is not None:
+                filters["uuid"] = input.ambassador_uuid
+
+            try:
+                ambassador = await Ambassador.objects.select_related("user").aget(
+                    **filters
+                )
+            except Ambassador.DoesNotExist:
+                return build_mutation_response(
+                    UpsertAmbassadorProfileResponse,
+                    success=False,
+                    message="Ambassador no encontrado.",
+                    input_obj=input,
+                )
+        else:
+            # If no identifier is provided, reuse or create ambassador for the current user.
+            ambassador = await Ambassador.objects.select_related("user").filter(
+                user=user
+            ).afirst()
+            if ambassador is None:
+                ambassador = None  # Explicit for clarity; will create inside transaction.
+
+        role_slug = cls().get_role_slug(user)
+        if ambassador and role_slug == "ambassador" and ambassador.user_id != user.id:
+            return build_mutation_response(
+                UpsertAmbassadorProfileResponse,
+                success=False,
+                message="No autorizado para actualizar este embajador.",
+                input_obj=input,
+            )
+
+        tenant = None
+        needs_tenant = any(
+            section is not None for section in (input.notes, input.skills)
+        )
+        if needs_tenant:
+            try:
+                tenant = await cls().get_user_tenant(
+                    info,
+                    tenant_id=input.tenant_id,
+                    tenant_uuid=None,
+                    user=user,
+                )
+            except Exception as exc:
+                return build_mutation_response(
+                    UpsertAmbassadorProfileResponse,
+                    success=False,
+                    message=f"No se pudo resolver el tenant: {exc}",
+                    input_obj=input,
+                )
+
+        if input.notes:
+            for note_input in input.notes:
+                if not note_input.tenant_id and tenant is None:
+                    return build_mutation_response(
+                        UpsertAmbassadorProfileResponse,
+                        success=False,
+                        message="Las notas requieren tenant_id.",
+                        input_obj=input,
+                    )
+
+        @sync_to_async
+        @transaction.atomic
+        def _persist():
+            nonlocal ambassador
+            if ambassador is None:
+                ambassador = Ambassador(
+                    user=user,
+                    created_by=user,
+                    updated_by=user,
+                )
+
+            if input.address is not None:
+                ambassador.address = input.address
+            if input.coordinates is not None:
+                ambassador.coordinates = input.coordinates
+            if input.is_active is not None:
+                ambassador.is_active = input.is_active
+            if input.rating is not None:
+                ambassador.rating = input.rating
+            ambassador.updated_by = user
+            ambassador.save()
+
+            if input.files is not None:
+                AmbassadorFile.objects.filter(ambassador=ambassador).delete()
+                new_files = []
+                for file_input in input.files:
+                    new_files.append(
+                        AmbassadorFile(
+                            ambassador=ambassador,
+                            name=file_input.name,
+                            url=file_input.url,
+                            main_resume=bool(file_input.main_resume),
+                            profile_pic=bool(file_input.profile_pic),
+                            is_public=bool(file_input.is_public),
+                            file_type_id=file_input.file_type_id,
+                            created_by=user,
+                            updated_by=user,
+                        )
+                    )
+                if new_files:
+                    AmbassadorFile.objects.bulk_create(new_files, batch_size=50)
+
+            if input.traits is not None:
+                AmbassadorTrait.objects.filter(ambassador=ambassador).delete()
+                new_traits = []
+                for trait_input in input.traits:
+                    new_traits.append(
+                        AmbassadorTrait(
+                            ambassador=ambassador,
+                            user_id=trait_input.user_id,
+                            created_by=user,
+                            updated_by=user,
+                        )
+                    )
+                if new_traits:
+                    AmbassadorTrait.objects.bulk_create(new_traits, batch_size=50)
+
+            if input.skills is not None:
+                AmbassadorSkill.objects.filter(ambassador=ambassador).delete()
+                new_skills = []
+                seen_skill_ids: set[int] = set()
+                for skill_input in input.skills:
+                    skill_id_int = int(skill_input.skill_id)
+                    if skill_id_int in seen_skill_ids:
+                        continue
+                    seen_skill_ids.add(skill_id_int)
+                    new_skills.append(
+                        AmbassadorSkill(
+                            ambassador=ambassador,
+                            skill_id=skill_id_int,
+                            tenant=tenant,
+                            created_by=user,
+                            updated_by=user,
+                        )
+                    )
+                if new_skills:
+                    AmbassadorSkill.objects.bulk_create(new_skills, batch_size=50)
+
+            if input.notes is not None:
+                AmbassadorNote.objects.filter(ambassador=ambassador).delete()
+                new_notes = []
+                for note_input in input.notes:
+                    note_tenant_id = note_input.tenant_id or (tenant.id if tenant else None)
+                    new_notes.append(
+                        AmbassadorNote(
+                            ambassador=ambassador,
+                            tenant_id=note_tenant_id,
+                            note=note_input.note,
+                            created_by=user,
+                            updated_by=user,
+                        )
+                    )
+                if new_notes:
+                    AmbassadorNote.objects.bulk_create(new_notes, batch_size=50)
+
+            if input.work_history is not None:
+                AmbassadorWorkHistory.objects.filter(ambassador=ambassador).delete()
+                new_work = []
+                for work_input in input.work_history:
+                    new_work.append(
+                        AmbassadorWorkHistory(
+                            ambassador=ambassador,
+                            user_id=work_input.user_id,
+                            created_by=user,
+                            updated_by=user,
+                        )
+                    )
+                if new_work:
+                    AmbassadorWorkHistory.objects.bulk_create(new_work, batch_size=50)
+
+            return ambassador
+
+        ambassador = await _persist()
+
+        async def fetch_reviews():
+            qs = AmbassadorReview.objects.filter(ambassador_id=ambassador.id)
+            return await sync_to_async(list)(qs)
+
+        async def fetch_files():
+            qs = AmbassadorFile.objects.select_related("file_type").filter(
+                ambassador_id=ambassador.id
+            )
+            return await sync_to_async(list)(qs)
+
+        async def fetch_traits():
+            qs = AmbassadorTrait.objects.filter(ambassador_id=ambassador.id)
+            return await sync_to_async(list)(qs)
+
+        async def fetch_skills():
+            qs = AmbassadorSkill.objects.select_related("skill").filter(
+                ambassador_id=ambassador.id
+            )
+            return await sync_to_async(list)(qs)
+
+        async def fetch_notes():
+            qs = AmbassadorNote.objects.filter(ambassador_id=ambassador.id)
+            return await sync_to_async(list)(qs)
+
+        async def fetch_work_history():
+            qs = AmbassadorWorkHistory.objects.filter(ambassador_id=ambassador.id)
+            return await sync_to_async(list)(qs)
+
+        (
+            reviews,
+            files,
+            traits,
+            skills,
+            notes,
+            work_history,
+        ) = await asyncio.gather(
+            fetch_reviews(),
+            fetch_files(),
+            fetch_traits(),
+            fetch_skills(),
+            fetch_notes(),
+            fetch_work_history(),
+        )
+
+        profile = AmbassadorProfile(
+            ambassador=ambassador,
+            reviews=reviews,
+            files=files,
+            traits=traits,
+            skills=skills,
+            notes=notes,
+            work_history=work_history,
+        )
+
+        return build_mutation_response(
+            UpsertAmbassadorProfileResponse,
+            success=True,
+            message="Perfil de embajador guardado.",
+            input_obj=input,
+            profile=profile,
+        )
 
 
 class DeleteInvitationService(BaseAmbassadorService):
@@ -751,6 +1077,26 @@ class AmbassadorQueriesService(SparkGraphQLMixin):
             max_limit=50,
         )
 
+    async def get_ambassadors(
+        self,
+        info: strawberry.Info,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        filters: inputs.AmbassadorFiltersInput | None = None,
+    ) -> CountableConnection[AmbassadorType]:
+        """General ambassador list with filters for active status, rating, name, and email."""
+        # Reuse available_ambassadors logic for tenant resolution and filtering.
+        return await self.get_available_ambassadors(
+            info=info,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+            filters=filters,
+        )
+
     async def _get_filtered_ambassadors_queryset(
         self,
         tenant_id: int | None = None,
@@ -772,6 +1118,11 @@ class AmbassadorQueriesService(SparkGraphQLMixin):
                 # Filter by active status
                 if filters.is_active is not None:
                     queryset = queryset.filter(is_active=filters.is_active)
+
+                if filters.rating_min is not None:
+                    queryset = queryset.filter(rating__gte=filters.rating_min)
+                if filters.rating_max is not None:
+                    queryset = queryset.filter(rating__lte=filters.rating_max)
 
                 # Search by user email
                 if filters.email:
@@ -802,6 +1153,44 @@ class AmbassadorQueriesService(SparkGraphQLMixin):
             return queryset.order_by("-created_at")
 
         return await get_queryset()
+
+    async def get_active_ambassadors(
+        self,
+        info: strawberry.Info,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        filters: inputs.ActiveAmbassadorFiltersInput | None = None,
+    ) -> CountableConnection[AmbassadorType]:
+        """Get all active ambassadors."""
+        @sync_to_async
+        def get_queryset():
+            queryset = Ambassador.objects.select_related("user").filter(is_active=True)
+
+            if filters:
+                if filters.email:
+                    queryset = queryset.filter(user__email__icontains=filters.email)
+                if filters.name:
+                    queryset = queryset.filter(
+                        Q(user__first_name__icontains=filters.name)
+                        | Q(user__last_name__icontains=filters.name)
+                    )
+
+            return queryset.order_by("-created_at")
+
+        queryset = await get_queryset()
+
+        from utils.graphql.relay import connection_from_queryset_async
+        return await connection_from_queryset_async(
+            queryset,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+            default_limit=10,
+            max_limit=50,
+        )
 
 
 class CreateAmbassadorReviewService(BaseAmbassadorService):

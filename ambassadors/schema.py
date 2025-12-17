@@ -8,6 +8,7 @@ class AmbassadorQuerySpark(
     queries.FileTypeQueries,
     queries.AmbassadorEventQueries,
     queries.AmbassadorManagementQueries,
+    queries.AmbassadorProfileQueries,
     queries.AmbassadorReviewQueries,
     queries.AmbassadorNoteQueries,
     queries.SkillQueries,
@@ -22,6 +23,7 @@ class AmbassadorQueryClient(
     queries.FileTypeQueries,
     queries.AmbassadorEventQueries,
     queries.AmbassadorManagementQueries,
+    queries.AmbassadorProfileQueries,
     queries.AmbassadorReviewQueries,
     queries.AmbassadorNoteQueries,
     queries.SkillQueries,
@@ -35,6 +37,7 @@ class AmbassadorQueryClient(
 class AmbassadorQueryMobile(
     queries.FileTypeQueries,
     queries.AmbassadorEventQueries,
+    queries.AmbassadorProfileQueries,
     queries.AmbassadorReviewQueries,
     queries.AmbassadorNoteQueries,
     queries.SkillQueries,

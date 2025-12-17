@@ -220,8 +220,8 @@ class EventQueries:
         if filters:
             if filters.event_type_id:
                 queryset = queryset.filter(event_type_id=filters.event_type_id)
-            if filters.event_status_id:
-                queryset = queryset.filter(status_id=filters.event_status_id)
+            if filters.event_status:
+                queryset = queryset.filter(status__slug=filters.event_status.value)
             if filters.request_id:
                 queryset = queryset.filter(request_id=filters.request_id)
             if filters.date:
@@ -308,8 +308,8 @@ class EventQueries:
         if filters:
             if filters.event_type_id:
                 queryset = queryset.filter(event_type_id=filters.event_type_id)
-            if filters.event_status_id:
-                queryset = queryset.filter(status_id=filters.event_status_id)
+            if filters.event_status:
+                queryset = queryset.filter(status__slug=filters.event_status.value)
             if filters.request_id:
                 queryset = queryset.filter(request_id=filters.request_id)
 
@@ -364,8 +364,8 @@ class EventQueries:
         if filters:
             if filters.event_type_id:
                 queryset = queryset.filter(event_type_id=filters.event_type_id)
-            if filters.event_status_id:
-                queryset = queryset.filter(status_id=filters.event_status_id)
+            if filters.event_status:
+                queryset = queryset.filter(status__slug=filters.event_status.value)
             if filters.request_id:
                 queryset = queryset.filter(request_id=filters.request_id)
 
