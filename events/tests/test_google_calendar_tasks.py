@@ -14,6 +14,7 @@ from django.utils import timezone
 from tenants.models import Role, Tenant, TenantedUser, GoogleCalendarConnection
 from events.models import Event, EventType, EventStatus, Request, RequestType, RequestStatus
 from events.models import Client, Distributor, Retailer, Location
+from ambassadors.models import Ambassador, AmbassadorEvent
 from events.tasks import (
     sync_event_to_google_calendar,
     update_event_in_google_calendar,
@@ -30,7 +31,7 @@ class TestGoogleCalendarTasks:
 
     def setup_method(self):
         """Set up test data."""
-        # Create role with canonical client ID so ROLE_ID checks work
+        # Create role with canonical client ID so role helpers and ID checks work
         self.role, _ = Role.objects.update_or_create(
             pk=ROLE_ID.Client,
             defaults={
@@ -175,6 +176,161 @@ class TestGoogleCalendarTasks:
         mock_service_class.assert_called_once_with(self.user)
         mock_service.sync_event.assert_called_once()
         assert result is None  # Task doesn't return value
+
+    @patch('events.tasks.GoogleCalendarService')
+    def test_sync_event_to_google_calendar_skips_when_event_has_no_request(
+        self,
+        mock_service_class,
+    ):
+        """Event without request should not be synced for any role."""
+        mock_service = MagicMock()
+        mock_service_class.return_value = mock_service
+
+        # Remove the request from the event
+        self.event.request = None
+        self.event.save()
+
+        result = sync_event_to_google_calendar(self.user.id, self.event.id)
+
+        # Service should never be called
+        mock_service_class.assert_not_called()
+        assert result is None
+
+    @patch('events.tasks.GoogleCalendarService')
+    def test_sync_event_to_google_calendar_skips_when_event_not_approved(
+        self,
+        mock_service_class,
+    ):
+        """Event with a non-approved status should not be synced."""
+        mock_service = MagicMock()
+        mock_service_class.return_value = mock_service
+
+        # Create a non-approved status and assign it to the event
+        draft_status = EventStatus.objects.create(
+            name="Draft",
+            tenant=self.tenant,
+            created_by=self.user,
+        )
+        self.event.status = draft_status
+        self.event.save()
+
+        result = sync_event_to_google_calendar(self.user.id, self.event.id)
+
+        mock_service_class.assert_not_called()
+        assert result is None
+
+    @patch('events.tasks.GoogleCalendarService')
+    def test_sync_event_to_google_calendar_ambassador_requires_approved_link(
+        self,
+        mock_service_class,
+    ):
+        """Ambassador should not receive event without an approved AmbassadorEvent link."""
+        mock_service = MagicMock()
+        mock_service_class.return_value = mock_service
+
+        # Create ambassador role and user
+        ambassador_role, _ = Role.objects.update_or_create(
+            pk=ROLE_ID.Ambassadors,
+            defaults={
+                "name": "Ambassador",
+                "slug": Role.AMBASSADOR_SLUG,
+            },
+        )
+        ambassador_user = User.objects.create_user(
+            username="ambassador",
+            email="ambassador@test.com",
+            password="testpass123",
+            role=ambassador_role,
+        )
+        TenantedUser.objects.create(
+            user=ambassador_user,
+            tenant=self.tenant,
+            is_active=True,
+            created_by=self.user,
+        )
+        # Active Google Calendar connection for ambassador
+        connection = GoogleCalendarConnection.objects.create(
+            user=ambassador_user,
+            created_by=ambassador_user,
+            updated_by=ambassador_user,
+            is_active=True,
+            calendar_id="primary",
+        )
+        connection.set_access_token("test_access_token")
+        connection.set_refresh_token("test_refresh_token")
+        connection.token_expiry = timezone.now() + timedelta(hours=1)
+        connection.save()
+
+        # No AmbassadorEvent link created here
+        result = sync_event_to_google_calendar(
+            ambassador_user.id, self.event.id)
+
+        # Should be skipped by _user_should_receive_event
+        mock_service_class.assert_not_called()
+        assert result is None
+
+    @patch('events.tasks.GoogleCalendarService')
+    def test_sync_event_to_google_calendar_ambassador_with_approved_link(
+        self,
+        mock_service_class,
+    ):
+        """Ambassador should receive event when there is an approved AmbassadorEvent link."""
+        mock_service = MagicMock()
+        mock_service_class.return_value = mock_service
+
+        # Create ambassador role and user
+        ambassador_role, _ = Role.objects.update_or_create(
+            pk=ROLE_ID.Ambassadors,
+            defaults={
+                "name": "Ambassador",
+                "slug": Role.AMBASSADOR_SLUG,
+            },
+        )
+        ambassador_user = User.objects.create_user(
+            username="ambassador2",
+            email="ambassador2@test.com",
+            password="testpass123",
+            role=ambassador_role,
+        )
+        TenantedUser.objects.create(
+            user=ambassador_user,
+            tenant=self.tenant,
+            is_active=True,
+            created_by=self.user,
+        )
+        # Active Google Calendar connection for ambassador
+        connection = GoogleCalendarConnection.objects.create(
+            user=ambassador_user,
+            created_by=ambassador_user,
+            updated_by=ambassador_user,
+            is_active=True,
+            calendar_id="primary",
+        )
+        connection.set_access_token("test_access_token")
+        connection.set_refresh_token("test_refresh_token")
+        connection.token_expiry = timezone.now() + timedelta(hours=1)
+        connection.save()
+
+        # Create ambassador and approved AmbassadorEvent link
+        ambassador = Ambassador.objects.create(
+            user=ambassador_user,
+            created_by=self.user,
+        )
+        AmbassadorEvent.objects.create(
+            ambassador=ambassador,
+            tenant=self.tenant,
+            event=self.event,
+            is_approved=True,
+            created_by=self.user,
+        )
+
+        result = sync_event_to_google_calendar(
+            ambassador_user.id, self.event.id)
+
+        # Service should be called for the ambassador user
+        mock_service_class.assert_called_once_with(ambassador_user)
+        mock_service.sync_event.assert_called_once()
+        assert result is None
 
     @patch('events.tasks.GoogleCalendarService')
     def test_sync_event_to_google_calendar_no_connection(self, mock_service_class):
