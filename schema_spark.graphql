@@ -636,6 +636,7 @@ input BaseRegisterInput {
   email: String!
   password1: String!
   password2: String!
+  image: String = null
 }
 
 """
@@ -1399,6 +1400,17 @@ input CreateTimeZoneInput {
   offset: Int!
 }
 
+input CreateUserInput {
+  clientMutationId: ID = null
+  firstName: String!
+  email: String!
+  password1: String!
+  password2: String!
+  image: String = null
+  role: UserRoleEnum!
+  tenantId: ID = null
+}
+
 """
 User(password, last_login, is_superuser, username, first_name, last_name, email, is_staff, date_joined, id, uuid, image, role, created_by, updated_by, created_at, updated_at, is_active)
 """
@@ -1412,6 +1424,20 @@ type CustomUserType {
   firstName: String!
   lastName: String!
   role: RoleType!
+}
+
+type CustomUserTypeCountableConnection {
+  pageInfo: PageInfo!
+  edges: [CustomUserTypeCountableEdge!]!
+  totalCount: Int!
+}
+
+type CustomUserTypeCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: CustomUserType!
 }
 
 input DashboardFiltersInput {
@@ -2248,6 +2274,8 @@ type Mutation {
   socialAuthApple(input: AppleSocialAuthInput!): SocialAuthResponse!
   createTenant(input: CreateTenantInput!): CreateTenantResponse!
   updateTenant(input: UpdateTenantInput!): UpdateTenantResponse!
+  createUser(input: CreateUserInput!): RegisterResponse!
+  updateUser(input: UpdateUserInput!): UpdateUserResponse!
   connectGoogleCalendar(input: ConnectGoogleCalendarInput!): ConnectGoogleCalendarResponse!
   googleCalendarCallback(input: GoogleCalendarCallbackInput!): GoogleCalendarCallbackResponse!
   disconnectGoogleCalendar(input: DisconnectGoogleCalendarInput!): DisconnectGoogleCalendarResponse!
@@ -2587,6 +2615,8 @@ type Query {
   googleCalendarConnectionStatus: GoogleCalendarConnectionStatus!
   healthcheck: String!
   me: CustomUserType!
+  user(id: ID = null, uuid: ID = null): CustomUserType!
+  users(filters: UserFiltersInput = null, first: Int = null, after: String = null, last: Int = null, before: String = null): CustomUserTypeCountableConnection!
   tenants(userUuid: ID = null, filters: TenantFiltersInput = null, first: Int = null, after: String = null, last: Int = null, before: String = null): TenantTypeCountableConnection!
   ambassadorJobStatuses(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): StatusCountableConnection!
   ambassadorJobStatus(id: ID = null, uuid: ID = null): Status
@@ -3161,6 +3191,12 @@ type ReviewScoreDetailResponse {
   message: String!
   clientMutationId: ID
   reviewScore: ReviewScore
+}
+
+enum RoleFilterEnum {
+  AMBASSADOR
+  CLIENT
+  SPARK
 }
 
 """
@@ -3890,6 +3926,24 @@ input UpdateTimeZoneInput {
   id: ID!
 }
 
+input UpdateUserInput {
+  clientMutationId: ID = null
+  id: ID = null
+  uuid: ID = null
+  firstName: String = null
+  lastName: String = null
+  email: String = null
+  role: UserRoleEnum = null
+  tenantId: ID = null
+  image: String = null
+}
+
+type UpdateUserResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+}
+
 type UploadUrlResponse {
   uploadUrl: String!
   blobName: String!
@@ -3915,6 +3969,19 @@ type UpsertAmbassadorProfileResponse {
   message: String!
   clientMutationId: ID
   profile: AmbassadorProfile
+}
+
+input UserFiltersInput {
+  tenantId: ID = null
+  name: String = null
+  email: String = null
+  role: RoleFilterEnum = null
+}
+
+enum UserRoleEnum {
+  AMBASSADOR
+  CLIENT
+  SPARK
 }
 
 """A helper model that handles user account stuff."""
