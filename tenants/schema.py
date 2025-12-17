@@ -3,19 +3,21 @@ import strawberry_django
 import strawberry
 from graphql import GraphQLError
 from django.contrib.auth import get_user_model
+from asgiref.sync import sync_to_async
 from gqlauth.user import relay as mutations
 from gqlauth.user.queries import UserQueries
 from strawberry_django.permissions import IsAuthenticated
 from utils.graphql.permissions import StrictIsAuthenticated
 
-from .models import Role, Tenant
-from .types import RoleType, TenantType
+from .models import Role, Tenant, TenantTheme
+from .types import RoleType, TenantType, TenantThemeType
 from .inputs import TenantFiltersInput
 from .mutations import (
     AmbassadorsCustomRegister,
     ClientsCustomRegister,
     SparkCustomRegister,
     SparkTenantMutations,
+    TenantThemeMutations,
 )
 from .calendar import GoogleCalendarMutations, GoogleCalendarQueries
 from .dashboard.schema import DashboardQueries
@@ -49,6 +51,31 @@ class QuerySpark(GoogleCalendarQueries):
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     def me(self, info) -> CustomUserType:
         return info.context.request.user
+
+    @strawberry.field
+    async def tenant_theme_public(
+        self,
+        info,
+        tenant_id: strawberry.ID,
+        color_scheme: str = "dark",
+    ) -> TenantThemeType | None:
+        """
+        Public query to fetch a tenant theme by tenant ID and color scheme.
+
+        This is intentionally unauthenticated so that login and public pages
+        can render tenant-specific branding.
+        """
+        try:
+            tenant = await sync_to_async(Tenant.objects.get)(pk=tenant_id)
+        except Tenant.DoesNotExist:
+            return None
+
+        theme = await sync_to_async(
+            lambda: TenantTheme.objects.filter(
+                tenant=tenant, color_scheme=color_scheme
+            ).first()
+        )()
+        return theme
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def tenants(
@@ -94,7 +121,7 @@ class QuerySpark(GoogleCalendarQueries):
 
 
 @strawberry.type
-class MutationSpark(SparkCustomRegister, SparkTenantMutations, GoogleCalendarMutations):
+class MutationSpark(SparkCustomRegister, SparkTenantMutations, TenantThemeMutations, GoogleCalendarMutations):
     verify_token = mutations.VerifyToken.field
     token_auth = mutations.ObtainJSONWebToken.field
     refresh_token = mutations.RefreshToken.field

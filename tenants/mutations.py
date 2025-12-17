@@ -11,8 +11,9 @@ from django.utils.text import slugify
 from utils.graphql.inputs import SparkGraphQLInput
 from utils.graphql.relay import ensure_relay_mutation
 from utils.utils import ROLE_ID
-from .models import Role, TenantedUser, Tenant
-from .types import TenantType
+from .models import Role, TenantedUser, Tenant, TenantTheme
+from .types import TenantType, TenantThemeType
+from .inputs import CreateOrUpdateTenantThemeInput
 from .social_auth import BaseSocialAuthMutations, SocialAuthResponse
 from events.models import RequestStatus, EventStatus
 
@@ -352,6 +353,14 @@ class UpdateTenantResponse:
 
 
 @strawberry.type
+class TenantThemeResponse:
+    success: bool
+    message: str
+    theme: TenantThemeType | None = None
+    client_mutation_id: strawberry.ID | None = None
+
+
+@strawberry.type
 class SparkTenantMutations:
     @relay.mutation
     async def create_tenant(
@@ -399,7 +408,7 @@ class SparkTenantMutations:
                     request_url_name=request_url_name,
                     created_by=user,
                 )
-                
+
                 # Create default statuses
                 for model_name, statuses in DEFAULT_TENANT_STATUSES.items():
                     ModelClass = RequestStatus if model_name == "RequestStatus" else EventStatus
@@ -477,7 +486,8 @@ class SparkTenantMutations:
                     tenant.name = input.name
                     # Generate new request_url_name when name is updated
                     random_chars = "".join(
-                        random.choices(string.ascii_letters + string.digits, k=4)
+                        random.choices(string.ascii_letters +
+                                       string.digits, k=4)
                     )
                     slugified_name = slugify(input.name)
                     tenant.request_url_name = f"{slugified_name}-{random_chars}".lower()
@@ -500,3 +510,92 @@ class SparkTenantMutations:
                 message=f"Error updating tenant: {e}",
                 client_mutation_id=input.client_mutation_id,
             )
+
+
+@strawberry.type
+class TenantThemeMutations:
+    @relay.mutation
+    async def upsert_tenant_theme(
+        self,
+        info: strawberry.Info,
+        input: CreateOrUpdateTenantThemeInput,
+    ) -> TenantThemeResponse:
+        """
+        Create or update a TenantTheme for a given tenant and color scheme.
+
+        Only spark-admin users are allowed to manage tenant themes.
+        """
+        user = info.context.request.user
+
+        if not user.is_authenticated:
+            return TenantThemeResponse(
+                success=False,
+                message="User not authenticated.",
+                client_mutation_id=input.client_mutation_id,
+                theme=None,
+            )
+
+        # Check if user is spark-admin
+        try:
+            is_spark_admin = await user.role.is_spark_admin
+            if not is_spark_admin:
+                return TenantThemeResponse(
+                    success=False,
+                    message="You do not have permission to manage tenant themes.",
+                    client_mutation_id=input.client_mutation_id,
+                    theme=None,
+                )
+        except Exception as e:
+            return TenantThemeResponse(
+                success=False,
+                message=f"Error checking permissions: {e}",
+                client_mutation_id=input.client_mutation_id,
+                theme=None,
+            )
+
+        # Resolve target tenant
+        try:
+            tenant = await sync_to_async(Tenant.objects.get)(pk=input.tenant_id)
+        except Tenant.DoesNotExist:
+            return TenantThemeResponse(
+                success=False,
+                message="Tenant not found.",
+                client_mutation_id=input.client_mutation_id,
+                theme=None,
+            )
+
+        # Upsert theme by (tenant, color_scheme)
+        def _upsert_theme():
+            defaults = {
+                "name": input.name if input.name is not None else "default",
+                "updated_by": user,
+            }
+            if input.css_variables is not None:
+                defaults["css_variables"] = input.css_variables
+
+            theme, created = TenantTheme.objects.update_or_create(
+                tenant=tenant,
+                color_scheme=input.color_scheme,
+                defaults=defaults,
+            )
+            if created and theme.created_by_id is None:
+                theme.created_by = user
+                theme.save(update_fields=["created_by"])
+            return theme
+
+        try:
+            theme = await sync_to_async(_upsert_theme)()
+        except Exception as e:
+            return TenantThemeResponse(
+                success=False,
+                message=f"Error saving tenant theme: {e}",
+                client_mutation_id=input.client_mutation_id,
+                theme=None,
+            )
+
+        return TenantThemeResponse(
+            success=True,
+            message="Tenant theme saved successfully.",
+            client_mutation_id=input.client_mutation_id,
+            theme=theme,
+        )
