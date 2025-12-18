@@ -239,8 +239,46 @@ class TestTenantThemeGraphQL(BaseGraphQLTestCase):
         )
 
         assert result.data is not None
+        assert result.errors is None
         theme = result.data["tenantThemePublic"]
         assert theme is not None
         assert theme["id"] == str(dark_theme.id)
         assert theme["name"] == "Public Dark"
         assert theme["colorScheme"] == "dark"
+
+    @pytest.mark.asyncio
+    async def test_tenant_theme_public_query_is_accessible_without_auth(self):
+        """tenantThemePublic can be accessed without authentication."""
+        system_user = self.get_system_user()
+        await sync_to_async(TenantTheme.objects.create)(
+            tenant=self.tenant,
+            color_scheme="dark",
+            name="Anonymous Dark",
+            created_by=system_user,
+            updated_by=system_user,
+        )
+
+        query = """
+        query TenantThemePublic($tenantId: ID!, $scheme: String!) {
+          tenantThemePublic(tenantId: $tenantId, colorScheme: $scheme) {
+            id
+            name
+            colorScheme
+          }
+        }
+        """
+
+        variables = {
+            "tenantId": str(self.tenant.id),
+            "scheme": "dark",
+        }
+
+        # No user passed -> unauthenticated request
+        result = await self._execute_mutation(
+            query, variables, self.endpoint_path
+        )
+
+        assert result.errors is None
+        assert result.data is not None
+        theme = result.data["tenantThemePublic"]
+        assert theme is not None
