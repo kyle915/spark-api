@@ -123,6 +123,8 @@ class BaseNameableInput(BaseTenantInput):
 class CreateEventInput(BaseNameableInput):
     event_type_id: strawberry.ID
     request_id: strawberry.ID | None = None
+    timezone_id: strawberry.ID | None = None
+    date: str
     address: str
     notes: str
     is_national: bool = False

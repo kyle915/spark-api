@@ -3,10 +3,50 @@ from typing import List
 import strawberry
 import strawberry_django
 
+import datetime
+from django.utils import timezone
 from tenants.types import TenantType
 from utils.gcs import extract_blob_name_from_url, generate_download_url
 
 from . import models
+
+
+def _serialize_dt(value, offset_minutes: int = 0):
+    """Serialize datetime applying explicit offset (minutes) and no server TZ conversion."""
+    if not value:
+        return None
+    # Normalize to UTC to remove server TZ influence
+    if hasattr(value, "tzinfo") and timezone.is_aware(value):
+        value = value.astimezone(datetime.timezone.utc)
+    # If naive, assume stored in UTC
+    if not hasattr(value, "tzinfo") or not timezone.is_aware(value):
+        value = value.replace(tzinfo=datetime.timezone.utc)
+    # Apply desired offset (event/request timezone)
+    value = value + datetime.timedelta(minutes=offset_minutes)
+    return value.replace(tzinfo=None).isoformat()
+
+
+def _get_field(instance, name: str):
+    """Safely fetch a model field value, bypassing descriptor overrides."""
+    try:
+        field = instance._meta.get_field(name)
+        return field.value_from_object(instance)
+    except Exception:
+        return None
+
+
+def _get_offset_minutes_from_timezone(tz_obj) -> int:
+    """Return timezone offset in minutes from a TimeZone model (default 0)."""
+    try:
+        offset = getattr(tz_obj, "offset", None)
+        return int(offset) if offset is not None else 0
+    except Exception:
+        return 0
+
+
+def _get_related_from_cache(instance, field_name: str):
+    """Return related object if already fetched, avoiding sync DB hits in async resolvers."""
+    return instance.__dict__.get(field_name)
 
 
 @strawberry_django.type(models.EventType)
@@ -237,9 +277,27 @@ class Request:
     id: strawberry.ID
     uuid: str
     name: str
-    date: str
-    start_time: str | None = None
-    end_time: str | None = None
+    # Date/time fields returned as stored, without server TZ conversion
+    @strawberry.field
+    def date(self) -> str | None:
+        offset = _get_offset_minutes_from_timezone(
+            _get_related_from_cache(self, "timezone")
+        )
+        return _serialize_dt(_get_field(self, "date"), offset_minutes=offset)
+
+    @strawberry.field
+    def start_time(self) -> str | None:
+        offset = _get_offset_minutes_from_timezone(
+            _get_related_from_cache(self, "timezone")
+        )
+        return _serialize_dt(_get_field(self, "start_time"), offset_minutes=offset)
+
+    @strawberry.field
+    def end_time(self) -> str | None:
+        offset = _get_offset_minutes_from_timezone(
+            _get_related_from_cache(self, "timezone")
+        )
+        return _serialize_dt(_get_field(self, "end_time"), offset_minutes=offset)
     address: str
     coordinates: List[float]
     client_name: str | None = None
@@ -302,10 +360,7 @@ class Event:
     id: strawberry.ID
     uuid: str
     name: str
-    date: str | None = None
     coordinates: List[float] | None = None
-    start_time: str | None = None
-    end_time: str | None = None
     address: str
     is_national: bool
     notes: str | None = None
@@ -316,6 +371,7 @@ class Event:
     tenant: TenantType | None = None
     event_type: EventType | None = None
     status: EventStatus | None = None
+    timezone: TimeZone | None = None
 
     @strawberry.field
     def tenant_image(self) -> str | None:
@@ -328,6 +384,33 @@ class Event:
             return None
 
         return generate_download_url(blob_name)
+
+    @strawberry.field
+    def date(self) -> str | None:
+        tz = _get_related_from_cache(self, "timezone")
+        if not tz:
+            req = _get_related_from_cache(self, "request")
+            tz = _get_related_from_cache(req, "timezone") if req else None
+        offset = _get_offset_minutes_from_timezone(tz)
+        return _serialize_dt(_get_field(self, "date"), offset_minutes=offset)
+
+    @strawberry.field
+    def start_time(self) -> str | None:
+        tz = _get_related_from_cache(self, "timezone")
+        if not tz:
+            req = _get_related_from_cache(self, "request")
+            tz = _get_related_from_cache(req, "timezone") if req else None
+        offset = _get_offset_minutes_from_timezone(tz)
+        return _serialize_dt(_get_field(self, "start_time"), offset_minutes=offset)
+
+    @strawberry.field
+    def end_time(self) -> str | None:
+        tz = _get_related_from_cache(self, "timezone")
+        if not tz:
+            req = _get_related_from_cache(self, "request")
+            tz = _get_related_from_cache(req, "timezone") if req else None
+        offset = _get_offset_minutes_from_timezone(tz)
+        return _serialize_dt(_get_field(self, "end_time"), offset_minutes=offset)
 
 
 @strawberry.type

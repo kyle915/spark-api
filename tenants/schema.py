@@ -7,6 +7,7 @@ from gqlauth.user import relay as mutations
 from gqlauth.user.queries import UserQueries
 from strawberry_django.permissions import IsAuthenticated
 from django.db.models import Q
+from utils.gcs import extract_blob_name_from_url, generate_download_url
 from utils.graphql.permissions import StrictIsAuthenticated
 
 from .models import Role, Tenant
@@ -39,6 +40,18 @@ class CustomUserType:
     first_name: strawberry.auto
     last_name: strawberry.auto
     role: RoleType
+
+    @strawberry.field
+    def image(self) -> str | None:
+        """Return a signed URL for the user image if it exists."""
+        if not self.image:
+            return None
+
+        blob_name = extract_blob_name_from_url(self.image.name)
+        if not blob_name:
+            return None
+
+        return generate_download_url(blob_name)
 
 
 # Spark Schema

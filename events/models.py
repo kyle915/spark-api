@@ -557,6 +557,10 @@ class Event(models.Model):
         null=True,
     )
 
+    timezone = models.ForeignKey(
+        TimeZone, on_delete=models.RESTRICT, null=True, related_name="events"
+    )
+
     tenant = models.ForeignKey(
         Tenant,
         on_delete=models.RESTRICT,

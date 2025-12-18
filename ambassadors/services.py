@@ -62,8 +62,7 @@ User = get_user_model()
 
 
 def validate_passwords_match(
-    input: SparkGraphQLInput,
-    response_class: type
+    input: SparkGraphQLInput, response_class: type
 ) -> None | Any:
     """
     Validate that passwords match.
@@ -123,6 +122,7 @@ class BaseAmbassadorService(SparkGraphQLMixin):
             ambassador: The ambassador associated with the invitation
             used_by: The user who used the invitation
         """
+
         @sync_to_async
         def _mark_invitation_used():
             invitation.is_used = True
@@ -130,6 +130,7 @@ class BaseAmbassadorService(SparkGraphQLMixin):
             invitation.ambassador = ambassador
             invitation.updated_by = used_by
             invitation.save()
+
         await _mark_invitation_used()
 
     @staticmethod
@@ -153,6 +154,7 @@ class BaseAmbassadorService(SparkGraphQLMixin):
         Returns:
             The created user instance
         """
+
         @sync_to_async
         def _create_ambassador_user():
             user = User.objects.create(
@@ -165,6 +167,7 @@ class BaseAmbassadorService(SparkGraphQLMixin):
             user.set_password(password)
             user.save()
             return user
+
         return await _create_ambassador_user()
 
     @staticmethod
@@ -184,6 +187,7 @@ class BaseAmbassadorService(SparkGraphQLMixin):
         Returns:
             The created TenantedUser instance, or None if already exists
         """
+
         @sync_to_async
         def _assign_user_to_tenant():
             # Check if TenantedUser already exists
@@ -197,6 +201,7 @@ class BaseAmbassadorService(SparkGraphQLMixin):
                 created_by=created_by,
                 updated_by=created_by,
             )
+
         return await _assign_user_to_tenant()
 
 
@@ -212,7 +217,8 @@ class PublicAmbassadorCreationService(BaseAmbassadorService):
         """Create a public ambassador account (inactive by default)."""
         # Validate passwords match
         password_error = validate_passwords_match(
-            input, PublicAmbassadorCreationResponse)
+            input, PublicAmbassadorCreationResponse
+        )
         if password_error:
             return password_error
 
@@ -353,8 +359,7 @@ class AcceptInvitationService(BaseAmbassadorService):
     ) -> AcceptInvitationResponse:
         """Accept an ambassador invitation and create account."""
         # Validate passwords match
-        password_error = validate_passwords_match(
-            input, AcceptInvitationResponse)
+        password_error = validate_passwords_match(input, AcceptInvitationResponse)
         if password_error:
             return password_error
 
@@ -546,7 +551,7 @@ class CreateAmbassadorService(BaseAmbassadorService):
             return build_mutation_response(
                 CreateAmbassadorResponse,
                 success=False,
-                message="Usuario no encontrado.",
+                message="User not found.",
                 input_obj=input,
             )
 
@@ -555,7 +560,7 @@ class CreateAmbassadorService(BaseAmbassadorService):
             return build_mutation_response(
                 CreateAmbassadorResponse,
                 success=False,
-                message="Este usuario ya tiene un perfil de embajador.",
+                message="This user already has an ambassador profile.",
                 input_obj=input,
             )
 
@@ -579,7 +584,7 @@ class CreateAmbassadorService(BaseAmbassadorService):
         return build_mutation_response(
             CreateAmbassadorResponse,
             success=True,
-            message="Ambassador creado exitosamente.",
+            message="Ambassador successfully created.",
             input_obj=input,
             ambassador=ambassador,
         )
@@ -665,23 +670,27 @@ class UpsertAmbassadorProfileService(BaseAmbassadorService):
                 return build_mutation_response(
                     UpsertAmbassadorProfileResponse,
                     success=False,
-                    message="Ambassador no encontrado.",
+                    message="Ambassador not found.",
                     input_obj=input,
                 )
         else:
             # If no identifier is provided, reuse or create ambassador for the current user.
-            ambassador = await Ambassador.objects.select_related("user").filter(
-                user=user
-            ).afirst()
+            ambassador = (
+                await Ambassador.objects.select_related("user")
+                .filter(user=user)
+                .afirst()
+            )
             if ambassador is None:
-                ambassador = None  # Explicit for clarity; will create inside transaction.
+                ambassador = (
+                    None  # Explicit for clarity; will create inside transaction.
+                )
 
         role_slug = cls().get_role_slug(user)
         if ambassador and role_slug == "ambassador" and ambassador.user_id != user.id:
             return build_mutation_response(
                 UpsertAmbassadorProfileResponse,
                 success=False,
-                message="No autorizado para actualizar este embajador.",
+                message="Not authorized to update this ambassador.",
                 input_obj=input,
             )
 
@@ -701,7 +710,7 @@ class UpsertAmbassadorProfileService(BaseAmbassadorService):
                 return build_mutation_response(
                     UpsertAmbassadorProfileResponse,
                     success=False,
-                    message=f"No se pudo resolver el tenant: {exc}",
+                    message=f"The tenant could not be resolved.: {exc}",
                     input_obj=input,
                 )
 
@@ -711,7 +720,7 @@ class UpsertAmbassadorProfileService(BaseAmbassadorService):
                     return build_mutation_response(
                         UpsertAmbassadorProfileResponse,
                         success=False,
-                        message="Las notas requieren tenant_id.",
+                        message="Notes require tenant_id.",
                         input_obj=input,
                     )
 
@@ -797,7 +806,9 @@ class UpsertAmbassadorProfileService(BaseAmbassadorService):
                 AmbassadorNote.objects.filter(ambassador=ambassador).delete()
                 new_notes = []
                 for note_input in input.notes:
-                    note_tenant_id = note_input.tenant_id or (tenant.id if tenant else None)
+                    note_tenant_id = note_input.tenant_id or (
+                        tenant.id if tenant else None
+                    )
                     new_notes.append(
                         AmbassadorNote(
                             ambassador=ambassador,
@@ -962,7 +973,9 @@ class AmbassadorInvitationQueriesService(SparkGraphQLMixin):
         tenant_uuid_input = filters.tenant_uuid if filters else None
 
         should_filter_by_tenant = (
-            not is_spark_request or tenant_id_input is not None or tenant_uuid_input is not None
+            not is_spark_request
+            or tenant_id_input is not None
+            or tenant_uuid_input is not None
         )
         if should_filter_by_tenant:
             tenant = await self.get_user_tenant(
@@ -976,6 +989,7 @@ class AmbassadorInvitationQueriesService(SparkGraphQLMixin):
         queryset = await self._get_filtered_invitations_queryset(tenant_id, filters)
 
         from utils.graphql.relay import connection_from_queryset_async
+
         return await connection_from_queryset_async(
             queryset,
             first=first,
@@ -992,10 +1006,12 @@ class AmbassadorInvitationQueriesService(SparkGraphQLMixin):
         filters: inputs.AmbassadorInvitationFiltersInput | None = None,
     ):
         """Get filtered queryset for invitations."""
+
         @sync_to_async
         def get_queryset():
             queryset = AmbassadorInvitation.objects.select_related(
-                "tenant", "invited_by")
+                "tenant", "invited_by"
+            )
 
             # Filter by tenant
             if tenant_id:
@@ -1053,7 +1069,9 @@ class AmbassadorQueriesService(SparkGraphQLMixin):
         tenant_uuid_input = filters.tenant_uuid if filters else None
 
         should_filter_by_tenant = (
-            not is_spark_request or tenant_id_input is not None or tenant_uuid_input is not None
+            not is_spark_request
+            or tenant_id_input is not None
+            or tenant_uuid_input is not None
         )
         if should_filter_by_tenant:
             tenant = await self.get_user_tenant(
@@ -1067,6 +1085,7 @@ class AmbassadorQueriesService(SparkGraphQLMixin):
         queryset = await self._get_filtered_ambassadors_queryset(tenant_id, filters)
 
         from utils.graphql.relay import connection_from_queryset_async
+
         return await connection_from_queryset_async(
             queryset,
             first=first,
@@ -1103,6 +1122,7 @@ class AmbassadorQueriesService(SparkGraphQLMixin):
         filters: inputs.AmbassadorFiltersInput | None = None,
     ):
         """Get filtered queryset for ambassadors."""
+
         @sync_to_async
         def get_queryset():
             queryset = Ambassador.objects.select_related("user")
@@ -1126,8 +1146,7 @@ class AmbassadorQueriesService(SparkGraphQLMixin):
 
                 # Search by user email
                 if filters.email:
-                    queryset = queryset.filter(
-                        user__email__icontains=filters.email)
+                    queryset = queryset.filter(user__email__icontains=filters.email)
 
                 # Search by user name
                 if filters.name:
@@ -1138,8 +1157,7 @@ class AmbassadorQueriesService(SparkGraphQLMixin):
 
                 # Search by address
                 if filters.address:
-                    queryset = queryset.filter(
-                        address__icontains=filters.address)
+                    queryset = queryset.filter(address__icontains=filters.address)
 
                 # General search across email, name, and address
                 if filters.search:
@@ -1164,6 +1182,7 @@ class AmbassadorQueriesService(SparkGraphQLMixin):
         filters: inputs.ActiveAmbassadorFiltersInput | None = None,
     ) -> CountableConnection[AmbassadorType]:
         """Get all active ambassadors."""
+
         @sync_to_async
         def get_queryset():
             queryset = Ambassador.objects.select_related("user").filter(is_active=True)
@@ -1182,6 +1201,7 @@ class AmbassadorQueriesService(SparkGraphQLMixin):
         queryset = await get_queryset()
 
         from utils.graphql.relay import connection_from_queryset_async
+
         return await connection_from_queryset_async(
             queryset,
             first=first,
@@ -1410,7 +1430,9 @@ class AmbassadorReviewQueriesService(SparkGraphQLMixin):
         tenant_uuid_input = filters.tenant_uuid if filters else None
 
         should_filter_by_tenant = (
-            not is_spark_request or tenant_id_input is not None or tenant_uuid_input is not None
+            not is_spark_request
+            or tenant_id_input is not None
+            or tenant_uuid_input is not None
         )
         if should_filter_by_tenant:
             tenant = await self.get_user_tenant(
@@ -1425,6 +1447,7 @@ class AmbassadorReviewQueriesService(SparkGraphQLMixin):
 
         from utils.graphql.relay import connection_from_queryset_async
         from ambassadors.types import AmbassadorReviewType
+
         return await connection_from_queryset_async(
             queryset,
             first=first,
@@ -1441,6 +1464,7 @@ class AmbassadorReviewQueriesService(SparkGraphQLMixin):
         filters: inputs.AmbassadorReviewFiltersInput | None = None,
     ):
         """Get filtered queryset for reviews."""
+
         @sync_to_async
         def get_queryset():
             queryset = AmbassadorReview.objects.select_related(
@@ -1454,13 +1478,11 @@ class AmbassadorReviewQueriesService(SparkGraphQLMixin):
             if filters:
                 # Filter by ambassador
                 if filters.ambassador_id:
-                    queryset = queryset.filter(
-                        ambassador_id=int(filters.ambassador_id))
+                    queryset = queryset.filter(ambassador_id=int(filters.ambassador_id))
 
                 # Filter by client
                 if filters.client_id:
-                    queryset = queryset.filter(
-                        client_id=int(filters.client_id))
+                    queryset = queryset.filter(client_id=int(filters.client_id))
 
                 # Filter by score range
                 if filters.min_score is not None:
@@ -1472,24 +1494,23 @@ class AmbassadorReviewQueriesService(SparkGraphQLMixin):
                 if filters.start_date:
                     try:
                         start_datetime = datetime.fromisoformat(
-                            filters.start_date.replace('Z', '+00:00'))
-                        queryset = queryset.filter(
-                            created_at__gte=start_datetime)
+                            filters.start_date.replace("Z", "+00:00")
+                        )
+                        queryset = queryset.filter(created_at__gte=start_datetime)
                     except (ValueError, AttributeError):
                         pass  # Invalid date format, skip filter
                 if filters.end_date:
                     try:
                         end_datetime = datetime.fromisoformat(
-                            filters.end_date.replace('Z', '+00:00'))
-                        queryset = queryset.filter(
-                            created_at__lte=end_datetime)
+                            filters.end_date.replace("Z", "+00:00")
+                        )
+                        queryset = queryset.filter(created_at__lte=end_datetime)
                     except (ValueError, AttributeError):
                         pass  # Invalid date format, skip filter
 
                 # Search in review text
                 if filters.search:
-                    queryset = queryset.filter(
-                        review__icontains=filters.search)
+                    queryset = queryset.filter(review__icontains=filters.search)
 
             return queryset.order_by("-created_at")
 
@@ -1663,7 +1684,9 @@ class AmbassadorNoteQueriesService(SparkGraphQLMixin):
         tenant_uuid_input = filters.tenant_uuid if filters else None
 
         should_filter_by_tenant = (
-            not is_spark_request or tenant_id_input is not None or tenant_uuid_input is not None
+            not is_spark_request
+            or tenant_id_input is not None
+            or tenant_uuid_input is not None
         )
         if should_filter_by_tenant:
             tenant = await self.get_user_tenant(
@@ -1678,6 +1701,7 @@ class AmbassadorNoteQueriesService(SparkGraphQLMixin):
 
         from utils.graphql.relay import connection_from_queryset_async
         from ambassadors.types import AmbassadorNoteType
+
         return await connection_from_queryset_async(
             queryset,
             first=first,
@@ -1694,6 +1718,7 @@ class AmbassadorNoteQueriesService(SparkGraphQLMixin):
         filters: inputs.AmbassadorNoteFiltersInput | None = None,
     ):
         """Get filtered queryset for notes."""
+
         @sync_to_async
         def get_queryset():
             queryset = AmbassadorNote.objects.select_related(
@@ -1707,36 +1732,33 @@ class AmbassadorNoteQueriesService(SparkGraphQLMixin):
             if filters:
                 # Filter by ambassador
                 if filters.ambassador_id:
-                    queryset = queryset.filter(
-                        ambassador_id=int(filters.ambassador_id))
+                    queryset = queryset.filter(ambassador_id=int(filters.ambassador_id))
 
                 # Filter by created_by
                 if filters.created_by_id:
-                    queryset = queryset.filter(
-                        created_by_id=int(filters.created_by_id))
+                    queryset = queryset.filter(created_by_id=int(filters.created_by_id))
 
                 # Filter by date range
                 if filters.start_date:
                     try:
                         start_datetime = datetime.fromisoformat(
-                            filters.start_date.replace('Z', '+00:00'))
-                        queryset = queryset.filter(
-                            created_at__gte=start_datetime)
+                            filters.start_date.replace("Z", "+00:00")
+                        )
+                        queryset = queryset.filter(created_at__gte=start_datetime)
                     except (ValueError, AttributeError):
                         pass  # Invalid date format, skip filter
                 if filters.end_date:
                     try:
                         end_datetime = datetime.fromisoformat(
-                            filters.end_date.replace('Z', '+00:00'))
-                        queryset = queryset.filter(
-                            created_at__lte=end_datetime)
+                            filters.end_date.replace("Z", "+00:00")
+                        )
+                        queryset = queryset.filter(created_at__lte=end_datetime)
                     except (ValueError, AttributeError):
                         pass  # Invalid date format, skip filter
 
                 # Search in note text
                 if filters.search:
-                    queryset = queryset.filter(
-                        note__icontains=filters.search)
+                    queryset = queryset.filter(note__icontains=filters.search)
 
             return queryset.order_by("-created_at")
 
@@ -1898,7 +1920,9 @@ class SkillQueriesService(SparkGraphQLMixin):
         tenant_uuid_input = filters.tenant_uuid if filters else None
 
         should_filter_by_tenant = (
-            not is_spark_request or tenant_id_input is not None or tenant_uuid_input is not None
+            not is_spark_request
+            or tenant_id_input is not None
+            or tenant_uuid_input is not None
         )
         if should_filter_by_tenant:
             tenant = await self.get_user_tenant(
@@ -1913,6 +1937,7 @@ class SkillQueriesService(SparkGraphQLMixin):
 
         from utils.graphql.relay import connection_from_queryset_async
         from ambassadors.types import SkillType
+
         return await connection_from_queryset_async(
             queryset,
             first=first,
@@ -1929,6 +1954,7 @@ class SkillQueriesService(SparkGraphQLMixin):
         filters: inputs.SkillFiltersInput | None = None,
     ):
         """Get filtered queryset for skills."""
+
         @sync_to_async
         def get_queryset():
             queryset = Skill.objects.select_related("tenant")
@@ -2061,7 +2087,9 @@ class DeleteAmbassadorSkillService(BaseAmbassadorService):
 
         # Validate ambassador skill exists
         try:
-            ambassador_skill = await AmbassadorSkill.objects._by_id(input.ambassador_skill_id)
+            ambassador_skill = await AmbassadorSkill.objects._by_id(
+                input.ambassador_skill_id
+            )
         except (AmbassadorSkill.DoesNotExist, ValueError, TypeError):
             return build_mutation_response(
                 DeleteAmbassadorSkillResponse,
@@ -2110,7 +2138,9 @@ class AmbassadorSkillQueriesService(SparkGraphQLMixin):
         tenant_uuid_input = filters.tenant_uuid if filters else None
 
         should_filter_by_tenant = (
-            not is_spark_request or tenant_id_input is not None or tenant_uuid_input is not None
+            not is_spark_request
+            or tenant_id_input is not None
+            or tenant_uuid_input is not None
         )
         if should_filter_by_tenant:
             tenant = await self.get_user_tenant(
@@ -2121,10 +2151,13 @@ class AmbassadorSkillQueriesService(SparkGraphQLMixin):
             )
             tenant_id = tenant.id
 
-        queryset = await self._get_filtered_ambassador_skills_queryset(tenant_id, filters)
+        queryset = await self._get_filtered_ambassador_skills_queryset(
+            tenant_id, filters
+        )
 
         from utils.graphql.relay import connection_from_queryset_async
         from ambassadors.types import AmbassadorSkillType
+
         return await connection_from_queryset_async(
             queryset,
             first=first,
@@ -2141,6 +2174,7 @@ class AmbassadorSkillQueriesService(SparkGraphQLMixin):
         filters: inputs.AmbassadorSkillFiltersInput | None = None,
     ):
         """Get filtered queryset for ambassador skills."""
+
         @sync_to_async
         def get_queryset():
             queryset = AmbassadorSkill.objects.select_related(
@@ -2154,8 +2188,7 @@ class AmbassadorSkillQueriesService(SparkGraphQLMixin):
             if filters:
                 # Filter by ambassador
                 if filters.ambassador_id:
-                    queryset = queryset.filter(
-                        ambassador_id=int(filters.ambassador_id))
+                    queryset = queryset.filter(ambassador_id=int(filters.ambassador_id))
 
                 # Filter by skill
                 if filters.skill_id:
