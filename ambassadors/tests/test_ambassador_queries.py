@@ -136,7 +136,8 @@ class TestSentInvitationsQuery(AmbassadorsGraphQLTestCase):
         assert result.errors is None
         assert result.data is not None
         assert result.data["sentInvitations"] is not None
-        assert result.data["sentInvitations"]["totalCount"] >= 3  # At least 3 invitations for this tenant
+        # At least 3 invitations for this tenant
+        assert result.data["sentInvitations"]["totalCount"] >= 3
 
         # Verify we get invitations for the client's tenant
         edges = result.data["sentInvitations"]["edges"]
@@ -445,7 +446,9 @@ class TestAvailableAmbassadorsQuery(AmbassadorsGraphQLTestCase):
                             isActive
                             address
                             coordinates
-                            userId
+                            user {
+                                id
+                            }
                         }
                     }
                     totalCount
@@ -471,7 +474,8 @@ class TestAvailableAmbassadorsQuery(AmbassadorsGraphQLTestCase):
         assert result.errors is None
         assert result.data is not None
         assert result.data["availableAmbassadors"] is not None
-        assert result.data["availableAmbassadors"]["totalCount"] >= 2  # At least 2 ambassadors for this tenant
+        # At least 2 ambassadors for this tenant
+        assert result.data["availableAmbassadors"]["totalCount"] >= 2
 
         # Verify we get ambassadors for the client's tenant
         edges = result.data["availableAmbassadors"]["edges"]
@@ -573,7 +577,7 @@ class TestAvailableAmbassadorsQuery(AmbassadorsGraphQLTestCase):
         assert result.errors is None
         assert result.data is not None
         edges = result.data["availableAmbassadors"]["edges"]
-        # Should find ambassadors matching email (we can only verify by userId since email is not exposed)
+        # Should find ambassadors matching email (we can only verify by user.id since email is not exposed)
         assert len(edges) >= 0
 
     @pytest.mark.asyncio
@@ -593,7 +597,7 @@ class TestAvailableAmbassadorsQuery(AmbassadorsGraphQLTestCase):
         assert result.errors is None
         assert result.data is not None
         edges = result.data["availableAmbassadors"]["edges"]
-        # Should find ambassadors matching name (we can only verify by userId since name is not exposed)
+        # Should find ambassadors matching name (we can only verify by user.id since name is not exposed)
         assert len(edges) >= 0
 
     @pytest.mark.asyncio
@@ -675,4 +679,3 @@ class TestAvailableAmbassadorsQuery(AmbassadorsGraphQLTestCase):
         assert result.data is None
         assert result.errors is not None
         assert len(result.errors) > 0
-

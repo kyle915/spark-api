@@ -84,7 +84,8 @@ class TestGoogleCalendarMutations(BaseGraphQLTestCase):
         assert result.data["connectGoogleCalendar"]["state"] is not None
 
     @pytest.mark.asyncio
-    async def test_connect_google_calendar_already_connected(self):
+    @patch('tenants.calendar.mutations.GoogleCalendarService')
+    async def test_connect_google_calendar_already_connected(self, mock_service_class):
         """Test connecting when already connected."""
         # Create existing connection
         connection = await sync_to_async(GoogleCalendarConnection.objects.create)(
@@ -96,6 +97,11 @@ class TestGoogleCalendarMutations(BaseGraphQLTestCase):
         )
         connection.set_access_token("test_token")
         await sync_to_async(connection.save)()
+
+        # Simulate a working existing connection
+        mock_service = MagicMock()
+        mock_service.test_connection.return_value = True
+        mock_service_class.return_value = mock_service
 
         mutation = """
         mutation ConnectGoogleCalendar($input: ConnectGoogleCalendarInput!) {
@@ -113,9 +119,76 @@ class TestGoogleCalendarMutations(BaseGraphQLTestCase):
         )
 
         assert result.data is not None
-        assert result.data["connectGoogleCalendar"]["success"] is False
-        assert "already" in result.data["connectGoogleCalendar"]["message"].lower(
+        payload = result.data["connectGoogleCalendar"]
+        assert payload["success"] is False
+        assert "already" in payload["message"].lower()
+        # Ensure we checked the connection status
+        mock_service_class.assert_called_once_with(self.user)
+        mock_service.test_connection.assert_called_once()
+
+    @pytest.mark.asyncio
+    @patch('tenants.calendar.utils.Flow')
+    @patch('tenants.calendar.mutations.GoogleCalendarService')
+    async def test_connect_google_calendar_reconnect_inactive_tokens(
+        self,
+        mock_service_class,
+        mock_flow_class,
+    ):
+        """Test reconnect flow when a connection exists but tokens are invalid/inactive."""
+        # Existing (but stale) connection
+        connection = await sync_to_async(GoogleCalendarConnection.objects.create)(
+            user=self.user,
+            created_by=self.user,
+            updated_by=self.user,
+            access_token="encrypted_token",
+            is_active=True,
         )
+        connection.set_access_token("stale_token")
+        await sync_to_async(connection.save)()
+
+        # Simulate that the existing connection is NOT working
+        mock_service = MagicMock()
+        mock_service.test_connection.return_value = False
+        mock_service_class.return_value = mock_service
+
+        # Mock OAuth flow to avoid real Google calls
+        mock_flow = MagicMock()
+        mock_flow.authorization_url.return_value = (
+            "https://accounts.google.com/o/oauth2/auth?client_id=test",
+            "state_reconnect",
+        )
+        mock_flow_class.from_client_config.return_value = mock_flow
+
+        mutation = """
+        mutation ConnectGoogleCalendar($input: ConnectGoogleCalendarInput!) {
+            connectGoogleCalendar(input: $input) {
+                success
+                message
+                authorizationUrl
+                state
+            }
+        }
+        """
+
+        variables = {"input": {}}
+
+        result = await self._execute_mutation(
+            mutation, variables, self.endpoint_path, user=self.user
+        )
+
+        assert result.data is not None
+        payload = result.data["connectGoogleCalendar"]
+        assert payload["success"] is True
+        assert payload["authorizationUrl"] is not None
+        assert payload["state"] is not None
+
+        # Existing connection should have been marked inactive
+        await sync_to_async(connection.refresh_from_db)()
+        assert connection.is_active is False
+
+        # Service was used to detect non-working connection
+        mock_service_class.assert_called_once_with(self.user)
+        mock_service.test_connection.assert_called_once()
 
     @pytest.mark.asyncio
     @patch('tenants.calendar.utils.Flow')

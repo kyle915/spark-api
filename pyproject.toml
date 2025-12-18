@@ -21,7 +21,7 @@ dependencies = [
     "strawberry-django-auth>=0.378.4",
     "strawberry-graphql>=0.284.1",
     "uuid6>=2025.0.1",
-    "celery>=5.3.0",
+    "django-rq>=3.2.1",
     "redis>=5.0.0",
     "cryptography>=41.0.0",
 ]

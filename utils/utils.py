@@ -32,6 +32,7 @@ class BlockIntrospectionForAnonymous(SchemaExtension):
 class ROLE_ID:
     Ambassadors = 1
     SparkAdmin = 2
+    Client = 3
 
 
 MutationResponseType = TypeVar("MutationResponseType")

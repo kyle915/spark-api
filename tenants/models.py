@@ -37,6 +37,10 @@ class Tenant(Asyncable, models.Model):
 
 
 class Role(models.Model):
+    AMBASSADOR_SLUG = 'ambassador'
+    SPARK_ADMIN_SLUG = 'spark-admin'
+    CLIENT_SLUG = 'client'
+
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     name = models.CharField(max_length=50, unique=True)
@@ -68,27 +72,39 @@ class Role(models.Model):
 
     @property
     async def is_ambassador(self) -> bool:
-        return self.slug == 'ambassador'
+        return self._is_ambassador
 
     @property
     async def is_spark_admin(self) -> bool:
-        return self.slug == 'spark-admin'
+        return self._is_spark_admin
 
     @property
     async def is_client(self) -> bool:
-        return self.slug == 'client'
+        return self._is_client
+
+    @property
+    def _is_spark_admin(self) -> bool:
+        return self.slug == Role.SPARK_ADMIN_SLUG
+
+    @property
+    def _is_client(self) -> bool:
+        return self.slug == Role.CLIENT_SLUG
+
+    @property
+    def _is_ambassador(self) -> bool:
+        return self.slug == Role.AMBASSADOR_SLUG
 
     @staticmethod
     async def get_ambassador_role() -> 'Role':
-        return await sync_to_async(Role.objects.get)(slug='ambassador')
+        return await sync_to_async(Role.objects.get)(slug=Role.AMBASSADOR_SLUG)
 
     @staticmethod
     async def get_spark_admin_role() -> 'Role':
-        return await sync_to_async(Role.objects.get)(slug='spark-admin')
+        return await sync_to_async(Role.objects.get)(slug=Role.SPARK_ADMIN_SLUG)
 
     @staticmethod
     async def get_client_role() -> 'Role':
-        return await sync_to_async(Role.objects.get)(slug='client')
+        return await sync_to_async(Role.objects.get)(slug=Role.CLIENT_SLUG)
 
 
 class User(AbstractUser):
