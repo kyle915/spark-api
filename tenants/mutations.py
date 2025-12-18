@@ -7,6 +7,7 @@ from asgiref.sync import sync_to_async
 import random
 import string
 from django.utils.text import slugify
+from gqlauth.models import UserStatus
 
 from utils.graphql.inputs import SparkGraphQLInput
 from utils.graphql.relay import ensure_relay_mutation
@@ -40,18 +41,27 @@ class RegisterResponse:
     client_mutation_id: strawberry.ID | None = None
 
 
+@strawberry.type
+class UpdateUserResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+
+
 @strawberry.input
 class BaseRegisterInput(SparkGraphQLInput):
     first_name: str
     email: str
     password1: str
     password2: str
+    image: str | None = None
 
 
 @strawberry.enum
 class UserRoleEnum(Enum):
     AMBASSADOR = "ambassador"
     CLIENT = "client"
+    SPARK = "spark-admin"
 
 
 @strawberry.input
@@ -64,6 +74,24 @@ class ClientRegisterInput(BaseRegisterInput):
 class AmbassadorRegisterInput(BaseRegisterInput):
     role: UserRoleEnum
     tenant_id: strawberry.ID | None = None
+
+
+@strawberry.input
+class CreateUserInput(BaseRegisterInput):
+    role: UserRoleEnum
+    tenant_id: strawberry.ID | None = None
+
+
+@strawberry.input
+class UpdateUserInput(SparkGraphQLInput):
+    id: strawberry.ID | None = None
+    uuid: strawberry.ID | None = None
+    first_name: str | None = None
+    last_name: str | None = None
+    email: str | None = None
+    role: UserRoleEnum | None = None
+    tenant_id: strawberry.ID | None = None
+    image: str | None = None
 
 
 @strawberry.input
@@ -82,6 +110,24 @@ class ClientAppleSocialAuthInput(AppleSocialAuthInput):
     tenant_id: strawberry.ID
 
 
+def _require_spark_admin(request_user) -> UpdateUserResponse | None:
+    if not request_user.is_authenticated:
+        return UpdateUserResponse(success=False, message="User not authenticated.")
+
+    try:
+        is_spark_admin = request_user.role and request_user.role.slug == UserRoleEnum.SPARK.value
+    except Exception as exc:
+        return UpdateUserResponse(success=False, message=f"Error checking permissions: {exc}")
+
+    if not is_spark_admin:
+        return UpdateUserResponse(
+            success=False,
+            message="You do not have permission to perform this action.",
+        )
+
+    return None
+
+
 async def register_user_with_role(
     first_name: str,
     email: str,
@@ -89,6 +135,8 @@ async def register_user_with_role(
     password2: str,
     role_id: int,
     tenant_id: int | None = None,
+    image: str | None = None,
+    auto_verify: bool = False,
     client_mutation_id: strawberry.ID | None = None,
 ) -> RegisterResponse:
     if password1 != password2:
@@ -122,6 +170,7 @@ async def register_user_with_role(
                 first_name=first_name,
                 username=email,
                 email=email,
+                image=image,
                 role=role,
                 is_active=True,
             )
@@ -157,11 +206,24 @@ async def register_user_with_role(
             client_mutation_id=client_mutation_id,
         )
 
-    activation_token: str = await sync_to_async(get_token)(user, "activation")
+    activation_token: str | None = None
+
+    if auto_verify:
+        await sync_to_async(UserStatus.objects.update_or_create)(
+            user=user, defaults={"verified": True, "archived": False}
+        )
+    else:
+        activation_token = await sync_to_async(get_token)(user, "activation")
+
+    message = (
+        "User registered successfully."
+        if auto_verify
+        else "User registered successfully. Please verify your email."
+    )
 
     return RegisterResponse(
         success=True,
-        message="User registered successfully. Please verify your email.",
+        message=message,
         activation_token=activation_token,
         client_mutation_id=client_mutation_id,
     )
@@ -196,7 +258,9 @@ class AmbassadorsCustomRegister:
             password1=input.password1,
             password2=input.password2,
             role_id=resolved_role_id,
+            image=input.image,
             tenant_id=resolved_tenant_id,
+            auto_verify=True,
             client_mutation_id=input.client_mutation_id,
         )
 
@@ -240,6 +304,7 @@ class SparkCustomRegister:
             password1=input.password1,
             password2=input.password2,
             role_id=ROLE_ID.SparkAdmin,
+            image=input.image,
             client_mutation_id=input.client_mutation_id,
         )
 
@@ -266,6 +331,226 @@ class SparkCustomRegister:
             role_id=ROLE_ID.SparkAdmin,
             client_mutation_id=input.client_mutation_id,
         )
+
+
+@strawberry.type
+class SparkUserMutations:
+    @relay.mutation
+    async def create_user(
+        self,
+        info: strawberry.Info,
+        input: CreateUserInput,
+    ) -> RegisterResponse:
+        user = info.context.request.user
+
+        if not user.is_authenticated:
+            return RegisterResponse(
+                success=False,
+                message="User not authenticated.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        try:
+            is_spark_admin = await user.role.is_spark_admin
+            if not is_spark_admin:
+                return RegisterResponse(
+                    success=False,
+                    message="You do not have permission to perform this action.",
+                    client_mutation_id=input.client_mutation_id,
+                )
+        except Exception as e:
+            return RegisterResponse(
+                success=False,
+                message=f"Error checking permissions: {e}",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        try:
+            role = await sync_to_async(Role.objects.get)(slug=input.role.value)
+            resolved_role_id = role.id
+        except Role.DoesNotExist:
+            return RegisterResponse(
+                success=False,
+                message=f"Invalid role: {input.role.value}",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        try:
+            resolved_tenant_id = int(input.tenant_id) if input.tenant_id else None
+        except (TypeError, ValueError):
+            return RegisterResponse(
+                success=False,
+                message="Invalid tenantId.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        if input.role == UserRoleEnum.CLIENT:
+            if not resolved_tenant_id:
+                return RegisterResponse(
+                    success=False,
+                    message="tenantId is required for client users.",
+                    client_mutation_id=input.client_mutation_id,
+                )
+
+            tenant_exists = await sync_to_async(
+                Tenant.objects.filter(pk=resolved_tenant_id).exists
+            )()
+            if not tenant_exists:
+                return RegisterResponse(
+                    success=False,
+                    message="Tenant not found.",
+                    client_mutation_id=input.client_mutation_id,
+                )
+
+        return await register_user_with_role(
+            first_name=input.first_name,
+            email=input.email,
+            password1=input.password1,
+            password2=input.password2,
+            role_id=resolved_role_id,
+            image=input.image,
+            tenant_id=resolved_tenant_id,
+            auto_verify=True,
+            client_mutation_id=input.client_mutation_id,
+        )
+
+    @relay.mutation
+    async def update_user(
+        self,
+        info: strawberry.Info,
+        input: UpdateUserInput,
+    ) -> UpdateUserResponse:
+        requester = info.context.request.user
+
+        permission_error = _require_spark_admin(requester)
+        if permission_error:
+            permission_error.client_mutation_id = input.client_mutation_id
+            return permission_error
+
+        if not input.id and not input.uuid:
+            return UpdateUserResponse(
+                success=False,
+                message="Provide id or uuid to update a user.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        try:
+            target_user = (
+                await sync_to_async(User.objects.select_related("role").get)(
+                    pk=int(input.id)
+                )
+                if input.id
+                else await sync_to_async(User.objects.select_related("role").get)(
+                    uuid=input.uuid
+                )
+            )
+        except (User.DoesNotExist, ValueError, TypeError):
+            return UpdateUserResponse(
+                success=False,
+                message="User not found.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        if input.email:
+            email_exists = await sync_to_async(
+                User.objects.exclude(pk=target_user.pk)
+                .filter(email=input.email)
+                .exists
+            )()
+            if email_exists:
+                return UpdateUserResponse(
+                    success=False,
+                    message="Email already exists.",
+                    client_mutation_id=input.client_mutation_id,
+                )
+
+        resolved_role = target_user.role
+        if input.role:
+            try:
+                resolved_role = await sync_to_async(Role.objects.get)(slug=input.role.value)
+            except Role.DoesNotExist:
+                return UpdateUserResponse(
+                    success=False,
+                    message=f"Invalid role: {input.role.value}",
+                    client_mutation_id=input.client_mutation_id,
+                )
+
+        resolved_tenant_id: int | None = None
+        if input.tenant_id:
+            try:
+                resolved_tenant_id = int(input.tenant_id)
+            except (TypeError, ValueError):
+                return UpdateUserResponse(
+                    success=False,
+                    message="Invalid tenantId.",
+                    client_mutation_id=input.client_mutation_id,
+                )
+
+        if resolved_role.slug == UserRoleEnum.CLIENT.value and not resolved_tenant_id:
+            return UpdateUserResponse(
+                success=False,
+                message="tenantId is required for client users.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        if resolved_tenant_id:
+            tenant_exists = await sync_to_async(
+                Tenant.objects.filter(pk=resolved_tenant_id).exists
+            )()
+            if not tenant_exists:
+                return UpdateUserResponse(
+                    success=False,
+                    message="Tenant not found.",
+                    client_mutation_id=input.client_mutation_id,
+                )
+
+        try:
+
+            @sync_to_async
+            def persist_updates():
+                if input.first_name is not None:
+                    target_user.first_name = input.first_name
+                if input.last_name is not None:
+                    target_user.last_name = input.last_name
+                if input.email is not None:
+                    target_user.email = input.email
+                    target_user.username = input.email
+                if input.image is not None:
+                    target_user.image = input.image
+                target_user.role = resolved_role
+                target_user.save()
+                return target_user
+
+            await persist_updates()
+
+            if resolved_tenant_id:
+                tenant = await sync_to_async(Tenant.objects.get)(pk=resolved_tenant_id)
+
+                @sync_to_async
+                def upsert_tenant_user():
+                    return TenantedUser.objects.update_or_create(
+                        user=target_user,
+                        tenant=tenant,
+                        defaults={
+                            "is_active": True,
+                            "created_by": requester,
+                            "updated_by": requester,
+                        },
+                    )
+
+                await upsert_tenant_user()
+
+            return UpdateUserResponse(
+                success=True,
+                message="User updated successfully.",
+                client_mutation_id=input.client_mutation_id,
+            )
+        except Exception as exc:
+            return UpdateUserResponse(
+                success=False,
+                message=f"Error updating user: {exc}",
+                client_mutation_id=input.client_mutation_id,
+            )
 
 
 # Clients - variable role_id
@@ -297,6 +582,7 @@ class ClientsCustomRegister:
             password1=input.password1,
             password2=input.password2,
             role_id=resolved_role_id,
+            image=input.image,
             tenant_id=resolved_tenant_id,
             client_mutation_id=input.client_mutation_id,
         )

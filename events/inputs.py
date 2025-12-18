@@ -35,11 +35,18 @@ class CoordinatesFilterInput:
     unit: DistanceUnit = DistanceUnit.KILOMETERS
 
 
+@strawberry.enum
+class EventStatusFilterEnum(str, Enum):
+    APPROVED = "approved"
+    DECLINED = "declined"
+    PENDING = "pending"
+
+
 @strawberry.input
 class EventFiltersInput(BaseTenantInput):
     tenant_uuid: strawberry.ID | None = None
     event_type_id: strawberry.ID | None = None
-    event_status_id: strawberry.ID | None = None
+    event_status: EventStatusFilterEnum | None = None
     request_id: strawberry.ID | None = None
     date: str | None = None
     coordinates: CoordinatesFilterInput | None = None

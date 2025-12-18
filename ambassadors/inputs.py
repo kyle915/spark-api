@@ -56,6 +56,8 @@ class AmbassadorFiltersInput:
     tenant_id: strawberry.ID | None = None
     tenant_uuid: strawberry.ID | None = None
     is_active: bool | None = None  # True for active, False for inactive, None for all
+    rating_min: int | None = None
+    rating_max: int | None = None
     email: str | None = None  # Search by user email (partial match)
     name: str | None = None  # Search by user first_name or last_name
     address: str | None = None  # Search by address (partial match)
@@ -70,6 +72,16 @@ class UpdateAmbassadorInput(SparkGraphQLInput):
     coordinates: List[float] | None = None
     is_active: bool | None = None
     tenant_id: strawberry.ID | None = None  # For assigning to tenant
+
+
+@strawberry.input
+class CreateAmbassadorInput(SparkGraphQLInput):
+    """Input for creating an ambassador."""
+    user_id: strawberry.ID
+    address: str | None = None
+    coordinates: List[float] | None = None
+    is_active: bool | None = None
+    rating: int | None = None
 
 
 @strawberry.input
@@ -133,6 +145,57 @@ class UpdateAmbassadorNoteInput(SparkGraphQLInput):
 class DeleteAmbassadorNoteInput(SparkGraphQLInput):
     """Input for deleting an ambassador note."""
     note_id: strawberry.ID
+
+
+@strawberry.input
+class AmbassadorFileInput(SparkGraphQLInput):
+    """Input for ambassador files."""
+    name: str
+    url: str | None = None
+    main_resume: bool | None = None
+    profile_pic: bool | None = None
+    is_public: bool | None = None
+    file_type_id: strawberry.ID | None = None
+
+
+@strawberry.input
+class AmbassadorTraitInput(SparkGraphQLInput):
+    """Input for ambassador traits."""
+    user_id: strawberry.ID
+
+
+@strawberry.input
+class AmbassadorSkillInput(SparkGraphQLInput):
+    """Input for ambassador skills."""
+    skill_id: strawberry.ID
+
+
+@strawberry.input
+class AmbassadorWorkHistoryInput(SparkGraphQLInput):
+    """Input for ambassador work history."""
+    user_id: strawberry.ID
+
+
+@strawberry.input
+class AmbassadorProfileNoteInput(BaseTenantInput):
+    """Input for ambassador notes inside profile save."""
+    note: str
+
+
+@strawberry.input
+class UpsertAmbassadorProfileInput(SparkGraphQLInput):
+    """Input for creating/updating an ambassador profile and related data."""
+    ambassador_id: strawberry.ID | None = None
+    ambassador_uuid: strawberry.ID | None = None
+    address: str | None = None
+    coordinates: List[float] | None = None
+    is_active: bool | None = None
+    rating: int | None = None
+    files: list[AmbassadorFileInput] | None = None
+    traits: list[AmbassadorTraitInput] | None = None
+    skills: list[AmbassadorSkillInput] | None = None
+    notes: list[AmbassadorProfileNoteInput] | None = None
+    work_history: list[AmbassadorWorkHistoryInput] | None = None
 
 
 @strawberry.input
@@ -251,3 +314,10 @@ class AttendanceFiltersInput(BaseTenantInput):
     attendance_status_id: strawberry.ID | None = None
     source_id: strawberry.ID | None = None
     attendace_type_id: strawberry.ID | None = None
+
+
+@strawberry.input
+class ActiveAmbassadorFiltersInput:
+    """Filters for active ambassadors."""
+    email: str | None = None
+    name: str | None = None

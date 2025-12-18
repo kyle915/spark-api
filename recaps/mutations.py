@@ -339,6 +339,26 @@ class RecapMutationService(SparkGraphQLMixin):
             delete_blob(blob_name)
         return True
 
+    async def approve_recap(self) -> models.Recap:
+        """Approve or decline a recap."""
+        if not isinstance(self.input, inputs.ApproveRecapInput):
+            raise GraphQLError("Invalid input type.")
+
+        try:
+            recap = await sync_to_async(models.Recap.objects.get)(id=self.input.id)
+        except models.Recap.DoesNotExist:
+            raise GraphQLError("Recap not found.")
+
+        @sync_to_async
+        def approve_recap_transaction():
+            with transaction.atomic():
+                recap.approved = self.input.approved
+                recap.updated_by = self.user
+                recap.save()
+                return recap
+
+        return await approve_recap_transaction()
+
 
 @strawberry.type
 class RecapMutations:
@@ -439,6 +459,33 @@ class RecapMutations:
         except GraphQLError as e:
             return build_mutation_response(
                 types.RecapFileDetailResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def approve_recap(
+        self,
+        info: strawberry.Info,
+        input: inputs.ApproveRecapInput,
+    ) -> types.RecapDetailResponse:
+        """Approve or decline a recap."""
+        try:
+            service = RecapMutationService.with_input(input)
+            await service.set_user(info)
+            recap = await service.approve_recap()
+            message = "Recap approved successfully." if input.approved else "Recap declined successfully."
+            return build_mutation_response(
+                types.RecapDetailResponse,
+                success=True,
+                message=message,
+                input_obj=input,
+                recap=recap,
+            )
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.RecapDetailResponse,
                 success=False,
                 message=str(e),
                 input_obj=input,
