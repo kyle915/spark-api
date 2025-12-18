@@ -1383,6 +1383,7 @@ input CreateStatusInput {
 input CreateTenantInput {
   clientMutationId: ID = null
   name: String!
+  image: String = null
 }
 
 type CreateTenantResponse {
@@ -1424,6 +1425,7 @@ type CustomUserType {
   firstName: String!
   lastName: String!
   role: RoleType!
+  image: String
 }
 
 type CustomUserTypeCountableConnection {
@@ -3908,6 +3910,7 @@ input UpdateTenantInput {
   clientMutationId: ID = null
   id: ID!
   name: String = null
+  image: String = null
 }
 
 type UpdateTenantResponse {
@@ -4008,11 +4011,11 @@ type UserType {
   dateJoined: DateTime!
   status: UserStatusType!
   id: ID!
-  firstName: String
 
   """Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only."""
   username: String!
   lastName: String
+  firstName: String
   email: String!
   archived: Boolean!
   verified: Boolean!
