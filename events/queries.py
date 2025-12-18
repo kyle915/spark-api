@@ -8,9 +8,22 @@ from utils.graphql.permissions import StrictIsAuthenticated
 from asgiref.sync import sync_to_async
 from graphql import GraphQLError
 
-from django.db.models import QuerySet
-from django.db.models import Model
+from django.db.models import (
+    Case,
+    DateField,
+    DateTimeField,
+    DurationField,
+    ExpressionWrapper,
+    F,
+    Func,
+    IntegerField,
+    Model,
+    QuerySet,
+    Value,
+    When,
+)
 from django.utils import timezone
+from django.db.models.functions import Cast, Coalesce
 
 from events import types
 from events import models
@@ -192,6 +205,52 @@ class EventQueriesService(BaseEventQueriesService):
 
 @strawberry.type
 class EventQueries:
+    @staticmethod
+    def _filter_events_for_local_today(queryset: QuerySet) -> QuerySet:
+        """Filter events whose local date (based on event/request timezone) matches 'today'."""
+        offset_value = Coalesce(
+            F("timezone__offset"), F("request__timezone__offset"), Value(0)
+        )
+        offset_minutes = Case(
+            When(timezone__offset__lt=-24, then=F("timezone__offset")),
+            When(timezone__offset__gt=24, then=F("timezone__offset")),
+            When(request__timezone__offset__lt=-24, then=F("request__timezone__offset")),
+            When(request__timezone__offset__gt=24, then=F("request__timezone__offset")),
+            default=ExpressionWrapper(
+                offset_value * Value(60), output_field=IntegerField()
+            ),
+            output_field=IntegerField(),
+        )
+        offset_interval = Func(
+            offset_minutes,
+            function="MAKE_INTERVAL",
+            template="%(function)s(mins => %(expressions)s)",
+            output_field=DurationField(),
+        )
+
+        event_dt = Coalesce(
+            F("date"),
+            F("request__date"),
+            output_field=DateTimeField(),
+        )
+        now = timezone.now()
+        return queryset.annotate(
+            event_local_date=Cast(
+                ExpressionWrapper(
+                    event_dt + offset_interval,
+                    output_field=DateTimeField(),
+                ),
+                output_field=DateField(),
+            ),
+            current_local_date=Cast(
+                ExpressionWrapper(
+                    Value(now) + offset_interval,
+                    output_field=DateTimeField(),
+                ),
+                output_field=DateField(),
+            ),
+        ).filter(event_local_date=F("current_local_date"))
+
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def events(
         self,
@@ -302,7 +361,6 @@ class EventQueries:
             tenant_uuid=tenant_uuid,
         )
 
-        today = timezone.localdate()
         queryset = service.get_filtered_queryset(resolved_tenant_id, q)
 
         if filters:
@@ -313,7 +371,9 @@ class EventQueries:
             if filters.request_id:
                 queryset = queryset.filter(request_id=filters.request_id)
 
-        queryset = queryset.filter(request__date=today).order_by("start_time")
+        queryset = EventQueries._filter_events_for_local_today(queryset).order_by(
+            "start_time"
+        )
 
         return await service.get_connection(
             tenant_id=resolved_tenant_id,
@@ -358,7 +418,6 @@ class EventQueries:
             tenant_uuid=tenant_uuid,
         )
 
-        today = timezone.localdate()
         queryset = service.get_filtered_queryset(resolved_tenant_id, q)
 
         if filters:
@@ -369,8 +428,7 @@ class EventQueries:
             if filters.request_id:
                 queryset = queryset.filter(request_id=filters.request_id)
 
-        # Filter by date
-        queryset = queryset.filter(request__date=today)
+        queryset = EventQueries._filter_events_for_local_today(queryset)
 
         # Calculate distance
         lat = coordinates[0]

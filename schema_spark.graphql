@@ -1076,6 +1076,8 @@ input CreateEventInput {
   name: String!
   eventTypeId: ID!
   requestId: ID = null
+  timezoneId: ID = null
+  date: String!
   address: String!
   notes: String!
   isNational: Boolean! = false
@@ -1619,7 +1621,7 @@ type DjangoModelType {
 }
 
 """
-Event(id, uuid, name, date, coordinates, tenant, request, event_type, status, start_time, end_time, address, notes, is_national, created_by, updated_by, created_at, updated_at)
+Event(id, uuid, name, date, coordinates, timezone, tenant, request, event_type, status, start_time, end_time, address, notes, is_national, created_by, updated_by, created_at, updated_at)
 """
 type Event {
   id: ID!
@@ -1639,6 +1641,7 @@ type Event {
   tenant: TenantType
   eventType: EventType
   status: EventStatus
+  timezone: TimeZone
   tenantImage: String
 }
 
@@ -3623,6 +3626,8 @@ input UpdateEventInput {
   name: String!
   eventTypeId: ID!
   requestId: ID = null
+  timezoneId: ID = null
+  date: String!
   address: String!
   notes: String!
   isNational: Boolean! = false
