@@ -2,6 +2,9 @@ import pytest
 from asgiref.sync import sync_to_async
 from django.contrib.auth import get_user_model
 
+from config.schema_spark import schema_spark
+from config.schema_client import schema_clients
+from config.schema_ambassador import schema_ambassador
 from tenants.models import TenantTheme
 from tenants.tests.base import BaseGraphQLTestCase
 
@@ -16,8 +19,6 @@ class TestTenantThemeGraphQL(BaseGraphQLTestCase):
     @pytest.fixture(autouse=True)
     def setup(self, db):
         """Set up roles, tenant, and schema."""
-        from config.schema_spark import schema_spark
-
         self.roles = self.setup_default_roles()
         self.schema = schema_spark
         self.endpoint_path = "/api/v1/graphql/spark"
@@ -282,3 +283,53 @@ class TestTenantThemeGraphQL(BaseGraphQLTestCase):
         assert result.data is not None
         theme = result.data["tenantThemePublic"]
         assert theme is not None
+
+    @pytest.mark.asyncio
+    async def test_tenant_theme_public_query_available_on_all_graphql_endpoints(self):
+        """
+        tenantThemePublic is exposed and works on spark, clients, and ambassadors endpoints.
+        """
+        system_user = self.get_system_user()
+        dark_theme = await sync_to_async(TenantTheme.objects.create)(
+            tenant=self.tenant,
+            color_scheme="dark",
+            name="Cross Endpoint Dark",
+            created_by=system_user,
+            updated_by=system_user,
+        )
+
+        query = """
+        query TenantThemePublic($tenantId: ID!, $scheme: String!) {
+          tenantThemePublic(tenantId: $tenantId, colorScheme: $scheme) {
+            id
+            name
+            colorScheme
+          }
+        }
+        """
+
+        variables = {
+            "tenantId": str(self.tenant.id),
+            "scheme": "dark",
+        }
+
+        # Check across all three main GraphQL endpoints
+        endpoints = [
+            (schema_spark, "/api/v1/graphql/spark"),
+            (schema_clients, "/api/v1/graphql/clients"),
+            (schema_ambassador, "/api/v1/graphql/ambassadors"),
+        ]
+
+        for schema, path in endpoints:
+            self.schema = schema
+            result = await self._execute_mutation(
+                query, variables, endpoint_path=path
+            )
+
+            assert result.errors is None
+            assert result.data is not None
+            theme = result.data["tenantThemePublic"]
+            assert theme is not None
+            assert theme["id"] == str(dark_theme.id)
+            assert theme["name"] == "Cross Endpoint Dark"
+            assert theme["colorScheme"] == "dark"

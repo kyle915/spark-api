@@ -41,17 +41,8 @@ class CustomUserType:
     role: RoleType
 
 
-# Spark Schema
-@strawberry.type()
-class QuerySpark(GoogleCalendarQueries):
-    @strawberry.field
-    def healthcheck(self) -> str:
-        return "ok"
-
-    @strawberry.field(permission_classes=[StrictIsAuthenticated])
-    def me(self, info) -> CustomUserType:
-        return info.context.request.user
-
+@strawberry.type
+class TenantThemingQuery:
     @strawberry.field
     async def tenant_theme_public(
         self,
@@ -76,6 +67,18 @@ class QuerySpark(GoogleCalendarQueries):
             ).first()
         )()
         return theme
+
+
+# Spark Schema
+@strawberry.type()
+class QuerySpark(GoogleCalendarQueries, TenantThemingQuery):
+    @strawberry.field
+    def healthcheck(self) -> str:
+        return "ok"
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    def me(self, info) -> CustomUserType:
+        return info.context.request.user
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def tenants(
@@ -131,7 +134,7 @@ class MutationSpark(SparkCustomRegister, SparkTenantMutations, TenantThemeMutati
 # Ambassadors Schema
 # @strawberry.django.type(model=get_user_model())
 @strawberry_django.type(User)
-class QueryAmbassadors(GoogleCalendarQueries):
+class QueryAmbassadors(GoogleCalendarQueries, TenantThemingQuery):
     @strawberry.field
     def healthcheck(self) -> str:
         return "ok"
@@ -152,7 +155,7 @@ class MutationAmbassadors(AmbassadorsCustomRegister, GoogleCalendarMutations):
 # Clients Schemas
 # @strawberry.django.type(model=get_user_model())
 @strawberry_django.type(User)
-class QueryClients(GoogleCalendarQueries):
+class QueryClients(GoogleCalendarQueries, TenantThemingQuery):
     @strawberry.field
     def healthcheck(self) -> str:
         return "ok"
@@ -218,7 +221,7 @@ class MutationClients(ClientsCustomRegister, GoogleCalendarMutations):
 # Mobile Schemas
 # @strawberry.django.type(model=get_user_model())
 @strawberry_django.type(User)
-class QueryMobile:
+class QueryMobile(TenantThemingQuery):
     @strawberry.field
     def healthcheck(self) -> str:
         return "ok"

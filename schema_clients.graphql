@@ -17,6 +17,26 @@ type AcceptInvitationResponse {
 }
 
 """
+AccountFeedback(id, uuid, do_differently_feedback, feedback, corpo_card, recap, created_by, updated_by, created_at, updated_at)
+"""
+type AccountFeedback {
+  id: ID!
+  uuid: String!
+  doDifferentlyFeedback: String
+  feedback: String
+  corpoCard: String
+  createdAt: String!
+  updatedAt: String!
+}
+
+input AccountFeedbackInput {
+  clientMutationId: ID = null
+  doDifferentlyFeedback: String = null
+  feedback: String = null
+  corpoCard: String = null
+}
+
+"""
 Ambassador(id, uuid, rating, address, coordinates, is_active, user, created_by, updated_by, created_at, updated_at)
 """
 type Ambassador {
@@ -713,6 +733,54 @@ type ConnectGoogleCalendarResponse {
   clientMutationId: ID
 }
 
+"""
+ConsumerEngagements(id, uuid, total_consumer, first_time_consumers, brand_aware_consumers, willing_to_purchase_consumers, not_willing_consumers, recap, created_by, updated_by, created_at, updated_at)
+"""
+type ConsumerEngagements {
+  id: ID!
+  uuid: String!
+  totalConsumer: Int!
+  firstTimeConsumers: Int!
+  brandAwareConsumers: Int!
+  willingToPurchaseConsumers: Int!
+  notWillingConsumers: Int!
+  createdAt: String!
+  updatedAt: String!
+}
+
+input ConsumerEngagementsInput {
+  clientMutationId: ID = null
+  totalConsumer: Int!
+  firstTimeConsumers: Int!
+  brandAwareConsumers: Int!
+  willingToPurchaseConsumers: Int!
+  notWillingConsumers: Int!
+}
+
+"""
+ConsumerFeedback(id, uuid, demographics, feedback, quotes, positive_stories, reasons_to_decline, recap, created_by, updated_by, created_at, updated_at)
+"""
+type ConsumerFeedback {
+  id: ID!
+  uuid: String!
+  demographics: String
+  feedback: String
+  quotes: String
+  positiveStories: String
+  reasonsToDecline: String
+  createdAt: String!
+  updatedAt: String!
+}
+
+input ConsumerFeedbackInput {
+  clientMutationId: ID = null
+  demographics: String = null
+  feedback: String = null
+  quotes: String = null
+  positiveStories: String = null
+  reasonsToDecline: String = null
+}
+
 input CoordinatesFilterInput {
   coordinates: [Float!]!
   range: Float!
@@ -1050,6 +1118,15 @@ input CreateRecapInput {
   name: String!
   eventId: ID!
   files: [String!]!
+  productsSold: Int = null
+  totalEarnings: Float = null
+  jobId: ID = null
+  retailerId: ID = null
+  consumerEngagements: ConsumerEngagementsInput = null
+  productSamples: [ProductSampleInput!] = null
+  salesPerformance: [SalesPerformanceInput!] = null
+  consumerFeedback: ConsumerFeedbackInput = null
+  accountFeedback: AccountFeedbackInput = null
 }
 
 input CreateRequestDetailInput {
@@ -1616,6 +1693,11 @@ input GoogleSocialAuthInput {
   clientMutationId: ID = null
   accessToken: String!
 }
+
+"""
+The `JSON` scalar type represents JSON values as specified by [ECMA-404](https://ecma-international.org/wp-content/uploads/ECMA-404_2nd_edition_december_2017.pdf).
+"""
+scalar JSON @specifiedBy(url: "https://ecma-international.org/wp-content/uploads/ECMA-404_2nd_edition_december_2017.pdf")
 
 """
 Job(id, uuid, name, description, code, address, start_date, end_date, public, closed, national, ongoing, coordinates, job_title, other_title, company, event, tenant, rate, created_by, updated_by, created_at, updated_at)
@@ -2229,6 +2311,24 @@ input ProductFiltersInput {
   productTypeId: ID = null
 }
 
+input ProductSampleInput {
+  clientMutationId: ID = null
+  productId: ID!
+  quantity: Int!
+}
+
+"""
+ProductSamples(id, uuid, product, recap, quantity, created_by, updated_by, created_at, updated_at)
+"""
+type ProductSamples {
+  id: ID!
+  uuid: String!
+  product: Product!
+  quantity: Int!
+  createdAt: String!
+  updatedAt: String!
+}
+
 """
 ProductType(id, uuid, name, tenant, created_by, updated_by, created_at, updated_at)
 """
@@ -2337,6 +2437,7 @@ type Query {
   attendances(first: Int = null, after: String = null, last: Int = null, before: String = null, filters: AttendanceFiltersInput = null): AttendanceCountableConnection!
   attendance(id: ID!): Attendance
   googleCalendarConnectionStatus: GoogleCalendarConnectionStatus!
+  tenantThemePublic(tenantId: ID!, colorScheme: String! = "dark"): TenantThemeType
   healthcheck: String!
   me: CustomUserType!
   tenants(userUuid: ID = null, filters: TenantFiltersInput = null, first: Int = null, after: String = null, last: Int = null, before: String = null): TenantTypeCountableConnection!
@@ -2529,7 +2630,7 @@ type RateTypeDetailResponse {
 }
 
 """
-Recap(id, uuid, name, event, recap_file, job, created_by, updated_by, created_at, updated_at)
+Recap(id, uuid, name, submited_at, total_engagements, products_sold, total_earnings, approved, timezone, event, ambassador, recap_file, job, retailer, created_by, updated_by, created_at, updated_at)
 """
 type Recap {
   id: ID!
@@ -2541,6 +2642,14 @@ type Recap {
   recapFileId: ID!
   createdAt: String!
   updatedAt: String!
+  totalEngagements: Int
+  productsSold: Int
+  totalEarnings: Float
+  consumerEngagements: [ConsumerEngagements!]!
+  productSamples: [ProductSamples!]!
+  salesPerformance: [SalesPerformance!]!
+  consumerFeedback: [ConsumerFeedback!]!
+  accountFeedback: [AccountFeedback!]!
   recapFiles: [RecapFile!]!
   ambassadors: [Ambassador!]!
   requestStoreManagers: [RequestStoreManager!]!
@@ -2568,7 +2677,7 @@ type RecapDetailResponse {
 }
 
 """
-RecapFile(id, uuid, name, file, approved, file_type, created_by, updated_by, created_at, updated_at)
+RecapFile(id, uuid, name, file, approved, file_type, file_recap_category, created_by, updated_by, created_at, updated_at)
 """
 type RecapFile {
   id: ID!
@@ -2915,6 +3024,26 @@ type RoleType {
   name: String!
 }
 
+"""
+SalesPerformance(id, uuid, price, product, recap, type_of_good, created_by, updated_by, created_at, updated_at)
+"""
+type SalesPerformance {
+  id: ID!
+  uuid: String!
+  product: Product!
+  typeOfGood: TypeOfGood!
+  price: Float!
+  createdAt: String!
+  updatedAt: String!
+}
+
+input SalesPerformanceInput {
+  clientMutationId: ID = null
+  productId: ID!
+  typeOfGoodId: ID!
+  price: Float!
+}
+
 input SkillFiltersInput {
   tenantId: ID = null
   tenantUuid: ID = null
@@ -3040,6 +3169,20 @@ input TenantFiltersInput {
 }
 
 """
+Per-tenant visual theme configuration compatible with DaisyUI.
+
+The frontend can use `css_variables` directly to construct a theme
+definition or apply CSS custom properties.
+"""
+type TenantThemeType {
+  id: ID!
+  name: String!
+  colorScheme: String!
+  cssVariables: JSON!
+  tenant: DjangoModelType!
+}
+
+"""
 Tenant(id, uuid, name, image, request_url_name, created_by, updated_by, created_at, updated_at)
 """
 type TenantType {
@@ -3127,6 +3270,17 @@ type TokenType {
 
   """The encoded payload, namely a token."""
   token: String!
+}
+
+"""
+TypeOfGood(id, uuid, name, tenant, created_by, updated_by, created_at, updated_at)
+"""
+type TypeOfGood {
+  id: ID!
+  uuid: String!
+  name: String!
+  createdAt: String!
+  updatedAt: String!
 }
 
 scalar UUID
@@ -3475,6 +3629,15 @@ input UpdateRecapInput {
   name: String!
   eventId: ID!
   files: [String!]!
+  productsSold: Int = null
+  totalEarnings: Float = null
+  jobId: ID = null
+  retailerId: ID = null
+  consumerEngagements: ConsumerEngagementsInput = null
+  productSamples: [ProductSampleInput!] = null
+  salesPerformance: [SalesPerformanceInput!] = null
+  consumerFeedback: ConsumerFeedbackInput = null
+  accountFeedback: AccountFeedbackInput = null
   id: ID!
 }
 
@@ -3613,13 +3776,13 @@ type UserType {
   isActive: Boolean!
   dateJoined: DateTime!
   status: UserStatusType!
-  id: ID!
   firstName: String
+  email: String!
 
   """Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only."""
   username: String!
   lastName: String
-  email: String!
+  id: ID!
   archived: Boolean!
   verified: Boolean!
 }
