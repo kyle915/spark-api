@@ -121,6 +121,7 @@ class Command(BaseCommand):
             defaults={
                 'name': 'Ambassador',
                 'created_by': system_user,
+                'slug': Role.AMBASSADOR_SLUG,
             }
         )
         if ambassador_created:
@@ -139,6 +140,7 @@ class Command(BaseCommand):
             defaults={
                 'name': 'Spark Admin',
                 'created_by': system_user,
+                'slug': Role.SPARK_ADMIN_SLUG,
             }
         )
         if spark_admin_created:
@@ -157,6 +159,7 @@ class Command(BaseCommand):
             defaults={
                 'name': 'Client',
                 'created_by': system_user,
+                'slug': Role.CLIENT_SLUG,
             }
         )
         if client_created:
