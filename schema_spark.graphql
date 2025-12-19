@@ -240,6 +240,8 @@ input AmbassadorJobFiltersInput {
   clientMutationId: ID = null
   tenantId: ID = null
   status: AmbassadorJobStatusFilter = null
+  statusId: ID = null
+  statusSlug: String = null
 }
 
 enum AmbassadorJobStatusFilter {
@@ -1326,6 +1328,8 @@ input CreateRequestWithDependenciesInput {
   coordinates: [Float!]!
   timezoneId: ID!
   requestTypeId: ID!
+  distributorId: ID = null
+  retailerId: ID = null
   clientName: String!
   clientEmail: String!
   distributorName: String!
@@ -1627,10 +1631,7 @@ type Event {
   id: ID!
   uuid: String!
   name: String!
-  date: String
   coordinates: [Float!]
-  startTime: String
-  endTime: String
   address: String!
   isNational: Boolean!
   notes: String
@@ -1643,6 +1644,9 @@ type Event {
   status: EventStatus
   timezone: TimeZone
   tenantImage: String
+  date: String
+  startTime: String
+  endTime: String
 }
 
 type EventAmbassadorCount {
@@ -1958,6 +1962,7 @@ input JobFiltersInput {
   clientMutationId: ID = null
   tenantId: ID = null
   eventId: ID = null
+  status: JobStatusFilter = null
 }
 
 """
@@ -2131,6 +2136,11 @@ type JobRequirementTypeDetailResponse {
   message: String!
   clientMutationId: ID
   jobRequirementType: JobRequirementType
+}
+
+enum JobStatusFilter {
+  OPEN
+  CLOSED
 }
 
 """
@@ -2919,9 +2929,6 @@ type Request {
   id: ID!
   uuid: String!
   name: String!
-  date: String!
-  startTime: String
-  endTime: String
   address: String!
   coordinates: [Float!]!
   clientName: String
@@ -2942,6 +2949,9 @@ type Request {
   tenantId: ID!
   createdAt: String!
   updatedAt: String!
+  date: String
+  startTime: String
+  endTime: String
 }
 
 type RequestCountableConnection {

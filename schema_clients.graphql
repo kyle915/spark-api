@@ -240,6 +240,8 @@ input AmbassadorJobFiltersInput {
   clientMutationId: ID = null
   tenantId: ID = null
   status: AmbassadorJobStatusFilter = null
+  statusId: ID = null
+  statusSlug: String = null
 }
 
 enum AmbassadorJobStatusFilter {
@@ -1949,6 +1951,12 @@ input JobFiltersInput {
   clientMutationId: ID = null
   tenantId: ID = null
   eventId: ID = null
+  status: JobStatusFilter = null
+}
+
+enum JobStatusFilter {
+  OPEN
+  CLOSED
 }
 
 """
