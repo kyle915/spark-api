@@ -111,26 +111,32 @@ class ClientAppleSocialAuthInput(AppleSocialAuthInput):
     tenant_id: strawberry.ID
 
 
-def _require_spark_admin(request_user) -> UpdateUserResponse | None:
+async def _check_client_or_spark_admin(request_user):
+    """Allow spark-admins and clients; return tuple (allowed, is_spark_admin, is_client, error_message)."""
     if not request_user.is_authenticated:
-        return UpdateUserResponse(success=False, message="User not authenticated.")
+        return False, False, False, "User not authenticated."
 
     try:
-        is_spark_admin = (
-            request_user.role and request_user.role.slug == UserRoleEnum.SPARK.value
-        )
+        is_spark_admin = await request_user.role.is_spark_admin
+        is_client = await request_user.role.is_client
     except Exception as exc:
-        return UpdateUserResponse(
-            success=False, message=f"Error checking permissions: {exc}"
+        return False, False, False, f"Error checking permissions: {exc}"
+
+    if not (is_spark_admin or is_client):
+        return (
+            False,
+            is_spark_admin,
+            is_client,
+            "You do not have permission to perform this action.",
         )
 
-    if not is_spark_admin:
-        return UpdateUserResponse(
-            success=False,
-            message="You do not have permission to perform this action.",
-        )
+    return True, is_spark_admin, is_client, None
 
-    return None
+
+async def _get_active_tenant_ids(user) -> list[int]:
+    return await sync_to_async(list)(
+        user.tenanted_users.filter(is_active=True).values_list("tenant_id", flat=True)
+    )
 
 
 async def register_user_with_role(
@@ -348,25 +354,13 @@ class SparkUserMutations:
     ) -> RegisterResponse:
         user = info.context.request.user
 
-        if not user.is_authenticated:
+        allowed, is_spark_admin, is_client, error = await _check_client_or_spark_admin(
+            user
+        )
+        if not allowed:
             return RegisterResponse(
                 success=False,
-                message="User not authenticated.",
-                client_mutation_id=input.client_mutation_id,
-            )
-
-        try:
-            is_spark_admin = await user.role.is_spark_admin
-            if not is_spark_admin:
-                return RegisterResponse(
-                    success=False,
-                    message="You do not have permission to perform this action.",
-                    client_mutation_id=input.client_mutation_id,
-                )
-        except Exception as e:
-            return RegisterResponse(
-                success=False,
-                message=f"Error checking permissions: {e}",
+                message=error,
                 client_mutation_id=input.client_mutation_id,
             )
 
@@ -389,6 +383,13 @@ class SparkUserMutations:
                 client_mutation_id=input.client_mutation_id,
             )
 
+        if is_client and input.role == UserRoleEnum.SPARK:
+            return RegisterResponse(
+                success=False,
+                message="Clients cannot assign spark-admin role.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
         if input.role == UserRoleEnum.CLIENT:
             if not resolved_tenant_id:
                 return RegisterResponse(
@@ -404,6 +405,21 @@ class SparkUserMutations:
                 return RegisterResponse(
                     success=False,
                     message="Tenant not found.",
+                    client_mutation_id=input.client_mutation_id,
+                )
+
+        if not is_spark_admin:
+            if not resolved_tenant_id:
+                return RegisterResponse(
+                    success=False,
+                    message="tenantId is required for client mutations.",
+                    client_mutation_id=input.client_mutation_id,
+                )
+            requester_tenants = await _get_active_tenant_ids(user)
+            if resolved_tenant_id not in requester_tenants:
+                return RegisterResponse(
+                    success=False,
+                    message="You do not have permission to manage this tenant.",
                     client_mutation_id=input.client_mutation_id,
                 )
 
@@ -427,10 +443,15 @@ class SparkUserMutations:
     ) -> UpdateUserResponse:
         requester = info.context.request.user
 
-        permission_error = _require_spark_admin(requester)
-        if permission_error:
-            permission_error.client_mutation_id = input.client_mutation_id
-            return permission_error
+        allowed, is_spark_admin, is_client, error = await _check_client_or_spark_admin(
+            requester
+        )
+        if not allowed:
+            return UpdateUserResponse(
+                success=False,
+                message=error,
+                client_mutation_id=input.client_mutation_id,
+            )
 
         if not input.id and not input.uuid:
             return UpdateUserResponse(
@@ -482,6 +503,13 @@ class SparkUserMutations:
                     client_mutation_id=input.client_mutation_id,
                 )
 
+        if is_client and resolved_role.slug == UserRoleEnum.SPARK.value:
+            return UpdateUserResponse(
+                success=False,
+                message="Clients cannot assign spark-admin role.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
         resolved_tenant_id: int | None = None
         if input.tenant_id:
             try:
@@ -508,6 +536,28 @@ class SparkUserMutations:
                 return UpdateUserResponse(
                     success=False,
                     message="Tenant not found.",
+                    client_mutation_id=input.client_mutation_id,
+                )
+
+        requester_tenant_ids = await _get_active_tenant_ids(requester)
+        target_user_tenant_ids = await sync_to_async(list)(
+            target_user.tenanted_users.filter(is_active=True).values_list(
+                "tenant_id", flat=True
+            )
+        )
+
+        if not is_spark_admin:
+            if resolved_tenant_id and resolved_tenant_id not in requester_tenant_ids:
+                return UpdateUserResponse(
+                    success=False,
+                    message="You do not have permission to manage this tenant.",
+                    client_mutation_id=input.client_mutation_id,
+                )
+
+            if not set(target_user_tenant_ids).intersection(requester_tenant_ids):
+                return UpdateUserResponse(
+                    success=False,
+                    message="You do not have permission to update this user.",
                     client_mutation_id=input.client_mutation_id,
                 )
 
