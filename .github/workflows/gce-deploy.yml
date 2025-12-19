@@ -79,7 +79,7 @@ jobs:
 
             echo ">>> Fetching latest code..." | tee -a $LOG_FILE
             git fetch origin 2>&1 | tee -a $LOG_FILE
-            git reset --hard origin/develop 2>&1 | tee -a $LOG_FILE
+            git reset --hard origin/staging 2>&1 | tee -a $LOG_FILE
 
             echo ">>> Syncing dependencies..." | tee -a $LOG_FILE
             uv sync 2>&1 | tee -a $LOG_FILE
