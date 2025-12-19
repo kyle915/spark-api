@@ -228,3 +228,7 @@ RQ_QUEUES = {
 RQ = {
     'COMMIT_MODE': 'on_db_commit',  # Ensures jobs wait for DB commits
 }
+
+RESEND_API_KEY = env("RESEND_API_KEY", default="")
+DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL",
+                         default="Spark <onboarding@resend.dev>")
