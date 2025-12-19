@@ -76,8 +76,9 @@ class QuerySpark(GoogleCalendarQueries):
         requester = info.context.request.user
 
         try:
-            is_spark_admin = await requester.role.is_spark_admin
-            is_client = await requester.role.is_client
+            role_slug = requester.role.slug if requester.role else None
+            is_spark_admin = role_slug == Role.SPARK_ADMIN_SLUG
+            is_client = role_slug == Role.CLIENT_SLUG
         except Exception as exc:
             raise GraphQLError(f"Error checking permissions: {exc}") from exc
 
@@ -122,8 +123,9 @@ class QuerySpark(GoogleCalendarQueries):
         user = info.context.request.user
 
         try:
-            is_spark_admin = await user.role.is_spark_admin
-            is_client = await user.role.is_client
+            role_slug = user.role.slug if user.role else None
+            is_spark_admin = role_slug == Role.SPARK_ADMIN_SLUG
+            is_client = role_slug == Role.CLIENT_SLUG
         except Exception as exc:
             raise GraphQLError(f"Error checking permissions: {exc}") from exc
 
@@ -282,11 +284,13 @@ class QueryClients(GoogleCalendarQueries):
         requester = info.context.request.user
 
         try:
-            is_spark_admin = await requester.role.is_spark_admin
+            role_slug = requester.role.slug if requester.role else None
+            is_spark_admin = role_slug == Role.SPARK_ADMIN_SLUG
+            is_client = role_slug == Role.CLIENT_SLUG
         except Exception as exc:
             raise GraphQLError(f"Error checking permissions: {exc}") from exc
 
-        if not is_spark_admin:
+        if not (is_spark_admin or is_client):
             raise GraphQLError("You do not have permission to perform this action.")
 
         if not id and not uuid:
@@ -294,10 +298,25 @@ class QueryClients(GoogleCalendarQueries):
 
         try:
             if id:
-                return await User.objects.select_related("role").aget(pk=id)
-            return await User.objects.select_related("role").aget(uuid=uuid)
+                target_user = await User.objects.select_related("role").aget(pk=id)
+            else:
+                target_user = await User.objects.select_related("role").aget(uuid=uuid)
         except User.DoesNotExist as exc:
             raise GraphQLError("User not found.") from exc
+
+        if is_client and not is_spark_admin:
+            has_shared_tenant = await sync_to_async(
+                TenantedUser.objects.filter(
+                    user=target_user,
+                    is_active=True,
+                    tenant__tenanted_users__user=requester,
+                    tenant__tenanted_users__is_active=True,
+                ).exists
+            )()
+            if not has_shared_tenant:
+                raise GraphQLError("You do not have permission to view this user.")
+
+        return target_user
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def users(
@@ -312,14 +331,28 @@ class QueryClients(GoogleCalendarQueries):
         user = info.context.request.user
 
         try:
-            is_spark_admin = await user.role.is_spark_admin
+            role_slug = user.role.slug if user.role else None
+            is_spark_admin = role_slug == Role.SPARK_ADMIN_SLUG
+            is_client = role_slug == Role.CLIENT_SLUG
         except Exception as exc:
             raise GraphQLError(f"Error checking permissions: {exc}") from exc
 
-        if not is_spark_admin:
+        if not (is_spark_admin or is_client):
             raise GraphQLError("You do not have permission to perform this action.")
 
         queryset = User.objects.select_related("role").all()
+        requester_tenant_ids: list[int] = []
+
+        if not is_spark_admin:
+            requester_tenant_ids = await sync_to_async(list)(
+                user.tenanted_users.filter(is_active=True).values_list(
+                    "tenant_id", flat=True
+                )
+            )
+            queryset = queryset.filter(
+                tenanted_users__is_active=True,
+                tenanted_users__tenant_id__in=requester_tenant_ids,
+            )
 
         if filters:
             if filters.tenant_id:
@@ -327,6 +360,10 @@ class QueryClients(GoogleCalendarQueries):
                     tenant_id = int(filters.tenant_id)
                 except (TypeError, ValueError) as exc:
                     raise GraphQLError("Invalid tenantId.") from exc
+                if not is_spark_admin and tenant_id not in requester_tenant_ids:
+                    raise GraphQLError(
+                        "You do not have permission to view users for this tenant."
+                    )
                 queryset = queryset.filter(
                     tenanted_users__is_active=True,
                     tenanted_users__tenant_id=tenant_id,

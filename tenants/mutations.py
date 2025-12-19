@@ -117,8 +117,9 @@ async def _check_client_or_spark_admin(request_user):
         return False, False, False, "User not authenticated."
 
     try:
-        is_spark_admin = await request_user.role.is_spark_admin
-        is_client = await request_user.role.is_client
+        role_slug = request_user.role.slug if request_user.role else None
+        is_spark_admin = role_slug == Role.SPARK_ADMIN_SLUG
+        is_client = role_slug == Role.CLIENT_SLUG
     except Exception as exc:
         return False, False, False, f"Error checking permissions: {exc}"
 
