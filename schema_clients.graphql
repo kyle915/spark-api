@@ -1328,6 +1328,8 @@ input CreateRequestWithDependenciesInput {
   coordinates: [Float!]!
   timezoneId: ID!
   requestTypeId: ID!
+  distributorId: ID = null
+  retailerId: ID = null
   clientName: String!
   clientEmail: String!
   distributorName: String!
