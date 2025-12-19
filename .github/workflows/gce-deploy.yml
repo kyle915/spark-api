@@ -1,4 +1,4 @@
-name: Deploy to GCE (merged PR -> develop, UV + Auto Rollback + Logging)
+name: Deploy to GCE Staging
 
 on:
   pull_request:
