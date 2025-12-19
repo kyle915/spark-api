@@ -239,6 +239,90 @@ class QueryClients(GoogleCalendarQueries):
         return info.context.request.user
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def user(
+        self,
+        info,
+        id: strawberry.ID | None = None,
+        uuid: strawberry.ID | None = None,
+    ) -> CustomUserType:
+        requester = info.context.request.user
+
+        try:
+            is_spark_admin = await requester.role.is_spark_admin
+        except Exception as exc:
+            raise GraphQLError(f"Error checking permissions: {exc}") from exc
+
+        if not is_spark_admin:
+            raise GraphQLError("You do not have permission to perform this action.")
+
+        if not id and not uuid:
+            raise GraphQLError("Provide id or uuid to fetch a user.")
+
+        try:
+            if id:
+                return await User.objects.select_related("role").aget(pk=id)
+            return await User.objects.select_related("role").aget(uuid=uuid)
+        except User.DoesNotExist as exc:
+            raise GraphQLError("User not found.") from exc
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def users(
+        self,
+        info,
+        filters: UserFiltersInput | None = None,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+    ) -> CountableConnection[CustomUserType]:
+        user = info.context.request.user
+
+        try:
+            is_spark_admin = await user.role.is_spark_admin
+        except Exception as exc:
+            raise GraphQLError(f"Error checking permissions: {exc}") from exc
+
+        if not is_spark_admin:
+            raise GraphQLError("You do not have permission to perform this action.")
+
+        queryset = User.objects.select_related("role").all()
+
+        if filters:
+            if filters.tenant_id:
+                try:
+                    tenant_id = int(filters.tenant_id)
+                except (TypeError, ValueError) as exc:
+                    raise GraphQLError("Invalid tenantId.") from exc
+                queryset = queryset.filter(
+                    tenanted_users__is_active=True,
+                    tenanted_users__tenant_id=tenant_id,
+                )
+            if filters.name:
+                queryset = queryset.filter(
+                    Q(first_name__icontains=filters.name)
+                    | Q(last_name__icontains=filters.name)
+                )
+            if filters.email:
+                queryset = queryset.filter(email__icontains=filters.email)
+            if filters.role:
+                queryset = queryset.filter(role__slug=filters.role.value)
+
+        queryset = queryset.distinct()
+
+        try:
+            return await connection_from_queryset_async(
+                queryset,
+                first=first,
+                after=after,
+                last=last,
+                before=before,
+                default_limit=10,
+                max_limit=100,
+            )
+        except ValueError as exc:
+            raise GraphQLError(str(exc)) from exc
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def tenants(
         self,
         info,
@@ -285,7 +369,7 @@ class QueryClients(GoogleCalendarQueries):
 
 
 @strawberry.type
-class MutationClients(ClientsCustomRegister, GoogleCalendarMutations):
+class MutationClients(ClientsCustomRegister, SparkUserMutations, GoogleCalendarMutations):
     verify_token = mutations.VerifyToken.field
     token_auth = mutations.ObtainJSONWebToken.field
     refresh_token = mutations.RefreshToken.field
