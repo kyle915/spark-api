@@ -12,6 +12,7 @@ from gqlauth.models import UserStatus
 from utils.graphql.inputs import SparkGraphQLInput
 from utils.graphql.relay import ensure_relay_mutation
 from utils.utils import ROLE_ID
+from utils.gcs import delete_blob, extract_blob_name_from_url
 from .models import Role, TenantedUser, Tenant
 from .types import TenantType
 from .social_auth import BaseSocialAuthMutations, SocialAuthResponse
@@ -115,9 +116,13 @@ def _require_spark_admin(request_user) -> UpdateUserResponse | None:
         return UpdateUserResponse(success=False, message="User not authenticated.")
 
     try:
-        is_spark_admin = request_user.role and request_user.role.slug == UserRoleEnum.SPARK.value
+        is_spark_admin = (
+            request_user.role and request_user.role.slug == UserRoleEnum.SPARK.value
+        )
     except Exception as exc:
-        return UpdateUserResponse(success=False, message=f"Error checking permissions: {exc}")
+        return UpdateUserResponse(
+            success=False, message=f"Error checking permissions: {exc}"
+        )
 
     if not is_spark_admin:
         return UpdateUserResponse(
@@ -451,11 +456,11 @@ class SparkUserMutations:
                 client_mutation_id=input.client_mutation_id,
             )
 
+        previous_image_name = target_user.image.name if target_user.image else None
+
         if input.email:
             email_exists = await sync_to_async(
-                User.objects.exclude(pk=target_user.pk)
-                .filter(email=input.email)
-                .exists
+                User.objects.exclude(pk=target_user.pk).filter(email=input.email).exists
             )()
             if email_exists:
                 return UpdateUserResponse(
@@ -467,7 +472,9 @@ class SparkUserMutations:
         resolved_role = target_user.role
         if input.role:
             try:
-                resolved_role = await sync_to_async(Role.objects.get)(slug=input.role.value)
+                resolved_role = await sync_to_async(Role.objects.get)(
+                    slug=input.role.value
+                )
             except Role.DoesNotExist:
                 return UpdateUserResponse(
                     success=False,
@@ -522,6 +529,15 @@ class SparkUserMutations:
                 return target_user
 
             await persist_updates()
+
+            if (
+                input.image is not None
+                and previous_image_name
+                and previous_image_name != input.image
+            ):
+                old_blob = extract_blob_name_from_url(previous_image_name)
+                if old_blob:
+                    await sync_to_async(delete_blob)(old_blob)
 
             if resolved_tenant_id:
                 tenant = await sync_to_async(Tenant.objects.get)(pk=resolved_tenant_id)
@@ -613,6 +629,7 @@ class ClientsCustomRegister:
 @strawberry.input
 class CreateTenantInput(SparkGraphQLInput):
     name: str
+    image: str | None = None
 
 
 @strawberry.type
@@ -627,6 +644,7 @@ class CreateTenantResponse:
 class UpdateTenantInput(SparkGraphQLInput):
     id: strawberry.ID
     name: str | None = None
+    image: str | None = None
 
 
 @strawberry.type
@@ -683,18 +701,21 @@ class SparkTenantMutations:
                 tenant = Tenant.objects.create(
                     name=input.name,
                     request_url_name=request_url_name,
+                    image=input.image,
                     created_by=user,
                 )
-                
+
                 # Create default statuses
                 for model_name, statuses in DEFAULT_TENANT_STATUSES.items():
-                    ModelClass = RequestStatus if model_name == "RequestStatus" else EventStatus
+                    ModelClass = (
+                        RequestStatus if model_name == "RequestStatus" else EventStatus
+                    )
                     for status_data in statuses:
                         ModelClass.objects.create(
                             name=status_data["name"],
                             tenant=tenant,
                             created_by=user,
-                            is_default=status_data["is_default"]
+                            is_default=status_data["is_default"],
                         )
 
                 return tenant
@@ -755,6 +776,8 @@ class SparkTenantMutations:
                 client_mutation_id=input.client_mutation_id,
             )
 
+        previous_image_name = tenant.image.name if tenant.image else None
+
         try:
 
             @sync_to_async
@@ -767,12 +790,23 @@ class SparkTenantMutations:
                     )
                     slugified_name = slugify(input.name)
                     tenant.request_url_name = f"{slugified_name}-{random_chars}".lower()
+                if input.image is not None:
+                    tenant.image = input.image
 
                 tenant.updated_by = user
                 tenant.save()
                 return tenant
 
             updated_tenant = await update_tenant_record()
+
+            if (
+                input.image is not None
+                and previous_image_name
+                and previous_image_name != input.image
+            ):
+                old_blob = extract_blob_name_from_url(previous_image_name)
+                if old_blob:
+                    await sync_to_async(delete_blob)(old_blob)
 
             return UpdateTenantResponse(
                 success=True,
