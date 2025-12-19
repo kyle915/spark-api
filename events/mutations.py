@@ -139,11 +139,16 @@ class BaseMutationService(SparkGraphQLMixin):
         if self.is_public and not tenant_id:
             raise GraphQLError("Tenant ID is required.")
 
-        is_client = await self.user.role.is_client
+        # Allow anonymous/public flows to skip role-based tenant restrictions
+        if not self.user or isinstance(self.user, AnonymousUser):
+            return
+
+        role = getattr(self.user, "role", None)
+        is_client = await role.is_client if role else False
         if (
             not self.is_public
             and not self.is_spark_schema
-            and self.user.role_id != ROLE_ID.SparkAdmin
+            and getattr(self.user, "role_id", None) != ROLE_ID.SparkAdmin
             and not is_client
             and tenant_id
         ):
