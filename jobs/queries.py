@@ -10,7 +10,7 @@ from jobs import models
 from django.db.models import QuerySet
 from django.db.models import Model
 from jobs import types
-from jobs.inputs import JobFiltersInput
+from jobs.inputs import JobFiltersInput, JobStatusFilter
 
 
 class JobsBaseQueriesService(BaseQueriesService):
@@ -543,8 +543,15 @@ class JobQueries:
             q=q,
         )
 
-        if filters and filters.event_id:
-            queryset = queryset.filter(event_id=filters.event_id)
+        if filters:
+            if filters.event_id:
+                queryset = queryset.filter(event_id=filters.event_id)
+            if filters.status:
+                status_filter_map = {
+                    JobStatusFilter.OPEN: False,
+                    JobStatusFilter.CLOSED: True,
+                }
+                queryset = queryset.filter(closed=status_filter_map[filters.status])
 
         return await service.get_connection(
             tenant_id=tenant_id,
@@ -799,6 +806,8 @@ class AmbassadorJobStatusFilter(str, Enum):
 @strawberry.input
 class AmbassadorJobFiltersInput(BaseTenantInput):
     status: AmbassadorJobStatusFilter | None = None
+    status_id: strawberry.ID | None = None
+    status_slug: str | None = None
 
 
 @strawberry.type
@@ -853,11 +862,19 @@ class AmbassadorJobQueries:
             q=q,
         )
 
-        if filters and filters.status:
-            status_filter_kwargs = {"status__slug": filters.status.value}
-            if tenant_id:
-                status_filter_kwargs["status__tenant_id"] = tenant_id
-            queryset = queryset.filter(**status_filter_kwargs)
+        if filters:
+            if filters.status_id:
+                queryset = queryset.filter(status_id=filters.status_id)
+            elif filters.status_slug:
+                status_filter_kwargs = {"status__slug": filters.status_slug}
+                if tenant_id:
+                    status_filter_kwargs["status__tenant_id"] = tenant_id
+                queryset = queryset.filter(**status_filter_kwargs)
+            elif filters.status:
+                status_filter_kwargs = {"status__slug": filters.status.value}
+                if tenant_id:
+                    status_filter_kwargs["status__tenant_id"] = tenant_id
+                queryset = queryset.filter(**status_filter_kwargs)
 
         return await service.get_connection(
             tenant_id=tenant_id,

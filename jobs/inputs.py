@@ -146,9 +146,16 @@ class UpdateJobInput(CreateJobInput):
     id: strawberry.ID
 
 
+@strawberry.enum
+class JobStatusFilter(str, Enum):
+    OPEN = "open"
+    CLOSED = "closed"
+
+
 @strawberry.input
 class JobFiltersInput(BaseTenantInput):
     event_id: strawberry.ID | None = None
+    status: JobStatusFilter | None = None
 
 
 @strawberry.input
