@@ -109,17 +109,18 @@ class Recap:
     id: strawberry.ID
     uuid: str
     name: str
+    approved: bool
     event: event_types.Event
     event_id: strawberry.ID
     recap_file: RecapFile
     recap_file_id: strawberry.ID
     created_at: str
     updated_at: str
-    
+
     total_engagements: int | None
     products_sold: int | None
     total_earnings: float | None
-    
+
     # Relationships
     consumer_engagements: List[ConsumerEngagements]
     product_samples: List[ProductSamples]

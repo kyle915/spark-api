@@ -29,6 +29,7 @@ from .types import (
     AmbassadorInvitationResponse,
     AcceptInvitationResponse,
     ApproveAmbassadorResponse,
+    CreateAmbassadorResponse,
     UpdateAmbassadorResponse,
     DeleteInvitationResponse,
     CreateAmbassadorReviewResponse,
@@ -42,6 +43,7 @@ from .types import (
     DeleteSkillResponse,
     CreateAmbassadorSkillResponse,
     DeleteAmbassadorSkillResponse,
+    UpsertAmbassadorProfileResponse,
     AttendanceTypeDetailResponse,
     AttendanceStatusDetailResponse,
     SourceDetailResponse,
@@ -53,6 +55,7 @@ from .services import (
     AmbassadorInvitationService,
     AcceptInvitationService,
     ApproveAmbassadorService,
+    CreateAmbassadorService,
     UpdateAmbassadorService,
     DeleteInvitationService,
     CreateAmbassadorReviewService,
@@ -66,6 +69,7 @@ from .services import (
     DeleteSkillService,
     CreateAmbassadorSkillService,
     DeleteAmbassadorSkillService,
+    UpsertAmbassadorProfileService,
 )
 
 
@@ -131,17 +135,28 @@ async def _get_default_application_status(tenant_id: int) -> JobStatus | None:
 class AmbassadorMutations:
     @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
     async def apply_ambassador_event(
-        self, info: Info, event_id: strawberry.ID
+        self,
+        info: Info,
+        event_id: strawberry.ID,
+        ambassador_id: strawberry.ID | None = None,
     ) -> ApplyAmbassadorEventResponse:
         user = info.context.request.user
         # Manual check removed as StrictIsAuthenticated handles it
 
-        try:
-            ambassador = await Ambassador.objects.aget(user=user)
-        except Ambassador.DoesNotExist:
-            return ApplyAmbassadorEventResponse(
-                success=False, message="Ambassador profile not found"
-            )
+        if ambassador_id:
+            try:
+                ambassador = await Ambassador.objects.aget(id=ambassador_id)
+            except (Ambassador.DoesNotExist, ValueError):
+                return ApplyAmbassadorEventResponse(
+                    success=False, message="Ambassador profile not found"
+                )
+        else:
+            try:
+                ambassador = await Ambassador.objects.aget(user=user)
+            except Ambassador.DoesNotExist:
+                return ApplyAmbassadorEventResponse(
+                    success=False, message="Ambassador profile not found"
+                )
 
         try:
             event = await Event.objects.select_related("tenant").aget(id=event_id)
@@ -257,12 +272,28 @@ class AmbassadorMutations:
         return await ApproveAmbassadorService.approve(input, info)
 
     @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
+    async def create_ambassador(
+        self,
+        info: strawberry.Info,
+        input: inputs.CreateAmbassadorInput,
+    ) -> CreateAmbassadorResponse:
+        return await CreateAmbassadorService.create(input, info)
+
+    @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
     async def update_ambassador(
         self,
         info: strawberry.Info,
         input: inputs.UpdateAmbassadorInput,
     ) -> UpdateAmbassadorResponse:
         return await UpdateAmbassadorService.update(input, info)
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def upsert_ambassador_profile(
+        self,
+        info: strawberry.Info,
+        input: inputs.UpsertAmbassadorProfileInput,
+    ) -> UpsertAmbassadorProfileResponse:
+        return await UpsertAmbassadorProfileService.upsert(input, info)
 
     @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
     async def delete_invitation(

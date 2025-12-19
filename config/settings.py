@@ -50,6 +50,7 @@ INSTALLED_APPS = [
     "strawberry_django",
     "corsheaders",
     "storages",
+    "django_rq",
 
     "gqlauth",
     "tenants",
@@ -201,17 +202,29 @@ GOOGLE_OAUTH_REDIRECT_URI = env(
     default="http://localhost:8000/api/v1/google-calendar/callback"
 )
 
-# Celery Configuration
-CELERY_BROKER_URL = env("CELERY_BROKER_URL",
-                        default="redis://localhost:6379/0")
-CELERY_RESULT_BACKEND = env("CELERY_RESULT_BACKEND",
-                            default="redis://localhost:6379/0")
-CELERY_ACCEPT_CONTENT = ['json']
-CELERY_TASK_SERIALIZER = 'json'
-CELERY_RESULT_SERIALIZER = 'json'
-CELERY_TIMEZONE = TIME_ZONE
-CELERY_TASK_TRACK_STARTED = True
-CELERY_TASK_TIME_LIMIT = 30 * 60  # 30 minutes
-CELERY_TASK_SOFT_TIME_LIMIT = 25 * 60  # 25 minutes
-CELERY_TASK_ACKS_LATE = True
-CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+# Django-RQ Configuration
+RQ_QUEUES = {
+    'default': {
+        'HOST': 'localhost',
+        'PORT': 6379,
+        'DB': 0,
+        'URL': env('CELERY_BROKER_URL', default='redis://localhost:6379/0'),
+    },
+    'high': {
+        'HOST': 'localhost',
+        'PORT': 6379,
+        'DB': 0,
+        'URL': env('CELERY_BROKER_URL', default='redis://localhost:6379/0'),
+    },
+    'low': {
+        'HOST': 'localhost',
+        'PORT': 6379,
+        'DB': 0,
+        'URL': env('CELERY_BROKER_URL', default='redis://localhost:6379/0'),
+    },
+}
+
+# RQ settings for commit mode (enqueue jobs when DB transaction commits)
+RQ = {
+    'COMMIT_MODE': 'on_db_commit',  # Ensures jobs wait for DB commits
+}

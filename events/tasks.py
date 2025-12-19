@@ -1,16 +1,16 @@
 """
-Celery tasks for Google Calendar synchronization.
+RQ jobs for Google Calendar synchronization.
 """
 import logging
-from celery import shared_task
-from celery.exceptions import Retry
-from django.utils import timezone
-from asgiref.sync import sync_to_async
+from django_rq import job
+from rq import Retry
 
 from events.models import Event
 from ambassadors.models import AmbassadorEvent
 from tenants.models import User, GoogleCalendarConnection
 from tenants.calendar.service import GoogleCalendarService
+from utils.queues import Queues
+from utils.utils import ROLE_ID
 
 logger = logging.getLogger(__name__)
 
@@ -18,8 +18,70 @@ logger = logging.getLogger(__name__)
 CONNECTION_BATCH_SIZE = 50
 
 
-@shared_task(bind=True, max_retries=3, default_retry_delay=60)
-def sync_event_to_google_calendar(self, user_id: int, event_id: int):
+def _user_should_receive_event(user: User, event: Event) -> bool:
+    """
+    Determine whether a user should receive a calendar event for the given Event.
+
+    Rules:
+    1. Spark Admin or Client:
+       - Event must be approved (status.slug == 'approved')
+       - Event must have an associated request
+    2. Ambassador:
+       - There must be an approved AmbassadorEvent relationship for this
+         user and this event in the current tenant (is_approved=True).
+    """
+    role = getattr(user, "role", None)
+    if not role:
+        logger.info(
+            "Skipping Google Calendar sync for user %s and event %s: "
+            "user has no role assigned.",
+            user.id,
+            event.id,
+        )
+        return False
+
+    # Check if event has a request
+    if not event.request:
+        logger.info(
+            "Skipping Google Calendar sync for user %s and event %s: "
+            "event has no request.",
+            user.id,
+            event.id,
+        )
+        return False
+
+    # Check if event has an approved status
+    if not event.status or event.status.slug != "approved":
+        logger.info(
+            "Skipping Google Calendar sync for user %s and event %s: "
+            "event is not approved.",
+            user.id,
+            event.id,
+        )
+        return False
+
+    # Ambassador
+    if role._is_ambassador:
+        has_approved_link = AmbassadorEvent.objects.filter(
+            ambassador__user=user,
+            event_id=event.id,
+            tenant_id=event.tenant_id,
+            is_approved=True,
+        ).exists()
+        if not has_approved_link:
+            logger.info(
+                "Skipping Google Calendar sync for ambassador user %s and event %s: "
+                "no approved AmbassadorEvent found for this tenant.",
+                user.id,
+                event.id,
+            )
+            return False
+
+    return True
+
+
+@job('default', retry=Retry(max=3, interval=[60, 120, 240]))
+def sync_event_to_google_calendar(user_id: int, event_id: int):
     """
     Sync an event to a user's Google Calendar.
 
@@ -33,13 +95,17 @@ def sync_event_to_google_calendar(self, user_id: int, event_id: int):
 
         # Check if user has active Google Calendar connection
         try:
-            connection = GoogleCalendarConnection.objects.get(
+            GoogleCalendarConnection.objects.get(
                 user=user,
                 is_active=True
             )
         except GoogleCalendarConnection.DoesNotExist:
             logger.warning(
                 f"User {user_id} does not have active Google Calendar connection")
+            return
+
+        # Role and business rules: decide if this user should receive this event
+        if not _user_should_receive_event(user, event):
             return
 
         # Get event type and status names
@@ -51,7 +117,7 @@ def sync_event_to_google_calendar(self, user_id: int, event_id: int):
         if event.status:
             status_name = event.status.name
 
-        # Validate event has request
+        # Validate event has request (required for building calendar payload)
         if not event.request:
             logger.error(
                 f"Event {event_id} must have a request to sync to Google Calendar")
@@ -71,32 +137,26 @@ def sync_event_to_google_calendar(self, user_id: int, event_id: int):
         else:
             logger.error(
                 f"Failed to sync event {event_id} to Google Calendar for user {user_id}")
-            # Retry the task if we haven't exceeded max retries
-            if self.request.retries < self.max_retries:
-                raise self.retry(exc=Exception(
-                    "Failed to create Google Calendar event"))
-            else:
-                logger.error(
-                    f"Max retries ({self.max_retries}) exceeded for event {event_id}. Giving up.")
+            # RQ will automatically retry on exception (up to max retries)
+            raise Exception("Failed to create Google Calendar event")
 
     except User.DoesNotExist:
         logger.error(f"User {user_id} not found")
+        # Don't retry on missing user
+        raise
     except Event.DoesNotExist:
         logger.error(f"Event {event_id} not found")
+        # Don't retry on missing event
+        raise
     except Exception as exc:
         logger.error(
             f"Error syncing event {event_id} to Google Calendar for user {user_id}: {exc}")
-        # Retry with exponential backoff if we haven't exceeded max retries
-        if self.request.retries < self.max_retries:
-            raise self.retry(exc=exc, countdown=60 *
-                             (2 ** self.request.retries))
-        else:
-            logger.error(
-                f"Max retries ({self.max_retries}) exceeded for event {event_id}. Giving up.")
+        # RQ will automatically retry on exception (up to max retries with exponential backoff)
+        raise
 
 
-@shared_task(bind=True, max_retries=3, default_retry_delay=60)
-def update_event_in_google_calendar(self, user_id: int, event_id: int, google_event_id: str = None):
+@job('default', retry=Retry(max=3, interval=[60, 120, 240]))
+def update_event_in_google_calendar(user_id: int, event_id: int, google_event_id: str = None):
     """
     Update an event in a user's Google Calendar.
     Uses sync_event which will update if mapping exists, or create if it doesn't.
@@ -112,13 +172,17 @@ def update_event_in_google_calendar(self, user_id: int, event_id: int, google_ev
 
         # Check if user has active Google Calendar connection
         try:
-            connection = GoogleCalendarConnection.objects.get(
+            GoogleCalendarConnection.objects.get(
                 user=user,
                 is_active=True
             )
         except GoogleCalendarConnection.DoesNotExist:
             logger.warning(
                 f"User {user_id} does not have active Google Calendar connection")
+            return
+
+        # Role and business rules: decide if this user should receive this event
+        if not _user_should_receive_event(user, event):
             return
 
         # Validate event has request
@@ -150,32 +214,26 @@ def update_event_in_google_calendar(self, user_id: int, event_id: int, google_ev
         else:
             logger.error(
                 f"Failed to sync/update event {event_id} in Google Calendar for user {user_id}")
-            # Retry the task if we haven't exceeded max retries
-            if self.request.retries < self.max_retries:
-                raise self.retry(exc=Exception(
-                    "Failed to update Google Calendar event"))
-            else:
-                logger.error(
-                    f"Max retries ({self.max_retries}) exceeded for event {event_id}. Giving up.")
+            # RQ will automatically retry on exception (up to max retries)
+            raise Exception("Failed to update Google Calendar event")
 
     except User.DoesNotExist:
         logger.error(f"User {user_id} not found")
+        # Don't retry on missing user
+        raise
     except Event.DoesNotExist:
         logger.error(f"Event {event_id} not found")
+        # Don't retry on missing event
+        raise
     except Exception as exc:
         logger.error(
             f"Error updating event {event_id} in Google Calendar for user {user_id}: {exc}")
-        # Retry with exponential backoff if we haven't exceeded max retries
-        if self.request.retries < self.max_retries:
-            raise self.retry(exc=exc, countdown=60 *
-                             (2 ** self.request.retries))
-        else:
-            logger.error(
-                f"Max retries ({self.max_retries}) exceeded for event {event_id}. Giving up.")
+        # RQ will automatically retry on exception (up to max retries with exponential backoff)
+        raise
 
 
-@shared_task(bind=True, max_retries=3, default_retry_delay=60)
-def sync_event_to_all_connected_users(self, event_id: int, tenant_id: int = None):
+@job('default', retry=Retry(max=3, interval=[60, 120, 240]))
+def sync_event_to_all_connected_users(event_id: int, tenant_id: int = None):
     """
     Sync an event to all users with active Google Calendar connections in a tenant.
 
@@ -194,6 +252,7 @@ def sync_event_to_all_connected_users(self, event_id: int, tenant_id: int = None
                 user__tenanted_users__is_active=True
             ).distinct()
 
+        queues: Queues = Queues()
         offset = 0
         total_queued = 0
         while True:
@@ -205,7 +264,9 @@ def sync_event_to_all_connected_users(self, event_id: int, tenant_id: int = None
                 break
 
             for user_id in user_ids_page:
-                sync_event_to_google_calendar.delay(user_id, event_id)
+                queues.default.add(
+                    sync_event_to_google_calendar, user_id, event_id)
+
             total_queued += len(user_ids_page)
             offset += CONNECTION_BATCH_SIZE
 
@@ -218,12 +279,9 @@ def sync_event_to_all_connected_users(self, event_id: int, tenant_id: int = None
 
     except Event.DoesNotExist:
         logger.error(f"Event {event_id} not found")
+        # Don't retry on missing event
+        raise
     except Exception as exc:
         logger.error(f"Error syncing event {event_id} to all users: {exc}")
-        # Retry with exponential backoff if we haven't exceeded max retries
-        if self.request.retries < self.max_retries:
-            raise self.retry(exc=exc, countdown=60 *
-                             (2 ** self.request.retries))
-        else:
-            logger.error(
-                f"Max retries ({self.max_retries}) exceeded for event {event_id}. Giving up.")
+        # RQ will automatically retry on exception (up to max retries with exponential backoff)
+        raise

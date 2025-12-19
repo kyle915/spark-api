@@ -35,11 +35,18 @@ class CoordinatesFilterInput:
     unit: DistanceUnit = DistanceUnit.KILOMETERS
 
 
+@strawberry.enum
+class EventStatusFilterEnum(str, Enum):
+    APPROVED = "approved"
+    DECLINED = "declined"
+    PENDING = "pending"
+
+
 @strawberry.input
 class EventFiltersInput(BaseTenantInput):
     tenant_uuid: strawberry.ID | None = None
     event_type_id: strawberry.ID | None = None
-    event_status_id: strawberry.ID | None = None
+    event_status: EventStatusFilterEnum | None = None
     request_id: strawberry.ID | None = None
     date: str | None = None
     coordinates: CoordinatesFilterInput | None = None
@@ -116,6 +123,8 @@ class BaseNameableInput(BaseTenantInput):
 class CreateEventInput(BaseNameableInput):
     event_type_id: strawberry.ID
     request_id: strawberry.ID | None = None
+    timezone_id: strawberry.ID | None = None
+    date: str
     address: str
     notes: str
     is_national: bool = False
@@ -310,6 +319,8 @@ class CreateRequestWithDependenciesInput(BaseNameableInput):
     coordinates: List[float]
     timezone_id: strawberry.ID
     request_type_id: strawberry.ID
+    distributor_id: strawberry.ID | None = None
+    retailer_id: strawberry.ID | None = None
     client_name: str
     client_email: str
     distributor_name: str

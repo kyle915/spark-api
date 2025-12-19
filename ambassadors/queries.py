@@ -1,3 +1,4 @@
+import asyncio
 import strawberry
 from enum import Enum
 from asgiref.sync import sync_to_async
@@ -30,6 +31,7 @@ class AmbassadorEventStatus(str, Enum):
 class AmbassadorEventsFiltersInput:
     """Filters for ambassador-scoped events."""
 
+    ambassador_uuid: strawberry.ID | None = None
     types: list[strawberry.ID] | None = None
     statuses: list[AmbassadorEventStatus] | None = None
     start_date: str | None = None
@@ -159,17 +161,21 @@ class FileTypeQueriesService(BaseAmbassadorQueriesService):
 class AmbassadorEventQueriesService(BaseAmbassadorQueriesService):
     """Service for ambassador event queries."""
 
-    def get_model(self) -> type[event_models.Event]:
+    def get_model(self) -> type[models.AmbassadorEvent]:
         """Get the model for the service."""
-        return event_models.Event
+        return models.AmbassadorEvent
 
-    def get_ambassador_queryset(self, user) -> QuerySet:
-        """Return events belonging to the given ambassador user."""
-        return (
+    def get_ambassador_queryset(self, user, filter_by_user: bool = True) -> QuerySet:
+        """Return ambassador events, optionally filtered by user."""
+        queryset = (
             self.get_model()
-            .objects.filter(ambassadors_events__ambassador__user=user)
-            .distinct()
+            .objects.select_related("ambassador__user", "event__request", "event__status", "event__event_type")
         )
+        
+        if filter_by_user:
+            queryset = queryset.filter(ambassador__user=user)
+        
+        return queryset.distinct()
 
 
 @strawberry.type
@@ -225,25 +231,35 @@ class AmbassadorEventQueries:
         before: str | None = None,
         q: str | None = None,
         filters: AmbassadorEventsFiltersInput | None = None,
-    ) -> CountableConnection[event_types.Event]:
-        """Return events scoped to the logged ambassador with optional filters."""
+    ) -> CountableConnection[types.AmbassadorEventType]:
+        """Return ambassador events with ambassador and user nested.
+        
+        If user role is 'ambassador', only returns events for the logged ambassador.
+        Otherwise, returns all ambassador events (for admins, clients, etc).
+        """
         service = AmbassadorEventQueriesService()
         user = await service.get_user(info)
-
-        queryset = service.get_ambassador_queryset(user)
+        
+        # Check if user role is ambassador
+        role_slug = service.get_role_slug(user)
+        filter_by_user = role_slug == "ambassador"
+        
+        queryset = service.get_ambassador_queryset(user, filter_by_user=filter_by_user)
         if q:
-            queryset = queryset.filter(name__icontains=q)
+            queryset = queryset.filter(event__name__icontains=q)
 
         if filters:
+            if filters.ambassador_uuid:
+                queryset = queryset.filter(ambassador__uuid=filters.ambassador_uuid)
             if filters.types:
-                queryset = queryset.filter(event_type_id__in=filters.types)
+                queryset = queryset.filter(event__event_type_id__in=filters.types)
             if filters.statuses:
                 status_slugs = [status.value for status in filters.statuses]
-                queryset = queryset.filter(status__slug__in=status_slugs)
+                queryset = queryset.filter(event__status__slug__in=status_slugs)
             if filters.start_date:
-                queryset = queryset.filter(request__date__gte=filters.start_date)
+                queryset = queryset.filter(event__request__date__gte=filters.start_date)
             if filters.end_date:
-                queryset = queryset.filter(request__date__lte=filters.end_date)
+                queryset = queryset.filter(event__request__date__lte=filters.end_date)
 
         queryset = queryset.order_by(*service.ordering)
 
@@ -304,6 +320,165 @@ class AmbassadorManagementQueries:
             last=last,
             before=before,
             filters=filters,
+        )
+
+    @strawberry.field(permission_classes=[IsClientOrSparkAdmin])
+    async def active_ambassadors(
+        self,
+        info: strawberry.Info,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        filters: inputs.ActiveAmbassadorFiltersInput | None = None,
+    ) -> CountableConnection[types.Ambassador]:
+        """Get all active ambassadors (client/spark-admin only)."""
+        from .services import AmbassadorQueriesService
+
+        service = AmbassadorQueriesService()
+        return await service.get_active_ambassadors(
+            info=info,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+            filters=filters,
+        )
+
+    @strawberry.field(permission_classes=[IsClientOrSparkAdmin])
+    async def ambassadors(
+        self,
+        info: strawberry.Info,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        filters: inputs.AmbassadorFiltersInput | None = None,
+    ) -> CountableConnection[types.Ambassador]:
+        """List ambassadors with filters for status, rating, name, and email."""
+        from .services import AmbassadorQueriesService
+
+        service = AmbassadorQueriesService()
+        return await service.get_ambassadors(
+            info=info,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+            filters=filters,
+        )
+
+    @strawberry.field(permission_classes=[IsClientOrSparkAdmin])
+    async def ambassador(
+        self,
+        info: strawberry.Info,
+        id: strawberry.ID | None = None,
+        uuid: strawberry.ID | None = None,
+    ) -> types.Ambassador | None:
+        """Get a single ambassador by id or uuid (client/spark-admin only)."""
+        from .services import AmbassadorQueriesService
+
+        if not id and not uuid:
+            raise GraphQLError("Either id or uuid must be provided")
+
+        service = AmbassadorQueriesService()
+        
+        try:
+            if id:
+                ambassador = await sync_to_async(models.Ambassador.objects.select_related("user").get)(id=id)
+            else:
+                ambassador = await sync_to_async(models.Ambassador.objects.select_related("user").get)(uuid=uuid)
+            return ambassador
+        except models.Ambassador.DoesNotExist:
+            return None
+
+
+@strawberry.type
+class AmbassadorProfileQueries:
+    """Aggregate query for full ambassador profile."""
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def ambassador_profile(
+        self,
+        info: strawberry.Info,
+        id: strawberry.ID | None = None,
+        uuid: strawberry.ID | None = None,
+    ) -> types.AmbassadorProfile | None:
+        """Return ambassador profile with related data in a single query."""
+        if not id and not uuid:
+            raise GraphQLError("Either id or uuid must be provided")
+
+        filters = {"id": id} if id is not None else {"uuid": uuid}
+
+        try:
+            ambassador = await models.Ambassador.objects.select_related("user").aget(
+                **filters
+            )
+        except models.Ambassador.DoesNotExist:
+            return None
+
+        ambassador_id = ambassador.id
+
+        async def fetch_reviews():
+            queryset = models.AmbassadorReview.objects.filter(
+                ambassador_id=ambassador_id
+            )
+            return await sync_to_async(list)(queryset)
+
+        async def fetch_files():
+            queryset = models.AmbassadorFile.objects.select_related("file_type").filter(
+                ambassador_id=ambassador_id
+            )
+            return await sync_to_async(list)(queryset)
+
+        async def fetch_traits():
+            queryset = models.AmbassadorTrait.objects.filter(
+                ambassador_id=ambassador_id
+            )
+            return await sync_to_async(list)(queryset)
+
+        async def fetch_skills():
+            queryset = models.AmbassadorSkill.objects.select_related("skill").filter(
+                ambassador_id=ambassador_id
+            )
+            return await sync_to_async(list)(queryset)
+
+        async def fetch_notes():
+            queryset = models.AmbassadorNote.objects.filter(
+                ambassador_id=ambassador_id
+            )
+            return await sync_to_async(list)(queryset)
+
+        async def fetch_work_history():
+            queryset = models.AmbassadorWorkHistory.objects.filter(
+                ambassador_id=ambassador_id
+            )
+            return await sync_to_async(list)(queryset)
+
+        (
+            reviews,
+            files,
+            traits,
+            skills,
+            notes,
+            work_history,
+        ) = await asyncio.gather(
+            fetch_reviews(),
+            fetch_files(),
+            fetch_traits(),
+            fetch_skills(),
+            fetch_notes(),
+            fetch_work_history(),
+        )
+
+        return types.AmbassadorProfile(
+            ambassador=ambassador,
+            reviews=reviews,
+            files=files,
+            traits=traits,
+            skills=skills,
+            notes=notes,
+            work_history=work_history,
         )
 
 

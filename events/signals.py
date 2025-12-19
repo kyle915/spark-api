@@ -9,8 +9,10 @@ from asgiref.sync import sync_to_async
 from events.models import Event
 from ambassadors.models import AmbassadorEvent
 from events.tasks import sync_event_to_google_calendar, sync_event_to_all_connected_users
+from utils.queues import Queues
 
 logger = logging.getLogger(__name__)
+queues: Queues = Queues()
 
 
 @receiver(post_save, sender=Event)
@@ -41,8 +43,8 @@ def sync_event_on_create_or_update(sender, instance: Event, created: bool, **kwa
                     # Not an ambassador, sync to all connected users in tenant
                     logger.info(
                         f"Event {instance.id} created by non-ambassador, syncing to all connected users")
-                    sync_event_to_all_connected_users.delay(
-                        instance.id, instance.tenant_id)
+                    queues.default.add(
+                        sync_event_to_all_connected_users, instance.id, instance.tenant_id)
                 else:
                     # Ambassador - will be handled by AmbassadorEvent signal
                     logger.debug(
@@ -51,8 +53,9 @@ def sync_event_on_create_or_update(sender, instance: Event, created: bool, **kwa
                 # No user or role, sync to all connected users as fallback
                 logger.warning(
                     f"Event {instance.id} created without user/role, syncing to all connected users")
-                sync_event_to_all_connected_users.delay(
-                    instance.id, instance.tenant_id)
+                queues.default.add(
+                    sync_event_to_all_connected_users, instance.id, instance.tenant_id)
+
         except Exception as e:
             logger.error(
                 f"Error in sync_event_on_create_or_update for event {instance.id}: {e}")
@@ -70,8 +73,9 @@ def sync_event_on_create_or_update(sender, instance: Event, created: bool, **kwa
 
                 # Sync update to each user who has this event
                 for mapping in mappings:
-                    sync_event_to_google_calendar.delay(
-                        mapping.user_id, instance.id)
+                    queues.default.add(
+                        sync_event_to_google_calendar, mapping.user_id, instance.id)
+
             else:
                 logger.debug(
                     f"Event {instance.id} updated but no users have it synced to their calendar")
@@ -101,8 +105,8 @@ def sync_event_for_ambassador(sender, instance: AmbassadorEvent, created: bool, 
                     # Sync event to this ambassador's Google Calendar
                     logger.info(
                         f"AmbassadorEvent {instance.id} created for ambassador {user.id}, syncing event {instance.event_id}")
-                    sync_event_to_google_calendar.delay(
-                        user.id, instance.event_id)
+                    queues.default.add(
+                        sync_event_to_google_calendar, user.id, instance.event_id)
                 else:
                     logger.debug(
                         f"AmbassadorEvent {instance.id} created by non-ambassador user {user.id}, skipping sync")

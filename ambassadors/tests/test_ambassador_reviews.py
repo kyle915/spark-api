@@ -692,10 +692,17 @@ class TestDeleteAmbassadorReview(AmbassadorsGraphQLTestCase):
     @pytest.mark.asyncio
     async def test_delete_ambassador_review_success_by_spark_admin(self):
         """Test successful review deletion by spark admin."""
-        # Create another review for deletion
+        # Use a different client to respect unique_together(ambassador, client)
+        other_client = await sync_to_async(self.create_client)(
+            name="Other Client",
+            email="other_client_delete@test.com",
+            tenant=self.tenant,
+        )
+
+        # Create another review for deletion linked to the other client
         review2 = await sync_to_async(AmbassadorReview.objects.create)(
             ambassador=self.ambassador,
-            client=self.client,
+            client=other_client,
             tenant=self.tenant,
             review="Another review",
             score=5,
