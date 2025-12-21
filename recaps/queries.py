@@ -39,6 +39,13 @@ class BaseRecapQueriesService(SparkGraphQLMixin):
                 "consumer_feedback",
                 "account_feedback",
                 Prefetch(
+                    "event__attendance",
+                    queryset=ambassador_models.Attendance.objects.select_related(
+                        "ambassador",
+                        "ambassador__user",
+                    ),
+                ),
+                Prefetch(
                     "event__ambassadors_events",
                     queryset=ambassador_models.AmbassadorEvent.objects.select_related(
                         "ambassador",

@@ -482,7 +482,6 @@ type ApplyAmbassadorJobResponse {
 input ApproveAmbassadorInput {
   clientMutationId: ID = null
   ambassadorId: ID!
-  tenantId: ID = null
 }
 
 input ApproveAmbassadorJobInput {
