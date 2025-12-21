@@ -241,7 +241,7 @@ class PublicAmbassadorCreationService(BaseAmbassadorService):
                 email=input.email,
                 role=role,
                 password=input.password1,
-                is_active=False,
+                is_active=True,
             )
 
             # Create ambassador (inactive by default)
