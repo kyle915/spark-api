@@ -315,6 +315,7 @@ class AttendanceType:
     id: strawberry.ID
     uuid: str
     name: str
+    slug: str | None
     created_at: str
     updated_at: str
 
@@ -332,6 +333,7 @@ class AttendanceStatus:
     id: strawberry.ID
     uuid: str
     name: str
+    slug: str | None
     tenant_id: strawberry.ID | None
     created_at: str
     updated_at: str
@@ -372,11 +374,18 @@ class Attendance:
     job_id: strawberry.ID | None
     event_id: strawberry.ID | None
     attendace_type_id: strawberry.ID | None
+    attendace_type: AttendanceType | None
     attendance_status_id: strawberry.ID | None
+    attendance_status: AttendanceStatus | None
     source_id: strawberry.ID | None
     timezone_id: strawberry.ID | None
     created_at: str
     updated_at: str
+
+    @strawberry.field
+    def ambassador(self) -> Ambassador | None:
+        """Return the ambassador who submitted the attendance."""
+        return self.ambassador
 
 
 @strawberry.type

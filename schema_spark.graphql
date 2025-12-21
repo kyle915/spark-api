@@ -482,7 +482,6 @@ type ApplyAmbassadorJobResponse {
 input ApproveAmbassadorInput {
   clientMutationId: ID = null
   ambassadorId: ID!
-  tenantId: ID = null
 }
 
 input ApproveAmbassadorJobInput {
@@ -529,11 +528,14 @@ type Attendance {
   jobId: ID
   eventId: ID
   attendaceTypeId: ID
+  attendaceType: AttendanceType
   attendanceStatusId: ID
+  attendanceStatus: AttendanceStatus
   sourceId: ID
   timezoneId: ID
   createdAt: String!
   updatedAt: String!
+  ambassador: Ambassador
 }
 
 type AttendanceCountableConnection {
@@ -568,12 +570,13 @@ input AttendanceFiltersInput {
 }
 
 """
-AttendanceStatus(id, uuid, name, tenant, created_by, updated_by, created_at, updated_at)
+AttendanceStatus(id, uuid, name, slug, tenant, created_by, updated_by, created_at, updated_at)
 """
 type AttendanceStatus {
   id: ID!
   uuid: String!
   name: String!
+  slug: String
   tenantId: ID
   createdAt: String!
   updatedAt: String!
@@ -601,12 +604,13 @@ type AttendanceStatusDetailResponse {
 }
 
 """
-AttendanceType(id, uuid, name, created_by, updated_by, created_at, updated_at)
+AttendanceType(id, uuid, name, slug, created_by, updated_by, created_at, updated_at)
 """
 type AttendanceType {
   id: ID!
   uuid: String!
   name: String!
+  slug: String
   createdAt: String!
   updatedAt: String!
 }
@@ -1002,12 +1006,14 @@ input CreateAttendanceStatusInput {
   clientMutationId: ID = null
   tenantId: ID = null
   name: String!
+  slug: String = null
 }
 
 input CreateAttendanceTypeInput {
   clientMutationId: ID = null
   tenantId: ID = null
   name: String!
+  slug: String = null
 }
 
 input CreateClientInput {
@@ -2845,6 +2851,7 @@ type Recap {
   accountFeedback: [AccountFeedback!]!
   recapFiles: [RecapFile!]!
   ambassadors: [Ambassador!]!
+  attendances: [Attendance!]!
   requestStoreManagers: [RequestStoreManager!]!
 }
 
@@ -3552,6 +3559,7 @@ input UpdateAttendanceStatusInput {
   clientMutationId: ID = null
   tenantId: ID = null
   name: String!
+  slug: String = null
   id: ID!
 }
 
@@ -3559,6 +3567,7 @@ input UpdateAttendanceTypeInput {
   clientMutationId: ID = null
   tenantId: ID = null
   name: String!
+  slug: String = null
   id: ID!
 }
 

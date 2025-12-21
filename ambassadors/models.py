@@ -646,6 +646,7 @@ class AttendanceType(models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     name = models.CharField(max_length=255)
+    slug = models.SlugField(max_length=50, null=True)
 
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -668,6 +669,7 @@ class AttendanceStatus(models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     name = models.CharField(max_length=255)
+    slug = models.SlugField(max_length=50, null=True)
 
     tenant = models.ForeignKey(
         Tenant,

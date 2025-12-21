@@ -36,7 +36,6 @@ class AcceptAmbassadorInvitationInput(SparkGraphQLInput):
 class ApproveAmbassadorInput(SparkGraphQLInput):
     """Input for approving an ambassador."""
     ambassador_id: strawberry.ID
-    tenant_id: strawberry.ID | None = None
 
 
 @strawberry.input
@@ -260,7 +259,7 @@ class AmbassadorSkillFiltersInput:
 
 @strawberry.input
 class CreateAttendanceTypeInput(BaseNameableInput):
-    pass
+    slug: str | None = None
 
 
 @strawberry.input
@@ -270,7 +269,7 @@ class UpdateAttendanceTypeInput(CreateAttendanceTypeInput):
 
 @strawberry.input
 class CreateAttendanceStatusInput(BaseNameableInput):
-    pass
+    slug: str | None = None
 
 
 @strawberry.input
