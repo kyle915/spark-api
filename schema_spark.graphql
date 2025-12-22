@@ -240,6 +240,8 @@ input AmbassadorJobFiltersInput {
   clientMutationId: ID = null
   tenantId: ID = null
   status: AmbassadorJobStatusFilter = null
+  statusId: ID = null
+  statusSlug: String = null
 }
 
 enum AmbassadorJobStatusFilter {
@@ -480,7 +482,6 @@ type ApplyAmbassadorJobResponse {
 input ApproveAmbassadorInput {
   clientMutationId: ID = null
   ambassadorId: ID!
-  tenantId: ID = null
 }
 
 input ApproveAmbassadorJobInput {
@@ -527,11 +528,14 @@ type Attendance {
   jobId: ID
   eventId: ID
   attendaceTypeId: ID
+  attendaceType: AttendanceType
   attendanceStatusId: ID
+  attendanceStatus: AttendanceStatus
   sourceId: ID
   timezoneId: ID
   createdAt: String!
   updatedAt: String!
+  ambassador: Ambassador
 }
 
 type AttendanceCountableConnection {
@@ -566,12 +570,13 @@ input AttendanceFiltersInput {
 }
 
 """
-AttendanceStatus(id, uuid, name, tenant, created_by, updated_by, created_at, updated_at)
+AttendanceStatus(id, uuid, name, slug, tenant, created_by, updated_by, created_at, updated_at)
 """
 type AttendanceStatus {
   id: ID!
   uuid: String!
   name: String!
+  slug: String
   tenantId: ID
   createdAt: String!
   updatedAt: String!
@@ -599,12 +604,13 @@ type AttendanceStatusDetailResponse {
 }
 
 """
-AttendanceType(id, uuid, name, created_by, updated_by, created_at, updated_at)
+AttendanceType(id, uuid, name, slug, created_by, updated_by, created_at, updated_at)
 """
 type AttendanceType {
   id: ID!
   uuid: String!
   name: String!
+  slug: String
   createdAt: String!
   updatedAt: String!
 }
@@ -1000,12 +1006,14 @@ input CreateAttendanceStatusInput {
   clientMutationId: ID = null
   tenantId: ID = null
   name: String!
+  slug: String = null
 }
 
 input CreateAttendanceTypeInput {
   clientMutationId: ID = null
   tenantId: ID = null
   name: String!
+  slug: String = null
 }
 
 input CreateClientInput {
@@ -1326,6 +1334,8 @@ input CreateRequestWithDependenciesInput {
   coordinates: [Float!]!
   timezoneId: ID!
   requestTypeId: ID!
+  distributorId: ID = null
+  retailerId: ID = null
   clientName: String!
   clientEmail: String!
   distributorName: String!
@@ -1627,10 +1637,7 @@ type Event {
   id: ID!
   uuid: String!
   name: String!
-  date: String
   coordinates: [Float!]
-  startTime: String
-  endTime: String
   address: String!
   isNational: Boolean!
   notes: String
@@ -1643,6 +1650,9 @@ type Event {
   status: EventStatus
   timezone: TimeZone
   tenantImage: String
+  date: String
+  startTime: String
+  endTime: String
 }
 
 type EventAmbassadorCount {
@@ -1896,6 +1906,7 @@ type Job {
   jobRequirements: [JobRequirement!]!
   createdAt: String!
   updatedAt: String!
+  attendances: [Attendance!]!
 }
 
 type JobCountableConnection {
@@ -1958,6 +1969,7 @@ input JobFiltersInput {
   clientMutationId: ID = null
   tenantId: ID = null
   eventId: ID = null
+  status: JobStatusFilter = null
 }
 
 """
@@ -2131,6 +2143,11 @@ type JobRequirementTypeDetailResponse {
   message: String!
   clientMutationId: ID
   jobRequirementType: JobRequirementType
+}
+
+enum JobStatusFilter {
+  OPEN
+  CLOSED
 }
 
 """
@@ -2919,9 +2936,6 @@ type Request {
   id: ID!
   uuid: String!
   name: String!
-  date: String!
-  startTime: String
-  endTime: String
   address: String!
   coordinates: [Float!]!
   clientName: String
@@ -2942,6 +2956,9 @@ type Request {
   tenantId: ID!
   createdAt: String!
   updatedAt: String!
+  date: String
+  startTime: String
+  endTime: String
 }
 
 type RequestCountableConnection {
@@ -3542,6 +3559,7 @@ input UpdateAttendanceStatusInput {
   clientMutationId: ID = null
   tenantId: ID = null
   name: String!
+  slug: String = null
   id: ID!
 }
 
@@ -3549,6 +3567,7 @@ input UpdateAttendanceTypeInput {
   clientMutationId: ID = null
   tenantId: ID = null
   name: String!
+  slug: String = null
   id: ID!
 }
 

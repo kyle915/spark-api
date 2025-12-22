@@ -678,7 +678,6 @@ class TestApproveAmbassador(AmbassadorsGraphQLTestCase):
         variables = {
             "input": {
                 "ambassadorId": str(self.ambassador.id),
-                "tenantId": str(self.tenant.id),
                 "clientMutationId": "test-123",
             }
         }
@@ -696,21 +695,12 @@ class TestApproveAmbassador(AmbassadorsGraphQLTestCase):
         ambassador = await sync_to_async(Ambassador.objects.get)(pk=self.ambassador.id)
         assert ambassador.is_active is True
 
-        # Verify TenantedUser was created
-        tenanted_user_exists = await sync_to_async(
-            TenantedUser.objects.filter(
-                user=self.ambassador_user, tenant=self.tenant
-            ).exists
-        )()
-        assert tenanted_user_exists is True
-
     @pytest.mark.asyncio
     async def test_approve_ambassador_success_by_spark_admin(self):
         """Test successful ambassador approval by spark admin."""
         variables = {
             "input": {
                 "ambassadorId": str(self.ambassador.id),
-                "tenantId": str(self.tenant.id),
                 "clientMutationId": "test-123",
             }
         }
@@ -789,56 +779,6 @@ class TestApproveAmbassador(AmbassadorsGraphQLTestCase):
         assert result.data["approveAmbassador"]["success"] is False
         assert "not found" in result.data["approveAmbassador"]["message"].lower(
         )
-
-    @pytest.mark.asyncio
-    async def test_approve_ambassador_invalid_tenant(self):
-        """Test approval with invalid tenant ID."""
-        variables = {
-            "input": {
-                "ambassadorId": str(self.ambassador.id),
-                "tenantId": "99999",
-                "clientMutationId": "test-123",
-            }
-        }
-
-        result = await self._execute_mutation_authenticated(
-            self.mutation, variables, self.client_user, self.endpoint_path
-        )
-
-        assert result.data is not None
-        assert result.data["approveAmbassador"]["success"] is False
-        assert "tenant" in result.data["approveAmbassador"]["message"].lower()
-
-    @pytest.mark.asyncio
-    async def test_approve_ambassador_existing_tenanted_user(self):
-        """Test approval when TenantedUser already exists."""
-        # Create existing TenantedUser
-        await sync_to_async(self.create_tenanted_user)(
-            self.ambassador_user, self.tenant
-        )
-
-        variables = {
-            "input": {
-                "ambassadorId": str(self.ambassador.id),
-                "tenantId": str(self.tenant.id),
-                "clientMutationId": "test-123",
-            }
-        }
-
-        result = await self._execute_mutation_authenticated(
-            self.mutation, variables, self.client_user, self.endpoint_path
-        )
-
-        assert result.data is not None
-        assert result.data["approveAmbassador"]["success"] is True
-
-        # Verify only one TenantedUser exists
-        tenanted_user_count = await sync_to_async(
-            TenantedUser.objects.filter(
-                user=self.ambassador_user, tenant=self.tenant
-            ).count
-        )()
-        assert tenanted_user_count == 1
 
 
 @pytest.mark.django_db(transaction=True)

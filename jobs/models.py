@@ -331,7 +331,7 @@ class Job(models.Model):
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     name = models.CharField(max_length=100, null=False)
     description = models.TextField(null=True)
-    code = models.CharField(max_length=100)
+    code = models.CharField(max_length=100, null=True)
     address = models.CharField(max_length=255)
     start_date = models.DateTimeField(null=True)
     end_date = models.DateTimeField(null=True)

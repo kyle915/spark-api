@@ -17,6 +17,31 @@ type AcceptInvitationResponse {
 }
 
 """
+AccountFeedback(id, uuid, do_differently_feedback, feedback, corpo_card, recap, created_by, updated_by, created_at, updated_at)
+"""
+type AccountFeedback {
+  id: ID!
+  uuid: String!
+  doDifferentlyFeedback: String
+  feedback: String
+  corpoCard: String
+  createdAt: String!
+  updatedAt: String!
+}
+
+input AccountFeedbackInput {
+  clientMutationId: ID = null
+  doDifferentlyFeedback: String = null
+  feedback: String = null
+  corpoCard: String = null
+}
+
+input ActiveAmbassadorFiltersInput {
+  email: String = null
+  name: String = null
+}
+
+"""
 Ambassador(id, uuid, rating, address, coordinates, is_active, user, created_by, updated_by, created_at, updated_at)
 """
 type Ambassador {
@@ -59,23 +84,68 @@ type AmbassadorEventType {
   uuid: String!
   isApproved: Boolean!
   ambassador: Ambassador!
+  event: Event!
   tenantId: ID!
   eventId: ID!
   createdAt: String!
   updatedAt: String!
 }
 
+type AmbassadorEventTypeCountableConnection {
+  pageInfo: PageInfo!
+  edges: [AmbassadorEventTypeCountableEdge!]!
+  totalCount: Int!
+}
+
+type AmbassadorEventTypeCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: AmbassadorEventType!
+}
+
 input AmbassadorEventsFiltersInput {
+  ambassadorUuid: ID = null
   types: [ID!] = null
   statuses: [AmbassadorEventStatus!] = null
   startDate: String = null
   endDate: String = null
 }
 
+input AmbassadorFileInput {
+  clientMutationId: ID = null
+  name: String!
+  url: String = null
+  mainResume: Boolean = null
+  profilePic: Boolean = null
+  isPublic: Boolean = null
+  fileTypeId: ID = null
+}
+
+"""
+AmbassadorFile(id, uuid, name, url, main_resume, profile_pic, is_public, file_type, ambassador, created_by, updated_by, created_at, updated_at)
+"""
+type AmbassadorFileType {
+  id: ID!
+  uuid: String!
+  name: String!
+  url: String
+  mainResume: Boolean!
+  profilePic: Boolean!
+  isPublic: Boolean!
+  ambassadorId: ID!
+  fileType: FileType
+  createdAt: String!
+  updatedAt: String!
+}
+
 input AmbassadorFiltersInput {
   tenantId: ID = null
   tenantUuid: ID = null
   isActive: Boolean = null
+  ratingMin: Int = null
+  ratingMax: Int = null
   email: String = null
   name: String = null
   address: String = null
@@ -170,6 +240,8 @@ input AmbassadorJobFiltersInput {
   clientMutationId: ID = null
   tenantId: ID = null
   status: AmbassadorJobStatusFilter = null
+  statusId: ID = null
+  statusSlug: String = null
 }
 
 enum AmbassadorJobStatusFilter {
@@ -215,6 +287,22 @@ type AmbassadorNoteTypeCountableEdge {
 
   """The item at the end of the edge"""
   node: AmbassadorNoteType!
+}
+
+type AmbassadorProfile {
+  ambassador: Ambassador!
+  reviews: [AmbassadorReviewType!]!
+  files: [AmbassadorFileType!]!
+  traits: [AmbassadorTraitType!]!
+  skills: [AmbassadorSkillType!]!
+  notes: [AmbassadorNoteType!]!
+  workHistory: [AmbassadorWorkHistoryType!]!
+}
+
+input AmbassadorProfileNoteInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  note: String!
 }
 
 input AmbassadorReviewFiltersInput {
@@ -265,6 +353,11 @@ input AmbassadorSkillFiltersInput {
   tenantUuid: ID = null
 }
 
+input AmbassadorSkillInput {
+  clientMutationId: ID = null
+  skillId: ID!
+}
+
 """
 AmbassadorSkill(id, uuid, tenant, ambassador, skill, created_by, updated_by, created_at, updated_at)
 """
@@ -274,6 +367,7 @@ type AmbassadorSkillType {
   ambassadorId: ID!
   skillId: ID!
   tenantId: ID!
+  skill: SkillType!
   createdAt: String!
   updatedAt: String!
 }
@@ -334,6 +428,40 @@ type AmbassadorToAmbassadorReviewDetailResponse {
   ambassadorToAmbassadorReview: AmbassadorToAmbassadorReview
 }
 
+input AmbassadorTraitInput {
+  clientMutationId: ID = null
+  userId: ID!
+}
+
+"""
+AmbassadorTrait(id, uuid, ambassador, user, created_by, updated_by, created_at, updated_at)
+"""
+type AmbassadorTraitType {
+  id: ID!
+  uuid: String!
+  ambassadorId: ID!
+  userId: ID!
+  createdAt: String!
+  updatedAt: String!
+}
+
+input AmbassadorWorkHistoryInput {
+  clientMutationId: ID = null
+  userId: ID!
+}
+
+"""
+AmbassadorWorkHistory(id, uuid, ambassador, user, created_by, updated_by, created_at, updated_at)
+"""
+type AmbassadorWorkHistoryType {
+  id: ID!
+  uuid: String!
+  ambassadorId: ID!
+  userId: ID!
+  createdAt: String!
+  updatedAt: String!
+}
+
 input AppleSocialAuthInput {
   clientMutationId: ID = null
   identityToken: String!
@@ -354,7 +482,6 @@ type ApplyAmbassadorJobResponse {
 input ApproveAmbassadorInput {
   clientMutationId: ID = null
   ambassadorId: ID!
-  tenantId: ID = null
 }
 
 input ApproveAmbassadorJobInput {
@@ -368,6 +495,12 @@ type ApproveAmbassadorResponse {
   message: String!
   clientMutationId: ID
   ambassador: Ambassador
+}
+
+input ApproveRecapInput {
+  clientMutationId: ID = null
+  id: ID!
+  approved: Boolean!
 }
 
 input ApproveRequestInput {
@@ -544,6 +677,7 @@ input ClientRegisterInput {
   email: String!
   password1: String!
   password2: String!
+  image: String = null
   role: UserRoleEnum!
   tenantId: ID = null
 }
@@ -713,10 +847,67 @@ type ConnectGoogleCalendarResponse {
   clientMutationId: ID
 }
 
+"""
+ConsumerEngagements(id, uuid, total_consumer, first_time_consumers, brand_aware_consumers, willing_to_purchase_consumers, not_willing_consumers, recap, created_by, updated_by, created_at, updated_at)
+"""
+type ConsumerEngagements {
+  id: ID!
+  uuid: String!
+  totalConsumer: Int!
+  firstTimeConsumers: Int!
+  brandAwareConsumers: Int!
+  willingToPurchaseConsumers: Int!
+  notWillingConsumers: Int!
+  createdAt: String!
+  updatedAt: String!
+}
+
+input ConsumerEngagementsInput {
+  clientMutationId: ID = null
+  totalConsumer: Int!
+  firstTimeConsumers: Int!
+  brandAwareConsumers: Int!
+  willingToPurchaseConsumers: Int!
+  notWillingConsumers: Int!
+}
+
+"""
+ConsumerFeedback(id, uuid, demographics, feedback, quotes, positive_stories, reasons_to_decline, recap, created_by, updated_by, created_at, updated_at)
+"""
+type ConsumerFeedback {
+  id: ID!
+  uuid: String!
+  demographics: String
+  feedback: String
+  quotes: String
+  positiveStories: String
+  reasonsToDecline: String
+  createdAt: String!
+  updatedAt: String!
+}
+
+input ConsumerFeedbackInput {
+  clientMutationId: ID = null
+  demographics: String = null
+  feedback: String = null
+  quotes: String = null
+  positiveStories: String = null
+  reasonsToDecline: String = null
+}
+
 input CoordinatesFilterInput {
   coordinates: [Float!]!
   range: Float!
   unit: DistanceUnit! = KILOMETERS
+}
+
+input CreateAmbassadorInput {
+  clientMutationId: ID = null
+  userId: ID!
+  address: String = null
+  coordinates: [Float!] = null
+  isActive: Boolean = null
+  rating: Int = null
 }
 
 input CreateAmbassadorInvitationInput {
@@ -747,6 +938,13 @@ type CreateAmbassadorNoteResponse {
   message: String!
   clientMutationId: ID
   ambassadorNote: AmbassadorNoteType
+}
+
+type CreateAmbassadorResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  ambassador: Ambassador
 }
 
 input CreateAmbassadorReviewInput {
@@ -881,6 +1079,8 @@ input CreateEventInput {
   name: String!
   eventTypeId: ID!
   requestId: ID = null
+  timezoneId: ID = null
+  date: String!
   address: String!
   notes: String!
   isNational: Boolean! = false
@@ -1050,6 +1250,15 @@ input CreateRecapInput {
   name: String!
   eventId: ID!
   files: [String!]!
+  productsSold: Int = null
+  totalEarnings: Float = null
+  jobId: ID = null
+  retailerId: ID = null
+  consumerEngagements: ConsumerEngagementsInput = null
+  productSamples: [ProductSampleInput!] = null
+  salesPerformance: [SalesPerformanceInput!] = null
+  consumerFeedback: ConsumerFeedbackInput = null
+  accountFeedback: AccountFeedbackInput = null
 }
 
 input CreateRequestDetailInput {
@@ -1120,6 +1329,8 @@ input CreateRequestWithDependenciesInput {
   coordinates: [Float!]!
   timezoneId: ID!
   requestTypeId: ID!
+  distributorId: ID = null
+  retailerId: ID = null
   clientName: String!
   clientEmail: String!
   distributorName: String!
@@ -1184,6 +1395,17 @@ input CreateTimeZoneInput {
   offset: Int!
 }
 
+input CreateUserInput {
+  clientMutationId: ID = null
+  firstName: String!
+  email: String!
+  password1: String!
+  password2: String!
+  image: String = null
+  role: UserRoleEnum!
+  tenantId: ID = null
+}
+
 """
 User(password, last_login, is_superuser, username, first_name, last_name, email, is_staff, date_joined, id, uuid, image, role, created_by, updated_by, created_at, updated_at, is_active)
 """
@@ -1197,6 +1419,21 @@ type CustomUserType {
   firstName: String!
   lastName: String!
   role: RoleType!
+  image: String
+}
+
+type CustomUserTypeCountableConnection {
+  pageInfo: PageInfo!
+  edges: [CustomUserTypeCountableEdge!]!
+  totalCount: Int!
+}
+
+type CustomUserTypeCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: CustomUserType!
 }
 
 input DashboardFiltersInput {
@@ -1376,16 +1613,13 @@ type DjangoModelType {
 }
 
 """
-Event(id, uuid, name, date, coordinates, tenant, request, event_type, status, start_time, end_time, address, notes, is_national, created_by, updated_by, created_at, updated_at)
+Event(id, uuid, name, date, coordinates, timezone, tenant, request, event_type, status, start_time, end_time, address, notes, is_national, created_by, updated_by, created_at, updated_at)
 """
 type Event {
   id: ID!
   uuid: String!
   name: String!
-  date: String
   coordinates: [Float!]
-  startTime: String
-  endTime: String
   address: String!
   isNational: Boolean!
   notes: String
@@ -1396,7 +1630,11 @@ type Event {
   tenant: TenantType
   eventType: EventType
   status: EventStatus
+  timezone: TimeZone
   tenantImage: String
+  date: String
+  startTime: String
+  endTime: String
 }
 
 type EventAmbassadorCount {
@@ -1456,7 +1694,7 @@ input EventFiltersInput {
   tenantId: ID = null
   tenantUuid: ID = null
   eventTypeId: ID = null
-  eventStatusId: ID = null
+  eventStatus: EventStatusFilterEnum = null
   requestId: ID = null
   date: String = null
   coordinates: CoordinatesFilterInput = null
@@ -1510,6 +1748,12 @@ type EventStatusDetailResponse {
   message: String!
   clientMutationId: ID
   eventStatus: EventStatus
+}
+
+enum EventStatusFilterEnum {
+  APPROVED
+  DECLINED
+  PENDING
 }
 
 input EventStatusFiltersInput {
@@ -1706,6 +1950,12 @@ input JobFiltersInput {
   clientMutationId: ID = null
   tenantId: ID = null
   eventId: ID = null
+  status: JobStatusFilter = null
+}
+
+enum JobStatusFilter {
+  OPEN
+  CLOSED
 }
 
 """
@@ -2021,9 +2271,12 @@ type Mutation {
   updateRecap(input: UpdateRecapInput!): RecapDetailResponse!
   deleteRecap(input: DeleteRecapInput!): RecapDetailResponse!
   deleteRecapFile(input: DeleteRecapFileInput!): RecapFileDetailResponse!
+  approveRecap(input: ApproveRecapInput!): RecapDetailResponse!
   register(input: ClientRegisterInput!): RegisterResponse!
   socialAuthGoogle(input: GoogleSocialAuthInput!): SocialAuthResponse!
   socialAuthApple(input: AppleSocialAuthInput!): SocialAuthResponse!
+  createUser(input: CreateUserInput!): RegisterResponse!
+  updateUser(input: UpdateUserInput!): UpdateUserResponse!
   connectGoogleCalendar(input: ConnectGoogleCalendarInput!): ConnectGoogleCalendarResponse!
   googleCalendarCallback(input: GoogleCalendarCallbackInput!): GoogleCalendarCallbackResponse!
   disconnectGoogleCalendar(input: DisconnectGoogleCalendarInput!): DisconnectGoogleCalendarResponse!
@@ -2084,13 +2337,15 @@ type Mutation {
   manageAmbassadorJobAssignment(input: ManageAmbassadorJobAssignmentInput!): AmbassadorJobDetailResponse!
   approveAmbassadorJob(input: ApproveAmbassadorJobInput!): AmbassadorJobDetailResponse!
   declineAmbassadorJob(input: DeclineAmbassadorJobInput!): AmbassadorJobDetailResponse!
-  applyAmbassadorEvent(eventId: ID!): ApplyAmbassadorEventResponse!
+  applyAmbassadorEvent(eventId: ID!, ambassadorId: ID = null): ApplyAmbassadorEventResponse!
   applyAmbassadorJob(jobId: ID!): ApplyAmbassadorJobResponse!
   createPublicAmbassador(input: CreatePublicAmbassadorInput!): PublicAmbassadorCreationResponse!
   createAmbassadorInvitation(input: CreateAmbassadorInvitationInput!): AmbassadorInvitationResponse!
   acceptAmbassadorInvitation(input: AcceptAmbassadorInvitationInput!): AcceptInvitationResponse!
   approveAmbassador(input: ApproveAmbassadorInput!): ApproveAmbassadorResponse!
+  createAmbassador(input: CreateAmbassadorInput!): CreateAmbassadorResponse!
   updateAmbassador(input: UpdateAmbassadorInput!): UpdateAmbassadorResponse!
+  upsertAmbassadorProfile(input: UpsertAmbassadorProfileInput!): UpsertAmbassadorProfileResponse!
   deleteInvitation(input: DeleteInvitationInput!): DeleteInvitationResponse!
   createAmbassadorReview(input: CreateAmbassadorReviewInput!): CreateAmbassadorReviewResponse!
   updateAmbassadorReview(input: UpdateAmbassadorReviewInput!): UpdateAmbassadorReviewResponse!
@@ -2229,6 +2484,24 @@ input ProductFiltersInput {
   productTypeId: ID = null
 }
 
+input ProductSampleInput {
+  clientMutationId: ID = null
+  productId: ID!
+  quantity: Int!
+}
+
+"""
+ProductSamples(id, uuid, product, recap, quantity, created_by, updated_by, created_at, updated_at)
+"""
+type ProductSamples {
+  id: ID!
+  uuid: String!
+  product: Product!
+  quantity: Int!
+  createdAt: String!
+  updatedAt: String!
+}
+
 """
 ProductType(id, uuid, name, tenant, created_by, updated_by, created_at, updated_at)
 """
@@ -2317,9 +2590,13 @@ type Query {
   recap(uuid: ID!): Recap
   fileTypes(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): FileTypeCountableConnection!
   fileType(uuid: ID!): FileType
-  ambassadorEvents(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: AmbassadorEventsFiltersInput = null): EventCountableConnection!
+  ambassadorEvents(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: AmbassadorEventsFiltersInput = null): AmbassadorEventTypeCountableConnection!
   sentInvitations(first: Int = null, after: String = null, last: Int = null, before: String = null, filters: AmbassadorInvitationFiltersInput = null): AmbassadorInvitationTypeCountableConnection!
   availableAmbassadors(first: Int = null, after: String = null, last: Int = null, before: String = null, filters: AmbassadorFiltersInput = null): AmbassadorCountableConnection!
+  activeAmbassadors(first: Int = null, after: String = null, last: Int = null, before: String = null, filters: ActiveAmbassadorFiltersInput = null): AmbassadorCountableConnection!
+  ambassadors(first: Int = null, after: String = null, last: Int = null, before: String = null, filters: AmbassadorFiltersInput = null): AmbassadorCountableConnection!
+  ambassador(id: ID = null, uuid: ID = null): Ambassador
+  ambassadorProfile(id: ID = null, uuid: ID = null): AmbassadorProfile
   ambassadorReviews(first: Int = null, after: String = null, last: Int = null, before: String = null, filters: AmbassadorReviewFiltersInput = null): AmbassadorReviewTypeCountableConnection!
   ambassadorReview(reviewId: ID!): AmbassadorReviewType
   ambassadorNotes(first: Int = null, after: String = null, last: Int = null, before: String = null, filters: AmbassadorNoteFiltersInput = null): AmbassadorNoteTypeCountableConnection!
@@ -2339,6 +2616,8 @@ type Query {
   googleCalendarConnectionStatus: GoogleCalendarConnectionStatus!
   healthcheck: String!
   me: CustomUserType!
+  user(id: ID = null, uuid: ID = null): CustomUserType!
+  users(filters: UserFiltersInput = null, first: Int = null, after: String = null, last: Int = null, before: String = null): CustomUserTypeCountableConnection!
   tenants(userUuid: ID = null, filters: TenantFiltersInput = null, first: Int = null, after: String = null, last: Int = null, before: String = null): TenantTypeCountableConnection!
   ambassadorJobStatuses(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): StatusCountableConnection!
   ambassadorJobStatus(id: ID = null, uuid: ID = null): Status
@@ -2529,18 +2808,27 @@ type RateTypeDetailResponse {
 }
 
 """
-Recap(id, uuid, name, event, recap_file, job, created_by, updated_by, created_at, updated_at)
+Recap(id, uuid, name, submited_at, total_engagements, products_sold, total_earnings, approved, timezone, event, ambassador, recap_file, job, retailer, created_by, updated_by, created_at, updated_at)
 """
 type Recap {
   id: ID!
   uuid: String!
   name: String!
+  approved: Boolean!
   event: Event!
   eventId: ID!
   recapFile: RecapFile!
   recapFileId: ID!
   createdAt: String!
   updatedAt: String!
+  totalEngagements: Int
+  productsSold: Int
+  totalEarnings: Float
+  consumerEngagements: [ConsumerEngagements!]!
+  productSamples: [ProductSamples!]!
+  salesPerformance: [SalesPerformance!]!
+  consumerFeedback: [ConsumerFeedback!]!
+  accountFeedback: [AccountFeedback!]!
   recapFiles: [RecapFile!]!
   ambassadors: [Ambassador!]!
   requestStoreManagers: [RequestStoreManager!]!
@@ -2568,7 +2856,7 @@ type RecapDetailResponse {
 }
 
 """
-RecapFile(id, uuid, name, file, approved, file_type, created_by, updated_by, created_at, updated_at)
+RecapFile(id, uuid, name, file, approved, file_type, file_recap_category, created_by, updated_by, created_at, updated_at)
 """
 type RecapFile {
   id: ID!
@@ -2627,9 +2915,6 @@ type Request {
   id: ID!
   uuid: String!
   name: String!
-  date: String!
-  startTime: String
-  endTime: String
   address: String!
   coordinates: [Float!]!
   clientName: String
@@ -2650,6 +2935,9 @@ type Request {
   tenantId: ID!
   createdAt: String!
   updatedAt: String!
+  date: String
+  startTime: String
+  endTime: String
 }
 
 type RequestCountableConnection {
@@ -2906,6 +3194,12 @@ type ReviewScoreDetailResponse {
   reviewScore: ReviewScore
 }
 
+enum RoleFilterEnum {
+  AMBASSADOR
+  CLIENT
+  SPARK
+}
+
 """
 Role(id, uuid, name, slug, created_by, updated_by, created_at, updated_at)
 """
@@ -2913,6 +3207,26 @@ type RoleType {
   id: ID!
   uuid: UUID!
   name: String!
+}
+
+"""
+SalesPerformance(id, uuid, price, product, recap, type_of_good, created_by, updated_by, created_at, updated_at)
+"""
+type SalesPerformance {
+  id: ID!
+  uuid: String!
+  product: Product!
+  typeOfGood: TypeOfGood!
+  price: Float!
+  createdAt: String!
+  updatedAt: String!
+}
+
+input SalesPerformanceInput {
+  clientMutationId: ID = null
+  productId: ID!
+  typeOfGoodId: ID!
+  price: Float!
 }
 
 input SkillFiltersInput {
@@ -3129,6 +3443,17 @@ type TokenType {
   token: String!
 }
 
+"""
+TypeOfGood(id, uuid, name, tenant, created_by, updated_by, created_at, updated_at)
+"""
+type TypeOfGood {
+  id: ID!
+  uuid: String!
+  name: String!
+  createdAt: String!
+  updatedAt: String!
+}
+
 scalar UUID
 
 input UpdateAmbassadorInput {
@@ -3297,6 +3622,8 @@ input UpdateEventInput {
   name: String!
   eventTypeId: ID!
   requestId: ID = null
+  timezoneId: ID = null
+  date: String!
   address: String!
   notes: String!
   isNational: Boolean! = false
@@ -3475,6 +3802,15 @@ input UpdateRecapInput {
   name: String!
   eventId: ID!
   files: [String!]!
+  productsSold: Int = null
+  totalEarnings: Float = null
+  jobId: ID = null
+  retailerId: ID = null
+  consumerEngagements: ConsumerEngagementsInput = null
+  productSamples: [ProductSampleInput!] = null
+  salesPerformance: [SalesPerformanceInput!] = null
+  consumerFeedback: ConsumerFeedbackInput = null
+  accountFeedback: AccountFeedbackInput = null
   id: ID!
 }
 
@@ -3580,14 +3916,62 @@ input UpdateTimeZoneInput {
   id: ID!
 }
 
+input UpdateUserInput {
+  clientMutationId: ID = null
+  id: ID = null
+  uuid: ID = null
+  firstName: String = null
+  lastName: String = null
+  email: String = null
+  role: UserRoleEnum = null
+  tenantId: ID = null
+  image: String = null
+}
+
+type UpdateUserResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+}
+
 type UploadUrlResponse {
   uploadUrl: String!
   blobName: String!
 }
 
+input UpsertAmbassadorProfileInput {
+  clientMutationId: ID = null
+  ambassadorId: ID = null
+  ambassadorUuid: ID = null
+  address: String = null
+  coordinates: [Float!] = null
+  isActive: Boolean = null
+  rating: Int = null
+  files: [AmbassadorFileInput!] = null
+  traits: [AmbassadorTraitInput!] = null
+  skills: [AmbassadorSkillInput!] = null
+  notes: [AmbassadorProfileNoteInput!] = null
+  workHistory: [AmbassadorWorkHistoryInput!] = null
+}
+
+type UpsertAmbassadorProfileResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  profile: AmbassadorProfile
+}
+
+input UserFiltersInput {
+  tenantId: ID = null
+  name: String = null
+  email: String = null
+  role: RoleFilterEnum = null
+}
+
 enum UserRoleEnum {
   AMBASSADOR
   CLIENT
+  SPARK
 }
 
 """A helper model that handles user account stuff."""
@@ -3614,11 +3998,11 @@ type UserType {
   dateJoined: DateTime!
   status: UserStatusType!
   id: ID!
-  firstName: String
 
   """Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only."""
   username: String!
   lastName: String
+  firstName: String
   email: String!
   archived: Boolean!
   verified: Boolean!
