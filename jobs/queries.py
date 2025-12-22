@@ -1,6 +1,7 @@
 import strawberry
 from enum import Enum
 from graphql import GraphQLError
+from django.db.models import Prefetch
 
 from utils.graphql.inputs import BaseTenantInput, SparkGraphQLInput
 from utils.graphql.permissions import StrictIsAuthenticated
@@ -11,6 +12,7 @@ from django.db.models import QuerySet
 from django.db.models import Model
 from jobs import types
 from jobs.inputs import JobFiltersInput, JobStatusFilter
+from ambassadors import models as ambassador_models
 
 
 class JobsBaseQueriesService(BaseQueriesService):
@@ -520,6 +522,30 @@ class JobQueriesService(JobsBaseQueriesService):
     def get_model(self) -> Model:
         """Get the model for the service."""
         return models.Job
+
+    def get_queryset(self) -> QuerySet:
+        """Get jobs with related attendance and ambassadors prefetched."""
+        return (
+            self.get_model()
+            .objects.select_related(
+                "job_title",
+                "other_title",
+                "company",
+                "event",
+                "rate",
+            )
+            .prefetch_related(
+                "job_requirements",
+                Prefetch(
+                    "attendance",
+                    queryset=ambassador_models.Attendance.objects.select_related(
+                        "ambassador",
+                        "ambassador__user",
+                    ),
+                ),
+            )
+            .all()
+        )
 
 
 @strawberry.type

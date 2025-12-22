@@ -3,11 +3,12 @@ from __future__ import annotations
 import strawberry_django
 import strawberry
 from typing import List, Optional
+from asgiref.sync import sync_to_async
 
 from . import models
 from events.types import Location, Event
 from tenants.types import TenantType as Tenant
-from ambassadors.types import Ambassador
+from ambassadors.types import Ambassador, Attendance
 
 
 @strawberry_django.type(models.Status)
@@ -201,7 +202,7 @@ class Job:
     uuid: str
     name: str
     description: str | None
-    code: str
+    code: str | None
     address: str
     start_date: str | None
     end_date: str | None
@@ -220,6 +221,11 @@ class Job:
     job_requirements: List[JobRequirement]
     created_at: str
     updated_at: str
+
+    @strawberry.field
+    async def attendances(self) -> List[Attendance]:
+        """Attendance records linked to this job."""
+        return await sync_to_async(list)(self.attendance.all())
 
 
 @strawberry.type
