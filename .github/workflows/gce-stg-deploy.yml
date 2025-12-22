@@ -91,7 +91,7 @@ jobs:
             sudo systemctl restart spark 2>&1 | tee -a $LOG_FILE
 
             echo ">>> Waiting for health check..." | tee -a $LOG_FILE
-            sleep 10
+            sleep 30
 
             HEALTH_RESPONSE=$(curl -s -w "\n%{http_code}" \
             -X POST http://localhost/api/v1/graphql/spark \
