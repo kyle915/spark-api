@@ -139,13 +139,6 @@ class Recap:
         return [ae.ambassador for ae in self.event.ambassadors_events.all()]
 
     @strawberry.field
-    def attendances(self) -> List[ambassador_types.Attendance]:
-        """Return attendance records linked to the recap's event."""
-        if not self.event:
-            return []
-        return list(self.event.attendance.all())
-
-    @strawberry.field
     def request_store_managers(self) -> List[event_types.RequestStoreManager]:
         """Return store managers associated with the recap's request."""
         if not self.event or not self.event.request:

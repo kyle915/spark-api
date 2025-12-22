@@ -1,6 +1,6 @@
 import strawberry_django
 import strawberry
-
+from asgiref.sync import sync_to_async
 
 from . import models
 from tenants.types import SparkUserType
@@ -383,9 +383,9 @@ class Attendance:
     updated_at: str
 
     @strawberry.field
-    def ambassador(self) -> Ambassador | None:
+    async def ambassador(self) -> Ambassador | None:
         """Return the ambassador who submitted the attendance."""
-        return self.ambassador
+        return await sync_to_async(lambda obj: obj.ambassador)(self)
 
 
 @strawberry.type
