@@ -1,11 +1,11 @@
-name: Deploy to GCE (merged PR -> develop, UV + Auto Rollback + Logging)
+name: Deploy to GCE Staging (merged PR -> develop, UV + Auto Rollback + Logging)
 
 on:
   pull_request:
     types:
       - closed
     branches:
-      - develop
+      - staging
 
 jobs:
   deploy:
@@ -32,20 +32,20 @@ jobs:
       - name: Prepare SSH
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.GCE_SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          echo "${{ secrets.GCE_SSH_PRIVATE_KEY_STG }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -H ${{ secrets.GCE_HOST }} >> ~/.ssh/known_hosts
+          ssh-keyscan -H ${{ secrets.GCE_HOST_STG }} >> ~/.ssh/known_hosts
       
       # ------------------------------------
       # DEPLOY + BACKUP + AUTO ROLLBACK
       # ------------------------------------
       - name: Deploy to GCE (with Auto Rollback + Logging)
         run: |
-          ssh ${{ secrets.GCE_USER }}@${{ secrets.GCE_HOST }} << 'EOF'
+          ssh ${{ secrets.GCE_USER_STG }}@${{ secrets.GCE_HOST_STG }} << 'EOF'
 
-            APP_DIR="/home/wern/spark-api"
-            BACKUP_DIR="/home/wern/deploy_backups"
-            LOG_DIR="/home/wern/deploy_logs"
+            APP_DIR="/home/spark/spark-api"
+            BACKUP_DIR="/home/spark/deploy_backups"
+            LOG_DIR="/home/spark/deploy_logs"
 
             mkdir -p $BACKUP_DIR
             mkdir -p $LOG_DIR
@@ -58,7 +58,7 @@ jobs:
             echo ">>> Log file: $LOG_FILE" | tee -a $LOG_FILE
 
             echo ">>> Creating backup..." | tee -a $LOG_FILE
-            cd /home/wern
+            cd /home/spark
             zip -r "$BACKUP_FILE" spark-api \
               -x "spark-api/*.sock" \
               -x "spark-api/*.pid" \
@@ -79,7 +79,7 @@ jobs:
 
             echo ">>> Fetching latest code..." | tee -a $LOG_FILE
             git fetch origin 2>&1 | tee -a $LOG_FILE
-            git reset --hard origin/develop 2>&1 | tee -a $LOG_FILE
+            git reset --hard origin/staging 2>&1 | tee -a $LOG_FILE
 
             echo ">>> Syncing dependencies..." | tee -a $LOG_FILE
             uv sync 2>&1 | tee -a $LOG_FILE
@@ -91,11 +91,11 @@ jobs:
             sudo systemctl restart spark 2>&1 | tee -a $LOG_FILE
 
             echo ">>> Waiting for health check..." | tee -a $LOG_FILE
-            sleep 5
+            sleep 10
 
             HEALTH_RESPONSE=$(curl -s -w "\n%{http_code}" \
             -X POST http://localhost/api/v1/graphql/spark \
-            -H "Host: spark-api-dev.wern.co" \
+            -H "Host: spark-api-stg.igniteproductions.co" \
             -H "Content-Type: application/json" \
             -d '{"query":"query { healthcheck }"}')
 
@@ -118,7 +118,7 @@ jobs:
 
             echo ">>> Restoring backup..." | tee -a $LOG_FILE
             rm -rf $APP_DIR 2>&1 | tee -a $LOG_FILE
-            unzip "$BACKUP_FILE" -d /home/wern/ 2>&1 | tee -a $LOG_FILE
+            unzip "$BACKUP_FILE" -d /home/spark/ 2>&1 | tee -a $LOG_FILE
 
             echo ">>> Resyncing dependencies after rollback..." | tee -a $LOG_FILE
             cd $APP_DIR
