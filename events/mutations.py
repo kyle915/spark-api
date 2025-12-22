@@ -1,3 +1,5 @@
+import datetime
+
 import strawberry
 from strawberry import relay
 from strawberry.extensions import MaxTokensLimiter
@@ -139,11 +141,16 @@ class BaseMutationService(SparkGraphQLMixin):
         if self.is_public and not tenant_id:
             raise GraphQLError("Tenant ID is required.")
 
-        is_client = await self.user.role.is_client
+        # Allow anonymous/public flows to skip role-based tenant restrictions
+        if not self.user or isinstance(self.user, AnonymousUser):
+            return
+
+        role = getattr(self.user, "role", None)
+        is_client = await role.is_client if role else False
         if (
             not self.is_public
             and not self.is_spark_schema
-            and self.user.role_id != ROLE_ID.SparkAdmin
+            and getattr(self.user, "role_id", None) != ROLE_ID.SparkAdmin
             and not is_client
             and tenant_id
         ):
@@ -203,6 +210,36 @@ class EventMutationService(BaseMutationService):
     def get_model(self) -> Model:
         """Get the model for the service."""
         return models.Event
+
+    @staticmethod
+    def _strip_tzinfo(dt_value: Any) -> Any:
+        """Remove timezone info to keep provided clock time unchanged."""
+        if dt_value is None:
+            return None
+
+        if isinstance(dt_value, datetime.datetime):
+            return dt_value.replace(tzinfo=None)
+
+        if isinstance(dt_value, str):
+            cleaned_value = dt_value
+            if dt_value.endswith("Z"):
+                cleaned_value = dt_value[:-1] + "+00:00"
+
+            try:
+                parsed = datetime.datetime.fromisoformat(cleaned_value)
+                return parsed.replace(tzinfo=None)
+            except ValueError:
+                return dt_value
+
+        return dt_value
+
+    async def save(self) -> Model:
+        """Save event keeping start/end times as provided (no TZ conversion)."""
+        if self.input:
+            self.input.start_time = self._strip_tzinfo(getattr(self.input, "start_time", None))
+            self.input.end_time = self._strip_tzinfo(getattr(self.input, "end_time", None))
+
+        return await super().save()
 
 
 @strawberry.type

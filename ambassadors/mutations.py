@@ -3,6 +3,7 @@ from strawberry import relay
 from strawberry.types import Info
 from asgiref.sync import sync_to_async
 from django.db.models import Model
+from graphql import GraphQLError
 
 from jobs.models import (
     AmbassadorJob as AmbassadorJobModel,
@@ -426,6 +427,56 @@ class AttendanceMutationService(TenantOptionalMutationService):
     def get_model(self) -> Model:
         """Get the model for the service."""
         return Attendance
+
+    async def set_user_and_tenant(self, info: strawberry.Info) -> "AttendanceMutationService":
+        """
+        Override tenant resolution so attendance creation does not require tenant membership.
+        Ambassadors are not tied to tenants, so we skip the tenant lookup entirely.
+        """
+        self.info = info
+        self.user = await self.get_user(info)
+        self.is_spark_schema = self.is_spark_schema_request(info, user=self.user)
+        self.tenant_id = None
+        return self
+
+    async def validations(self):
+        """Skip tenant validations for attendance because it is tenant-agnostic."""
+        return None
+
+    async def _assign_status_for_creator(self):
+        """Force attendance status based on creator role."""
+        role_slug = self.get_role_slug(self.user)
+        if role_slug not in {"spark-admin", "ambassador"}:
+            return
+
+        status_slug = "approved" if role_slug == "spark-admin" else "pending"
+        tenant_id = getattr(self.input, "tenant_id", None)
+
+        queryset = AttendanceStatus.objects.filter(slug=status_slug)
+        if tenant_id:
+            queryset = queryset.filter(tenant_id=tenant_id)
+
+        status = await sync_to_async(queryset.first)()
+
+        # fallback to global status if tenant-specific not found
+        if not status and tenant_id:
+            status = await sync_to_async(
+                AttendanceStatus.objects.filter(
+                    slug=status_slug, tenant__isnull=True
+                ).first
+            )()
+
+        if not status:
+            raise GraphQLError(
+                f"Attendance status with slug '{status_slug}' not found."
+            )
+
+        self.input.attendance_status_id = status.id
+
+    async def save(self) -> Model:
+        """Set status based on role before saving."""
+        await self._assign_status_for_creator()
+        return await super().save()
 
 
 @strawberry.type

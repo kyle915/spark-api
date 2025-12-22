@@ -319,6 +319,8 @@ class CreateRequestWithDependenciesInput(BaseNameableInput):
     coordinates: List[float]
     timezone_id: strawberry.ID
     request_type_id: strawberry.ID
+    distributor_id: strawberry.ID | None = None
+    retailer_id: strawberry.ID | None = None
     client_name: str
     client_email: str
     distributor_name: str

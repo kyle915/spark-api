@@ -1,4 +1,4 @@
-name: Deploy to GCE Staging
+name: Deploy to GCE Staging (merged PR -> develop, UV + Auto Rollback + Logging)
 
 on:
   pull_request:
@@ -32,16 +32,16 @@ jobs:
       - name: Prepare SSH
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.GCE_SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          echo "${{ secrets.GCE_SSH_PRIVATE_KEY_STG }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -H ${{ secrets.GCE_HOST }} >> ~/.ssh/known_hosts
+          ssh-keyscan -H ${{ secrets.GCE_HOST_STG }} >> ~/.ssh/known_hosts
       
       # ------------------------------------
       # DEPLOY + BACKUP + AUTO ROLLBACK
       # ------------------------------------
       - name: Deploy to GCE (with Auto Rollback + Logging)
         run: |
-          ssh ${{ secrets.GCE_USER }}@${{ secrets.GCE_HOST }} << 'EOF'
+          ssh ${{ secrets.GCE_USER_STG }}@${{ secrets.GCE_HOST_STG }} << 'EOF'
 
             APP_DIR="/home/spark/spark-api"
             BACKUP_DIR="/home/spark/deploy_backups"
