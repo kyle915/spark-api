@@ -852,12 +852,17 @@ class AmbassadorJobQueries:
         """Get all available jobs."""
         service = JobQueriesService()
         tenant_id = await service.resolve_query_tenant_id(info, filters=filters)
+        user = await service.get_user(info)
+        role_slug = service.get_role_slug(user)
         queryset = service.get_ordered_queryset(
             tenant_id=tenant_id, q=q, ordering=("start_date",)
         )
         queryset = queryset.filter(
             ongoing=True, closed=False, public=True
         ).prefetch_related("job_requirements")
+
+        if role_slug == "ambassador":
+            queryset = queryset.exclude(ambassador_jobs__ambassador__user=user)
         if filters and filters.event_id:
             queryset = queryset.filter(event_id=filters.event_id)
         return await service.get_connection(
