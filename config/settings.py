@@ -224,11 +224,16 @@ RQ_QUEUES = {
     },
 }
 
+EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+EMAIL_HOST = "localhost"
+EMAIL_PORT = 1025
+
 # RQ settings for commit mode (enqueue jobs when DB transaction commits)
 RQ = {
     'COMMIT_MODE': 'on_db_commit',  # Ensures jobs wait for DB commits
 }
 
+MAIL_DRIVER = "mailpit"  # mailpit, resend
 RESEND_API_KEY = env("RESEND_API_KEY", default="")
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL",
                          default="Spark <onboarding@resend.dev>")

@@ -7,6 +7,7 @@ from django.conf import settings
 from django.template.loader import get_template as django_get_template
 from django.template import Template
 from django_rq import job
+from django.core.mail import EmailMultiAlternatives
 from rq import Retry
 
 from utils.queues import Queues
@@ -69,11 +70,90 @@ class Envelope:
             "to": self.to_emails,
             "subject": self.subject,
             "html": self.render_template(),
+            "headers": self.headers,
         }
+
+    @staticmethod
+    def from_dict(payload: dict) -> "Envelope":
+        """
+        Create an Envelope from a dictionary.
+        """
+        available_keys = ["from", "to", "subject", "html", "headers"]
+        for key in available_keys:
+            if key not in payload:
+                raise ValueError(
+                    f"Key {key} is required in the payload at Envelope.from_dict")
+
+        return Envelope(
+            from_email=payload.get("from"),
+            to_emails=payload.get("to"),
+            subject=payload.get("subject"),
+            html=payload.get("html"),
+            headers=payload.get("headers"),
+        )
+
+
+class MailDriver:
+    """
+    The Mail Driver class.
+    """
+
+    def send(self, envelope: Envelope) -> None:
+        raise NotImplementedError("Subclasses must implement this method")
+
+
+class ResendMailDriver(MailDriver):
+    """
+    The Resend Mail Driver.
+    """
+
+    def send(self, envelope: Envelope) -> None:
+        params: resend.Emails.SendParams = {
+            "from": envelope.from_email,
+            "to": envelope.to_emails,
+            "subject": envelope.subject,
+            "html": envelope.render_template(),
+            "headers": envelope.headers,
+        }
+        resend.Emails.send(params)
+
+
+class MailpitMailDriver(MailDriver):
+    """
+    The Mailpit Mail Driver.
+    """
+
+    def send(self, envelope: Envelope) -> None:
+        html_content = envelope.render_template()
+        email = EmailMultiAlternatives(
+            subject=envelope.subject,
+            body=html_content,
+            from_email=envelope.from_email,
+            to=envelope.to_emails,
+            headers=envelope.headers,
+        )
+        email.attach_alternative(html_content, "text/html")
+        email.send()
+
+
+class MailDrivers:
+    """
+    The Mail Drivers class.
+    """
+
+    def __init__(self):
+        self.driver = settings.MAIL_DRIVER or "mailpit"
+        self.drivers = {
+            "resend": ResendMailDriver(),
+            "mailpit": MailpitMailDriver(),
+        }
+
+    def send(self, envelope: Envelope) -> None:
+        self.drivers[self.driver].send(envelope)
 
 
 @job('default', retry=Retry(max=3, interval=[60, 120, 240]))
-def send_email_task(envelop: dict) -> None:
+def send_email_task(payload: dict) -> None:
     """
     Background task to send an email using Resend.
 
@@ -84,14 +164,15 @@ def send_email_task(envelop: dict) -> None:
         envelope: The envelope to send as a dictionary.
     """
     try:
-        params: resend.Emails.SendParams = envelop
-        resend.Emails.send(params)
+        envelope = Envelope.from_dict(payload)
+        driver = MailDrivers()
+        driver.send(envelope)
         logger.info(
-            f"Successfully sent email to {params['to']} with subject: {params['subject']}")
+            f"Successfully sent email to {envelope.to_emails} with subject: {envelope.subject}")
 
     except Exception as exc:
         logger.error(
-            f"Error sending email to {params['to']} with subject '{params['subject']}': {exc}")
+            f"Error sending email to {payload['to']} with subject '{payload['subject']}': {exc}")
         # RQ will automatically retry on exception (up to max retries with exponential backoff)
         raise
 
@@ -123,16 +204,19 @@ class Mailer:
             )        
     """
 
+    driver: MailDrivers | None = None
+
+    def envelope(self) -> Envelope:
+        raise NotImplementedError(
+            "Subclasses must implement this method. Please implement the envelope() method.")
+
+    def get_driver(self) -> MailDrivers:
+        if self.driver is None:
+            self.driver = MailDrivers()
+        return self.driver
+
     def dispatch(self) -> None:
-        envelope: Envelope = self.envelope()
-        params: resend.Emails.SendParams = {
-            "from": envelope.from_email,
-            "to": envelope.to_emails,
-            "subject": envelope.subject,
-            "html": envelope.render_template(),
-            "headers": envelope.headers,
-        }
-        resend.Emails.send(params)
+        self.get_driver().send(self.envelope())
 
     async def send_async(self) -> None:
         await sync_to_async(self.dispatch)()
