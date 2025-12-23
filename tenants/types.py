@@ -2,13 +2,15 @@ import django.contrib.sites.requests
 import strawberry
 import strawberry_django
 from utils.gcs import extract_blob_name_from_url, generate_download_url
-from .models import Tenant, Role, User
+from .models import Tenant, Role, User, TenantTheme
+
 
 @strawberry_django.type(Role)
 class RoleType:
     id: strawberry.auto
     uuid: strawberry.auto
     name: strawberry.auto
+
 
 @strawberry_django.type(Tenant)
 class TenantType:
@@ -39,3 +41,12 @@ class SparkUserType:
     first_name: strawberry.auto
     last_name: strawberry.auto
     image: strawberry.auto
+
+
+@strawberry_django.type(TenantTheme)
+class TenantThemeType:
+    id: strawberry.auto
+    name: strawberry.auto
+    color_scheme: strawberry.auto
+    css_variables: strawberry.auto
+    tenant: strawberry.auto
