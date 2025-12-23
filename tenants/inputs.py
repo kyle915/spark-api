@@ -10,6 +10,12 @@ class RoleFilterEnum(Enum):
     SPARK = "spark-admin"
 
 
+@strawberry.enum
+class ColorSchemeEnum(str, Enum):
+    DARK = "dark"
+    LIGHT = "light"
+
+
 @strawberry.input
 class TenantFiltersInput:
     name: str | None = None
@@ -19,13 +25,13 @@ class TenantFiltersInput:
 @strawberry.input
 class TenantThemeFiltersInput:
     tenant_id: strawberry.ID | None = None
-    color_scheme: str | None = None
+    color_scheme: ColorSchemeEnum | None = None
 
 
 @strawberry.input
 class CreateOrUpdateTenantThemeInput(SparkGraphQLInput):
     tenant_id: strawberry.ID
-    color_scheme: str
+    color_scheme: ColorSchemeEnum
     name: str | None = None
     # Arbitrary JSON-like mapping of CSS variable names to values
     css_variables: strawberry.scalar(dict) | None = None

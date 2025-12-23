@@ -685,6 +685,11 @@ input ClientFiltersInput {
   tenantUuid: ID = null
 }
 
+enum ColorSchemeEnum {
+  DARK
+  LIGHT
+}
+
 """
 Company(id, name, uuid, email, website_url, founding_date, phone, address, about_us, company_size_min, company_size_max, approved, tenant, location, cover, profile_image, created_by, updated_by, created_at, updated_at)
 """
@@ -1194,7 +1199,7 @@ input CreateLocationInput {
 input CreateOrUpdateTenantThemeInput {
   clientMutationId: ID = null
   tenantId: ID!
-  colorScheme: String!
+  colorScheme: ColorSchemeEnum!
   name: String = null
   cssVariables: dict = null
 }
@@ -1900,7 +1905,7 @@ type Job {
   uuid: String!
   name: String!
   description: String
-  code: String!
+  code: String
   address: String!
   startDate: String
   endDate: String
@@ -2649,7 +2654,8 @@ type Query {
   attendances(first: Int = null, after: String = null, last: Int = null, before: String = null, filters: AttendanceFiltersInput = null): AttendanceCountableConnection!
   attendance(id: ID!): Attendance
   googleCalendarConnectionStatus: GoogleCalendarConnectionStatus!
-  tenantThemePublic(tenantId: ID!, colorScheme: String! = "dark"): TenantThemeType
+  tenantThemePublic(requestUrlName: String!, colorScheme: ColorSchemeEnum! = DARK): TenantThemeType
+  tenantTheme(tenantId: ID!, colorScheme: ColorSchemeEnum! = DARK): TenantThemeType
   healthcheck: String!
   me: CustomUserType!
   user(id: ID = null, uuid: ID = null): CustomUserType!
@@ -4070,13 +4076,13 @@ type UserType {
   isActive: Boolean!
   dateJoined: DateTime!
   status: UserStatusType!
-  id: ID!
-  email: String!
   lastName: String
+  email: String!
+  id: ID!
+  firstName: String
 
   """Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only."""
   username: String!
-  firstName: String
   archived: Boolean!
   verified: Boolean!
 }
