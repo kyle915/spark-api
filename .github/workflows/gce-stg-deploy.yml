@@ -88,27 +88,33 @@ jobs:
             uv run python manage.py migrate 2>&1 | tee -a $LOG_FILE
 
             echo ">>> Restarting spark service..." | tee -a $LOG_FILE
-            sudo systemctl restart spark 2>&1 | tee -a $LOG_FILE
+            sudo systemctl restart spark >/dev/null 2>&1 &
+            echo ">>> spark restart command issued" | tee -a $LOG_FILE
 
             echo ">>> Waiting for health check..." | tee -a $LOG_FILE
-            sleep 10
 
-            HEALTH_RESPONSE=$(curl -s -w "\n%{http_code}" \
-            -X POST http://localhost/api/v1/graphql/spark \
-            -H "Host: spark-api-stg.igniteproductions.co" \
-            -H "Content-Type: application/json" \
-            -d '{"query":"query { healthcheck }"}')
+            for i in {1..12}; do
+              HEALTH_RESPONSE=$(curl -s -w "\n%{http_code}" \
+                -X POST http://localhost/api/v1/graphql/spark \
+                -H "Host: spark-api-stg.igniteproductions.co" \
+                -H "Content-Type: application/json" \
+                -d '{"query":"query { healthcheck }"}')
 
-            STATUS=$(echo "$HEALTH_RESPONSE" | tail -n 1)
-            BODY=$(echo "$HEALTH_RESPONSE" | sed '$d')
+              STATUS=$(echo "$HEALTH_RESPONSE" | tail -n 1)
+              BODY=$(echo "$HEALTH_RESPONSE" | sed '$d')
 
-            echo ">>> Healthcheck status: $STATUS" | tee -a $LOG_FILE
-            echo ">>> Response body: $BODY" | tee -a $LOG_FILE
+              echo "Attempt $i → status: $STATUS" | tee -a $LOG_FILE
 
-            if [ "$STATUS" = "200" ] && echo "$BODY" | grep -q '"healthcheck"[[:space:]]*:[[:space:]]*"ok"'; then
-                echo ">>> Health check OK (GraphQL responded successfully)." | tee -a $LOG_FILE
+              if [ "$STATUS" = "200" ] && echo "$BODY" | grep -q '"healthcheck"[[:space:]]*:[[:space:]]*"ok"'; then
+                echo ">>> Health check OK" | tee -a $LOG_FILE
                 exit 0
-            fi
+              fi
+
+              sleep 5
+            done
+
+            echo "❌ Health check failed after restart" | tee -a $LOG_FILE
+            exit 1
 
             # -----------------------------
             # AUTO ROLLBACK ON FAILURE
