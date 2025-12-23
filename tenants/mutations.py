@@ -19,7 +19,7 @@ from .types import TenantType
 from .social_auth import BaseSocialAuthMutations, SocialAuthResponse
 from events.models import EventStatus, EventType, RequestStatus, RequestType
 from jobs.models import Status as JobStatus, RateType
-from recaps.models import FileRecapCategory
+from recaps.models import FileRecapCategory, TypeOfGood
 from ambassadors.models import AttendanceStatus
 
 User = get_user_model()
@@ -52,6 +52,8 @@ DEFAULT_FILE_RECAP_CATEGORIES = [
     "Table setup",
     "Receipts",
 ]
+
+DEFAULT_TYPES_OF_GOOD = ["Can", "Pack"]
 
 
 @strawberry.type
@@ -825,6 +827,14 @@ class SparkTenantMutations:
                     for recap_category in DEFAULT_FILE_RECAP_CATEGORIES:
                         FileRecapCategory.objects.create(
                             name=recap_category,
+                            tenant=tenant,
+                            created_by=user,
+                        )
+
+                    # Types of good
+                    for type_of_good in DEFAULT_TYPES_OF_GOOD:
+                        TypeOfGood.objects.create(
+                            name=type_of_good,
                             tenant=tenant,
                             created_by=user,
                         )
