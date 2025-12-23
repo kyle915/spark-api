@@ -51,6 +51,7 @@ INSTALLED_APPS = [
     "corsheaders",
     "storages",
     "django_rq",
+    "django_extensions",
 
     "gqlauth",
     "tenants",

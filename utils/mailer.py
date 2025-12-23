@@ -70,6 +70,7 @@ class Envelope:
             "to": self.to_emails,
             "subject": self.subject,
             "html": self.render_template(),
+            "template": self.template,
             "headers": self.headers,
         }
 
@@ -88,7 +89,7 @@ class Envelope:
             from_email=payload.get("from"),
             to_emails=payload.get("to"),
             subject=payload.get("subject"),
-            html=payload.get("html"),
+            template=payload.get("template"),
             headers=payload.get("headers"),
         )
 
@@ -237,5 +238,5 @@ class Mailer:
         queues = Queues()
         queues.default.add(
             send_email_task,
-            envelope=envelope.compile(),
+            payload=envelope.compile(),
         )
