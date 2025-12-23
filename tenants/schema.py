@@ -14,7 +14,7 @@ from utils.graphql.permissions import StrictIsAuthenticated
 
 from .models import Role, Tenant, TenantTheme, TenantedUser
 from .types import RoleType, TenantType, TenantThemeType
-from .inputs import TenantFiltersInput, UserFiltersInput
+from .inputs import ColorSchemeEnum, TenantFiltersInput, UserFiltersInput
 from .mutations import (
     AmbassadorsCustomRegister,
     ClientsCustomRegister,
@@ -63,15 +63,52 @@ class TenantThemingQuery:
     async def tenant_theme_public(
         self,
         info,
-        tenant_id: strawberry.ID,
-        color_scheme: str = "dark",
+        request_url_name: str,
+        color_scheme: ColorSchemeEnum = ColorSchemeEnum.DARK,
     ) -> TenantThemeType | None:
         """
-        Public query to fetch a tenant theme by tenant ID and color scheme.
+        Public query to fetch a tenant theme by request URL name and color scheme.
 
         This is intentionally unauthenticated so that login and public pages
         can render tenant-specific branding.
         """
+        try:
+            tenant = await sync_to_async(Tenant.objects.get)(
+                request_url_name=request_url_name
+            )
+        except Tenant.DoesNotExist:
+            return None
+
+        theme = await sync_to_async(
+            lambda: TenantTheme.objects.filter(
+                tenant=tenant, color_scheme=color_scheme.value
+            ).first()
+        )()
+        return theme
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def tenant_theme(
+        self,
+        info,
+        tenant_id: strawberry.ID,
+        color_scheme: ColorSchemeEnum = ColorSchemeEnum.DARK,
+    ) -> TenantThemeType | None:
+        """
+        Authenticated query to fetch a tenant theme by tenant ID and color scheme.
+        Ensures the requesting user belongs to the tenant.
+        """
+        user = info.context.request.user
+
+        has_access = await sync_to_async(
+            lambda: TenantedUser.objects.filter(
+                user=user, tenant_id=tenant_id, is_active=True
+            ).exists()
+        )()
+        if not has_access:
+            raise GraphQLError(
+                "You do not have permission to view this tenant theme."
+            )
+
         try:
             tenant = await sync_to_async(Tenant.objects.get)(pk=tenant_id)
         except Tenant.DoesNotExist:
@@ -79,7 +116,7 @@ class TenantThemingQuery:
 
         theme = await sync_to_async(
             lambda: TenantTheme.objects.filter(
-                tenant=tenant, color_scheme=color_scheme
+                tenant=tenant, color_scheme=color_scheme.value
             ).first()
         )()
         return theme

@@ -1019,7 +1019,7 @@ class TenantThemeMutations:
 
             theme, created = TenantTheme.objects.update_or_create(
                 tenant=tenant,
-                color_scheme=input.color_scheme,
+                color_scheme=input.color_scheme.value,
                 defaults=defaults,
             )
             if created and theme.created_by_id is None:
