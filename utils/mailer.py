@@ -220,9 +220,18 @@ class Mailer:
         self.get_driver().send(self.envelope())
 
     async def send_async(self) -> None:
-        await sync_to_async(self.dispatch)()
+        """Send the email asynchronously. (background processing)
+        """
+        await sync_to_async(self.send)()
+
+    async def send_async_now(self) -> None:
+        """Send the email asynchronously now. (no background processing)
+        """
+        await sync_to_async(self.send_now)()
 
     def send_now(self) -> None:
+        """Send the email now. (no background processing)
+        """
         self.dispatch()
 
     def send(self) -> None:
