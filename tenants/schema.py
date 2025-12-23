@@ -99,15 +99,19 @@ class TenantThemingQuery:
         """
         user = info.context.request.user
 
-        has_access = await sync_to_async(
-            lambda: TenantedUser.objects.filter(
-                user=user, tenant_id=tenant_id, is_active=True
-            ).exists()
-        )()
-        if not has_access:
-            raise GraphQLError(
-                "You do not have permission to view this tenant theme."
-            )
+        # Spark admins can view any tenant theme; others must belong to the tenant.
+        role_slug = getattr(user.role, "slug", None)
+        is_spark_admin = role_slug == Role.SPARK_ADMIN_SLUG
+        if not is_spark_admin:
+            has_access = await sync_to_async(
+                lambda: TenantedUser.objects.filter(
+                    user=user, tenant_id=tenant_id, is_active=True
+                ).exists()
+            )()
+            if not has_access:
+                raise GraphQLError(
+                    "You do not have permission to view this tenant theme."
+                )
 
         try:
             tenant = await sync_to_async(Tenant.objects.get)(pk=tenant_id)
@@ -514,7 +518,12 @@ class QueryClients(GoogleCalendarQueries, TenantThemingQuery):
 
 
 @strawberry.type
-class MutationClients(ClientsCustomRegister, SparkUserMutations, GoogleCalendarMutations):
+class MutationClients(
+    ClientsCustomRegister,
+    SparkUserMutations,
+    GoogleCalendarMutations,
+    TenantThemeMutations,
+):
     verify_token = mutations.VerifyToken.field
     token_auth = mutations.ObtainJSONWebToken.field
     refresh_token = mutations.RefreshToken.field
