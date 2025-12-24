@@ -967,7 +967,7 @@ class TenantThemeMutations:
         """
         Create or update a TenantTheme for a given tenant and color scheme.
 
-        Only spark-admin users are allowed to manage tenant themes.
+        Spark-admins can manage any tenant theme. Clients can manage themes for their own tenant(s).
         """
         user = info.context.request.user
 
@@ -979,10 +979,11 @@ class TenantThemeMutations:
                 theme=None,
             )
 
-        # Check if user is spark-admin
+        # Check if user is spark-admin or client
         try:
             is_spark_admin = await user.role.is_spark_admin
-            if not is_spark_admin:
+            is_client = await user.role.is_client
+            if not (is_spark_admin or is_client):
                 return TenantThemeResponse(
                     success=False,
                     message="You do not have permission to manage tenant themes.",
@@ -997,9 +998,29 @@ class TenantThemeMutations:
                 theme=None,
             )
 
+        try:
+            resolved_tenant_id = int(input.tenant_id)
+        except (TypeError, ValueError):
+            return TenantThemeResponse(
+                success=False,
+                message="Invalid tenantId.",
+                client_mutation_id=input.client_mutation_id,
+                theme=None,
+            )
+
+        if is_client:
+            active_tenant_ids = await _get_active_tenant_ids(user)
+            if resolved_tenant_id not in active_tenant_ids:
+                return TenantThemeResponse(
+                    success=False,
+                    message="You do not have permission to manage this tenant theme.",
+                    client_mutation_id=input.client_mutation_id,
+                    theme=None,
+                )
+
         # Resolve target tenant
         try:
-            tenant = await sync_to_async(Tenant.objects.get)(pk=input.tenant_id)
+            tenant = await sync_to_async(Tenant.objects.get)(pk=resolved_tenant_id)
         except Tenant.DoesNotExist:
             return TenantThemeResponse(
                 success=False,
