@@ -17,6 +17,7 @@ from .models import Role, TenantedUser, Tenant
 from .types import TenantType
 from .social_auth import BaseSocialAuthMutations, SocialAuthResponse
 from events.models import RequestStatus, EventStatus
+from .envelopes import EmailVerificationMailer
 
 User = get_user_model()
 ensure_relay_mutation()
@@ -136,7 +137,8 @@ async def _check_client_or_spark_admin(request_user):
 
 async def _get_active_tenant_ids(user) -> list[int]:
     return await sync_to_async(list)(
-        user.tenanted_users.filter(is_active=True).values_list("tenant_id", flat=True)
+        user.tenanted_users.filter(
+            is_active=True).values_list("tenant_id", flat=True)
     )
 
 
@@ -226,6 +228,8 @@ async def register_user_with_role(
         )
     else:
         activation_token = await sync_to_async(get_token)(user, "activation")
+        verification_email = EmailVerificationMailer(user, activation_token)
+        await verification_email.send_async()
 
     message = (
         "User registered successfully."
@@ -376,7 +380,8 @@ class SparkUserMutations:
             )
 
         try:
-            resolved_tenant_id = int(input.tenant_id) if input.tenant_id else None
+            resolved_tenant_id = int(
+                input.tenant_id) if input.tenant_id else None
         except (TypeError, ValueError):
             return RegisterResponse(
                 success=False,
@@ -482,7 +487,8 @@ class SparkUserMutations:
 
         if input.email:
             email_exists = await sync_to_async(
-                User.objects.exclude(pk=target_user.pk).filter(email=input.email).exists
+                User.objects.exclude(pk=target_user.pk).filter(
+                    email=input.email).exists
             )()
             if email_exists:
                 return UpdateUserResponse(
@@ -837,7 +843,8 @@ class SparkTenantMutations:
                     tenant.name = input.name
                     # Generate new request_url_name when name is updated
                     random_chars = "".join(
-                        random.choices(string.ascii_letters + string.digits, k=4)
+                        random.choices(string.ascii_letters +
+                                       string.digits, k=4)
                     )
                     slugified_name = slugify(input.name)
                     tenant.request_url_name = f"{slugified_name}-{random_chars}".lower()

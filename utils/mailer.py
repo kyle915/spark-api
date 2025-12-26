@@ -24,6 +24,7 @@ class Envelope:
     from_email: str = settings.DEFAULT_FROM_EMAIL
     to_emails: list[str] = []
     headers: dict = {}
+    html: str = ""
 
     def __init__(self, **kwargs: Any) -> None:
         """
@@ -35,6 +36,7 @@ class Envelope:
         self.from_email = kwargs.get("from_email", self.from_email)
         self.to_emails = kwargs.get("to_emails", self.to_emails)
         self.headers = kwargs.get("headers", self.headers)
+        self.html = kwargs.get("html", self.html)
 
     def get_template(self) -> Template:
         """
@@ -58,6 +60,9 @@ class Envelope:
         """
         Render the template with the context.
         """
+        if self.html:
+            return self.html
+
         template = self.get_template()
         return template.render(self.context or {})
 
@@ -91,6 +96,7 @@ class Envelope:
             subject=payload.get("subject"),
             template=payload.get("template"),
             headers=payload.get("headers"),
+            html=payload.get("html"),
         )
 
 
