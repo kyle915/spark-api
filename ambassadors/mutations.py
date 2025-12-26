@@ -71,6 +71,8 @@ from .services import (
     DeleteAmbassadorSkillService,
     UpsertAmbassadorProfileService,
 )
+from .envelopes import AmbassadorEventApplicationMailer, NotifyApplicationToClientMailer
+from utils.mailer import MailChain
 
 
 class TenantOptionalMutationService(BaseMutationService):
@@ -180,6 +182,11 @@ class AmbassadorMutations:
             created_by=user,
             updated_by=user,
         )
+
+        await MailChain.send_chain_async([
+            AmbassadorEventApplicationMailer(application),
+            NotifyApplicationToClientMailer(application),
+        ])
 
         return ApplyAmbassadorEventResponse(
             success=True, message="Application successful", application=application

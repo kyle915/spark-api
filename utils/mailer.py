@@ -255,3 +255,74 @@ class Mailer:
             send_email_task,
             payload=envelope.compile(),
         )
+
+
+class MailChain:
+    """
+    The Mail Chain class.
+    This class is used to send a chain of Mailers.
+
+    For instance:
+    mail_chain = MailChain()
+    mail_chain.add(EmailVerificationMailer(user, activation_token))
+    mail_chain.add(EventApplicationMailer(application))
+    mail_chain.send()
+
+    or 
+
+    mail_chain = MailChain.from_mailers([EmailVerificationMailer(user, activation_token), EventApplicationMailer(application)])
+    mail_chain.send()
+
+    or 
+
+    mail_chain = MailChain([EmailVerificationMailer(user, activation_token), EventApplicationMailer(application)])
+    mail_chain.send()
+    """
+
+    def __init__(self, mailers: list[Mailer] | None = None):
+        self.mailers: list[Mailer] = mailers or []
+
+    @staticmethod
+    def send_chain(mailers: list[Mailer]) -> "MailChain":
+        chain = MailChain(mailers)
+        chain.send()
+        return chain
+
+    @staticmethod
+    def send_chain_now(mailers: list[Mailer]) -> "MailChain":
+        chain = MailChain(mailers)
+        chain.send_now()
+        return chain
+
+    @staticmethod
+    async def send_chain_async(mailers: list[Mailer]) -> "MailChain":
+        chain = MailChain(mailers)
+        await chain.send_async()
+        return chain
+
+    @staticmethod
+    async def send_chain_async_now(mailers: list[Mailer]) -> "MailChain":
+        chain = MailChain(mailers)
+        await chain.send_async_now()
+        return chain
+
+    def add(self, mailer: Mailer) -> None:
+        self.mailers.append(mailer)
+
+    def send(self) -> None:
+        for mailer in self.mailers:
+            mailer.send()
+
+    def send_now(self) -> None:
+        for mailer in self.mailers:
+            mailer.send_now()
+
+    async def send_async(self) -> None:
+        """Send all emails in the chain asynchronously (background processing)."""
+        for mailer in self.mailers:
+            await mailer.send_async()
+
+    async def send_async_now(self) -> None:
+        """Send all emails in the chain asynchronously now (no background processing)."""
+        for mailer in self.mailers:
+            await mailer.send_async_now()

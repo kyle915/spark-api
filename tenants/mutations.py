@@ -8,6 +8,7 @@ import random
 import string
 from django.utils.text import slugify
 from gqlauth.models import UserStatus
+from django.conf import settings
 
 from utils.graphql.inputs import SparkGraphQLInput
 from utils.graphql.relay import ensure_relay_mutation
@@ -228,7 +229,13 @@ async def register_user_with_role(
         )
     else:
         activation_token = await sync_to_async(get_token)(user, "activation")
-        verification_email = EmailVerificationMailer(user, activation_token)
+        frontend_url = {
+            "client": settings.CLIENT_FRONTEND_URL,
+            "ambassador": settings.AMBASSADOR_FRONTEND_URL,
+            "spark-admin": settings.ADMIN_FRONTEND_URL,
+        }
+        activation_url = f"{frontend_url[role.slug]}/verify-account?token={activation_token}"
+        verification_email = EmailVerificationMailer(user, activation_url)
         await verification_email.send_async()
 
     message = (
@@ -276,7 +283,7 @@ class AmbassadorsCustomRegister:
             role_id=resolved_role_id,
             image=input.image,
             tenant_id=resolved_tenant_id,
-            auto_verify=True,
+            auto_verify=False,
             client_mutation_id=input.client_mutation_id,
         )
 

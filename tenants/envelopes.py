@@ -7,13 +7,13 @@ class EmailVerificationMailer(Mailer):
     The Email Verification Mailer.
 
     usage example:
-    mailer = EmailVerificationMailer(user, activation_token)
+    mailer = EmailVerificationMailer(user, activation_url)
     mailer.send()
     """
 
-    def __init__(self, user: User, activation_token: str):
+    def __init__(self, user: User, activation_url: str):
         self.user = user
-        self.activation_token = activation_token
+        self.activation_url = activation_url
 
     def envelope(self) -> Envelope:
         return Envelope(
@@ -22,6 +22,6 @@ class EmailVerificationMailer(Mailer):
             to_emails=[self.user.email],
             context={
                 "user": self.user,
-                "activation_token": self.activation_token
+                "activation_url": self.activation_url
             }
         )
