@@ -9,31 +9,54 @@ import string
 from django.utils.text import slugify
 from gqlauth.models import UserStatus
 from django.conf import settings
+from django.db import transaction
 
 from utils.graphql.inputs import SparkGraphQLInput
 from utils.graphql.relay import ensure_relay_mutation
 from utils.utils import ROLE_ID
 from utils.gcs import delete_blob, extract_blob_name_from_url
-from .models import Role, TenantedUser, Tenant
-from .types import TenantType
+from .models import Role, TenantedUser, Tenant, TenantTheme
+from .types import TenantType, TenantThemeType
+from .inputs import CreateOrUpdateTenantThemeInput
 from .social_auth import BaseSocialAuthMutations, SocialAuthResponse
-from events.models import RequestStatus, EventStatus
 from .envelopes import EmailVerificationMailer
+from events.models import EventStatus, EventType, RequestStatus, RequestType
+from jobs.models import Status as JobStatus, RateType
+from recaps.models import FileRecapCategory, TypeOfGood
+from ambassadors.models import AttendanceStatus
 
 User = get_user_model()
 ensure_relay_mutation()
 
-DEFAULT_TENANT_STATUSES = {
-    "RequestStatus": [
-        {"name": "Pending", "is_default": True},
-        {"name": "Approved", "is_default": False},
-        {"name": "Decline", "is_default": False},
-    ],
-    "EventStatus": [
-        {"name": "Approved", "is_default": True},
-        {"name": "Decline", "is_default": False},
-    ],
-}
+DEFAULT_STATUS_TEMPLATES = [
+    {"name": "Pending", "is_default": True},
+    {"name": "Approved", "is_default": False},
+    {"name": "Declined", "is_default": False},
+]
+
+DEFAULT_EVENT_TYPES = [
+    {"name": "Sampling", "is_default": True},
+    {"name": "Promotion", "is_default": False},
+    {"name": "Launch", "is_default": False},
+    {"name": "Special Event", "is_default": False},
+]
+
+DEFAULT_REQUEST_TYPES = [
+    "Event Activation",
+    "On-Premise",
+    "Retail Sampling",
+    "Bar Sampling",
+]
+
+DEFAULT_RATE_TYPES = ["Hour", "Day", "Week"]
+
+DEFAULT_FILE_RECAP_CATEGORIES = [
+    "Sampling photos",
+    "Table setup",
+    "Receipts",
+]
+
+DEFAULT_TYPES_OF_GOOD = ["Can", "Pack"]
 
 
 @strawberry.type
@@ -720,6 +743,14 @@ class UpdateTenantResponse:
 
 
 @strawberry.type
+class TenantThemeResponse:
+    success: bool
+    message: str
+    theme: TenantThemeType | None = None
+    client_mutation_id: strawberry.ID | None = None
+
+
+@strawberry.type
 class SparkTenantMutations:
     @relay.mutation
     async def create_tenant(
@@ -756,30 +787,79 @@ class SparkTenantMutations:
             random.choices(string.ascii_letters + string.digits, k=4)
         )
         slugified_name = slugify(input.name)
-        request_url_name = f"{slugified_name}-{random_chars}".lower()
+        request_url_name = f"{random_chars}-{slugified_name}".lower()
 
         try:
 
             @sync_to_async
             def create_tenant_record():
-                tenant = Tenant.objects.create(
-                    name=input.name,
-                    request_url_name=request_url_name,
-                    image=input.image,
-                    created_by=user,
-                )
-
-                # Create default statuses
-                for model_name, statuses in DEFAULT_TENANT_STATUSES.items():
-                    ModelClass = (
-                        RequestStatus if model_name == "RequestStatus" else EventStatus
+                with transaction.atomic():
+                    tenant = Tenant.objects.create(
+                        name=input.name,
+                        request_url_name=request_url_name,
+                        image=input.image,
+                        created_by=user,
                     )
-                    for status_data in statuses:
-                        ModelClass.objects.create(
-                            name=status_data["name"],
+
+                    def create_statuses(model_cls, include_default_flag: bool):
+                        for status in DEFAULT_STATUS_TEMPLATES:
+                            status_slug = slugify(status["name"])
+                            payload = {
+                                "name": status["name"],
+                                "slug": status_slug,
+                                "tenant": tenant,
+                                "created_by": user,
+                            }
+                            if include_default_flag:
+                                payload["is_default"] = status["is_default"]
+                            model_cls.objects.create(**payload)
+
+                    # Status templates
+                    create_statuses(RequestStatus, include_default_flag=True)
+                    create_statuses(EventStatus, include_default_flag=True)
+                    create_statuses(JobStatus, include_default_flag=False)
+                    create_statuses(AttendanceStatus,
+                                    include_default_flag=False)
+
+                    # Event types
+                    for event_type in DEFAULT_EVENT_TYPES:
+                        EventType.objects.create(
+                            name=event_type["name"],
                             tenant=tenant,
                             created_by=user,
-                            is_default=status_data["is_default"],
+                            is_default=event_type["is_default"],
+                        )
+
+                    # Request types
+                    for request_type in DEFAULT_REQUEST_TYPES:
+                        RequestType.objects.create(
+                            name=request_type,
+                            tenant=tenant,
+                            created_by=user,
+                        )
+
+                    # Rate types
+                    for rate_type in DEFAULT_RATE_TYPES:
+                        RateType.objects.create(
+                            name=rate_type,
+                            tenant=tenant,
+                            created_by=user,
+                        )
+
+                    # Recap categories
+                    for recap_category in DEFAULT_FILE_RECAP_CATEGORIES:
+                        FileRecapCategory.objects.create(
+                            name=recap_category,
+                            tenant=tenant,
+                            created_by=user,
+                        )
+
+                    # Types of good
+                    for type_of_good in DEFAULT_TYPES_OF_GOOD:
+                        TypeOfGood.objects.create(
+                            name=type_of_good,
+                            tenant=tenant,
+                            created_by=user,
                         )
 
                 return tenant
@@ -885,3 +965,113 @@ class SparkTenantMutations:
                 message=f"Error updating tenant: {e}",
                 client_mutation_id=input.client_mutation_id,
             )
+
+
+@strawberry.type
+class TenantThemeMutations:
+    @relay.mutation
+    async def upsert_tenant_theme(
+        self,
+        info: strawberry.Info,
+        input: CreateOrUpdateTenantThemeInput,
+    ) -> TenantThemeResponse:
+        """
+        Create or update a TenantTheme for a given tenant and color scheme.
+
+        Spark-admins can manage any tenant theme. Clients can manage themes for their own tenant(s).
+        """
+        user = info.context.request.user
+
+        if not user.is_authenticated:
+            return TenantThemeResponse(
+                success=False,
+                message="User not authenticated.",
+                client_mutation_id=input.client_mutation_id,
+                theme=None,
+            )
+
+        # Check if user is spark-admin or client
+        try:
+            is_spark_admin = await user.role.is_spark_admin
+            is_client = await user.role.is_client
+            if not (is_spark_admin or is_client):
+                return TenantThemeResponse(
+                    success=False,
+                    message="You do not have permission to manage tenant themes.",
+                    client_mutation_id=input.client_mutation_id,
+                    theme=None,
+                )
+        except Exception as e:
+            return TenantThemeResponse(
+                success=False,
+                message=f"Error checking permissions: {e}",
+                client_mutation_id=input.client_mutation_id,
+                theme=None,
+            )
+
+        try:
+            resolved_tenant_id = int(input.tenant_id)
+        except (TypeError, ValueError):
+            return TenantThemeResponse(
+                success=False,
+                message="Invalid tenantId.",
+                client_mutation_id=input.client_mutation_id,
+                theme=None,
+            )
+
+        if is_client:
+            active_tenant_ids = await _get_active_tenant_ids(user)
+            if resolved_tenant_id not in active_tenant_ids:
+                return TenantThemeResponse(
+                    success=False,
+                    message="You do not have permission to manage this tenant theme.",
+                    client_mutation_id=input.client_mutation_id,
+                    theme=None,
+                )
+
+        # Resolve target tenant
+        try:
+            tenant = await sync_to_async(Tenant.objects.get)(pk=resolved_tenant_id)
+        except Tenant.DoesNotExist:
+            return TenantThemeResponse(
+                success=False,
+                message="Tenant not found.",
+                client_mutation_id=input.client_mutation_id,
+                theme=None,
+            )
+
+        # Upsert theme by (tenant, color_scheme)
+        def _upsert_theme():
+            defaults = {
+                "name": input.name if input.name is not None else "default",
+                "updated_by": user,
+            }
+            if input.css_variables is not None:
+                defaults["css_variables"] = input.css_variables
+
+            theme, created = TenantTheme.objects.update_or_create(
+                tenant=tenant,
+                color_scheme=input.color_scheme.value,
+                defaults=defaults,
+            )
+            if created and theme.created_by_id is None:
+                theme.created_by = user
+                theme.save(update_fields=["created_by"])
+            return theme
+
+        try:
+            theme = await sync_to_async(_upsert_theme)()
+        except Exception as e:
+            return TenantThemeResponse(
+                success=False,
+                message=f"Error saving tenant theme: {e}",
+                client_mutation_id=input.client_mutation_id,
+                theme=None,
+            )
+
+        return TenantThemeResponse(
+            success=True,
+            message="Tenant theme saved successfully.",
+            client_mutation_id=input.client_mutation_id,
+            theme=theme,
+        )

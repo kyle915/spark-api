@@ -241,7 +241,7 @@ class PublicAmbassadorCreationService(BaseAmbassadorService):
                 email=input.email,
                 role=role,
                 password=input.password1,
-                is_active=False,
+                is_active=True,
             )
 
             # Create ambassador (inactive by default)
@@ -476,7 +476,7 @@ class ApproveAmbassadorService(BaseAmbassadorService):
         input: inputs.ApproveAmbassadorInput,
         info: strawberry.Info,
     ) -> ApproveAmbassadorResponse:
-        """Approve an ambassador and optionally assign to tenant."""
+        """Approve an ambassador."""
         user = info.context.request.user
 
         try:
@@ -499,24 +499,6 @@ class ApproveAmbassadorService(BaseAmbassadorService):
                 return ambassador
 
             ambassador = await approve_ambassador()
-
-            # Assign to tenant if provided
-            if input.tenant_id:
-                try:
-                    tenant = await Tenant.objects._get(id=input.tenant_id)
-
-                    await cls.assign_user_to_tenant(
-                        user=ambassador.user,
-                        tenant=tenant,
-                        created_by=user,
-                    )
-                except (Tenant.DoesNotExist, ValueError, TypeError):
-                    return build_mutation_response(
-                        ApproveAmbassadorResponse,
-                        success=False,
-                        message="Invalid tenant ID.",
-                        input_obj=input,
-                    )
 
             return build_mutation_response(
                 ApproveAmbassadorResponse,

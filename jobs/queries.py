@@ -1,6 +1,7 @@
 import strawberry
 from enum import Enum
 from graphql import GraphQLError
+from django.db.models import Prefetch
 
 from utils.graphql.inputs import BaseTenantInput, SparkGraphQLInput
 from utils.graphql.permissions import StrictIsAuthenticated
@@ -11,6 +12,7 @@ from django.db.models import QuerySet
 from django.db.models import Model
 from jobs import types
 from jobs.inputs import JobFiltersInput, JobStatusFilter
+from ambassadors import models as ambassador_models
 
 
 class JobsBaseQueriesService(BaseQueriesService):
@@ -521,6 +523,30 @@ class JobQueriesService(JobsBaseQueriesService):
         """Get the model for the service."""
         return models.Job
 
+    def get_queryset(self) -> QuerySet:
+        """Get jobs with related attendance and ambassadors prefetched."""
+        return (
+            self.get_model()
+            .objects.select_related(
+                "job_title",
+                "other_title",
+                "company",
+                "event",
+                "rate",
+            )
+            .prefetch_related(
+                "job_requirements",
+                Prefetch(
+                    "attendance",
+                    queryset=ambassador_models.Attendance.objects.select_related(
+                        "ambassador",
+                        "ambassador__user",
+                    ),
+                ),
+            )
+            .all()
+        )
+
 
 @strawberry.type
 class JobQueries:
@@ -826,12 +852,17 @@ class AmbassadorJobQueries:
         """Get all available jobs."""
         service = JobQueriesService()
         tenant_id = await service.resolve_query_tenant_id(info, filters=filters)
+        user = await service.get_user(info)
+        role_slug = service.get_role_slug(user)
         queryset = service.get_ordered_queryset(
             tenant_id=tenant_id, q=q, ordering=("start_date",)
         )
         queryset = queryset.filter(
             ongoing=True, closed=False, public=True
         ).prefetch_related("job_requirements")
+
+        if role_slug == "ambassador":
+            queryset = queryset.exclude(ambassador_jobs__ambassador__user=user)
         if filters and filters.event_id:
             queryset = queryset.filter(event_id=filters.event_id)
         return await service.get_connection(

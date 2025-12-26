@@ -26,7 +26,7 @@ type Ambassador {
   address: String
   coordinates: [Float!]!
   isActive: Boolean!
-  userId: ID!
+  user: SparkUserType!
   createdAt: String!
   updatedAt: String!
 }
@@ -39,8 +39,36 @@ type AmbassadorEventType {
   uuid: String!
   isApproved: Boolean!
   ambassador: Ambassador!
+  event: Event!
   tenantId: ID!
   eventId: ID!
+  createdAt: String!
+  updatedAt: String!
+}
+
+input AmbassadorFileInput {
+  clientMutationId: ID = null
+  name: String!
+  url: String = null
+  mainResume: Boolean = null
+  profilePic: Boolean = null
+  isPublic: Boolean = null
+  fileTypeId: ID = null
+}
+
+"""
+AmbassadorFile(id, uuid, name, url, main_resume, profile_pic, is_public, file_type, ambassador, created_by, updated_by, created_at, updated_at)
+"""
+type AmbassadorFileType {
+  id: ID!
+  uuid: String!
+  name: String!
+  url: String
+  mainResume: Boolean!
+  profilePic: Boolean!
+  isPublic: Boolean!
+  ambassadorId: ID!
+  fileType: FileType
   createdAt: String!
   updatedAt: String!
 }
@@ -77,6 +105,7 @@ type AmbassadorJob {
   appearAsRfp: Boolean!
   tenantId: ID!
   ambassadorId: ID!
+  ambassador: Ambassador!
   job: Job!
   status: Status!
   rate: Rate!
@@ -105,6 +134,18 @@ type AmbassadorJobDetailResponse {
   ambassadorJob: AmbassadorJob
 }
 
+input AmbassadorJobFiltersInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  status: AmbassadorJobStatusFilter = null
+}
+
+enum AmbassadorJobStatusFilter {
+  APPROVED
+  DECLINED
+  PENDING
+}
+
 """
 AmbassadorNote(id, uuid, note, tenant, ambassador, created_by, updated_by, created_at, updated_at)
 """
@@ -120,12 +161,29 @@ type AmbassadorNoteType {
   updatedAt: String!
 }
 
+type AmbassadorProfile {
+  ambassador: Ambassador!
+  reviews: [AmbassadorReviewType!]!
+  files: [AmbassadorFileType!]!
+  traits: [AmbassadorTraitType!]!
+  skills: [AmbassadorSkillType!]!
+  notes: [AmbassadorNoteType!]!
+  workHistory: [AmbassadorWorkHistoryType!]!
+}
+
+input AmbassadorProfileNoteInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  note: String!
+}
+
 input AmbassadorRegisterInput {
   clientMutationId: ID = null
   firstName: String!
   email: String!
   password1: String!
   password2: String!
+  image: String = null
   role: UserRoleEnum!
   tenantId: ID = null
 }
@@ -145,6 +203,11 @@ type AmbassadorReviewType {
   updatedAt: String!
 }
 
+input AmbassadorSkillInput {
+  clientMutationId: ID = null
+  skillId: ID!
+}
+
 """
 AmbassadorSkill(id, uuid, tenant, ambassador, skill, created_by, updated_by, created_at, updated_at)
 """
@@ -154,6 +217,7 @@ type AmbassadorSkillType {
   ambassadorId: ID!
   skillId: ID!
   tenantId: ID!
+  skill: SkillType!
   createdAt: String!
   updatedAt: String!
 }
@@ -179,6 +243,40 @@ type AmbassadorToAmbassadorReviewDetailResponse {
   ambassadorToAmbassadorReview: AmbassadorToAmbassadorReview
 }
 
+input AmbassadorTraitInput {
+  clientMutationId: ID = null
+  userId: ID!
+}
+
+"""
+AmbassadorTrait(id, uuid, ambassador, user, created_by, updated_by, created_at, updated_at)
+"""
+type AmbassadorTraitType {
+  id: ID!
+  uuid: String!
+  ambassadorId: ID!
+  userId: ID!
+  createdAt: String!
+  updatedAt: String!
+}
+
+input AmbassadorWorkHistoryInput {
+  clientMutationId: ID = null
+  userId: ID!
+}
+
+"""
+AmbassadorWorkHistory(id, uuid, ambassador, user, created_by, updated_by, created_at, updated_at)
+"""
+type AmbassadorWorkHistoryType {
+  id: ID!
+  uuid: String!
+  ambassadorId: ID!
+  userId: ID!
+  createdAt: String!
+  updatedAt: String!
+}
+
 input AppleSocialAuthInput {
   clientMutationId: ID = null
   identityToken: String!
@@ -199,7 +297,6 @@ type ApplyAmbassadorJobResponse {
 input ApproveAmbassadorInput {
   clientMutationId: ID = null
   ambassadorId: ID!
-  tenantId: ID = null
 }
 
 type ApproveAmbassadorResponse {
@@ -340,6 +437,15 @@ input CoordinatesFilterInput {
   unit: DistanceUnit! = KILOMETERS
 }
 
+input CreateAmbassadorInput {
+  clientMutationId: ID = null
+  userId: ID!
+  address: String = null
+  coordinates: [Float!] = null
+  isActive: Boolean = null
+  rating: Int = null
+}
+
 input CreateAmbassadorInvitationInput {
   clientMutationId: ID = null
   tenantId: ID = null
@@ -368,6 +474,13 @@ type CreateAmbassadorNoteResponse {
   message: String!
   clientMutationId: ID
   ambassadorNote: AmbassadorNoteType
+}
+
+type CreateAmbassadorResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  ambassador: Ambassador
 }
 
 input CreateAmbassadorReviewInput {
@@ -466,6 +579,8 @@ input CreateRequestWithDependenciesInput {
   coordinates: [Float!]!
   timezoneId: ID!
   requestTypeId: ID!
+  distributorId: ID = null
+  retailerId: ID = null
   clientName: String!
   clientEmail: String!
   distributorName: String!
@@ -511,6 +626,7 @@ type CustomUserType {
   firstName: String!
   lastName: String!
   role: RoleType!
+  image: String
 }
 
 """Date with time (isoformat)"""
@@ -600,21 +716,27 @@ type Distributor {
   updatedAt: String!
 }
 
+type DjangoImageType {
+  name: String!
+  path: String!
+  size: Int!
+  url: String!
+  width: Int!
+  height: Int!
+}
+
 type DjangoModelType {
   pk: ID!
 }
 
 """
-Event(id, uuid, name, date, coordinates, tenant, request, event_type, status, start_time, end_time, address, notes, is_national, created_by, updated_by, created_at, updated_at)
+Event(id, uuid, name, date, coordinates, timezone, tenant, request, event_type, status, start_time, end_time, address, notes, is_national, created_by, updated_by, created_at, updated_at)
 """
 type Event {
   id: ID!
   uuid: String!
   name: String!
-  date: String
   coordinates: [Float!]
-  startTime: String
-  endTime: String
   address: String!
   isNational: Boolean!
   notes: String
@@ -625,7 +747,11 @@ type Event {
   tenant: TenantType
   eventType: EventType
   status: EventStatus
+  timezone: TimeZone
   tenantImage: String
+  date: String
+  startTime: String
+  endTime: String
 }
 
 type EventCountableConnection {
@@ -647,7 +773,7 @@ input EventFiltersInput {
   tenantId: ID = null
   tenantUuid: ID = null
   eventTypeId: ID = null
-  eventStatusId: ID = null
+  eventStatus: EventStatusFilterEnum = null
   requestId: ID = null
   date: String = null
   coordinates: CoordinatesFilterInput = null
@@ -679,6 +805,12 @@ type EventStatusCountableEdge {
 
   """The item at the end of the edge"""
   node: EventStatus!
+}
+
+enum EventStatusFilterEnum {
+  APPROVED
+  DECLINED
+  PENDING
 }
 
 input EventStatusFiltersInput {
@@ -723,6 +855,18 @@ input EventTypeFiltersInput {
 "\n     Errors messages and codes mapped to\n    fields or non fields errors.\n    Example:\n    {\n        field_name: [\n            {\n                \"message\": \"error message\",\n                \"code\": \"error_code\"\n            }\n        ],\n        other_field: [\n            {\n                \"message\": \"error message\",\n                \"code\": \"error_code\"\n            }\n        ],\n        nonFieldErrors: [\n            {\n                \"message\": \"error message\",\n                \"code\": \"error_code\"\n            }\n        ]\n    }\n    "
 scalar ExpectedError
 
+"""
+FileType(id, uuid, name, extension, created_by, updated_by, created_at, updated_at)
+"""
+type FileType {
+  id: ID!
+  uuid: String!
+  name: String!
+  extension: String
+  createdAt: String!
+  updatedAt: String!
+}
+
 input GoogleCalendarCallbackInput {
   clientMutationId: ID = null
   code: String!
@@ -748,6 +892,11 @@ input GoogleSocialAuthInput {
 }
 
 """
+The `JSON` scalar type represents JSON values as specified by [ECMA-404](https://ecma-international.org/wp-content/uploads/ECMA-404_2nd_edition_december_2017.pdf).
+"""
+scalar JSON @specifiedBy(url: "https://ecma-international.org/wp-content/uploads/ECMA-404_2nd_edition_december_2017.pdf")
+
+"""
 Job(id, uuid, name, description, code, address, start_date, end_date, public, closed, national, ongoing, coordinates, job_title, other_title, company, event, tenant, rate, created_by, updated_by, created_at, updated_at)
 """
 type Job {
@@ -763,12 +912,13 @@ type Job {
   closed: Boolean!
   national: Boolean!
   ongoing: Boolean!
+  coordinates: [Float!]
   jobTitle: JobTitle!
   otherTitle: JobTitle
   company: Company!
   event: Event!
-  location: Location!
   tenantId: ID!
+  tenant: TenantType
   rate: Rate!
   jobRequirements: [JobRequirement!]!
   createdAt: String!
@@ -871,13 +1021,15 @@ type Mutation {
   updateAmbassadorJob(input: UpdateAmbassadorJobInput!): AmbassadorJobDetailResponse!
   createAmbassadorToAmbassadorReview(input: CreateAmbassadorToAmbassadorReviewInput!): AmbassadorToAmbassadorReviewDetailResponse!
   updateAmbassadorToAmbassadorReview(input: UpdateAmbassadorToAmbassadorReviewInput!): AmbassadorToAmbassadorReviewDetailResponse!
-  applyAmbassadorEvent(eventId: ID!): ApplyAmbassadorEventResponse!
+  applyAmbassadorEvent(eventId: ID!, ambassadorId: ID = null): ApplyAmbassadorEventResponse!
   applyAmbassadorJob(jobId: ID!): ApplyAmbassadorJobResponse!
   createPublicAmbassador(input: CreatePublicAmbassadorInput!): PublicAmbassadorCreationResponse!
   createAmbassadorInvitation(input: CreateAmbassadorInvitationInput!): AmbassadorInvitationResponse!
   acceptAmbassadorInvitation(input: AcceptAmbassadorInvitationInput!): AcceptInvitationResponse!
   approveAmbassador(input: ApproveAmbassadorInput!): ApproveAmbassadorResponse!
+  createAmbassador(input: CreateAmbassadorInput!): CreateAmbassadorResponse!
   updateAmbassador(input: UpdateAmbassadorInput!): UpdateAmbassadorResponse!
+  upsertAmbassadorProfile(input: UpsertAmbassadorProfileInput!): UpsertAmbassadorProfileResponse!
   deleteInvitation(input: DeleteInvitationInput!): DeleteInvitationResponse!
   createAmbassadorReview(input: CreateAmbassadorReviewInput!): CreateAmbassadorReviewResponse!
   updateAmbassadorReview(input: UpdateAmbassadorReviewInput!): UpdateAmbassadorReviewResponse!
@@ -949,21 +1101,22 @@ type PublicAmbassadorCreationResponse {
 
 type Query {
   events(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: EventFiltersInput = null): EventCountableConnection!
-  event(uuid: ID!): Event
+  event(id: ID = null, uuid: ID = null): Event
   todayEvents(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: EventFiltersInput = null): EventCountableConnection!
   todayEventsCoordinates(coordinates: [Float!]!, range: Float!, unit: DistanceUnit! = KILOMETERS, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: EventFiltersInput = null): EventCountableConnection!
   eventTypes(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: EventTypeFiltersInput = null): EventTypeCountableConnection!
-  eventType(id: ID!): EventType
+  eventType(id: ID = null, uuid: ID = null): EventType
   eventStatuses(first: Int = null, after: String = null, last: Int = null, before: String = null, filters: EventStatusFiltersInput = null): EventStatusCountableConnection!
-  eventStatus(id: ID!): EventStatus
+  eventStatus(id: ID = null, uuid: ID = null): EventStatus
   timezones(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): TimeZoneCountableConnection!
   publicTimezones(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): TimeZoneCountableConnection!
   googleCalendarConnectionStatus: GoogleCalendarConnectionStatus!
+  tenantThemePublic(tenantId: ID!, colorScheme: String! = "dark"): TenantThemeType
   healthcheck: String!
   me: CustomUserType!
   availableJobs(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: JobFiltersInput = null): JobCountableConnection!
-  ambassadorJobs(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): AmbassadorJobCountableConnection!
-  ambassadorJob(id: ID!): AmbassadorJob
+  ambassadorJobs(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: AmbassadorJobFiltersInput = null): AmbassadorJobCountableConnection!
+  ambassadorJob(id: ID = null, uuid: ID = null): AmbassadorJob
 }
 
 """
@@ -1025,9 +1178,6 @@ type Request {
   id: ID!
   uuid: String!
   name: String!
-  date: String!
-  startTime: String
-  endTime: String
   address: String!
   coordinates: [Float!]!
   clientName: String
@@ -1048,6 +1198,9 @@ type Request {
   tenantId: ID!
   createdAt: String!
   updatedAt: String!
+  date: String
+  startTime: String
+  endTime: String
 }
 
 type RequestDetailResponse {
@@ -1141,6 +1294,21 @@ type SourceDetailResponse {
 }
 
 """
+User(password, last_login, is_superuser, username, first_name, last_name, email, is_staff, date_joined, id, uuid, image, role, created_by, updated_by, created_at, updated_at, is_active)
+"""
+type SparkUserType {
+  id: ID!
+  uuid: UUID!
+
+  """Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only."""
+  username: String!
+  email: String!
+  firstName: String!
+  lastName: String!
+  image: DjangoImageType
+}
+
+"""
 Status(id, uuid, name, slug, tenant, created_by, updated_by, created_at, updated_at)
 """
 type Status {
@@ -1151,6 +1319,20 @@ type Status {
   tenantId: ID!
   createdAt: String!
   updatedAt: String!
+}
+
+"""
+Per-tenant visual theme configuration compatible with DaisyUI.
+
+The frontend can use `css_variables` directly to construct a theme
+definition or apply CSS custom properties.
+"""
+type TenantThemeType {
+  id: ID!
+  name: String!
+  colorScheme: String!
+  cssVariables: JSON!
+  tenant: DjangoModelType!
 }
 
 """
@@ -1324,9 +1506,32 @@ input UpdateSourceInput {
   id: ID!
 }
 
+input UpsertAmbassadorProfileInput {
+  clientMutationId: ID = null
+  ambassadorId: ID = null
+  ambassadorUuid: ID = null
+  address: String = null
+  coordinates: [Float!] = null
+  isActive: Boolean = null
+  rating: Int = null
+  files: [AmbassadorFileInput!] = null
+  traits: [AmbassadorTraitInput!] = null
+  skills: [AmbassadorSkillInput!] = null
+  notes: [AmbassadorProfileNoteInput!] = null
+  workHistory: [AmbassadorWorkHistoryInput!] = null
+}
+
+type UpsertAmbassadorProfileResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  profile: AmbassadorProfile
+}
+
 enum UserRoleEnum {
   AMBASSADOR
   CLIENT
+  SPARK
 }
 
 """A helper model that handles user account stuff."""
@@ -1352,13 +1557,13 @@ type UserType {
   isActive: Boolean!
   dateJoined: DateTime!
   status: UserStatusType!
+  id: ID!
+  email: String!
+  lastName: String
 
   """Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only."""
   username: String!
   firstName: String
-  id: ID!
-  email: String!
-  lastName: String
   archived: Boolean!
   verified: Boolean!
 }

@@ -482,7 +482,6 @@ type ApplyAmbassadorJobResponse {
 input ApproveAmbassadorInput {
   clientMutationId: ID = null
   ambassadorId: ID!
-  tenantId: ID = null
 }
 
 input ApproveAmbassadorJobInput {
@@ -1863,6 +1862,11 @@ input GoogleSocialAuthInput {
 }
 
 """
+The `JSON` scalar type represents JSON values as specified by [ECMA-404](https://ecma-international.org/wp-content/uploads/ECMA-404_2nd_edition_december_2017.pdf).
+"""
+scalar JSON @specifiedBy(url: "https://ecma-international.org/wp-content/uploads/ECMA-404_2nd_edition_december_2017.pdf")
+
+"""
 Job(id, uuid, name, description, code, address, start_date, end_date, public, closed, national, ongoing, coordinates, job_title, other_title, company, event, tenant, rate, created_by, updated_by, created_at, updated_at)
 """
 type Job {
@@ -2615,6 +2619,7 @@ type Query {
   attendances(first: Int = null, after: String = null, last: Int = null, before: String = null, filters: AttendanceFiltersInput = null): AttendanceCountableConnection!
   attendance(id: ID!): Attendance
   googleCalendarConnectionStatus: GoogleCalendarConnectionStatus!
+  tenantThemePublic(tenantId: ID!, colorScheme: String! = "dark"): TenantThemeType
   healthcheck: String!
   me: CustomUserType!
   user(id: ID = null, uuid: ID = null): CustomUserType!
@@ -3355,6 +3360,20 @@ input TenantFiltersInput {
 }
 
 """
+Per-tenant visual theme configuration compatible with DaisyUI.
+
+The frontend can use `css_variables` directly to construct a theme
+definition or apply CSS custom properties.
+"""
+type TenantThemeType {
+  id: ID!
+  name: String!
+  colorScheme: String!
+  cssVariables: JSON!
+  tenant: DjangoModelType!
+}
+
+"""
 Tenant(id, uuid, name, image, request_url_name, created_by, updated_by, created_at, updated_at)
 """
 type TenantType {
@@ -3999,12 +4018,12 @@ type UserType {
   dateJoined: DateTime!
   status: UserStatusType!
   id: ID!
+  email: String!
+  lastName: String
 
   """Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only."""
   username: String!
-  lastName: String
   firstName: String
-  email: String!
   archived: Boolean!
   verified: Boolean!
 }
