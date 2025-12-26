@@ -283,7 +283,7 @@ class AmbassadorsCustomRegister:
             role_id=resolved_role_id,
             image=input.image,
             tenant_id=resolved_tenant_id,
-            auto_verify=False,
+            auto_verify=True,
             client_mutation_id=input.client_mutation_id,
         )
 
