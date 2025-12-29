@@ -131,7 +131,7 @@ class Recap:
     @strawberry.field
     def recap_files(self) -> List[RecapFile]:
         """Return all recap files linked to this recap."""
-        return [relation.recap_file for relation in self.recap_recap_file.all()]
+        return list(self.recap_files.all())
 
     @strawberry.field
     def ambassadors(self) -> List[ambassador_types.Ambassador]:
@@ -159,12 +159,3 @@ class RecapListResponse:
     total_pages: int
     recaps: List[Recap]
 
-
-@strawberry_django.type(models.RecapRecapFile)
-class RecapRecapFile:
-    id: strawberry.ID
-    uuid: str
-    recap_file_id: strawberry.ID
-    recap_id: strawberry.ID
-    created_at: str
-    updated_at: str

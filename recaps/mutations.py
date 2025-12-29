@@ -112,7 +112,6 @@ class RecapMutationService(SparkGraphQLMixin):
                 recap = models.Recap(
                     name=self.input.name,
                     event=event,
-                    recap_file=recap_files[0],
                     created_by=self.user,
                     total_engagements=total_engagements,
                     products_sold=self.input.products_sold,
@@ -122,13 +121,10 @@ class RecapMutationService(SparkGraphQLMixin):
                 )
                 recap.save()
 
-                # Create RecapRecapFile entries for ALL files
-                for recap_file in recap_files:
-                    models.RecapRecapFile.objects.create(
-                        recap=recap,
-                        recap_file=recap_file,
-                        created_by=self.user,
-                    )
+                # Link recap to all recap files
+                models.RecapFile.objects.filter(
+                    id__in=[recap_file.id for recap_file in recap_files]
+                ).update(recap=recap)
 
                 # Create related objects
                 if self.input.consumer_engagements:
@@ -208,7 +204,7 @@ class RecapMutationService(SparkGraphQLMixin):
         def update_recap_with_files():
             with transaction.atomic():
                 existing_files = list(
-                    models.RecapFile.objects.filter(recap_recap_file__recap=recap).distinct()
+                    models.RecapFile.objects.filter(recap=recap).distinct()
                 )
                 blob_to_file = {
                     extract_blob_name_from_url(str(file.file)): file
@@ -235,6 +231,7 @@ class RecapMutationService(SparkGraphQLMixin):
                         name=f"Recap file for {self.input.name}",
                         file=blob_name,
                         file_type=file_type,
+                        recap=recap,
                         approved=False,
                         created_by=self.user,
                     )
@@ -246,28 +243,13 @@ class RecapMutationService(SparkGraphQLMixin):
                 # Update the recap
                 recap.name = self.input.name
                 recap.event = event
-                recap.recap_file = final_files[0]
                 recap.updated_by = self.user
                 recap.save()
 
-                # Remove only relations for files no longer linked
-                models.RecapRecapFile.objects.filter(recap=recap).exclude(
-                    recap_file__in=final_files
-                ).delete()
-
-                # Ensure relations exist for all current files
-                existing_relations = set(
-                    models.RecapRecapFile.objects.filter(
-                        recap=recap, recap_file__in=final_files
-                    ).values_list("recap_file_id", flat=True)
-                )
                 for recap_file in final_files:
-                    if recap_file.id not in existing_relations:
-                        models.RecapRecapFile.objects.create(
-                            recap=recap,
-                            recap_file=recap_file,
-                            created_by=self.user,
-                        )
+                    if recap_file.recap_id != recap.id:
+                        recap_file.recap = recap
+                        recap_file.save(update_fields=["recap"])
 
                 removed_blob_names = [
                     extract_blob_name_from_url(str(file.file)) for file in removed_files
@@ -280,9 +262,9 @@ class RecapMutationService(SparkGraphQLMixin):
 
                 return recap, removed_blob_names
         
-        recap, existing_blob_names = await update_recap_with_files()
+        recap, removed_blob_names = await update_recap_with_files()
 
-        for blob_name in existing_blob_names:
+        for blob_name in removed_blob_names:
             if blob_name:
                 delete_blob(blob_name)
 
@@ -301,8 +283,8 @@ class RecapMutationService(SparkGraphQLMixin):
         @sync_to_async
         def delete_recap_with_files():
             with transaction.atomic():
-                # Delete RecapRecapFile entries
-                models.RecapRecapFile.objects.filter(recap=recap).delete()
+                # Detach recap files before deleting recap
+                models.RecapFile.objects.filter(recap=recap).update(recap=None)
                 # Delete the recap
                 recap.delete()
             return True
@@ -324,13 +306,12 @@ class RecapMutationService(SparkGraphQLMixin):
         @sync_to_async
         def delete_file_with_references():
             with transaction.atomic():
-                if models.Recap.objects.filter(recap_file=recap_file).exists():
+                if recap_file.recap_id:
                     raise GraphQLError(
-                        "Recap file is set as primary for a recap. Update the recap before deleting this file."
+                        "Recap file is linked to a recap. Update the recap before deleting this file."
                     )
 
                 blob_name = extract_blob_name_from_url(str(recap_file.file))
-                models.RecapRecapFile.objects.filter(recap_file=recap_file).delete()
                 recap_file.delete()
                 return blob_name
 
