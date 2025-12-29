@@ -2628,6 +2628,8 @@ type Query {
   publicTimezones(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): TimeZoneCountableConnection!
   recaps(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: RecapFiltersInput = null): RecapCountableConnection!
   recap(uuid: ID!): Recap
+  typeOfGoods(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): TypeOfGoodCountableConnection!
+  typeOfGood(id: ID = null, uuid: ID = null): TypeOfGood
   fileTypes(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): FileTypeCountableConnection!
   fileType(uuid: ID!): FileType
   ambassadorEvents(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: AmbassadorEventsFiltersInput = null): AmbassadorEventTypeCountableConnection!
@@ -2850,7 +2852,7 @@ type RateTypeDetailResponse {
 }
 
 """
-Recap(id, uuid, name, submited_at, total_engagements, products_sold, total_earnings, approved, timezone, event, ambassador, recap_file, job, retailer, created_by, updated_by, created_at, updated_at)
+Recap(id, uuid, name, submited_at, total_engagements, products_sold, total_earnings, approved, timezone, event, ambassador, job, retailer, created_by, updated_by, created_at, updated_at)
 """
 type Recap {
   id: ID!
@@ -2898,7 +2900,7 @@ type RecapDetailResponse {
 }
 
 """
-RecapFile(id, uuid, name, file, approved, file_type, file_recap_category, created_by, updated_by, created_at, updated_at)
+RecapFile(id, uuid, name, file, approved, recap, file_type, file_recap_category, created_by, updated_by, created_at, updated_at)
 """
 type RecapFile {
   id: ID!
@@ -3517,6 +3519,20 @@ type TypeOfGood {
   updatedAt: String!
 }
 
+type TypeOfGoodCountableConnection {
+  pageInfo: PageInfo!
+  edges: [TypeOfGoodCountableEdge!]!
+  totalCount: Int!
+}
+
+type TypeOfGoodCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: TypeOfGood!
+}
+
 scalar UUID
 
 input UpdateAmbassadorInput {
@@ -4076,13 +4092,13 @@ type UserType {
   isActive: Boolean!
   dateJoined: DateTime!
   status: UserStatusType!
-  lastName: String
-  email: String!
   id: ID!
-  firstName: String
 
   """Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only."""
   username: String!
+  lastName: String
+  firstName: String
+  email: String!
   archived: Boolean!
   verified: Boolean!
 }
