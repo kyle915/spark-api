@@ -8,6 +8,7 @@ import random
 import string
 from django.utils.text import slugify
 from gqlauth.models import UserStatus
+from django.conf import settings
 from django.db import transaction
 
 from utils.graphql.inputs import SparkGraphQLInput
@@ -18,6 +19,7 @@ from .models import Role, TenantedUser, Tenant, TenantTheme
 from .types import TenantType, TenantThemeType
 from .inputs import CreateOrUpdateTenantThemeInput
 from .social_auth import BaseSocialAuthMutations, SocialAuthResponse
+from .envelopes import EmailVerificationMailer
 from events.models import EventStatus, EventType, RequestStatus, RequestType
 from jobs.models import Status as JobStatus, RateType
 from recaps.models import FileRecapCategory, TypeOfGood
@@ -250,6 +252,14 @@ async def register_user_with_role(
         )
     else:
         activation_token = await sync_to_async(get_token)(user, "activation")
+        frontend_url = {
+            "client": settings.CLIENT_FRONTEND_URL,
+            "ambassador": settings.AMBASSADOR_FRONTEND_URL,
+            "spark-admin": settings.ADMIN_FRONTEND_URL,
+        }
+        activation_url = f"{frontend_url[role.slug]}/verify-account?token={activation_token}"
+        verification_email = EmailVerificationMailer(user, activation_url)
+        await verification_email.send_async()
 
     message = (
         "User registered successfully."
@@ -808,7 +818,8 @@ class SparkTenantMutations:
                     create_statuses(RequestStatus, include_default_flag=True)
                     create_statuses(EventStatus, include_default_flag=True)
                     create_statuses(JobStatus, include_default_flag=False)
-                    create_statuses(AttendanceStatus, include_default_flag=False)
+                    create_statuses(AttendanceStatus,
+                                    include_default_flag=False)
 
                     # Event types
                     for event_type in DEFAULT_EVENT_TYPES:

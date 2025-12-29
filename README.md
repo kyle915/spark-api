@@ -62,6 +62,14 @@ CELERY_BROKER_URL=redis://localhost:6379/0
 
 # Test Database (for running tests)
 TEST_DATABASE_URL=postgres:///spark_tests
+
+CLIENT_FRONTEND_URL=http://client.app
+AMBASSADOR_FRONTEND_URL=http://ambassador.app
+ADMIN_FRONTEND_URL=http://admin.app
+
+RESEND_API_KEY=re_apikeyhere
+MAIL_DRIVER=resend
+DEFAULT_FROM_EMAIL=Spark <onboarding@resend.dev>
 ```
 ---
 
