@@ -1,3 +1,4 @@
+import base64
 import strawberry
 from typing import Any, Union, Type
 from graphql import GraphQLError
@@ -12,6 +13,58 @@ from tenants.models import Tenant
 from utils.graphql.inputs import SparkGraphQLInput
 
 User = get_user_model()
+
+
+def decode_global_id(global_id: str) -> int:
+    """
+    Decode a strawberry-relay globalId to extract the database ID.
+    
+    GlobalIds are base64 encoded strings in the format "TypeName:ID".
+    This function decodes the base64 and extracts the numeric ID.
+    
+    Args:
+        global_id: The globalId string (e.g., "VGVuYW50VHlwZTox")
+        
+    Returns:
+        The numeric database ID
+        
+    Raises:
+        GraphQLError: If the globalId cannot be decoded or is invalid
+    """
+    import base64
+    try:
+        # Decode base64
+        decoded = base64.b64decode(global_id.encode("utf-8")).decode("utf-8")
+        # Extract ID after the colon (format: "TypeName:ID")
+        if ":" not in decoded:
+            raise ValueError("Invalid globalId format")
+        _, db_id = decoded.split(":", 1)
+        return int(db_id)
+    except (ValueError, TypeError, UnicodeDecodeError) as e:
+        raise GraphQLError(f"Invalid globalId: {global_id}") from e
+
+
+def resolve_id_to_int(id_value: str | int) -> int:
+    """
+    Resolve an ID value that could be either a globalId or a direct integer.
+    
+    Args:
+        id_value: Either a globalId string or an integer/string integer
+        
+    Returns:
+        The numeric database ID
+    """
+    if isinstance(id_value, int):
+        return id_value
+    
+    if isinstance(id_value, str):
+        # If it's a pure digit string, convert directly
+        if id_value.isdigit():
+            return int(id_value)
+        # Otherwise, try to decode as globalId
+        return decode_global_id(id_value)
+    
+    raise GraphQLError(f"Invalid ID format: {id_value}")
 
 
 class SparkGraphQLMixin:
@@ -125,8 +178,8 @@ class SparkGraphQLMixin:
 
         if tenant_id is not None:
             try:
-                filters["id"] = int(tenant_id)
-            except (TypeError, ValueError):
+                filters["id"] = resolve_id_to_int(tenant_id)
+            except (TypeError, ValueError, GraphQLError):
                 raise GraphQLError("Invalid tenant ID.")
         elif tenant_uuid:
             filters["uuid"] = tenant_uuid
@@ -376,8 +429,8 @@ class BaseMutationService(SparkGraphQLMixin):
     ) -> int:
         """Resolve tenant ID for Spark schema requests without membership restrictions."""
         try:
-            tenant_pk = int(tenant_id)
-        except (TypeError, ValueError):
+            tenant_pk = resolve_id_to_int(tenant_id)
+        except (TypeError, ValueError, GraphQLError):
             raise GraphQLError("Invalid tenant ID.")
 
         try:

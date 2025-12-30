@@ -29,6 +29,7 @@ from utils.graphql.relay import (
     CountableConnection,
     connection_from_queryset_async,
 )
+from utils.graphql.mixins import resolve_id_to_int
 
 User = get_user_model()
 
@@ -154,8 +155,7 @@ class QuerySpark(GoogleCalendarQueries, TenantThemingQuery):
             raise GraphQLError(f"Error checking permissions: {exc}") from exc
 
         if not (is_spark_admin or is_client):
-            raise GraphQLError(
-                "You do not have permission to perform this action.")
+            raise GraphQLError("You do not have permission to perform this action.")
 
         if not id and not uuid:
             raise GraphQLError("Provide id or uuid to fetch a user.")
@@ -178,8 +178,7 @@ class QuerySpark(GoogleCalendarQueries, TenantThemingQuery):
                 ).exists
             )()
             if not has_shared_tenant:
-                raise GraphQLError(
-                    "You do not have permission to view this user.")
+                raise GraphQLError("You do not have permission to view this user.")
 
         return target_user
 
@@ -203,8 +202,7 @@ class QuerySpark(GoogleCalendarQueries, TenantThemingQuery):
             raise GraphQLError(f"Error checking permissions: {exc}") from exc
 
         if not (is_spark_admin or is_client):
-            raise GraphQLError(
-                "You do not have permission to perform this action.")
+            raise GraphQLError("You do not have permission to perform this action.")
 
         queryset = User.objects.select_related("role").all()
         requester_tenant_ids: list[int] = []
@@ -223,8 +221,8 @@ class QuerySpark(GoogleCalendarQueries, TenantThemingQuery):
         if filters:
             if filters.tenant_id:
                 try:
-                    tenant_id = int(filters.tenant_id)
-                except (TypeError, ValueError) as exc:
+                    tenant_id = resolve_id_to_int(filters.tenant_id)
+                except (TypeError, ValueError, GraphQLError) as exc:
                     raise GraphQLError("Invalid tenantId.") from exc
                 if not is_spark_admin and tenant_id not in requester_tenant_ids:
                     raise GraphQLError(
@@ -366,8 +364,7 @@ class QueryClients(GoogleCalendarQueries, TenantThemingQuery):
             raise GraphQLError(f"Error checking permissions: {exc}") from exc
 
         if not (is_spark_admin or is_client):
-            raise GraphQLError(
-                "You do not have permission to perform this action.")
+            raise GraphQLError("You do not have permission to perform this action.")
 
         if not id and not uuid:
             raise GraphQLError("Provide id or uuid to fetch a user.")
@@ -390,8 +387,7 @@ class QueryClients(GoogleCalendarQueries, TenantThemingQuery):
                 ).exists
             )()
             if not has_shared_tenant:
-                raise GraphQLError(
-                    "You do not have permission to view this user.")
+                raise GraphQLError("You do not have permission to view this user.")
 
         return target_user
 
@@ -415,8 +411,7 @@ class QueryClients(GoogleCalendarQueries, TenantThemingQuery):
             raise GraphQLError(f"Error checking permissions: {exc}") from exc
 
         if not (is_spark_admin or is_client):
-            raise GraphQLError(
-                "You do not have permission to perform this action.")
+            raise GraphQLError("You do not have permission to perform this action.")
 
         queryset = User.objects.select_related("role").all()
         requester_tenant_ids: list[int] = []
@@ -435,8 +430,8 @@ class QueryClients(GoogleCalendarQueries, TenantThemingQuery):
         if filters:
             if filters.tenant_id:
                 try:
-                    tenant_id = int(filters.tenant_id)
-                except (TypeError, ValueError) as exc:
+                    tenant_id = resolve_id_to_int(filters.tenant_id)
+                except (TypeError, ValueError, GraphQLError) as exc:
                     raise GraphQLError("Invalid tenantId.") from exc
                 if not is_spark_admin and tenant_id not in requester_tenant_ids:
                     raise GraphQLError(

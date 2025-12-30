@@ -19,7 +19,8 @@ type AcceptInvitationResponse {
 """
 AccountFeedback(id, uuid, do_differently_feedback, feedback, corpo_card, recap, created_by, updated_by, created_at, updated_at)
 """
-type AccountFeedback {
+type AccountFeedback implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   doDifferentlyFeedback: String
@@ -44,7 +45,8 @@ input ActiveAmbassadorFiltersInput {
 """
 Ambassador(id, uuid, rating, address, coordinates, is_active, user, created_by, updated_by, created_at, updated_at)
 """
-type Ambassador {
+type Ambassador implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   rating: Int!
@@ -79,7 +81,8 @@ enum AmbassadorEventStatus {
 """
 AmbassadorEvent(id, uuid, is_approved, ambassador, tenant, event, created_by, updated_by, created_at, updated_at)
 """
-type AmbassadorEventType {
+type AmbassadorEventType implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   isApproved: Boolean!
@@ -126,7 +129,8 @@ input AmbassadorFileInput {
 """
 AmbassadorFile(id, uuid, name, url, main_resume, profile_pic, is_public, file_type, ambassador, created_by, updated_by, created_at, updated_at)
 """
-type AmbassadorFileType {
+type AmbassadorFileType implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
@@ -169,7 +173,8 @@ type AmbassadorInvitationResponse {
 }
 
 """Model to track ambassador invitations sent by clients or spark-admins."""
-type AmbassadorInvitationType {
+type AmbassadorInvitationType implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   email: String!
@@ -201,7 +206,8 @@ type AmbassadorInvitationTypeCountableEdge {
 """
 AmbassadorJob(id, uuid, recap_uploaded, appear_as_rfp, tenant, ambassador, job, status, rate, created_by, updated_by, created_at, updated_at)
 """
-type AmbassadorJob {
+type AmbassadorJob implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   appearAsRfp: Boolean!
@@ -263,7 +269,8 @@ input AmbassadorNoteFiltersInput {
 """
 AmbassadorNote(id, uuid, note, tenant, ambassador, created_by, updated_by, created_at, updated_at)
 """
-type AmbassadorNoteType {
+type AmbassadorNoteType implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   note: String!
@@ -320,7 +327,8 @@ input AmbassadorReviewFiltersInput {
 """
 AmbassadorReview(id, uuid, review, score, ambassador, client, tenant, created_by, updated_by, created_at, updated_at)
 """
-type AmbassadorReviewType {
+type AmbassadorReviewType implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   review: String
@@ -361,7 +369,8 @@ input AmbassadorSkillInput {
 """
 AmbassadorSkill(id, uuid, tenant, ambassador, skill, created_by, updated_by, created_at, updated_at)
 """
-type AmbassadorSkillType {
+type AmbassadorSkillType implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   ambassadorId: ID!
@@ -396,7 +405,8 @@ type AmbassadorStats {
 """
 AmbassadorToAmbassadorReview(id, uuid, description, rate, tenant, ambassador, created_by, updated_by, created_at, updated_at)
 """
-type AmbassadorToAmbassadorReview {
+type AmbassadorToAmbassadorReview implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   description: String!
@@ -436,7 +446,8 @@ input AmbassadorTraitInput {
 """
 AmbassadorTrait(id, uuid, ambassador, user, created_by, updated_by, created_at, updated_at)
 """
-type AmbassadorTraitType {
+type AmbassadorTraitType implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   ambassadorId: ID!
@@ -453,7 +464,8 @@ input AmbassadorWorkHistoryInput {
 """
 AmbassadorWorkHistory(id, uuid, ambassador, user, created_by, updated_by, created_at, updated_at)
 """
-type AmbassadorWorkHistoryType {
+type AmbassadorWorkHistoryType implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   ambassadorId: ID!
@@ -519,7 +531,8 @@ type ApproveRequestResponse {
 """
 Attendance(id, uuid, clock_time, coordinates, ambassador, job, event, attendace_type, attendance_status, source, timezone, created_by, updated_by, created_at, updated_at)
 """
-type Attendance {
+type Attendance implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   clockTime: String!
@@ -572,7 +585,8 @@ input AttendanceFiltersInput {
 """
 AttendanceStatus(id, uuid, name, slug, tenant, created_by, updated_by, created_at, updated_at)
 """
-type AttendanceStatus {
+type AttendanceStatus implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
@@ -606,7 +620,8 @@ type AttendanceStatusDetailResponse {
 """
 AttendanceType(id, uuid, name, slug, created_by, updated_by, created_at, updated_at)
 """
-type AttendanceType {
+type AttendanceType implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
@@ -648,7 +663,8 @@ input BaseRegisterInput {
 """
 Client(id, uuid, name, email, tenant, created_by, updated_by, created_at, updated_at)
 """
-type Client {
+type Client implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
@@ -693,7 +709,8 @@ enum ColorSchemeEnum {
 """
 Company(id, name, uuid, email, website_url, founding_date, phone, address, about_us, company_size_min, company_size_max, approved, tenant, location, cover, profile_image, created_by, updated_by, created_at, updated_at)
 """
-type Company {
+type Company implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
@@ -738,7 +755,8 @@ type CompanyDetailResponse {
 """
 CompanyFile(id, uuid, name, url, file_type, created_by, updated_by, created_at, updated_at)
 """
-type CompanyFile {
+type CompanyFile implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
@@ -772,7 +790,8 @@ type CompanyFileDetailResponse {
 """
 CompanyReview(id, uuid, global_score, review, min_pay_timing, max_pay_timing, pay_timing_range, company, ambassador, created_by, updated_by, created_at, updated_at)
 """
-type CompanyReview {
+type CompanyReview implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   globalScore: Int!
@@ -810,7 +829,8 @@ type CompanyReviewDetailResponse {
 """
 CompanyToAmbassadorReview(id, uuid, description, rate, tenant, ambassador, job, created_by, updated_by, created_at, updated_at)
 """
-type CompanyToAmbassadorReview {
+type CompanyToAmbassadorReview implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   description: String!
@@ -858,7 +878,8 @@ type ConnectGoogleCalendarResponse {
 """
 ConsumerEngagements(id, uuid, total_consumer, first_time_consumers, brand_aware_consumers, willing_to_purchase_consumers, not_willing_consumers, recap, created_by, updated_by, created_at, updated_at)
 """
-type ConsumerEngagements {
+type ConsumerEngagements implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   totalConsumer: Int!
@@ -882,7 +903,8 @@ input ConsumerEngagementsInput {
 """
 ConsumerFeedback(id, uuid, demographics, feedback, quotes, positive_stories, reasons_to_decline, recap, created_by, updated_by, created_at, updated_at)
 """
-type ConsumerFeedback {
+type ConsumerFeedback implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   demographics: String
@@ -1592,7 +1614,8 @@ enum DistanceUnit {
 """
 Distributor(id, uuid, name, email, location, tenant, created_by, updated_by, created_at, updated_at)
 """
-type Distributor {
+type Distributor implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
@@ -1639,14 +1662,11 @@ type DjangoImageType {
   height: Int!
 }
 
-type DjangoModelType {
-  pk: ID!
-}
-
 """
 Event(id, uuid, name, date, coordinates, timezone, tenant, request, event_type, status, start_time, end_time, address, notes, is_national, created_by, updated_by, created_at, updated_at)
 """
-type Event {
+type Event implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
@@ -1743,7 +1763,8 @@ type EventStats {
 """
 EventStatus(id, uuid, name, slug, is_default, tenant, created_by, updated_by, created_at, updated_at)
 """
-type EventStatus {
+type EventStatus implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
@@ -1802,7 +1823,8 @@ type EventTimeSeries {
 """
 EventType(id, uuid, name, is_default, tenant, created_by, updated_by, created_at, updated_at)
 """
-type EventType {
+type EventType implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
@@ -1845,7 +1867,8 @@ scalar ExpectedError
 """
 FileType(id, uuid, name, extension, created_by, updated_by, created_at, updated_at)
 """
-type FileType {
+type FileType implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
@@ -1900,7 +1923,8 @@ scalar JSON @specifiedBy(url: "https://ecma-international.org/wp-content/uploads
 """
 Job(id, uuid, name, description, code, address, start_date, end_date, public, closed, national, ongoing, coordinates, job_title, other_title, company, event, tenant, rate, created_by, updated_by, created_at, updated_at)
 """
-type Job {
+type Job implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
@@ -1951,7 +1975,8 @@ type JobDetailResponse {
 """
 JobFile(id, uuid, name, url, job, file_type, created_by, updated_by, created_at, updated_at)
 """
-type JobFile {
+type JobFile implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
@@ -1993,7 +2018,8 @@ input JobFiltersInput {
 """
 JobRequirement(id, uuid, name, tenant, job_requirement_type, job, created_by, updated_by, created_at, updated_at)
 """
-type JobRequirement {
+type JobRequirement implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
@@ -2007,7 +2033,8 @@ type JobRequirement {
 """
 JobRequirementAnswer(id, uuid, selected_answer, tenant, job_requirement_question, ambassador, created_by, updated_by, created_at, updated_at)
 """
-type JobRequirementAnswer {
+type JobRequirementAnswer implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   selectedAnswer: [Int!]!
@@ -2063,7 +2090,8 @@ type JobRequirementDetailResponse {
 """
 JobRequirementFile(id, uuid, name, url, job_requirement, file_type, created_by, updated_by, created_at, updated_at)
 """
-type JobRequirementFile {
+type JobRequirementFile implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
@@ -2098,7 +2126,8 @@ type JobRequirementFileDetailResponse {
 """
 JobRequirementQuestion(id, uuid, question, tenant, job_requirement, question_type, created_by, updated_by, created_at, updated_at)
 """
-type JobRequirementQuestion {
+type JobRequirementQuestion implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   question: String!
@@ -2133,7 +2162,8 @@ type JobRequirementQuestionDetailResponse {
 """
 JobRequirementType(id, uuid, name, tenant, created_by, updated_by, created_at, updated_at)
 """
-type JobRequirementType {
+type JobRequirementType implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
@@ -2171,7 +2201,8 @@ enum JobStatusFilter {
 """
 JobTitle(id, uuid, name, tenant, created_by, updated_by, created_at, updated_at)
 """
-type JobTitle {
+type JobTitle implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String
@@ -2204,7 +2235,8 @@ type JobTitleDetailResponse {
 """
 Location(id, uuid, name, code, zip, tenant, created_by, updated_by, created_at, updated_at)
 """
-type Location {
+type Location implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
@@ -2413,6 +2445,12 @@ type MutationNormalOutput {
   errors: ExpectedError
 }
 
+"""An object with a Globally Unique ID"""
+interface Node {
+  """The Globally Unique ID of this object"""
+  id: ID!
+}
+
 input ObtainJSONWebTokenInput {
   password: String!
   username: String!
@@ -2450,7 +2488,8 @@ type PageInfo {
 """
 PayTiming(id, uuid, min_pay_timing, max_pay_timing, unit, company_review, created_by, updated_by, created_at, updated_at)
 """
-type PayTiming {
+type PayTiming implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   minPayTiming: Int!
@@ -2485,7 +2524,8 @@ type PayTimingDetailResponse {
 """
 Product(id, uuid, name, image, product_type, tenant, created_by, updated_by, created_at, updated_at)
 """
-type Product {
+type Product implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
@@ -2533,7 +2573,8 @@ input ProductSampleInput {
 """
 ProductSamples(id, uuid, product, recap, quantity, created_by, updated_by, created_at, updated_at)
 """
-type ProductSamples {
+type ProductSamples implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   product: Product!
@@ -2545,7 +2586,8 @@ type ProductSamples {
 """
 ProductType(id, uuid, name, tenant, created_by, updated_by, created_at, updated_at)
 """
-type ProductType {
+type ProductType implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
@@ -2720,7 +2762,8 @@ type Query {
 """
 QuestionOption(id, uuid, option, tenant, job_requirement_question, created_by, updated_by, created_at, updated_at)
 """
-type QuestionOption {
+type QuestionOption implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   option: String!
@@ -2754,7 +2797,8 @@ type QuestionOptionDetailResponse {
 """
 QuestionType(id, uuid, name, tenant, created_by, updated_by, created_at, updated_at)
 """
-type QuestionType {
+type QuestionType implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
@@ -2787,7 +2831,8 @@ type QuestionTypeDetailResponse {
 """
 Rate(id, uuid, amount, tenant, rate_type, created_by, updated_by, created_at, updated_at)
 """
-type Rate {
+type Rate implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   amount: Float!
@@ -2821,7 +2866,8 @@ type RateDetailResponse {
 """
 RateType(id, uuid, name, tenant, created_by, updated_by, created_at, updated_at)
 """
-type RateType {
+type RateType implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
@@ -2854,7 +2900,8 @@ type RateTypeDetailResponse {
 """
 Recap(id, uuid, name, submited_at, total_engagements, products_sold, total_earnings, approved, timezone, event, ambassador, job, retailer, created_by, updated_by, created_at, updated_at)
 """
-type Recap {
+type Recap implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
@@ -2902,7 +2949,8 @@ type RecapDetailResponse {
 """
 RecapFile(id, uuid, name, file, approved, recap, file_type, file_recap_category, created_by, updated_by, created_at, updated_at)
 """
-type RecapFile {
+type RecapFile implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
@@ -2955,7 +3003,8 @@ type RegisterResponse {
 """
 Request(id, uuid, name, date, start_time, end_time, address, coordinates, client_name, client_email, distributor_name, distributor_email, retailer_name, retailer_address, retailer_store_contact, store_manager_name, store_manager_phone, timezone, client, distributor, retailer, request_type, status, tenant, created_by, updated_by, created_at, updated_at)
 """
-type Request {
+type Request implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
@@ -3028,7 +3077,11 @@ type RequestStats {
   requestsByStatus: [RequestStatusCount!]
 }
 
-type RequestStatus {
+"""
+RequestStatus(id, uuid, name, slug, create_event, is_default, tenant, created_by, updated_by, created_at, updated_at)
+"""
+type RequestStatus implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
@@ -3075,7 +3128,8 @@ input RequestStatusFiltersInput {
 """
 RequestStoreManager(id, uuid, name, phone, request, tenant, created_by, updated_by, created_at, updated_at)
 """
-type RequestStoreManager {
+type RequestStoreManager implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
@@ -3126,7 +3180,8 @@ type RequestTimeSeries {
 """
 RequestType(id, uuid, name, tenant, created_by, updated_by, created_at, updated_at)
 """
-type RequestType {
+type RequestType implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
@@ -3165,7 +3220,8 @@ input RequestTypeFiltersInput {
 """
 Retailer(id, uuid, name, address, store_contact, location, tenant, created_by, updated_by, created_at, updated_at)
 """
-type Retailer {
+type Retailer implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
@@ -3207,7 +3263,8 @@ input RetailerFiltersInput {
 """
 ReviewScore(id, uuid, name, score, company_review, created_by, updated_by, created_at, updated_at)
 """
-type ReviewScore {
+type ReviewScore implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String
@@ -3247,7 +3304,8 @@ enum RoleFilterEnum {
 """
 Role(id, uuid, name, slug, created_by, updated_by, created_at, updated_at)
 """
-type RoleType {
+type RoleType implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: UUID!
   name: String!
@@ -3256,7 +3314,8 @@ type RoleType {
 """
 SalesPerformance(id, uuid, price, product, recap, type_of_good, created_by, updated_by, created_at, updated_at)
 """
-type SalesPerformance {
+type SalesPerformance implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   product: Product!
@@ -3282,7 +3341,8 @@ input SkillFiltersInput {
 """
 Skill(id, uuid, name, tenant, created_by, updated_by, created_at, updated_at)
 """
-type SkillType {
+type SkillType implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
@@ -3314,7 +3374,8 @@ type SocialAuthResponse {
 }
 
 """Source(id, uuid, name, created_by, updated_by, created_at, updated_at)"""
-type Source {
+type Source implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
@@ -3346,7 +3407,8 @@ type SourceDetailResponse {
 """
 User(password, last_login, is_superuser, username, first_name, last_name, email, is_staff, date_joined, id, uuid, image, role, created_by, updated_by, created_at, updated_at, is_active)
 """
-type SparkUserType {
+type SparkUserType implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: UUID!
 
@@ -3361,7 +3423,8 @@ type SparkUserType {
 """
 Status(id, uuid, name, slug, tenant, created_by, updated_by, created_at, updated_at)
 """
-type Status {
+type Status implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
@@ -3410,18 +3473,20 @@ Per-tenant visual theme configuration compatible with DaisyUI.
 The frontend can use `css_variables` directly to construct a theme
 definition or apply CSS custom properties.
 """
-type TenantThemeType {
+type TenantThemeType implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   name: String!
   colorScheme: String!
   cssVariables: JSON!
-  tenant: DjangoModelType!
+  tenant: Node!
 }
 
 """
 Tenant(id, uuid, name, image, request_url_name, created_by, updated_by, created_at, updated_at)
 """
-type TenantType {
+type TenantType implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: UUID!
   name: String!
@@ -3459,7 +3524,8 @@ type TimeSeriesDataPoint {
 """
 TimeZone(id, uuid, name, code, offset, created_by, updated_by, created_at, updated_at)
 """
-type TimeZone {
+type TimeZone implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
@@ -3511,7 +3577,8 @@ type TokenType {
 """
 TypeOfGood(id, uuid, name, tenant, created_by, updated_by, created_at, updated_at)
 """
-type TypeOfGood {
+type TypeOfGood implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
@@ -4079,7 +4146,7 @@ type UserStatusType {
 User(password, last_login, is_superuser, username, first_name, last_name, email, is_staff, date_joined, id, uuid, image, role, created_by, updated_by, created_at, updated_at, is_active)
 """
 type UserType {
-  logentrySet: [DjangoModelType!]!
+  logentrySet: [Node!]!
 
   """
   Designates that this user has all permissions without explicitly assigning them.
@@ -4092,13 +4159,13 @@ type UserType {
   isActive: Boolean!
   dateJoined: DateTime!
   status: UserStatusType!
+  email: String!
   id: ID!
+  lastName: String
 
   """Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only."""
   username: String!
-  lastName: String
   firstName: String
-  email: String!
   archived: Boolean!
   verified: Boolean!
 }

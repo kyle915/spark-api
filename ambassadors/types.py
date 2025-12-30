@@ -1,5 +1,6 @@
 import strawberry_django
 import strawberry
+from strawberry.relay import Node
 from asgiref.sync import sync_to_async
 
 from . import models
@@ -8,8 +9,7 @@ from events.types import Event
 
 
 @strawberry_django.type(models.FileType)
-class FileType:
-    id: strawberry.ID
+class FileType(Node):
     uuid: str
     name: str
     extension: str | None
@@ -18,8 +18,7 @@ class FileType:
 
 
 @strawberry_django.type(models.Ambassador)
-class Ambassador:
-    id: strawberry.ID
+class Ambassador(Node):
     uuid: str
     rating: int
     address: str | None
@@ -31,8 +30,7 @@ class Ambassador:
 
 
 @strawberry_django.type(models.AmbassadorEvent)
-class AmbassadorEventType:
-    id: strawberry.ID
+class AmbassadorEventType(Node):
     uuid: str
     is_approved: bool
     ambassador: Ambassador
@@ -52,8 +50,7 @@ class FileTypeDetailResponse:
 
 
 @strawberry_django.type(models.AmbassadorInvitation)
-class AmbassadorInvitationType:
-    id: strawberry.ID
+class AmbassadorInvitationType(Node):
     uuid: str
     email: str
     token: str
@@ -125,8 +122,7 @@ class DeleteInvitationResponse:
 
 
 @strawberry_django.type(models.AmbassadorReview)
-class AmbassadorReviewType:
-    id: strawberry.ID
+class AmbassadorReviewType(Node):
     uuid: str
     review: str | None
     score: int | None
@@ -161,8 +157,7 @@ class DeleteAmbassadorReviewResponse:
 
 
 @strawberry_django.type(models.AmbassadorNote)
-class AmbassadorNoteType:
-    id: strawberry.ID
+class AmbassadorNoteType(Node):
     uuid: str
     note: str
     ambassador_id: strawberry.ID
@@ -197,8 +192,7 @@ class DeleteAmbassadorNoteResponse:
 
 
 @strawberry_django.type(models.Skill)
-class SkillType:
-    id: strawberry.ID
+class SkillType(Node):
     uuid: str
     name: str
     tenant_id: strawberry.ID
@@ -230,8 +224,7 @@ class DeleteSkillResponse:
 
 
 @strawberry_django.type(models.AmbassadorSkill)
-class AmbassadorSkillType:
-    id: strawberry.ID
+class AmbassadorSkillType(Node):
     uuid: str
     ambassador_id: strawberry.ID
     skill_id: strawberry.ID
@@ -257,8 +250,7 @@ class DeleteAmbassadorSkillResponse:
 
 
 @strawberry_django.type(models.AmbassadorFile)
-class AmbassadorFileType:
-    id: strawberry.ID
+class AmbassadorFileType(Node):
     uuid: str
     name: str
     url: str | None
@@ -272,8 +264,7 @@ class AmbassadorFileType:
 
 
 @strawberry_django.type(models.AmbassadorTrait)
-class AmbassadorTraitType:
-    id: strawberry.ID
+class AmbassadorTraitType(Node):
     uuid: str
     ambassador_id: strawberry.ID
     user_id: strawberry.ID
@@ -282,8 +273,7 @@ class AmbassadorTraitType:
 
 
 @strawberry_django.type(models.AmbassadorWorkHistory)
-class AmbassadorWorkHistoryType:
-    id: strawberry.ID
+class AmbassadorWorkHistoryType(Node):
     uuid: str
     ambassador_id: strawberry.ID
     user_id: strawberry.ID
@@ -311,8 +301,7 @@ class UpsertAmbassadorProfileResponse:
 
 
 @strawberry_django.type(models.AttendanceType)
-class AttendanceType:
-    id: strawberry.ID
+class AttendanceType(Node):
     uuid: str
     name: str
     slug: str | None
@@ -329,8 +318,7 @@ class AttendanceTypeDetailResponse:
 
 
 @strawberry_django.type(models.AttendanceStatus)
-class AttendanceStatus:
-    id: strawberry.ID
+class AttendanceStatus(Node):
     uuid: str
     name: str
     slug: str | None
@@ -348,8 +336,7 @@ class AttendanceStatusDetailResponse:
 
 
 @strawberry_django.type(models.Source)
-class Source:
-    id: strawberry.ID
+class Source(Node):
     uuid: str
     name: str
     created_at: str
@@ -365,8 +352,7 @@ class SourceDetailResponse:
 
 
 @strawberry_django.type(models.Attendance)
-class Attendance:
-    id: strawberry.ID
+class Attendance(Node):
     uuid: str
     clock_time: str
     coordinates: list[float] | None

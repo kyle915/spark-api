@@ -1,6 +1,7 @@
 import strawberry
 from strawberry import relay
 from enum import Enum
+from graphql import GraphQLError
 from django.contrib.auth import get_user_model
 from gqlauth.core.utils import get_token
 from asgiref.sync import sync_to_async
@@ -13,6 +14,7 @@ from django.db import transaction
 
 from utils.graphql.inputs import SparkGraphQLInput
 from utils.graphql.relay import ensure_relay_mutation
+from utils.graphql.mixins import resolve_id_to_int
 from utils.utils import ROLE_ID
 from utils.gcs import delete_blob, extract_blob_name_from_url
 from .models import Role, TenantedUser, Tenant, TenantTheme
@@ -296,7 +298,7 @@ class AmbassadorsCustomRegister:
             )
 
         # Handle optional tenant_id
-        resolved_tenant_id = int(input.tenant_id) if input.tenant_id else None
+        resolved_tenant_id = resolve_id_to_int(input.tenant_id) if input.tenant_id else None
 
         return await register_user_with_role(
             first_name=input.first_name,
@@ -410,9 +412,9 @@ class SparkUserMutations:
             )
 
         try:
-            resolved_tenant_id = int(
+            resolved_tenant_id = resolve_id_to_int(
                 input.tenant_id) if input.tenant_id else None
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, GraphQLError):
             return RegisterResponse(
                 success=False,
                 message="Invalid tenantId.",
@@ -497,16 +499,17 @@ class SparkUserMutations:
             )
 
         try:
+            target_user_id = resolve_id_to_int(input.id) if input.id else None
             target_user = (
                 await sync_to_async(User.objects.select_related("role").get)(
-                    pk=int(input.id)
+                    pk=target_user_id
                 )
                 if input.id
                 else await sync_to_async(User.objects.select_related("role").get)(
                     uuid=input.uuid
                 )
             )
-        except (User.DoesNotExist, ValueError, TypeError):
+        except (User.DoesNotExist, ValueError, TypeError, GraphQLError):
             return UpdateUserResponse(
                 success=False,
                 message="User not found.",
@@ -550,8 +553,8 @@ class SparkUserMutations:
         resolved_tenant_id: int | None = None
         if input.tenant_id:
             try:
-                resolved_tenant_id = int(input.tenant_id)
-            except (TypeError, ValueError):
+                resolved_tenant_id = resolve_id_to_int(input.tenant_id)
+            except (TypeError, ValueError, GraphQLError):
                 return UpdateUserResponse(
                     success=False,
                     message="Invalid tenantId.",
@@ -677,7 +680,7 @@ class ClientsCustomRegister:
             )
 
         # Handle optional tenant_id
-        resolved_tenant_id = int(input.tenant_id) if input.tenant_id else None
+        resolved_tenant_id = resolve_id_to_int(input.tenant_id) if input.tenant_id else None
 
         return await register_user_with_role(
             first_name=input.first_name,
@@ -912,7 +915,8 @@ class SparkTenantMutations:
             )
 
         try:
-            tenant = await sync_to_async(Tenant.objects.get)(pk=input.id)
+            tenant_id = resolve_id_to_int(input.id)
+            tenant = await sync_to_async(Tenant.objects.get)(pk=tenant_id)
         except Tenant.DoesNotExist:
             return UpdateTenantResponse(
                 success=False,
@@ -1010,8 +1014,8 @@ class TenantThemeMutations:
             )
 
         try:
-            resolved_tenant_id = int(input.tenant_id)
-        except (TypeError, ValueError):
+            resolved_tenant_id = resolve_id_to_int(input.tenant_id)
+        except (TypeError, ValueError, GraphQLError):
             return TenantThemeResponse(
                 success=False,
                 message="Invalid tenantId.",

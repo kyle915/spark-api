@@ -7,6 +7,7 @@ from utils.graphql.inputs import BaseTenantInput, SparkGraphQLInput
 from utils.graphql.permissions import StrictIsAuthenticated
 from utils.graphql.relay import CountableConnection
 from utils.graphql.queries import BaseQueriesService
+from utils.graphql.mixins import resolve_id_to_int
 from jobs import models
 from django.db.models import QuerySet
 from django.db.models import Model
@@ -571,7 +572,11 @@ class JobQueries:
 
         if filters:
             if filters.event_id:
-                queryset = queryset.filter(event_id=filters.event_id)
+                try:
+                    event_id = resolve_id_to_int(filters.event_id)
+                    queryset = queryset.filter(event_id=event_id)
+                except (TypeError, ValueError, GraphQLError):
+                    raise GraphQLError("Invalid event ID.")
             if filters.status:
                 status_filter_map = {
                     JobStatusFilter.OPEN: False,
@@ -864,7 +869,11 @@ class AmbassadorJobQueries:
         if role_slug == "ambassador":
             queryset = queryset.exclude(ambassador_jobs__ambassador__user=user)
         if filters and filters.event_id:
-            queryset = queryset.filter(event_id=filters.event_id)
+            try:
+                event_id = resolve_id_to_int(filters.event_id)
+                queryset = queryset.filter(event_id=event_id)
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Invalid event ID.")
         return await service.get_connection(
             tenant_id=tenant_id,
             first=first,

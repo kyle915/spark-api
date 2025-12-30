@@ -1,5 +1,6 @@
 import strawberry_django
 import strawberry
+from strawberry.relay import Node
 from typing import List
 
 from events import types as event_types
@@ -9,8 +10,7 @@ from utils.gcs import generate_download_url, extract_blob_name_from_url
 
 
 @strawberry_django.type(models.RecapFile)
-class RecapFile:
-    id: strawberry.ID
+class RecapFile(Node):
     uuid: str
     name: str
     approved: bool
@@ -38,8 +38,7 @@ class RecapFileDetailResponse:
 
 
 @strawberry_django.type(models.ConsumerEngagements)
-class ConsumerEngagements:
-    id: strawberry.ID
+class ConsumerEngagements(Node):
     uuid: str
     total_consumer: int
     first_time_consumers: int
@@ -51,8 +50,7 @@ class ConsumerEngagements:
 
 
 @strawberry_django.type(models.ProductSamples)
-class ProductSamples:
-    id: strawberry.ID
+class ProductSamples(Node):
     uuid: str
     product: event_types.Product
     quantity: int
@@ -61,8 +59,7 @@ class ProductSamples:
 
 
 @strawberry_django.type(models.TypeOfGood)
-class TypeOfGood:
-    id: strawberry.ID
+class TypeOfGood(Node):
     uuid: str
     name: str
     created_at: str
@@ -70,8 +67,7 @@ class TypeOfGood:
 
 
 @strawberry_django.type(models.SalesPerformance)
-class SalesPerformance:
-    id: strawberry.ID
+class SalesPerformance(Node):
     uuid: str
     product: event_types.Product
     type_of_good: TypeOfGood
@@ -81,8 +77,7 @@ class SalesPerformance:
 
 
 @strawberry_django.type(models.ConsumerFeedback)
-class ConsumerFeedback:
-    id: strawberry.ID
+class ConsumerFeedback(Node):
     uuid: str
     demographics: str | None
     feedback: str | None
@@ -94,8 +89,7 @@ class ConsumerFeedback:
 
 
 @strawberry_django.type(models.AccountFeedback)
-class AccountFeedback:
-    id: strawberry.ID
+class AccountFeedback(Node):
     uuid: str
     do_differently_feedback: str | None
     feedback: str | None
@@ -105,8 +99,7 @@ class AccountFeedback:
 
 
 @strawberry_django.type(models.Recap)
-class Recap:
-    id: strawberry.ID
+class Recap(Node):
     uuid: str
     name: str
     approved: bool

@@ -10,7 +10,7 @@ from recaps import models
 from ambassadors import models as ambassador_models
 from recaps.inputs import RecapFiltersInput
 from utils.graphql.permissions import StrictIsAuthenticated
-from utils.graphql.mixins import SparkGraphQLMixin
+from utils.graphql.mixins import SparkGraphQLMixin, resolve_id_to_int
 from utils.graphql.relay import (
     CountableConnection,
     connection_from_queryset_async,
@@ -244,7 +244,7 @@ class RecapQueries:
         user = await service.get_user(info)
 
         event_id: int | None = (
-            int(filters.event_id) if filters and filters.event_id else None
+            resolve_id_to_int(filters.event_id) if filters and filters.event_id else None
         )
         queryset = service.get_ordered_queryset(event_id=event_id, q=q)
 
@@ -335,7 +335,7 @@ class RecapMobileQueries:
         user = await service.get_user(info)
 
         event_id: int | None = (
-            int(filters.event_id) if filters and filters.event_id else None
+            resolve_id_to_int(filters.event_id) if filters and filters.event_id else None
         )
         queryset = service.get_ambassador_queryset(
             user=user,
