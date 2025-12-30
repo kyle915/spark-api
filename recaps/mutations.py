@@ -17,7 +17,7 @@ from jobs.models import Job
 from utils.graphql.inputs import SparkGraphQLInput
 from utils.graphql.permissions import StrictIsAuthenticated
 from utils.graphql.relay import ensure_relay_mutation
-from utils.graphql.mixins import SparkGraphQLMixin
+from utils.graphql.mixins import SparkGraphQLMixin, resolve_id_to_int
 from utils.utils import build_mutation_response
 from utils.gcs import extract_blob_name_from_url, delete_blob
 
@@ -58,22 +58,25 @@ class RecapMutationService(SparkGraphQLMixin):
 
         # Validate event exists
         try:
-            event = await sync_to_async(Event.objects.get)(id=self.input.event_id)
-        except Event.DoesNotExist:
+            event_id = resolve_id_to_int(self.input.event_id)
+            event = await sync_to_async(Event.objects.get)(id=event_id)
+        except (Event.DoesNotExist, TypeError, ValueError, GraphQLError):
             raise GraphQLError("Event not found.")
 
         job = None
         if self.input.job_id:
             try:
-                job = await sync_to_async(Job.objects.get)(id=self.input.job_id)
-            except Job.DoesNotExist:
+                job_id = resolve_id_to_int(self.input.job_id)
+                job = await sync_to_async(Job.objects.get)(id=job_id)
+            except (Job.DoesNotExist, TypeError, ValueError, GraphQLError):
                 raise GraphQLError("Job not found.")
 
         retailer = None
         if self.input.retailer_id:
             try:
-                retailer = await sync_to_async(Retailer.objects.get)(id=self.input.retailer_id)
-            except Retailer.DoesNotExist:
+                retailer_id = resolve_id_to_int(self.input.retailer_id)
+                retailer = await sync_to_async(Retailer.objects.get)(id=retailer_id)
+            except (Retailer.DoesNotExist, TypeError, ValueError, GraphQLError):
                 raise GraphQLError("Retailer not found.")
 
         if not self.input.files or len(self.input.files) == 0:
@@ -140,22 +143,31 @@ class RecapMutationService(SparkGraphQLMixin):
 
                 if self.input.product_samples:
                     for sample in self.input.product_samples:
-                        models.ProductSamples.objects.create(
-                            recap=recap,
-                            created_by=self.user,
-                            product_id=sample.product_id,
-                            quantity=sample.quantity,
-                        )
+                        try:
+                            product_id = resolve_id_to_int(sample.product_id)
+                            models.ProductSamples.objects.create(
+                                recap=recap,
+                                created_by=self.user,
+                                product_id=product_id,
+                                quantity=sample.quantity,
+                            )
+                        except (TypeError, ValueError, GraphQLError):
+                            raise GraphQLError(f"Invalid product ID: {sample.product_id}")
 
                 if self.input.sales_performance:
                     for sale in self.input.sales_performance:
-                        models.SalesPerformance.objects.create(
-                            recap=recap,
-                            created_by=self.user,
-                            product_id=sale.product_id,
-                            type_of_good_id=sale.type_of_good_id,
-                            price=sale.price,
-                        )
+                        try:
+                            product_id = resolve_id_to_int(sale.product_id)
+                            type_of_good_id = resolve_id_to_int(sale.type_of_good_id)
+                            models.SalesPerformance.objects.create(
+                                recap=recap,
+                                created_by=self.user,
+                                product_id=product_id,
+                                type_of_good_id=type_of_good_id,
+                                price=sale.price,
+                            )
+                        except (TypeError, ValueError, GraphQLError):
+                            raise GraphQLError(f"Invalid product or type of good ID")
 
                 if self.input.consumer_feedback:
                     models.ConsumerFeedback.objects.create(
@@ -187,14 +199,16 @@ class RecapMutationService(SparkGraphQLMixin):
             raise GraphQLError("Invalid input type.")
 
         try:
-            recap = await sync_to_async(models.Recap.objects.get)(id=self.input.id)
-        except models.Recap.DoesNotExist:
+            recap_id = resolve_id_to_int(self.input.id)
+            recap = await sync_to_async(models.Recap.objects.get)(id=recap_id)
+        except (models.Recap.DoesNotExist, TypeError, ValueError, GraphQLError):
             raise GraphQLError("Recap not found.")
 
         # Validate event exists
         try:
-            event = await sync_to_async(Event.objects.get)(id=self.input.event_id)
-        except Event.DoesNotExist:
+            event_id = resolve_id_to_int(self.input.event_id)
+            event = await sync_to_async(Event.objects.get)(id=event_id)
+        except (Event.DoesNotExist, TypeError, ValueError, GraphQLError):
             raise GraphQLError("Event not found.")
 
         if not self.input.files or len(self.input.files) == 0:
@@ -276,8 +290,9 @@ class RecapMutationService(SparkGraphQLMixin):
             raise GraphQLError("Invalid input type.")
 
         try:
-            recap = await sync_to_async(models.Recap.objects.get)(id=self.input.id)
-        except models.Recap.DoesNotExist:
+            recap_id = resolve_id_to_int(self.input.id)
+            recap = await sync_to_async(models.Recap.objects.get)(id=recap_id)
+        except (models.Recap.DoesNotExist, TypeError, ValueError, GraphQLError):
             raise GraphQLError("Recap not found.")
 
         @sync_to_async
@@ -297,10 +312,11 @@ class RecapMutationService(SparkGraphQLMixin):
             raise GraphQLError("Invalid input type.")
 
         try:
+            recap_file_id = resolve_id_to_int(self.input.id)
             recap_file = await sync_to_async(models.RecapFile.objects.get)(
-                id=self.input.id
+                id=recap_file_id
             )
-        except models.RecapFile.DoesNotExist:
+        except (models.RecapFile.DoesNotExist, TypeError, ValueError, GraphQLError):
             raise GraphQLError("Recap file not found.")
 
         @sync_to_async
@@ -326,8 +342,9 @@ class RecapMutationService(SparkGraphQLMixin):
             raise GraphQLError("Invalid input type.")
 
         try:
-            recap = await sync_to_async(models.Recap.objects.get)(id=self.input.id)
-        except models.Recap.DoesNotExist:
+            recap_id = resolve_id_to_int(self.input.id)
+            recap = await sync_to_async(models.Recap.objects.get)(id=recap_id)
+        except (models.Recap.DoesNotExist, TypeError, ValueError, GraphQLError):
             raise GraphQLError("Recap not found.")
 
         @sync_to_async

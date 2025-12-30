@@ -2,6 +2,7 @@ from typing import List
 
 import strawberry
 import strawberry_django
+from strawberry.relay import Node
 
 import datetime
 from django.utils import timezone
@@ -50,8 +51,7 @@ def _get_related_from_cache(instance, field_name: str):
 
 
 @strawberry_django.type(models.EventType)
-class EventType:
-    id: strawberry.ID
+class EventType(Node):
     uuid: str
     name: str
     is_default: bool
@@ -69,8 +69,7 @@ class EventTypeDetailResponse:
 
 
 @strawberry_django.type(models.TimeZone)
-class TimeZone:
-    id: strawberry.ID
+class TimeZone(Node):
     uuid: str
     name: str
     code: str
@@ -88,8 +87,7 @@ class TimeZoneResponse:
 
 
 @strawberry_django.type(models.EventStatus)
-class EventStatus:
-    id: strawberry.ID
+class EventStatus(Node):
     uuid: str
     name: str
     slug: str
@@ -108,8 +106,7 @@ class EventStatusDetailResponse:
 
 
 @strawberry_django.type(models.Location)
-class Location:
-    id: strawberry.ID
+class Location(Node):
     uuid: str
     name: str
     code: str
@@ -128,8 +125,7 @@ class LocationDetailResponse:
 
 
 @strawberry_django.type(models.Client)
-class Client:
-    id: strawberry.ID
+class Client(Node):
     uuid: str
     name: str
     email: str
@@ -147,8 +143,7 @@ class ClientDetailResponse:
 
 
 @strawberry_django.type(models.Distributor)
-class Distributor:
-    id: strawberry.ID
+class Distributor(Node):
     uuid: str
     name: str
     email: str
@@ -167,8 +162,7 @@ class DistributorDetailResponse:
 
 
 @strawberry_django.type(models.Retailer)
-class Retailer:
-    id: strawberry.ID
+class Retailer(Node):
     uuid: str
     name: str
     address: str
@@ -188,8 +182,7 @@ class RetailerDetailResponse:
 
 
 @strawberry_django.type(models.ProductType)
-class ProductType:
-    id: strawberry.ID
+class ProductType(Node):
     uuid: str
     name: str
     tenant_id: strawberry.ID
@@ -206,8 +199,7 @@ class ProductTypeDetailResponse:
 
 
 @strawberry_django.type(models.Product)
-class Product:
-    id: strawberry.ID
+class Product(Node):
     uuid: str
     name: str
     product_type: ProductType | None = None
@@ -235,8 +227,7 @@ class ProductDetailResponse:
 
 
 @strawberry_django.type(models.RequestType)
-class RequestType:
-    id: strawberry.ID
+class RequestType(Node):
     uuid: str
     name: str
     tenant_id: strawberry.ID
@@ -252,9 +243,8 @@ class RequestTypeDetailResponse:
     request_type: RequestType | None = None
 
 
-@strawberry.type
-class RequestStatus:
-    id: strawberry.ID
+@strawberry_django.type(models.RequestStatus)
+class RequestStatus(Node):
     uuid: str
     name: str
     slug: str
@@ -273,10 +263,10 @@ class RequestStatusDetailResponse:
 
 
 @strawberry_django.type(models.Request)
-class Request:
-    id: strawberry.ID
+class Request(Node):
     uuid: str
     name: str
+
     # Date/time fields returned as stored, without server TZ conversion
     @strawberry.field
     def date(self) -> str | None:
@@ -298,6 +288,7 @@ class Request:
             _get_related_from_cache(self, "timezone")
         )
         return _serialize_dt(_get_field(self, "end_time"), offset_minutes=offset)
+
     address: str
     coordinates: List[float]
     client_name: str | None = None
@@ -321,8 +312,7 @@ class Request:
 
 
 @strawberry_django.type(models.RequestStoreManager)
-class RequestStoreManager:
-    id: strawberry.ID
+class RequestStoreManager(Node):
     uuid: str
     name: str
     phone: str
@@ -356,8 +346,7 @@ class RequestListResponse:
 
 
 @strawberry_django.type(models.Event)
-class Event:
-    id: strawberry.ID
+class Event(Node):
     uuid: str
     name: str
     coordinates: List[float] | None = None
