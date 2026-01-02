@@ -5,7 +5,6 @@ This document provides comprehensive documentation for the Event Dashboard and R
 ## Table of Contents
 
 - [Base URLs](#base-urls)
-- [Authentication](#authentication)
 - [Overview](#overview)
 - [Queries](#queries)
   - [Event Dashboard](#event-dashboard-queries)
@@ -33,29 +32,6 @@ The Event Dashboard API is available on the following GraphQL endpoints:
 
 ---
 
-## Authentication
-
-All Dashboard queries require authentication. You must include a JWT token in the Authorization header:
-
-```
-Authorization: Bearer <your_jwt_token>
-```
-
-To obtain a token, use the `tokenAuth` mutation:
-
-```graphql
-mutation {
-  tokenAuth(email: "user@example.com", password: "password") {
-    token
-    refreshToken
-    user {
-      id
-      email
-      firstName
-    }
-  }
-}
-```
 
 ---
 
