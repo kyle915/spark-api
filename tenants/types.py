@@ -3,18 +3,17 @@ import strawberry
 import strawberry_django
 from utils.gcs import extract_blob_name_from_url, generate_download_url
 from .models import Tenant, Role, User, TenantTheme
+from strawberry.relay import Node
 
 
 @strawberry_django.type(Role)
-class RoleType:
-    id: strawberry.auto
+class RoleType(Node):
     uuid: strawberry.auto
     name: strawberry.auto
 
 
 @strawberry_django.type(Tenant)
-class TenantType:
-    id: strawberry.auto
+class TenantType(Node):
     uuid: strawberry.auto
     name: strawberry.auto
     request_url_name: strawberry.auto
@@ -33,8 +32,7 @@ class TenantType:
 
 
 @strawberry_django.type(User)
-class SparkUserType:
-    id: strawberry.auto
+class SparkUserType(Node):
     uuid: strawberry.auto
     username: strawberry.auto
     email: strawberry.auto
@@ -44,8 +42,7 @@ class SparkUserType:
 
 
 @strawberry_django.type(TenantTheme)
-class TenantThemeType:
-    id: strawberry.auto
+class TenantThemeType(Node):
     name: strawberry.auto
     color_scheme: strawberry.auto
     css_variables: strawberry.auto

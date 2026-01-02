@@ -11,7 +11,7 @@ from ambassadors import inputs
 from utils.graphql.permissions import StrictIsAuthenticated, IsClientOrSparkAdmin
 from events import models as event_models
 from events import types as event_types
-from utils.graphql.mixins import SparkGraphQLMixin
+from utils.graphql.mixins import SparkGraphQLMixin, resolve_id_to_int
 from utils.graphql.queries import BaseQueriesService
 from utils.graphql.inputs import SparkGraphQLInput
 from utils.graphql.relay import (
@@ -705,19 +705,43 @@ class AttendanceQueriesService(BaseQueriesService):
             return queryset
 
         if filters.tenant_id:
-            queryset = queryset.filter(tenant_id=filters.tenant_id)
+            try:
+                tenant_id = resolve_id_to_int(filters.tenant_id)
+                queryset = queryset.filter(tenant_id=tenant_id)
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Invalid tenant ID.")
         if filters.job_id:
-            queryset = queryset.filter(job_id=filters.job_id)
+            try:
+                job_id = resolve_id_to_int(filters.job_id)
+                queryset = queryset.filter(job_id=job_id)
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Invalid job ID.")
         if filters.event_id:
-            queryset = queryset.filter(event_id=filters.event_id)
+            try:
+                event_id = resolve_id_to_int(filters.event_id)
+                queryset = queryset.filter(event_id=event_id)
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Invalid event ID.")
         if filters.attendance_status_id:
-            queryset = queryset.filter(
-                attendance_status_id=filters.attendance_status_id
-            )
+            try:
+                attendance_status_id = resolve_id_to_int(filters.attendance_status_id)
+                queryset = queryset.filter(
+                    attendance_status_id=attendance_status_id
+                )
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Invalid attendance status ID.")
         if filters.source_id:
-            queryset = queryset.filter(source_id=filters.source_id)
+            try:
+                source_id = resolve_id_to_int(filters.source_id)
+                queryset = queryset.filter(source_id=source_id)
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Invalid source ID.")
         if filters.attendace_type_id:
-            queryset = queryset.filter(attendace_type_id=filters.attendace_type_id)
+            try:
+                attendace_type_id = resolve_id_to_int(filters.attendace_type_id)
+                queryset = queryset.filter(attendace_type_id=attendace_type_id)
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Invalid attendance type ID.")
         return queryset
 
 

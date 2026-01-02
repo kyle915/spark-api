@@ -20,7 +20,7 @@ from utils.graphql.inputs import SparkGraphQLInput
 from utils.graphql.permissions import StrictIsAuthenticated
 from utils.graphql.relay import ensure_relay_mutation
 from utils.graphql.types import SparkGraphQLErrorResponse
-from utils.graphql.mixins import SparkGraphQLMixin
+from utils.graphql.mixins import SparkGraphQLMixin, resolve_id_to_int
 from utils.utils import ROLE_ID, build_mutation_response
 from utils.gcs import delete_blob, extract_blob_name_from_url
 from tenants.models import Tenant, User
@@ -88,6 +88,8 @@ class BaseMutationService(SparkGraphQLMixin):
         self.is_spark_schema = self.is_spark_schema_request(info, user=self.user)
         tenant_id = getattr(self.input, "tenant_id", None)
         is_update = hasattr(self.input, "id") and self.input.id is not None
+        if is_update:
+            self.input.id = resolve_id_to_int(self.input.id)
 
         if self.is_spark_schema and tenant_id:
             # Spark user with explicit tenant_id
@@ -161,8 +163,8 @@ class BaseMutationService(SparkGraphQLMixin):
     ) -> int:
         """Resolve tenant ID for Spark schema requests without membership restrictions."""
         try:
-            tenant_pk = int(tenant_id)
-        except (TypeError, ValueError):
+            tenant_pk = resolve_id_to_int(tenant_id)
+        except (TypeError, ValueError, GraphQLError):
             raise GraphQLError("Invalid tenant ID.")
 
         try:
@@ -193,6 +195,7 @@ class BaseMutationService(SparkGraphQLMixin):
 
         # set the parameters
         params: dict[str, Any] = self.input.to_dict(["tenant_id", "id"])
+        params = self._normalize_id_fields(params)
         for key, value in params.items():
             if not hasattr(model, key):
                 continue
@@ -202,6 +205,21 @@ class BaseMutationService(SparkGraphQLMixin):
         setattr(model, "tenant_id", self.tenant_id)
         await sync_to_async(model.save)()
         return model
+
+    @staticmethod
+    def _normalize_id_fields(params: dict[str, Any]) -> dict[str, Any]:
+        """Convert relay/global IDs into database IDs for *_id fields."""
+        normalized: dict[str, Any] = {}
+        for key, value in params.items():
+            if value is None:
+                continue
+            if isinstance(value, str) and value.strip() == "":
+                continue
+            if key == "id" or key.endswith("_id"):
+                normalized[key] = resolve_id_to_int(value)
+            else:
+                normalized[key] = value
+        return normalized
 
 
 class EventMutationService(BaseMutationService):
@@ -1313,7 +1331,9 @@ class RequestWithDependenciesMutationService(BaseMutationService):
             # Create products
             if self.input.products:
                 for product_input in self.input.products:
-                    product_params = product_input.to_dict()
+                    product_params = self._normalize_id_fields(
+                        product_input.to_dict()
+                    )
                     product = models.RequestProduct(**product_params)
                     product.request = request
                     product.tenant_id = request.tenant_id
@@ -1332,6 +1352,7 @@ class RequestWithDependenciesMutationService(BaseMutationService):
         params: dict[str, Any] = self.input.to_dict(
             ["tenant_id", "id", "details", "products"]
         )
+        params = self._normalize_id_fields(params)
 
         return await sync_to_async(self._save_sync)(params)
 
