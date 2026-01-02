@@ -11,7 +11,7 @@ from django.db import transaction
 from recaps import types
 from recaps import models
 from recaps import inputs
-from ambassadors.models import FileType
+from ambassadors.models import FileType, Ambassador
 from events.models import Event, Retailer
 from jobs.models import Job
 from utils.graphql.inputs import SparkGraphQLInput
@@ -79,6 +79,31 @@ class RecapMutationService(SparkGraphQLMixin):
             except (Retailer.DoesNotExist, TypeError, ValueError, GraphQLError):
                 raise GraphQLError("Retailer not found.")
 
+        ambassador = None
+        if self.input.ambassador_id:
+            try:
+                ambassador_id = resolve_id_to_int(self.input.ambassador_id)
+                ambassador = await sync_to_async(Ambassador.objects.get)(
+                    id=ambassador_id
+                )
+            except (Ambassador.DoesNotExist, TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Ambassador not found.")
+
+        file_recap_category = None
+        if self.input.file_recap_category_id:
+            try:
+                category_id = resolve_id_to_int(self.input.file_recap_category_id)
+                file_recap_category = await sync_to_async(
+                    models.FileRecapCategory.objects.get
+                )(id=category_id)
+            except (
+                models.FileRecapCategory.DoesNotExist,
+                TypeError,
+                ValueError,
+                GraphQLError,
+            ):
+                raise GraphQLError("File recap category not found.")
+
         if not self.input.files or len(self.input.files) == 0:
             raise GraphQLError("At least one file is required.")
 
@@ -101,6 +126,7 @@ class RecapMutationService(SparkGraphQLMixin):
                         name=f"Recap file for {self.input.name}",
                         file=blob_name,
                         file_type=file_type,
+                        file_recap_category=file_recap_category,
                         approved=False,
                         created_by=self.user,
                     )
@@ -121,6 +147,7 @@ class RecapMutationService(SparkGraphQLMixin):
                     total_earnings=self.input.total_earnings,
                     job=job,
                     retailer=retailer,
+                    ambassador=ambassador,
                 )
                 recap.save()
 
@@ -211,6 +238,47 @@ class RecapMutationService(SparkGraphQLMixin):
         except (Event.DoesNotExist, TypeError, ValueError, GraphQLError):
             raise GraphQLError("Event not found.")
 
+        job = None
+        if self.input.job_id:
+            try:
+                job_id = resolve_id_to_int(self.input.job_id)
+                job = await sync_to_async(Job.objects.get)(id=job_id)
+            except (Job.DoesNotExist, TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Job not found.")
+
+        retailer = None
+        if self.input.retailer_id:
+            try:
+                retailer_id = resolve_id_to_int(self.input.retailer_id)
+                retailer = await sync_to_async(Retailer.objects.get)(id=retailer_id)
+            except (Retailer.DoesNotExist, TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Retailer not found.")
+
+        ambassador = None
+        if self.input.ambassador_id:
+            try:
+                ambassador_id = resolve_id_to_int(self.input.ambassador_id)
+                ambassador = await sync_to_async(Ambassador.objects.get)(
+                    id=ambassador_id
+                )
+            except (Ambassador.DoesNotExist, TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Ambassador not found.")
+
+        file_recap_category = None
+        if self.input.file_recap_category_id:
+            try:
+                category_id = resolve_id_to_int(self.input.file_recap_category_id)
+                file_recap_category = await sync_to_async(
+                    models.FileRecapCategory.objects.get
+                )(id=category_id)
+            except (
+                models.FileRecapCategory.DoesNotExist,
+                TypeError,
+                ValueError,
+                GraphQLError,
+            ):
+                raise GraphQLError("File recap category not found.")
+
         if not self.input.files or len(self.input.files) == 0:
             raise GraphQLError("At least one file is required.")
 
@@ -234,7 +302,8 @@ class RecapMutationService(SparkGraphQLMixin):
 
                     if blob_name in blob_to_file:
                         # Reuse existing file; mark as kept by popping
-                        final_files.append(blob_to_file.pop(blob_name))
+                        existing_file = blob_to_file.pop(blob_name)
+                        final_files.append(existing_file)
                         continue
 
                     file_type = FileType.objects.first()
@@ -245,6 +314,7 @@ class RecapMutationService(SparkGraphQLMixin):
                         name=f"Recap file for {self.input.name}",
                         file=blob_name,
                         file_type=file_type,
+                        file_recap_category=file_recap_category,
                         recap=recap,
                         approved=False,
                         created_by=self.user,
@@ -257,6 +327,12 @@ class RecapMutationService(SparkGraphQLMixin):
                 # Update the recap
                 recap.name = self.input.name
                 recap.event = event
+                if self.input.job_id is not None:
+                    recap.job = job
+                if self.input.retailer_id is not None:
+                    recap.retailer = retailer
+                if self.input.ambassador_id is not None:
+                    recap.ambassador = ambassador
                 recap.updated_by = self.user
                 recap.save()
 

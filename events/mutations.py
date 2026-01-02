@@ -213,6 +213,8 @@ class BaseMutationService(SparkGraphQLMixin):
         for key, value in params.items():
             if value is None:
                 continue
+            if isinstance(value, str) and value.strip() == "":
+                continue
             if key == "id" or key.endswith("_id"):
                 normalized[key] = resolve_id_to_int(value)
             else:
