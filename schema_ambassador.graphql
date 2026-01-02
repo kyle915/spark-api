@@ -138,6 +138,8 @@ input AmbassadorJobFiltersInput {
   clientMutationId: ID = null
   tenantId: ID = null
   status: AmbassadorJobStatusFilter = null
+  statusId: ID = null
+  statusSlug: String = null
 }
 
 enum AmbassadorJobStatusFilter {
@@ -318,11 +320,14 @@ type Attendance {
   jobId: ID
   eventId: ID
   attendaceTypeId: ID
+  attendaceType: AttendanceType
   attendanceStatusId: ID
+  attendanceStatus: AttendanceStatus
   sourceId: ID
   timezoneId: ID
   createdAt: String!
   updatedAt: String!
+  ambassador: Ambassador
 }
 
 type AttendanceDetailResponse {
@@ -333,12 +338,13 @@ type AttendanceDetailResponse {
 }
 
 """
-AttendanceStatus(id, uuid, name, tenant, created_by, updated_by, created_at, updated_at)
+AttendanceStatus(id, uuid, name, slug, tenant, created_by, updated_by, created_at, updated_at)
 """
 type AttendanceStatus {
   id: ID!
   uuid: String!
   name: String!
+  slug: String
   tenantId: ID
   createdAt: String!
   updatedAt: String!
@@ -352,12 +358,13 @@ type AttendanceStatusDetailResponse {
 }
 
 """
-AttendanceType(id, uuid, name, created_by, updated_by, created_at, updated_at)
+AttendanceType(id, uuid, name, slug, created_by, updated_by, created_at, updated_at)
 """
 type AttendanceType {
   id: ID!
   uuid: String!
   name: String!
+  slug: String
   createdAt: String!
   updatedAt: String!
 }
@@ -380,6 +387,11 @@ type Client {
   tenantId: ID!
   createdAt: String!
   updatedAt: String!
+}
+
+enum ColorSchemeEnum {
+  DARK
+  LIGHT
 }
 
 """
@@ -539,12 +551,14 @@ input CreateAttendanceStatusInput {
   clientMutationId: ID = null
   tenantId: ID = null
   name: String!
+  slug: String = null
 }
 
 input CreateAttendanceTypeInput {
   clientMutationId: ID = null
   tenantId: ID = null
   name: String!
+  slug: String = null
 }
 
 input CreatePublicAmbassadorInput {
@@ -904,7 +918,7 @@ type Job {
   uuid: String!
   name: String!
   description: String
-  code: String!
+  code: String
   address: String!
   startDate: String
   endDate: String
@@ -923,6 +937,7 @@ type Job {
   jobRequirements: [JobRequirement!]!
   createdAt: String!
   updatedAt: String!
+  attendances: [Attendance!]!
 }
 
 type JobCountableConnection {
@@ -943,6 +958,7 @@ input JobFiltersInput {
   clientMutationId: ID = null
   tenantId: ID = null
   eventId: ID = null
+  status: JobStatusFilter = null
 }
 
 """
@@ -969,6 +985,11 @@ type JobRequirementType {
   tenantId: ID!
   createdAt: String!
   updatedAt: String!
+}
+
+enum JobStatusFilter {
+  OPEN
+  CLOSED
 }
 
 """
@@ -1111,7 +1132,8 @@ type Query {
   timezones(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): TimeZoneCountableConnection!
   publicTimezones(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): TimeZoneCountableConnection!
   googleCalendarConnectionStatus: GoogleCalendarConnectionStatus!
-  tenantThemePublic(tenantId: ID!, colorScheme: String! = "dark"): TenantThemeType
+  tenantThemePublic(requestUrlName: String!, colorScheme: ColorSchemeEnum! = DARK): TenantThemeType
+  tenantTheme(tenantId: ID!, colorScheme: ColorSchemeEnum! = DARK): TenantThemeType
   healthcheck: String!
   me: CustomUserType!
   availableJobs(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: JobFiltersInput = null): JobCountableConnection!
@@ -1475,6 +1497,7 @@ input UpdateAttendanceStatusInput {
   clientMutationId: ID = null
   tenantId: ID = null
   name: String!
+  slug: String = null
   id: ID!
 }
 
@@ -1482,6 +1505,7 @@ input UpdateAttendanceTypeInput {
   clientMutationId: ID = null
   tenantId: ID = null
   name: String!
+  slug: String = null
   id: ID!
 }
 
@@ -1557,12 +1581,12 @@ type UserType {
   isActive: Boolean!
   dateJoined: DateTime!
   status: UserStatusType!
-  id: ID!
-  email: String!
-  lastName: String
 
   """Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only."""
   username: String!
+  lastName: String
+  id: ID!
+  email: String!
   firstName: String
   archived: Boolean!
   verified: Boolean!

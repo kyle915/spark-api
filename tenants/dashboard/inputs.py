@@ -1,48 +1,50 @@
 """
 Input types for dashboard queries.
 
-This module defines filter inputs for dashboard data queries.
+This module defines filter inputs for Event Dashboard and Recap Dashboard data queries.
 """
 import strawberry
-from enum import Enum
 
 from utils.graphql.inputs import BaseTenantInput
 
 
-@strawberry.enum
-class TimeGroupBy(str, Enum):
-    """Time grouping options for time series queries."""
-    HOUR = "HOUR"
-    DAY = "DAY"
-    WEEK = "WEEK"
-    MONTH = "MONTH"
-
-
 @strawberry.input
-class DashboardFiltersInput(BaseTenantInput):
-    """Filters for dashboard queries.
-    
+class EventDashboardFiltersInput(BaseTenantInput):
+    """Filters for Event Dashboard queries.
+
     All filters are optional. When not provided, queries will return
-    data for the authenticated user's tenant within reasonable defaults.
+    data for the authenticated user's tenant within the current quarter.
     """
     # Date range filters
     start_date: str | None = None  # ISO date string (YYYY-MM-DD)
     end_date: str | None = None    # ISO date string (YYYY-MM-DD)
-    
-    # Location/zone filters
-    location_id: strawberry.ID | None = None
-    location_code: str | None = None  # Filter by location code (zone)
-    
-    # Event filters
-    event_type_id: strawberry.ID | None = None
-    event_status_id: strawberry.ID | None = None
-    
-    # Request filters
-    request_status_id: strawberry.ID | None = None
-    request_type_id: strawberry.ID | None = None
-    
-    # Additional useful filters
-    client_id: strawberry.ID | None = None
-    distributor_id: strawberry.ID | None = None
-    retailer_id: strawberry.ID | None = None
 
+    # Quarter filter (takes precedence over start_date/end_date if provided)
+    quarter: str | None = None  # Quarter string like "Q1 2025"
+
+    # RMM filter (RMM = Retailer)
+    rmm_id: strawberry.ID | None = None  # Retailer ID
+
+    # Distributor filter
+    distributor_id: strawberry.ID | None = None
+
+
+@strawberry.input
+class RecapDashboardFiltersInput(BaseTenantInput):
+    """Filters for Recap Dashboard queries.
+
+    All filters are optional. When not provided, queries will return
+    data for all tenants within the current quarter (admin dashboard).
+    """
+    # Date range filters
+    start_date: str | None = None  # ISO date string (YYYY-MM-DD)
+    end_date: str | None = None    # ISO date string (YYYY-MM-DD)
+
+    # Quarter filter (takes precedence over start_date/end_date if provided)
+    quarter: str | None = None  # Quarter string like "Q1 2025"
+
+    # RMM filter (RMM = Retailer)
+    rmm_id: strawberry.ID | None = None  # Retailer ID
+
+    # Distributor filter
+    distributor_id: strawberry.ID | None = None

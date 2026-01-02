@@ -4,7 +4,7 @@ Base test class for dashboard tests.
 This module provides a base class with common setup for dashboard query tests.
 """
 import pytest
-from datetime import date, time, timedelta
+from datetime import date, time, timedelta, datetime
 from django.utils import timezone
 from django.core.cache import cache
 from events.tests.base import EventsGraphQLTestCase
@@ -206,6 +206,106 @@ class DashboardGraphQLTestCase(EventsGraphQLTestCase):
             status=status,
             rate=rate,
             tenant=self.tenant
+        )
+
+        # Create recaps and consumer engagements for Event Dashboard tests
+        from recaps import models as recap_models
+        
+        # Create recap for event1
+        self.recap1 = recap_models.Recap.objects.create(
+            name="Recap 1",
+            event=self.event1,
+            ambassador=self.ambassador,
+            job=self.job1,
+            retailer=self.retailer,
+            total_engagements=100,
+            products_sold=50,
+            total_earnings=1000.0,
+            approved=True,
+            created_by=self.get_system_user()
+        )
+        
+        # Create consumer engagements for recap1
+        self.consumer_engagements1 = recap_models.ConsumerEngagements.objects.create(
+            recap=self.recap1,
+            total_consumer=100,
+            first_time_consumers=30,
+            brand_aware_consumers=40,
+            willing_to_purchase_consumers=70,
+            not_willing_consumers=30,
+            created_by=self.get_system_user()
+        )
+        
+        # Create recap for event2
+        self.recap2 = recap_models.Recap.objects.create(
+            name="Recap 2",
+            event=self.event2,
+            ambassador=self.ambassador,
+            total_engagements=80,
+            products_sold=40,
+            total_earnings=800.0,
+            approved=False,
+            created_by=self.get_system_user()
+        )
+        
+        # Create consumer engagements for recap2
+        self.consumer_engagements2 = recap_models.ConsumerEngagements.objects.create(
+            recap=self.recap2,
+            total_consumer=80,
+            first_time_consumers=20,
+            brand_aware_consumers=30,
+            willing_to_purchase_consumers=50,
+            not_willing_consumers=30,
+            created_by=self.get_system_user()
+        )
+        
+        # Create an upcoming event for recent events test
+        future_date = today + timedelta(days=7)
+        self.request3 = self.create_request(
+            name="Request 3",
+            date=future_date,
+            address="Address 3",
+            client=self.client,
+            distributor=self.distributor,
+            retailer=self.retailer,
+            request_type=self.request_type,
+            tenant=self.tenant,
+            start_time=time(9, 0),
+            end_time=time(17, 0),
+            status=self.approved_status
+        )
+        
+        self.event3 = self.create_event(
+            name="Event 3",
+            tenant=self.tenant,
+            address="Address 3",
+            request=self.request3,
+            event_type=self.event_type,
+            status=self.event_status,
+            date=timezone.make_aware(datetime.combine(future_date, time(10, 0))),
+            start_time=timezone.make_aware(datetime.combine(future_date, time(10, 0)))
+        )
+        
+        # Create recap for event3 (upcoming event)
+        self.recap3 = recap_models.Recap.objects.create(
+            name="Recap 3",
+            event=self.event3,
+            ambassador=self.ambassador,
+            total_engagements=120,
+            products_sold=60,
+            total_earnings=1200.0,
+            approved=True,
+            created_by=self.get_system_user()
+        )
+        
+        self.consumer_engagements3 = recap_models.ConsumerEngagements.objects.create(
+            recap=self.recap3,
+            total_consumer=120,
+            first_time_consumers=40,
+            brand_aware_consumers=50,
+            willing_to_purchase_consumers=90,
+            not_willing_consumers=30,
+            created_by=self.get_system_user()
         )
 
         # Set schema and endpoint for tests

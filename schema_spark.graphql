@@ -395,13 +395,6 @@ type AmbassadorSkillTypeCountableEdge {
   node: AmbassadorSkillType!
 }
 
-type AmbassadorStats {
-  totalAmbassadorsWorking: Int!
-  ambassadorsByEvent: [EventAmbassadorCount!]
-  ambassadorsByLocation: [LocationAmbassadorCount!]
-  uniqueAmbassadorsCount: Int!
-}
-
 """
 AmbassadorToAmbassadorReview(id, uuid, description, rate, tenant, ambassador, created_by, updated_by, created_at, updated_at)
 """
@@ -660,6 +653,18 @@ input BaseRegisterInput {
   image: String = null
 }
 
+type BestMonth {
+  month: String!
+  eventsCount: Int!
+  consumersCount: Int!
+}
+
+type BestRecapMonth {
+  month: String!
+  recapsCount: Int!
+  consumersCount: Int!
+}
+
 """
 Client(id, uuid, name, email, tenant, created_by, updated_by, created_at, updated_at)
 """
@@ -861,6 +866,13 @@ type CompanyToAmbassadorReviewDetailResponse {
   message: String!
   clientMutationId: ID
   companyToAmbassadorReview: CompanyToAmbassadorReview
+}
+
+type ComparisonValues {
+  totalEvents: Int!
+  consumersSampled: Int!
+  brandAwareness: Float!
+  purchaseIntent: Float!
 }
 
 input ConnectGoogleCalendarInput {
@@ -1491,22 +1503,6 @@ type CustomUserTypeCountableEdge {
   node: CustomUserType!
 }
 
-input DashboardFiltersInput {
-  clientMutationId: ID = null
-  tenantId: ID = null
-  startDate: String = null
-  endDate: String = null
-  locationId: ID = null
-  locationCode: String = null
-  eventTypeId: ID = null
-  eventStatusId: ID = null
-  requestStatusId: ID = null
-  requestTypeId: ID = null
-  clientId: ID = null
-  distributorId: ID = null
-  retailerId: ID = null
-}
-
 """Date with time (isoformat)"""
 scalar DateTime
 
@@ -1655,6 +1651,11 @@ input DistributorFiltersInput {
   tenantUuid: ID = null
 }
 
+type DistributorOption {
+  id: ID!
+  name: String!
+}
+
 type DjangoImageType {
   name: String!
   path: String!
@@ -1690,19 +1691,6 @@ type Event implements Node {
   endTime: String
 }
 
-type EventAmbassadorCount {
-  eventId: ID!
-  eventName: String!
-  ambassadorCount: Int!
-}
-
-type EventAmbassadorInfo {
-  ambassadorId: ID!
-  ambassadorName: String!
-  isApproved: Boolean!
-  jobsCount: Int!
-}
-
 type EventCountableConnection {
   pageInfo: PageInfo!
   edges: [EventCountableEdge!]!
@@ -1717,14 +1705,37 @@ type EventCountableEdge {
   node: Event!
 }
 
-type EventDetail {
-  event: Event!
-  relatedRequestId: ID
-  ambassadorsCount: Int!
-  jobsCount: Int!
-  ambassadors: [EventAmbassadorInfo!]
-  location: Location
-  statistics: EventDetailStatistics
+type EventDashboard {
+  metrics: EventDashboardMetrics!
+  monthlyTrends: MonthlyPerformanceTrend!
+  performanceInsights: PerformanceInsights!
+  recentEvents: [RecentEvent!]
+}
+
+type EventDashboardFilterOptions {
+  distributors: [DistributorOption!]
+  rmms: [RetailerOption!]
+  quarters: [QuarterOption!]
+  tenants: [TenantOption!]
+}
+
+input EventDashboardFiltersInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  startDate: String = null
+  endDate: String = null
+  quarter: String = null
+  rmmId: ID = null
+  distributorId: ID = null
+}
+
+type EventDashboardMetrics {
+  totalEvents: Int!
+  consumersSampled: Int!
+  brandAwareness: Float!
+  purchaseIntent: Float!
+  comparisonPeriod: String
+  comparisonValues: ComparisonValues
 }
 
 type EventDetailResponse {
@@ -1732,14 +1743,6 @@ type EventDetailResponse {
   message: String!
   clientMutationId: ID
   event: Event
-}
-
-type EventDetailStatistics {
-  totalAmbassadors: Int!
-  approvedAmbassadors: Int!
-  totalJobs: Int!
-  activeJobs: Int!
-  totalRequests: Int!
 }
 
 input EventFiltersInput {
@@ -1751,15 +1754,6 @@ input EventFiltersInput {
   requestId: ID = null
   date: String = null
   coordinates: CoordinatesFilterInput = null
-}
-
-type EventStats {
-  totalEvents: Int!
-  eventsByStatus: [EventStatusCount!]
-  eventsByLocation: [LocationEventCount!]
-  eventsToday: Int!
-  eventsThisWeek: Int!
-  eventsThisMonth: Int!
 }
 
 """
@@ -1775,12 +1769,6 @@ type EventStatus implements Node {
   tenantId: ID!
   createdAt: String!
   updatedAt: String!
-}
-
-type EventStatusCount {
-  statusId: ID!
-  statusName: String!
-  count: Int!
 }
 
 type EventStatusCountableConnection {
@@ -1814,12 +1802,6 @@ input EventStatusFiltersInput {
   clientMutationId: ID = null
   tenantId: ID = null
   tenantUuid: ID = null
-}
-
-type EventTimeSeries {
-  dataPoints: [TimeSeriesDataPoint!]!
-  groupBy: String!
-  totalCount: Int!
 }
 
 """
@@ -2280,13 +2262,6 @@ type Location implements Node {
   updatedAt: String!
 }
 
-type LocationAmbassadorCount {
-  locationId: ID!
-  locationName: String!
-  locationCode: String!
-  ambassadorCount: Int!
-}
-
 type LocationCountableConnection {
   pageInfo: PageInfo!
   edges: [LocationCountableEdge!]!
@@ -2308,13 +2283,6 @@ type LocationDetailResponse {
   location: Location
 }
 
-type LocationEventCount {
-  locationId: ID!
-  locationName: String!
-  locationCode: String!
-  count: Int!
-}
-
 input LocationFiltersInput {
   clientMutationId: ID = null
   tenantId: ID = null
@@ -2334,6 +2302,32 @@ input ManageAmbassadorJobAssignmentInput {
   ambassadorJobId: ID!
   action: ManageAmbassadorJobAssignmentAction!
   statusId: ID = null
+}
+
+type MarketPerformanceAnalysis {
+  dataPoints: [MarketPerformanceData!]!
+}
+
+type MarketPerformanceData {
+  marketId: ID!
+  marketName: String!
+  consumers: Int!
+  purchases: Int!
+  conversion: Float!
+  demos: Int!
+  efficiency: Float!
+}
+
+type MonthlyDataPoint {
+  month: String!
+  consumersSampled: Int!
+  willingToPurchase: Int!
+  conversionRate: Float!
+  eventsCount: Int!
+}
+
+type MonthlyPerformanceTrend {
+  dataPoints: [MonthlyDataPoint!]!
 }
 
 type Mutation {
@@ -2554,6 +2548,15 @@ type PayTimingDetailResponse {
   payTiming: PayTiming
 }
 
+type PerformanceInsights {
+  knewAboutBrand: Int!
+  knewAboutBrandPercentage: Float!
+  willingToPurchase: Int!
+  willingToPurchasePercentage: Float!
+  bestMonth: BestMonth
+  growthRate: Float!
+}
+
 """
 Product(id, uuid, name, image, product_type, tenant, created_by, updated_by, created_at, updated_at)
 """
@@ -2662,6 +2665,11 @@ type PublicAmbassadorCreationResponse {
   clientMutationId: ID
   ambassador: Ambassador
   activationToken: String
+}
+
+type QuarterOption {
+  value: String!
+  label: String!
 }
 
 type Query {
@@ -2784,12 +2792,10 @@ type Query {
   questionOption(id: ID = null, uuid: ID = null): QuestionOption
   jobRequirementAnswers(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): JobRequirementAnswerCountableConnection!
   jobRequirementAnswer(id: ID = null, uuid: ID = null): JobRequirementAnswer
-  eventsStats(filters: DashboardFiltersInput = null): EventStats!
-  eventsTimeSeries(filters: DashboardFiltersInput = null, groupBy: TimeGroupBy! = DAY): EventTimeSeries!
-  ambassadorsStats(filters: DashboardFiltersInput = null): AmbassadorStats!
-  requestStats(filters: DashboardFiltersInput = null): RequestStats!
-  requestTimeSeries(filters: DashboardFiltersInput = null, groupBy: TimeGroupBy! = DAY): RequestTimeSeries!
-  eventDetail(id: ID!, filters: DashboardFiltersInput = null): EventDetail
+  eventDashboardFilterOptions: EventDashboardFilterOptions!
+  eventDashboard(filters: EventDashboardFiltersInput = null): EventDashboard!
+  recapDashboardFilterOptions: RecapDashboardFilterOptions!
+  recapDashboard(filters: RecapDashboardFiltersInput = null): RecapDashboard!
   getUploadUrl(filePath: String!, contentType: String! = "image/jpeg"): UploadUrlResponse!
   getDownloadUrl(filePath: String!): String!
 }
@@ -2861,6 +2867,18 @@ type QuestionTypeDetailResponse {
   message: String!
   clientMutationId: ID
   questionType: QuestionType
+}
+
+type RMMPerformance {
+  dataPoints: [RMMPerformanceData!]!
+}
+
+type RMMPerformanceData {
+  rmmId: ID!
+  rmmName: String!
+  consumersSampled: Int!
+  demos: Int!
+  conversionRate: Float!
 }
 
 """
@@ -2962,6 +2980,13 @@ type Recap implements Node {
   requestStoreManagers: [RequestStoreManager!]!
 }
 
+type RecapComparisonValues {
+  totalConsumersSampled: Int!
+  totalPurchases: Int!
+  conversionRate: Float!
+  revenueGenerated: Float!
+}
+
 type RecapCountableConnection {
   pageInfo: PageInfo!
   edges: [RecapCountableEdge!]!
@@ -2974,6 +2999,40 @@ type RecapCountableEdge {
 
   """The item at the end of the edge"""
   node: Recap!
+}
+
+type RecapDashboard {
+  metrics: RecapDashboardMetrics!
+  monthlyTrends: RecapMonthlyTrends!
+  performanceInsights: RecapPerformanceInsights!
+  marketAnalysis: MarketPerformanceAnalysis!
+  rmmPerformance: RMMPerformance!
+}
+
+type RecapDashboardFilterOptions {
+  distributors: [DistributorOption!]
+  rmms: [RetailerOption!]
+  quarters: [QuarterOption!]
+  tenants: [TenantOption!]
+}
+
+input RecapDashboardFiltersInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  startDate: String = null
+  endDate: String = null
+  quarter: String = null
+  rmmId: ID = null
+  distributorId: ID = null
+}
+
+type RecapDashboardMetrics {
+  totalConsumersSampled: Int!
+  totalPurchases: Int!
+  conversionRate: Float!
+  revenueGenerated: Float!
+  comparisonPeriod: String
+  comparisonValues: RecapComparisonValues
 }
 
 type RecapDetailResponse {
@@ -3010,6 +3069,40 @@ type RecapFileDetailResponse {
 input RecapFiltersInput {
   clientMutationId: ID = null
   eventId: ID = null
+}
+
+type RecapMonthlyDataPoint {
+  month: String!
+  consumersSampled: Int!
+  purchases: Int!
+  conversionRate: Float!
+  revenue: Float!
+  recapsCount: Int!
+}
+
+type RecapMonthlyTrends {
+  dataPoints: [RecapMonthlyDataPoint!]!
+}
+
+type RecapPerformanceInsights {
+  newCustomersSampled: Int!
+  newCustomersPercentage: Float!
+  brandAwareness: Int!
+  brandAwarenessPercentage: Float!
+  willingToPurchase: Int!
+  willingToPurchasePercentage: Float!
+  bestMonth: BestRecapMonth
+  growthRate: Float!
+}
+
+type RecentEvent {
+  id: ID!
+  name: String!
+  date: String!
+  location: String!
+  consumers: Int!
+  intentRate: Float!
+  status: String!
 }
 
 """
@@ -3104,18 +3197,6 @@ input RequestFiltersInput {
   date: String = null
 }
 
-type RequestStats {
-  totalRequests: Int!
-  approvedCount: Int!
-  rejectedCount: Int!
-  pendingCount: Int!
-  approvalRate: Float!
-  rejectionRate: Float!
-  requestsWithJobsCount: Int!
-  requestsWithJobsPercentage: Float!
-  requestsByStatus: [RequestStatusCount!]
-}
-
 """
 RequestStatus(id, uuid, name, slug, create_event, is_default, tenant, created_by, updated_by, created_at, updated_at)
 """
@@ -3129,12 +3210,6 @@ type RequestStatus implements Node {
   isDefault: Boolean!
   createdAt: String!
   updatedAt: String!
-}
-
-type RequestStatusCount {
-  statusId: ID!
-  statusName: String!
-  count: Int!
 }
 
 type RequestStatusCountableConnection {
@@ -3205,15 +3280,6 @@ input RequestStoreManagerFiltersInput {
   clientMutationId: ID = null
   tenantId: ID = null
   tenantUuid: ID = null
-}
-
-type RequestTimeSeries {
-  dataPoints: [TimeSeriesDataPoint!]!
-  groupBy: String!
-  totalCount: Int!
-  approvalTrend: [TimeSeriesDataPoint!]
-  rejectionTrend: [TimeSeriesDataPoint!]
-  jobsAssignedTrend: [TimeSeriesDataPoint!]
 }
 
 """
@@ -3297,6 +3363,12 @@ input RetailerFiltersInput {
   clientMutationId: ID = null
   tenantId: ID = null
   tenantUuid: ID = null
+}
+
+type RetailerOption {
+  id: ID!
+  name: String!
+  address: String!
 }
 
 """
@@ -3499,6 +3571,11 @@ input TenantFiltersInput {
   requestUrlName: String = null
 }
 
+type TenantOption {
+  id: ID!
+  name: String!
+}
+
 type TenantThemeResponse {
   success: Boolean!
   message: String!
@@ -3545,19 +3622,6 @@ type TenantTypeCountableEdge {
 
   """The item at the end of the edge"""
   node: TenantType!
-}
-
-enum TimeGroupBy {
-  HOUR
-  DAY
-  WEEK
-  MONTH
-}
-
-type TimeSeriesDataPoint {
-  timestamp: String!
-  count: Int!
-  value: Float
 }
 
 """
@@ -4200,12 +4264,12 @@ type UserType {
   isActive: Boolean!
   dateJoined: DateTime!
   status: UserStatusType!
-  email: String!
-  id: ID!
-  lastName: String
 
   """Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only."""
   username: String!
+  lastName: String
+  id: ID!
+  email: String!
   firstName: String
   archived: Boolean!
   verified: Boolean!

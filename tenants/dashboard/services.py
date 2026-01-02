@@ -5,11 +5,11 @@ This module contains service classes for dashboard queries with performance opti
 """
 import hashlib
 import json
-from datetime import datetime, timedelta
-from typing import Any, Callable
-from functools import wraps
+from datetime import datetime, date
+from typing import Any, Callable, List, Tuple
 from django.core.cache import cache
 from django.utils import timezone
+from django.db.models import Q
 
 from utils.graphql.mixins import SparkGraphQLMixin
 from . import inputs
@@ -18,148 +18,44 @@ from . import inputs
 class DashboardQueriesService(SparkGraphQLMixin):
     """Service for dashboard queries with performance optimizations."""
 
-    def _apply_filters(
-        self,
-        queryset,
-        filters: inputs.DashboardFiltersInput | None,
-        tenant_id: int
-    ):
-        """Apply filters to queryset efficiently."""
-        if not filters:
-            return queryset.filter(tenant_id=tenant_id)
+    # Quarter definitions: (quarter_num, start_month, end_month, end_day)
+    QUARTER_DEFINITIONS = [
+        (1, 1, 3, 31),   # Q1: Jan-Mar
+        (2, 4, 6, 30),   # Q2: Apr-Jun
+        (3, 7, 9, 30),   # Q3: Jul-Sep
+        (4, 10, 12, 31),  # Q4: Oct-Dec
+    ]
 
-        # Start with tenant filter
-        queryset = queryset.filter(tenant_id=tenant_id)
-
-        # Date range filters
-        if filters.start_date:
-            try:
-                start = datetime.fromisoformat(
-                    filters.start_date.replace('Z', '+00:00'))
-                queryset = queryset.filter(created_at__gte=start)
-            except (ValueError, AttributeError):
-                pass
-
-        if filters.end_date:
-            try:
-                end = datetime.fromisoformat(
-                    filters.end_date.replace('Z', '+00:00'))
-                # Add one day to include the entire end date
-                end = end + timedelta(days=1)
-                queryset = queryset.filter(created_at__lt=end)
-            except (ValueError, AttributeError):
-                pass
-
-        # Location filters - apply only if model has direct location field
-        # For Event querysets, location is accessed via request__location (handled in queries)
-        # For Request querysets, location is accessed via distributor__location or retailer__location
-        model = queryset.model
-        if hasattr(model, '_meta') and 'location' in [f.name for f in model._meta.get_fields()]:
-            if filters.location_id:
-                queryset = queryset.filter(location_id=filters.location_id)
-            elif filters.location_code:
-                queryset = queryset.filter(
-                    location__code=filters.location_code)
-
-        # Event filters (only apply to Event querysets)
-        model = queryset.model
-        model_name = model.__name__
-
-        if model_name == 'Event':
-            if filters.event_type_id:
-                queryset = queryset.filter(event_type_id=filters.event_type_id)
-            if filters.event_status_id:
-                queryset = queryset.filter(status_id=filters.event_status_id)
-
-        # Request filters (only apply to Request querysets)
-        if model_name == 'Request':
-            if filters.request_status_id:
-                queryset = queryset.filter(status_id=filters.request_status_id)
-            if filters.request_type_id:
-                queryset = queryset.filter(
-                    request_type_id=filters.request_type_id)
-            if filters.client_id:
-                queryset = queryset.filter(client_id=filters.client_id)
-            if filters.distributor_id:
-                queryset = queryset.filter(
-                    distributor_id=filters.distributor_id)
-            if filters.retailer_id:
-                queryset = queryset.filter(retailer_id=filters.retailer_id)
-
-        return queryset
-
-    def _get_date_range(self, filters: inputs.DashboardFiltersInput | None):
-        """Get date range from filters with defaults."""
-        today = timezone.now().date()
-
-        if filters and filters.start_date:
-            try:
-                start = datetime.fromisoformat(
-                    filters.start_date.replace('Z', '+00:00')).date()
-            except (ValueError, AttributeError):
-                start = today - timedelta(days=30)  # Default to last 30 days
-        else:
-            start = today - timedelta(days=30)
-
-        if filters and filters.end_date:
-            try:
-                end = datetime.fromisoformat(
-                    filters.end_date.replace('Z', '+00:00')).date()
-            except (ValueError, AttributeError):
-                end = today
-        else:
-            end = today
-
-        return start, end
-
-    def _extract_filter_values(
-        self, filters: inputs.DashboardFiltersInput | None
-    ) -> dict[str, str]:
+    @staticmethod
+    def _get_quarter_date_range(quarter_num: int, year: int) -> Tuple[date, date]:
         """
-        Extract filter values into a dictionary for cache key generation.
-
-        Only includes non-None values. ID fields are converted to strings
-        for consistent hashing.
+        Get start and end dates for a given quarter and year.
 
         Args:
-            filters: Optional filter input
+            quarter_num: Quarter number (1-4)
+            year: Year (e.g., 2025)
 
         Returns:
-            Dictionary of filter key-value pairs
+            Tuple of (start_date, end_date)
+
+        Raises:
+            ValueError: If quarter_num is not between 1 and 4
         """
-        if not filters:
-            return {}
+        if not 1 <= quarter_num <= 4:
+            raise ValueError(
+                f"Invalid quarter number: {quarter_num}. Must be between 1 and 4.")
 
-        # Mapping of field names to their conversion functions
-        # None means keep as-is, str means convert to string
-        field_mappings = {
-            # Date range filters
-            'start_date': None,
-            'end_date': None,
-            # Location filters
-            'location_id': str,
-            'location_code': None,
-            # Event filters
-            'event_type_id': str,
-            'event_status_id': str,
-            # Request filters
-            'request_status_id': str,
-            'request_type_id': str,
-            # Additional filters
-            'client_id': str,
-            'distributor_id': str,
-            'retailer_id': str,
-            'tenant_id': str,
-        }
+        # Find quarter definition
+        quarter_def = next(
+            (sm, em, ed) for q, sm, em, ed in DashboardQueriesService.QUARTER_DEFINITIONS
+            if q == quarter_num
+        )
 
-        filter_dict = {}
-        for field_name, converter in field_mappings.items():
-            value = getattr(filters, field_name, None)
-            if value is not None:
-                filter_dict[field_name] = converter(
-                    value) if converter else value
+        start_month, end_month, end_day = quarter_def
+        start_date = date(year, start_month, 1)
+        end_date = date(year, end_month, end_day)
 
-        return filter_dict
+        return start_date, end_date
 
     def _get_cache_version(self, query_name: str, tenant_id: int) -> int:
         """
@@ -179,17 +75,15 @@ class DashboardQueriesService(SparkGraphQLMixin):
         self,
         query_name: str,
         tenant_id: int,
-        filters: inputs.DashboardFiltersInput | None = None,
-        group_by: str | None = None,
+        filters: inputs.EventDashboardFiltersInput | inputs.RecapDashboardFiltersInput | None = None,
     ) -> str:
         """
         Generate a cache key based on query name, tenant ID, version, and all filter parameters.
 
         Args:
-            query_name: Name of the query (e.g., 'events_stats', 'request_time_series')
+            query_name: Name of the query (e.g., 'event_dashboard', 'recap_dashboard', etc.)
             tenant_id: The tenant ID
-            filters: Optional filter input
-            group_by: Optional group_by parameter for time series queries
+            filters: Optional Event Dashboard or Recap Dashboard filter input
 
         Returns:
             Cache key string in format: dashboard:{query_name}:{tenant_id}:v{version}:{filter_hash}
@@ -198,10 +92,11 @@ class DashboardQueriesService(SparkGraphQLMixin):
         version = self._get_cache_version(query_name, tenant_id)
 
         # Build filter dict with all parameters (only non-None values)
-        filter_dict = self._extract_filter_values(filters)
-
-        if group_by:
-            filter_dict['group_by'] = group_by
+        # Extract filter values based on query type
+        if query_name.startswith('recap_dashboard'):
+            filter_dict = self._extract_recap_dashboard_filter_values(filters)
+        else:
+            filter_dict = self._extract_event_dashboard_filter_values(filters)
 
         # Sort keys to ensure consistent hash
         sorted_items = sorted(filter_dict.items())
@@ -222,19 +117,21 @@ class DashboardQueriesService(SparkGraphQLMixin):
         Returns:
             TTL in seconds
         """
-        # Stats queries: 5-15 minutes (using 10 minutes = 600 seconds)
-        stats_queries = ['events_stats', 'ambassadors_stats', 'request_stats']
-        # Time series queries: 1 hour (3600 seconds)
-        time_series_queries = ['events_time_series', 'request_time_series']
-        # Detail queries: 5 minutes (300 seconds)
-        detail_queries = ['event_detail']
+        # Filter Options: 1 hour TTL (rarely changes)
+        filter_options_queries = [
+            'event_dashboard_filter_options',
+            'recap_dashboard_filter_options'
+        ]
+        # Dashboards: 10 minutes TTL (frequently accessed, needs freshness)
+        dashboard_queries = [
+            'event_dashboard',
+            'recap_dashboard'
+        ]
 
-        if query_name in stats_queries:
-            return 600  # 10 minutes
-        elif query_name in time_series_queries:
+        if query_name in filter_options_queries:
             return 3600  # 1 hour
-        elif query_name in detail_queries:
-            return 300  # 5 minutes
+        elif query_name in dashboard_queries:
+            return 600  # 10 minutes
         else:
             return 600  # Default: 10 minutes
 
@@ -243,8 +140,7 @@ class DashboardQueriesService(SparkGraphQLMixin):
         query_name: str,
         tenant_id: int,
         execute_func: Callable,
-        filters: inputs.DashboardFiltersInput | None = None,
-        group_by: str | None = None,
+        filters: inputs.EventDashboardFiltersInput | None = None,
         *args,
         **kwargs
     ) -> Any:
@@ -255,15 +151,14 @@ class DashboardQueriesService(SparkGraphQLMixin):
             query_name: Name of the query (for cache key generation)
             tenant_id: The tenant ID
             execute_func: Async function to execute if cache miss
-            filters: Optional filter input
-            group_by: Optional group_by parameter
+            filters: Optional Event Dashboard filter input
             *args, **kwargs: Additional arguments to pass to execute_func
 
         Returns:
             Cached result or result from execute_func
         """
         cache_key = self._generate_cache_key(
-            query_name, tenant_id, filters, group_by)
+            query_name, tenant_id, filters)
         ttl = self._get_cache_ttl(query_name)
 
         # Try to get from cache
@@ -299,15 +194,420 @@ class DashboardQueriesService(SparkGraphQLMixin):
         # This is a limitation - in production with Redis, use cache.delete_pattern()
 
         if query_names is None:
-            # Invalidate all dashboard queries for this tenant
+            # Invalidate all Dashboard queries for this tenant
             query_names = [
-                'events_stats', 'events_time_series',
-                'ambassadors_stats',
-                'request_stats', 'request_time_series',
-                'event_detail'
+                'event_dashboard_filter_options',
+                'event_dashboard',
+                'recap_dashboard_filter_options',
+                'recap_dashboard'
             ]
 
         # Since we can't do wildcard deletion with default cache,
         # we'll need to track keys or use Redis in production.
         # For now, this is a placeholder that would need Redis or key tracking.
         pass
+
+    def _get_current_quarter(self) -> Tuple[str, date, date]:
+        """
+        Get current quarter string and date range.
+
+        Returns:
+            Tuple of (quarter_string, start_date, end_date)
+            e.g., ("Q1 2025", date(2025, 1, 1), date(2025, 3, 31))
+        """
+        now = timezone.now().date()
+        year = now.year
+        month = now.month
+
+        # Determine current quarter based on month
+        quarter_num, _, _, _ = next(
+            (q, sm, em, ed) for q, sm, em, ed in self.QUARTER_DEFINITIONS
+            if sm <= month <= em
+        )
+
+        start_date, end_date = self._get_quarter_date_range(quarter_num, year)
+        quarter_string = f"Q{quarter_num} {year}"
+
+        return quarter_string, start_date, end_date
+
+    def _parse_quarter(self, quarter: str) -> Tuple[date, date]:
+        """
+        Parse quarter string to date range.
+
+        Args:
+            quarter: Quarter string like "Q1 2025"
+
+        Returns:
+            Tuple of (start_date, end_date)
+
+        Raises:
+            ValueError: If quarter string is invalid
+        """
+        try:
+            # Parse format: "Q1 2025" or "Q2 2024"
+            parts = quarter.strip().split()
+            if len(parts) != 2:
+                raise ValueError(f"Invalid quarter format: {quarter}")
+
+            quarter_part = parts[0].upper()
+            if not quarter_part.startswith('Q') or len(quarter_part) != 2:
+                raise ValueError(f"Invalid quarter format: {quarter}")
+
+            quarter_num = int(quarter_part[1])
+            if quarter_num < 1 or quarter_num > 4:
+                raise ValueError(f"Invalid quarter number: {quarter_num}")
+
+            year = int(parts[1])
+
+            # Calculate date range using utility function
+            start_date, end_date = self._get_quarter_date_range(
+                quarter_num, year)
+
+            return start_date, end_date
+        except (ValueError, IndexError) as e:
+            raise ValueError(f"Invalid quarter format: {quarter}") from e
+
+    def _get_available_quarters(
+        self, years_back: int = 2
+    ) -> List[str]:
+        """
+        Get available quarters from event data.
+
+        Args:
+            years_back: Number of years back to include (default 2)
+
+        Returns:
+            List of quarter strings like ["Q1 2025", "Q2 2025", ...]
+        """
+        now = timezone.now().date()
+        current_year = now.year
+
+        # Generate quarters for the last N years + current year
+        quarters = []
+        for year_offset in range(years_back, -1, -1):  # e.g., 2, 1, 0
+            year = current_year - year_offset
+            for quarter_num in range(1, 5):
+                quarter_string = f"Q{quarter_num} {year}"
+                quarters.append(quarter_string)
+
+        return quarters
+
+    def _apply_event_dashboard_filters(
+        self,
+        queryset,
+        filters: inputs.EventDashboardFiltersInput | None
+    ):
+        """
+        Apply Event Dashboard specific filters including quarter and tenant.
+
+        Args:
+            queryset: Base queryset (Event model)
+            filters: EventDashboardFiltersInput filters
+
+        Returns:
+            Filtered queryset
+        """
+        if not filters:
+            return queryset
+
+        # Tenant filter (only if provided - admin dashboard shows all by default)
+        if filters.tenant_id:
+            queryset = queryset.filter(tenant_id=filters.tenant_id)
+
+        # Quarter filter (takes precedence over start_date/end_date)
+        if filters.quarter:
+            try:
+                start_date, end_date = self._parse_quarter(filters.quarter)
+                # Use event date or start_time for filtering
+                queryset = queryset.filter(
+                    Q(date__date__gte=start_date, date__date__lte=end_date) |
+                    Q(start_time__date__gte=start_date, start_time__date__lte=end_date) |
+                    Q(request__date__date__gte=start_date,
+                      request__date__date__lte=end_date)
+                )
+            except ValueError:
+                # Invalid quarter format, ignore
+                pass
+        elif filters.start_date or filters.end_date:
+            # Use date range if quarter not provided
+            if filters.start_date:
+                try:
+                    start = datetime.fromisoformat(
+                        filters.start_date.replace('Z', '+00:00')).date()
+                    queryset = queryset.filter(
+                        Q(date__date__gte=start) |
+                        Q(start_time__date__gte=start) |
+                        Q(request__date__date__gte=start)
+                    )
+                except (ValueError, AttributeError):
+                    pass
+
+            if filters.end_date:
+                try:
+                    end = datetime.fromisoformat(
+                        filters.end_date.replace('Z', '+00:00')).date()
+                    queryset = queryset.filter(
+                        Q(date__date__lte=end) |
+                        Q(start_time__date__lte=end) |
+                        Q(request__date__date__lte=end)
+                    )
+                except (ValueError, AttributeError):
+                    pass
+
+        # RMM (Retailer) filter
+        if filters.rmm_id:
+            queryset = queryset.filter(request__retailer_id=filters.rmm_id)
+
+        # Distributor filter
+        if filters.distributor_id:
+            queryset = queryset.filter(
+                request__distributor_id=filters.distributor_id)
+
+        return queryset
+
+    def _get_event_dashboard_date_range(
+        self, filters: inputs.EventDashboardFiltersInput | None
+    ) -> Tuple[date, date]:
+        """
+        Get date range for Event Dashboard with defaults.
+
+        If quarter is provided, use it. Otherwise use start_date/end_date.
+        If neither is provided, default to current quarter.
+
+        Args:
+            filters: EventDashboardFiltersInput filters
+
+        Returns:
+            Tuple of (start_date, end_date)
+        """
+        if filters and filters.quarter:
+            try:
+                return self._parse_quarter(filters.quarter)
+            except ValueError:
+                pass
+
+        if filters and (filters.start_date or filters.end_date):
+            today = timezone.now().date()
+            start = today
+            end = today
+
+            if filters.start_date:
+                try:
+                    start = datetime.fromisoformat(
+                        filters.start_date.replace('Z', '+00:00')).date()
+                except (ValueError, AttributeError):
+                    pass
+
+            if filters.end_date:
+                try:
+                    end = datetime.fromisoformat(
+                        filters.end_date.replace('Z', '+00:00')).date()
+                except (ValueError, AttributeError):
+                    pass
+
+            return start, end
+
+        # Default to current quarter
+        _, start_date, end_date = self._get_current_quarter()
+        return start_date, end_date
+
+    def _extract_event_dashboard_filter_values(
+        self, filters: inputs.EventDashboardFiltersInput | None
+    ) -> dict[str, str]:
+        """
+        Extract Event Dashboard filter values for cache key generation.
+
+        Args:
+            filters: EventDashboardFiltersInput filters
+
+        Returns:
+            Dictionary of filter key-value pairs
+        """
+        if not filters:
+            return {}
+
+        filter_dict = {}
+
+        # Quarter (takes precedence)
+        if filters.quarter:
+            filter_dict['quarter'] = filters.quarter
+        else:
+            # Date range
+            if filters.start_date:
+                filter_dict['start_date'] = filters.start_date
+            if filters.end_date:
+                filter_dict['end_date'] = filters.end_date
+
+        # Other filters
+        if filters.rmm_id:
+            filter_dict['rmm_id'] = str(filters.rmm_id)
+        if filters.distributor_id:
+            filter_dict['distributor_id'] = str(filters.distributor_id)
+        if filters.tenant_id:
+            filter_dict['tenant_id'] = str(filters.tenant_id)
+
+        return filter_dict
+
+    def _apply_recap_dashboard_filters(
+        self,
+        queryset,
+        filters: inputs.RecapDashboardFiltersInput | None
+    ):
+        """
+        Apply Recap Dashboard specific filters including quarter and tenant.
+
+        Args:
+            queryset: Base queryset (Recap model)
+            filters: RecapDashboardFiltersInput filters
+
+        Returns:
+            Filtered queryset
+        """
+        if not filters:
+            return queryset
+
+        # Tenant filter (only if provided - admin dashboard shows all by default)
+        if filters.tenant_id:
+            # Filter by tenant via event
+            queryset = queryset.filter(event__tenant_id=filters.tenant_id)
+
+        # Quarter filter (takes precedence over start_date/end_date)
+        if filters.quarter:
+            try:
+                start_date, end_date = self._parse_quarter(filters.quarter)
+                # Use event date or recap created_at for filtering
+                queryset = queryset.filter(
+                    Q(event__date__date__gte=start_date, event__date__date__lte=end_date) |
+                    Q(event__start_time__date__gte=start_date, event__start_time__date__lte=end_date) |
+                    Q(event__request__date__date__gte=start_date,
+                      event__request__date__date__lte=end_date) |
+                    Q(created_at__date__gte=start_date,
+                      created_at__date__lte=end_date)
+                )
+            except ValueError:
+                # Invalid quarter format, ignore
+                pass
+        elif filters.start_date or filters.end_date:
+            # Use date range if quarter not provided
+            if filters.start_date:
+                try:
+                    start = datetime.fromisoformat(
+                        filters.start_date.replace('Z', '+00:00')).date()
+                    queryset = queryset.filter(
+                        Q(event__date__date__gte=start) |
+                        Q(event__start_time__date__gte=start) |
+                        Q(event__request__date__date__gte=start) |
+                        Q(created_at__date__gte=start)
+                    )
+                except (ValueError, AttributeError):
+                    pass
+
+            if filters.end_date:
+                try:
+                    end = datetime.fromisoformat(
+                        filters.end_date.replace('Z', '+00:00')).date()
+                    queryset = queryset.filter(
+                        Q(event__date__date__lte=end) |
+                        Q(event__start_time__date__lte=end) |
+                        Q(event__request__date__date__lte=end) |
+                        Q(created_at__date__lte=end)
+                    )
+                except (ValueError, AttributeError):
+                    pass
+
+        # RMM (Retailer) filter
+        if filters.rmm_id:
+            queryset = queryset.filter(
+                Q(retailer_id=filters.rmm_id) |
+                Q(event__request__retailer_id=filters.rmm_id)
+            )
+
+        # Distributor filter
+        if filters.distributor_id:
+            queryset = queryset.filter(
+                event__request__distributor_id=filters.distributor_id)
+
+        return queryset
+
+    def _get_recap_dashboard_date_range(
+        self, filters: inputs.RecapDashboardFiltersInput | None
+    ) -> Tuple[date, date]:
+        """
+        Get date range for Recap Dashboard with defaults.
+
+        If quarter is provided, use it. Otherwise use start_date/end_date.
+        If neither is provided, default to current quarter.
+
+        Args:
+            filters: RecapDashboardFiltersInput filters
+
+        Returns:
+            Tuple of (start_date, end_date)
+        """
+        if filters and filters.quarter:
+            try:
+                return self._parse_quarter(filters.quarter)
+            except ValueError:
+                pass
+
+        if filters and (filters.start_date or filters.end_date):
+            today = timezone.now().date()
+            start = today
+            end = today
+
+            if filters.start_date:
+                try:
+                    start = datetime.fromisoformat(
+                        filters.start_date.replace('Z', '+00:00')).date()
+                except (ValueError, AttributeError):
+                    pass
+
+            if filters.end_date:
+                try:
+                    end = datetime.fromisoformat(
+                        filters.end_date.replace('Z', '+00:00')).date()
+                except (ValueError, AttributeError):
+                    pass
+
+            return start, end
+
+        # Default to current quarter
+        _, start_date, end_date = self._get_current_quarter()
+        return start_date, end_date
+
+    def _extract_recap_dashboard_filter_values(
+        self, filters: inputs.RecapDashboardFiltersInput | None
+    ) -> dict[str, str]:
+        """
+        Extract Recap Dashboard filter values for cache key generation.
+
+        Args:
+            filters: RecapDashboardFiltersInput filters
+
+        Returns:
+            Dictionary of filter key-value pairs
+        """
+        if not filters:
+            return {}
+
+        filter_dict = {}
+
+        # Quarter (takes precedence)
+        if filters.quarter:
+            filter_dict['quarter'] = filters.quarter
+        else:
+            # Date range
+            if filters.start_date:
+                filter_dict['start_date'] = filters.start_date
+            if filters.end_date:
+                filter_dict['end_date'] = filters.end_date
+
+        # Other filters
+        if filters.rmm_id:
+            filter_dict['rmm_id'] = str(filters.rmm_id)
+        if filters.distributor_id:
+            filter_dict['distributor_id'] = str(filters.distributor_id)
+        if filters.tenant_id:
+            filter_dict['tenant_id'] = str(filters.tenant_id)
+
+        return filter_dict
