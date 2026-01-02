@@ -972,7 +972,8 @@ class ClientSparkAmbassadorJobQueries:
             queryset = queryset.filter(tenant_id=tenant_id)
 
         # Filter by job_id
-        queryset = queryset.filter(job_id=job_id)
+        resolved_job_id = resolve_id_to_int(job_id)
+        queryset = queryset.filter(job_id=resolved_job_id)
 
         # Note: q parameter is not used here as AmbassadorJob doesn't have a 'name' field
         # If search is needed, it could be implemented by filtering on related ambassador or job fields

@@ -1290,10 +1290,12 @@ input CreateRecapInput {
   name: String!
   eventId: ID!
   files: [String!]!
+  fileRecapCategoryId: ID = null
   productsSold: Int = null
   totalEarnings: Float = null
   jobId: ID = null
   retailerId: ID = null
+  ambassadorId: ID = null
   consumerEngagements: ConsumerEngagementsInput = null
   productSamples: [ProductSampleInput!] = null
   salesPerformance: [SalesPerformanceInput!] = null
@@ -1863,6 +1865,37 @@ input EventTypeFiltersInput {
 
 "\n     Errors messages and codes mapped to\n    fields or non fields errors.\n    Example:\n    {\n        field_name: [\n            {\n                \"message\": \"error message\",\n                \"code\": \"error_code\"\n            }\n        ],\n        other_field: [\n            {\n                \"message\": \"error message\",\n                \"code\": \"error_code\"\n            }\n        ],\n        nonFieldErrors: [\n            {\n                \"message\": \"error message\",\n                \"code\": \"error_code\"\n            }\n        ]\n    }\n    "
 scalar ExpectedError
+
+"""
+FileRecapCategory(id, uuid, name, tenant, created_by, updated_by, created_at, updated_at)
+"""
+type FileRecapCategory implements Node {
+  """The Globally Unique ID of this object"""
+  id: ID!
+  uuid: String!
+  name: String!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type FileRecapCategoryCountableConnection {
+  pageInfo: PageInfo!
+  edges: [FileRecapCategoryCountableEdge!]!
+  totalCount: Int!
+}
+
+type FileRecapCategoryCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: FileRecapCategory!
+}
+
+input FileRecapCategoryFiltersInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+}
 
 """
 FileType(id, uuid, name, extension, created_by, updated_by, created_at, updated_at)
@@ -2672,6 +2705,8 @@ type Query {
   recap(uuid: ID!): Recap
   typeOfGoods(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): TypeOfGoodCountableConnection!
   typeOfGood(id: ID = null, uuid: ID = null): TypeOfGood
+  fileRecapCategories(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: FileRecapCategoryFiltersInput = null): FileRecapCategoryCountableConnection!
+  fileRecapCategory(id: ID = null, uuid: ID = null): FileRecapCategory
   fileTypes(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): FileTypeCountableConnection!
   fileType(uuid: ID!): FileType
   ambassadorEvents(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: AmbassadorEventsFiltersInput = null): AmbassadorEventTypeCountableConnection!
@@ -2908,6 +2943,8 @@ type Recap implements Node {
   approved: Boolean!
   event: Event!
   eventId: ID!
+  jobId: ID
+  job: Job
   recapFile: RecapFile!
   recapFileId: ID!
   createdAt: String!
@@ -2956,8 +2993,10 @@ type RecapFile implements Node {
   name: String!
   approved: Boolean!
   fileTypeId: ID!
+  fileRecapCategoryId: ID
   createdAt: String!
   updatedAt: String!
+  fileRecapCategory: FileRecapCategory
   file: String
 }
 
@@ -3950,10 +3989,12 @@ input UpdateRecapInput {
   name: String!
   eventId: ID!
   files: [String!]!
+  fileRecapCategoryId: ID = null
   productsSold: Int = null
   totalEarnings: Float = null
   jobId: ID = null
   retailerId: ID = null
+  ambassadorId: ID = null
   consumerEngagements: ConsumerEngagementsInput = null
   productSamples: [ProductSampleInput!] = null
   salesPerformance: [SalesPerformanceInput!] = null

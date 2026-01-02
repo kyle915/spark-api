@@ -1,9 +1,12 @@
+from __future__ import annotations
+
 import strawberry_django
 import strawberry
 from strawberry.relay import Node
 from typing import List
 
 from events import types as event_types
+from jobs import types as job_types
 from ambassadors import types as ambassador_types
 from . import models
 from utils.gcs import generate_download_url, extract_blob_name_from_url
@@ -15,8 +18,11 @@ class RecapFile(Node):
     name: str
     approved: bool
     file_type_id: strawberry.ID
+    file_recap_category_id: strawberry.ID | None
     created_at: str
     updated_at: str
+
+    file_recap_category: FileRecapCategory | None
 
     @strawberry.field
     def file(self) -> str | None:
@@ -66,6 +72,14 @@ class TypeOfGood(Node):
     updated_at: str
 
 
+@strawberry_django.type(models.FileRecapCategory)
+class FileRecapCategory(Node):
+    uuid: str
+    name: str
+    created_at: str
+    updated_at: str
+
+
 @strawberry_django.type(models.SalesPerformance)
 class SalesPerformance(Node):
     uuid: str
@@ -105,6 +119,8 @@ class Recap(Node):
     approved: bool
     event: event_types.Event
     event_id: strawberry.ID
+    job_id: strawberry.ID | None
+    job: job_types.Job | None
     recap_file: RecapFile
     recap_file_id: strawberry.ID
     created_at: str
@@ -151,4 +167,3 @@ class RecapDetailResponse:
 class RecapListResponse:
     total_pages: int
     recaps: List[Recap]
-
