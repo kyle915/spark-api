@@ -1924,6 +1924,11 @@ type FileTypeCountableEdge {
   node: FileType!
 }
 
+input GenerateRecapPdfInput {
+  clientMutationId: ID = null
+  id: ID!
+}
+
 input GoogleCalendarCallbackInput {
   clientMutationId: ID = null
   code: String!
@@ -2374,6 +2379,7 @@ type Mutation {
   deleteRecap(input: DeleteRecapInput!): RecapDetailResponse!
   deleteRecapFile(input: DeleteRecapFileInput!): RecapFileDetailResponse!
   approveRecap(input: ApproveRecapInput!): RecapDetailResponse!
+  generateRecapPdf(input: GenerateRecapPdfInput!): RecapFileDetailResponse!
   register(input: BaseRegisterInput!): RegisterResponse!
   socialAuthGoogle(input: GoogleSocialAuthInput!): SocialAuthResponse!
   socialAuthApple(input: AppleSocialAuthInput!): SocialAuthResponse!

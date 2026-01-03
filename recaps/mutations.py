@@ -5,8 +5,9 @@ from asgiref.sync import sync_to_async
 from typing import Any
 
 from django.contrib.auth import get_user_model
-from django.db.models import Model
+from django.db.models import Model, Prefetch, Q
 from django.db import transaction
+from django.utils import timezone
 
 from recaps import types
 from recaps import models
@@ -19,7 +20,13 @@ from utils.graphql.permissions import StrictIsAuthenticated
 from utils.graphql.relay import ensure_relay_mutation
 from utils.graphql.mixins import SparkGraphQLMixin, resolve_id_to_int
 from utils.utils import build_mutation_response
-from utils.gcs import extract_blob_name_from_url, delete_blob
+from utils.gcs import (
+    extract_blob_name_from_url,
+    delete_blob,
+    upload_bytes,
+    download_blob_bytes,
+)
+from recaps.pdf import build_recap_pdf, should_embed_recap_file, is_image_bytes
 
 ensure_relay_mutation()
 
@@ -116,11 +123,13 @@ class RecapMutationService(SparkGraphQLMixin):
                 for file_url in self.input.files:
                     # Extract blob name from GCS URL
                     blob_name = extract_blob_name_from_url(file_url)
-                    
+
                     # Get default file type (you may want to make this configurable)
                     file_type = FileType.objects.first()
                     if not file_type:
-                        raise GraphQLError("No file type available. Please create a file type first.")
+                        raise GraphQLError(
+                            "No file type available. Please create a file type first."
+                        )
 
                     recap_file = models.RecapFile(
                         name=f"Recap file for {self.input.name}",
@@ -179,7 +188,9 @@ class RecapMutationService(SparkGraphQLMixin):
                                 quantity=sample.quantity,
                             )
                         except (TypeError, ValueError, GraphQLError):
-                            raise GraphQLError(f"Invalid product ID: {sample.product_id}")
+                            raise GraphQLError(
+                                f"Invalid product ID: {sample.product_id}"
+                            )
 
                 if self.input.sales_performance:
                     for sale in self.input.sales_performance:
@@ -215,9 +226,9 @@ class RecapMutationService(SparkGraphQLMixin):
                         feedback=self.input.account_feedback.feedback,
                         corpo_card=self.input.account_feedback.corpo_card,
                     )
-                
+
                 return recap
-        
+
         return await create_recap_with_files()
 
     async def update_recap(self) -> models.Recap:
@@ -351,7 +362,7 @@ class RecapMutationService(SparkGraphQLMixin):
                     ).delete()
 
                 return recap, removed_blob_names
-        
+
         recap, removed_blob_names = await update_recap_with_files()
 
         for blob_name in removed_blob_names:
@@ -379,7 +390,7 @@ class RecapMutationService(SparkGraphQLMixin):
                 # Delete the recap
                 recap.delete()
             return True
-        
+
         return await delete_recap_with_files()
 
     async def delete_recap_file(self) -> bool:
@@ -432,6 +443,123 @@ class RecapMutationService(SparkGraphQLMixin):
                 return recap
 
         return await approve_recap_transaction()
+
+    async def generate_recap_pdf(self) -> models.RecapFile:
+        """Generate a PDF with recap details and images, upload it, and return the file."""
+        if not isinstance(self.input, inputs.GenerateRecapPdfInput):
+            raise GraphQLError("Invalid input type.")
+
+        try:
+            recap_id = resolve_id_to_int(self.input.id)
+        except (TypeError, ValueError, GraphQLError):
+            raise GraphQLError("Recap not found.")
+
+        @sync_to_async
+        def fetch_recap():
+            return (
+                models.Recap.objects.select_related(
+                    "event",
+                    "job",
+                    "retailer",
+                    "ambassador",
+                    "ambassador__user",
+                )
+                .prefetch_related(
+                    Prefetch(
+                        "recap_files",
+                        queryset=models.RecapFile.objects.select_related(
+                            "file_type",
+                            "file_recap_category",
+                        ),
+                    ),
+                    "consumer_engagements",
+                    Prefetch(
+                        "product_samples",
+                        queryset=models.ProductSamples.objects.select_related(
+                            "product"
+                        ),
+                    ),
+                    Prefetch(
+                        "sales_performance",
+                        queryset=models.SalesPerformance.objects.select_related(
+                            "product",
+                            "type_of_good",
+                        ),
+                    ),
+                    "consumer_feedback",
+                    "account_feedback",
+                )
+                .get(id=recap_id)
+            )
+
+        try:
+            recap = await fetch_recap()
+        except models.Recap.DoesNotExist:
+            raise GraphQLError("Recap not found.")
+
+        image_entries = []
+        for recap_file in recap.recap_files.all():
+            blob_name = extract_blob_name_from_url(str(recap_file.file))
+            if not blob_name:
+                continue
+            image_bytes = download_blob_bytes(blob_name)
+            if not image_bytes:
+                continue
+            if not should_embed_recap_file(recap_file) and not is_image_bytes(image_bytes):
+                continue
+            image_entries.append(
+                {
+                    "name": recap_file.name,
+                    "bytes": image_bytes,
+                    "category": (
+                        recap_file.file_recap_category.name
+                        if recap_file.file_recap_category
+                        else "Uncategorized"
+                    ),
+                }
+            )
+
+        pdf_bytes = build_recap_pdf(recap, image_entries)
+        timestamp = timezone.now().strftime("%Y%m%d%H%M%S")
+        blob_name = f"recaps/pdfs/{recap.uuid}-{timestamp}.pdf"
+        upload_bytes(blob_name, pdf_bytes, content_type="application/pdf")
+
+        @sync_to_async
+        def create_recap_pdf_file():
+            file_type = FileType.objects.filter(
+                Q(extension__iexact=".pdf") | Q(extension__iexact="pdf")
+            ).first()
+            if not file_type:
+                raise GraphQLError("No PDF file type available.")
+            existing_files = list(
+                models.RecapFile.objects.filter(recap=recap, file_type=file_type)
+            )
+            existing_blob_names = [
+                extract_blob_name_from_url(str(item.file)) for item in existing_files
+            ]
+            if existing_files:
+                models.RecapFile.objects.filter(
+                    id__in=[item.id for item in existing_files]
+                ).delete()
+            recap_file = models.RecapFile.objects.create(
+                name=f"Recap PDF - {recap.name}",
+                file=blob_name,
+                file_type=file_type,
+                recap=recap,
+                approved=False,
+                created_by=self.user,
+            )
+            return recap_file, existing_blob_names
+
+        try:
+            recap_file, existing_blob_names = await create_recap_pdf_file()
+        except Exception:
+            delete_blob(blob_name)
+            raise
+        for existing_blob_name in existing_blob_names:
+            if existing_blob_name:
+                delete_blob(existing_blob_name)
+        return recap_file
 
 
 @strawberry.type
@@ -549,7 +677,11 @@ class RecapMutations:
             service = RecapMutationService.with_input(input)
             await service.set_user(info)
             recap = await service.approve_recap()
-            message = "Recap approved successfully." if input.approved else "Recap declined successfully."
+            message = (
+                "Recap approved successfully."
+                if input.approved
+                else "Recap declined successfully."
+            )
             return build_mutation_response(
                 types.RecapDetailResponse,
                 success=True,
@@ -560,6 +692,32 @@ class RecapMutations:
         except GraphQLError as e:
             return build_mutation_response(
                 types.RecapDetailResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def generate_recap_pdf(
+        self,
+        info: strawberry.Info,
+        input: inputs.GenerateRecapPdfInput,
+    ) -> types.RecapFileDetailResponse:
+        """Generate a recap PDF and return the resulting file."""
+        try:
+            service = RecapMutationService.with_input(input)
+            await service.set_user(info)
+            recap_file = await service.generate_recap_pdf()
+            return build_mutation_response(
+                types.RecapFileDetailResponse,
+                success=True,
+                message="Recap PDF generated successfully.",
+                input_obj=input,
+                recap_file=recap_file,
+            )
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.RecapFileDetailResponse,
                 success=False,
                 message=str(e),
                 input_obj=input,
