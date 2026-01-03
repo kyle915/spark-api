@@ -94,7 +94,7 @@ brew install pango cairo gdk-pixbuf libffi
 
 **Linux (Debian/Ubuntu):**
 ```bash
-sudo apt install libpango-1.0-0 libcairo2 libgdk-pixbuf2.0-0 libffi-dev
+sudo apt install libpangocairo-1.0-0 libpango-1.0-0 libcairo2 libgdk-pixbuf2.0-0 libffi-dev
 ```
 
 ---
