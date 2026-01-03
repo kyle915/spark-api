@@ -92,3 +92,8 @@ class DeleteRecapFileInput(SparkGraphQLInput):
 class ApproveRecapInput(SparkGraphQLInput):
     id: strawberry.ID
     approved: bool
+
+
+@strawberry.input
+class GenerateRecapPdfInput(SparkGraphQLInput):
+    id: strawberry.ID

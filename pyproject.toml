@@ -27,6 +27,7 @@ dependencies = [
     "resend>=2.19.0",
     "django-extensions>=4.1",
     "ipython>=9.8.0",
+    "weasyprint>=67.0",
 ]
 
 [tool.pyrefly]

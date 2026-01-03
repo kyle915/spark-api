@@ -83,7 +83,23 @@ uv sync
 
 ---
 
-### 4). Apply Database Migrations
+### 4). Install Native Dependencies (WeasyPrint)
+
+WeasyPrint requires native libraries for PDF rendering.
+
+**macOS (Homebrew):**
+```bash
+brew install pango cairo gdk-pixbuf libffi
+```
+
+**Linux (Debian/Ubuntu):**
+```bash
+sudo apt install libpango-1.0-0 libcairo2 libgdk-pixbuf2.0-0 libffi-dev
+```
+
+---
+
+### 5). Apply Database Migrations
 
 Run migrate to sync your apps.
 
@@ -91,7 +107,7 @@ Run migrate to sync your apps.
 uv run python manage.py migrate
 ```
 
-### 5). Start the Development Server
+### 6). Start the Development Server
 
 Launch the Django development server:
 
@@ -104,7 +120,7 @@ Visit the project at:
 
 ---
 
-### 6). Start Redis (Required for django-rq)
+### 7). Start Redis (Required for django-rq)
 
 django-rq requires Redis as a message queue. Make sure Redis is running:
 
@@ -133,7 +149,7 @@ redis-cli ping
 
 ---
 
-### 7). Start RQ Worker (For Background Tasks)
+### 8). Start RQ Worker (For Background Tasks)
 
 The Google Calendar integration uses django-rq for asynchronous task processing. Start the RQ worker in a separate terminal:
 
