@@ -113,16 +113,22 @@ class SparkGraphQLMixin:
         user = user or await self.get_user(info)
         is_spark_request = self.is_spark_schema_request(info, user=user)
         has_explicit_tenant = tenant_id is not None or tenant_uuid is not None
+        resolved_tenant_id: int | None = None
+        if tenant_id is not None:
+            try:
+                resolved_tenant_id = resolve_id_to_int(tenant_id)
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Invalid tenant ID.")
 
         if is_spark_request and has_explicit_tenant:
             tenant = await self._get_tenant_without_membership(
-                tenant_id=tenant_id,
+                tenant_id=resolved_tenant_id,
                 tenant_uuid=tenant_uuid,
             )
         else:
             tenant = await self.get_tenant(
                 user,
-                tenant_id=tenant_id,
+                tenant_id=resolved_tenant_id,
                 tenant_uuid=tenant_uuid,
             )
 
@@ -200,12 +206,22 @@ class SparkGraphQLMixin:
         filters_tenant_id = getattr(filters, "tenant_id", None)
         user = await self.get_user(info)
         role_slug = self.get_role_slug(user)
+        resolved_tenant_id: int | None = None
+
+        if filters_tenant_id is not None:
+            try:
+                resolved_tenant_id = resolve_id_to_int(filters_tenant_id)
+            except (TypeError, ValueError, GraphQLError) as exc:
+                raise GraphQLError("Invalid tenant ID.") from exc
 
         if role_slug == "client":
-            tenant = await self.get_user_tenant(info, tenant_id=filters_tenant_id)
+            tenant = await self.get_user_tenant(
+                info,
+                tenant_id=resolved_tenant_id,
+            )
             return tenant.id
 
-        return filters_tenant_id
+        return resolved_tenant_id
 
 
 class BaseMutationService(SparkGraphQLMixin):

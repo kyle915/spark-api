@@ -7,11 +7,13 @@ import hashlib
 import json
 from datetime import datetime, date
 from typing import Any, Callable, List, Tuple
+import strawberry
 from django.core.cache import cache
 from django.utils import timezone
 from django.db.models import Q
+from graphql import GraphQLError
 
-from utils.graphql.mixins import SparkGraphQLMixin
+from utils.graphql.mixins import SparkGraphQLMixin, resolve_id_to_int
 from . import inputs
 
 
@@ -311,8 +313,9 @@ class DashboardQueriesService(SparkGraphQLMixin):
             return queryset
 
         # Tenant filter (only if provided - admin dashboard shows all by default)
-        if filters.tenant_id:
-            queryset = queryset.filter(tenant_id=filters.tenant_id)
+        tenant_id = self._resolve_filter_tenant_id(filters)
+        if tenant_id:
+            queryset = queryset.filter(tenant_id=tenant_id)
 
         # Quarter filter (takes precedence over start_date/end_date)
         if filters.quarter:
@@ -356,12 +359,16 @@ class DashboardQueriesService(SparkGraphQLMixin):
 
         # RMM (Retailer) filter
         if filters.rmm_id:
-            queryset = queryset.filter(request__retailer_id=filters.rmm_id)
+            rmm_id = self._resolve_filter_id(filters.rmm_id, "retailer")
+            queryset = queryset.filter(request__retailer_id=rmm_id)
 
         # Distributor filter
         if filters.distributor_id:
+            distributor_id = self._resolve_filter_id(
+                filters.distributor_id, "distributor"
+            )
             queryset = queryset.filter(
-                request__distributor_id=filters.distributor_id)
+                request__distributor_id=distributor_id)
 
         return queryset
 
@@ -440,11 +447,16 @@ class DashboardQueriesService(SparkGraphQLMixin):
 
         # Other filters
         if filters.rmm_id:
-            filter_dict['rmm_id'] = str(filters.rmm_id)
+            rmm_id = self._resolve_filter_id(filters.rmm_id, "retailer")
+            filter_dict['rmm_id'] = str(rmm_id)
         if filters.distributor_id:
-            filter_dict['distributor_id'] = str(filters.distributor_id)
-        if filters.tenant_id:
-            filter_dict['tenant_id'] = str(filters.tenant_id)
+            distributor_id = self._resolve_filter_id(
+                filters.distributor_id, "distributor"
+            )
+            filter_dict['distributor_id'] = str(distributor_id)
+        tenant_id = self._resolve_filter_tenant_id(filters)
+        if tenant_id:
+            filter_dict['tenant_id'] = str(tenant_id)
 
         return filter_dict
 
@@ -467,9 +479,10 @@ class DashboardQueriesService(SparkGraphQLMixin):
             return queryset
 
         # Tenant filter (only if provided - admin dashboard shows all by default)
-        if filters.tenant_id:
+        tenant_id = self._resolve_filter_tenant_id(filters)
+        if tenant_id:
             # Filter by tenant via event
-            queryset = queryset.filter(event__tenant_id=filters.tenant_id)
+            queryset = queryset.filter(event__tenant_id=tenant_id)
 
         # Quarter filter (takes precedence over start_date/end_date)
         if filters.quarter:
@@ -517,15 +530,19 @@ class DashboardQueriesService(SparkGraphQLMixin):
 
         # RMM (Retailer) filter
         if filters.rmm_id:
+            rmm_id = self._resolve_filter_id(filters.rmm_id, "retailer")
             queryset = queryset.filter(
-                Q(retailer_id=filters.rmm_id) |
-                Q(event__request__retailer_id=filters.rmm_id)
+                Q(retailer_id=rmm_id) |
+                Q(event__request__retailer_id=rmm_id)
             )
 
         # Distributor filter
         if filters.distributor_id:
+            distributor_id = self._resolve_filter_id(
+                filters.distributor_id, "distributor"
+            )
             queryset = queryset.filter(
-                event__request__distributor_id=filters.distributor_id)
+                event__request__distributor_id=distributor_id)
 
         return queryset
 
@@ -604,10 +621,38 @@ class DashboardQueriesService(SparkGraphQLMixin):
 
         # Other filters
         if filters.rmm_id:
-            filter_dict['rmm_id'] = str(filters.rmm_id)
+            rmm_id = self._resolve_filter_id(filters.rmm_id, "retailer")
+            filter_dict['rmm_id'] = str(rmm_id)
         if filters.distributor_id:
-            filter_dict['distributor_id'] = str(filters.distributor_id)
-        if filters.tenant_id:
-            filter_dict['tenant_id'] = str(filters.tenant_id)
+            distributor_id = self._resolve_filter_id(
+                filters.distributor_id, "distributor"
+            )
+            filter_dict['distributor_id'] = str(distributor_id)
+        tenant_id = self._resolve_filter_tenant_id(filters)
+        if tenant_id:
+            filter_dict['tenant_id'] = str(tenant_id)
 
         return filter_dict
+
+    @staticmethod
+    def _resolve_filter_tenant_id(
+        filters: inputs.EventDashboardFiltersInput | inputs.RecapDashboardFiltersInput | None,
+    ) -> int | None:
+        """Resolve tenant id from filters, supporting relay/global IDs."""
+        tenant_id_value = getattr(filters, "tenant_id", None) if filters else None
+        if not tenant_id_value:
+            return None
+        try:
+            return resolve_id_to_int(tenant_id_value)
+        except (TypeError, ValueError, GraphQLError) as exc:
+            raise GraphQLError("Invalid tenant ID.") from exc
+
+    @staticmethod
+    def _resolve_filter_id(value: strawberry.ID | None, label: str) -> int | None:
+        """Resolve relay/global IDs used in filters to database IDs."""
+        if value in (None, ""):
+            return None
+        try:
+            return resolve_id_to_int(value)
+        except (TypeError, ValueError, GraphQLError) as exc:
+            raise GraphQLError(f"Invalid {label} ID.") from exc

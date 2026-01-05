@@ -28,19 +28,26 @@ class JobsBaseQueriesService(BaseQueriesService):
         user = await self.get_user(info)
         filters_tenant_id = getattr(filters, "tenant_id", None) if filters else None
         role_slug = self.get_role_slug(user)
+        resolved_tenant_id: int | None = None
+
+        if filters_tenant_id is not None:
+            try:
+                resolved_tenant_id = resolve_id_to_int(filters_tenant_id)
+            except (TypeError, ValueError, GraphQLError) as exc:
+                raise GraphQLError("Invalid tenant ID.") from exc
 
         if role_slug in {"spark-admin", "ambassador"}:
             if filters_tenant_id is None:
                 return None
             tenant = await self._get_tenant_without_membership(
-                tenant_id=filters_tenant_id
+                tenant_id=resolved_tenant_id
             )
             return tenant.id
 
         if role_slug == "client":
             tenant = await self.get_user_tenant(
                 info,
-                tenant_id=filters_tenant_id,
+                tenant_id=resolved_tenant_id,
                 user=user,
             )
             return tenant.id
@@ -48,7 +55,7 @@ class JobsBaseQueriesService(BaseQueriesService):
         try:
             tenant = await self.get_user_tenant(
                 info,
-                tenant_id=filters_tenant_id,
+                tenant_id=resolved_tenant_id,
                 user=user,
             )
             return tenant.id
@@ -904,7 +911,11 @@ class AmbassadorJobQueries:
 
         if filters:
             if filters.status_id:
-                queryset = queryset.filter(status_id=filters.status_id)
+                try:
+                    status_id = resolve_id_to_int(filters.status_id)
+                    queryset = queryset.filter(status_id=status_id)
+                except (TypeError, ValueError, GraphQLError):
+                    raise GraphQLError("Invalid status ID.")
             elif filters.status_slug:
                 status_filter_kwargs = {"status__slug": filters.status_slug}
                 if tenant_id:

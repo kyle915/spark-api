@@ -27,6 +27,24 @@ class AmbassadorEventStatus(str, Enum):
     CANCELED = "canceled"
 
 
+def _resolve_filter_id(value: strawberry.ID | None, label: str) -> int | None:
+    """Resolve relay/global IDs used in filters to database IDs."""
+    if value in (None, ""):
+        return None
+    try:
+        return resolve_id_to_int(value)
+    except (TypeError, ValueError, GraphQLError) as exc:
+        raise GraphQLError(f"Invalid {label} ID.") from exc
+
+
+def _resolve_filter_id_list(values: list[strawberry.ID], label: str) -> list[int]:
+    """Resolve a list of relay/global IDs used in filters to database IDs."""
+    try:
+        return [resolve_id_to_int(value) for value in values]
+    except (TypeError, ValueError, GraphQLError) as exc:
+        raise GraphQLError(f"Invalid {label} ID.") from exc
+
+
 @strawberry.input
 class AmbassadorEventsFiltersInput:
     """Filters for ambassador-scoped events."""
@@ -127,19 +145,26 @@ class AmbassadorsTenantQueriesService(BaseQueriesService):
         user = await self.get_user(info)
         filters_tenant_id = getattr(filters, "tenant_id", None) if filters else None
         role_slug = self.get_role_slug(user)
+        resolved_tenant_id: int | None = None
+
+        if filters_tenant_id is not None:
+            try:
+                resolved_tenant_id = resolve_id_to_int(filters_tenant_id)
+            except (TypeError, ValueError, GraphQLError) as exc:
+                raise GraphQLError("Invalid tenant ID.") from exc
 
         if role_slug in {"spark-admin", "ambassador"}:
             if filters_tenant_id is None:
                 return None
             tenant = await self._get_tenant_without_membership(
-                tenant_id=filters_tenant_id
+                tenant_id=resolved_tenant_id
             )
             return tenant.id
 
         try:
             tenant = await self.get_user_tenant(
                 info,
-                tenant_id=filters_tenant_id,
+                tenant_id=resolved_tenant_id,
                 user=user,
             )
             return tenant.id
@@ -252,7 +277,8 @@ class AmbassadorEventQueries:
             if filters.ambassador_uuid:
                 queryset = queryset.filter(ambassador__uuid=filters.ambassador_uuid)
             if filters.types:
-                queryset = queryset.filter(event__event_type_id__in=filters.types)
+                type_ids = _resolve_filter_id_list(filters.types, "event type")
+                queryset = queryset.filter(event__event_type_id__in=type_ids)
             if filters.statuses:
                 status_slugs = [status.value for status in filters.statuses]
                 queryset = queryset.filter(event__status__slug__in=status_slugs)

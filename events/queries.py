@@ -45,13 +45,23 @@ from events.inputs import (
     DistanceUnit,
 )
 
-from utils.graphql.mixins import SparkGraphQLMixin
+from utils.graphql.mixins import SparkGraphQLMixin, resolve_id_to_int
 from utils.graphql.relay import (
     CountableConnection,
     connection_from_queryset_async,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_filter_id(value: strawberry.ID | None, label: str) -> int | None:
+    """Resolve relay/global IDs used in filters to database IDs."""
+    if value in (None, ""):
+        return None
+    try:
+        return resolve_id_to_int(value)
+    except (TypeError, ValueError, GraphQLError) as exc:
+        raise GraphQLError(f"Invalid {label} ID.") from exc
 
 
 class BaseEventQueriesService(SparkGraphQLMixin):
@@ -164,6 +174,13 @@ class BaseEventQueriesService(SparkGraphQLMixin):
         user = await self.get_user(info)
         unrestricted = self.has_unrestricted_tenant_access(user)
         has_explicit_tenant = tenant_id is not None or tenant_uuid is not None
+        resolved_tenant_id: int | None = None
+
+        if tenant_id is not None:
+            try:
+                resolved_tenant_id = resolve_id_to_int(tenant_id)
+            except (TypeError, ValueError, GraphQLError) as exc:
+                raise GraphQLError("Invalid tenant ID.") from exc
 
         should_filter = not unrestricted or has_explicit_tenant
         if not should_filter:
@@ -171,7 +188,7 @@ class BaseEventQueriesService(SparkGraphQLMixin):
 
         if unrestricted and has_explicit_tenant:
             tenant = await self._get_tenant_without_membership(
-                tenant_id=tenant_id,
+                tenant_id=resolved_tenant_id,
                 tenant_uuid=tenant_uuid,
             )
             return tenant.id
@@ -179,7 +196,7 @@ class BaseEventQueriesService(SparkGraphQLMixin):
         try:
             tenant = await self.get_user_tenant(
                 info,
-                tenant_id=tenant_id,
+                tenant_id=resolved_tenant_id,
                 tenant_uuid=tenant_uuid,
                 user=user,
             )
@@ -278,11 +295,15 @@ class EventQueries:
 
         if filters:
             if filters.event_type_id:
-                queryset = queryset.filter(event_type_id=filters.event_type_id)
+                event_type_id = _resolve_filter_id(
+                    filters.event_type_id, "event type"
+                )
+                queryset = queryset.filter(event_type_id=event_type_id)
             if filters.event_status:
                 queryset = queryset.filter(status__slug=filters.event_status.value)
             if filters.request_id:
-                queryset = queryset.filter(request_id=filters.request_id)
+                request_id = _resolve_filter_id(filters.request_id, "request")
+                queryset = queryset.filter(request_id=request_id)
             if filters.date:
                 queryset = queryset.filter(request__date=filters.date)
 
@@ -365,11 +386,15 @@ class EventQueries:
 
         if filters:
             if filters.event_type_id:
-                queryset = queryset.filter(event_type_id=filters.event_type_id)
+                event_type_id = _resolve_filter_id(
+                    filters.event_type_id, "event type"
+                )
+                queryset = queryset.filter(event_type_id=event_type_id)
             if filters.event_status:
                 queryset = queryset.filter(status__slug=filters.event_status.value)
             if filters.request_id:
-                queryset = queryset.filter(request_id=filters.request_id)
+                request_id = _resolve_filter_id(filters.request_id, "request")
+                queryset = queryset.filter(request_id=request_id)
 
         queryset = EventQueries._filter_events_for_local_today(queryset).order_by(
             "start_time"
@@ -422,11 +447,15 @@ class EventQueries:
 
         if filters:
             if filters.event_type_id:
-                queryset = queryset.filter(event_type_id=filters.event_type_id)
+                event_type_id = _resolve_filter_id(
+                    filters.event_type_id, "event type"
+                )
+                queryset = queryset.filter(event_type_id=event_type_id)
             if filters.event_status:
                 queryset = queryset.filter(status__slug=filters.event_status.value)
             if filters.request_id:
-                queryset = queryset.filter(request_id=filters.request_id)
+                request_id = _resolve_filter_id(filters.request_id, "request")
+                queryset = queryset.filter(request_id=request_id)
 
         queryset = EventQueries._filter_events_for_local_today(queryset)
 
@@ -619,13 +648,19 @@ class RequestQueries:
 
         if filters:
             if filters.status_id:
-                queryset = queryset.filter(status_id=filters.status_id)
+                status_id = _resolve_filter_id(filters.status_id, "status")
+                queryset = queryset.filter(status_id=status_id)
             if filters.client_id:
-                queryset = queryset.filter(client_id=filters.client_id)
+                client_id = _resolve_filter_id(filters.client_id, "client")
+                queryset = queryset.filter(client_id=client_id)
             if filters.retailer_id:
-                queryset = queryset.filter(retailer_id=filters.retailer_id)
+                retailer_id = _resolve_filter_id(filters.retailer_id, "retailer")
+                queryset = queryset.filter(retailer_id=retailer_id)
             if filters.distributor_id:
-                queryset = queryset.filter(distributor_id=filters.distributor_id)
+                distributor_id = _resolve_filter_id(
+                    filters.distributor_id, "distributor"
+                )
+                queryset = queryset.filter(distributor_id=distributor_id)
             if filters.date:
                 queryset = queryset.filter(date=filters.date)
 
@@ -1343,7 +1378,10 @@ class ProductQueries:
 
         queryset = service.get_ordered_queryset(tenant_id=tenant.id, q=q)
         if filters and filters.product_type_id:
-            queryset = queryset.filter(product_type_id=filters.product_type_id)
+            product_type_id = _resolve_filter_id(
+                filters.product_type_id, "product type"
+            )
+            queryset = queryset.filter(product_type_id=product_type_id)
 
         return await service.get_connection(
             tenant_id=tenant.id,
@@ -1382,7 +1420,10 @@ class ProductQueries:
         )
 
         if filters and filters.product_type_id:
-            queryset = queryset.filter(product_type_id=filters.product_type_id)
+            product_type_id = _resolve_filter_id(
+                filters.product_type_id, "product type"
+            )
+            queryset = queryset.filter(product_type_id=product_type_id)
 
         return await service.get_connection(
             tenant_id=resolved_tenant_id,
