@@ -4274,8 +4274,8 @@ type UserType {
   """Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only."""
   username: String!
   lastName: String
-  id: ID!
   email: String!
+  id: ID!
   firstName: String
   archived: Boolean!
   verified: Boolean!

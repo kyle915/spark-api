@@ -103,10 +103,14 @@ class TenantThemingQuery:
         # Spark admins can view any tenant theme; others must belong to the tenant.
         role_slug = getattr(user.role, "slug", None)
         is_spark_admin = role_slug == Role.SPARK_ADMIN_SLUG
+        try:
+            resolved_tenant_id = resolve_id_to_int(tenant_id)
+        except (TypeError, ValueError, GraphQLError):
+            raise GraphQLError("Invalid tenant ID.")
         if not is_spark_admin:
             has_access = await sync_to_async(
                 lambda: TenantedUser.objects.filter(
-                    user=user, tenant_id=tenant_id, is_active=True
+                    user=user, tenant_id=resolved_tenant_id, is_active=True
                 ).exists()
             )()
             if not has_access:
@@ -115,7 +119,7 @@ class TenantThemingQuery:
                 )
 
         try:
-            tenant = await sync_to_async(Tenant.objects.get)(pk=tenant_id)
+            tenant = await sync_to_async(Tenant.objects.get)(pk=resolved_tenant_id)
         except Tenant.DoesNotExist:
             return None
 
