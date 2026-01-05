@@ -446,8 +446,7 @@ class DashboardQueries:
 
         # Generate cache key with Event Dashboard filter extraction
         # Use tenant_id from filters if provided, otherwise use 0 for global cache
-        tenant_id_for_cache = int(
-            filters.tenant_id) if filters and filters.tenant_id else 0
+        tenant_id_for_cache = service._resolve_filter_tenant_id(filters) or 0
         filter_dict = service._extract_event_dashboard_filter_values(filters)
         filter_str = json.dumps(sorted(filter_dict.items()), sort_keys=True)
         filter_hash = hashlib.md5(filter_str.encode()).hexdigest()
@@ -1043,8 +1042,7 @@ class DashboardQueries:
 
         # Generate cache key with Recap Dashboard filter extraction
         # Use tenant_id from filters if provided, otherwise use 0 for global cache
-        tenant_id_for_cache = int(
-            filters.tenant_id) if filters and filters.tenant_id else 0
+        tenant_id_for_cache = service._resolve_filter_tenant_id(filters) or 0
         filter_dict = service._extract_recap_dashboard_filter_values(filters)
         filter_str = json.dumps(sorted(filter_dict.items()), sort_keys=True)
         filter_hash = hashlib.md5(filter_str.encode()).hexdigest()
