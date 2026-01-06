@@ -60,6 +60,9 @@ class EventQueryMobile(
     queries.EventQueries,
     queries.EventTypeQueries,
     queries.EventStatusQueries,
+    queries.RetailerQueries,
+    queries.ProductTypeQueries,
+    queries.ProductQueries,
     queries.TimeZoneQueries,
 ):
     pass

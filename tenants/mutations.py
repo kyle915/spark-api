@@ -25,7 +25,7 @@ from .envelopes import EmailVerificationMailer
 from events.models import EventStatus, EventType, RequestStatus, RequestType
 from jobs.models import Status as JobStatus, RateType
 from recaps.models import FileRecapCategory, TypeOfGood
-from ambassadors.models import AttendanceStatus
+from ambassadors.models import AttendanceStatus, Skill
 
 User = get_user_model()
 ensure_relay_mutation()
@@ -59,6 +59,13 @@ DEFAULT_FILE_RECAP_CATEGORIES = [
 ]
 
 DEFAULT_TYPES_OF_GOOD = ["Can", "Pack"]
+DEFAULT_SKILLS = [
+    "Communication",
+    "Teamwork",
+    "Leadership",
+    "Time Management",
+    "Problem Solving",
+]
 
 
 @strawberry.type
@@ -861,6 +868,14 @@ class SparkTenantMutations:
                     for type_of_good in DEFAULT_TYPES_OF_GOOD:
                         TypeOfGood.objects.create(
                             name=type_of_good,
+                            tenant=tenant,
+                            created_by=user,
+                        )
+
+                    # Skills
+                    for skill in DEFAULT_SKILLS:
+                        Skill.objects.create(
+                            name=skill,
                             tenant=tenant,
                             created_by=user,
                         )

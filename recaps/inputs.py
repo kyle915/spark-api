@@ -15,6 +15,18 @@ class FileRecapCategoryFiltersInput(SparkGraphQLInput):
 
 
 @strawberry.input
+class TypeOfGoodFiltersInput(SparkGraphQLInput):
+    tenant_id: strawberry.ID | None = None
+
+
+@strawberry.input
+class RecapFileInput(SparkGraphQLInput):
+    file: str
+    file_type_id: strawberry.ID | None = None
+    file_recap_category_id: strawberry.ID | None = None
+
+
+@strawberry.input
 class ConsumerEngagementsInput(SparkGraphQLInput):
     total_consumer: int
     first_time_consumers: int
@@ -56,8 +68,7 @@ class AccountFeedbackInput(SparkGraphQLInput):
 class CreateRecapInput(SparkGraphQLInput):
     name: str
     event_id: strawberry.ID
-    files: List[str]  # List of file URLs/paths from GCS
-    file_recap_category_id: strawberry.ID | None = None
+    files: List[RecapFileInput]
     
     products_sold: int | None = None
     total_earnings: float | None = None

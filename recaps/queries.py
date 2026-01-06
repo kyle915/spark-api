@@ -8,7 +8,11 @@ from django.db.models import QuerySet, Model, Prefetch
 from recaps import types
 from recaps import models
 from ambassadors import models as ambassador_models
-from recaps.inputs import RecapFiltersInput, FileRecapCategoryFiltersInput
+from recaps.inputs import (
+    FileRecapCategoryFiltersInput,
+    RecapFiltersInput,
+    TypeOfGoodFiltersInput,
+)
 from utils.graphql.permissions import StrictIsAuthenticated
 from utils.graphql.mixins import SparkGraphQLMixin, resolve_id_to_int
 from utils.graphql.relay import (
@@ -380,11 +384,17 @@ class RecapQueries:
         last: int | None = None,
         before: str | None = None,
         q: str | None = None,
+        filters: TypeOfGoodFiltersInput | None = None,
     ) -> CountableConnection[types.TypeOfGood]:
         """List TypeOfGood records."""
         service = TypeOfGoodQueriesService()
         await service.get_user(info)
-        queryset = service.get_ordered_queryset(q=q)
+        resolved_tenant_id = (
+            resolve_id_to_int(filters.tenant_id)
+            if filters and filters.tenant_id not in (None, "")
+            else None
+        )
+        queryset = service.get_ordered_queryset(q=q, tenant_id=resolved_tenant_id)
 
         return await service.get_connection(
             q=q,
@@ -520,5 +530,104 @@ class RecapMobileQueries:
                 user=user, uuid=str(uuid)
             )
             return recap
+        except GraphQLError:
+            return None
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def type_of_goods(
+        self,
+        info: strawberry.Info,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        q: str | None = None,
+        filters: TypeOfGoodFiltersInput | None = None,
+    ) -> CountableConnection[types.TypeOfGood]:
+        """List TypeOfGood records (mobile)."""
+        service = TypeOfGoodQueriesService()
+        await service.get_user(info)
+        resolved_tenant_id = (
+            resolve_id_to_int(filters.tenant_id)
+            if filters and filters.tenant_id not in (None, "")
+            else None
+        )
+        queryset = service.get_ordered_queryset(q=q, tenant_id=resolved_tenant_id)
+
+        return await service.get_connection(
+            q=q,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+            queryset=queryset,
+        )
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def type_of_good(
+        self,
+        info: strawberry.Info,
+        id: strawberry.ID | None = None,
+        uuid: strawberry.ID | None = None,
+    ) -> types.TypeOfGood | None:
+        """Return a single TypeOfGood (mobile)."""
+        try:
+            service = TypeOfGoodQueriesService()
+            await service.get_user(info)
+            record = await service.get_record(
+                id=int(id) if id not in (None, "") else None,
+                uuid=str(uuid) if uuid not in (None, "") else None,
+            )
+            return record
+        except GraphQLError:
+            return None
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def file_recap_categories(
+        self,
+        info: strawberry.Info,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        q: str | None = None,
+        filters: FileRecapCategoryFiltersInput | None = None,
+    ) -> CountableConnection[types.FileRecapCategory]:
+        """List FileRecapCategory records (mobile)."""
+        service = FileRecapCategoryQueriesService()
+        await service.get_user(info)
+        tenant_id: int | None = (
+            resolve_id_to_int(filters.tenant_id)
+            if filters and filters.tenant_id
+            else None
+        )
+        queryset = service.get_ordered_queryset(q=q, tenant_id=tenant_id)
+
+        return await service.get_connection(
+            q=q,
+            tenant_id=tenant_id,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+            queryset=queryset,
+        )
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def file_recap_category(
+        self,
+        info: strawberry.Info,
+        id: strawberry.ID | None = None,
+        uuid: strawberry.ID | None = None,
+    ) -> types.FileRecapCategory | None:
+        """Return a single FileRecapCategory (mobile)."""
+        try:
+            service = FileRecapCategoryQueriesService()
+            await service.get_user(info)
+            record = await service.get_record(
+                id=int(id) if id not in (None, "") else None,
+                uuid=str(uuid) if uuid not in (None, "") else None,
+            )
+            return record
         except GraphQLError:
             return None
