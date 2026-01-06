@@ -92,7 +92,10 @@ class BaseQueriesService(SparkGraphQLMixin):
 
         filters: dict[str, Any] = {}
         if id is not None:
-            filters["id"] = id
+            try:
+                filters["id"] = resolve_id_to_int(id)
+            except (TypeError, ValueError, GraphQLError) as exc:
+                raise GraphQLError("Invalid ID.") from exc
         if uuid is not None:
             filters["uuid"] = uuid
         if tenant_id is not None:
