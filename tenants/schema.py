@@ -11,6 +11,7 @@ from django.db.models import Q
 from asgiref.sync import sync_to_async
 from utils.gcs import extract_blob_name_from_url, generate_download_url
 from utils.graphql.permissions import StrictIsAuthenticated
+from strawberry.relay import Node
 
 from .models import Role, Tenant, TenantTheme, TenantedUser
 from .types import RoleType, TenantType, TenantThemeType
@@ -36,8 +37,7 @@ User = get_user_model()
 
 # @strawberry.django.type(model=get_user_model(), name="CustomUserType")
 @strawberry_django.type(User)
-class CustomUserType:
-    id: strawberry.auto
+class CustomUserType(Node):
     uuid: strawberry.auto
     username: strawberry.auto
     email: strawberry.auto
@@ -166,11 +166,16 @@ class QuerySpark(GoogleCalendarQueries, TenantThemingQuery):
 
         try:
             if id:
-                target_user = await User.objects.select_related("role").aget(pk=id)
+                resolved_id = resolve_id_to_int(id)
+                target_user = await User.objects.select_related("role").aget(
+                    pk=resolved_id
+                )
             else:
                 target_user = await User.objects.select_related("role").aget(uuid=uuid)
         except User.DoesNotExist as exc:
             raise GraphQLError("User not found.") from exc
+        except (TypeError, ValueError, GraphQLError) as exc:
+            raise GraphQLError("Invalid user ID.") from exc
 
         if is_client and not is_spark_admin:
             has_shared_tenant = await sync_to_async(

@@ -140,7 +140,10 @@ class BaseEventQueriesService(SparkGraphQLMixin):
         """Get a single record using id or uuid."""
         filters: dict[str, object] = {}
         if id not in (None, ""):
-            filters["id"] = id
+            try:
+                filters["id"] = resolve_id_to_int(id)
+            except (TypeError, ValueError, GraphQLError) as exc:
+                raise GraphQLError("Invalid ID.") from exc
         if uuid not in (None, ""):
             filters["uuid"] = uuid
         if tenant_id:
