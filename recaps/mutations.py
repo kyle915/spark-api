@@ -96,21 +96,6 @@ class RecapMutationService(SparkGraphQLMixin):
             except (Ambassador.DoesNotExist, TypeError, ValueError, GraphQLError):
                 raise GraphQLError("Ambassador not found.")
 
-        file_recap_category = None
-        if self.input.file_recap_category_id:
-            try:
-                category_id = resolve_id_to_int(self.input.file_recap_category_id)
-                file_recap_category = await sync_to_async(
-                    models.FileRecapCategory.objects.get
-                )(id=category_id)
-            except (
-                models.FileRecapCategory.DoesNotExist,
-                TypeError,
-                ValueError,
-                GraphQLError,
-            ):
-                raise GraphQLError("File recap category not found.")
-
         if not self.input.files or len(self.input.files) == 0:
             raise GraphQLError("At least one file is required.")
 
@@ -120,16 +105,45 @@ class RecapMutationService(SparkGraphQLMixin):
             with transaction.atomic():
                 # Create RecapFile instances for each file
                 recap_files = []
-                for file_url in self.input.files:
+                for file_input in self.input.files:
+                    file_url = file_input.file
                     # Extract blob name from GCS URL
                     blob_name = extract_blob_name_from_url(file_url)
+                    if not blob_name:
+                        raise GraphQLError("Invalid recap file path.")
+
+                    file_type = None
+                    if file_input.file_type_id not in (None, ""):
+                        try:
+                            file_type_id = resolve_id_to_int(file_input.file_type_id)
+                            file_type = FileType.objects.get(id=file_type_id)
+                        except (FileType.DoesNotExist, TypeError, ValueError, GraphQLError):
+                            raise GraphQLError("File type not found.")
 
                     # Get default file type (you may want to make this configurable)
-                    file_type = FileType.objects.first()
+                    if not file_type:
+                        file_type = FileType.objects.first()
                     if not file_type:
                         raise GraphQLError(
                             "No file type available. Please create a file type first."
                         )
+
+                    file_recap_category = None
+                    if file_input.file_recap_category_id not in (None, ""):
+                        try:
+                            category_id = resolve_id_to_int(
+                                file_input.file_recap_category_id
+                            )
+                            file_recap_category = models.FileRecapCategory.objects.get(
+                                id=category_id
+                            )
+                        except (
+                            models.FileRecapCategory.DoesNotExist,
+                            TypeError,
+                            ValueError,
+                            GraphQLError,
+                        ):
+                            raise GraphQLError("File recap category not found.")
 
                     recap_file = models.RecapFile(
                         name=f"Recap file for {self.input.name}",
@@ -275,21 +289,6 @@ class RecapMutationService(SparkGraphQLMixin):
             except (Ambassador.DoesNotExist, TypeError, ValueError, GraphQLError):
                 raise GraphQLError("Ambassador not found.")
 
-        file_recap_category = None
-        if self.input.file_recap_category_id:
-            try:
-                category_id = resolve_id_to_int(self.input.file_recap_category_id)
-                file_recap_category = await sync_to_async(
-                    models.FileRecapCategory.objects.get
-                )(id=category_id)
-            except (
-                models.FileRecapCategory.DoesNotExist,
-                TypeError,
-                ValueError,
-                GraphQLError,
-            ):
-                raise GraphQLError("File recap category not found.")
-
         if not self.input.files or len(self.input.files) == 0:
             raise GraphQLError("At least one file is required.")
 
@@ -306,7 +305,8 @@ class RecapMutationService(SparkGraphQLMixin):
                 }
 
                 final_files: list[models.RecapFile] = []
-                for file_url in self.input.files:
+                for file_input in self.input.files:
+                    file_url = file_input.file
                     blob_name = extract_blob_name_from_url(file_url)
                     if not blob_name:
                         raise GraphQLError("Invalid recap file path.")
@@ -314,12 +314,74 @@ class RecapMutationService(SparkGraphQLMixin):
                     if blob_name in blob_to_file:
                         # Reuse existing file; mark as kept by popping
                         existing_file = blob_to_file.pop(blob_name)
+                        updated_fields = []
+                        if file_input.file_type_id not in (None, ""):
+                            try:
+                                file_type_id = resolve_id_to_int(file_input.file_type_id)
+                                file_type = FileType.objects.get(id=file_type_id)
+                            except (
+                                FileType.DoesNotExist,
+                                TypeError,
+                                ValueError,
+                                GraphQLError,
+                            ):
+                                raise GraphQLError("File type not found.")
+                            if existing_file.file_type_id != file_type.id:
+                                existing_file.file_type = file_type
+                                updated_fields.append("file_type")
+
+                        if file_input.file_recap_category_id not in (None, ""):
+                            try:
+                                category_id = resolve_id_to_int(
+                                    file_input.file_recap_category_id
+                                )
+                                file_recap_category = (
+                                    models.FileRecapCategory.objects.get(id=category_id)
+                                )
+                            except (
+                                models.FileRecapCategory.DoesNotExist,
+                                TypeError,
+                                ValueError,
+                                GraphQLError,
+                            ):
+                                raise GraphQLError("File recap category not found.")
+                            if existing_file.file_recap_category_id != file_recap_category.id:
+                                existing_file.file_recap_category = file_recap_category
+                                updated_fields.append("file_recap_category")
+
+                        if updated_fields:
+                            existing_file.save(update_fields=updated_fields)
                         final_files.append(existing_file)
                         continue
 
-                    file_type = FileType.objects.first()
+                    file_type = None
+                    if file_input.file_type_id not in (None, ""):
+                        try:
+                            file_type_id = resolve_id_to_int(file_input.file_type_id)
+                            file_type = FileType.objects.get(id=file_type_id)
+                        except (FileType.DoesNotExist, TypeError, ValueError, GraphQLError):
+                            raise GraphQLError("File type not found.")
+                    if not file_type:
+                        file_type = FileType.objects.first()
                     if not file_type:
                         raise GraphQLError("No file type available.")
+
+                    file_recap_category = None
+                    if file_input.file_recap_category_id not in (None, ""):
+                        try:
+                            category_id = resolve_id_to_int(
+                                file_input.file_recap_category_id
+                            )
+                            file_recap_category = models.FileRecapCategory.objects.get(
+                                id=category_id
+                            )
+                        except (
+                            models.FileRecapCategory.DoesNotExist,
+                            TypeError,
+                            ValueError,
+                            GraphQLError,
+                        ):
+                            raise GraphQLError("File recap category not found.")
 
                     recap_file = models.RecapFile(
                         name=f"Recap file for {self.input.name}",
