@@ -15,6 +15,7 @@ class AmbassadorQuerySpark(
     queries.AmbassadorSkillQueries,
     queries.AttendanceQueries,
     queries.GroupTypeQueries,
+    queries.AmbassadorGroupQueries,
 ):
     pass
 
@@ -31,6 +32,7 @@ class AmbassadorQueryClient(
     queries.AmbassadorSkillQueries,
     queries.AttendanceQueries,
     queries.GroupTypeQueries,
+    queries.AmbassadorGroupQueries,
 ):
     pass
 
@@ -62,5 +64,21 @@ class AmbassadorMutations(
 class AmbassadorMutationsMobile(
     mutations.AmbassadorMutations,
     mutations.AttendanceMutations,
+):
+    pass
+
+
+@strawberry.type
+class AmbassadorMutationsClient(
+    AmbassadorMutations,
+    mutations.GroupTypeMutations,
+    mutations.AmbassadorGroupMutations,
+):
+    pass
+
+
+@strawberry.type
+class AmbassadorMutationsSpark(
+    AmbassadorMutationsClient,
 ):
     pass

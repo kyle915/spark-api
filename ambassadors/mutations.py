@@ -50,6 +50,7 @@ from .types import (
     SourceDetailResponse,
     AttendanceDetailResponse,
     GroupTypeResponse,
+    AmbassadorGroupResponse,
 )
 from . import inputs
 from .services import (
@@ -73,6 +74,7 @@ from .services import (
     DeleteAmbassadorSkillService,
     UpsertAmbassadorProfileService,
     GroupTypeMutationService,
+    AmbassadorGroupMutationService,
 )
 from .envelopes import AmbassadorEventApplicationMailer, NotifyApplicationToClientMailer
 from utils.mailer import MailChain
@@ -401,6 +403,9 @@ class AmbassadorMutations:
     ) -> DeleteAmbassadorSkillResponse:
         return await DeleteAmbassadorSkillService.delete(input, info)
 
+
+@strawberry.type
+class GroupTypeMutations:
     @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
     async def create_group_type(
         self,
@@ -416,6 +421,41 @@ class AmbassadorMutations:
         input: inputs.UpdateGroupTypeInput,
     ) -> GroupTypeResponse:
         return await GroupTypeMutationService.update(input, info)
+
+    @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
+    async def delete_group_type(
+        self,
+        info: strawberry.Info,
+        input: inputs.DeleteGroupTypeInput,
+    ) -> GroupTypeResponse:
+        return await GroupTypeMutationService.delete(input, info)
+
+
+@strawberry.type
+class AmbassadorGroupMutations:
+    @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
+    async def create_ambassador_group(
+        self,
+        info: strawberry.Info,
+        input: inputs.CreateAmbassadorGroupInput,
+    ) -> AmbassadorGroupResponse:
+        return await AmbassadorGroupMutationService.create(input, info)
+
+    @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
+    async def update_ambassador_group(
+        self,
+        info: strawberry.Info,
+        input: inputs.UpdateAmbassadorGroupInput,
+    ) -> AmbassadorGroupResponse:
+        return await AmbassadorGroupMutationService.update(input, info)
+
+    @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
+    async def delete_ambassador_group(
+        self,
+        info: strawberry.Info,
+        input: inputs.DeleteAmbassadorGroupInput,
+    ) -> AmbassadorGroupResponse:
+        return await AmbassadorGroupMutationService.delete(input, info)
 
 
 class AttendanceTypeMutationService(TenantOptionalMutationService):

@@ -719,6 +719,14 @@ class GroupTypeQueriesService(BaseQueriesService):
         return models.GroupType
 
 
+class AmbassadorGroupQueriesService(BaseQueriesService):
+    """Service for ambassador group queries."""
+
+    def get_model(self) -> Model:
+        """Get the model for the service."""
+        return models.AmbassadorGroup
+
+
 class AttendanceQueriesService(BaseQueriesService):
     """Service for attendance queries."""
 
@@ -961,6 +969,52 @@ class GroupTypeQueries:
             service = GroupTypeQueriesService()
             await service.get_user(info)
             return await service.get_record(group_type_id)
+        except GraphQLError:
+            return None
+
+
+@strawberry.type
+class AmbassadorGroupQueries:
+    @strawberry.field(permission_classes=[IsClientOrSparkAdmin])
+    async def ambassador_groups(
+        self,
+        info: strawberry.Info,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        filters: inputs.AmbassadorGroupFiltersInput | None = None,
+    ) -> CountableConnection[types.AmbassadorGroup]:
+        """Get ambassador groups with filters (client/spark-admin only)."""
+        service = AmbassadorGroupQueriesService()
+        tenant_id = await service.resolve_query_tenant_id(info)
+        await service.get_user(info)
+
+        q = filters.search if filters else None
+        queryset = service.get_ordered_queryset(tenant_id=tenant_id, q=q)
+
+        return await service.get_connection(
+            tenant_id=tenant_id,
+            q=q,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+            queryset=queryset,
+        )
+
+    @strawberry.field(permission_classes=[IsClientOrSparkAdmin])
+    async def ambassador_group(
+        self,
+        info: strawberry.Info,
+        group_id: strawberry.ID,
+    ) -> types.AmbassadorGroup | None:
+        """Get a single ambassador group by ID (client/spark-admin only)."""
+        try:
+            service = AmbassadorGroupQueriesService()
+            tenant_id = await service.resolve_query_tenant_id(info)
+            await service.get_user(info)
+            return await service.get_record(id=group_id, tenant_id=tenant_id)
         except GraphQLError:
             return None
 

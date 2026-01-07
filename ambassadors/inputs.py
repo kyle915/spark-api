@@ -335,6 +335,38 @@ class UpdateGroupTypeInput(CreateGroupTypeInput):
 
 
 @strawberry.input
+class DeleteGroupTypeInput(SparkGraphQLInput):
+    """Input for deleting a group type."""
+    id: strawberry.ID
+
+
+@strawberry.input
 class GroupTypeFiltersInput:
     """Filters for group type queries."""
+    search: str | None = None
+
+
+@strawberry.input
+class CreateAmbassadorGroupInput(BaseNameableInput):
+    """Input for creating an ambassador group."""
+    group_type_id: strawberry.ID
+    description: str | None = None
+    private: bool | None = None
+
+
+@strawberry.input
+class UpdateAmbassadorGroupInput(CreateAmbassadorGroupInput):
+    """Input for updating an ambassador group."""
+    id: strawberry.ID
+
+
+@strawberry.input
+class DeleteAmbassadorGroupInput(SparkGraphQLInput):
+    """Input for deleting an ambassador group."""
+    id: strawberry.ID
+
+
+@strawberry.input
+class AmbassadorGroupFiltersInput:
+    """Filters for ambassador group queries."""
     search: str | None = None

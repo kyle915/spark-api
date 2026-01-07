@@ -30,6 +30,7 @@ from .models import (
     Skill,
     AmbassadorSkill,
     GroupType,
+    AmbassadorGroup,
 )
 from .types import (
     PublicAmbassadorCreationResponse,
@@ -55,6 +56,7 @@ from .types import (
     UpsertAmbassadorProfileResponse,
     AmbassadorProfile,
     GroupTypeResponse,
+    AmbassadorGroupResponse,
 )
 from events.models import Client
 from . import inputs
@@ -2214,3 +2216,13 @@ class GroupTypeMutationService(BaseMutationService):
     def get_model(self) -> GroupType:
         """Get the model for the service."""
         return GroupType
+
+
+class AmbassadorGroupMutationService(BaseMutationService):
+    """Service for creating ambassador groups (client/spark-admin only)."""
+    response_class = AmbassadorGroupResponse
+    model_field_name = "ambassador_group"
+
+    def get_model(self) -> AmbassadorGroup:
+        """Get the model for the service."""
+        return AmbassadorGroup
