@@ -42,6 +42,21 @@ input ActiveAmbassadorFiltersInput {
   name: String = null
 }
 
+input AddAmbassadorsToGroupInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  jobId: ID = null
+  groupId: ID!
+  ambassadorIds: [ID!]!
+}
+
+type AddAmbassadorsToGroupResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  members: [UserGroup!]
+}
+
 """
 Ambassador(id, uuid, rating, address, coordinates, is_active, user, created_by, updated_by, created_at, updated_at)
 """
@@ -2597,6 +2612,8 @@ type Mutation {
   createAmbassadorGroup(input: CreateAmbassadorGroupInput!): AmbassadorGroupResponse!
   updateAmbassadorGroup(input: UpdateAmbassadorGroupInput!): AmbassadorGroupResponse!
   deleteAmbassadorGroup(input: DeleteAmbassadorGroupInput!): AmbassadorGroupResponse!
+  addAmbassadorsToGroup(input: AddAmbassadorsToGroupInput!): AddAmbassadorsToGroupResponse!
+  removeAmbassadorsFromGroup(input: RemoveAmbassadorsFromGroupInput!): AmbassadorGroupResponse!
 }
 
 type MutationNormalOutput {
@@ -3273,6 +3290,13 @@ type RegisterResponse {
   message: String!
   activationToken: String
   clientMutationId: ID
+}
+
+input RemoveAmbassadorsFromGroupInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  groupId: ID!
+  userGroupIds: [ID!]!
 }
 
 """

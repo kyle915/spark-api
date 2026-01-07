@@ -181,7 +181,8 @@ class TestAddAmbassadorsToGroup(AmbassadorsGraphQLTestCase):
         assert result.errors is None
         assert result.data is not None
         assert result.data["addAmbassadorsToGroup"]["success"] is True
-        assert "added" in result.data["addAmbassadorsToGroup"]["message"].lower()
+        assert "added" in result.data["addAmbassadorsToGroup"]["message"].lower(
+        )
         assert result.data["addAmbassadorsToGroup"]["clientMutationId"] == "add-1"
 
         members = result.data["addAmbassadorsToGroup"]["members"]
@@ -505,7 +506,8 @@ class TestRemoveAmbassadorsFromGroup(AmbassadorsGraphQLTestCase):
         assert result.errors is None
         assert result.data is not None
         assert result.data["removeAmbassadorsFromGroup"]["success"] is True
-        assert "removed" in result.data["removeAmbassadorsFromGroup"]["message"].lower()
+        assert "removed" in result.data["removeAmbassadorsFromGroup"]["message"].lower(
+        )
         assert result.data["removeAmbassadorsFromGroup"]["clientMutationId"] == "remove-1"
 
         # Verify UserGroup was deleted
@@ -598,7 +600,8 @@ class TestRemoveAmbassadorsFromGroup(AmbassadorsGraphQLTestCase):
         assert result.errors is None
         assert result.data is not None
         assert result.data["removeAmbassadorsFromGroup"]["success"] is False
-        assert "not found" in result.data["removeAmbassadorsFromGroup"]["message"].lower()
+        assert "not found" in result.data["removeAmbassadorsFromGroup"]["message"].lower(
+        )
 
     @pytest.mark.asyncio
     async def test_remove_ambassadors_from_group_user_group_not_found(self):
@@ -617,7 +620,8 @@ class TestRemoveAmbassadorsFromGroup(AmbassadorsGraphQLTestCase):
         assert result.errors is None
         assert result.data is not None
         assert result.data["removeAmbassadorsFromGroup"]["success"] is False
-        assert "not found" in result.data["removeAmbassadorsFromGroup"]["message"].lower()
+        assert "not found" in result.data["removeAmbassadorsFromGroup"]["message"].lower(
+        )
 
     @pytest.mark.asyncio
     async def test_remove_ambassadors_from_group_missing_user_group_ids(self):
@@ -636,7 +640,8 @@ class TestRemoveAmbassadorsFromGroup(AmbassadorsGraphQLTestCase):
         assert result.errors is None
         assert result.data is not None
         assert result.data["removeAmbassadorsFromGroup"]["success"] is False
-        assert "required" in result.data["removeAmbassadorsFromGroup"]["message"].lower()
+        assert "required" in result.data["removeAmbassadorsFromGroup"]["message"].lower(
+        )
 
     @pytest.mark.asyncio
     async def test_remove_ambassadors_from_group_unauthorized_ambassador(self):
@@ -695,5 +700,5 @@ class TestRemoveAmbassadorsFromGroup(AmbassadorsGraphQLTestCase):
         assert result.errors is None
         assert result.data is not None
         assert result.data["removeAmbassadorsFromGroup"]["success"] is False
-        assert "not found" in result.data["removeAmbassadorsFromGroup"]["message"].lower()
-
+        assert "not found" in result.data["removeAmbassadorsFromGroup"]["message"].lower(
+        )
