@@ -2362,19 +2362,10 @@ class AmbassadorGroupMutationService(BaseMutationService):
                 f"Ambassadors with IDs {missing_ids} not found.")
 
         # prepare the invited status
-        invited_status = job_models.Status.objects.filter(
+        invited_status = job_models.Status.objects.get_invited(
             tenant_id=job.tenant_id,
-            slug="invited"
-        ).first()
-
-        if not invited_status:
-            invited_status = job_models.Status.objects.create(
-                name="Invited",
-                slug="invited",
-                tenant=job.tenant,
-                created_by=self.user,
-                updated_by=self.user,
-            )
+            user=self.user
+        )
 
         for ambassador in ambassadors:
             # assign the user to the group

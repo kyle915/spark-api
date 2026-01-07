@@ -317,6 +317,7 @@ class AmbassadorJobStatusEnum(Enum):
     APPROVED = "approved"
     DECLINED = "declined"
     PENDING = "pending"
+    INVITED = 'invited'
 
 
 @strawberry.input
@@ -327,3 +328,9 @@ class ApproveAmbassadorJobInput(BaseTenantInput):
 @strawberry.input
 class DeclineAmbassadorJobInput(BaseTenantInput):
     ambassador_job_id: strawberry.ID
+
+
+@strawberry.input
+class InviteAmbassadorsToJobInput(BaseTenantInput):
+    ambassador_ids: List[strawberry.ID]
+    job_id: strawberry.ID

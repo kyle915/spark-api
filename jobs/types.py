@@ -433,3 +433,11 @@ class JobRequirementAnswerDetailResponse:
     message: str
     client_mutation_id: strawberry.ID | None = None
     job_requirement_answer: JobRequirementAnswer | None = None
+
+
+@strawberry.type
+class InviteAmbassadorsToJobResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    ambassador_jobs: List[AmbassadorJob] | None = None
