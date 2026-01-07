@@ -377,3 +377,18 @@ class DeleteAmbassadorGroupInput(SparkGraphQLInput):
 class AmbassadorGroupFiltersInput:
     """Filters for ambassador group queries."""
     search: str | None = None
+
+
+@strawberry.input
+class AddAmbassadorsToGroupInput(BaseTenantInput):
+    """Input for adding ambassadors to a group."""
+    job_id: strawberry.ID | None = None
+    group_id: strawberry.ID
+    ambassador_ids: list[strawberry.ID]
+
+
+@strawberry.input
+class RemoveAmbassadorsFromGroupInput(BaseTenantInput):
+    """Input for removing ambassadors from a group."""
+    group_id: strawberry.ID
+    user_group_ids: list[strawberry.ID]

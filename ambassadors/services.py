@@ -2335,7 +2335,111 @@ class AmbassadorGroupMutationService(BaseMutationService):
                 input_obj=input,
             )
 
-    def create_user_groups(self, group: AmbassadorGroup, job: job_models.Job):
+    @classmethod
+    async def add_ambassadors_to_group(
+        cls,
+        input: inputs.AddAmbassadorsToGroupInput,
+        info: strawberry.Info,
+        *,
+        response_class: type | None = None,
+    ) -> Any:
+        try:
+            from graphql import GraphQLError
+            from utils.graphql.mixins import resolve_id_to_int
+            resolved_group_id = resolve_id_to_int(input.group_id)
+            try:
+                group = await sync_to_async(AmbassadorGroup.objects.select_related("group_type", "tenant").get)(
+                    id=resolved_group_id
+                )
+            except AmbassadorGroup.DoesNotExist:
+                raise GraphQLError("Group not found.")
+            service = cls.with_input(input)
+            await service.set_user_and_tenant(info)
+
+            job_id = getattr(input, "job_id", None)
+            job = None
+            if job_id:
+                from utils.graphql.mixins import resolve_id_to_int
+                resolved_job_id = resolve_id_to_int(job_id)
+                job = await sync_to_async(job_models.Job.objects.select_related("rate", "tenant").get)(
+                    id=resolved_job_id
+                )
+
+            def create_user_groups():
+                with transaction.atomic():
+                    return service.create_user_groups(group, job)
+
+            user_groups = await sync_to_async(create_user_groups)()
+            return cls._build_mutation_response(
+                response_class=response_class,
+                success=True,
+                message="Ambassadors added to group successfully.",
+                input_obj=input,
+                members=user_groups,
+            )
+
+        except (job_models.Job.DoesNotExist, ValueError, TypeError, GraphQLError) as exc:
+            return cls._build_mutation_response(
+                response_class=response_class,
+                success=False,
+                message=str(exc),
+                input_obj=input,
+            )
+
+    @classmethod
+    async def remove_ambassadors_from_group(
+        cls,
+        input: inputs.RemoveAmbassadorsFromGroupInput,
+        info: strawberry.Info,
+        *,
+        response_class: type | None = None,
+    ) -> Any:
+        try:
+            from graphql import GraphQLError
+            from utils.graphql.mixins import resolve_id_to_int
+            from django.db import transaction
+
+            resolved_group_id = resolve_id_to_int(input.group_id)
+            try:
+                group = await sync_to_async(AmbassadorGroup.objects.get)(id=resolved_group_id)
+            except AmbassadorGroup.DoesNotExist:
+                raise GraphQLError("Group not found.")
+
+            user_group_ids = getattr(input, "user_group_ids", None)
+            if not user_group_ids:
+                raise GraphQLError("User group IDs are required.")
+
+            @sync_to_async
+            def delete_user_groups():
+                with transaction.atomic():
+                    for user_group_id in user_group_ids:
+                        resolved_user_group_id = resolve_id_to_int(
+                            user_group_id)
+                        try:
+                            user_group = UserGroup.objects.get(
+                                id=resolved_user_group_id, group=group)
+                            user_group.delete()
+                        except UserGroup.DoesNotExist:
+                            raise GraphQLError(
+                                f"UserGroup with ID {user_group_id} not found in this group.")
+
+            await delete_user_groups()
+
+            return cls._build_mutation_response(
+                response_class=response_class,
+                success=True,
+                message="Ambassadors removed from group successfully.",
+                input_obj=input,
+            )
+        except (AmbassadorGroup.DoesNotExist, ValueError, TypeError, GraphQLError) as exc:
+            return cls._build_mutation_response(
+                response_class=response_class,
+                success=False,
+                message=str(exc),
+                input_obj=input,
+            )
+
+    def create_user_groups(self, group: AmbassadorGroup, job: job_models.Job | None = None) -> list[UserGroup]:
         from graphql import GraphQLError
 
         ambassador_ids = getattr(self.input, "ambassador_ids", None)
@@ -2361,20 +2465,26 @@ class AmbassadorGroupMutationService(BaseMutationService):
             raise GraphQLError(
                 f"Ambassadors with IDs {missing_ids} not found.")
 
-        # prepare the invited status
-        invited_status = job_models.Status.objects.get_invited(
-            tenant_id=job.tenant_id,
-            user=self.user
-        )
+        invited_status = None
+        if job:
+            # prepare the invited status
+            invited_status = job_models.Status.objects.get_invited(
+                tenant_id=job.tenant_id,
+                user=self.user
+            )
 
+        user_groups = []
         for ambassador in ambassadors:
             # assign the user to the group
-            UserGroup.objects.create(
+            user_group = UserGroup.objects.create(
                 group=group,
                 user=ambassador.user,
                 ambassador=ambassador,
             )
+            user_groups.append(user_group)
 
+            if not job:
+                continue
             # create the ambassador job
             job_models.AmbassadorJob.objects.create(
                 ambassador=ambassador,
@@ -2387,4 +2497,4 @@ class AmbassadorGroupMutationService(BaseMutationService):
                 updated_by=self.user,
             )
 
-        return ambassadors
+        return user_groups
