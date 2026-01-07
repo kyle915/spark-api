@@ -320,3 +320,21 @@ class ActiveAmbassadorFiltersInput:
     """Filters for active ambassadors."""
     email: str | None = None
     name: str | None = None
+
+
+@strawberry.input
+class CreateGroupTypeInput(SparkGraphQLInput):
+    """Input for creating a group type."""
+    name: str
+
+
+@strawberry.input
+class UpdateGroupTypeInput(CreateGroupTypeInput):
+    """Input for updating a group type."""
+    id: strawberry.ID
+
+
+@strawberry.input
+class GroupTypeFiltersInput:
+    """Filters for group type queries."""
+    search: str | None = None

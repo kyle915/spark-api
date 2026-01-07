@@ -380,3 +380,19 @@ class AttendanceDetailResponse:
     message: str
     client_mutation_id: strawberry.ID | None = None
     attendance: Attendance | None = None
+
+
+@strawberry_django.type(models.GroupType)
+class GroupType(Node):
+    uuid: str
+    name: str
+    created_at: str
+    updated_at: str
+
+
+@strawberry.type
+class GroupTypeResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    group_type: GroupType | None = None

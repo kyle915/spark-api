@@ -16,7 +16,7 @@ from tenants.models import Role, Tenant, TenantedUser
 from gqlauth.core.utils import get_token
 from utils.utils import build_mutation_response
 from utils.graphql.inputs import SparkGraphQLInput
-from utils.graphql.mixins import SparkGraphQLMixin
+from utils.graphql.mixins import SparkGraphQLMixin, BaseMutationService
 from utils.graphql.relay import CountableConnection
 
 from .models import (
@@ -29,6 +29,7 @@ from .models import (
     AmbassadorWorkHistory,
     Skill,
     AmbassadorSkill,
+    GroupType,
 )
 from .types import (
     PublicAmbassadorCreationResponse,
@@ -53,6 +54,7 @@ from .types import (
     DeleteAmbassadorSkillResponse,
     UpsertAmbassadorProfileResponse,
     AmbassadorProfile,
+    GroupTypeResponse,
 )
 from events.models import Client
 from . import inputs
@@ -359,7 +361,8 @@ class AcceptInvitationService(BaseAmbassadorService):
     ) -> AcceptInvitationResponse:
         """Accept an ambassador invitation and create account."""
         # Validate passwords match
-        password_error = validate_passwords_match(input, AcceptInvitationResponse)
+        password_error = validate_passwords_match(
+            input, AcceptInvitationResponse)
         if password_error:
             return password_error
 
@@ -664,7 +667,8 @@ class UpsertAmbassadorProfileService(BaseAmbassadorService):
             )
             if ambassador is None:
                 ambassador = (
-                    None  # Explicit for clarity; will create inside transaction.
+                    # Explicit for clarity; will create inside transaction.
+                    None
                 )
 
         role_slug = cls().get_role_slug(user)
@@ -746,7 +750,8 @@ class UpsertAmbassadorProfileService(BaseAmbassadorService):
                         )
                     )
                 if new_files:
-                    AmbassadorFile.objects.bulk_create(new_files, batch_size=50)
+                    AmbassadorFile.objects.bulk_create(
+                        new_files, batch_size=50)
 
             if input.traits is not None:
                 AmbassadorTrait.objects.filter(ambassador=ambassador).delete()
@@ -761,7 +766,8 @@ class UpsertAmbassadorProfileService(BaseAmbassadorService):
                         )
                     )
                 if new_traits:
-                    AmbassadorTrait.objects.bulk_create(new_traits, batch_size=50)
+                    AmbassadorTrait.objects.bulk_create(
+                        new_traits, batch_size=50)
 
             if input.skills is not None:
                 AmbassadorSkill.objects.filter(ambassador=ambassador).delete()
@@ -782,7 +788,8 @@ class UpsertAmbassadorProfileService(BaseAmbassadorService):
                         )
                     )
                 if new_skills:
-                    AmbassadorSkill.objects.bulk_create(new_skills, batch_size=50)
+                    AmbassadorSkill.objects.bulk_create(
+                        new_skills, batch_size=50)
 
             if input.notes is not None:
                 AmbassadorNote.objects.filter(ambassador=ambassador).delete()
@@ -801,10 +808,12 @@ class UpsertAmbassadorProfileService(BaseAmbassadorService):
                         )
                     )
                 if new_notes:
-                    AmbassadorNote.objects.bulk_create(new_notes, batch_size=50)
+                    AmbassadorNote.objects.bulk_create(
+                        new_notes, batch_size=50)
 
             if input.work_history is not None:
-                AmbassadorWorkHistory.objects.filter(ambassador=ambassador).delete()
+                AmbassadorWorkHistory.objects.filter(
+                    ambassador=ambassador).delete()
                 new_work = []
                 for work_input in input.work_history:
                     new_work.append(
@@ -816,7 +825,8 @@ class UpsertAmbassadorProfileService(BaseAmbassadorService):
                         )
                     )
                 if new_work:
-                    AmbassadorWorkHistory.objects.bulk_create(new_work, batch_size=50)
+                    AmbassadorWorkHistory.objects.bulk_create(
+                        new_work, batch_size=50)
 
             return ambassador
 
@@ -847,7 +857,8 @@ class UpsertAmbassadorProfileService(BaseAmbassadorService):
             return await sync_to_async(list)(qs)
 
         async def fetch_work_history():
-            qs = AmbassadorWorkHistory.objects.filter(ambassador_id=ambassador.id)
+            qs = AmbassadorWorkHistory.objects.filter(
+                ambassador_id=ambassador.id)
             return await sync_to_async(list)(qs)
 
         (
@@ -1128,7 +1139,8 @@ class AmbassadorQueriesService(SparkGraphQLMixin):
 
                 # Search by user email
                 if filters.email:
-                    queryset = queryset.filter(user__email__icontains=filters.email)
+                    queryset = queryset.filter(
+                        user__email__icontains=filters.email)
 
                 # Search by user name
                 if filters.name:
@@ -1139,7 +1151,8 @@ class AmbassadorQueriesService(SparkGraphQLMixin):
 
                 # Search by address
                 if filters.address:
-                    queryset = queryset.filter(address__icontains=filters.address)
+                    queryset = queryset.filter(
+                        address__icontains=filters.address)
 
                 # General search across email, name, and address
                 if filters.search:
@@ -1167,11 +1180,13 @@ class AmbassadorQueriesService(SparkGraphQLMixin):
 
         @sync_to_async
         def get_queryset():
-            queryset = Ambassador.objects.select_related("user").filter(is_active=True)
+            queryset = Ambassador.objects.select_related(
+                "user").filter(is_active=True)
 
             if filters:
                 if filters.email:
-                    queryset = queryset.filter(user__email__icontains=filters.email)
+                    queryset = queryset.filter(
+                        user__email__icontains=filters.email)
                 if filters.name:
                     queryset = queryset.filter(
                         Q(user__first_name__icontains=filters.name)
@@ -1460,11 +1475,13 @@ class AmbassadorReviewQueriesService(SparkGraphQLMixin):
             if filters:
                 # Filter by ambassador
                 if filters.ambassador_id:
-                    queryset = queryset.filter(ambassador_id=int(filters.ambassador_id))
+                    queryset = queryset.filter(
+                        ambassador_id=int(filters.ambassador_id))
 
                 # Filter by client
                 if filters.client_id:
-                    queryset = queryset.filter(client_id=int(filters.client_id))
+                    queryset = queryset.filter(
+                        client_id=int(filters.client_id))
 
                 # Filter by score range
                 if filters.min_score is not None:
@@ -1478,7 +1495,8 @@ class AmbassadorReviewQueriesService(SparkGraphQLMixin):
                         start_datetime = datetime.fromisoformat(
                             filters.start_date.replace("Z", "+00:00")
                         )
-                        queryset = queryset.filter(created_at__gte=start_datetime)
+                        queryset = queryset.filter(
+                            created_at__gte=start_datetime)
                     except (ValueError, AttributeError):
                         pass  # Invalid date format, skip filter
                 if filters.end_date:
@@ -1486,13 +1504,15 @@ class AmbassadorReviewQueriesService(SparkGraphQLMixin):
                         end_datetime = datetime.fromisoformat(
                             filters.end_date.replace("Z", "+00:00")
                         )
-                        queryset = queryset.filter(created_at__lte=end_datetime)
+                        queryset = queryset.filter(
+                            created_at__lte=end_datetime)
                     except (ValueError, AttributeError):
                         pass  # Invalid date format, skip filter
 
                 # Search in review text
                 if filters.search:
-                    queryset = queryset.filter(review__icontains=filters.search)
+                    queryset = queryset.filter(
+                        review__icontains=filters.search)
 
             return queryset.order_by("-created_at")
 
@@ -1714,11 +1734,13 @@ class AmbassadorNoteQueriesService(SparkGraphQLMixin):
             if filters:
                 # Filter by ambassador
                 if filters.ambassador_id:
-                    queryset = queryset.filter(ambassador_id=int(filters.ambassador_id))
+                    queryset = queryset.filter(
+                        ambassador_id=int(filters.ambassador_id))
 
                 # Filter by created_by
                 if filters.created_by_id:
-                    queryset = queryset.filter(created_by_id=int(filters.created_by_id))
+                    queryset = queryset.filter(
+                        created_by_id=int(filters.created_by_id))
 
                 # Filter by date range
                 if filters.start_date:
@@ -1726,7 +1748,8 @@ class AmbassadorNoteQueriesService(SparkGraphQLMixin):
                         start_datetime = datetime.fromisoformat(
                             filters.start_date.replace("Z", "+00:00")
                         )
-                        queryset = queryset.filter(created_at__gte=start_datetime)
+                        queryset = queryset.filter(
+                            created_at__gte=start_datetime)
                     except (ValueError, AttributeError):
                         pass  # Invalid date format, skip filter
                 if filters.end_date:
@@ -1734,7 +1757,8 @@ class AmbassadorNoteQueriesService(SparkGraphQLMixin):
                         end_datetime = datetime.fromisoformat(
                             filters.end_date.replace("Z", "+00:00")
                         )
-                        queryset = queryset.filter(created_at__lte=end_datetime)
+                        queryset = queryset.filter(
+                            created_at__lte=end_datetime)
                     except (ValueError, AttributeError):
                         pass  # Invalid date format, skip filter
 
@@ -2170,7 +2194,8 @@ class AmbassadorSkillQueriesService(SparkGraphQLMixin):
             if filters:
                 # Filter by ambassador
                 if filters.ambassador_id:
-                    queryset = queryset.filter(ambassador_id=int(filters.ambassador_id))
+                    queryset = queryset.filter(
+                        ambassador_id=int(filters.ambassador_id))
 
                 # Filter by skill
                 if filters.skill_id:
@@ -2179,3 +2204,13 @@ class AmbassadorSkillQueriesService(SparkGraphQLMixin):
             return queryset.order_by("-created_at")
 
         return await get_queryset()
+
+
+class GroupTypeMutationService(BaseMutationService):
+    """Service for creating group types (client/spark-admin only)."""
+    response_class = GroupTypeResponse
+    model_field_name = "group_type"
+
+    def get_model(self) -> GroupType:
+        """Get the model for the service."""
+        return GroupType

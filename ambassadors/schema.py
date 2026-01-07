@@ -14,6 +14,7 @@ class AmbassadorQuerySpark(
     queries.SkillQueries,
     queries.AmbassadorSkillQueries,
     queries.AttendanceQueries,
+    queries.GroupTypeQueries,
 ):
     pass
 
@@ -29,6 +30,7 @@ class AmbassadorQueryClient(
     queries.SkillQueries,
     queries.AmbassadorSkillQueries,
     queries.AttendanceQueries,
+    queries.GroupTypeQueries,
 ):
     pass
 
@@ -43,6 +45,7 @@ class AmbassadorQueryMobile(
     queries.SkillQueries,
     queries.AmbassadorSkillQueries,
     queries.AttendanceMobileQueries,
+    queries.GroupTypeQueries,
 ):
     pass
 

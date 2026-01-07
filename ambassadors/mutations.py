@@ -49,6 +49,7 @@ from .types import (
     AttendanceStatusDetailResponse,
     SourceDetailResponse,
     AttendanceDetailResponse,
+    GroupTypeResponse,
 )
 from . import inputs
 from .services import (
@@ -71,6 +72,7 @@ from .services import (
     CreateAmbassadorSkillService,
     DeleteAmbassadorSkillService,
     UpsertAmbassadorProfileService,
+    GroupTypeMutationService,
 )
 from .envelopes import AmbassadorEventApplicationMailer, NotifyApplicationToClientMailer
 from utils.mailer import MailChain
@@ -399,6 +401,22 @@ class AmbassadorMutations:
     ) -> DeleteAmbassadorSkillResponse:
         return await DeleteAmbassadorSkillService.delete(input, info)
 
+    @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
+    async def create_group_type(
+        self,
+        info: strawberry.Info,
+        input: inputs.CreateGroupTypeInput,
+    ) -> GroupTypeResponse:
+        return await GroupTypeMutationService.create(input, info)
+
+    @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
+    async def update_group_type(
+        self,
+        info: strawberry.Info,
+        input: inputs.UpdateGroupTypeInput,
+    ) -> GroupTypeResponse:
+        return await GroupTypeMutationService.update(input, info)
+
 
 class AttendanceTypeMutationService(TenantOptionalMutationService):
     response_class = AttendanceTypeDetailResponse
@@ -442,7 +460,8 @@ class AttendanceMutationService(TenantOptionalMutationService):
         """
         self.info = info
         self.user = await self.get_user(info)
-        self.is_spark_schema = self.is_spark_schema_request(info, user=self.user)
+        self.is_spark_schema = self.is_spark_schema_request(
+            info, user=self.user)
         self.tenant_id = None
         return self
 
