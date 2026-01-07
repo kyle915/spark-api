@@ -83,3 +83,15 @@ class AmbassadorSkillManager(BaseManager, models.Manager):
             lambda: self.filter(ambassador_id=ambassador_id,
                                 skill_id=skill_id).exists()
         )()
+
+
+class AmbassadorGroupManager(UtilsBaseManager, models.Manager):
+    """Manager for AmbassadorGroup model with async support."""
+
+    pass
+
+
+class UserGroupManager(UtilsBaseManager, models.Manager):
+    """Manager for UserGroup model with async support."""
+
+    pass

@@ -156,6 +156,48 @@ input AmbassadorFiltersInput {
   search: String = null
 }
 
+"""
+AmbassadorGroup(id, uuid, name, description, private, group_type, tenant, created_by, updated_by, created_at, updated_at)
+"""
+type AmbassadorGroup implements Node {
+  """The Globally Unique ID of this object"""
+  id: ID!
+  uuid: String!
+  name: String!
+  description: String
+  private: Boolean!
+  groupType: GroupType!
+  tenantId: ID!
+  createdAt: String!
+  updatedAt: String!
+  members: [UserGroup!]!
+}
+
+type AmbassadorGroupCountableConnection {
+  pageInfo: PageInfo!
+  edges: [AmbassadorGroupCountableEdge!]!
+  totalCount: Int!
+}
+
+type AmbassadorGroupCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: AmbassadorGroup!
+}
+
+input AmbassadorGroupFiltersInput {
+  search: String = null
+}
+
+type AmbassadorGroupResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  ambassadorGroup: AmbassadorGroup
+}
+
 input AmbassadorInvitationFiltersInput {
   tenantId: ID = null
   tenantUuid: ID = null
@@ -945,6 +987,17 @@ input CoordinatesFilterInput {
   unit: DistanceUnit! = KILOMETERS
 }
 
+input CreateAmbassadorGroupInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  name: String!
+  jobId: ID!
+  groupTypeId: ID!
+  description: String = null
+  private: Boolean = null
+  ambassadorIds: [ID!] = null
+}
+
 input CreateAmbassadorInput {
   clientMutationId: ID = null
   userId: ID!
@@ -1149,6 +1202,11 @@ input CreateEventTypeInput {
   isDefault: Boolean! = false
 }
 
+input CreateGroupTypeInput {
+  clientMutationId: ID = null
+  name: String!
+}
+
 input CreateJobFileInput {
   clientMutationId: ID = null
   tenantId: ID = null
@@ -1303,8 +1361,7 @@ input CreateRecapInput {
   clientMutationId: ID = null
   name: String!
   eventId: ID!
-  files: [String!]!
-  fileRecapCategoryId: ID = null
+  files: [RecapFileInput!]!
   productsSold: Int = null
   totalEarnings: Float = null
   jobId: ID = null
@@ -1465,7 +1522,8 @@ input CreateUserInput {
 """
 User(password, last_login, is_superuser, username, first_name, last_name, email, is_staff, date_joined, id, uuid, image, role, created_by, updated_by, created_at, updated_at, is_active)
 """
-type CustomUserType {
+type CustomUserType implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: UUID!
 
@@ -1513,6 +1571,11 @@ type DeclineRequestResponse {
   request: Request
 }
 
+input DeleteAmbassadorGroupInput {
+  clientMutationId: ID = null
+  id: ID!
+}
+
 input DeleteAmbassadorNoteInput {
   clientMutationId: ID = null
   noteId: ID!
@@ -1544,6 +1607,11 @@ type DeleteAmbassadorSkillResponse {
   success: Boolean!
   message: String!
   clientMutationId: ID
+}
+
+input DeleteGroupTypeInput {
+  clientMutationId: ID = null
+  id: ID!
 }
 
 input DeleteInvitationInput {
@@ -1922,6 +1990,57 @@ type GoogleCalendarConnectionStatus {
 input GoogleSocialAuthInput {
   clientMutationId: ID = null
   accessToken: String!
+}
+
+"""
+GroupType(id, uuid, name, created_by, updated_by, created_at, updated_at)
+"""
+type GroupType implements Node {
+  """The Globally Unique ID of this object"""
+  id: ID!
+  uuid: String!
+  name: String!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type GroupTypeCountableConnection {
+  pageInfo: PageInfo!
+  edges: [GroupTypeCountableEdge!]!
+  totalCount: Int!
+}
+
+type GroupTypeCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: GroupType!
+}
+
+input GroupTypeFiltersInput {
+  search: String = null
+}
+
+type GroupTypeResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  groupType: GroupType
+}
+
+input InviteAmbassadorsToJobInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  ambassadorIds: [ID!]!
+  jobId: ID!
+}
+
+type InviteAmbassadorsToJobResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  ambassadorJobs: [AmbassadorJob!]
 }
 
 """
@@ -2428,6 +2547,7 @@ type Mutation {
   updateJobRequirementAnswer(input: UpdateJobRequirementAnswerInput!): JobRequirementAnswerDetailResponse!
   manageAmbassadorJobAssignment(input: ManageAmbassadorJobAssignmentInput!): AmbassadorJobDetailResponse!
   approveAmbassadorJob(input: ApproveAmbassadorJobInput!): AmbassadorJobDetailResponse!
+  inviteAmbassadorsToJob(input: InviteAmbassadorsToJobInput!): InviteAmbassadorsToJobResponse!
   declineAmbassadorJob(input: DeclineAmbassadorJobInput!): AmbassadorJobDetailResponse!
   applyAmbassadorEvent(eventId: ID!, ambassadorId: ID = null): ApplyAmbassadorEventResponse!
   applyAmbassadorJob(jobId: ID!): ApplyAmbassadorJobResponse!
@@ -2458,6 +2578,12 @@ type Mutation {
   updateSource(input: UpdateSourceInput!): SourceDetailResponse!
   createAttendance(input: CreateAttendanceInput!): AttendanceDetailResponse!
   updateAttendance(input: UpdateAttendanceInput!): AttendanceDetailResponse!
+  createGroupType(input: CreateGroupTypeInput!): GroupTypeResponse!
+  updateGroupType(input: UpdateGroupTypeInput!): GroupTypeResponse!
+  deleteGroupType(input: DeleteGroupTypeInput!): GroupTypeResponse!
+  createAmbassadorGroup(input: CreateAmbassadorGroupInput!): AmbassadorGroupResponse!
+  updateAmbassadorGroup(input: UpdateAmbassadorGroupInput!): AmbassadorGroupResponse!
+  deleteAmbassadorGroup(input: DeleteAmbassadorGroupInput!): AmbassadorGroupResponse!
 }
 
 type MutationNormalOutput {
@@ -2704,7 +2830,7 @@ type Query {
   publicTimezones(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): TimeZoneCountableConnection!
   recaps(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: RecapFiltersInput = null): RecapCountableConnection!
   recap(uuid: ID!): Recap
-  typeOfGoods(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): TypeOfGoodCountableConnection!
+  typeOfGoods(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: TypeOfGoodFiltersInput = null): TypeOfGoodCountableConnection!
   typeOfGood(id: ID = null, uuid: ID = null): TypeOfGood
   fileRecapCategories(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: FileRecapCategoryFiltersInput = null): FileRecapCategoryCountableConnection!
   fileRecapCategory(id: ID = null, uuid: ID = null): FileRecapCategory
@@ -2733,6 +2859,10 @@ type Query {
   source(id: ID!): Source
   attendances(first: Int = null, after: String = null, last: Int = null, before: String = null, filters: AttendanceFiltersInput = null): AttendanceCountableConnection!
   attendance(id: ID!): Attendance
+  groupTypes(first: Int = null, after: String = null, last: Int = null, before: String = null, filters: GroupTypeFiltersInput = null): GroupTypeCountableConnection!
+  groupType(groupTypeId: ID!): GroupType
+  ambassadorGroups(first: Int = null, after: String = null, last: Int = null, before: String = null, filters: AmbassadorGroupFiltersInput = null): AmbassadorGroupCountableConnection!
+  ambassadorGroup(groupId: ID!): AmbassadorGroup
   googleCalendarConnectionStatus: GoogleCalendarConnectionStatus!
   tenantThemePublic(requestUrlName: String!, colorScheme: ColorSchemeEnum! = DARK): TenantThemeType
   tenantTheme(tenantId: ID!, colorScheme: ColorSchemeEnum! = DARK): TenantThemeType
@@ -3057,6 +3187,13 @@ type RecapFileDetailResponse {
   message: String!
   clientMutationId: ID
   recapFile: RecapFile
+}
+
+input RecapFileInput {
+  clientMutationId: ID = null
+  file: String!
+  fileTypeId: ID = null
+  fileRecapCategoryId: ID = null
 }
 
 input RecapFiltersInput {
@@ -3696,7 +3833,24 @@ type TypeOfGoodCountableEdge {
   node: TypeOfGood!
 }
 
+input TypeOfGoodFiltersInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+}
+
 scalar UUID
+
+input UpdateAmbassadorGroupInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  name: String!
+  id: ID!
+  groupTypeId: ID = null
+  jobId: ID = null
+  description: String = null
+  private: Boolean = null
+  ambassadorIds: [ID!] = null
+}
 
 input UpdateAmbassadorInput {
   clientMutationId: ID = null
@@ -3893,6 +4047,12 @@ input UpdateEventTypeInput {
   id: ID!
 }
 
+input UpdateGroupTypeInput {
+  clientMutationId: ID = null
+  name: String!
+  id: ID!
+}
+
 input UpdateJobFileInput {
   clientMutationId: ID = null
   tenantId: ID = null
@@ -4045,8 +4205,7 @@ input UpdateRecapInput {
   clientMutationId: ID = null
   name: String!
   eventId: ID!
-  files: [String!]!
-  fileRecapCategoryId: ID = null
+  files: [RecapFileInput!]!
   productsSold: Int = null
   totalEarnings: Float = null
   jobId: ID = null
@@ -4214,6 +4373,15 @@ input UserFiltersInput {
   role: RoleFilterEnum = null
 }
 
+"""UserGroup(id, uuid, user, group, ambassador)"""
+type UserGroup implements Node {
+  """The Globally Unique ID of this object"""
+  id: ID!
+  uuid: String!
+  user: SparkUserType!
+  ambassador: Ambassador
+}
+
 enum UserRoleEnum {
   AMBASSADOR
   CLIENT
@@ -4243,11 +4411,11 @@ type UserType {
   isActive: Boolean!
   dateJoined: DateTime!
   status: UserStatusType!
+  email: String!
+  lastName: String
 
   """Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only."""
   username: String!
-  lastName: String
-  email: String!
   id: ID!
   firstName: String
   archived: Boolean!

@@ -12,6 +12,8 @@ from ambassadors.managers import (
     AmbassadorReviewManager,
     SkillManager,
     AmbassadorSkillManager,
+    AmbassadorGroupManager,
+    UserGroupManager,
 )
 from utils.models import Asyncable
 
@@ -775,3 +777,101 @@ class Attendance(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
     updated_at = models.DateTimeField(auto_now=True)
+
+
+# Models Related to the Ambassador Groups
+class GroupType(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    name = models.CharField(max_length=255)
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="group_types_created_by",
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="group_types_updated_by",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return self.name
+
+
+class AmbassadorGroup(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    name = models.CharField(max_length=255)
+    description = models.TextField(null=True)
+    private = models.BooleanField(default=False)
+    group_type = models.ForeignKey(
+        GroupType,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="groups",
+    )
+
+    tenant = models.ForeignKey(
+        Tenant,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="groups",
+    )
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="groups_created_by",
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="groups_updated_by",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    objects = AmbassadorGroupManager()
+
+    def __str__(self):
+        return self.name
+
+
+class UserGroup(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="user_groups",
+    )
+    group = models.ForeignKey(
+        AmbassadorGroup,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="members",
+    )
+    # ambassador is optional because it will be set when the user accepts the invite.
+    ambassador = models.ForeignKey(
+        Ambassador,
+        on_delete=models.RESTRICT,
+        null=True,
+        blank=True,
+        related_name="ambassador_groups",
+    )
+
+    objects = UserGroupManager()
+
+    def __str__(self):
+        return f"{self.user.username} - {self.group.name}"

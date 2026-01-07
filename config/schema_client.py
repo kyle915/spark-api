@@ -3,7 +3,7 @@ from strawberry_django.optimizer import DjangoOptimizerExtension
 from gqlauth.core.middlewares import JwtSchema
 from events.schema import EventQueryClient, EventMutationsClient
 from recaps.schema import RecapQueryClient, RecapMutationsClient
-from ambassadors.schema import AmbassadorQueryClient, AmbassadorMutations
+from ambassadors.schema import AmbassadorQueryClient, AmbassadorMutationsClient
 from tenants.schema import QueryClients, MutationClients
 from tenants.dashboard.schema import DashboardQueries
 from jobs.schema import ClientJobMutations, ClientJobQueries
@@ -30,7 +30,7 @@ MutationClients = merge_types(
         RecapMutationsClient,
         MutationClients,
         ClientJobMutations,
-        AmbassadorMutations,
+        AmbassadorMutationsClient,
     ),
 )
 

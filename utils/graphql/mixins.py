@@ -404,6 +404,80 @@ class BaseMutationService(SparkGraphQLMixin):
                 input_obj=input,
             )
 
+    @classmethod
+    async def delete(
+        cls,
+        input: SparkGraphQLInput,
+        info: strawberry.Info,
+        *,
+        response_class: Type | None = None,
+        model_field_name: str | None = None,
+        delete_message: str | None = None,
+    ) -> Any:
+        """
+        Delete mutation handler.
+
+        Args:
+            input: The input for the mutation (must have an 'id' field)
+            info: Strawberry GraphQL info
+            response_class: Response class type (uses cls.response_class if not provided)
+            model_field_name: Field name in response (uses cls.model_field_name if not provided)
+            delete_message: Success message (uses cls.delete_message if not provided)
+
+        Returns:
+            Response object with success/message
+        """
+        response_cls: Type | None = response_class or cls.response_class
+        field_name: str | None = model_field_name or cls.model_field_name
+        message: str | None = delete_message or getattr(cls, "delete_message", None)
+
+        if not response_cls:
+            raise ValueError(
+                "response_class must be provided either as class attribute or parameter"
+            )
+
+        try:
+            service = cls.with_input(input)
+            await service.set_user_and_tenant(info)
+
+            # Get the model instance to delete
+            model_class = service.get_model()
+            model_id = getattr(input, "id", None)
+            if not model_id:
+                raise GraphQLError("ID is required for delete operation.")
+
+            # Resolve the ID (handles both integer IDs and Relay global IDs)
+            try:
+                resolved_id = resolve_id_to_int(model_id)
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError(f"Invalid ID: {model_id}")
+
+            try:
+                model = await sync_to_async(model_class.objects.get)(id=resolved_id)
+            except model_class.DoesNotExist:
+                raise GraphQLError(f"{model_class.__name__} not found.")
+
+            # Delete the model
+            await sync_to_async(model.delete)()
+
+            # Generate message if not provided
+            if not message:
+                message = cls._get_default_message(field_name, "delete")
+
+            return cls._build_mutation_response(
+                response_class=response_cls,
+                success=True,
+                message=message,
+                input_obj=input,
+            )
+        except GraphQLError as e:
+            return cls._build_mutation_response(
+                response_class=response_cls,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
     def set_input(self, input: SparkGraphQLInput) -> "BaseMutationService":
         """Set the input for the service."""
         self.input = input

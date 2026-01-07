@@ -6,7 +6,7 @@ from asgiref.sync import sync_to_async
 
 from jobs import models, inputs, types
 from utils.graphql.mixins import BaseMutationService, SparkGraphQLMixin
-from utils.graphql.permissions import StrictIsAuthenticated
+from utils.graphql.permissions import StrictIsAuthenticated, IsClientOrSparkAdmin
 from utils.graphql.relay import ensure_relay_mutation
 from utils.utils import build_mutation_response
 
@@ -781,6 +781,76 @@ class ApproveAmbassadorJobMutationService(SparkGraphQLMixin):
     """Service for approving ambassador job."""
 
     @classmethod
+    async def invite_ambassadors_to_job(
+        cls,
+        input: inputs.InviteAmbassadorsToJobInput,
+        info: strawberry.Info,
+    ) -> types.AmbassadorJobDetailResponse:
+        service = cls()
+        user = await service.get_user(info)
+        tenant = await service.get_user_tenant(
+            info,
+            tenant_id=input.tenant_id,
+            user=user,
+        )
+
+        @sync_to_async
+        def invite_ambassadors_to_job():
+            invite_status = models.Status.objects.get_invited(
+                tenant_id=tenant.id,
+                user=user
+            )
+
+            job = models.Job.objects.filter(
+                id=input.job_id, tenant_id=tenant.id, rate__isnull=False).first()
+            if not job:
+                raise GraphQLError("Job not found or has no rate.")
+            ambassador_ids = getattr(input, "ambassador_ids", None)
+            if not ambassador_ids:
+                return []
+
+            # Resolve ambassador IDs from Relay IDs to integers
+            from utils.graphql.mixins import resolve_id_to_int
+            resolved_ids = []
+            for ambassador_id in ambassador_ids:
+                try:
+                    resolved_id = resolve_id_to_int(ambassador_id)
+                    resolved_ids.append(resolved_id)
+                except (TypeError, ValueError, GraphQLError) as exc:
+                    raise GraphQLError(
+                        f"Invalid ambassador ID: {ambassador_id}") from exc
+
+            # Filter ambassadors by tenant via TenantedUser relationship
+            ambassadors = models.Ambassador.objects.filter(
+                id__in=resolved_ids
+            ).distinct()
+            if not ambassadors:
+                return []
+            ambassador_jobs = []
+            for ambassador in ambassadors:
+                ambassador_job = models.AmbassadorJob.objects.create(
+                    ambassador=ambassador,
+                    job=job,
+                    tenant=tenant,
+                    status=invite_status,
+                    rate=job.rate,
+                    appear_as_rfp=True,
+                    created_by=user,
+                    updated_by=user,
+                )
+                ambassador_jobs.append(ambassador_job)
+            return ambassador_jobs
+
+        ambassador_jobs = await invite_ambassadors_to_job()
+        return build_mutation_response(
+            types.InviteAmbassadorsToJobResponse,
+            success=True,
+            message="Ambassadors invited to job.",
+            input_obj=input,
+            ambassador_jobs=ambassador_jobs,
+        )
+
+    @classmethod
     async def approve(
         cls,
         input: inputs.ApproveAmbassadorJobInput,
@@ -843,7 +913,17 @@ class ApproveAmbassadorJobMutations:
     ) -> types.AmbassadorJobDetailResponse:
         return await ApproveAmbassadorJobMutationService.approve(input, info)
 
+    @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
+    async def invite_ambassadors_to_job(
+        self,
+        info: strawberry.Info,
+        input: inputs.InviteAmbassadorsToJobInput,
+    ) -> types.InviteAmbassadorsToJobResponse:
+        return await ApproveAmbassadorJobMutationService.invite_ambassadors_to_job(input, info)
+
 # Decline Ambassador Job Mutation
+
+
 class DeclineAmbassadorJobMutationService(SparkGraphQLMixin):
     """Service for declining ambassador job."""
 

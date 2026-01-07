@@ -380,3 +380,47 @@ class AttendanceDetailResponse:
     message: str
     client_mutation_id: strawberry.ID | None = None
     attendance: Attendance | None = None
+
+
+@strawberry_django.type(models.GroupType)
+class GroupType(Node):
+    uuid: str
+    name: str
+    created_at: str
+    updated_at: str
+
+
+@strawberry.type
+class GroupTypeResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    group_type: GroupType | None = None
+
+
+@strawberry_django.type(models.UserGroup)
+class UserGroup(Node):
+    uuid: str
+    user: SparkUserType
+    ambassador: Ambassador | None
+
+
+@strawberry_django.type(models.AmbassadorGroup)
+class AmbassadorGroup(Node):
+    uuid: str
+    name: str
+    description: str | None
+    private: bool
+    group_type: GroupType
+    tenant_id: strawberry.ID
+    created_at: str
+    updated_at: str
+    members: list[UserGroup]
+
+
+@strawberry.type
+class AmbassadorGroupResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    ambassador_group: AmbassadorGroup | None = None
