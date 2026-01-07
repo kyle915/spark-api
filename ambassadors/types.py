@@ -398,6 +398,13 @@ class GroupTypeResponse:
     group_type: GroupType | None = None
 
 
+@strawberry_django.type(models.UserGroup)
+class UserGroup(Node):
+    uuid: str
+    user: SparkUserType
+    ambassador: Ambassador | None
+
+
 @strawberry_django.type(models.AmbassadorGroup)
 class AmbassadorGroup(Node):
     uuid: str
@@ -408,6 +415,7 @@ class AmbassadorGroup(Node):
     tenant_id: strawberry.ID
     created_at: str
     updated_at: str
+    members: list[UserGroup]
 
 
 @strawberry.type

@@ -5,6 +5,7 @@ from django.conf import settings
 from ambassadors.models import FileType, Ambassador
 from events.models import Location, Event
 from tenants.models import Tenant
+from .managers import StatusManager, JobManager, AmbassadorJobManager
 
 
 UNIT: list[tuple[str, str]] = [
@@ -42,6 +43,8 @@ class Status(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
     updated_at = models.DateTimeField(auto_now=True)
+
+    objects = StatusManager()
 
     def save(self, *args, **kwargs):
         if not self.slug:
@@ -390,6 +393,8 @@ class Job(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
     updated_at = models.DateTimeField(auto_now=True)
 
+    objects = JobManager()
+
 
 class JobFile(models.Model):
     id = models.BigAutoField(primary_key=True)
@@ -586,6 +591,8 @@ class AmbassadorJob(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
     updated_at = models.DateTimeField(auto_now=True)
+
+    objects = AmbassadorJobManager()
 
 
 class CompanyToAmbassadorReview(models.Model):

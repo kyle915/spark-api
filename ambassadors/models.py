@@ -13,6 +13,7 @@ from ambassadors.managers import (
     SkillManager,
     AmbassadorSkillManager,
     AmbassadorGroupManager,
+    UserGroupManager,
 )
 from utils.models import Asyncable
 
@@ -869,6 +870,8 @@ class UserGroup(models.Model):
         blank=True,
         related_name="ambassador_groups",
     )
+
+    objects = UserGroupManager()
 
     def __str__(self):
         return f"{self.user.username} - {self.group.name}"

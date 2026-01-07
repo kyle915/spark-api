@@ -89,3 +89,9 @@ class AmbassadorGroupManager(UtilsBaseManager, models.Manager):
     """Manager for AmbassadorGroup model with async support."""
 
     pass
+
+
+class UserGroupManager(UtilsBaseManager, models.Manager):
+    """Manager for UserGroup model with async support."""
+
+    pass

@@ -16,7 +16,7 @@ from tenants.models import Role, Tenant, TenantedUser
 from gqlauth.core.utils import get_token
 from utils.utils import build_mutation_response
 from utils.graphql.inputs import SparkGraphQLInput
-from utils.graphql.mixins import SparkGraphQLMixin, BaseMutationService
+from utils.graphql.mixins import SparkGraphQLMixin, BaseMutationService, resolve_id_to_int
 from utils.graphql.relay import CountableConnection
 
 from .models import (
@@ -31,7 +31,9 @@ from .models import (
     AmbassadorSkill,
     GroupType,
     AmbassadorGroup,
+    UserGroup,
 )
+from jobs import models as job_models
 from .types import (
     PublicAmbassadorCreationResponse,
     AmbassadorInvitationResponse,
@@ -2226,3 +2228,172 @@ class AmbassadorGroupMutationService(BaseMutationService):
     def get_model(self) -> AmbassadorGroup:
         """Get the model for the service."""
         return AmbassadorGroup
+
+    @classmethod
+    async def create(
+        cls,
+        input: SparkGraphQLInput,
+        info: strawberry.Info,
+        *,
+        response_class: type | None = None,
+        model_field_name: str | None = None,
+        create_message: str | None = None,
+    ) -> Any:
+        """
+        Create ambassador group with job validation and ambassador invitations.
+
+        Validates job exists and has rate, creates group, optionally creates UserGroup
+        records and AmbassadorJob invitations for each ambassador.
+        """
+        from graphql import GraphQLError
+
+        response_cls = response_class or cls.response_class
+        field_name = model_field_name or cls.model_field_name
+        message = create_message or cls.create_message
+
+        if not response_cls:
+            raise ValueError(
+                "response_class must be provided either as class attribute or parameter"
+            )
+
+        try:
+            # Create service instance and set user/tenant
+            service = cls.with_input(input)
+            await service.set_user_and_tenant(info)
+
+            # Step 1: Validate Job
+            job_id = getattr(input, "job_id", None)
+            if not job_id:
+                raise GraphQLError("Job ID is required.")
+
+            try:
+                resolved_job_id = resolve_id_to_int(job_id)
+            except (TypeError, ValueError, GraphQLError) as exc:
+                raise GraphQLError(f"Invalid job ID: {job_id}") from exc
+
+            try:
+                # Fetch job with select_related for rate and tenant
+                job = await sync_to_async(
+                    lambda: job_models.Job.objects.select_related(
+                        "rate", "tenant").get(id=resolved_job_id)
+                )()
+            except job_models.Job.DoesNotExist:
+                raise GraphQLError("Job not found.")
+
+            if job.rate is None:
+                raise GraphQLError("Job must have a rate assigned.")
+
+            # Step 2-4: Create Group, UserGroups, and AmbassadorJobs (within transaction)
+            def create_group_with_extras():
+                with transaction.atomic():
+                    # Create the group using base mutation service logic
+                    model_class = service.get_model()
+                    model = model_class()
+                    if service.user:
+                        setattr(model, "created_by", service.user)
+
+                    # Set parameters from input (excluding job_id and ambassador_ids)
+                    params = input.to_dict(
+                        ["tenant_id", "job_id", "ambassador_ids"])
+                    for key, value in params.items():
+                        setattr(model, key, value)
+
+                    # Set tenant_id from service
+                    setattr(model, "tenant_id", service.tenant_id)
+                    model.save()
+
+                    # Step 3 and 4: Create UserGroup and AmbassadorJob  records if ambassador_ids provided
+                    service.create_user_groups(model, job)
+
+                    return model
+
+            model_instance = await sync_to_async(create_group_with_extras)()
+
+            # Generate message if not provided
+            if not message:
+                message = cls._get_default_message(field_name, "create")
+
+            return cls._build_mutation_response(
+                response_class=response_cls,
+                success=True,
+                message=message,
+                input_obj=input,
+                **{field_name: model_instance},
+            )
+        except GraphQLError as e:
+            return cls._build_mutation_response(
+                response_class=response_cls,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+        except Exception as e:
+            return cls._build_mutation_response(
+                response_class=response_cls,
+                success=False,
+                message=f"Error creating ambassador group: {str(e)}",
+                input_obj=input,
+            )
+
+    def create_user_groups(self, group: AmbassadorGroup, job: job_models.Job):
+        from graphql import GraphQLError
+
+        ambassador_ids = getattr(self.input, "ambassador_ids", None)
+        if not ambassador_ids:
+            return []
+
+        # Resolve ambassador IDs from strawberry.ID to integers
+        resolved_ids = []
+        for ambassador_id in ambassador_ids:
+            try:
+                resolved_id = resolve_id_to_int(ambassador_id)
+                resolved_ids.append(resolved_id)
+            except (TypeError, ValueError, GraphQLError) as exc:
+                raise GraphQLError(
+                    f"Invalid ambassador ID: {ambassador_id}") from exc
+
+        ambassadors = list(Ambassador.objects.select_related(
+            "user").filter(id__in=resolved_ids))
+
+        if len(ambassadors) != len(resolved_ids):
+            found_ids = {amb.id for amb in ambassadors}
+            missing_ids = set(resolved_ids) - found_ids
+            raise GraphQLError(
+                f"Ambassadors with IDs {missing_ids} not found.")
+
+        # prepare the invited status
+        invited_status = job_models.Status.objects.filter(
+            tenant_id=job.tenant_id,
+            slug="invited"
+        ).first()
+
+        if not invited_status:
+            invited_status = job_models.Status.objects.create(
+                name="Invited",
+                slug="invited",
+                tenant=job.tenant,
+                created_by=self.user,
+                updated_by=self.user,
+            )
+
+        for ambassador in ambassadors:
+            # assign the user to the group
+            UserGroup.objects.create(
+                group=group,
+                user=ambassador.user,
+                ambassador=ambassador,
+            )
+
+            # create the ambassador job
+            job_models.AmbassadorJob.objects.create(
+                ambassador=ambassador,
+                job=job,
+                tenant=job.tenant,
+                status=invited_status,
+                rate=job.rate,
+                appear_as_rfp=True,
+                created_by=self.user,
+                updated_by=self.user,
+            )
+
+        return ambassadors

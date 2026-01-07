@@ -349,15 +349,22 @@ class GroupTypeFiltersInput:
 @strawberry.input
 class CreateAmbassadorGroupInput(BaseNameableInput):
     """Input for creating an ambassador group."""
+    job_id: strawberry.ID
     group_type_id: strawberry.ID
     description: str | None = None
     private: bool | None = None
+    ambassador_ids: list[strawberry.ID] | None = None
 
 
 @strawberry.input
-class UpdateAmbassadorGroupInput(CreateAmbassadorGroupInput):
+class UpdateAmbassadorGroupInput(BaseNameableInput):
     """Input for updating an ambassador group."""
     id: strawberry.ID
+    group_type_id: strawberry.ID | None = None
+    job_id: strawberry.ID | None = None
+    description: str | None = None
+    private: bool | None = None
+    ambassador_ids: list[strawberry.ID] | None = None
 
 
 @strawberry.input
