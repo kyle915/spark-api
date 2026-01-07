@@ -2029,6 +2029,20 @@ type GroupTypeResponse {
   groupType: GroupType
 }
 
+input InviteAmbassadorsToJobInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  ambassadorIds: [ID!]!
+  jobId: ID!
+}
+
+type InviteAmbassadorsToJobResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  ambassadorJobs: [AmbassadorJob!]
+}
+
 """
 The `JSON` scalar type represents JSON values as specified by [ECMA-404](https://ecma-international.org/wp-content/uploads/ECMA-404_2nd_edition_december_2017.pdf).
 """
@@ -2533,6 +2547,7 @@ type Mutation {
   updateJobRequirementAnswer(input: UpdateJobRequirementAnswerInput!): JobRequirementAnswerDetailResponse!
   manageAmbassadorJobAssignment(input: ManageAmbassadorJobAssignmentInput!): AmbassadorJobDetailResponse!
   approveAmbassadorJob(input: ApproveAmbassadorJobInput!): AmbassadorJobDetailResponse!
+  inviteAmbassadorsToJob(input: InviteAmbassadorsToJobInput!): InviteAmbassadorsToJobResponse!
   declineAmbassadorJob(input: DeclineAmbassadorJobInput!): AmbassadorJobDetailResponse!
   applyAmbassadorEvent(eventId: ID!, ambassadorId: ID = null): ApplyAmbassadorEventResponse!
   applyAmbassadorJob(jobId: ID!): ApplyAmbassadorJobResponse!
@@ -4396,12 +4411,12 @@ type UserType {
   isActive: Boolean!
   dateJoined: DateTime!
   status: UserStatusType!
+  email: String!
+  lastName: String
 
   """Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only."""
   username: String!
   id: ID!
-  lastName: String
-  email: String!
   firstName: String
   archived: Boolean!
   verified: Boolean!
