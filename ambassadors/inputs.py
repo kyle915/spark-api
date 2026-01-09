@@ -377,3 +377,5 @@ class DeleteAmbassadorGroupInput(SparkGraphQLInput):
 class AmbassadorGroupFiltersInput:
     """Filters for ambassador group queries."""
     search: str | None = None
+    job_id: strawberry.ID | None = None
+    job_uuid: strawberry.ID | None = None

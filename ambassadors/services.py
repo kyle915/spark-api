@@ -2295,6 +2295,13 @@ class AmbassadorGroupMutationService(BaseMutationService):
                     # Set parameters from input (excluding job_id and ambassador_ids)
                     params = input.to_dict(
                         ["tenant_id", "job_id", "ambassador_ids"])
+                    group_type_id = params.get("group_type_id")
+                    if group_type_id is not None:
+                        try:
+                            params["group_type_id"] = resolve_id_to_int(group_type_id)
+                        except (TypeError, ValueError, GraphQLError) as exc:
+                            raise GraphQLError(
+                                f"Invalid group type ID: {group_type_id}") from exc
                     for key, value in params.items():
                         setattr(model, key, value)
 

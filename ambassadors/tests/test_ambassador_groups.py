@@ -66,12 +66,6 @@ class TestCreateAmbassadorGroup(AmbassadorsGraphQLTestCase):
         )
 
         # Create job-related test data
-        self.company = self.create_company(
-            name="Test Company",
-            email="company@test.com",
-            phone="1234567890",
-            tenant=self.tenant
-        )
         self.event = self.create_event(
             name="Test Event",
             tenant=self.tenant,
@@ -97,7 +91,6 @@ class TestCreateAmbassadorGroup(AmbassadorsGraphQLTestCase):
             name="Test Job",
             code="JOB-001",
             address="123 Test St",
-            company=self.company,
             event=self.event,
             job_title=self.job_title,
             tenant=self.tenant,
@@ -383,7 +376,6 @@ class TestCreateAmbassadorGroup(AmbassadorsGraphQLTestCase):
                 name="Job Without Rate",
                 code="JOB-NO-RATE",
                 address="123 Test St",
-                company=self.company,
                 event=self.event,
                 job_title=self.job_title,
                 tenant=self.tenant,
@@ -490,12 +482,6 @@ class TestUpdateAmbassadorGroup(AmbassadorsGraphQLTestCase):
         )
 
         # Create job and rate for update tests
-        self.company = self.create_company(
-            name="Update Test Company",
-            email="update@company.com",
-            phone="1234567890",
-            tenant=self.tenant
-        )
         self.event = self.create_event(
             name="Update Test Event",
             address="123 Test St",
@@ -521,7 +507,6 @@ class TestUpdateAmbassadorGroup(AmbassadorsGraphQLTestCase):
             name="Update Test Job",
             code="JOB-UPDATE-001",
             address="123 Test St",
-            company=self.company,
             event=self.event,
             job_title=self.job_title,
             tenant=self.tenant,
