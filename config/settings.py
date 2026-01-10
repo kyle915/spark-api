@@ -51,7 +51,7 @@ INSTALLED_APPS = [
     "corsheaders",
     "storages",
     "django_rq",
-
+    "django_extensions",
     "gqlauth",
     "tenants",
     "events",
@@ -64,6 +64,7 @@ INSTALLED_APPS = [
 AUTH_USER_MODEL = "tenants.User"
 
 STRAWBERRY_DJANGO = {
+    "MAP_AUTO_ID_AS_GLOBAL_ID": True,
     "FIELD_DESCRIPTION_FROM_HELP_TEXT": True,
     "TYPE_DESCRIPTION_FROM_MODEL_DOCSTRING": True,
 }
@@ -172,6 +173,7 @@ GS_PROJECT_ID = env("GS_PROJECT_ID", default=None)
 GS_CREDENTIALS_JSON = env("GS_CREDENTIALS", default=None)
 if GS_CREDENTIALS_JSON:
     import json
+
     try:
         # Parse the JSON credentials
         GS_CREDENTIALS = json.loads(GS_CREDENTIALS_JSON)
@@ -199,32 +201,47 @@ GOOGLE_OAUTH_CLIENT_ID = env("GOOGLE_OAUTH_CLIENT_ID", default="")
 GOOGLE_OAUTH_CLIENT_SECRET = env("GOOGLE_OAUTH_CLIENT_SECRET", default="")
 GOOGLE_OAUTH_REDIRECT_URI = env(
     "GOOGLE_OAUTH_REDIRECT_URI",
-    default="http://localhost:8000/api/v1/google-calendar/callback"
+    default="http://localhost:8000/api/v1/google-calendar/callback",
 )
 
 # Django-RQ Configuration
 RQ_QUEUES = {
-    'default': {
-        'HOST': 'localhost',
-        'PORT': 6379,
-        'DB': 0,
-        'URL': env('CELERY_BROKER_URL', default='redis://localhost:6379/0'),
+    "default": {
+        "HOST": "localhost",
+        "PORT": 6379,
+        "DB": 0,
+        "URL": env("CELERY_BROKER_URL", default="redis://localhost:6379/0"),
     },
-    'high': {
-        'HOST': 'localhost',
-        'PORT': 6379,
-        'DB': 0,
-        'URL': env('CELERY_BROKER_URL', default='redis://localhost:6379/0'),
+    "high": {
+        "HOST": "localhost",
+        "PORT": 6379,
+        "DB": 0,
+        "URL": env("CELERY_BROKER_URL", default="redis://localhost:6379/0"),
     },
-    'low': {
-        'HOST': 'localhost',
-        'PORT': 6379,
-        'DB': 0,
-        'URL': env('CELERY_BROKER_URL', default='redis://localhost:6379/0'),
+    "low": {
+        "HOST": "localhost",
+        "PORT": 6379,
+        "DB": 0,
+        "URL": env("CELERY_BROKER_URL", default="redis://localhost:6379/0"),
     },
 }
 
+EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+EMAIL_HOST = "localhost"
+EMAIL_PORT = 1025
+
 # RQ settings for commit mode (enqueue jobs when DB transaction commits)
 RQ = {
-    'COMMIT_MODE': 'on_db_commit',  # Ensures jobs wait for DB commits
+    "COMMIT_MODE": "on_db_commit",  # Ensures jobs wait for DB commits
 }
+
+MAIL_DRIVER = env("MAIL_DRIVER", default="mailpit")  # mailpit, resend
+RESEND_API_KEY = env("RESEND_API_KEY", default="")
+DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="Spark <onboarding@resend.dev>")
+
+
+CLIENT_FRONTEND_URL = env("CLIENT_FRONTEND_URL", default="http://localhost:3000")
+AMBASSADOR_FRONTEND_URL = env(
+    "AMBASSADOR_FRONTEND_URL", default="http://localhost:3000"
+)
+ADMIN_FRONTEND_URL = env("ADMIN_FRONTEND_URL", default="http://localhost:3000")

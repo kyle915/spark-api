@@ -6,7 +6,7 @@ from asgiref.sync import sync_to_async
 from django.db.models import QuerySet
 from django.db.models import Model
 
-from utils.graphql.mixins import SparkGraphQLMixin
+from utils.graphql.mixins import SparkGraphQLMixin, resolve_id_to_int
 from utils.graphql.inputs import SparkGraphQLInput
 from utils.graphql.relay import CountableConnection
 from utils.graphql.relay import connection_from_queryset_async
@@ -92,7 +92,10 @@ class BaseQueriesService(SparkGraphQLMixin):
 
         filters: dict[str, Any] = {}
         if id is not None:
-            filters["id"] = id
+            try:
+                filters["id"] = resolve_id_to_int(id)
+            except (TypeError, ValueError, GraphQLError) as exc:
+                raise GraphQLError("Invalid ID.") from exc
         if uuid is not None:
             filters["uuid"] = uuid
         if tenant_id is not None:
@@ -115,6 +118,13 @@ class BaseQueriesService(SparkGraphQLMixin):
         user = await self.get_user(info)
         is_spark_request = self.is_spark_schema_request(info, user=user)
         filters_tenant_id = getattr(filters, "tenant_id", None) if filters else None
+        resolved_tenant_id: int | None = None
+
+        if filters_tenant_id is not None:
+            try:
+                resolved_tenant_id = resolve_id_to_int(filters_tenant_id)
+            except (TypeError, ValueError, GraphQLError) as exc:
+                raise GraphQLError("Invalid tenant ID.") from exc
 
         should_filter_by_tenant = (
             not is_spark_request or filters_tenant_id is not None
@@ -122,7 +132,7 @@ class BaseQueriesService(SparkGraphQLMixin):
 
         if should_filter_by_tenant:
             tenant = await self.get_user_tenant(
-                info, tenant_id=filters_tenant_id, user=user
+                info, tenant_id=resolved_tenant_id, user=user
             )
             return tenant.id
 

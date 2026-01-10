@@ -1,6 +1,7 @@
 import strawberry
 from strawberry import relay
 from enum import Enum
+from graphql import GraphQLError
 from django.contrib.auth import get_user_model
 from gqlauth.core.utils import get_token
 from asgiref.sync import sync_to_async
@@ -8,19 +9,23 @@ import random
 import string
 from django.utils.text import slugify
 from gqlauth.models import UserStatus
+from django.conf import settings
 from django.db import transaction
 
 from utils.graphql.inputs import SparkGraphQLInput
 from utils.graphql.relay import ensure_relay_mutation
+from utils.graphql.mixins import resolve_id_to_int
 from utils.utils import ROLE_ID
 from utils.gcs import delete_blob, extract_blob_name_from_url
-from .models import Role, TenantedUser, Tenant
-from .types import TenantType
+from .models import Role, TenantedUser, Tenant, TenantTheme
+from .types import TenantType, TenantThemeType
+from .inputs import CreateOrUpdateTenantThemeInput
 from .social_auth import BaseSocialAuthMutations, SocialAuthResponse
+from .envelopes import EmailVerificationMailer
 from events.models import EventStatus, EventType, RequestStatus, RequestType
 from jobs.models import Status as JobStatus, RateType
 from recaps.models import FileRecapCategory, TypeOfGood
-from ambassadors.models import AttendanceStatus
+from ambassadors.models import AttendanceStatus, Skill
 
 User = get_user_model()
 ensure_relay_mutation()
@@ -54,6 +59,13 @@ DEFAULT_FILE_RECAP_CATEGORIES = [
 ]
 
 DEFAULT_TYPES_OF_GOOD = ["Can", "Pack"]
+DEFAULT_SKILLS = [
+    "Communication",
+    "Teamwork",
+    "Leadership",
+    "Time Management",
+    "Problem Solving",
+]
 
 
 @strawberry.type
@@ -158,7 +170,8 @@ async def _check_client_or_spark_admin(request_user):
 
 async def _get_active_tenant_ids(user) -> list[int]:
     return await sync_to_async(list)(
-        user.tenanted_users.filter(is_active=True).values_list("tenant_id", flat=True)
+        user.tenanted_users.filter(
+            is_active=True).values_list("tenant_id", flat=True)
     )
 
 
@@ -248,6 +261,14 @@ async def register_user_with_role(
         )
     else:
         activation_token = await sync_to_async(get_token)(user, "activation")
+        frontend_url = {
+            "client": settings.CLIENT_FRONTEND_URL,
+            "ambassador": settings.AMBASSADOR_FRONTEND_URL,
+            "spark-admin": settings.ADMIN_FRONTEND_URL,
+        }
+        activation_url = f"{frontend_url[role.slug]}/verify-account?token={activation_token}"
+        verification_email = EmailVerificationMailer(user, activation_url)
+        await verification_email.send_async()
 
     message = (
         "User registered successfully."
@@ -284,7 +305,7 @@ class AmbassadorsCustomRegister:
             )
 
         # Handle optional tenant_id
-        resolved_tenant_id = int(input.tenant_id) if input.tenant_id else None
+        resolved_tenant_id = resolve_id_to_int(input.tenant_id) if input.tenant_id else None
 
         return await register_user_with_role(
             first_name=input.first_name,
@@ -398,8 +419,9 @@ class SparkUserMutations:
             )
 
         try:
-            resolved_tenant_id = int(input.tenant_id) if input.tenant_id else None
-        except (TypeError, ValueError):
+            resolved_tenant_id = resolve_id_to_int(
+                input.tenant_id) if input.tenant_id else None
+        except (TypeError, ValueError, GraphQLError):
             return RegisterResponse(
                 success=False,
                 message="Invalid tenantId.",
@@ -484,16 +506,17 @@ class SparkUserMutations:
             )
 
         try:
+            target_user_id = resolve_id_to_int(input.id) if input.id else None
             target_user = (
                 await sync_to_async(User.objects.select_related("role").get)(
-                    pk=int(input.id)
+                    pk=target_user_id
                 )
                 if input.id
                 else await sync_to_async(User.objects.select_related("role").get)(
                     uuid=input.uuid
                 )
             )
-        except (User.DoesNotExist, ValueError, TypeError):
+        except (User.DoesNotExist, ValueError, TypeError, GraphQLError):
             return UpdateUserResponse(
                 success=False,
                 message="User not found.",
@@ -504,7 +527,8 @@ class SparkUserMutations:
 
         if input.email:
             email_exists = await sync_to_async(
-                User.objects.exclude(pk=target_user.pk).filter(email=input.email).exists
+                User.objects.exclude(pk=target_user.pk).filter(
+                    email=input.email).exists
             )()
             if email_exists:
                 return UpdateUserResponse(
@@ -536,8 +560,8 @@ class SparkUserMutations:
         resolved_tenant_id: int | None = None
         if input.tenant_id:
             try:
-                resolved_tenant_id = int(input.tenant_id)
-            except (TypeError, ValueError):
+                resolved_tenant_id = resolve_id_to_int(input.tenant_id)
+            except (TypeError, ValueError, GraphQLError):
                 return UpdateUserResponse(
                     success=False,
                     message="Invalid tenantId.",
@@ -663,7 +687,7 @@ class ClientsCustomRegister:
             )
 
         # Handle optional tenant_id
-        resolved_tenant_id = int(input.tenant_id) if input.tenant_id else None
+        resolved_tenant_id = resolve_id_to_int(input.tenant_id) if input.tenant_id else None
 
         return await register_user_with_role(
             first_name=input.first_name,
@@ -725,6 +749,14 @@ class UpdateTenantResponse:
     success: bool
     message: str
     tenant: TenantType | None = None
+    client_mutation_id: strawberry.ID | None = None
+
+
+@strawberry.type
+class TenantThemeResponse:
+    success: bool
+    message: str
+    theme: TenantThemeType | None = None
     client_mutation_id: strawberry.ID | None = None
 
 
@@ -796,7 +828,8 @@ class SparkTenantMutations:
                     create_statuses(RequestStatus, include_default_flag=True)
                     create_statuses(EventStatus, include_default_flag=True)
                     create_statuses(JobStatus, include_default_flag=False)
-                    create_statuses(AttendanceStatus, include_default_flag=False)
+                    create_statuses(AttendanceStatus,
+                                    include_default_flag=False)
 
                     # Event types
                     for event_type in DEFAULT_EVENT_TYPES:
@@ -835,6 +868,14 @@ class SparkTenantMutations:
                     for type_of_good in DEFAULT_TYPES_OF_GOOD:
                         TypeOfGood.objects.create(
                             name=type_of_good,
+                            tenant=tenant,
+                            created_by=user,
+                        )
+
+                    # Skills
+                    for skill in DEFAULT_SKILLS:
+                        Skill.objects.create(
+                            name=skill,
                             tenant=tenant,
                             created_by=user,
                         )
@@ -889,7 +930,8 @@ class SparkTenantMutations:
             )
 
         try:
-            tenant = await sync_to_async(Tenant.objects.get)(pk=input.id)
+            tenant_id = resolve_id_to_int(input.id)
+            tenant = await sync_to_async(Tenant.objects.get)(pk=tenant_id)
         except Tenant.DoesNotExist:
             return UpdateTenantResponse(
                 success=False,
@@ -907,7 +949,8 @@ class SparkTenantMutations:
                     tenant.name = input.name
                     # Generate new request_url_name when name is updated
                     random_chars = "".join(
-                        random.choices(string.ascii_letters + string.digits, k=4)
+                        random.choices(string.ascii_letters +
+                                       string.digits, k=4)
                     )
                     slugified_name = slugify(input.name)
                     tenant.request_url_name = f"{slugified_name}-{random_chars}".lower()
@@ -941,3 +984,113 @@ class SparkTenantMutations:
                 message=f"Error updating tenant: {e}",
                 client_mutation_id=input.client_mutation_id,
             )
+
+
+@strawberry.type
+class TenantThemeMutations:
+    @relay.mutation
+    async def upsert_tenant_theme(
+        self,
+        info: strawberry.Info,
+        input: CreateOrUpdateTenantThemeInput,
+    ) -> TenantThemeResponse:
+        """
+        Create or update a TenantTheme for a given tenant and color scheme.
+
+        Spark-admins can manage any tenant theme. Clients can manage themes for their own tenant(s).
+        """
+        user = info.context.request.user
+
+        if not user.is_authenticated:
+            return TenantThemeResponse(
+                success=False,
+                message="User not authenticated.",
+                client_mutation_id=input.client_mutation_id,
+                theme=None,
+            )
+
+        # Check if user is spark-admin or client
+        try:
+            is_spark_admin = await user.role.is_spark_admin
+            is_client = await user.role.is_client
+            if not (is_spark_admin or is_client):
+                return TenantThemeResponse(
+                    success=False,
+                    message="You do not have permission to manage tenant themes.",
+                    client_mutation_id=input.client_mutation_id,
+                    theme=None,
+                )
+        except Exception as e:
+            return TenantThemeResponse(
+                success=False,
+                message=f"Error checking permissions: {e}",
+                client_mutation_id=input.client_mutation_id,
+                theme=None,
+            )
+
+        try:
+            resolved_tenant_id = resolve_id_to_int(input.tenant_id)
+        except (TypeError, ValueError, GraphQLError):
+            return TenantThemeResponse(
+                success=False,
+                message="Invalid tenantId.",
+                client_mutation_id=input.client_mutation_id,
+                theme=None,
+            )
+
+        if is_client:
+            active_tenant_ids = await _get_active_tenant_ids(user)
+            if resolved_tenant_id not in active_tenant_ids:
+                return TenantThemeResponse(
+                    success=False,
+                    message="You do not have permission to manage this tenant theme.",
+                    client_mutation_id=input.client_mutation_id,
+                    theme=None,
+                )
+
+        # Resolve target tenant
+        try:
+            tenant = await sync_to_async(Tenant.objects.get)(pk=resolved_tenant_id)
+        except Tenant.DoesNotExist:
+            return TenantThemeResponse(
+                success=False,
+                message="Tenant not found.",
+                client_mutation_id=input.client_mutation_id,
+                theme=None,
+            )
+
+        # Upsert theme by (tenant, color_scheme)
+        def _upsert_theme():
+            defaults = {
+                "name": input.name if input.name is not None else "default",
+                "updated_by": user,
+            }
+            if input.css_variables is not None:
+                defaults["css_variables"] = input.css_variables
+
+            theme, created = TenantTheme.objects.update_or_create(
+                tenant=tenant,
+                color_scheme=input.color_scheme.value,
+                defaults=defaults,
+            )
+            if created and theme.created_by_id is None:
+                theme.created_by = user
+                theme.save(update_fields=["created_by"])
+            return theme
+
+        try:
+            theme = await sync_to_async(_upsert_theme)()
+        except Exception as e:
+            return TenantThemeResponse(
+                success=False,
+                message=f"Error saving tenant theme: {e}",
+                client_mutation_id=input.client_mutation_id,
+                theme=None,
+            )
+
+        return TenantThemeResponse(
+            success=True,
+            message="Tenant theme saved successfully.",
+            client_mutation_id=input.client_mutation_id,
+            theme=theme,
+        )

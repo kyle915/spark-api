@@ -83,3 +83,23 @@ class AmbassadorSkillManager(BaseManager, models.Manager):
             lambda: self.filter(ambassador_id=ambassador_id,
                                 skill_id=skill_id).exists()
         )()
+
+
+class GroupTypeManager(UtilsBaseManager, models.Manager):
+    """Manager for GroupType model with async support."""
+
+    pass
+
+
+class AmbassadorGroupManager(UtilsBaseManager, models.Manager):
+    """Manager for AmbassadorGroup model with async support."""
+
+    async def _by_id(self, id: int | str | strawberry.ID):
+        """Return by ID but in async way."""
+        return await sync_to_async(self.by_id)(int(id))
+
+
+class UserGroupManager(UtilsBaseManager, models.Manager):
+    """Manager for UserGroup model with async support."""
+
+    pass

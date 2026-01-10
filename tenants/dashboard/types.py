@@ -1,146 +1,238 @@
 """
 GraphQL types for dashboard queries.
 
-This module defines all response types for dashboard data queries.
+This module defines all response types for Event Dashboard and Recap Dashboard data queries.
 """
 from __future__ import annotations
 
 import strawberry
 from typing import List
 
-from events.types import Event, Location
+# Shared Filter Option Types (used by both Event and Recap Dashboards)
 
 
 @strawberry.type
-class TimeSeriesDataPoint:
-    """A single data point in a time series."""
-    timestamp: str  # ISO datetime string
-    count: int
-    value: float | None = None  # Optional additional metric value
+class DistributorOption:
+    """Distributor option for filters."""
+    id: strawberry.ID
+    name: str
 
 
 @strawberry.type
-class EventStats:
-    """Aggregated event statistics."""
+class RetailerOption:
+    """Retailer/RMM option for filters."""
+    id: strawberry.ID
+    name: str
+    address: str
+
+
+@strawberry.type
+class QuarterOption:
+    """Quarter option for filters."""
+    value: str  # e.g., "Q1 2025"
+    label: str  # e.g., "Q1 2025"
+
+
+@strawberry.type
+class TenantOption:
+    """Tenant option for filters."""
+    id: strawberry.ID
+    name: str
+
+
+@strawberry.type
+class EventDashboardFilterOptions:
+    """Available filter options for Event Dashboard."""
+    distributors: List[DistributorOption] | None = None
+    rmms: List[RetailerOption] | None = None  # RMM = Retailer
+    quarters: List[QuarterOption] | None = None
+    tenants: List[TenantOption] | None = None
+
+
+@strawberry.type
+class ComparisonValues:
+    """Period-over-period comparison values."""
     total_events: int
-    events_by_status: List[EventStatusCount] | None = None
-    events_by_location: List[LocationEventCount] | None = None
-    events_today: int
-    events_this_week: int
-    events_this_month: int
+    consumers_sampled: int
+    brand_awareness: float
+    purchase_intent: float
 
 
 @strawberry.type
-class EventStatusCount:
-    """Event count grouped by status."""
-    status_id: strawberry.ID
-    status_name: str
-    count: int
+class EventDashboardMetrics:
+    """Key metrics for Event Dashboard."""
+    total_events: int
+    consumers_sampled: int
+    brand_awareness: float  # Percentage
+    purchase_intent: float  # Percentage
+    comparison_period: str | None = None  # e.g., "Q4 2024"
+    comparison_values: ComparisonValues | None = None
 
 
 @strawberry.type
-class LocationEventCount:
-    """Event count grouped by location."""
-    location_id: strawberry.ID
-    location_name: str
-    location_code: str
-    count: int
+class MonthlyDataPoint:
+    """Monthly performance data point."""
+    month: str  # e.g., "2025-01"
+    consumers_sampled: int
+    willing_to_purchase: int
+    conversion_rate: float  # Percentage
+    events_count: int
 
 
 @strawberry.type
-class EventTimeSeries:
-    """Time series data for events."""
-    data_points: List[TimeSeriesDataPoint]
-    group_by: str  # HOUR, DAY, WEEK, MONTH
-    total_count: int
+class MonthlyPerformanceTrend:
+    """Monthly performance trends chart data."""
+    data_points: List[MonthlyDataPoint]
 
 
 @strawberry.type
-class AmbassadorStats:
-    """Ambassador working statistics."""
-    total_ambassadors_working: int
-    ambassadors_by_event: List[EventAmbassadorCount] | None = None
-    ambassadors_by_location: List[LocationAmbassadorCount] | None = None
-    unique_ambassadors_count: int  # Distinct ambassadors across all events
+class BestMonth:
+    """Best performing month."""
+    month: str  # e.g., "2025-06"
+    events_count: int
+    consumers_count: int
 
 
 @strawberry.type
-class EventAmbassadorCount:
-    """Ambassador count per event."""
-    event_id: strawberry.ID
-    event_name: str
-    ambassador_count: int
+class PerformanceInsights:
+    """Performance insights section."""
+    knew_about_brand: int
+    knew_about_brand_percentage: float
+    willing_to_purchase: int
+    willing_to_purchase_percentage: float
+    best_month: BestMonth | None = None
+    growth_rate: float  # Percentage (events vs last year)
 
 
 @strawberry.type
-class LocationAmbassadorCount:
-    """Ambassador count grouped by location."""
-    location_id: strawberry.ID
-    location_name: str
-    location_code: str
-    ambassador_count: int
+class RecentEvent:
+    """Recent/upcoming event."""
+    id: strawberry.ID
+    name: str
+    date: str  # ISO date string
+    location: str  # RMM/Location name
+    consumers: int
+    intent_rate: float  # Percentage
+    status: str  # "Upcoming", "Completed", etc.
 
 
 @strawberry.type
-class RequestStats:
-    """Request statistics including approval/rejection rates."""
-    total_requests: int
-    approved_count: int
-    rejected_count: int
-    pending_count: int
-    approval_rate: float  # Percentage (0-100)
-    rejection_rate: float  # Percentage (0-100)
-    requests_with_jobs_count: int
-    requests_with_jobs_percentage: float  # Percentage (0-100)
-    requests_by_status: List[RequestStatusCount] | None = None
+class EventDashboard:
+    """Main Event Dashboard response."""
+    metrics: EventDashboardMetrics
+    monthly_trends: MonthlyPerformanceTrend
+    performance_insights: PerformanceInsights
+    recent_events: List[RecentEvent] | None = None
+
+
+# Recap Dashboard Types
+
+@strawberry.type
+class RecapDashboardFilterOptions:
+    """Available filter options for Recap Dashboard."""
+    distributors: List[DistributorOption] | None = None
+    rmms: List[RetailerOption] | None = None  # RMM = Retailer
+    quarters: List[QuarterOption] | None = None
+    tenants: List[TenantOption] | None = None
 
 
 @strawberry.type
-class RequestStatusCount:
-    """Request count grouped by status."""
-    status_id: strawberry.ID
-    status_name: str
-    count: int
+class RecapComparisonValues:
+    """Period-over-period comparison values for Recap Dashboard."""
+    total_consumers_sampled: int
+    total_purchases: int
+    conversion_rate: float
+    revenue_generated: float
 
 
 @strawberry.type
-class RequestTimeSeries:
-    """Time series data for requests."""
-    data_points: List[TimeSeriesDataPoint]
-    group_by: str  # HOUR, DAY, WEEK, MONTH
-    total_count: int
-    approval_trend: List[TimeSeriesDataPoint] | None = None
-    rejection_trend: List[TimeSeriesDataPoint] | None = None
-    jobs_assigned_trend: List[TimeSeriesDataPoint] | None = None
+class RecapDashboardMetrics:
+    """Key metrics for Recap Dashboard."""
+    total_consumers_sampled: int
+    total_purchases: int
+    conversion_rate: float  # Percentage
+    revenue_generated: float
+    comparison_period: str | None = None  # e.g., "Q4 2024"
+    comparison_values: RecapComparisonValues | None = None
 
 
 @strawberry.type
-class EventDetail:
-    """Detailed information about a specific event."""
-    event: Event
-    related_request_id: strawberry.ID | None = None
-    ambassadors_count: int
-    jobs_count: int
-    ambassadors: List[EventAmbassadorInfo] | None = None
-    location: Location | None = None
-    statistics: EventDetailStatistics | None = None
+class RecapMonthlyDataPoint:
+    """Monthly performance data point for Recap Dashboard."""
+    month: str  # e.g., "2025-01"
+    consumers_sampled: int
+    purchases: int
+    conversion_rate: float  # Percentage
+    revenue: float
+    recaps_count: int
 
 
 @strawberry.type
-class EventAmbassadorInfo:
-    """Information about an ambassador working in an event."""
-    ambassador_id: strawberry.ID
-    ambassador_name: str
-    is_approved: bool
-    jobs_count: int  # Number of jobs this ambassador has in this event
+class RecapMonthlyTrends:
+    """Monthly performance trends chart data for Recap Dashboard."""
+    data_points: List[RecapMonthlyDataPoint]
 
 
 @strawberry.type
-class EventDetailStatistics:
-    """Statistics for a specific event."""
-    total_ambassadors: int
-    approved_ambassadors: int
-    total_jobs: int
-    active_jobs: int  # Jobs that are not closed
-    total_requests: int  # Related requests count
+class BestRecapMonth:
+    """Best performing month for Recap Dashboard."""
+    month: str  # e.g., "2025-06"
+    recaps_count: int
+    consumers_count: int
 
+
+@strawberry.type
+class RecapPerformanceInsights:
+    """Performance insights section for Recap Dashboard."""
+    new_customers_sampled: int
+    new_customers_percentage: float  # Percentage
+    brand_awareness: int
+    brand_awareness_percentage: float  # Percentage
+    willing_to_purchase: int
+    willing_to_purchase_percentage: float  # Percentage
+    best_month: BestRecapMonth | None = None
+    growth_rate: float  # Percentage (recaps growth vs last year)
+
+
+@strawberry.type
+class MarketPerformanceData:
+    """Market performance data point."""
+    market_id: strawberry.ID  # Retailer ID
+    market_name: str  # Retailer name
+    consumers: int
+    purchases: int
+    conversion: float  # Percentage
+    demos: int  # total_engagements
+    efficiency: float  # Calculated metric (percentage)
+
+
+@strawberry.type
+class MarketPerformanceAnalysis:
+    """Market performance analysis section."""
+    data_points: List[MarketPerformanceData]
+
+
+@strawberry.type
+class RMMPerformanceData:
+    """RMM performance data point."""
+    rmm_id: strawberry.ID  # Retailer ID
+    rmm_name: str  # Retailer name
+    consumers_sampled: int
+    demos: int
+    conversion_rate: float  # Percentage
+
+
+@strawberry.type
+class RMMPerformance:
+    """RMM performance section."""
+    data_points: List[RMMPerformanceData]
+
+
+@strawberry.type
+class RecapDashboard:
+    """Main Recap Dashboard response."""
+    metrics: RecapDashboardMetrics
+    monthly_trends: RecapMonthlyTrends
+    performance_insights: RecapPerformanceInsights
+    market_analysis: MarketPerformanceAnalysis
+    rmm_performance: RMMPerformance

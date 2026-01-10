@@ -61,3 +61,17 @@ def enable_db_access_for_all_tests(db):
     This fixture is automatically applied to all tests.
     """
     pass
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _apply_migrations_for_reused_db(django_db_setup, django_db_blocker):
+    """
+    Ensure the reused test DB schema is up-to-date.
+
+    With --reuse-db, pytest-django can keep an existing database that may be missing
+    newer tables. Running migrations once per session makes the suite deterministic.
+    """
+    from django.core.management import call_command
+
+    with django_db_blocker.unblock():
+        call_command("migrate", interactive=False, verbosity=0)

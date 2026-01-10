@@ -24,6 +24,10 @@ dependencies = [
     "django-rq>=3.2.1",
     "redis>=5.0.0",
     "cryptography>=41.0.0",
+    "resend>=2.19.0",
+    "django-extensions>=4.1",
+    "ipython>=9.8.0",
+    "weasyprint>=67.0",
 ]
 
 [tool.pyrefly]

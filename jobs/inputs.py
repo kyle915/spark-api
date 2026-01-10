@@ -136,7 +136,6 @@ class CreateJobInput(BaseNameableInput):
     coordinates: List[float] | None = None
     job_title_id: strawberry.ID
     other_title_id: strawberry.ID | None = None
-    company_id: strawberry.ID
     event_id: strawberry.ID
     rate_id: strawberry.ID | None = None
 
@@ -156,6 +155,11 @@ class JobStatusFilter(str, Enum):
 class JobFiltersInput(BaseTenantInput):
     event_id: strawberry.ID | None = None
     status: JobStatusFilter | None = None
+
+
+@strawberry.input
+class RateTypeFiltersInput(BaseTenantInput):
+    pass
 
 
 @strawberry.input
@@ -317,6 +321,7 @@ class AmbassadorJobStatusEnum(Enum):
     APPROVED = "approved"
     DECLINED = "declined"
     PENDING = "pending"
+    INVITED = 'invited'
 
 
 @strawberry.input
@@ -327,3 +332,9 @@ class ApproveAmbassadorJobInput(BaseTenantInput):
 @strawberry.input
 class DeclineAmbassadorJobInput(BaseTenantInput):
     ambassador_job_id: strawberry.ID
+
+
+@strawberry.input
+class InviteAmbassadorsToJobInput(BaseTenantInput):
+    ambassador_ids: List[strawberry.ID]
+    job_id: strawberry.ID

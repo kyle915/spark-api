@@ -1,3 +1,4 @@
+import base64
 import strawberry
 from typing import Any, Union, Type
 from graphql import GraphQLError
@@ -12,6 +13,59 @@ from tenants.models import Tenant
 from utils.graphql.inputs import SparkGraphQLInput
 
 User = get_user_model()
+
+
+def decode_global_id(global_id: str) -> int:
+    """
+    Decode a strawberry-relay globalId to extract the database ID.
+
+    GlobalIds are base64 encoded strings in the format "TypeName:ID".
+    This function decodes the base64 and extracts the numeric ID.
+
+    Args:
+        global_id: The globalId string (e.g., "VGVuYW50VHlwZTox")
+
+    Returns:
+        The numeric database ID
+
+    Raises:
+        GraphQLError: If the globalId cannot be decoded or is invalid
+    """
+    import base64
+
+    try:
+        # Decode base64
+        decoded = base64.b64decode(global_id.encode("utf-8")).decode("utf-8")
+        # Extract ID after the colon (format: "TypeName:ID")
+        if ":" not in decoded:
+            raise ValueError("Invalid globalId format")
+        _, db_id = decoded.split(":", 1)
+        return int(db_id)
+    except (ValueError, TypeError, UnicodeDecodeError) as e:
+        raise GraphQLError(f"Invalid globalId: {global_id}") from e
+
+
+def resolve_id_to_int(id_value: str | int) -> int:
+    """
+    Resolve an ID value that could be either a globalId or a direct integer.
+
+    Args:
+        id_value: Either a globalId string or an integer/string integer
+
+    Returns:
+        The numeric database ID
+    """
+    if isinstance(id_value, int):
+        return id_value
+
+    if isinstance(id_value, str):
+        # If it's a pure digit string, convert directly
+        if id_value.isdigit():
+            return int(id_value)
+        # Otherwise, try to decode as globalId
+        return decode_global_id(id_value)
+
+    raise GraphQLError(f"Invalid ID format: {id_value}")
 
 
 class SparkGraphQLMixin:
@@ -59,16 +113,22 @@ class SparkGraphQLMixin:
         user = user or await self.get_user(info)
         is_spark_request = self.is_spark_schema_request(info, user=user)
         has_explicit_tenant = tenant_id is not None or tenant_uuid is not None
+        resolved_tenant_id: int | None = None
+        if tenant_id is not None:
+            try:
+                resolved_tenant_id = resolve_id_to_int(tenant_id)
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Invalid tenant ID.")
 
         if is_spark_request and has_explicit_tenant:
             tenant = await self._get_tenant_without_membership(
-                tenant_id=tenant_id,
+                tenant_id=resolved_tenant_id,
                 tenant_uuid=tenant_uuid,
             )
         else:
             tenant = await self.get_tenant(
                 user,
-                tenant_id=tenant_id,
+                tenant_id=resolved_tenant_id,
                 tenant_uuid=tenant_uuid,
             )
 
@@ -112,8 +172,7 @@ class SparkGraphQLMixin:
                 tenant_uuid,
             )
         except Exception as e:
-            raise GraphQLError(
-                "It looks like you are not a member of this tenant.")
+            raise GraphQLError("It looks like you are not a member of this tenant.")
 
     async def _get_tenant_without_membership(
         self,
@@ -125,8 +184,8 @@ class SparkGraphQLMixin:
 
         if tenant_id is not None:
             try:
-                filters["id"] = int(tenant_id)
-            except (TypeError, ValueError):
+                filters["id"] = resolve_id_to_int(tenant_id)
+            except (TypeError, ValueError, GraphQLError):
                 raise GraphQLError("Invalid tenant ID.")
         elif tenant_uuid:
             filters["uuid"] = tenant_uuid
@@ -147,12 +206,22 @@ class SparkGraphQLMixin:
         filters_tenant_id = getattr(filters, "tenant_id", None)
         user = await self.get_user(info)
         role_slug = self.get_role_slug(user)
+        resolved_tenant_id: int | None = None
+
+        if filters_tenant_id is not None:
+            try:
+                resolved_tenant_id = resolve_id_to_int(filters_tenant_id)
+            except (TypeError, ValueError, GraphQLError) as exc:
+                raise GraphQLError("Invalid tenant ID.") from exc
 
         if role_slug == "client":
-            tenant = await self.get_user_tenant(info, tenant_id=filters_tenant_id)
+            tenant = await self.get_user_tenant(
+                info,
+                tenant_id=resolved_tenant_id,
+            )
             return tenant.id
 
-        return filters_tenant_id
+        return resolved_tenant_id
 
 
 class BaseMutationService(SparkGraphQLMixin):
@@ -214,6 +283,7 @@ class BaseMutationService(SparkGraphQLMixin):
     ) -> Any:
         """Build a mutation response (success or error)."""
         from utils.utils import build_mutation_response as _build_mutation_response
+
         return _build_mutation_response(
             response_class,
             success=success,
@@ -251,10 +321,13 @@ class BaseMutationService(SparkGraphQLMixin):
 
         if not response_cls:
             raise ValueError(
-                "response_class must be provided either as class attribute or parameter")
+                "response_class must be provided either as class attribute or parameter"
+            )
 
         try:
-            model_instance: Model = await cls.process_create_or_update(input=input, info=info)
+            model_instance: Model = await cls.process_create_or_update(
+                input=input, info=info
+            )
 
             # Generate message if not provided
             if not message:
@@ -265,7 +338,7 @@ class BaseMutationService(SparkGraphQLMixin):
                 success=True,
                 message=message,
                 input_obj=input,
-                **{field_name: model_instance}
+                **{field_name: model_instance},
             )
         except GraphQLError as e:
             return cls._build_mutation_response(
@@ -304,10 +377,13 @@ class BaseMutationService(SparkGraphQLMixin):
 
         if not response_cls:
             raise ValueError(
-                "response_class must be provided either as class attribute or parameter")
+                "response_class must be provided either as class attribute or parameter"
+            )
 
         try:
-            model_instance: Model = await cls.process_create_or_update(input=input, info=info)
+            model_instance: Model = await cls.process_create_or_update(
+                input=input, info=info
+            )
 
             # Generate message if not provided
             if not message:
@@ -318,7 +394,81 @@ class BaseMutationService(SparkGraphQLMixin):
                 success=True,
                 message=message,
                 input_obj=input,
-                **{field_name: model_instance}
+                **{field_name: model_instance},
+            )
+        except GraphQLError as e:
+            return cls._build_mutation_response(
+                response_class=response_cls,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
+    @classmethod
+    async def delete(
+        cls,
+        input: SparkGraphQLInput,
+        info: strawberry.Info,
+        *,
+        response_class: Type | None = None,
+        model_field_name: str | None = None,
+        delete_message: str | None = None,
+    ) -> Any:
+        """
+        Delete mutation handler.
+
+        Args:
+            input: The input for the mutation (must have an 'id' field)
+            info: Strawberry GraphQL info
+            response_class: Response class type (uses cls.response_class if not provided)
+            model_field_name: Field name in response (uses cls.model_field_name if not provided)
+            delete_message: Success message (uses cls.delete_message if not provided)
+
+        Returns:
+            Response object with success/message
+        """
+        response_cls: Type | None = response_class or cls.response_class
+        field_name: str | None = model_field_name or cls.model_field_name
+        message: str | None = delete_message or getattr(cls, "delete_message", None)
+
+        if not response_cls:
+            raise ValueError(
+                "response_class must be provided either as class attribute or parameter"
+            )
+
+        try:
+            service = cls.with_input(input)
+            await service.set_user_and_tenant(info)
+
+            # Get the model instance to delete
+            model_class = service.get_model()
+            model_id = getattr(input, "id", None)
+            if not model_id:
+                raise GraphQLError("ID is required for delete operation.")
+
+            # Resolve the ID (handles both integer IDs and Relay global IDs)
+            try:
+                resolved_id = resolve_id_to_int(model_id)
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError(f"Invalid ID: {model_id}")
+
+            try:
+                model = await sync_to_async(model_class.objects.get)(id=resolved_id)
+            except model_class.DoesNotExist:
+                raise GraphQLError(f"{model_class.__name__} not found.")
+
+            # Delete the model
+            await sync_to_async(model.delete)()
+
+            # Generate message if not provided
+            if not message:
+                message = cls._get_default_message(field_name, "delete")
+
+            return cls._build_mutation_response(
+                response_class=response_cls,
+                success=True,
+                message=message,
+                input_obj=input,
             )
         except GraphQLError as e:
             return cls._build_mutation_response(
@@ -337,8 +487,7 @@ class BaseMutationService(SparkGraphQLMixin):
         """Set the user and tenant for the service."""
         self.info = info
         self.user = await self.get_user(info)
-        self.is_spark_schema = self.is_spark_schema_request(
-            info, user=self.user)
+        self.is_spark_schema = self.is_spark_schema_request(info, user=self.user)
         tenant_id = getattr(self.input, "tenant_id", None)
 
         if self.is_spark_schema and tenant_id:
@@ -362,7 +511,11 @@ class BaseMutationService(SparkGraphQLMixin):
         tenant_id = getattr(self.input, "tenant_id", None)
         if self.is_public and not tenant_id:
             raise GraphQLError("Tenant ID is required.")
-        is_spark_admin = await self.user.role.is_spark_admin if self.user and self.user.role else False
+        is_spark_admin = (
+            await self.user.role.is_spark_admin
+            if self.user and self.user.role
+            else False
+        )
         if (
             not self.is_public
             and not self.is_spark_schema
@@ -376,8 +529,8 @@ class BaseMutationService(SparkGraphQLMixin):
     ) -> int:
         """Resolve tenant ID for Spark schema requests without membership restrictions."""
         try:
-            tenant_pk = int(tenant_id)
-        except (TypeError, ValueError):
+            tenant_pk = resolve_id_to_int(tenant_id)
+        except (TypeError, ValueError, GraphQLError):
             raise GraphQLError("Invalid tenant ID.")
 
         try:
@@ -394,10 +547,14 @@ class BaseMutationService(SparkGraphQLMixin):
 
         # get the model
         model_class = self.get_model()
-        is_update: bool = hasattr(
-            self.input, "id") and self.input.id is not None
+        is_update: bool = hasattr(self.input, "id") and self.input.id is not None
         if is_update:
-            model = await sync_to_async(model_class.objects.get)(id=self.input.id)
+            model_id = getattr(self.input, "id", None)
+            try:
+                resolved_id = resolve_id_to_int(model_id)
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError(f"Invalid ID: {model_id}")
+            model = await sync_to_async(model_class.objects.get)(id=resolved_id)
             if self.user:
                 setattr(model, "updated_by", self.user)
         else:
@@ -409,6 +566,12 @@ class BaseMutationService(SparkGraphQLMixin):
 
         # set the parameters
         params: dict[str, Any] = self.input.to_dict(["tenant_id", "id"])
+        for key, value in list(params.items()):
+            if key.endswith("_id") and value is not None:
+                try:
+                    params[key] = resolve_id_to_int(value)
+                except (TypeError, ValueError, GraphQLError):
+                    raise GraphQLError(f"Invalid {key}: {value}")
         for key, value in params.items():
             setattr(model, key, value)
 

@@ -11,7 +11,7 @@ from ambassadors import inputs
 from utils.graphql.permissions import StrictIsAuthenticated, IsClientOrSparkAdmin
 from events import models as event_models
 from events import types as event_types
-from utils.graphql.mixins import SparkGraphQLMixin
+from utils.graphql.mixins import SparkGraphQLMixin, resolve_id_to_int
 from utils.graphql.queries import BaseQueriesService
 from utils.graphql.inputs import SparkGraphQLInput
 from utils.graphql.relay import (
@@ -25,6 +25,24 @@ class AmbassadorEventStatus(str, Enum):
     APPROVED = "approved"
     DECLINED = "declined"
     CANCELED = "canceled"
+
+
+def _resolve_filter_id(value: strawberry.ID | None, label: str) -> int | None:
+    """Resolve relay/global IDs used in filters to database IDs."""
+    if value in (None, ""):
+        return None
+    try:
+        return resolve_id_to_int(value)
+    except (TypeError, ValueError, GraphQLError) as exc:
+        raise GraphQLError(f"Invalid {label} ID.") from exc
+
+
+def _resolve_filter_id_list(values: list[strawberry.ID], label: str) -> list[int]:
+    """Resolve a list of relay/global IDs used in filters to database IDs."""
+    try:
+        return [resolve_id_to_int(value) for value in values]
+    except (TypeError, ValueError, GraphQLError) as exc:
+        raise GraphQLError(f"Invalid {label} ID.") from exc
 
 
 @strawberry.input
@@ -125,26 +143,35 @@ class AmbassadorsTenantQueriesService(BaseQueriesService):
     ) -> int | None:
         """Allow spark-admin/ambassador to query any tenant; clients stay restricted."""
         user = await self.get_user(info)
-        filters_tenant_id = getattr(filters, "tenant_id", None) if filters else None
+        filters_tenant_id = getattr(
+            filters, "tenant_id", None) if filters else None
         role_slug = self.get_role_slug(user)
+        resolved_tenant_id: int | None = None
+
+        if filters_tenant_id is not None:
+            try:
+                resolved_tenant_id = resolve_id_to_int(filters_tenant_id)
+            except (TypeError, ValueError, GraphQLError) as exc:
+                raise GraphQLError("Invalid tenant ID.") from exc
 
         if role_slug in {"spark-admin", "ambassador"}:
             if filters_tenant_id is None:
                 return None
             tenant = await self._get_tenant_without_membership(
-                tenant_id=filters_tenant_id
+                tenant_id=resolved_tenant_id
             )
             return tenant.id
 
         try:
             tenant = await self.get_user_tenant(
                 info,
-                tenant_id=filters_tenant_id,
+                tenant_id=resolved_tenant_id,
                 user=user,
             )
             return tenant.id
         except GraphQLError as exc:
-            membership_error = "not a member of this tenant" in str(exc).lower()
+            membership_error = "not a member of this tenant" in str(
+                exc).lower()
             if membership_error and role_slug != "client":
                 raise GraphQLError("Tenant access denied.") from exc
             raise
@@ -171,10 +198,10 @@ class AmbassadorEventQueriesService(BaseAmbassadorQueriesService):
             self.get_model()
             .objects.select_related("ambassador__user", "event__request", "event__status", "event__event_type")
         )
-        
+
         if filter_by_user:
             queryset = queryset.filter(ambassador__user=user)
-        
+
         return queryset.distinct()
 
 
@@ -233,33 +260,39 @@ class AmbassadorEventQueries:
         filters: AmbassadorEventsFiltersInput | None = None,
     ) -> CountableConnection[types.AmbassadorEventType]:
         """Return ambassador events with ambassador and user nested.
-        
+
         If user role is 'ambassador', only returns events for the logged ambassador.
         Otherwise, returns all ambassador events (for admins, clients, etc).
         """
         service = AmbassadorEventQueriesService()
         user = await service.get_user(info)
-        
+
         # Check if user role is ambassador
         role_slug = service.get_role_slug(user)
         filter_by_user = role_slug == "ambassador"
-        
-        queryset = service.get_ambassador_queryset(user, filter_by_user=filter_by_user)
+
+        queryset = service.get_ambassador_queryset(
+            user, filter_by_user=filter_by_user)
         if q:
             queryset = queryset.filter(event__name__icontains=q)
 
         if filters:
             if filters.ambassador_uuid:
-                queryset = queryset.filter(ambassador__uuid=filters.ambassador_uuid)
+                queryset = queryset.filter(
+                    ambassador__uuid=filters.ambassador_uuid)
             if filters.types:
-                queryset = queryset.filter(event__event_type_id__in=filters.types)
+                type_ids = _resolve_filter_id_list(filters.types, "event type")
+                queryset = queryset.filter(event__event_type_id__in=type_ids)
             if filters.statuses:
                 status_slugs = [status.value for status in filters.statuses]
-                queryset = queryset.filter(event__status__slug__in=status_slugs)
+                queryset = queryset.filter(
+                    event__status__slug__in=status_slugs)
             if filters.start_date:
-                queryset = queryset.filter(event__request__date__gte=filters.start_date)
+                queryset = queryset.filter(
+                    event__request__date__gte=filters.start_date)
             if filters.end_date:
-                queryset = queryset.filter(event__request__date__lte=filters.end_date)
+                queryset = queryset.filter(
+                    event__request__date__lte=filters.end_date)
 
         queryset = queryset.order_by(*service.ordering)
 
@@ -382,7 +415,7 @@ class AmbassadorManagementQueries:
             raise GraphQLError("Either id or uuid must be provided")
 
         service = AmbassadorQueriesService()
-        
+
         try:
             if id:
                 ambassador = await sync_to_async(models.Ambassador.objects.select_related("user").get)(id=id)
@@ -678,6 +711,46 @@ class SourceQueriesService(BaseQueriesService):
         return models.Source
 
 
+class GroupTypeQueriesService(BaseQueriesService):
+    """Service for group type queries."""
+
+    def get_model(self) -> Model:
+        """Get the model for the service."""
+        return models.GroupType
+
+
+class AmbassadorGroupQueriesService(BaseQueriesService):
+    """Service for ambassador group queries."""
+
+    def get_model(self) -> Model:
+        """Get the model for the service."""
+        return models.AmbassadorGroup
+
+    def apply_filters(
+        self,
+        queryset: QuerySet,
+        filters: inputs.AmbassadorGroupFiltersInput | None,
+    ) -> QuerySet:
+        """Apply ambassador group filters to queryset."""
+        if not filters:
+            return queryset
+
+        if filters.job_id:
+            try:
+                job_id = resolve_id_to_int(filters.job_id)
+                queryset = queryset.filter(
+                    members__ambassador__ambassador_jobs__job_id=job_id
+                ).distinct()
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Invalid job ID.")
+        if filters.job_uuid:
+            queryset = queryset.filter(
+                members__ambassador__ambassador_jobs__job__uuid=filters.job_uuid
+            ).distinct()
+
+        return queryset
+
+
 class AttendanceQueriesService(BaseQueriesService):
     """Service for attendance queries."""
 
@@ -705,19 +778,45 @@ class AttendanceQueriesService(BaseQueriesService):
             return queryset
 
         if filters.tenant_id:
-            queryset = queryset.filter(tenant_id=filters.tenant_id)
+            try:
+                tenant_id = resolve_id_to_int(filters.tenant_id)
+                queryset = queryset.filter(tenant_id=tenant_id)
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Invalid tenant ID.")
         if filters.job_id:
-            queryset = queryset.filter(job_id=filters.job_id)
+            try:
+                job_id = resolve_id_to_int(filters.job_id)
+                queryset = queryset.filter(job_id=job_id)
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Invalid job ID.")
         if filters.event_id:
-            queryset = queryset.filter(event_id=filters.event_id)
+            try:
+                event_id = resolve_id_to_int(filters.event_id)
+                queryset = queryset.filter(event_id=event_id)
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Invalid event ID.")
         if filters.attendance_status_id:
-            queryset = queryset.filter(
-                attendance_status_id=filters.attendance_status_id
-            )
+            try:
+                attendance_status_id = resolve_id_to_int(
+                    filters.attendance_status_id)
+                queryset = queryset.filter(
+                    attendance_status_id=attendance_status_id
+                )
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Invalid attendance status ID.")
         if filters.source_id:
-            queryset = queryset.filter(source_id=filters.source_id)
+            try:
+                source_id = resolve_id_to_int(filters.source_id)
+                queryset = queryset.filter(source_id=source_id)
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Invalid source ID.")
         if filters.attendace_type_id:
-            queryset = queryset.filter(attendace_type_id=filters.attendace_type_id)
+            try:
+                attendace_type_id = resolve_id_to_int(
+                    filters.attendace_type_id)
+                queryset = queryset.filter(attendace_type_id=attendace_type_id)
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Invalid attendance type ID.")
         return queryset
 
 
@@ -849,6 +948,98 @@ class AttendanceQueries:
             service = AttendanceQueriesService()
             await service.get_user(info)
             return await service.get_record(id)
+        except GraphQLError:
+            return None
+
+
+@strawberry.type
+class GroupTypeQueries:
+    """Queries for group types."""
+
+    @strawberry.field(permission_classes=[IsClientOrSparkAdmin])
+    async def group_types(
+        self,
+        info: strawberry.Info,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        filters: inputs.GroupTypeFiltersInput | None = None,
+    ) -> CountableConnection[types.GroupType]:
+        """Get group types with filters (authenticated users only)."""
+        service = GroupTypeQueriesService()
+        await service.get_user(info)
+
+        q = filters.search if filters else None
+        queryset = service.get_ordered_queryset(q=q)
+
+        return await service.get_connection(
+            q=q,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+            queryset=queryset,
+        )
+
+    @strawberry.field(permission_classes=[IsClientOrSparkAdmin])
+    async def group_type(
+        self,
+        info: strawberry.Info,
+        group_type_id: strawberry.ID,
+    ) -> types.GroupType | None:
+        """Get a single group type by ID (authenticated users only)."""
+        try:
+            service = GroupTypeQueriesService()
+            await service.get_user(info)
+            return await service.get_record(group_type_id)
+        except GraphQLError:
+            return None
+
+
+@strawberry.type
+class AmbassadorGroupQueries:
+    @strawberry.field(permission_classes=[IsClientOrSparkAdmin])
+    async def ambassador_groups(
+        self,
+        info: strawberry.Info,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        filters: inputs.AmbassadorGroupFiltersInput | None = None,
+    ) -> CountableConnection[types.AmbassadorGroup]:
+        """Get ambassador groups with filters (client/spark-admin only)."""
+        service = AmbassadorGroupQueriesService()
+        tenant_id = await service.resolve_query_tenant_id(info)
+        await service.get_user(info)
+
+        q = filters.search if filters else None
+        queryset = service.get_ordered_queryset(tenant_id=tenant_id, q=q)
+        queryset = service.apply_filters(queryset, filters)
+
+        return await service.get_connection(
+            tenant_id=tenant_id,
+            q=q,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+            queryset=queryset,
+        )
+
+    @strawberry.field(permission_classes=[IsClientOrSparkAdmin])
+    async def ambassador_group(
+        self,
+        info: strawberry.Info,
+        group_id: strawberry.ID,
+    ) -> types.AmbassadorGroup | None:
+        """Get a single ambassador group by ID (client/spark-admin only)."""
+        try:
+            service = AmbassadorGroupQueriesService()
+            tenant_id = await service.resolve_query_tenant_id(info)
+            await service.get_user(info)
+            return await service.get_record(id=group_id, tenant_id=tenant_id)
         except GraphQLError:
             return None
 

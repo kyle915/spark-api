@@ -3,6 +3,7 @@ import strawberry_django
 import strawberry
 from graphql import GraphQLError
 from django.contrib.auth import get_user_model
+from asgiref.sync import sync_to_async
 from gqlauth.user import relay as mutations
 from gqlauth.user.queries import UserQueries
 from strawberry_django.permissions import IsAuthenticated
@@ -10,15 +11,17 @@ from django.db.models import Q
 from asgiref.sync import sync_to_async
 from utils.gcs import extract_blob_name_from_url, generate_download_url
 from utils.graphql.permissions import StrictIsAuthenticated
+from strawberry.relay import Node
 
-from .models import Role, Tenant, TenantedUser
-from .types import RoleType, TenantType
-from .inputs import TenantFiltersInput, UserFiltersInput
+from .models import Role, Tenant, TenantTheme, TenantedUser
+from .types import RoleType, TenantType, TenantThemeType
+from .inputs import ColorSchemeEnum, TenantFiltersInput, UserFiltersInput
 from .mutations import (
     AmbassadorsCustomRegister,
     ClientsCustomRegister,
     SparkCustomRegister,
     SparkTenantMutations,
+    TenantThemeMutations,
     SparkUserMutations,
 )
 from .calendar import GoogleCalendarMutations, GoogleCalendarQueries
@@ -27,14 +30,14 @@ from utils.graphql.relay import (
     CountableConnection,
     connection_from_queryset_async,
 )
+from utils.graphql.mixins import resolve_id_to_int
 
 User = get_user_model()
 
 
 # @strawberry.django.type(model=get_user_model(), name="CustomUserType")
 @strawberry_django.type(User)
-class CustomUserType:
-    id: strawberry.auto
+class CustomUserType(Node):
     uuid: strawberry.auto
     username: strawberry.auto
     email: strawberry.auto
@@ -55,9 +58,82 @@ class CustomUserType:
         return generate_download_url(blob_name)
 
 
+@strawberry.type
+class TenantThemingQuery:
+    @strawberry.field
+    async def tenant_theme_public(
+        self,
+        info,
+        request_url_name: str,
+        color_scheme: ColorSchemeEnum = ColorSchemeEnum.DARK,
+    ) -> TenantThemeType | None:
+        """
+        Public query to fetch a tenant theme by request URL name and color scheme.
+
+        This is intentionally unauthenticated so that login and public pages
+        can render tenant-specific branding.
+        """
+        try:
+            tenant = await sync_to_async(Tenant.objects.get)(
+                request_url_name=request_url_name
+            )
+        except Tenant.DoesNotExist:
+            return None
+
+        theme = await sync_to_async(
+            lambda: TenantTheme.objects.filter(
+                tenant=tenant, color_scheme=color_scheme.value
+            ).first()
+        )()
+        return theme
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def tenant_theme(
+        self,
+        info,
+        tenant_id: strawberry.ID,
+        color_scheme: ColorSchemeEnum = ColorSchemeEnum.DARK,
+    ) -> TenantThemeType | None:
+        """
+        Authenticated query to fetch a tenant theme by tenant ID and color scheme.
+        Ensures the requesting user belongs to the tenant.
+        """
+        user = info.context.request.user
+
+        # Spark admins can view any tenant theme; others must belong to the tenant.
+        role_slug = getattr(user.role, "slug", None)
+        is_spark_admin = role_slug == Role.SPARK_ADMIN_SLUG
+        try:
+            resolved_tenant_id = resolve_id_to_int(tenant_id)
+        except (TypeError, ValueError, GraphQLError):
+            raise GraphQLError("Invalid tenant ID.")
+        if not is_spark_admin:
+            has_access = await sync_to_async(
+                lambda: TenantedUser.objects.filter(
+                    user=user, tenant_id=resolved_tenant_id, is_active=True
+                ).exists()
+            )()
+            if not has_access:
+                raise GraphQLError(
+                    "You do not have permission to view this tenant theme."
+                )
+
+        try:
+            tenant = await sync_to_async(Tenant.objects.get)(pk=resolved_tenant_id)
+        except Tenant.DoesNotExist:
+            return None
+
+        theme = await sync_to_async(
+            lambda: TenantTheme.objects.filter(
+                tenant=tenant, color_scheme=color_scheme.value
+            ).first()
+        )()
+        return theme
+
+
 # Spark Schema
 @strawberry.type()
-class QuerySpark(GoogleCalendarQueries):
+class QuerySpark(GoogleCalendarQueries, TenantThemingQuery):
     @strawberry.field
     def healthcheck(self) -> str:
         return "ok"
@@ -90,11 +166,16 @@ class QuerySpark(GoogleCalendarQueries):
 
         try:
             if id:
-                target_user = await User.objects.select_related("role").aget(pk=id)
+                resolved_id = resolve_id_to_int(id)
+                target_user = await User.objects.select_related("role").aget(
+                    pk=resolved_id
+                )
             else:
                 target_user = await User.objects.select_related("role").aget(uuid=uuid)
         except User.DoesNotExist as exc:
             raise GraphQLError("User not found.") from exc
+        except (TypeError, ValueError, GraphQLError) as exc:
+            raise GraphQLError("Invalid user ID.") from exc
 
         if is_client and not is_spark_admin:
             has_shared_tenant = await sync_to_async(
@@ -149,8 +230,8 @@ class QuerySpark(GoogleCalendarQueries):
         if filters:
             if filters.tenant_id:
                 try:
-                    tenant_id = int(filters.tenant_id)
-                except (TypeError, ValueError) as exc:
+                    tenant_id = resolve_id_to_int(filters.tenant_id)
+                except (TypeError, ValueError, GraphQLError) as exc:
                     raise GraphQLError("Invalid tenantId.") from exc
                 if not is_spark_admin and tenant_id not in requester_tenant_ids:
                     raise GraphQLError(
@@ -234,6 +315,7 @@ class MutationSpark(
     SparkTenantMutations,
     SparkUserMutations,
     GoogleCalendarMutations,
+    TenantThemeMutations,
 ):
     verify_token = mutations.VerifyToken.field
     token_auth = mutations.ObtainJSONWebToken.field
@@ -244,7 +326,7 @@ class MutationSpark(
 # Ambassadors Schema
 # @strawberry.django.type(model=get_user_model())
 @strawberry_django.type(User)
-class QueryAmbassadors(GoogleCalendarQueries):
+class QueryAmbassadors(GoogleCalendarQueries, TenantThemingQuery):
     @strawberry.field
     def healthcheck(self) -> str:
         return "ok"
@@ -265,7 +347,7 @@ class MutationAmbassadors(AmbassadorsCustomRegister, GoogleCalendarMutations):
 # Clients Schemas
 # @strawberry.django.type(model=get_user_model())
 @strawberry_django.type(User)
-class QueryClients(GoogleCalendarQueries):
+class QueryClients(GoogleCalendarQueries, TenantThemingQuery):
     @strawberry.field
     def healthcheck(self) -> str:
         return "ok"
@@ -357,8 +439,8 @@ class QueryClients(GoogleCalendarQueries):
         if filters:
             if filters.tenant_id:
                 try:
-                    tenant_id = int(filters.tenant_id)
-                except (TypeError, ValueError) as exc:
+                    tenant_id = resolve_id_to_int(filters.tenant_id)
+                except (TypeError, ValueError, GraphQLError) as exc:
                     raise GraphQLError("Invalid tenantId.") from exc
                 if not is_spark_admin and tenant_id not in requester_tenant_ids:
                     raise GraphQLError(
@@ -440,7 +522,12 @@ class QueryClients(GoogleCalendarQueries):
 
 
 @strawberry.type
-class MutationClients(ClientsCustomRegister, SparkUserMutations, GoogleCalendarMutations):
+class MutationClients(
+    ClientsCustomRegister,
+    SparkUserMutations,
+    GoogleCalendarMutations,
+    TenantThemeMutations,
+):
     verify_token = mutations.VerifyToken.field
     token_auth = mutations.ObtainJSONWebToken.field
     refresh_token = mutations.RefreshToken.field
@@ -450,7 +537,7 @@ class MutationClients(ClientsCustomRegister, SparkUserMutations, GoogleCalendarM
 # Mobile Schemas
 # @strawberry.django.type(model=get_user_model())
 @strawberry_django.type(User)
-class QueryMobile:
+class QueryMobile(TenantThemingQuery):
     @strawberry.field
     def healthcheck(self) -> str:
         return "ok"

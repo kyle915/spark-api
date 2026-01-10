@@ -7,11 +7,12 @@ from utils.graphql.inputs import BaseTenantInput, SparkGraphQLInput
 from utils.graphql.permissions import StrictIsAuthenticated
 from utils.graphql.relay import CountableConnection
 from utils.graphql.queries import BaseQueriesService
+from utils.graphql.mixins import resolve_id_to_int
 from jobs import models
 from django.db.models import QuerySet
 from django.db.models import Model
 from jobs import types
-from jobs.inputs import JobFiltersInput, JobStatusFilter
+from jobs.inputs import JobFiltersInput, JobStatusFilter, RateTypeFiltersInput
 from ambassadors import models as ambassador_models
 
 
@@ -27,19 +28,26 @@ class JobsBaseQueriesService(BaseQueriesService):
         user = await self.get_user(info)
         filters_tenant_id = getattr(filters, "tenant_id", None) if filters else None
         role_slug = self.get_role_slug(user)
+        resolved_tenant_id: int | None = None
+
+        if filters_tenant_id is not None:
+            try:
+                resolved_tenant_id = resolve_id_to_int(filters_tenant_id)
+            except (TypeError, ValueError, GraphQLError) as exc:
+                raise GraphQLError("Invalid tenant ID.") from exc
 
         if role_slug in {"spark-admin", "ambassador"}:
             if filters_tenant_id is None:
                 return None
             tenant = await self._get_tenant_without_membership(
-                tenant_id=filters_tenant_id
+                tenant_id=resolved_tenant_id
             )
             return tenant.id
 
         if role_slug == "client":
             tenant = await self.get_user_tenant(
                 info,
-                tenant_id=filters_tenant_id,
+                tenant_id=resolved_tenant_id,
                 user=user,
             )
             return tenant.id
@@ -47,7 +55,7 @@ class JobsBaseQueriesService(BaseQueriesService):
         try:
             tenant = await self.get_user_tenant(
                 info,
-                tenant_id=filters_tenant_id,
+                tenant_id=resolved_tenant_id,
                 user=user,
             )
             return tenant.id
@@ -435,10 +443,11 @@ class RateTypeQueries:
         last: int | None = None,
         before: str | None = None,
         q: str | None = None,
+        filters: RateTypeFiltersInput | None = None,
     ) -> CountableConnection[types.RateType]:
         """Get all rate types."""
         service = RateTypeQueriesService()
-        tenant_id = await service.resolve_query_tenant_id(info)
+        tenant_id = await service.resolve_query_tenant_id(info, filters=filters)
         return await service.get_connection(
             tenant_id=tenant_id,
             q=q,
@@ -530,7 +539,6 @@ class JobQueriesService(JobsBaseQueriesService):
             .objects.select_related(
                 "job_title",
                 "other_title",
-                "company",
                 "event",
                 "rate",
             )
@@ -571,7 +579,11 @@ class JobQueries:
 
         if filters:
             if filters.event_id:
-                queryset = queryset.filter(event_id=filters.event_id)
+                try:
+                    event_id = resolve_id_to_int(filters.event_id)
+                    queryset = queryset.filter(event_id=event_id)
+                except (TypeError, ValueError, GraphQLError):
+                    raise GraphQLError("Invalid event ID.")
             if filters.status:
                 status_filter_map = {
                     JobStatusFilter.OPEN: False,
@@ -864,7 +876,11 @@ class AmbassadorJobQueries:
         if role_slug == "ambassador":
             queryset = queryset.exclude(ambassador_jobs__ambassador__user=user)
         if filters and filters.event_id:
-            queryset = queryset.filter(event_id=filters.event_id)
+            try:
+                event_id = resolve_id_to_int(filters.event_id)
+                queryset = queryset.filter(event_id=event_id)
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Invalid event ID.")
         return await service.get_connection(
             tenant_id=tenant_id,
             first=first,
@@ -895,7 +911,11 @@ class AmbassadorJobQueries:
 
         if filters:
             if filters.status_id:
-                queryset = queryset.filter(status_id=filters.status_id)
+                try:
+                    status_id = resolve_id_to_int(filters.status_id)
+                    queryset = queryset.filter(status_id=status_id)
+                except (TypeError, ValueError, GraphQLError):
+                    raise GraphQLError("Invalid status ID.")
             elif filters.status_slug:
                 status_filter_kwargs = {"status__slug": filters.status_slug}
                 if tenant_id:
@@ -963,7 +983,8 @@ class ClientSparkAmbassadorJobQueries:
             queryset = queryset.filter(tenant_id=tenant_id)
 
         # Filter by job_id
-        queryset = queryset.filter(job_id=job_id)
+        resolved_job_id = resolve_id_to_int(job_id)
+        queryset = queryset.filter(job_id=resolved_job_id)
 
         # Note: q parameter is not used here as AmbassadorJob doesn't have a 'name' field
         # If search is needed, it could be implemented by filtering on related ambassador or job fields

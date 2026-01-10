@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import strawberry_django
 import strawberry
+from strawberry.relay import Node
 from typing import List, Optional
 from asgiref.sync import sync_to_async
 
@@ -12,8 +13,7 @@ from ambassadors.types import Ambassador, Attendance
 
 
 @strawberry_django.type(models.Status)
-class Status:
-    id: strawberry.ID
+class Status(Node):
     uuid: str
     name: str
     slug: str
@@ -31,8 +31,7 @@ class StatusDetailResponse:
 
 
 @strawberry_django.type(models.CompanyFile)
-class CompanyFile:
-    id: strawberry.ID
+class CompanyFile(Node):
     uuid: str
     name: str
     url: str | None
@@ -50,8 +49,7 @@ class CompanyFileDetailResponse:
 
 
 @strawberry_django.type(models.Company)
-class Company:
-    id: strawberry.ID
+class Company(Node):
     uuid: str
     name: str
     email: str
@@ -80,8 +78,7 @@ class CompanyDetailResponse:
 
 
 @strawberry_django.type(models.CompanyReview)
-class CompanyReview:
-    id: strawberry.ID
+class CompanyReview(Node):
     uuid: str
     global_score: int
     review: str
@@ -103,8 +100,7 @@ class CompanyReviewDetailResponse:
 
 
 @strawberry_django.type(models.PayTiming)
-class PayTiming:
-    id: strawberry.ID
+class PayTiming(Node):
     uuid: str
     min_pay_timing: int
     max_pay_timing: int
@@ -123,8 +119,7 @@ class PayTimingDetailResponse:
 
 
 @strawberry_django.type(models.ReviewScore)
-class ReviewScore:
-    id: strawberry.ID
+class ReviewScore(Node):
     uuid: str
     name: str | None
     score: int | None
@@ -142,8 +137,7 @@ class ReviewScoreDetailResponse:
 
 
 @strawberry_django.type(models.JobTitle)
-class JobTitle:
-    id: strawberry.ID
+class JobTitle(Node):
     uuid: str
     name: str | None
     tenant_id: strawberry.ID
@@ -160,8 +154,7 @@ class JobTitleDetailResponse:
 
 
 @strawberry_django.type(models.RateType)
-class RateType:
-    id: strawberry.ID
+class RateType(Node):
     uuid: str
     name: str
     tenant_id: strawberry.ID
@@ -178,8 +171,7 @@ class RateTypeDetailResponse:
 
 
 @strawberry_django.type(models.Rate)
-class Rate:
-    id: strawberry.ID
+class Rate(Node):
     uuid: str
     amount: float  # Note: typo in model field name (DecimalField)
     tenant_id: strawberry.ID
@@ -197,8 +189,7 @@ class RateDetailResponse:
 
 
 @strawberry_django.type(models.Job)
-class Job:
-    id: strawberry.ID
+class Job(Node):
     uuid: str
     name: str
     description: str | None
@@ -213,7 +204,6 @@ class Job:
     coordinates: List[float] | None
     job_title: JobTitle
     other_title: JobTitle | None
-    company: Company
     event: Event
     tenant_id: strawberry.ID
     tenant: Tenant | None = None
@@ -237,8 +227,7 @@ class JobDetailResponse:
 
 
 @strawberry_django.type(models.JobFile)
-class JobFile:
-    id: strawberry.ID
+class JobFile(Node):
     uuid: str
     name: str
     url: str
@@ -257,8 +246,7 @@ class JobFileDetailResponse:
 
 
 @strawberry_django.type(models.JobRequirementType)
-class JobRequirementType:
-    id: strawberry.ID
+class JobRequirementType(Node):
     uuid: str
     name: str
     tenant_id: strawberry.ID
@@ -275,8 +263,7 @@ class JobRequirementTypeDetailResponse:
 
 
 @strawberry_django.type(models.JobRequirement)
-class JobRequirement:
-    id: strawberry.ID
+class JobRequirement(Node):
     uuid: str
     name: str
     tenant_id: strawberry.ID
@@ -295,8 +282,7 @@ class JobRequirementDetailResponse:
 
 
 @strawberry_django.type(models.JobRequirementFile)
-class JobRequirementFile:
-    id: strawberry.ID
+class JobRequirementFile(Node):
     uuid: str
     name: str
     url: str
@@ -315,8 +301,7 @@ class JobRequirementFileDetailResponse:
 
 
 @strawberry_django.type(models.AmbassadorJob)
-class AmbassadorJob:
-    id: strawberry.ID
+class AmbassadorJob(Node):
     uuid: str
     appear_as_rfp: bool
     tenant_id: strawberry.ID
@@ -338,8 +323,7 @@ class AmbassadorJobDetailResponse:
 
 
 @strawberry_django.type(models.CompanyToAmbassadorReview)
-class CompanyToAmbassadorReview:
-    id: strawberry.ID
+class CompanyToAmbassadorReview(Node):
     uuid: str
     description: str
     rate: float  # DecimalField
@@ -359,8 +343,7 @@ class CompanyToAmbassadorReviewDetailResponse:
 
 
 @strawberry_django.type(models.AmbassadorToAmbassadorReview)
-class AmbassadorToAmbassadorReview:
-    id: strawberry.ID
+class AmbassadorToAmbassadorReview(Node):
     uuid: str
     description: str
     rate: float  # DecimalField
@@ -379,8 +362,7 @@ class AmbassadorToAmbassadorReviewDetailResponse:
 
 
 @strawberry_django.type(models.QuestionType)
-class QuestionType:
-    id: strawberry.ID
+class QuestionType(Node):
     uuid: str
     name: str
     tenant_id: strawberry.ID
@@ -397,8 +379,7 @@ class QuestionTypeDetailResponse:
 
 
 @strawberry_django.type(models.JobRequirementQuestion)
-class JobRequirementQuestion:
-    id: strawberry.ID
+class JobRequirementQuestion(Node):
     uuid: str
     question: str
     tenant_id: strawberry.ID
@@ -417,8 +398,7 @@ class JobRequirementQuestionDetailResponse:
 
 
 @strawberry_django.type(models.QuestionOption)
-class QuestionOption:
-    id: strawberry.ID
+class QuestionOption(Node):
     uuid: str
     option: str
     tenant_id: strawberry.ID
@@ -436,8 +416,7 @@ class QuestionOptionDetailResponse:
 
 
 @strawberry_django.type(models.JobRequirementAnswer)
-class JobRequirementAnswer:
-    id: strawberry.ID
+class JobRequirementAnswer(Node):
     uuid: str
     selected_answer: List[int]
     tenant_id: strawberry.ID
@@ -453,3 +432,11 @@ class JobRequirementAnswerDetailResponse:
     message: str
     client_mutation_id: strawberry.ID | None = None
     job_requirement_answer: JobRequirementAnswer | None = None
+
+
+@strawberry.type
+class InviteAmbassadorsToJobResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    ambassador_jobs: List[AmbassadorJob] | None = None

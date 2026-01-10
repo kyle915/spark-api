@@ -26,15 +26,11 @@ class TestApplyAmbassadorJob(JobsGraphQLTestCase):
 
         self.event = self.create_event(
             "Launch", tenant=self.tenant, address="123 St")
-        self.company = self.create_company(
-            "ACME", "contact@acme.local", "123456789", self.tenant
-        )
         self.job_title = self.create_job_title("Promoter", self.tenant)
         self.job = self.create_job(
             name="Test Job",
             code="JOB-1",
             address="123 St",
-            company=self.company,
             event=self.event,
             job_title=self.job_title,
             tenant=self.tenant,

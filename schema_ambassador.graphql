@@ -19,14 +19,15 @@ type AcceptInvitationResponse {
 """
 Ambassador(id, uuid, rating, address, coordinates, is_active, user, created_by, updated_by, created_at, updated_at)
 """
-type Ambassador {
+type Ambassador implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   rating: Int!
   address: String
   coordinates: [Float!]!
   isActive: Boolean!
-  userId: ID!
+  user: SparkUserType!
   createdAt: String!
   updatedAt: String!
 }
@@ -34,13 +35,43 @@ type Ambassador {
 """
 AmbassadorEvent(id, uuid, is_approved, ambassador, tenant, event, created_by, updated_by, created_at, updated_at)
 """
-type AmbassadorEventType {
+type AmbassadorEventType implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   isApproved: Boolean!
   ambassador: Ambassador!
+  event: Event!
   tenantId: ID!
   eventId: ID!
+  createdAt: String!
+  updatedAt: String!
+}
+
+input AmbassadorFileInput {
+  clientMutationId: ID = null
+  name: String!
+  url: String = null
+  mainResume: Boolean = null
+  profilePic: Boolean = null
+  isPublic: Boolean = null
+  fileTypeId: ID = null
+}
+
+"""
+AmbassadorFile(id, uuid, name, url, main_resume, profile_pic, is_public, file_type, ambassador, created_by, updated_by, created_at, updated_at)
+"""
+type AmbassadorFileType implements Node {
+  """The Globally Unique ID of this object"""
+  id: ID!
+  uuid: String!
+  name: String!
+  url: String
+  mainResume: Boolean!
+  profilePic: Boolean!
+  isPublic: Boolean!
+  ambassadorId: ID!
+  fileType: FileType
   createdAt: String!
   updatedAt: String!
 }
@@ -53,7 +84,8 @@ type AmbassadorInvitationResponse {
 }
 
 """Model to track ambassador invitations sent by clients or spark-admins."""
-type AmbassadorInvitationType {
+type AmbassadorInvitationType implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   email: String!
@@ -71,12 +103,14 @@ type AmbassadorInvitationType {
 """
 AmbassadorJob(id, uuid, recap_uploaded, appear_as_rfp, tenant, ambassador, job, status, rate, created_by, updated_by, created_at, updated_at)
 """
-type AmbassadorJob {
+type AmbassadorJob implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   appearAsRfp: Boolean!
   tenantId: ID!
   ambassadorId: ID!
+  ambassador: Ambassador!
   job: Job!
   status: Status!
   rate: Rate!
@@ -105,10 +139,25 @@ type AmbassadorJobDetailResponse {
   ambassadorJob: AmbassadorJob
 }
 
+input AmbassadorJobFiltersInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  status: AmbassadorJobStatusFilter = null
+  statusId: ID = null
+  statusSlug: String = null
+}
+
+enum AmbassadorJobStatusFilter {
+  APPROVED
+  DECLINED
+  PENDING
+}
+
 """
 AmbassadorNote(id, uuid, note, tenant, ambassador, created_by, updated_by, created_at, updated_at)
 """
-type AmbassadorNoteType {
+type AmbassadorNoteType implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   note: String!
@@ -120,12 +169,29 @@ type AmbassadorNoteType {
   updatedAt: String!
 }
 
+type AmbassadorProfile {
+  ambassador: Ambassador!
+  reviews: [AmbassadorReviewType!]!
+  files: [AmbassadorFileType!]!
+  traits: [AmbassadorTraitType!]!
+  skills: [AmbassadorSkillType!]!
+  notes: [AmbassadorNoteType!]!
+  workHistory: [AmbassadorWorkHistoryType!]!
+}
+
+input AmbassadorProfileNoteInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  note: String!
+}
+
 input AmbassadorRegisterInput {
   clientMutationId: ID = null
   firstName: String!
   email: String!
   password1: String!
   password2: String!
+  image: String = null
   role: UserRoleEnum!
   tenantId: ID = null
 }
@@ -133,7 +199,8 @@ input AmbassadorRegisterInput {
 """
 AmbassadorReview(id, uuid, review, score, ambassador, client, tenant, created_by, updated_by, created_at, updated_at)
 """
-type AmbassadorReviewType {
+type AmbassadorReviewType implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   review: String
@@ -145,15 +212,22 @@ type AmbassadorReviewType {
   updatedAt: String!
 }
 
+input AmbassadorSkillInput {
+  clientMutationId: ID = null
+  skillId: ID!
+}
+
 """
 AmbassadorSkill(id, uuid, tenant, ambassador, skill, created_by, updated_by, created_at, updated_at)
 """
-type AmbassadorSkillType {
+type AmbassadorSkillType implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   ambassadorId: ID!
   skillId: ID!
   tenantId: ID!
+  skill: SkillType!
   createdAt: String!
   updatedAt: String!
 }
@@ -161,7 +235,8 @@ type AmbassadorSkillType {
 """
 AmbassadorToAmbassadorReview(id, uuid, description, rate, tenant, ambassador, created_by, updated_by, created_at, updated_at)
 """
-type AmbassadorToAmbassadorReview {
+type AmbassadorToAmbassadorReview implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   description: String!
@@ -177,6 +252,42 @@ type AmbassadorToAmbassadorReviewDetailResponse {
   message: String!
   clientMutationId: ID
   ambassadorToAmbassadorReview: AmbassadorToAmbassadorReview
+}
+
+input AmbassadorTraitInput {
+  clientMutationId: ID = null
+  userId: ID!
+}
+
+"""
+AmbassadorTrait(id, uuid, ambassador, user, created_by, updated_by, created_at, updated_at)
+"""
+type AmbassadorTraitType implements Node {
+  """The Globally Unique ID of this object"""
+  id: ID!
+  uuid: String!
+  ambassadorId: ID!
+  userId: ID!
+  createdAt: String!
+  updatedAt: String!
+}
+
+input AmbassadorWorkHistoryInput {
+  clientMutationId: ID = null
+  userId: ID!
+}
+
+"""
+AmbassadorWorkHistory(id, uuid, ambassador, user, created_by, updated_by, created_at, updated_at)
+"""
+type AmbassadorWorkHistoryType implements Node {
+  """The Globally Unique ID of this object"""
+  id: ID!
+  uuid: String!
+  ambassadorId: ID!
+  userId: ID!
+  createdAt: String!
+  updatedAt: String!
 }
 
 input AppleSocialAuthInput {
@@ -211,7 +322,8 @@ type ApproveAmbassadorResponse {
 """
 Attendance(id, uuid, clock_time, coordinates, ambassador, job, event, attendace_type, attendance_status, source, timezone, created_by, updated_by, created_at, updated_at)
 """
-type Attendance {
+type Attendance implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   clockTime: String!
@@ -220,11 +332,14 @@ type Attendance {
   jobId: ID
   eventId: ID
   attendaceTypeId: ID
+  attendaceType: AttendanceType
   attendanceStatusId: ID
+  attendanceStatus: AttendanceStatus
   sourceId: ID
   timezoneId: ID
   createdAt: String!
   updatedAt: String!
+  ambassador: Ambassador
 }
 
 type AttendanceDetailResponse {
@@ -235,12 +350,14 @@ type AttendanceDetailResponse {
 }
 
 """
-AttendanceStatus(id, uuid, name, tenant, created_by, updated_by, created_at, updated_at)
+AttendanceStatus(id, uuid, name, slug, tenant, created_by, updated_by, created_at, updated_at)
 """
-type AttendanceStatus {
+type AttendanceStatus implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
+  slug: String
   tenantId: ID
   createdAt: String!
   updatedAt: String!
@@ -254,12 +371,14 @@ type AttendanceStatusDetailResponse {
 }
 
 """
-AttendanceType(id, uuid, name, created_by, updated_by, created_at, updated_at)
+AttendanceType(id, uuid, name, slug, created_by, updated_by, created_at, updated_at)
 """
-type AttendanceType {
+type AttendanceType implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
+  slug: String
   createdAt: String!
   updatedAt: String!
 }
@@ -274,7 +393,8 @@ type AttendanceTypeDetailResponse {
 """
 Client(id, uuid, name, email, tenant, created_by, updated_by, created_at, updated_at)
 """
-type Client {
+type Client implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
@@ -284,10 +404,16 @@ type Client {
   updatedAt: String!
 }
 
+enum ColorSchemeEnum {
+  DARK
+  LIGHT
+}
+
 """
 Company(id, name, uuid, email, website_url, founding_date, phone, address, about_us, company_size_min, company_size_max, approved, tenant, location, cover, profile_image, created_by, updated_by, created_at, updated_at)
 """
-type Company {
+type Company implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
@@ -311,7 +437,8 @@ type Company {
 """
 CompanyFile(id, uuid, name, url, file_type, created_by, updated_by, created_at, updated_at)
 """
-type CompanyFile {
+type CompanyFile implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
@@ -337,6 +464,15 @@ input CoordinatesFilterInput {
   coordinates: [Float!]!
   range: Float!
   unit: DistanceUnit! = KILOMETERS
+}
+
+input CreateAmbassadorInput {
+  clientMutationId: ID = null
+  userId: ID!
+  address: String = null
+  coordinates: [Float!] = null
+  isActive: Boolean = null
+  rating: Int = null
 }
 
 input CreateAmbassadorInvitationInput {
@@ -367,6 +503,13 @@ type CreateAmbassadorNoteResponse {
   message: String!
   clientMutationId: ID
   ambassadorNote: AmbassadorNoteType
+}
+
+type CreateAmbassadorResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  ambassador: Ambassador
 }
 
 input CreateAmbassadorReviewInput {
@@ -425,12 +568,14 @@ input CreateAttendanceStatusInput {
   clientMutationId: ID = null
   tenantId: ID = null
   name: String!
+  slug: String = null
 }
 
 input CreateAttendanceTypeInput {
   clientMutationId: ID = null
   tenantId: ID = null
   name: String!
+  slug: String = null
 }
 
 input CreatePublicAmbassadorInput {
@@ -465,6 +610,8 @@ input CreateRequestWithDependenciesInput {
   coordinates: [Float!]!
   timezoneId: ID!
   requestTypeId: ID!
+  distributorId: ID = null
+  retailerId: ID = null
   clientName: String!
   clientEmail: String!
   distributorName: String!
@@ -500,7 +647,8 @@ input CreateSourceInput {
 """
 User(password, last_login, is_superuser, username, first_name, last_name, email, is_staff, date_joined, id, uuid, image, role, created_by, updated_by, created_at, updated_at, is_active)
 """
-type CustomUserType {
+type CustomUserType implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: UUID!
 
@@ -510,6 +658,7 @@ type CustomUserType {
   firstName: String!
   lastName: String!
   role: RoleType!
+  image: String
 }
 
 """Date with time (isoformat)"""
@@ -588,7 +737,8 @@ enum DistanceUnit {
 """
 Distributor(id, uuid, name, email, location, tenant, created_by, updated_by, created_at, updated_at)
 """
-type Distributor {
+type Distributor implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
@@ -599,21 +749,24 @@ type Distributor {
   updatedAt: String!
 }
 
-type DjangoModelType {
-  pk: ID!
+type DjangoImageType {
+  name: String!
+  path: String!
+  size: Int!
+  url: String!
+  width: Int!
+  height: Int!
 }
 
 """
-Event(id, uuid, name, date, coordinates, tenant, request, event_type, status, start_time, end_time, address, notes, is_national, created_by, updated_by, created_at, updated_at)
+Event(id, uuid, name, date, coordinates, timezone, tenant, request, event_type, status, start_time, end_time, address, notes, is_national, created_by, updated_by, created_at, updated_at)
 """
-type Event {
+type Event implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
-  date: String
   coordinates: [Float!]
-  startTime: String
-  endTime: String
   address: String!
   isNational: Boolean!
   notes: String
@@ -624,7 +777,11 @@ type Event {
   tenant: TenantType
   eventType: EventType
   status: EventStatus
+  timezone: TimeZone
   tenantImage: String
+  date: String
+  startTime: String
+  endTime: String
 }
 
 type EventCountableConnection {
@@ -646,7 +803,7 @@ input EventFiltersInput {
   tenantId: ID = null
   tenantUuid: ID = null
   eventTypeId: ID = null
-  eventStatusId: ID = null
+  eventStatus: EventStatusFilterEnum = null
   requestId: ID = null
   date: String = null
   coordinates: CoordinatesFilterInput = null
@@ -655,7 +812,8 @@ input EventFiltersInput {
 """
 EventStatus(id, uuid, name, slug, is_default, tenant, created_by, updated_by, created_at, updated_at)
 """
-type EventStatus {
+type EventStatus implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
@@ -680,6 +838,12 @@ type EventStatusCountableEdge {
   node: EventStatus!
 }
 
+enum EventStatusFilterEnum {
+  APPROVED
+  DECLINED
+  PENDING
+}
+
 input EventStatusFiltersInput {
   clientMutationId: ID = null
   tenantId: ID = null
@@ -689,7 +853,8 @@ input EventStatusFiltersInput {
 """
 EventType(id, uuid, name, is_default, tenant, created_by, updated_by, created_at, updated_at)
 """
-type EventType {
+type EventType implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
@@ -722,6 +887,19 @@ input EventTypeFiltersInput {
 "\n     Errors messages and codes mapped to\n    fields or non fields errors.\n    Example:\n    {\n        field_name: [\n            {\n                \"message\": \"error message\",\n                \"code\": \"error_code\"\n            }\n        ],\n        other_field: [\n            {\n                \"message\": \"error message\",\n                \"code\": \"error_code\"\n            }\n        ],\n        nonFieldErrors: [\n            {\n                \"message\": \"error message\",\n                \"code\": \"error_code\"\n            }\n        ]\n    }\n    "
 scalar ExpectedError
 
+"""
+FileType(id, uuid, name, extension, created_by, updated_by, created_at, updated_at)
+"""
+type FileType implements Node {
+  """The Globally Unique ID of this object"""
+  id: ID!
+  uuid: String!
+  name: String!
+  extension: String
+  createdAt: String!
+  updatedAt: String!
+}
+
 input GoogleCalendarCallbackInput {
   clientMutationId: ID = null
   code: String!
@@ -747,14 +925,20 @@ input GoogleSocialAuthInput {
 }
 
 """
-Job(id, uuid, name, description, code, address, start_date, end_date, public, closed, national, ongoing, coordinates, job_title, other_title, company, event, tenant, rate, created_by, updated_by, created_at, updated_at)
+The `JSON` scalar type represents JSON values as specified by [ECMA-404](https://ecma-international.org/wp-content/uploads/ECMA-404_2nd_edition_december_2017.pdf).
 """
-type Job {
+scalar JSON @specifiedBy(url: "https://ecma-international.org/wp-content/uploads/ECMA-404_2nd_edition_december_2017.pdf")
+
+"""
+Job(id, uuid, name, description, code, address, start_date, end_date, public, closed, national, ongoing, coordinates, job_title, other_title, event, tenant, rate, created_by, updated_by, created_at, updated_at)
+"""
+type Job implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
   description: String
-  code: String!
+  code: String
   address: String!
   startDate: String
   endDate: String
@@ -762,16 +946,17 @@ type Job {
   closed: Boolean!
   national: Boolean!
   ongoing: Boolean!
+  coordinates: [Float!]
   jobTitle: JobTitle!
   otherTitle: JobTitle
-  company: Company!
   event: Event!
-  location: Location!
   tenantId: ID!
+  tenant: TenantType
   rate: Rate!
   jobRequirements: [JobRequirement!]!
   createdAt: String!
   updatedAt: String!
+  attendances: [Attendance!]!
 }
 
 type JobCountableConnection {
@@ -792,12 +977,14 @@ input JobFiltersInput {
   clientMutationId: ID = null
   tenantId: ID = null
   eventId: ID = null
+  status: JobStatusFilter = null
 }
 
 """
 JobRequirement(id, uuid, name, tenant, job_requirement_type, job, created_by, updated_by, created_at, updated_at)
 """
-type JobRequirement {
+type JobRequirement implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
@@ -811,7 +998,8 @@ type JobRequirement {
 """
 JobRequirementType(id, uuid, name, tenant, created_by, updated_by, created_at, updated_at)
 """
-type JobRequirementType {
+type JobRequirementType implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
@@ -820,10 +1008,16 @@ type JobRequirementType {
   updatedAt: String!
 }
 
+enum JobStatusFilter {
+  OPEN
+  CLOSED
+}
+
 """
 JobTitle(id, uuid, name, tenant, created_by, updated_by, created_at, updated_at)
 """
-type JobTitle {
+type JobTitle implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String
@@ -835,7 +1029,8 @@ type JobTitle {
 """
 Location(id, uuid, name, code, zip, tenant, created_by, updated_by, created_at, updated_at)
 """
-type Location {
+type Location implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
@@ -870,13 +1065,15 @@ type Mutation {
   updateAmbassadorJob(input: UpdateAmbassadorJobInput!): AmbassadorJobDetailResponse!
   createAmbassadorToAmbassadorReview(input: CreateAmbassadorToAmbassadorReviewInput!): AmbassadorToAmbassadorReviewDetailResponse!
   updateAmbassadorToAmbassadorReview(input: UpdateAmbassadorToAmbassadorReviewInput!): AmbassadorToAmbassadorReviewDetailResponse!
-  applyAmbassadorEvent(eventId: ID!): ApplyAmbassadorEventResponse!
+  applyAmbassadorEvent(eventId: ID!, ambassadorId: ID = null): ApplyAmbassadorEventResponse!
   applyAmbassadorJob(jobId: ID!): ApplyAmbassadorJobResponse!
   createPublicAmbassador(input: CreatePublicAmbassadorInput!): PublicAmbassadorCreationResponse!
   createAmbassadorInvitation(input: CreateAmbassadorInvitationInput!): AmbassadorInvitationResponse!
   acceptAmbassadorInvitation(input: AcceptAmbassadorInvitationInput!): AcceptInvitationResponse!
   approveAmbassador(input: ApproveAmbassadorInput!): ApproveAmbassadorResponse!
+  createAmbassador(input: CreateAmbassadorInput!): CreateAmbassadorResponse!
   updateAmbassador(input: UpdateAmbassadorInput!): UpdateAmbassadorResponse!
+  upsertAmbassadorProfile(input: UpsertAmbassadorProfileInput!): UpsertAmbassadorProfileResponse!
   deleteInvitation(input: DeleteInvitationInput!): DeleteInvitationResponse!
   createAmbassadorReview(input: CreateAmbassadorReviewInput!): CreateAmbassadorReviewResponse!
   updateAmbassadorReview(input: UpdateAmbassadorReviewInput!): UpdateAmbassadorReviewResponse!
@@ -902,6 +1099,12 @@ type Mutation {
 type MutationNormalOutput {
   success: Boolean!
   errors: ExpectedError
+}
+
+"""An object with a Globally Unique ID"""
+interface Node {
+  """The Globally Unique ID of this object"""
+  id: ID!
 }
 
 input ObtainJSONWebTokenInput {
@@ -948,27 +1151,30 @@ type PublicAmbassadorCreationResponse {
 
 type Query {
   events(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: EventFiltersInput = null): EventCountableConnection!
-  event(uuid: ID!): Event
+  event(id: ID = null, uuid: ID = null): Event
   todayEvents(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: EventFiltersInput = null): EventCountableConnection!
   todayEventsCoordinates(coordinates: [Float!]!, range: Float!, unit: DistanceUnit! = KILOMETERS, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: EventFiltersInput = null): EventCountableConnection!
   eventTypes(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: EventTypeFiltersInput = null): EventTypeCountableConnection!
-  eventType(id: ID!): EventType
+  eventType(id: ID = null, uuid: ID = null): EventType
   eventStatuses(first: Int = null, after: String = null, last: Int = null, before: String = null, filters: EventStatusFiltersInput = null): EventStatusCountableConnection!
-  eventStatus(id: ID!): EventStatus
+  eventStatus(id: ID = null, uuid: ID = null): EventStatus
   timezones(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): TimeZoneCountableConnection!
   publicTimezones(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): TimeZoneCountableConnection!
   googleCalendarConnectionStatus: GoogleCalendarConnectionStatus!
+  tenantThemePublic(requestUrlName: String!, colorScheme: ColorSchemeEnum! = DARK): TenantThemeType
+  tenantTheme(tenantId: ID!, colorScheme: ColorSchemeEnum! = DARK): TenantThemeType
   healthcheck: String!
   me: CustomUserType!
   availableJobs(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: JobFiltersInput = null): JobCountableConnection!
-  ambassadorJobs(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): AmbassadorJobCountableConnection!
-  ambassadorJob(id: ID!): AmbassadorJob
+  ambassadorJobs(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: AmbassadorJobFiltersInput = null): AmbassadorJobCountableConnection!
+  ambassadorJob(id: ID = null, uuid: ID = null): AmbassadorJob
 }
 
 """
 Rate(id, uuid, amount, tenant, rate_type, created_by, updated_by, created_at, updated_at)
 """
-type Rate {
+type Rate implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   amount: Float!
@@ -981,7 +1187,8 @@ type Rate {
 """
 RateType(id, uuid, name, tenant, created_by, updated_by, created_at, updated_at)
 """
-type RateType {
+type RateType implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
@@ -1020,13 +1227,11 @@ type RegisterResponse {
 """
 Request(id, uuid, name, date, start_time, end_time, address, coordinates, client_name, client_email, distributor_name, distributor_email, retailer_name, retailer_address, retailer_store_contact, store_manager_name, store_manager_phone, timezone, client, distributor, retailer, request_type, status, tenant, created_by, updated_by, created_at, updated_at)
 """
-type Request {
+type Request implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
-  date: String!
-  startTime: String
-  endTime: String
   address: String!
   coordinates: [Float!]!
   clientName: String
@@ -1047,6 +1252,9 @@ type Request {
   tenantId: ID!
   createdAt: String!
   updatedAt: String!
+  date: String
+  startTime: String
+  endTime: String
 }
 
 type RequestDetailResponse {
@@ -1056,7 +1264,11 @@ type RequestDetailResponse {
   request: Request
 }
 
-type RequestStatus {
+"""
+RequestStatus(id, uuid, name, slug, create_event, is_default, tenant, created_by, updated_by, created_at, updated_at)
+"""
+type RequestStatus implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
@@ -1070,7 +1282,8 @@ type RequestStatus {
 """
 RequestType(id, uuid, name, tenant, created_by, updated_by, created_at, updated_at)
 """
-type RequestType {
+type RequestType implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
@@ -1082,7 +1295,8 @@ type RequestType {
 """
 Retailer(id, uuid, name, address, store_contact, location, tenant, created_by, updated_by, created_at, updated_at)
 """
-type Retailer {
+type Retailer implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
@@ -1097,7 +1311,8 @@ type Retailer {
 """
 Role(id, uuid, name, slug, created_by, updated_by, created_at, updated_at)
 """
-type RoleType {
+type RoleType implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: UUID!
   name: String!
@@ -1106,7 +1321,8 @@ type RoleType {
 """
 Skill(id, uuid, name, tenant, created_by, updated_by, created_at, updated_at)
 """
-type SkillType {
+type SkillType implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
@@ -1124,7 +1340,8 @@ type SocialAuthResponse {
 }
 
 """Source(id, uuid, name, created_by, updated_by, created_at, updated_at)"""
-type Source {
+type Source implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
@@ -1140,9 +1357,26 @@ type SourceDetailResponse {
 }
 
 """
+User(password, last_login, is_superuser, username, first_name, last_name, email, is_staff, date_joined, id, uuid, image, role, created_by, updated_by, created_at, updated_at, is_active)
+"""
+type SparkUserType implements Node {
+  """The Globally Unique ID of this object"""
+  id: ID!
+  uuid: UUID!
+
+  """Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only."""
+  username: String!
+  email: String!
+  firstName: String!
+  lastName: String!
+  image: DjangoImageType
+}
+
+"""
 Status(id, uuid, name, slug, tenant, created_by, updated_by, created_at, updated_at)
 """
-type Status {
+type Status implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
@@ -1153,9 +1387,25 @@ type Status {
 }
 
 """
+Per-tenant visual theme configuration compatible with DaisyUI.
+
+The frontend can use `css_variables` directly to construct a theme
+definition or apply CSS custom properties.
+"""
+type TenantThemeType implements Node {
+  """The Globally Unique ID of this object"""
+  id: ID!
+  name: String!
+  colorScheme: String!
+  cssVariables: JSON!
+  tenant: Node!
+}
+
+"""
 Tenant(id, uuid, name, image, request_url_name, created_by, updated_by, created_at, updated_at)
 """
-type TenantType {
+type TenantType implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: UUID!
   name: String!
@@ -1166,7 +1416,8 @@ type TenantType {
 """
 TimeZone(id, uuid, name, code, offset, created_by, updated_by, created_at, updated_at)
 """
-type TimeZone {
+type TimeZone implements Node {
+  """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
@@ -1292,6 +1543,7 @@ input UpdateAttendanceStatusInput {
   clientMutationId: ID = null
   tenantId: ID = null
   name: String!
+  slug: String = null
   id: ID!
 }
 
@@ -1299,6 +1551,7 @@ input UpdateAttendanceTypeInput {
   clientMutationId: ID = null
   tenantId: ID = null
   name: String!
+  slug: String = null
   id: ID!
 }
 
@@ -1323,9 +1576,32 @@ input UpdateSourceInput {
   id: ID!
 }
 
+input UpsertAmbassadorProfileInput {
+  clientMutationId: ID = null
+  ambassadorId: ID = null
+  ambassadorUuid: ID = null
+  address: String = null
+  coordinates: [Float!] = null
+  isActive: Boolean = null
+  rating: Int = null
+  files: [AmbassadorFileInput!] = null
+  traits: [AmbassadorTraitInput!] = null
+  skills: [AmbassadorSkillInput!] = null
+  notes: [AmbassadorProfileNoteInput!] = null
+  workHistory: [AmbassadorWorkHistoryInput!] = null
+}
+
+type UpsertAmbassadorProfileResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  profile: AmbassadorProfile
+}
+
 enum UserRoleEnum {
   AMBASSADOR
   CLIENT
+  SPARK
 }
 
 """A helper model that handles user account stuff."""
@@ -1338,7 +1614,7 @@ type UserStatusType {
 User(password, last_login, is_superuser, username, first_name, last_name, email, is_staff, date_joined, id, uuid, image, role, created_by, updated_by, created_at, updated_at, is_active)
 """
 type UserType {
-  logentrySet: [DjangoModelType!]!
+  logentrySet: [Node!]!
 
   """
   Designates that this user has all permissions without explicitly assigning them.
@@ -1351,13 +1627,13 @@ type UserType {
   isActive: Boolean!
   dateJoined: DateTime!
   status: UserStatusType!
+  email: String!
+  lastName: String
 
   """Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only."""
   username: String!
-  firstName: String
   id: ID!
-  email: String!
-  lastName: String
+  firstName: String
   archived: Boolean!
   verified: Boolean!
 }

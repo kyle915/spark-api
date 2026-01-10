@@ -150,12 +150,6 @@ class TestJobsModelCreation(JobsGraphQLTestCase):
     def test_create_job(self):
         """Test creating a job directly with all dependencies."""
         tenant = self.create_tenant(name="Test Tenant")
-        company = self.create_company(
-            name="Test Company",
-            email="test@company.com",
-            phone="123-456-7890",
-            tenant=tenant
-        )
         location = self.create_location(
             name="Test Location",
             code="TEST",
@@ -174,7 +168,6 @@ class TestJobsModelCreation(JobsGraphQLTestCase):
             name="Test Job",
             code="JOB-001",
             address="123 Job St",
-            company=company,
             event=event,
             job_title=job_title,
             tenant=tenant
@@ -183,7 +176,6 @@ class TestJobsModelCreation(JobsGraphQLTestCase):
         assert job.id is not None
         assert job.name == "Test Job"
         assert job.code == "JOB-001"
-        assert job.company == company
         assert job.event == event
         assert job.job_title == job_title
         assert job.tenant == tenant
@@ -192,12 +184,6 @@ class TestJobsModelCreation(JobsGraphQLTestCase):
     def test_create_job_file(self):
         """Test creating a job file directly."""
         tenant = self.create_tenant(name="Test Tenant")
-        company = self.create_company(
-            name="Test Company",
-            email="test@company.com",
-            phone="123-456-7890",
-            tenant=tenant
-        )
         location = self.create_location(
             name="Test Location",
             code="TEST",
@@ -215,7 +201,6 @@ class TestJobsModelCreation(JobsGraphQLTestCase):
             name="Test Job",
             code="JOB-001",
             address="123 Job St",
-            company=company,
             event=event,
             job_title=job_title,
             tenant=tenant
@@ -252,12 +237,6 @@ class TestJobsModelCreation(JobsGraphQLTestCase):
     def test_create_job_requirement(self):
         """Test creating a job requirement directly."""
         tenant = self.create_tenant(name="Test Tenant")
-        company = self.create_company(
-            name="Test Company",
-            email="test@company.com",
-            phone="123-456-7890",
-            tenant=tenant
-        )
         location = self.create_location(
             name="Test Location",
             code="TEST",
@@ -275,7 +254,6 @@ class TestJobsModelCreation(JobsGraphQLTestCase):
             name="Test Job",
             code="JOB-001",
             address="123 Job St",
-            company=company,
             event=event,
             job_title=job_title,
             tenant=tenant

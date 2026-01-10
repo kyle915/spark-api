@@ -78,7 +78,8 @@ class TestAmbassadorsRegistration(BaseGraphQLTestCase):
         assert result.data["register"][
             "success"] is True, f"Registration failed: {result.data['register'].get('message', 'Unknown error')}"
         assert "successfully" in result.data["register"]["message"].lower()
-        assert result.data["register"]["activationToken"] is not None
+        # With auto_verify=True, activationToken is None since user is auto-verified
+        assert result.data["register"]["activationToken"] is None
         assert result.data["register"]["clientMutationId"] == "test-123"
 
         # Verify user was created
@@ -205,6 +206,7 @@ class TestSparkRegistration(BaseGraphQLTestCase):
         assert result.data is not None
         assert result.data["register"]["success"] is True
         assert "successfully" in result.data["register"]["message"].lower()
+        # Spark registration doesn't use auto_verify, so activationToken is generated
         assert result.data["register"]["activationToken"] is not None
         assert result.data["register"]["clientMutationId"] == "spark-123"
 
@@ -335,6 +337,7 @@ class TestClientsRegistration(BaseGraphQLTestCase):
         assert result.data is not None
         assert result.data["register"]["success"] is True
         assert "successfully" in result.data["register"]["message"].lower()
+        # Client registration doesn't use auto_verify, so activationToken is generated
         assert result.data["register"]["activationToken"] is not None
         assert result.data["register"]["clientMutationId"] == "client-123"
 

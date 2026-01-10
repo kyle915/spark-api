@@ -7,6 +7,7 @@ from google.cloud import storage
 from google.api_core.exceptions import NotFound
 from django.conf import settings
 from urllib.parse import urlparse
+from typing import Optional
 
 
 def get_gcs_client():
@@ -93,6 +94,44 @@ def delete_blob(blob_name: str) -> bool:
         return True
     except NotFound:
         return False
+
+
+def upload_bytes(
+    blob_name: str,
+    data: bytes,
+    content_type: str = "application/octet-stream",
+) -> None:
+    """
+    Upload bytes directly to GCS.
+
+    Args:
+        blob_name: The path/name of the file in the bucket (e.g., "recaps/file.pdf")
+        data: Byte content to upload
+        content_type: MIME type for the uploaded blob
+    """
+    client = get_gcs_client()
+    bucket = client.bucket(settings.GS_BUCKET_NAME)
+    blob = bucket.blob(blob_name)
+    blob.upload_from_string(data, content_type=content_type)
+
+
+def download_blob_bytes(blob_name: str) -> Optional[bytes]:
+    """
+    Download a blob from GCS as bytes.
+
+    Args:
+        blob_name: The path/name of the file in the bucket
+
+    Returns:
+        The blob content as bytes, or None if not found.
+    """
+    client = get_gcs_client()
+    bucket = client.bucket(settings.GS_BUCKET_NAME)
+    blob = bucket.blob(blob_name)
+    try:
+        return blob.download_as_bytes()
+    except NotFound:
+        return None
 
 
 def extract_blob_name_from_url(url_or_path: str | None) -> str | None:

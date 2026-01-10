@@ -5,21 +5,28 @@ from asgiref.sync import sync_to_async
 from typing import Any
 
 from django.contrib.auth import get_user_model
-from django.db.models import Model
+from django.db.models import Model, Prefetch, Q
 from django.db import transaction
+from django.utils import timezone
 
 from recaps import types
 from recaps import models
 from recaps import inputs
-from ambassadors.models import FileType
+from ambassadors.models import FileType, Ambassador
 from events.models import Event, Retailer
 from jobs.models import Job
 from utils.graphql.inputs import SparkGraphQLInput
 from utils.graphql.permissions import StrictIsAuthenticated
 from utils.graphql.relay import ensure_relay_mutation
-from utils.graphql.mixins import SparkGraphQLMixin
+from utils.graphql.mixins import SparkGraphQLMixin, resolve_id_to_int
 from utils.utils import build_mutation_response
-from utils.gcs import extract_blob_name_from_url, delete_blob
+from utils.gcs import (
+    extract_blob_name_from_url,
+    delete_blob,
+    upload_bytes,
+    download_blob_bytes,
+)
+from recaps.pdf import build_recap_pdf, should_embed_recap_file, is_image_bytes
 
 ensure_relay_mutation()
 
@@ -58,23 +65,36 @@ class RecapMutationService(SparkGraphQLMixin):
 
         # Validate event exists
         try:
-            event = await sync_to_async(Event.objects.get)(id=self.input.event_id)
-        except Event.DoesNotExist:
+            event_id = resolve_id_to_int(self.input.event_id)
+            event = await sync_to_async(Event.objects.get)(id=event_id)
+        except (Event.DoesNotExist, TypeError, ValueError, GraphQLError):
             raise GraphQLError("Event not found.")
 
         job = None
         if self.input.job_id:
             try:
-                job = await sync_to_async(Job.objects.get)(id=self.input.job_id)
-            except Job.DoesNotExist:
+                job_id = resolve_id_to_int(self.input.job_id)
+                job = await sync_to_async(Job.objects.get)(id=job_id)
+            except (Job.DoesNotExist, TypeError, ValueError, GraphQLError):
                 raise GraphQLError("Job not found.")
 
         retailer = None
         if self.input.retailer_id:
             try:
-                retailer = await sync_to_async(Retailer.objects.get)(id=self.input.retailer_id)
-            except Retailer.DoesNotExist:
+                retailer_id = resolve_id_to_int(self.input.retailer_id)
+                retailer = await sync_to_async(Retailer.objects.get)(id=retailer_id)
+            except (Retailer.DoesNotExist, TypeError, ValueError, GraphQLError):
                 raise GraphQLError("Retailer not found.")
+
+        ambassador = None
+        if self.input.ambassador_id:
+            try:
+                ambassador_id = resolve_id_to_int(self.input.ambassador_id)
+                ambassador = await sync_to_async(Ambassador.objects.get)(
+                    id=ambassador_id
+                )
+            except (Ambassador.DoesNotExist, TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Ambassador not found.")
 
         if not self.input.files or len(self.input.files) == 0:
             raise GraphQLError("At least one file is required.")
@@ -85,19 +105,51 @@ class RecapMutationService(SparkGraphQLMixin):
             with transaction.atomic():
                 # Create RecapFile instances for each file
                 recap_files = []
-                for file_url in self.input.files:
+                for file_input in self.input.files:
+                    file_url = file_input.file
                     # Extract blob name from GCS URL
                     blob_name = extract_blob_name_from_url(file_url)
-                    
+                    if not blob_name:
+                        raise GraphQLError("Invalid recap file path.")
+
+                    file_type = None
+                    if file_input.file_type_id not in (None, ""):
+                        try:
+                            file_type_id = resolve_id_to_int(file_input.file_type_id)
+                            file_type = FileType.objects.get(id=file_type_id)
+                        except (FileType.DoesNotExist, TypeError, ValueError, GraphQLError):
+                            raise GraphQLError("File type not found.")
+
                     # Get default file type (you may want to make this configurable)
-                    file_type = FileType.objects.first()
                     if not file_type:
-                        raise GraphQLError("No file type available. Please create a file type first.")
+                        file_type = FileType.objects.first()
+                    if not file_type:
+                        raise GraphQLError(
+                            "No file type available. Please create a file type first."
+                        )
+
+                    file_recap_category = None
+                    if file_input.file_recap_category_id not in (None, ""):
+                        try:
+                            category_id = resolve_id_to_int(
+                                file_input.file_recap_category_id
+                            )
+                            file_recap_category = models.FileRecapCategory.objects.get(
+                                id=category_id
+                            )
+                        except (
+                            models.FileRecapCategory.DoesNotExist,
+                            TypeError,
+                            ValueError,
+                            GraphQLError,
+                        ):
+                            raise GraphQLError("File recap category not found.")
 
                     recap_file = models.RecapFile(
                         name=f"Recap file for {self.input.name}",
                         file=blob_name,
                         file_type=file_type,
+                        file_recap_category=file_recap_category,
                         approved=False,
                         created_by=self.user,
                     )
@@ -112,23 +164,20 @@ class RecapMutationService(SparkGraphQLMixin):
                 recap = models.Recap(
                     name=self.input.name,
                     event=event,
-                    recap_file=recap_files[0],
                     created_by=self.user,
                     total_engagements=total_engagements,
                     products_sold=self.input.products_sold,
                     total_earnings=self.input.total_earnings,
                     job=job,
                     retailer=retailer,
+                    ambassador=ambassador,
                 )
                 recap.save()
 
-                # Create RecapRecapFile entries for ALL files
-                for recap_file in recap_files:
-                    models.RecapRecapFile.objects.create(
-                        recap=recap,
-                        recap_file=recap_file,
-                        created_by=self.user,
-                    )
+                # Link recap to all recap files
+                models.RecapFile.objects.filter(
+                    id__in=[recap_file.id for recap_file in recap_files]
+                ).update(recap=recap)
 
                 # Create related objects
                 if self.input.consumer_engagements:
@@ -144,22 +193,33 @@ class RecapMutationService(SparkGraphQLMixin):
 
                 if self.input.product_samples:
                     for sample in self.input.product_samples:
-                        models.ProductSamples.objects.create(
-                            recap=recap,
-                            created_by=self.user,
-                            product_id=sample.product_id,
-                            quantity=sample.quantity,
-                        )
+                        try:
+                            product_id = resolve_id_to_int(sample.product_id)
+                            models.ProductSamples.objects.create(
+                                recap=recap,
+                                created_by=self.user,
+                                product_id=product_id,
+                                quantity=sample.quantity,
+                            )
+                        except (TypeError, ValueError, GraphQLError):
+                            raise GraphQLError(
+                                f"Invalid product ID: {sample.product_id}"
+                            )
 
                 if self.input.sales_performance:
                     for sale in self.input.sales_performance:
-                        models.SalesPerformance.objects.create(
-                            recap=recap,
-                            created_by=self.user,
-                            product_id=sale.product_id,
-                            type_of_good_id=sale.type_of_good_id,
-                            price=sale.price,
-                        )
+                        try:
+                            product_id = resolve_id_to_int(sale.product_id)
+                            type_of_good_id = resolve_id_to_int(sale.type_of_good_id)
+                            models.SalesPerformance.objects.create(
+                                recap=recap,
+                                created_by=self.user,
+                                product_id=product_id,
+                                type_of_good_id=type_of_good_id,
+                                price=sale.price,
+                            )
+                        except (TypeError, ValueError, GraphQLError):
+                            raise GraphQLError(f"Invalid product or type of good ID")
 
                 if self.input.consumer_feedback:
                     models.ConsumerFeedback.objects.create(
@@ -180,9 +240,9 @@ class RecapMutationService(SparkGraphQLMixin):
                         feedback=self.input.account_feedback.feedback,
                         corpo_card=self.input.account_feedback.corpo_card,
                     )
-                
+
                 return recap
-        
+
         return await create_recap_with_files()
 
     async def update_recap(self) -> models.Recap:
@@ -191,15 +251,43 @@ class RecapMutationService(SparkGraphQLMixin):
             raise GraphQLError("Invalid input type.")
 
         try:
-            recap = await sync_to_async(models.Recap.objects.get)(id=self.input.id)
-        except models.Recap.DoesNotExist:
+            recap_id = resolve_id_to_int(self.input.id)
+            recap = await sync_to_async(models.Recap.objects.get)(id=recap_id)
+        except (models.Recap.DoesNotExist, TypeError, ValueError, GraphQLError):
             raise GraphQLError("Recap not found.")
 
         # Validate event exists
         try:
-            event = await sync_to_async(Event.objects.get)(id=self.input.event_id)
-        except Event.DoesNotExist:
+            event_id = resolve_id_to_int(self.input.event_id)
+            event = await sync_to_async(Event.objects.get)(id=event_id)
+        except (Event.DoesNotExist, TypeError, ValueError, GraphQLError):
             raise GraphQLError("Event not found.")
+
+        job = None
+        if self.input.job_id:
+            try:
+                job_id = resolve_id_to_int(self.input.job_id)
+                job = await sync_to_async(Job.objects.get)(id=job_id)
+            except (Job.DoesNotExist, TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Job not found.")
+
+        retailer = None
+        if self.input.retailer_id:
+            try:
+                retailer_id = resolve_id_to_int(self.input.retailer_id)
+                retailer = await sync_to_async(Retailer.objects.get)(id=retailer_id)
+            except (Retailer.DoesNotExist, TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Retailer not found.")
+
+        ambassador = None
+        if self.input.ambassador_id:
+            try:
+                ambassador_id = resolve_id_to_int(self.input.ambassador_id)
+                ambassador = await sync_to_async(Ambassador.objects.get)(
+                    id=ambassador_id
+                )
+            except (Ambassador.DoesNotExist, TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Ambassador not found.")
 
         if not self.input.files or len(self.input.files) == 0:
             raise GraphQLError("At least one file is required.")
@@ -208,7 +296,7 @@ class RecapMutationService(SparkGraphQLMixin):
         def update_recap_with_files():
             with transaction.atomic():
                 existing_files = list(
-                    models.RecapFile.objects.filter(recap_recap_file__recap=recap).distinct()
+                    models.RecapFile.objects.filter(recap=recap).distinct()
                 )
                 blob_to_file = {
                     extract_blob_name_from_url(str(file.file)): file
@@ -217,24 +305,90 @@ class RecapMutationService(SparkGraphQLMixin):
                 }
 
                 final_files: list[models.RecapFile] = []
-                for file_url in self.input.files:
+                for file_input in self.input.files:
+                    file_url = file_input.file
                     blob_name = extract_blob_name_from_url(file_url)
                     if not blob_name:
                         raise GraphQLError("Invalid recap file path.")
 
                     if blob_name in blob_to_file:
                         # Reuse existing file; mark as kept by popping
-                        final_files.append(blob_to_file.pop(blob_name))
+                        existing_file = blob_to_file.pop(blob_name)
+                        updated_fields = []
+                        if file_input.file_type_id not in (None, ""):
+                            try:
+                                file_type_id = resolve_id_to_int(file_input.file_type_id)
+                                file_type = FileType.objects.get(id=file_type_id)
+                            except (
+                                FileType.DoesNotExist,
+                                TypeError,
+                                ValueError,
+                                GraphQLError,
+                            ):
+                                raise GraphQLError("File type not found.")
+                            if existing_file.file_type_id != file_type.id:
+                                existing_file.file_type = file_type
+                                updated_fields.append("file_type")
+
+                        if file_input.file_recap_category_id not in (None, ""):
+                            try:
+                                category_id = resolve_id_to_int(
+                                    file_input.file_recap_category_id
+                                )
+                                file_recap_category = (
+                                    models.FileRecapCategory.objects.get(id=category_id)
+                                )
+                            except (
+                                models.FileRecapCategory.DoesNotExist,
+                                TypeError,
+                                ValueError,
+                                GraphQLError,
+                            ):
+                                raise GraphQLError("File recap category not found.")
+                            if existing_file.file_recap_category_id != file_recap_category.id:
+                                existing_file.file_recap_category = file_recap_category
+                                updated_fields.append("file_recap_category")
+
+                        if updated_fields:
+                            existing_file.save(update_fields=updated_fields)
+                        final_files.append(existing_file)
                         continue
 
-                    file_type = FileType.objects.first()
+                    file_type = None
+                    if file_input.file_type_id not in (None, ""):
+                        try:
+                            file_type_id = resolve_id_to_int(file_input.file_type_id)
+                            file_type = FileType.objects.get(id=file_type_id)
+                        except (FileType.DoesNotExist, TypeError, ValueError, GraphQLError):
+                            raise GraphQLError("File type not found.")
+                    if not file_type:
+                        file_type = FileType.objects.first()
                     if not file_type:
                         raise GraphQLError("No file type available.")
+
+                    file_recap_category = None
+                    if file_input.file_recap_category_id not in (None, ""):
+                        try:
+                            category_id = resolve_id_to_int(
+                                file_input.file_recap_category_id
+                            )
+                            file_recap_category = models.FileRecapCategory.objects.get(
+                                id=category_id
+                            )
+                        except (
+                            models.FileRecapCategory.DoesNotExist,
+                            TypeError,
+                            ValueError,
+                            GraphQLError,
+                        ):
+                            raise GraphQLError("File recap category not found.")
 
                     recap_file = models.RecapFile(
                         name=f"Recap file for {self.input.name}",
                         file=blob_name,
                         file_type=file_type,
+                        file_recap_category=file_recap_category,
+                        recap=recap,
                         approved=False,
                         created_by=self.user,
                     )
@@ -246,28 +400,19 @@ class RecapMutationService(SparkGraphQLMixin):
                 # Update the recap
                 recap.name = self.input.name
                 recap.event = event
-                recap.recap_file = final_files[0]
+                if self.input.job_id is not None:
+                    recap.job = job
+                if self.input.retailer_id is not None:
+                    recap.retailer = retailer
+                if self.input.ambassador_id is not None:
+                    recap.ambassador = ambassador
                 recap.updated_by = self.user
                 recap.save()
 
-                # Remove only relations for files no longer linked
-                models.RecapRecapFile.objects.filter(recap=recap).exclude(
-                    recap_file__in=final_files
-                ).delete()
-
-                # Ensure relations exist for all current files
-                existing_relations = set(
-                    models.RecapRecapFile.objects.filter(
-                        recap=recap, recap_file__in=final_files
-                    ).values_list("recap_file_id", flat=True)
-                )
                 for recap_file in final_files:
-                    if recap_file.id not in existing_relations:
-                        models.RecapRecapFile.objects.create(
-                            recap=recap,
-                            recap_file=recap_file,
-                            created_by=self.user,
-                        )
+                    if recap_file.recap_id != recap.id:
+                        recap_file.recap = recap
+                        recap_file.save(update_fields=["recap"])
 
                 removed_blob_names = [
                     extract_blob_name_from_url(str(file.file)) for file in removed_files
@@ -279,10 +424,10 @@ class RecapMutationService(SparkGraphQLMixin):
                     ).delete()
 
                 return recap, removed_blob_names
-        
-        recap, existing_blob_names = await update_recap_with_files()
 
-        for blob_name in existing_blob_names:
+        recap, removed_blob_names = await update_recap_with_files()
+
+        for blob_name in removed_blob_names:
             if blob_name:
                 delete_blob(blob_name)
 
@@ -294,19 +439,20 @@ class RecapMutationService(SparkGraphQLMixin):
             raise GraphQLError("Invalid input type.")
 
         try:
-            recap = await sync_to_async(models.Recap.objects.get)(id=self.input.id)
-        except models.Recap.DoesNotExist:
+            recap_id = resolve_id_to_int(self.input.id)
+            recap = await sync_to_async(models.Recap.objects.get)(id=recap_id)
+        except (models.Recap.DoesNotExist, TypeError, ValueError, GraphQLError):
             raise GraphQLError("Recap not found.")
 
         @sync_to_async
         def delete_recap_with_files():
             with transaction.atomic():
-                # Delete RecapRecapFile entries
-                models.RecapRecapFile.objects.filter(recap=recap).delete()
+                # Detach recap files before deleting recap
+                models.RecapFile.objects.filter(recap=recap).update(recap=None)
                 # Delete the recap
                 recap.delete()
             return True
-        
+
         return await delete_recap_with_files()
 
     async def delete_recap_file(self) -> bool:
@@ -315,22 +461,22 @@ class RecapMutationService(SparkGraphQLMixin):
             raise GraphQLError("Invalid input type.")
 
         try:
+            recap_file_id = resolve_id_to_int(self.input.id)
             recap_file = await sync_to_async(models.RecapFile.objects.get)(
-                id=self.input.id
+                id=recap_file_id
             )
-        except models.RecapFile.DoesNotExist:
+        except (models.RecapFile.DoesNotExist, TypeError, ValueError, GraphQLError):
             raise GraphQLError("Recap file not found.")
 
         @sync_to_async
         def delete_file_with_references():
             with transaction.atomic():
-                if models.Recap.objects.filter(recap_file=recap_file).exists():
+                if recap_file.recap_id:
                     raise GraphQLError(
-                        "Recap file is set as primary for a recap. Update the recap before deleting this file."
+                        "Recap file is linked to a recap. Update the recap before deleting this file."
                     )
 
                 blob_name = extract_blob_name_from_url(str(recap_file.file))
-                models.RecapRecapFile.objects.filter(recap_file=recap_file).delete()
                 recap_file.delete()
                 return blob_name
 
@@ -345,8 +491,9 @@ class RecapMutationService(SparkGraphQLMixin):
             raise GraphQLError("Invalid input type.")
 
         try:
-            recap = await sync_to_async(models.Recap.objects.get)(id=self.input.id)
-        except models.Recap.DoesNotExist:
+            recap_id = resolve_id_to_int(self.input.id)
+            recap = await sync_to_async(models.Recap.objects.get)(id=recap_id)
+        except (models.Recap.DoesNotExist, TypeError, ValueError, GraphQLError):
             raise GraphQLError("Recap not found.")
 
         @sync_to_async
@@ -358,6 +505,123 @@ class RecapMutationService(SparkGraphQLMixin):
                 return recap
 
         return await approve_recap_transaction()
+
+    async def generate_recap_pdf(self) -> models.RecapFile:
+        """Generate a PDF with recap details and images, upload it, and return the file."""
+        if not isinstance(self.input, inputs.GenerateRecapPdfInput):
+            raise GraphQLError("Invalid input type.")
+
+        try:
+            recap_id = resolve_id_to_int(self.input.id)
+        except (TypeError, ValueError, GraphQLError):
+            raise GraphQLError("Recap not found.")
+
+        @sync_to_async
+        def fetch_recap():
+            return (
+                models.Recap.objects.select_related(
+                    "event",
+                    "job",
+                    "retailer",
+                    "ambassador",
+                    "ambassador__user",
+                )
+                .prefetch_related(
+                    Prefetch(
+                        "recap_files",
+                        queryset=models.RecapFile.objects.select_related(
+                            "file_type",
+                            "file_recap_category",
+                        ),
+                    ),
+                    "consumer_engagements",
+                    Prefetch(
+                        "product_samples",
+                        queryset=models.ProductSamples.objects.select_related(
+                            "product"
+                        ),
+                    ),
+                    Prefetch(
+                        "sales_performance",
+                        queryset=models.SalesPerformance.objects.select_related(
+                            "product",
+                            "type_of_good",
+                        ),
+                    ),
+                    "consumer_feedback",
+                    "account_feedback",
+                )
+                .get(id=recap_id)
+            )
+
+        try:
+            recap = await fetch_recap()
+        except models.Recap.DoesNotExist:
+            raise GraphQLError("Recap not found.")
+
+        image_entries = []
+        for recap_file in recap.recap_files.all():
+            blob_name = extract_blob_name_from_url(str(recap_file.file))
+            if not blob_name:
+                continue
+            image_bytes = download_blob_bytes(blob_name)
+            if not image_bytes:
+                continue
+            if not should_embed_recap_file(recap_file) and not is_image_bytes(image_bytes):
+                continue
+            image_entries.append(
+                {
+                    "name": recap_file.name,
+                    "bytes": image_bytes,
+                    "category": (
+                        recap_file.file_recap_category.name
+                        if recap_file.file_recap_category
+                        else "Uncategorized"
+                    ),
+                }
+            )
+
+        pdf_bytes = build_recap_pdf(recap, image_entries)
+        timestamp = timezone.now().strftime("%Y%m%d%H%M%S")
+        blob_name = f"recaps/pdfs/{recap.uuid}-{timestamp}.pdf"
+        upload_bytes(blob_name, pdf_bytes, content_type="application/pdf")
+
+        @sync_to_async
+        def create_recap_pdf_file():
+            file_type = FileType.objects.filter(
+                Q(extension__iexact=".pdf") | Q(extension__iexact="pdf")
+            ).first()
+            if not file_type:
+                raise GraphQLError("No PDF file type available.")
+            existing_files = list(
+                models.RecapFile.objects.filter(recap=recap, file_type=file_type)
+            )
+            existing_blob_names = [
+                extract_blob_name_from_url(str(item.file)) for item in existing_files
+            ]
+            if existing_files:
+                models.RecapFile.objects.filter(
+                    id__in=[item.id for item in existing_files]
+                ).delete()
+            recap_file = models.RecapFile.objects.create(
+                name=f"Recap PDF - {recap.name}",
+                file=blob_name,
+                file_type=file_type,
+                recap=recap,
+                approved=False,
+                created_by=self.user,
+            )
+            return recap_file, existing_blob_names
+
+        try:
+            recap_file, existing_blob_names = await create_recap_pdf_file()
+        except Exception:
+            delete_blob(blob_name)
+            raise
+        for existing_blob_name in existing_blob_names:
+            if existing_blob_name:
+                delete_blob(existing_blob_name)
+        return recap_file
 
 
 @strawberry.type
@@ -475,7 +739,11 @@ class RecapMutations:
             service = RecapMutationService.with_input(input)
             await service.set_user(info)
             recap = await service.approve_recap()
-            message = "Recap approved successfully." if input.approved else "Recap declined successfully."
+            message = (
+                "Recap approved successfully."
+                if input.approved
+                else "Recap declined successfully."
+            )
             return build_mutation_response(
                 types.RecapDetailResponse,
                 success=True,
@@ -486,6 +754,32 @@ class RecapMutations:
         except GraphQLError as e:
             return build_mutation_response(
                 types.RecapDetailResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def generate_recap_pdf(
+        self,
+        info: strawberry.Info,
+        input: inputs.GenerateRecapPdfInput,
+    ) -> types.RecapFileDetailResponse:
+        """Generate a recap PDF and return the resulting file."""
+        try:
+            service = RecapMutationService.with_input(input)
+            await service.set_user(info)
+            recap_file = await service.generate_recap_pdf()
+            return build_mutation_response(
+                types.RecapFileDetailResponse,
+                success=True,
+                message="Recap PDF generated successfully.",
+                input_obj=input,
+                recap_file=recap_file,
+            )
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.RecapFileDetailResponse,
                 success=False,
                 message=str(e),
                 input_obj=input,

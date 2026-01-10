@@ -313,7 +313,6 @@ class JobsGraphQLTestCase(BaseGraphQLTestCase):
         name: str,
         code: str,
         address: str,
-        company: models.Company,
         event: Event,
         job_title: models.JobTitle,
         tenant: Tenant,
@@ -326,7 +325,6 @@ class JobsGraphQLTestCase(BaseGraphQLTestCase):
             name: Name of the job
             code: Code of the job
             address: Address of the job
-            company: Company instance
             event: Event instance
             job_title: JobTitle instance
             tenant: Tenant instance
@@ -341,7 +339,6 @@ class JobsGraphQLTestCase(BaseGraphQLTestCase):
             name=name,
             code=code,
             address=address,
-            company=company,
             event=event,
             job_title=job_title,
             tenant=tenant,

@@ -1,22 +1,28 @@
+from __future__ import annotations
+
 import strawberry_django
 import strawberry
+from strawberry.relay import Node
 from typing import List
 
 from events import types as event_types
+from jobs import types as job_types
 from ambassadors import types as ambassador_types
 from . import models
 from utils.gcs import generate_download_url, extract_blob_name_from_url
 
 
 @strawberry_django.type(models.RecapFile)
-class RecapFile:
-    id: strawberry.ID
+class RecapFile(Node):
     uuid: str
     name: str
     approved: bool
     file_type_id: strawberry.ID
+    file_recap_category_id: strawberry.ID | None
     created_at: str
     updated_at: str
+
+    file_recap_category: FileRecapCategory | None
 
     @strawberry.field
     def file(self) -> str | None:
@@ -38,8 +44,7 @@ class RecapFileDetailResponse:
 
 
 @strawberry_django.type(models.ConsumerEngagements)
-class ConsumerEngagements:
-    id: strawberry.ID
+class ConsumerEngagements(Node):
     uuid: str
     total_consumer: int
     first_time_consumers: int
@@ -51,8 +56,7 @@ class ConsumerEngagements:
 
 
 @strawberry_django.type(models.ProductSamples)
-class ProductSamples:
-    id: strawberry.ID
+class ProductSamples(Node):
     uuid: str
     product: event_types.Product
     quantity: int
@@ -61,8 +65,15 @@ class ProductSamples:
 
 
 @strawberry_django.type(models.TypeOfGood)
-class TypeOfGood:
-    id: strawberry.ID
+class TypeOfGood(Node):
+    uuid: str
+    name: str
+    created_at: str
+    updated_at: str
+
+
+@strawberry_django.type(models.FileRecapCategory)
+class FileRecapCategory(Node):
     uuid: str
     name: str
     created_at: str
@@ -70,8 +81,7 @@ class TypeOfGood:
 
 
 @strawberry_django.type(models.SalesPerformance)
-class SalesPerformance:
-    id: strawberry.ID
+class SalesPerformance(Node):
     uuid: str
     product: event_types.Product
     type_of_good: TypeOfGood
@@ -81,8 +91,7 @@ class SalesPerformance:
 
 
 @strawberry_django.type(models.ConsumerFeedback)
-class ConsumerFeedback:
-    id: strawberry.ID
+class ConsumerFeedback(Node):
     uuid: str
     demographics: str | None
     feedback: str | None
@@ -94,8 +103,7 @@ class ConsumerFeedback:
 
 
 @strawberry_django.type(models.AccountFeedback)
-class AccountFeedback:
-    id: strawberry.ID
+class AccountFeedback(Node):
     uuid: str
     do_differently_feedback: str | None
     feedback: str | None
@@ -105,13 +113,14 @@ class AccountFeedback:
 
 
 @strawberry_django.type(models.Recap)
-class Recap:
-    id: strawberry.ID
+class Recap(Node):
     uuid: str
     name: str
     approved: bool
     event: event_types.Event
     event_id: strawberry.ID
+    job_id: strawberry.ID | None
+    job: job_types.Job | None
     recap_file: RecapFile
     recap_file_id: strawberry.ID
     created_at: str
@@ -131,7 +140,7 @@ class Recap:
     @strawberry.field
     def recap_files(self) -> List[RecapFile]:
         """Return all recap files linked to this recap."""
-        return [relation.recap_file for relation in self.recap_recap_file.all()]
+        return list(self.recap_files.all())
 
     @strawberry.field
     def ambassadors(self) -> List[ambassador_types.Ambassador]:
@@ -158,13 +167,3 @@ class RecapDetailResponse:
 class RecapListResponse:
     total_pages: int
     recaps: List[Recap]
-
-
-@strawberry_django.type(models.RecapRecapFile)
-class RecapRecapFile:
-    id: strawberry.ID
-    uuid: str
-    recap_file_id: strawberry.ID
-    recap_id: strawberry.ID
-    created_at: str
-    updated_at: str
