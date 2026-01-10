@@ -300,7 +300,13 @@ class EventMutations:
                     )
                     setattr(input, "tenant_id", tenant_id)
                 else:
-                    tenant = await service.get_tenant(user, input_tenant_id)
+                    resolved_tenant_id = input_tenant_id
+                    if input_tenant_id is not None:
+                        try:
+                            resolved_tenant_id = resolve_id_to_int(input_tenant_id)
+                        except (TypeError, ValueError, GraphQLError):
+                            raise GraphQLError("Invalid tenant ID.")
+                    tenant = await service.get_tenant(user, resolved_tenant_id)
                     tenant_id = tenant.id
 
             if tenant_id is None:
