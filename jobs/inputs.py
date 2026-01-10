@@ -136,7 +136,6 @@ class CreateJobInput(BaseNameableInput):
     coordinates: List[float] | None = None
     job_title_id: strawberry.ID
     other_title_id: strawberry.ID | None = None
-    company_id: strawberry.ID
     event_id: strawberry.ID
     rate_id: strawberry.ID | None = None
 
@@ -156,6 +155,11 @@ class JobStatusFilter(str, Enum):
 class JobFiltersInput(BaseTenantInput):
     event_id: strawberry.ID | None = None
     status: JobStatusFilter | None = None
+
+
+@strawberry.input
+class RateTypeFiltersInput(BaseTenantInput):
+    pass
 
 
 @strawberry.input

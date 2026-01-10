@@ -44,12 +44,6 @@ class TestClientInviteAmbassadorsToJob(JobsGraphQLTestCase):
         self.create_tenanted_user(user=self.client_user, tenant=self.tenant)
 
         # Create prerequisite data
-        self.company = self.create_company(
-            name="Test Company",
-            email="company@test.com",
-            phone="123-456-7890",
-            tenant=self.tenant
-        )
         self.event = self.create_event(
             name="Test Event",
             tenant=self.tenant,
@@ -72,7 +66,6 @@ class TestClientInviteAmbassadorsToJob(JobsGraphQLTestCase):
             name="Test Job",
             code="JOB-001",
             address="123 Main St",
-            company=self.company,
             event=self.event,
             job_title=self.job_title,
             tenant=self.tenant,
@@ -252,7 +245,6 @@ class TestClientInviteAmbassadorsToJob(JobsGraphQLTestCase):
                 name="Job Without Rate",
                 code="JOB-NO-RATE",
                 address="123 Test St",
-                company=self.company,
                 event=self.event,
                 job_title=self.job_title,
                 tenant=self.tenant,
@@ -485,12 +477,6 @@ class TestSparkInviteAmbassadorsToJob(JobsGraphQLTestCase):
             user=self.spark_admin_user, tenant=self.tenant)
 
         # Create prerequisite data
-        self.company = self.create_company(
-            name="Test Company",
-            email="company@test.com",
-            phone="123-456-7890",
-            tenant=self.tenant
-        )
         self.event = self.create_event(
             name="Test Event",
             tenant=self.tenant,
@@ -513,7 +499,6 @@ class TestSparkInviteAmbassadorsToJob(JobsGraphQLTestCase):
             name="Test Job",
             code="JOB-SPARK-001",
             address="123 Main St",
-            company=self.company,
             event=self.event,
             job_title=self.job_title,
             tenant=self.tenant,

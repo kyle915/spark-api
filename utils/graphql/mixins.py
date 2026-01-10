@@ -549,7 +549,12 @@ class BaseMutationService(SparkGraphQLMixin):
         model_class = self.get_model()
         is_update: bool = hasattr(self.input, "id") and self.input.id is not None
         if is_update:
-            model = await sync_to_async(model_class.objects.get)(id=self.input.id)
+            model_id = getattr(self.input, "id", None)
+            try:
+                resolved_id = resolve_id_to_int(model_id)
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError(f"Invalid ID: {model_id}")
+            model = await sync_to_async(model_class.objects.get)(id=resolved_id)
             if self.user:
                 setattr(model, "updated_by", self.user)
         else:
@@ -561,6 +566,12 @@ class BaseMutationService(SparkGraphQLMixin):
 
         # set the parameters
         params: dict[str, Any] = self.input.to_dict(["tenant_id", "id"])
+        for key, value in list(params.items()):
+            if key.endswith("_id") and value is not None:
+                try:
+                    params[key] = resolve_id_to_int(value)
+                except (TypeError, ValueError, GraphQLError):
+                    raise GraphQLError(f"Invalid {key}: {value}")
         for key, value in params.items():
             setattr(model, key, value)
 

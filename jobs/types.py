@@ -204,7 +204,6 @@ class Job(Node):
     coordinates: List[float] | None
     job_title: JobTitle
     other_title: JobTitle | None
-    company: Company
     event: Event
     tenant_id: strawberry.ID
     tenant: Tenant | None = None

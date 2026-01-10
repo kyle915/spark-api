@@ -726,6 +726,30 @@ class AmbassadorGroupQueriesService(BaseQueriesService):
         """Get the model for the service."""
         return models.AmbassadorGroup
 
+    def apply_filters(
+        self,
+        queryset: QuerySet,
+        filters: inputs.AmbassadorGroupFiltersInput | None,
+    ) -> QuerySet:
+        """Apply ambassador group filters to queryset."""
+        if not filters:
+            return queryset
+
+        if filters.job_id:
+            try:
+                job_id = resolve_id_to_int(filters.job_id)
+                queryset = queryset.filter(
+                    members__ambassador__ambassador_jobs__job_id=job_id
+                ).distinct()
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Invalid job ID.")
+        if filters.job_uuid:
+            queryset = queryset.filter(
+                members__ambassador__ambassador_jobs__job__uuid=filters.job_uuid
+            ).distinct()
+
+        return queryset
+
 
 class AttendanceQueriesService(BaseQueriesService):
     """Service for attendance queries."""
@@ -992,6 +1016,7 @@ class AmbassadorGroupQueries:
 
         q = filters.search if filters else None
         queryset = service.get_ordered_queryset(tenant_id=tenant_id, q=q)
+        queryset = service.apply_filters(queryset, filters)
 
         return await service.get_connection(
             tenant_id=tenant_id,

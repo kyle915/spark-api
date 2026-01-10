@@ -358,9 +358,9 @@ class Job(models.Model):
         related_name="jobs_other_titles",
     )
 
-    company = models.ForeignKey(
-        Company, on_delete=models.RESTRICT, null=False, related_name="jobs"
-    )
+    # company = models.ForeignKey(
+    #     Company, on_delete=models.RESTRICT, null=False, related_name="jobs"
+    # )
 
     event = models.ForeignKey(
         Event, on_delete=models.RESTRICT, null=False, related_name="jobs"
