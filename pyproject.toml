@@ -1,0 +1,50 @@
+[project]
+name = "spark-api"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "django>=5.2.7",
+    "django-cors-headers>=4.9.0",
+    "django-environ>=0.12.0",
+    "django-storages>=1.14.6",
+    "google-api-python-client>=2.100.0",
+    "google-auth-httplib2>=0.1.1",
+    "google-auth-oauthlib>=1.0.0",
+    "google-cloud-storage>=3.6.0",
+    "httpx>=0.28.1",
+    "hypercorn>=0.17.3",
+    "pillow>=12.0.0",
+    "psycopg[binary]>=3.2.11",
+    "pyrefly>=0.38.1",
+    "strawberry-django-auth>=0.378.4",
+    "strawberry-graphql>=0.284.1",
+    "uuid6>=2025.0.1",
+    "django-rq>=3.2.1",
+    "redis>=5.0.0",
+    "cryptography>=41.0.0",
+    "resend>=2.19.0",
+    "django-extensions>=4.1",
+    "ipython>=9.8.0",
+    "weasyprint>=67.0",
+]
+
+[tool.pyrefly]
+project-includes = ["**/*.py*"]
+project-excludes = [
+    "**/node_modules",
+    "**/__pycache__",
+    "**/*venv/**/*",
+    "**/.[!/.]*/**/*",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.14.1",
+    "pytest>=8.0.0",
+    "pytest-django>=4.8.0",
+    "pytest-asyncio>=0.23.0",
+]
+
+[tool]
