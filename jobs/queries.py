@@ -12,7 +12,7 @@ from jobs import models
 from django.db.models import QuerySet
 from django.db.models import Model
 from jobs import types
-from jobs.inputs import JobFiltersInput, JobStatusFilter
+from jobs.inputs import JobFiltersInput, JobStatusFilter, RateTypeFiltersInput
 from ambassadors import models as ambassador_models
 
 
@@ -443,10 +443,11 @@ class RateTypeQueries:
         last: int | None = None,
         before: str | None = None,
         q: str | None = None,
+        filters: RateTypeFiltersInput | None = None,
     ) -> CountableConnection[types.RateType]:
         """Get all rate types."""
         service = RateTypeQueriesService()
-        tenant_id = await service.resolve_query_tenant_id(info)
+        tenant_id = await service.resolve_query_tenant_id(info, filters=filters)
         return await service.get_connection(
             tenant_id=tenant_id,
             q=q,
@@ -538,7 +539,6 @@ class JobQueriesService(JobsBaseQueriesService):
             .objects.select_related(
                 "job_title",
                 "other_title",
-                "company",
                 "event",
                 "rate",
             )

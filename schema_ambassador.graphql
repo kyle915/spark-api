@@ -930,7 +930,7 @@ The `JSON` scalar type represents JSON values as specified by [ECMA-404](https:/
 scalar JSON @specifiedBy(url: "https://ecma-international.org/wp-content/uploads/ECMA-404_2nd_edition_december_2017.pdf")
 
 """
-Job(id, uuid, name, description, code, address, start_date, end_date, public, closed, national, ongoing, coordinates, job_title, other_title, company, event, tenant, rate, created_by, updated_by, created_at, updated_at)
+Job(id, uuid, name, description, code, address, start_date, end_date, public, closed, national, ongoing, coordinates, job_title, other_title, event, tenant, rate, created_by, updated_by, created_at, updated_at)
 """
 type Job implements Node {
   """The Globally Unique ID of this object"""
@@ -949,7 +949,6 @@ type Job implements Node {
   coordinates: [Float!]
   jobTitle: JobTitle!
   otherTitle: JobTitle
-  company: Company!
   event: Event!
   tenantId: ID!
   tenant: TenantType

@@ -37,12 +37,6 @@ class TestClientJobQueries(JobsGraphQLTestCase):
         self.create_tenanted_user(user=self.client_user, tenant=self.tenant)
 
         # Create prerequisite data for jobs
-        self.company = self.create_company(
-            name="Test Company",
-            email="company@test.com",
-            phone="123-456-7890",
-            tenant=self.tenant
-        )
         self.location = self.create_location(
             name="Test Location",
             code="TEST",
@@ -64,7 +58,6 @@ class TestClientJobQueries(JobsGraphQLTestCase):
             name="Job 1",
             code="JOB-001",
             address="Address 1",
-            company=self.company,
             event=self.event,
             job_title=self.job_title,
             tenant=self.tenant
@@ -73,7 +66,6 @@ class TestClientJobQueries(JobsGraphQLTestCase):
             name="Job 2",
             code="JOB-002",
             address="Address 2",
-            company=self.company,
             event=self.event,
             job_title=self.job_title,
             tenant=self.tenant
@@ -171,12 +163,6 @@ class TestSparkJobQueries(JobsGraphQLTestCase):
         self.create_tenanted_user(user=self.spark_user, tenant=self.tenant)
 
         # Create prerequisite data for jobs
-        self.company = self.create_company(
-            name="Test Company",
-            email="company@test.com",
-            phone="123-456-7890",
-            tenant=self.tenant
-        )
         self.location = self.create_location(
             name="Test Location",
             code="TEST",
@@ -198,7 +184,6 @@ class TestSparkJobQueries(JobsGraphQLTestCase):
             name="Spark Job",
             code="SPARK-001",
             address="Spark Address",
-            company=self.company,
             event=self.event,
             job_title=self.job_title,
             tenant=self.tenant
@@ -285,12 +270,6 @@ class TestAmbassadorJobQueries(JobsGraphQLTestCase):
             user=self.ambassador_user, tenant=self.tenant)
 
         # Create prerequisite data for jobs
-        self.company = self.create_company(
-            name="Test Company",
-            email="company@test.com",
-            phone="123-456-7890",
-            tenant=self.tenant
-        )
         self.location = self.create_location(
             name="Test Location",
             code="TEST",
@@ -312,7 +291,6 @@ class TestAmbassadorJobQueries(JobsGraphQLTestCase):
             name="Available Job",
             code="AVAIL-001",
             address="Available Address",
-            company=self.company,
             event=self.event,
             job_title=self.job_title,
             tenant=self.tenant,

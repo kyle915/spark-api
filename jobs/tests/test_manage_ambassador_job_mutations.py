@@ -40,12 +40,6 @@ class TestClientManageAmbassadorJobMutations(JobsGraphQLTestCase):
         self.create_tenanted_user(user=self.client_user, tenant=self.tenant)
 
         # Create prerequisite data
-        self.company = self.create_company(
-            name="Test Company",
-            email="company@test.com",
-            phone="123-456-7890",
-            tenant=self.tenant
-        )
         self.location = self.create_location(
             name="Test Location",
             code="TEST",
@@ -65,7 +59,6 @@ class TestClientManageAmbassadorJobMutations(JobsGraphQLTestCase):
             name="Test Job",
             code="JOB-001",
             address="123 Main St",
-            company=self.company,
             event=self.event,
             job_title=self.job_title,
             tenant=self.tenant
@@ -391,12 +384,6 @@ class TestSparkManageAmbassadorJobMutations(JobsGraphQLTestCase):
         self.create_tenanted_user(user=self.spark_user, tenant=self.tenant)
 
         # Create prerequisite data
-        self.company = self.create_company(
-            name="Test Company",
-            email="company@test.com",
-            phone="123-456-7890",
-            tenant=self.tenant
-        )
         self.location = self.create_location(
             name="Test Location",
             code="TEST",
@@ -416,7 +403,6 @@ class TestSparkManageAmbassadorJobMutations(JobsGraphQLTestCase):
             name="Spark Job",
             code="SPARK-001",
             address="456 Spark St",
-            company=self.company,
             event=self.event,
             job_title=self.job_title,
             tenant=self.tenant

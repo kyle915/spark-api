@@ -37,12 +37,6 @@ class TestClientJobMutations(JobsGraphQLTestCase):
         self.create_tenanted_user(user=self.client_user, tenant=self.tenant)
 
         # Create prerequisite data for jobs
-        self.company = self.create_company(
-            name="Test Company",
-            email="company@test.com",
-            phone="123-456-7890",
-            tenant=self.tenant
-        )
         self.event = self.create_event(
             name="Test Event",
             tenant=self.tenant,
@@ -83,7 +77,6 @@ class TestClientJobMutations(JobsGraphQLTestCase):
                 "code": "JOB-001",
                 "address": "123 Main St",
                 "jobTitleId": str(self.job_title.id),
-                "companyId": str(self.company.id),
                 "eventId": str(self.event.id),
                 "coordinates": coordinates,
             }
@@ -104,7 +97,6 @@ class TestClientJobMutations(JobsGraphQLTestCase):
         assert job.name == "Test Job"
         assert job.code == "JOB-001"
         # Compare IDs to avoid async database access
-        assert job.company_id == self.company.id
         assert job.event_id == self.event.id
         assert job.coordinates == coordinates
         assert job.job_title_id == self.job_title.id
@@ -119,7 +111,6 @@ class TestClientJobMutations(JobsGraphQLTestCase):
             name="Original Job",
             code="JOB-ORIG",
             address="Original Address",
-            company=self.company,
             event=self.event,
             job_title=self.job_title,
             tenant=self.tenant,
@@ -150,7 +141,6 @@ class TestClientJobMutations(JobsGraphQLTestCase):
                 "code": "JOB-UPD",
                 "address": "Updated Address",
                 "jobTitleId": str(self.job_title.id),
-                "companyId": str(self.company.id),
                 "eventId": str(self.event.id),
                 "coordinates": new_coordinates,
             }
@@ -192,12 +182,6 @@ class TestSparkJobMutations(JobsGraphQLTestCase):
         self.create_tenanted_user(user=self.spark_user, tenant=self.tenant)
 
         # Create prerequisite data for jobs
-        self.company = self.create_company(
-            name="Test Company",
-            email="company@test.com",
-            phone="123-456-7890",
-            tenant=self.tenant
-        )
         self.event = self.create_event(
             name="Test Event",
             tenant=self.tenant,
@@ -237,7 +221,6 @@ class TestSparkJobMutations(JobsGraphQLTestCase):
                 "code": "SPARK-001",
                 "address": "456 Spark St",
                 "jobTitleId": str(self.job_title.id),
-                "companyId": str(self.company.id),
                 "eventId": str(self.event.id),
                 "coordinates": coordinates,
             }
@@ -269,7 +252,6 @@ class TestSparkJobMutations(JobsGraphQLTestCase):
             name="Original Spark Job",
             code="SPARK-ORIG",
             address="Original Address",
-            company=self.company,
             event=self.event,
             job_title=self.job_title,
             tenant=self.tenant,
@@ -299,7 +281,6 @@ class TestSparkJobMutations(JobsGraphQLTestCase):
                 "code": "SPARK-UPD",
                 "address": "Updated Address",
                 "jobTitleId": str(self.job_title.id),
-                "companyId": str(self.company.id),
                 "eventId": str(self.event.id),
                 "coordinates": new_coordinates,
             }

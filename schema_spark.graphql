@@ -189,6 +189,8 @@ type AmbassadorGroupCountableEdge {
 
 input AmbassadorGroupFiltersInput {
   search: String = null
+  jobId: ID = null
+  jobUuid: ID = null
 }
 
 type AmbassadorGroupResponse {
@@ -1230,7 +1232,6 @@ input CreateJobInput {
   coordinates: [Float!] = null
   jobTitleId: ID!
   otherTitleId: ID = null
-  companyId: ID!
   eventId: ID!
   rateId: ID = null
 }
@@ -2060,7 +2061,7 @@ The `JSON` scalar type represents JSON values as specified by [ECMA-404](https:/
 scalar JSON @specifiedBy(url: "https://ecma-international.org/wp-content/uploads/ECMA-404_2nd_edition_december_2017.pdf")
 
 """
-Job(id, uuid, name, description, code, address, start_date, end_date, public, closed, national, ongoing, coordinates, job_title, other_title, company, event, tenant, rate, created_by, updated_by, created_at, updated_at)
+Job(id, uuid, name, description, code, address, start_date, end_date, public, closed, national, ongoing, coordinates, job_title, other_title, event, tenant, rate, created_by, updated_by, created_at, updated_at)
 """
 type Job implements Node {
   """The Globally Unique ID of this object"""
@@ -2079,7 +2080,6 @@ type Job implements Node {
   coordinates: [Float!]
   jobTitle: JobTitle!
   otherTitle: JobTitle
-  company: Company!
   event: Event!
   tenantId: ID!
   tenant: TenantType
@@ -2898,7 +2898,7 @@ type Query {
   reviewScore(id: ID = null, uuid: ID = null): ReviewScore
   jobTitles(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): JobTitleCountableConnection!
   jobTitle(id: ID = null, uuid: ID = null): JobTitle
-  rateTypes(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): RateTypeCountableConnection!
+  rateTypes(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: RateTypeFiltersInput = null): RateTypeCountableConnection!
   rateType(id: ID = null, uuid: ID = null): RateType
   rates(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): RateCountableConnection!
   rate(id: ID = null, uuid: ID = null): Rate
@@ -3084,6 +3084,11 @@ type RateTypeDetailResponse {
   message: String!
   clientMutationId: ID
   rateType: RateType
+}
+
+input RateTypeFiltersInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
 }
 
 """
@@ -4092,7 +4097,6 @@ input UpdateJobInput {
   coordinates: [Float!] = null
   jobTitleId: ID!
   otherTitleId: ID = null
-  companyId: ID!
   eventId: ID!
   rateId: ID = null
   id: ID!
@@ -4439,11 +4443,11 @@ type UserType {
   dateJoined: DateTime!
   status: UserStatusType!
   email: String!
+  id: ID!
   lastName: String
 
   """Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only."""
   username: String!
-  id: ID!
   firstName: String
   archived: Boolean!
   verified: Boolean!

@@ -320,10 +320,6 @@ query {
           id
           name
         }
-        company {
-          id
-          name
-        }
         event {
           id
           name
@@ -367,10 +363,6 @@ query {
     national
     ongoing
     jobTitle {
-      id
-      name
-    }
-    company {
       id
       name
     }
@@ -762,7 +754,6 @@ mutation {
     ongoing: true
     jobTitleId: "1"
     otherTitleId: "2"
-    companyId: "1"
     eventId: "1"
     locationId: "1"
     rateId: "1"
@@ -786,10 +777,6 @@ mutation {
       national
       ongoing
       jobTitle {
-        id
-        name
-      }
-      company {
         id
         name
       }
@@ -817,7 +804,6 @@ mutation {
 - `ongoing` (bool, optional): Whether the job is ongoing (default: false)
 - `jobTitleId` (ID, required): ID of the job title
 - `otherTitleId` (ID, optional): ID of the other job title
-- `companyId` (ID, required): ID of the company
 - `eventId` (ID, required): ID of the associated event
 - `locationId` (ID, required): ID of the location
 - `rateId` (ID, required): ID of the rate
@@ -1230,7 +1216,6 @@ Extends `CreateCompanyInput` with:
 - `ongoing` (bool, optional): Whether the job is ongoing (default: false)
 - `jobTitleId` (ID, required): ID of the job title
 - `otherTitleId` (ID, optional): ID of the other job title
-- `companyId` (ID, required): ID of the company
 - `eventId` (ID, required): ID of the associated event
 - `locationId` (ID, required): ID of the location
 - `rateId` (ID, required): ID of the rate
@@ -1381,7 +1366,6 @@ mutation {
     public: true
     ongoing: true
     jobTitleId: "1"
-    companyId: "1"
     eventId: "1"
     locationId: "1"
     rateId: "1"
@@ -1393,10 +1377,6 @@ mutation {
       name
       description
       code
-      company {
-        id
-        name
-      }
       jobTitle {
         id
         name
@@ -1419,10 +1399,6 @@ query {
         id
         name
         description
-        company {
-          id
-          name
-        }
         jobRequirements {
           id
           name
