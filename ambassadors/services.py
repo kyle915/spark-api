@@ -1922,24 +1922,25 @@ class SkillQueriesService(SparkGraphQLMixin):
     ) -> CountableConnection:
         """Get skills with filters (authenticated users only)."""
         user = await self.get_user(info)
-        is_spark_request = self.is_spark_schema_request(info, user=user)
+        role_slug = self.get_role_slug(user)
 
         # Resolve tenant
         tenant_id: int | None = None
         tenant_id_input = filters.tenant_id if filters else None
         tenant_uuid_input = filters.tenant_uuid if filters else None
 
-        should_filter_by_tenant = (
-            not is_spark_request
-            or tenant_id_input is not None
-            or tenant_uuid_input is not None
-        )
-        if should_filter_by_tenant:
+        if role_slug == "client":
             tenant = await self.get_user_tenant(
                 info,
                 tenant_id=tenant_id_input,
                 tenant_uuid=tenant_uuid_input,
                 user=user,
+            )
+            tenant_id = tenant.id
+        elif tenant_id_input is not None or tenant_uuid_input is not None:
+            tenant = await self._get_tenant_without_membership(
+                tenant_id=tenant_id_input,
+                tenant_uuid=tenant_uuid_input,
             )
             tenant_id = tenant.id
 
