@@ -7,6 +7,7 @@ from utils.graphql.inputs import SparkGraphQLInput, BaseTenantInput, BaseNameabl
 @strawberry.input
 class CreatePublicAmbassadorInput(SparkGraphQLInput):
     """Input for public ambassador creation."""
+
     first_name: str
     email: str
     password1: str
@@ -18,12 +19,14 @@ class CreatePublicAmbassadorInput(SparkGraphQLInput):
 @strawberry.input
 class CreateAmbassadorInvitationInput(BaseTenantInput):
     """Input for creating ambassador invitation."""
+
     email: str
 
 
 @strawberry.input
 class AcceptAmbassadorInvitationInput(SparkGraphQLInput):
     """Input for accepting ambassador invitation."""
+
     token: str
     first_name: str
     password1: str
@@ -35,12 +38,14 @@ class AcceptAmbassadorInvitationInput(SparkGraphQLInput):
 @strawberry.input
 class ApproveAmbassadorInput(SparkGraphQLInput):
     """Input for approving an ambassador."""
+
     ambassador_id: strawberry.ID
 
 
 @strawberry.input
 class AmbassadorInvitationFiltersInput:
     """Filters for ambassador invitation queries."""
+
     tenant_id: strawberry.ID | None = None
     tenant_uuid: strawberry.ID | None = None
     is_expired: bool | None = None  # True for expired, False for active, None for all
@@ -52,6 +57,7 @@ class AmbassadorInvitationFiltersInput:
 @strawberry.input
 class AmbassadorFiltersInput:
     """Filters for ambassador queries."""
+
     tenant_id: strawberry.ID | None = None
     tenant_uuid: strawberry.ID | None = None
     is_active: bool | None = None  # True for active, False for inactive, None for all
@@ -66,6 +72,7 @@ class AmbassadorFiltersInput:
 @strawberry.input
 class UpdateAmbassadorInput(SparkGraphQLInput):
     """Input for updating an ambassador."""
+
     ambassador_id: strawberry.ID
     address: str | None = None
     coordinates: List[float] | None = None
@@ -76,6 +83,7 @@ class UpdateAmbassadorInput(SparkGraphQLInput):
 @strawberry.input
 class CreateAmbassadorInput(SparkGraphQLInput):
     """Input for creating an ambassador."""
+
     user_id: strawberry.ID
     address: str | None = None
     coordinates: List[float] | None = None
@@ -86,12 +94,14 @@ class CreateAmbassadorInput(SparkGraphQLInput):
 @strawberry.input
 class DeleteInvitationInput(SparkGraphQLInput):
     """Input for deleting an invitation."""
+
     invitation_id: strawberry.ID
 
 
 @strawberry.input
 class CreateAmbassadorReviewInput(BaseTenantInput):
     """Input for creating an ambassador review."""
+
     ambassador_id: strawberry.ID
     client_id: strawberry.ID | None = None
     review: str | None = None
@@ -101,6 +111,7 @@ class CreateAmbassadorReviewInput(BaseTenantInput):
 @strawberry.input
 class UpdateAmbassadorReviewInput(SparkGraphQLInput):
     """Input for updating an ambassador review."""
+
     review_id: strawberry.ID
     review: str | None = None
     score: int | None = None
@@ -109,12 +120,14 @@ class UpdateAmbassadorReviewInput(SparkGraphQLInput):
 @strawberry.input
 class DeleteAmbassadorReviewInput(SparkGraphQLInput):
     """Input for deleting an ambassador review."""
+
     review_id: strawberry.ID
 
 
 @strawberry.input
 class AmbassadorReviewFiltersInput:
     """Filters for ambassador review queries."""
+
     ambassador_id: strawberry.ID | None = None
     client_id: strawberry.ID | None = None
     tenant_id: strawberry.ID | None = None
@@ -129,6 +142,7 @@ class AmbassadorReviewFiltersInput:
 @strawberry.input
 class CreateAmbassadorNoteInput(BaseTenantInput):
     """Input for creating an ambassador note."""
+
     ambassador_id: strawberry.ID
     note: str
 
@@ -136,6 +150,7 @@ class CreateAmbassadorNoteInput(BaseTenantInput):
 @strawberry.input
 class UpdateAmbassadorNoteInput(SparkGraphQLInput):
     """Input for updating an ambassador note."""
+
     note_id: strawberry.ID
     note: str | None = None
 
@@ -143,12 +158,14 @@ class UpdateAmbassadorNoteInput(SparkGraphQLInput):
 @strawberry.input
 class DeleteAmbassadorNoteInput(SparkGraphQLInput):
     """Input for deleting an ambassador note."""
+
     note_id: strawberry.ID
 
 
 @strawberry.input
 class AmbassadorFileInput(SparkGraphQLInput):
     """Input for ambassador files."""
+
     name: str
     url: str | None = None
     main_resume: bool | None = None
@@ -160,30 +177,35 @@ class AmbassadorFileInput(SparkGraphQLInput):
 @strawberry.input
 class AmbassadorTraitInput(SparkGraphQLInput):
     """Input for ambassador traits."""
+
     user_id: strawberry.ID
 
 
 @strawberry.input
 class AmbassadorSkillInput(SparkGraphQLInput):
     """Input for ambassador skills."""
+
     skill_id: strawberry.ID
 
 
 @strawberry.input
 class AmbassadorWorkHistoryInput(SparkGraphQLInput):
     """Input for ambassador work history."""
+
     user_id: strawberry.ID
 
 
 @strawberry.input
 class AmbassadorProfileNoteInput(BaseTenantInput):
     """Input for ambassador notes inside profile save."""
+
     note: str
 
 
 @strawberry.input
 class UpsertAmbassadorProfileInput(SparkGraphQLInput):
     """Input for creating/updating an ambassador profile and related data."""
+
     ambassador_id: strawberry.ID | None = None
     ambassador_uuid: strawberry.ID | None = None
     address: str | None = None
@@ -200,6 +222,7 @@ class UpsertAmbassadorProfileInput(SparkGraphQLInput):
 @strawberry.input
 class AmbassadorNoteFiltersInput:
     """Filters for ambassador note queries."""
+
     ambassador_id: strawberry.ID | None = None
     tenant_id: strawberry.ID | None = None
     tenant_uuid: strawberry.ID | None = None
@@ -212,24 +235,28 @@ class AmbassadorNoteFiltersInput:
 @strawberry.input
 class CreateSkillInput(BaseNameableInput):
     """Input for creating a skill."""
+
     pass  # name and tenant_id inherited from BaseNameableInput
 
 
 @strawberry.input
 class UpdateSkillInput(CreateSkillInput):
     """Input for updating a skill."""
+
     id: strawberry.ID
 
 
 @strawberry.input
 class DeleteSkillInput(SparkGraphQLInput):
     """Input for deleting a skill."""
+
     id: strawberry.ID
 
 
 @strawberry.input
 class SkillFiltersInput:
     """Filters for skill queries."""
+
     tenant_id: strawberry.ID | None = None
     tenant_uuid: strawberry.ID | None = None
     search: str | None = None
@@ -238,6 +265,7 @@ class SkillFiltersInput:
 @strawberry.input
 class CreateAmbassadorSkillInput(BaseTenantInput):
     """Input for creating an ambassador skill."""
+
     ambassador_id: strawberry.ID
     skill_id: strawberry.ID
 
@@ -245,12 +273,14 @@ class CreateAmbassadorSkillInput(BaseTenantInput):
 @strawberry.input
 class DeleteAmbassadorSkillInput(SparkGraphQLInput):
     """Input for deleting an ambassador skill."""
+
     ambassador_skill_id: strawberry.ID
 
 
 @strawberry.input
 class AmbassadorSkillFiltersInput:
     """Filters for ambassador skill queries."""
+
     ambassador_id: strawberry.ID | None = None
     skill_id: strawberry.ID | None = None
     tenant_id: strawberry.ID | None = None
@@ -308,6 +338,7 @@ class UpdateAttendanceInput(CreateAttendanceInput):
 @strawberry.input
 class AttendanceFiltersInput(BaseTenantInput):
     """Filtros para attendances."""
+
     job_id: strawberry.ID | None = None
     event_id: strawberry.ID | None = None
     attendance_status_id: strawberry.ID | None = None
@@ -318,6 +349,7 @@ class AttendanceFiltersInput(BaseTenantInput):
 @strawberry.input
 class ActiveAmbassadorFiltersInput:
     """Filters for active ambassadors."""
+
     email: str | None = None
     name: str | None = None
 
@@ -325,30 +357,35 @@ class ActiveAmbassadorFiltersInput:
 @strawberry.input
 class CreateGroupTypeInput(SparkGraphQLInput):
     """Input for creating a group type."""
+
     name: str
 
 
 @strawberry.input
 class UpdateGroupTypeInput(CreateGroupTypeInput):
     """Input for updating a group type."""
+
     id: strawberry.ID
 
 
 @strawberry.input
 class DeleteGroupTypeInput(SparkGraphQLInput):
     """Input for deleting a group type."""
+
     id: strawberry.ID
 
 
 @strawberry.input
 class GroupTypeFiltersInput:
     """Filters for group type queries."""
+
     search: str | None = None
 
 
 @strawberry.input
 class CreateAmbassadorGroupInput(BaseNameableInput):
     """Input for creating an ambassador group."""
+
     job_id: strawberry.ID
     group_type_id: strawberry.ID
     description: str | None = None
@@ -359,6 +396,7 @@ class CreateAmbassadorGroupInput(BaseNameableInput):
 @strawberry.input
 class UpdateAmbassadorGroupInput(BaseNameableInput):
     """Input for updating an ambassador group."""
+
     id: strawberry.ID
     group_type_id: strawberry.ID | None = None
     job_id: strawberry.ID | None = None
@@ -370,12 +408,29 @@ class UpdateAmbassadorGroupInput(BaseNameableInput):
 @strawberry.input
 class DeleteAmbassadorGroupInput(SparkGraphQLInput):
     """Input for deleting an ambassador group."""
+
     id: strawberry.ID
 
 
 @strawberry.input
 class AmbassadorGroupFiltersInput:
     """Filters for ambassador group queries."""
+
     search: str | None = None
+
+
+@strawberry.input
+class AddAmbassadorsToGroupInput(BaseTenantInput):
+    """Input for adding ambassadors to a group."""
+
     job_id: strawberry.ID | None = None
-    job_uuid: strawberry.ID | None = None
+    group_id: strawberry.ID
+    ambassador_ids: list[strawberry.ID]
+
+
+@strawberry.input
+class RemoveAmbassadorsFromGroupInput(BaseTenantInput):
+    """Input for removing ambassadors from a group."""
+
+    group_id: strawberry.ID
+    user_group_ids: list[strawberry.ID]

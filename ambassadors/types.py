@@ -424,3 +424,11 @@ class AmbassadorGroupResponse:
     message: str
     client_mutation_id: strawberry.ID | None = None
     ambassador_group: AmbassadorGroup | None = None
+
+
+@strawberry.type
+class AddAmbassadorsToGroupResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    members: list[UserGroup] | None = None

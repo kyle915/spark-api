@@ -51,6 +51,7 @@ from .types import (
     AttendanceDetailResponse,
     GroupTypeResponse,
     AmbassadorGroupResponse,
+    AddAmbassadorsToGroupResponse,
 )
 from . import inputs
 from .services import (
@@ -456,6 +457,26 @@ class AmbassadorGroupMutations:
         input: inputs.DeleteAmbassadorGroupInput,
     ) -> AmbassadorGroupResponse:
         return await AmbassadorGroupMutationService.delete(input, info)
+
+    @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
+    async def add_ambassadors_to_group(
+        self,
+        info: strawberry.Info,
+        input: inputs.AddAmbassadorsToGroupInput,
+    ) -> AddAmbassadorsToGroupResponse:
+        return await AmbassadorGroupMutationService.add_ambassadors_to_group(
+            input, info, response_class=AddAmbassadorsToGroupResponse
+        )
+
+    @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
+    async def remove_ambassadors_from_group(
+        self,
+        info: strawberry.Info,
+        input: inputs.RemoveAmbassadorsFromGroupInput,
+    ) -> AmbassadorGroupResponse:
+        return await AmbassadorGroupMutationService.remove_ambassadors_from_group(
+            input, info, response_class=AmbassadorGroupResponse
+        )
 
 
 class AttendanceTypeMutationService(TenantOptionalMutationService):
