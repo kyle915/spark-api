@@ -279,6 +279,10 @@ class EventMutations:
             tenant_id: int | None = None
 
             if request_id:
+                try:
+                    request_id = resolve_id_to_int(request_id)
+                except (TypeError, ValueError, GraphQLError):
+                    raise GraphQLError("Invalid request ID.")
                 request: models.Request = await sync_to_async(
                     models.Request.objects.get
                 )(id=request_id)
@@ -1168,6 +1172,10 @@ class RequestStoreManagerMutationService(BaseMutationService):
         if not manager_id:
             return None
         try:
+            manager_id = resolve_id_to_int(manager_id)
+        except (TypeError, ValueError, GraphQLError):
+            raise GraphQLError("Invalid store manager ID.")
+        try:
             self._manager = await sync_to_async(
                 models.RequestStoreManager.objects.select_related("request").get
             )(id=manager_id)
@@ -1182,6 +1190,10 @@ class RequestStoreManagerMutationService(BaseMutationService):
 
         request_id = getattr(self.input, "request_id", None)
         if request_id:
+            try:
+                request_id = resolve_id_to_int(request_id)
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Invalid request ID.")
             try:
                 request = await sync_to_async(models.Request.objects.get)(
                     id=request_id
