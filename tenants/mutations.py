@@ -35,6 +35,11 @@ DEFAULT_STATUS_TEMPLATES = [
     {"name": "Approved", "is_default": False},
     {"name": "Declined", "is_default": False},
 ]
+DEFAULT_ATTENDANCE_STATUS_TEMPLATES = [
+    {"name": "Pending", "slug": "pending"},
+    {"name": "Approved", "slug": "approved"},
+    {"name": "Declined", "slug": "declined"},
+]
 
 DEFAULT_EVENT_TYPES = [
     {"name": "Sampling", "is_default": True},
@@ -811,9 +816,15 @@ class SparkTenantMutations:
                         created_by=user,
                     )
 
-                    def create_statuses(model_cls, include_default_flag: bool):
-                        for status in DEFAULT_STATUS_TEMPLATES:
-                            status_slug = slugify(status["name"])
+                    def create_statuses(
+                        model_cls,
+                        include_default_flag: bool,
+                        templates=DEFAULT_STATUS_TEMPLATES,
+                    ):
+                        for status in templates:
+                            status_slug = status.get("slug") or slugify(
+                                status["name"]
+                            )
                             payload = {
                                 "name": status["name"],
                                 "slug": status_slug,
@@ -828,8 +839,11 @@ class SparkTenantMutations:
                     create_statuses(RequestStatus, include_default_flag=True)
                     create_statuses(EventStatus, include_default_flag=True)
                     create_statuses(JobStatus, include_default_flag=False)
-                    create_statuses(AttendanceStatus,
-                                    include_default_flag=False)
+                    create_statuses(
+                        AttendanceStatus,
+                        include_default_flag=False,
+                        templates=DEFAULT_ATTENDANCE_STATUS_TEMPLATES,
+                    )
 
                     # Event types
                     for event_type in DEFAULT_EVENT_TYPES:
