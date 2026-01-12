@@ -436,12 +436,22 @@ class AmbassadorProfileQueries:
         info: strawberry.Info,
         id: strawberry.ID | None = None,
         uuid: strawberry.ID | None = None,
+        user_id: strawberry.ID | None = None,
     ) -> types.AmbassadorProfile | None:
         """Return ambassador profile with related data in a single query."""
-        if not id and not uuid:
-            raise GraphQLError("Either id or uuid must be provided")
+        if id is None and uuid is None and user_id is None:
+            raise GraphQLError("Either id, uuid, or user_id must be provided")
 
-        filters = {"id": id} if id is not None else {"uuid": uuid}
+        if id is not None:
+            filters = {"id": id}
+        elif uuid is not None:
+            filters = {"uuid": uuid}
+        else:
+            try:
+                resolved_user_id = resolve_id_to_int(user_id)
+            except (TypeError, ValueError, GraphQLError) as exc:
+                raise GraphQLError("Invalid user ID.") from exc
+            filters = {"user_id": resolved_user_id}
 
         try:
             ambassador = await models.Ambassador.objects.select_related("user").aget(
