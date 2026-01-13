@@ -11,12 +11,17 @@ from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
+from graphql import GraphQLError
 
 from tenants.models import Role, Tenant, TenantedUser
 from gqlauth.core.utils import get_token
 from utils.utils import build_mutation_response
 from utils.graphql.inputs import SparkGraphQLInput
-from utils.graphql.mixins import SparkGraphQLMixin, BaseMutationService, resolve_id_to_int
+from utils.graphql.mixins import (
+    SparkGraphQLMixin,
+    BaseMutationService,
+    resolve_id_to_int,
+)
 from utils.graphql.relay import CountableConnection
 
 from .models import (
@@ -365,8 +370,7 @@ class AcceptInvitationService(BaseAmbassadorService):
     ) -> AcceptInvitationResponse:
         """Accept an ambassador invitation and create account."""
         # Validate passwords match
-        password_error = validate_passwords_match(
-            input, AcceptInvitationResponse)
+        password_error = validate_passwords_match(input, AcceptInvitationResponse)
         if password_error:
             return password_error
 
@@ -487,8 +491,9 @@ class ApproveAmbassadorService(BaseAmbassadorService):
         user = info.context.request.user
 
         try:
-            ambassador = await Ambassador.objects._by_id(input.ambassador_id)
-        except (Ambassador.DoesNotExist, ValueError, TypeError):
+            ambassador_id = resolve_id_to_int(input.ambassador_id)
+            ambassador = await Ambassador.objects._by_id(ambassador_id)
+        except (Ambassador.DoesNotExist, ValueError, TypeError, GraphQLError):
             return build_mutation_response(
                 ApproveAmbassadorResponse,
                 success=False,
@@ -591,8 +596,9 @@ class UpdateAmbassadorService(BaseAmbassadorService):
         """Update an ambassador (client/spark-admin only)."""
         user = info.context.request.user
         try:
-            ambassador = await Ambassador.objects._by_id(input.ambassador_id)
-        except (Ambassador.DoesNotExist, ValueError, TypeError):
+            ambassador_id = resolve_id_to_int(input.ambassador_id)
+            ambassador = await Ambassador.objects._by_id(ambassador_id)
+        except (Ambassador.DoesNotExist, ValueError, TypeError, GraphQLError):
             return build_mutation_response(
                 UpdateAmbassadorResponse,
                 success=False,
@@ -754,8 +760,7 @@ class UpsertAmbassadorProfileService(BaseAmbassadorService):
                         )
                     )
                 if new_files:
-                    AmbassadorFile.objects.bulk_create(
-                        new_files, batch_size=50)
+                    AmbassadorFile.objects.bulk_create(new_files, batch_size=50)
 
             if input.traits is not None:
                 AmbassadorTrait.objects.filter(ambassador=ambassador).delete()
@@ -770,8 +775,7 @@ class UpsertAmbassadorProfileService(BaseAmbassadorService):
                         )
                     )
                 if new_traits:
-                    AmbassadorTrait.objects.bulk_create(
-                        new_traits, batch_size=50)
+                    AmbassadorTrait.objects.bulk_create(new_traits, batch_size=50)
 
             if input.skills is not None:
                 AmbassadorSkill.objects.filter(ambassador=ambassador).delete()
@@ -792,8 +796,7 @@ class UpsertAmbassadorProfileService(BaseAmbassadorService):
                         )
                     )
                 if new_skills:
-                    AmbassadorSkill.objects.bulk_create(
-                        new_skills, batch_size=50)
+                    AmbassadorSkill.objects.bulk_create(new_skills, batch_size=50)
 
             if input.notes is not None:
                 AmbassadorNote.objects.filter(ambassador=ambassador).delete()
@@ -812,12 +815,10 @@ class UpsertAmbassadorProfileService(BaseAmbassadorService):
                         )
                     )
                 if new_notes:
-                    AmbassadorNote.objects.bulk_create(
-                        new_notes, batch_size=50)
+                    AmbassadorNote.objects.bulk_create(new_notes, batch_size=50)
 
             if input.work_history is not None:
-                AmbassadorWorkHistory.objects.filter(
-                    ambassador=ambassador).delete()
+                AmbassadorWorkHistory.objects.filter(ambassador=ambassador).delete()
                 new_work = []
                 for work_input in input.work_history:
                     new_work.append(
@@ -829,8 +830,7 @@ class UpsertAmbassadorProfileService(BaseAmbassadorService):
                         )
                     )
                 if new_work:
-                    AmbassadorWorkHistory.objects.bulk_create(
-                        new_work, batch_size=50)
+                    AmbassadorWorkHistory.objects.bulk_create(new_work, batch_size=50)
 
             return ambassador
 
@@ -861,8 +861,7 @@ class UpsertAmbassadorProfileService(BaseAmbassadorService):
             return await sync_to_async(list)(qs)
 
         async def fetch_work_history():
-            qs = AmbassadorWorkHistory.objects.filter(
-                ambassador_id=ambassador.id)
+            qs = AmbassadorWorkHistory.objects.filter(ambassador_id=ambassador.id)
             return await sync_to_async(list)(qs)
 
         (
@@ -916,8 +915,9 @@ class DeleteInvitationService(BaseAmbassadorService):
         # No need to validate because we have IsClientOrSparkAdmin permission class
 
         try:
-            invitation = await AmbassadorInvitation.objects._by_id(input.invitation_id)
-        except (AmbassadorInvitation.DoesNotExist, ValueError, TypeError):
+            invitation_id = resolve_id_to_int(input.invitation_id)
+            invitation = await AmbassadorInvitation.objects._by_id(invitation_id)
+        except (AmbassadorInvitation.DoesNotExist, ValueError, TypeError, GraphQLError):
             return build_mutation_response(
                 DeleteInvitationResponse,
                 success=False,
@@ -1143,8 +1143,7 @@ class AmbassadorQueriesService(SparkGraphQLMixin):
 
                 # Search by user email
                 if filters.email:
-                    queryset = queryset.filter(
-                        user__email__icontains=filters.email)
+                    queryset = queryset.filter(user__email__icontains=filters.email)
 
                 # Search by user name
                 if filters.name:
@@ -1155,8 +1154,7 @@ class AmbassadorQueriesService(SparkGraphQLMixin):
 
                 # Search by address
                 if filters.address:
-                    queryset = queryset.filter(
-                        address__icontains=filters.address)
+                    queryset = queryset.filter(address__icontains=filters.address)
 
                 # General search across email, name, and address
                 if filters.search:
@@ -1184,13 +1182,11 @@ class AmbassadorQueriesService(SparkGraphQLMixin):
 
         @sync_to_async
         def get_queryset():
-            queryset = Ambassador.objects.select_related(
-                "user").filter(is_active=True)
+            queryset = Ambassador.objects.select_related("user").filter(is_active=True)
 
             if filters:
                 if filters.email:
-                    queryset = queryset.filter(
-                        user__email__icontains=filters.email)
+                    queryset = queryset.filter(user__email__icontains=filters.email)
                 if filters.name:
                     queryset = queryset.filter(
                         Q(user__first_name__icontains=filters.name)
@@ -1238,8 +1234,9 @@ class CreateAmbassadorReviewService(BaseAmbassadorService):
 
         # Validate ambassador exists
         try:
-            ambassador = await Ambassador.objects._by_id(input.ambassador_id)
-        except (Ambassador.DoesNotExist, ValueError, TypeError):
+            ambassador_id = resolve_id_to_int(input.ambassador_id)
+            ambassador = await Ambassador.objects._by_id(ambassador_id)
+        except (Ambassador.DoesNotExist, ValueError, TypeError, GraphQLError):
             return build_mutation_response(
                 CreateAmbassadorReviewResponse,
                 success=False,
@@ -1324,8 +1321,9 @@ class UpdateAmbassadorReviewService(BaseAmbassadorService):
 
         # Validate review exists
         try:
-            review = await AmbassadorReview.objects._by_id(input.review_id)
-        except (AmbassadorReview.DoesNotExist, ValueError, TypeError):
+            review_id = resolve_id_to_int(input.review_id)
+            review = await AmbassadorReview.objects._by_id(review_id)
+        except (AmbassadorReview.DoesNotExist, ValueError, TypeError, GraphQLError):
             return build_mutation_response(
                 UpdateAmbassadorReviewResponse,
                 success=False,
@@ -1382,8 +1380,9 @@ class DeleteAmbassadorReviewService(BaseAmbassadorService):
 
         # Validate review exists
         try:
-            review = await AmbassadorReview.objects._by_id(input.review_id)
-        except (AmbassadorReview.DoesNotExist, ValueError, TypeError):
+            review_id = resolve_id_to_int(input.review_id)
+            review = await AmbassadorReview.objects._by_id(review_id)
+        except (AmbassadorReview.DoesNotExist, ValueError, TypeError, GraphQLError):
             return build_mutation_response(
                 DeleteAmbassadorReviewResponse,
                 success=False,
@@ -1479,13 +1478,11 @@ class AmbassadorReviewQueriesService(SparkGraphQLMixin):
             if filters:
                 # Filter by ambassador
                 if filters.ambassador_id:
-                    queryset = queryset.filter(
-                        ambassador_id=int(filters.ambassador_id))
+                    queryset = queryset.filter(ambassador_id=int(filters.ambassador_id))
 
                 # Filter by client
                 if filters.client_id:
-                    queryset = queryset.filter(
-                        client_id=int(filters.client_id))
+                    queryset = queryset.filter(client_id=int(filters.client_id))
 
                 # Filter by score range
                 if filters.min_score is not None:
@@ -1499,8 +1496,7 @@ class AmbassadorReviewQueriesService(SparkGraphQLMixin):
                         start_datetime = datetime.fromisoformat(
                             filters.start_date.replace("Z", "+00:00")
                         )
-                        queryset = queryset.filter(
-                            created_at__gte=start_datetime)
+                        queryset = queryset.filter(created_at__gte=start_datetime)
                     except (ValueError, AttributeError):
                         pass  # Invalid date format, skip filter
                 if filters.end_date:
@@ -1508,15 +1504,13 @@ class AmbassadorReviewQueriesService(SparkGraphQLMixin):
                         end_datetime = datetime.fromisoformat(
                             filters.end_date.replace("Z", "+00:00")
                         )
-                        queryset = queryset.filter(
-                            created_at__lte=end_datetime)
+                        queryset = queryset.filter(created_at__lte=end_datetime)
                     except (ValueError, AttributeError):
                         pass  # Invalid date format, skip filter
 
                 # Search in review text
                 if filters.search:
-                    queryset = queryset.filter(
-                        review__icontains=filters.search)
+                    queryset = queryset.filter(review__icontains=filters.search)
 
             return queryset.order_by("-created_at")
 
@@ -1537,8 +1531,9 @@ class CreateAmbassadorNoteService(BaseAmbassadorService):
 
         # Validate ambassador exists
         try:
-            ambassador = await Ambassador.objects._by_id(input.ambassador_id)
-        except (Ambassador.DoesNotExist, ValueError, TypeError):
+            ambassador_id = resolve_id_to_int(input.ambassador_id)
+            ambassador = await Ambassador.objects._by_id(ambassador_id)
+        except (Ambassador.DoesNotExist, ValueError, TypeError, GraphQLError):
             return build_mutation_response(
                 CreateAmbassadorNoteResponse,
                 success=False,
@@ -1738,13 +1733,11 @@ class AmbassadorNoteQueriesService(SparkGraphQLMixin):
             if filters:
                 # Filter by ambassador
                 if filters.ambassador_id:
-                    queryset = queryset.filter(
-                        ambassador_id=int(filters.ambassador_id))
+                    queryset = queryset.filter(ambassador_id=int(filters.ambassador_id))
 
                 # Filter by created_by
                 if filters.created_by_id:
-                    queryset = queryset.filter(
-                        created_by_id=int(filters.created_by_id))
+                    queryset = queryset.filter(created_by_id=int(filters.created_by_id))
 
                 # Filter by date range
                 if filters.start_date:
@@ -1752,8 +1745,7 @@ class AmbassadorNoteQueriesService(SparkGraphQLMixin):
                         start_datetime = datetime.fromisoformat(
                             filters.start_date.replace("Z", "+00:00")
                         )
-                        queryset = queryset.filter(
-                            created_at__gte=start_datetime)
+                        queryset = queryset.filter(created_at__gte=start_datetime)
                     except (ValueError, AttributeError):
                         pass  # Invalid date format, skip filter
                 if filters.end_date:
@@ -1761,8 +1753,7 @@ class AmbassadorNoteQueriesService(SparkGraphQLMixin):
                         end_datetime = datetime.fromisoformat(
                             filters.end_date.replace("Z", "+00:00")
                         )
-                        queryset = queryset.filter(
-                            created_at__lte=end_datetime)
+                        queryset = queryset.filter(created_at__lte=end_datetime)
                     except (ValueError, AttributeError):
                         pass  # Invalid date format, skip filter
 
@@ -1835,8 +1826,9 @@ class UpdateSkillService(BaseAmbassadorService):
 
         # Validate skill exists
         try:
-            skill = await Skill.objects._by_id(input.id)
-        except (Skill.DoesNotExist, ValueError, TypeError):
+            skill_id = resolve_id_to_int(input.id)
+            skill = await Skill.objects._by_id(skill_id)
+        except (Skill.DoesNotExist, ValueError, TypeError, GraphQLError):
             return build_mutation_response(
                 UpdateSkillResponse,
                 success=False,
@@ -1881,8 +1873,9 @@ class DeleteSkillService(BaseAmbassadorService):
 
         # Validate skill exists
         try:
-            skill = await Skill.objects._by_id(input.id)
-        except (Skill.DoesNotExist, ValueError, TypeError):
+            skill_id = resolve_id_to_int(input.id)
+            skill = await Skill.objects._by_id(skill_id)
+        except (Skill.DoesNotExist, ValueError, TypeError, GraphQLError):
             return build_mutation_response(
                 DeleteSkillResponse,
                 success=False,
@@ -1998,8 +1991,9 @@ class CreateAmbassadorSkillService(BaseAmbassadorService):
 
         # Validate ambassador exists
         try:
-            ambassador = await Ambassador.objects._by_id(input.ambassador_id)
-        except (Ambassador.DoesNotExist, ValueError, TypeError):
+            ambassador_id = resolve_id_to_int(input.ambassador_id)
+            ambassador = await Ambassador.objects._by_id(ambassador_id)
+        except (Ambassador.DoesNotExist, ValueError, TypeError, GraphQLError):
             return build_mutation_response(
                 CreateAmbassadorSkillResponse,
                 success=False,
@@ -2009,8 +2003,9 @@ class CreateAmbassadorSkillService(BaseAmbassadorService):
 
         # Validate skill exists
         try:
-            skill = await Skill.objects._by_id(input.skill_id)
-        except (Skill.DoesNotExist, ValueError, TypeError):
+            skill_id = resolve_id_to_int(input.skill_id)
+            skill = await Skill.objects._by_id(skill_id)
+        except (Skill.DoesNotExist, ValueError, TypeError, GraphQLError):
             return build_mutation_response(
                 CreateAmbassadorSkillResponse,
                 success=False,
@@ -2199,8 +2194,7 @@ class AmbassadorSkillQueriesService(SparkGraphQLMixin):
             if filters:
                 # Filter by ambassador
                 if filters.ambassador_id:
-                    queryset = queryset.filter(
-                        ambassador_id=int(filters.ambassador_id))
+                    queryset = queryset.filter(ambassador_id=int(filters.ambassador_id))
 
                 # Filter by skill
                 if filters.skill_id:
@@ -2213,6 +2207,7 @@ class AmbassadorSkillQueriesService(SparkGraphQLMixin):
 
 class GroupTypeMutationService(BaseMutationService):
     """Service for creating group types (client/spark-admin only)."""
+
     response_class = GroupTypeResponse
     model_field_name = "group_type"
 
@@ -2223,6 +2218,7 @@ class GroupTypeMutationService(BaseMutationService):
 
 class AmbassadorGroupMutationService(BaseMutationService):
     """Service for creating ambassador groups (client/spark-admin only)."""
+
     response_class = AmbassadorGroupResponse
     model_field_name = "ambassador_group"
 
@@ -2275,8 +2271,9 @@ class AmbassadorGroupMutationService(BaseMutationService):
             try:
                 # Fetch job with select_related for rate and tenant
                 job = await sync_to_async(
-                    lambda: job_models.Job.objects.select_related(
-                        "rate", "tenant").get(id=resolved_job_id)
+                    lambda: job_models.Job.objects.select_related("rate", "tenant").get(
+                        id=resolved_job_id
+                    )
                 )()
             except job_models.Job.DoesNotExist:
                 raise GraphQLError("Job not found.")
@@ -2294,15 +2291,15 @@ class AmbassadorGroupMutationService(BaseMutationService):
                         setattr(model, "created_by", service.user)
 
                     # Set parameters from input (excluding job_id and ambassador_ids)
-                    params = input.to_dict(
-                        ["tenant_id", "job_id", "ambassador_ids"])
+                    params = input.to_dict(["tenant_id", "job_id", "ambassador_ids"])
                     group_type_id = params.get("group_type_id")
                     if group_type_id is not None:
                         try:
                             params["group_type_id"] = resolve_id_to_int(group_type_id)
                         except (TypeError, ValueError, GraphQLError) as exc:
                             raise GraphQLError(
-                                f"Invalid group type ID: {group_type_id}") from exc
+                                f"Invalid group type ID: {group_type_id}"
+                            ) from exc
                     for key, value in params.items():
                         setattr(model, key, value)
 
@@ -2354,11 +2351,12 @@ class AmbassadorGroupMutationService(BaseMutationService):
         try:
             from graphql import GraphQLError
             from utils.graphql.mixins import resolve_id_to_int
+
             resolved_group_id = resolve_id_to_int(input.group_id)
             try:
-                group = await sync_to_async(AmbassadorGroup.objects.select_related("group_type", "tenant").get)(
-                    id=resolved_group_id
-                )
+                group = await sync_to_async(
+                    AmbassadorGroup.objects.select_related("group_type", "tenant").get
+                )(id=resolved_group_id)
             except AmbassadorGroup.DoesNotExist:
                 raise GraphQLError("Group not found.")
             service = cls.with_input(input)
@@ -2368,10 +2366,11 @@ class AmbassadorGroupMutationService(BaseMutationService):
             job = None
             if job_id:
                 from utils.graphql.mixins import resolve_id_to_int
+
                 resolved_job_id = resolve_id_to_int(job_id)
-                job = await sync_to_async(job_models.Job.objects.select_related("rate", "tenant").get)(
-                    id=resolved_job_id
-                )
+                job = await sync_to_async(
+                    job_models.Job.objects.select_related("rate", "tenant").get
+                )(id=resolved_job_id)
 
             def create_user_groups():
                 with transaction.atomic():
@@ -2386,7 +2385,12 @@ class AmbassadorGroupMutationService(BaseMutationService):
                 members=user_groups,
             )
 
-        except (job_models.Job.DoesNotExist, ValueError, TypeError, GraphQLError) as exc:
+        except (
+            job_models.Job.DoesNotExist,
+            ValueError,
+            TypeError,
+            GraphQLError,
+        ) as exc:
             return cls._build_mutation_response(
                 response_class=response_class,
                 success=False,
@@ -2409,7 +2413,9 @@ class AmbassadorGroupMutationService(BaseMutationService):
 
             resolved_group_id = resolve_id_to_int(input.group_id)
             try:
-                group = await sync_to_async(AmbassadorGroup.objects.get)(id=resolved_group_id)
+                group = await sync_to_async(AmbassadorGroup.objects.get)(
+                    id=resolved_group_id
+                )
             except AmbassadorGroup.DoesNotExist:
                 raise GraphQLError("Group not found.")
 
@@ -2421,15 +2427,16 @@ class AmbassadorGroupMutationService(BaseMutationService):
             def delete_user_groups():
                 with transaction.atomic():
                     for user_group_id in user_group_ids:
-                        resolved_user_group_id = resolve_id_to_int(
-                            user_group_id)
+                        resolved_user_group_id = resolve_id_to_int(user_group_id)
                         try:
                             user_group = UserGroup.objects.get(
-                                id=resolved_user_group_id, group=group)
+                                id=resolved_user_group_id, group=group
+                            )
                             user_group.delete()
                         except UserGroup.DoesNotExist:
                             raise GraphQLError(
-                                f"UserGroup with ID {user_group_id} not found in this group.")
+                                f"UserGroup with ID {user_group_id} not found in this group."
+                            )
 
             await delete_user_groups()
 
@@ -2439,7 +2446,12 @@ class AmbassadorGroupMutationService(BaseMutationService):
                 message="Ambassadors removed from group successfully.",
                 input_obj=input,
             )
-        except (AmbassadorGroup.DoesNotExist, ValueError, TypeError, GraphQLError) as exc:
+        except (
+            AmbassadorGroup.DoesNotExist,
+            ValueError,
+            TypeError,
+            GraphQLError,
+        ) as exc:
             return cls._build_mutation_response(
                 response_class=response_class,
                 success=False,
@@ -2447,7 +2459,9 @@ class AmbassadorGroupMutationService(BaseMutationService):
                 input_obj=input,
             )
 
-    def create_user_groups(self, group: AmbassadorGroup, job: job_models.Job | None = None) -> list[UserGroup]:
+    def create_user_groups(
+        self, group: AmbassadorGroup, job: job_models.Job | None = None
+    ) -> list[UserGroup]:
         from graphql import GraphQLError
 
         ambassador_ids = getattr(self.input, "ambassador_ids", None)
@@ -2461,24 +2475,22 @@ class AmbassadorGroupMutationService(BaseMutationService):
                 resolved_id = resolve_id_to_int(ambassador_id)
                 resolved_ids.append(resolved_id)
             except (TypeError, ValueError, GraphQLError) as exc:
-                raise GraphQLError(
-                    f"Invalid ambassador ID: {ambassador_id}") from exc
+                raise GraphQLError(f"Invalid ambassador ID: {ambassador_id}") from exc
 
-        ambassadors = list(Ambassador.objects.select_related(
-            "user").filter(id__in=resolved_ids))
+        ambassadors = list(
+            Ambassador.objects.select_related("user").filter(id__in=resolved_ids)
+        )
 
         if len(ambassadors) != len(resolved_ids):
             found_ids = {amb.id for amb in ambassadors}
             missing_ids = set(resolved_ids) - found_ids
-            raise GraphQLError(
-                f"Ambassadors with IDs {missing_ids} not found.")
+            raise GraphQLError(f"Ambassadors with IDs {missing_ids} not found.")
 
         invited_status = None
         if job:
             # prepare the invited status
             invited_status = job_models.Status.objects.get_invited(
-                tenant_id=job.tenant_id,
-                user=self.user
+                tenant_id=job.tenant_id, user=self.user
             )
 
         user_groups = []

@@ -35,6 +35,12 @@ DEFAULT_STATUS_TEMPLATES = [
     {"name": "Approved", "is_default": False},
     {"name": "Declined", "is_default": False},
 ]
+DEFAULT_JOB_STATUS_TEMPLATES = [
+    {"name": "Pending", "slug": "pending"},
+    {"name": "Approved", "slug": "approved"},
+    {"name": "Declined", "slug": "declined"},
+    {"name": "Invited", "slug": "invited"},
+]
 DEFAULT_ATTENDANCE_STATUS_TEMPLATES = [
     {"name": "Pending", "slug": "pending"},
     {"name": "Approved", "slug": "approved"},
@@ -838,7 +844,11 @@ class SparkTenantMutations:
                     # Status templates
                     create_statuses(RequestStatus, include_default_flag=True)
                     create_statuses(EventStatus, include_default_flag=True)
-                    create_statuses(JobStatus, include_default_flag=False)
+                    create_statuses(
+                        JobStatus,
+                        include_default_flag=False,
+                        templates=DEFAULT_JOB_STATUS_TEMPLATES,
+                    )
                     create_statuses(
                         AttendanceStatus,
                         include_default_flag=False,
