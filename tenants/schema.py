@@ -23,6 +23,7 @@ from .mutations import (
     SparkTenantMutations,
     TenantThemeMutations,
     SparkUserMutations,
+    AmbassadorUserMutations,
 )
 from .calendar import GoogleCalendarMutations, GoogleCalendarQueries
 from .dashboard.schema import DashboardQueries
@@ -192,6 +193,29 @@ class QuerySpark(GoogleCalendarQueries, TenantThemingQuery):
         return target_user
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def tenant(
+        self,
+        info,
+        id: strawberry.ID | None = None,
+        uuid: strawberry.ID | None = None,
+    ) -> TenantType:
+        if not id and not uuid:
+            raise GraphQLError("Provide id or uuid to fetch a tenant.")
+
+        try:
+            if id:
+                resolved_id = resolve_id_to_int(id)
+                tenant = await Tenant.objects.aget(pk=resolved_id)
+            else:
+                tenant = await Tenant.objects.aget(uuid=uuid)
+        except Tenant.DoesNotExist as exc:
+            raise GraphQLError("Tenant not found.") from exc
+        except (TypeError, ValueError, GraphQLError) as exc:
+            raise GraphQLError("Invalid tenant ID.") from exc
+
+        return tenant
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def users(
         self,
         info,
@@ -337,7 +361,11 @@ class QueryAmbassadors(GoogleCalendarQueries, TenantThemingQuery):
 
 
 @strawberry.type
-class MutationAmbassadors(AmbassadorsCustomRegister, GoogleCalendarMutations):
+class MutationAmbassadors(
+    AmbassadorsCustomRegister,
+    AmbassadorUserMutations,
+    GoogleCalendarMutations,
+):
     verify_token = mutations.VerifyToken.field
     token_auth = mutations.ObtainJSONWebToken.field
     refresh_token = mutations.RefreshToken.field
@@ -351,6 +379,19 @@ class QueryClients(GoogleCalendarQueries, TenantThemingQuery):
     @strawberry.field
     def healthcheck(self) -> str:
         return "ok"
+
+    @strawberry.field
+    async def tenant_public(
+        self,
+        info,
+        request_url_name: str,
+    ) -> TenantType | None:
+        try:
+            return await sync_to_async(Tenant.objects.get)(
+                request_url_name=request_url_name
+            )
+        except Tenant.DoesNotExist:
+            return None
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     def me(self, info) -> CustomUserType:
@@ -399,6 +440,36 @@ class QueryClients(GoogleCalendarQueries, TenantThemingQuery):
                 raise GraphQLError("You do not have permission to view this user.")
 
         return target_user
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def tenant(
+        self,
+        info,
+        id: strawberry.ID | None = None,
+        uuid: strawberry.ID | None = None,
+    ) -> TenantType:
+        if not id and not uuid:
+            raise GraphQLError("Provide id or uuid to fetch a tenant.")
+
+        user = info.context.request.user
+        queryset = Tenant.objects.filter(
+            tenanted_users__is_active=True,
+            tenanted_users__user=user,
+        )
+
+        try:
+            if id:
+                resolved_id = resolve_id_to_int(id)
+                queryset = queryset.filter(pk=resolved_id)
+            else:
+                queryset = queryset.filter(uuid=uuid)
+            tenant = await queryset.aget()
+        except Tenant.DoesNotExist as exc:
+            raise GraphQLError("Tenant not found.") from exc
+        except (TypeError, ValueError, GraphQLError) as exc:
+            raise GraphQLError("Invalid tenant ID.") from exc
+
+        return tenant
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def users(
@@ -560,7 +631,10 @@ class Customer:
 
 
 @strawberry.type
-class MutationMobile(AmbassadorsCustomRegister):
+class MutationMobile(
+    AmbassadorsCustomRegister,
+    AmbassadorUserMutations,
+):
     verify_token = mutations.VerifyToken.field
     token_auth = mutations.ObtainJSONWebToken.field
     refresh_token = mutations.RefreshToken.field

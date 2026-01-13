@@ -724,6 +724,14 @@ type BestRecapMonth {
   consumersCount: Int!
 }
 
+input ChangeUserPasswordInput {
+  clientMutationId: ID = null
+  id: ID = null
+  uuid: ID = null
+  password1: String!
+  password2: String!
+}
+
 """
 Client(id, uuid, name, email, tenant, created_by, updated_by, created_at, updated_at)
 """
@@ -2518,6 +2526,7 @@ type Mutation {
   updateTenant(input: UpdateTenantInput!): UpdateTenantResponse!
   createUser(input: CreateUserInput!): RegisterResponse!
   updateUser(input: UpdateUserInput!): UpdateUserResponse!
+  changeUserPassword(input: ChangeUserPasswordInput!): UpdateUserResponse!
   connectGoogleCalendar(input: ConnectGoogleCalendarInput!): ConnectGoogleCalendarResponse!
   googleCalendarCallback(input: GoogleCalendarCallbackInput!): GoogleCalendarCallbackResponse!
   disconnectGoogleCalendar(input: DisconnectGoogleCalendarInput!): DisconnectGoogleCalendarResponse!
@@ -2902,6 +2911,7 @@ type Query {
   healthcheck: String!
   me: CustomUserType!
   user(id: ID = null, uuid: ID = null): CustomUserType!
+  tenant(id: ID = null, uuid: ID = null): TenantType!
   users(filters: UserFiltersInput = null, first: Int = null, after: String = null, last: Int = null, before: String = null): CustomUserTypeCountableConnection!
   tenants(userUuid: ID = null, filters: TenantFiltersInput = null, first: Int = null, after: String = null, last: Int = null, before: String = null): TenantTypeCountableConnection!
   ambassadorJobStatuses(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): StatusCountableConnection!
