@@ -1,5 +1,5 @@
 from utils.mailer import Envelope, Mailer
-from ambassadors.models import AmbassadorEvent
+from ambassadors.models import AmbassadorEvent, AmbassadorInvitation
 
 
 class AmbassadorEventApplicationMailer(Mailer):
@@ -29,8 +29,8 @@ class NotifyApplicationToClientMailer(Mailer):
         from tenants.models import TenantedUser, Role
         users = TenantedUser.objects.filter(
             tenant=self.application.tenant,
-            role__slug=Role.CLIENT_SLUG
-        ).select_related("user")
+            user__role__slug=Role.CLIENT_SLUG
+        ).select_related("user", "user__role")
         to_emails = [user.user.email for user in users]
 
         return Envelope(
@@ -39,5 +39,20 @@ class NotifyApplicationToClientMailer(Mailer):
             to_emails=to_emails,
             context={
                 "application": self.application
+            }
+        )
+
+
+class SendInvitationMailToAmbassadorMailer(Mailer):
+    def __init__(self, invitation: AmbassadorInvitation):
+        self.invitation = invitation
+
+    def envelope(self) -> Envelope:
+        return Envelope(
+            subject="You have been invited to a job",
+            template="ambassadors.templates.emails.send_invitation_to_ambassador",
+            to_emails=[self.invitation.email],
+            context={
+                "invitation": self.invitation
             }
         )

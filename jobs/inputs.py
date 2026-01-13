@@ -147,14 +147,17 @@ class UpdateJobInput(CreateJobInput):
 
 @strawberry.enum
 class JobStatusFilter(str, Enum):
-    OPEN = "open"
-    CLOSED = "closed"
+    PENDING = "pending"
+    APPROVED = "approved"
+    DECLINED = "declined"
+    INVITED = "invited"
 
 
 @strawberry.input
 class JobFiltersInput(BaseTenantInput):
     event_id: strawberry.ID | None = None
     status: JobStatusFilter | None = None
+    statuses: list[JobStatusFilter] | None = None
 
 
 @strawberry.input

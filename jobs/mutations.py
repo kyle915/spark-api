@@ -5,7 +5,11 @@ from graphql import GraphQLError
 from asgiref.sync import sync_to_async
 
 from jobs import models, inputs, types
-from utils.graphql.mixins import BaseMutationService, SparkGraphQLMixin
+from utils.graphql.mixins import (
+    BaseMutationService,
+    SparkGraphQLMixin,
+    resolve_id_to_int,
+)
 from utils.graphql.permissions import StrictIsAuthenticated, IsClientOrSparkAdmin
 from utils.graphql.relay import ensure_relay_mutation
 from utils.utils import build_mutation_response
@@ -492,6 +496,10 @@ class ManageAmbassadorJobMutationService(SparkGraphQLMixin):
         """Get the status for the given action."""
         if status_id:
             try:
+                status_id = resolve_id_to_int(status_id)
+            except (TypeError, ValueError, GraphQLError) as exc:
+                raise GraphQLError("Invalid status ID.") from exc
+            try:
                 status = await sync_to_async(models.Status.objects.get)(
                     id=status_id, tenant_id=tenant_id
                 )
@@ -535,8 +543,17 @@ class ManageAmbassadorJobMutationService(SparkGraphQLMixin):
 
         # Get the AmbassadorJob
         try:
+            ambassador_job_id = resolve_id_to_int(input.ambassador_job_id)
+        except (TypeError, ValueError, GraphQLError):
+            return build_mutation_response(
+                types.AmbassadorJobDetailResponse,
+                success=False,
+                message="Invalid ambassador job ID.",
+                input_obj=input,
+            )
+        try:
             ambassador_job = await sync_to_async(models.AmbassadorJob.objects.get)(
-                id=input.ambassador_job_id, tenant_id=tenant.id
+                id=ambassador_job_id, tenant_id=tenant.id
             )
         except models.AmbassadorJob.DoesNotExist:
             return build_mutation_response(
@@ -865,8 +882,17 @@ class ApproveAmbassadorJobMutationService(SparkGraphQLMixin):
         )
 
         try:
+            ambassador_job_id = resolve_id_to_int(input.ambassador_job_id)
+        except (TypeError, ValueError, GraphQLError):
+            return build_mutation_response(
+                types.AmbassadorJobDetailResponse,
+                success=False,
+                message="Invalid ambassador job ID.",
+                input_obj=input,
+            )
+        try:
             ambassador_job = await sync_to_async(models.AmbassadorJob.objects.get)(
-                id=input.ambassador_job_id, tenant_id=tenant.id
+                id=ambassador_job_id, tenant_id=tenant.id
             )
         except models.AmbassadorJob.DoesNotExist:
             return build_mutation_response(
@@ -942,8 +968,17 @@ class DeclineAmbassadorJobMutationService(SparkGraphQLMixin):
         )
 
         try:
+            ambassador_job_id = resolve_id_to_int(input.ambassador_job_id)
+        except (TypeError, ValueError, GraphQLError):
+            return build_mutation_response(
+                types.AmbassadorJobDetailResponse,
+                success=False,
+                message="Invalid ambassador job ID.",
+                input_obj=input,
+            )
+        try:
             ambassador_job = await sync_to_async(models.AmbassadorJob.objects.get)(
-                id=input.ambassador_job_id, tenant_id=tenant.id
+                id=ambassador_job_id, tenant_id=tenant.id
             )
         except models.AmbassadorJob.DoesNotExist:
             return build_mutation_response(

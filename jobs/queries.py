@@ -584,12 +584,20 @@ class JobQueries:
                     queryset = queryset.filter(event_id=event_id)
                 except (TypeError, ValueError, GraphQLError):
                     raise GraphQLError("Invalid event ID.")
+            status_values = []
+            if filters.statuses:
+                status_values.extend([status.value for status in filters.statuses])
             if filters.status:
-                status_filter_map = {
-                    JobStatusFilter.OPEN: False,
-                    JobStatusFilter.CLOSED: True,
+                status_values.append(filters.status.value)
+            if status_values:
+                status_filter_kwargs = {
+                    "ambassador_jobs__status__slug__in": status_values
                 }
-                queryset = queryset.filter(closed=status_filter_map[filters.status])
+                if tenant_id:
+                    status_filter_kwargs["ambassador_jobs__status__tenant_id"] = (
+                        tenant_id
+                    )
+                queryset = queryset.filter(**status_filter_kwargs).distinct()
 
         return await service.get_connection(
             tenant_id=tenant_id,
@@ -839,11 +847,13 @@ class AmbassadorJobStatusFilter(str, Enum):
     APPROVED = "approved"
     DECLINED = "declined"
     PENDING = "pending"
+    INVITED = "invited"
 
 
 @strawberry.input
 class AmbassadorJobFiltersInput(BaseTenantInput):
     status: AmbassadorJobStatusFilter | None = None
+    statuses: list[AmbassadorJobStatusFilter] | None = None
     status_id: strawberry.ID | None = None
     status_slug: str | None = None
 
@@ -921,11 +931,17 @@ class AmbassadorJobQueries:
                 if tenant_id:
                     status_filter_kwargs["status__tenant_id"] = tenant_id
                 queryset = queryset.filter(**status_filter_kwargs)
-            elif filters.status:
-                status_filter_kwargs = {"status__slug": filters.status.value}
-                if tenant_id:
-                    status_filter_kwargs["status__tenant_id"] = tenant_id
-                queryset = queryset.filter(**status_filter_kwargs)
+            else:
+                status_values = []
+                if filters.statuses:
+                    status_values.extend([status.value for status in filters.statuses])
+                if filters.status:
+                    status_values.append(filters.status.value)
+                if status_values:
+                    status_filter_kwargs = {"status__slug__in": status_values}
+                    if tenant_id:
+                        status_filter_kwargs["status__tenant_id"] = tenant_id
+                    queryset = queryset.filter(**status_filter_kwargs)
 
         return await service.get_connection(
             tenant_id=tenant_id,

@@ -36,6 +36,13 @@ class AcceptAmbassadorInvitationInput(SparkGraphQLInput):
 
 
 @strawberry.input
+class AcceptByTokenInput(SparkGraphQLInput):
+    """Input for accepting by token."""
+
+    token: str
+
+
+@strawberry.input
 class ApproveAmbassadorInput(SparkGraphQLInput):
     """Input for approving an ambassador."""
 

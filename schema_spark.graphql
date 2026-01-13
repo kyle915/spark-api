@@ -8,6 +8,11 @@ input AcceptAmbassadorInvitationInput {
   coordinates: [Float!] = null
 }
 
+input AcceptByTokenInput {
+  clientMutationId: ID = null
+  token: String!
+}
+
 type AcceptInvitationResponse {
   success: Boolean!
   message: String!
@@ -204,8 +209,6 @@ type AmbassadorGroupCountableEdge {
 
 input AmbassadorGroupFiltersInput {
   search: String = null
-  jobId: ID = null
-  jobUuid: ID = null
 }
 
 type AmbassadorGroupResponse {
@@ -305,6 +308,7 @@ input AmbassadorJobFiltersInput {
   clientMutationId: ID = null
   tenantId: ID = null
   status: AmbassadorJobStatusFilter = null
+  statuses: [AmbassadorJobStatusFilter!] = null
   statusId: ID = null
   statusSlug: String = null
 }
@@ -313,6 +317,7 @@ enum AmbassadorJobStatusFilter {
   APPROVED
   DECLINED
   PENDING
+  INVITED
 }
 
 input AmbassadorNoteFiltersInput {
@@ -722,6 +727,14 @@ type BestRecapMonth {
   month: String!
   recapsCount: Int!
   consumersCount: Int!
+}
+
+input ChangeUserPasswordInput {
+  clientMutationId: ID = null
+  id: ID = null
+  uuid: ID = null
+  password1: String!
+  password2: String!
 }
 
 """
@@ -2167,6 +2180,7 @@ input JobFiltersInput {
   tenantId: ID = null
   eventId: ID = null
   status: JobStatusFilter = null
+  statuses: [JobStatusFilter!] = null
 }
 
 """
@@ -2348,8 +2362,10 @@ type JobRequirementTypeDetailResponse {
 }
 
 enum JobStatusFilter {
-  OPEN
-  CLOSED
+  PENDING
+  APPROVED
+  DECLINED
+  INVITED
 }
 
 """
@@ -2515,6 +2531,7 @@ type Mutation {
   updateTenant(input: UpdateTenantInput!): UpdateTenantResponse!
   createUser(input: CreateUserInput!): RegisterResponse!
   updateUser(input: UpdateUserInput!): UpdateUserResponse!
+  changeUserPassword(input: ChangeUserPasswordInput!): UpdateUserResponse!
   connectGoogleCalendar(input: ConnectGoogleCalendarInput!): ConnectGoogleCalendarResponse!
   googleCalendarCallback(input: GoogleCalendarCallbackInput!): GoogleCalendarCallbackResponse!
   disconnectGoogleCalendar(input: DisconnectGoogleCalendarInput!): DisconnectGoogleCalendarResponse!
@@ -2582,6 +2599,7 @@ type Mutation {
   createPublicAmbassador(input: CreatePublicAmbassadorInput!): PublicAmbassadorCreationResponse!
   createAmbassadorInvitation(input: CreateAmbassadorInvitationInput!): AmbassadorInvitationResponse!
   acceptAmbassadorInvitation(input: AcceptAmbassadorInvitationInput!): AcceptInvitationResponse!
+  acceptByToken(input: AcceptByTokenInput!): AcceptInvitationResponse!
   approveAmbassador(input: ApproveAmbassadorInput!): ApproveAmbassadorResponse!
   createAmbassador(input: CreateAmbassadorInput!): CreateAmbassadorResponse!
   updateAmbassador(input: UpdateAmbassadorInput!): UpdateAmbassadorResponse!
@@ -2872,7 +2890,7 @@ type Query {
   activeAmbassadors(first: Int = null, after: String = null, last: Int = null, before: String = null, filters: ActiveAmbassadorFiltersInput = null): AmbassadorCountableConnection!
   ambassadors(first: Int = null, after: String = null, last: Int = null, before: String = null, filters: AmbassadorFiltersInput = null): AmbassadorCountableConnection!
   ambassador(id: ID = null, uuid: ID = null): Ambassador
-  ambassadorProfile(id: ID = null, uuid: ID = null): AmbassadorProfile
+  ambassadorProfile(id: ID = null, uuid: ID = null, userId: ID = null): AmbassadorProfile
   ambassadorReviews(first: Int = null, after: String = null, last: Int = null, before: String = null, filters: AmbassadorReviewFiltersInput = null): AmbassadorReviewTypeCountableConnection!
   ambassadorReview(reviewId: ID!): AmbassadorReviewType
   ambassadorNotes(first: Int = null, after: String = null, last: Int = null, before: String = null, filters: AmbassadorNoteFiltersInput = null): AmbassadorNoteTypeCountableConnection!
@@ -2899,6 +2917,7 @@ type Query {
   healthcheck: String!
   me: CustomUserType!
   user(id: ID = null, uuid: ID = null): CustomUserType!
+  tenant(id: ID = null, uuid: ID = null): TenantType!
   users(filters: UserFiltersInput = null, first: Int = null, after: String = null, last: Int = null, before: String = null): CustomUserTypeCountableConnection!
   tenants(userUuid: ID = null, filters: TenantFiltersInput = null, first: Int = null, after: String = null, last: Int = null, before: String = null): TenantTypeCountableConnection!
   ambassadorJobStatuses(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): StatusCountableConnection!
@@ -3335,6 +3354,7 @@ type Request implements Node {
   date: String
   startTime: String
   endTime: String
+  storeManagers: [RequestStoreManager!]!
 }
 
 type RequestCountableConnection {
@@ -4466,8 +4486,8 @@ type UserType {
   isActive: Boolean!
   dateJoined: DateTime!
   status: UserStatusType!
-  email: String!
   id: ID!
+  email: String!
   lastName: String
 
   """Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only."""

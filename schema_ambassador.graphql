@@ -8,6 +8,11 @@ input AcceptAmbassadorInvitationInput {
   coordinates: [Float!] = null
 }
 
+input AcceptByTokenInput {
+  clientMutationId: ID = null
+  token: String!
+}
+
 type AcceptInvitationResponse {
   success: Boolean!
   message: String!
@@ -143,6 +148,7 @@ input AmbassadorJobFiltersInput {
   clientMutationId: ID = null
   tenantId: ID = null
   status: AmbassadorJobStatusFilter = null
+  statuses: [AmbassadorJobStatusFilter!] = null
   statusId: ID = null
   statusSlug: String = null
 }
@@ -151,6 +157,7 @@ enum AmbassadorJobStatusFilter {
   APPROVED
   DECLINED
   PENDING
+  INVITED
 }
 
 """
@@ -407,45 +414,6 @@ type Client implements Node {
 enum ColorSchemeEnum {
   DARK
   LIGHT
-}
-
-"""
-Company(id, name, uuid, email, website_url, founding_date, phone, address, about_us, company_size_min, company_size_max, approved, tenant, location, cover, profile_image, created_by, updated_by, created_at, updated_at)
-"""
-type Company implements Node {
-  """The Globally Unique ID of this object"""
-  id: ID!
-  uuid: String!
-  name: String!
-  email: String!
-  websiteUrl: String
-  foundingDate: String
-  phone: String!
-  address: String
-  aboutUs: String
-  companySizeMin: Int
-  companySizeMax: Int
-  approved: Boolean!
-  tenantId: ID
-  location: Location
-  cover: CompanyFile
-  profileImage: CompanyFile
-  createdAt: String!
-  updatedAt: String!
-}
-
-"""
-CompanyFile(id, uuid, name, url, file_type, created_by, updated_by, created_at, updated_at)
-"""
-type CompanyFile implements Node {
-  """The Globally Unique ID of this object"""
-  id: ID!
-  uuid: String!
-  name: String!
-  url: String
-  fileTypeId: ID!
-  createdAt: String!
-  updatedAt: String!
 }
 
 input ConnectGoogleCalendarInput {
@@ -978,6 +946,7 @@ input JobFiltersInput {
   tenantId: ID = null
   eventId: ID = null
   status: JobStatusFilter = null
+  statuses: [JobStatusFilter!] = null
 }
 
 """
@@ -1009,8 +978,10 @@ type JobRequirementType implements Node {
 }
 
 enum JobStatusFilter {
-  OPEN
-  CLOSED
+  PENDING
+  APPROVED
+  DECLINED
+  INVITED
 }
 
 """
@@ -1070,6 +1041,7 @@ type Mutation {
   createPublicAmbassador(input: CreatePublicAmbassadorInput!): PublicAmbassadorCreationResponse!
   createAmbassadorInvitation(input: CreateAmbassadorInvitationInput!): AmbassadorInvitationResponse!
   acceptAmbassadorInvitation(input: AcceptAmbassadorInvitationInput!): AcceptInvitationResponse!
+  acceptByToken(input: AcceptByTokenInput!): AcceptInvitationResponse!
   approveAmbassador(input: ApproveAmbassadorInput!): ApproveAmbassadorResponse!
   createAmbassador(input: CreateAmbassadorInput!): CreateAmbassadorResponse!
   updateAmbassador(input: UpdateAmbassadorInput!): UpdateAmbassadorResponse!
@@ -1255,6 +1227,7 @@ type Request implements Node {
   date: String
   startTime: String
   endTime: String
+  storeManagers: [RequestStoreManager!]!
 }
 
 type RequestDetailResponse {
@@ -1275,6 +1248,22 @@ type RequestStatus implements Node {
   slug: String!
   createEvent: Boolean!
   isDefault: Boolean!
+  createdAt: String!
+  updatedAt: String!
+}
+
+"""
+RequestStoreManager(id, uuid, name, phone, request, tenant, created_by, updated_by, created_at, updated_at)
+"""
+type RequestStoreManager implements Node {
+  """The Globally Unique ID of this object"""
+  id: ID!
+  uuid: String!
+  name: String!
+  phone: String!
+  requestId: ID
+  request: Request
+  tenantId: ID
   createdAt: String!
   updatedAt: String!
 }
@@ -1627,12 +1616,12 @@ type UserType {
   isActive: Boolean!
   dateJoined: DateTime!
   status: UserStatusType!
+  id: ID!
   email: String!
   lastName: String
 
   """Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only."""
   username: String!
-  id: ID!
   firstName: String
   archived: Boolean!
   verified: Boolean!
