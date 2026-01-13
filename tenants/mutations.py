@@ -141,6 +141,20 @@ class UpdateUserInput(SparkGraphQLInput):
 
 
 @strawberry.input
+class ChangeUserPasswordInput(SparkGraphQLInput):
+    id: strawberry.ID | None = None
+    uuid: strawberry.ID | None = None
+    password1: str
+    password2: str
+
+
+@strawberry.input
+class ChangeOwnPasswordInput(SparkGraphQLInput):
+    password1: str
+    password2: str
+
+
+@strawberry.input
 class GoogleSocialAuthInput(SparkGraphQLInput):
     access_token: str
 
@@ -673,6 +687,133 @@ class SparkUserMutations:
             return UpdateUserResponse(
                 success=False,
                 message=f"Error updating user: {exc}",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+    @relay.mutation
+    async def change_user_password(
+        self,
+        info: strawberry.Info,
+        input: ChangeUserPasswordInput,
+    ) -> UpdateUserResponse:
+        requester = info.context.request.user
+
+        allowed, is_spark_admin, _, error = await _check_client_or_spark_admin(
+            requester
+        )
+        if not allowed:
+            return UpdateUserResponse(
+                success=False,
+                message=error,
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        if not input.id and not input.uuid:
+            return UpdateUserResponse(
+                success=False,
+                message="Provide id or uuid to change a user's password.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        if input.password1 != input.password2:
+            return UpdateUserResponse(
+                success=False,
+                message="Passwords do not match.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        try:
+            target_user_id = resolve_id_to_int(input.id) if input.id else None
+            target_user = (
+                await sync_to_async(User.objects.get)(pk=target_user_id)
+                if input.id
+                else await sync_to_async(User.objects.get)(uuid=input.uuid)
+            )
+        except (User.DoesNotExist, ValueError, TypeError, GraphQLError):
+            return UpdateUserResponse(
+                success=False,
+                message="User not found.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        if not is_spark_admin:
+            requester_tenant_ids = await _get_active_tenant_ids(requester)
+            target_user_tenant_ids = await sync_to_async(list)(
+                target_user.tenanted_users.filter(is_active=True).values_list(
+                    "tenant_id", flat=True
+                )
+            )
+            if not set(target_user_tenant_ids).intersection(requester_tenant_ids):
+                return UpdateUserResponse(
+                    success=False,
+                    message="You do not have permission to update this user.",
+                    client_mutation_id=input.client_mutation_id,
+                )
+
+        try:
+
+            @sync_to_async
+            def persist_password():
+                target_user.set_password(input.password1)
+                target_user.save()
+
+            await persist_password()
+
+            return UpdateUserResponse(
+                success=True,
+                message="Password updated successfully.",
+                client_mutation_id=input.client_mutation_id,
+            )
+        except Exception as exc:
+            return UpdateUserResponse(
+                success=False,
+                message=f"Error updating password: {exc}",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+
+@strawberry.type
+class AmbassadorUserMutations:
+    @relay.mutation
+    async def change_user_password(
+        self,
+        info: strawberry.Info,
+        input: ChangeOwnPasswordInput,
+    ) -> UpdateUserResponse:
+        requester = info.context.request.user
+
+        if not requester.is_authenticated:
+            return UpdateUserResponse(
+                success=False,
+                message="User not authenticated.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        if input.password1 != input.password2:
+            return UpdateUserResponse(
+                success=False,
+                message="Passwords do not match.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        try:
+
+            @sync_to_async
+            def persist_password():
+                requester.set_password(input.password1)
+                requester.save()
+
+            await persist_password()
+
+            return UpdateUserResponse(
+                success=True,
+                message="Password updated successfully.",
+                client_mutation_id=input.client_mutation_id,
+            )
+        except Exception as exc:
+            return UpdateUserResponse(
+                success=False,
+                message=f"Error updating password: {exc}",
                 client_mutation_id=input.client_mutation_id,
             )
 
