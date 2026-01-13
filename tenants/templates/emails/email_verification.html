@@ -1,31 +1,39 @@
 {% extends "emails/base.html" %} {% block content %}
-<div class="content">
-  <div class="greeting">
-    {% if user.first_name %} Welcome, {{ user.first_name }}! {% else %} Welcome
-    to Spark! {% endif %}
-  </div>
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+  <tr>
+    <td style="font-size: 18px; font-weight: 600; color: #333333; padding-bottom: 15px;">
+      {% if user.first_name %} Welcome, {{ user.first_name }}! {% else %} Welcome to Spark! {% endif %}
+    </td>
+  </tr>
+  <tr>
+    <td style="font-size: 16px; color: #555555; line-height: 1.6;">
+      <p style="margin: 0 0 20px 0;">We're thrilled to have you join the Spark community! 🎉</p>
 
-  <div class="welcome-message">
-    <p>We're thrilled to have you join the Spark community! 🎉</p>
+      <p style="margin: 0 0 20px 0;">
+        Your account has been successfully created. Please click the button below
+        to verify your email.
+      </p>
 
-    <p>
-      Your account has been successfully created. Please click the button below
-      to verify your email.
-    </p>
+      <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin: 20px 0;">
+        <tr>
+          <td align="center" style="background-color: #4a90e2; border-radius: 5px;">
+            <a href="{{ activation_url }}" style="display: inline-block; padding: 12px 30px; color: #ffffff; text-decoration: none; font-weight: 600; border-radius: 5px;">Verify Email</a>
+          </td>
+        </tr>
+      </table>
 
-    <a href="{{ activation_url }}" class="button">Verify Email</a>
+      <p style="margin: 20px 0;">
+        If the button doesn't work, you can copy and paste the following link into
+        your browser:
+      </p>
 
-    <p>
-      If the button doesn't work, you can copy and paste the following link into
-      your browser:
-    </p>
+      <p style="margin: 10px 0; word-break: break-all; color: #4a90e2;">{{ activation_url }}</p>
 
-    <p style="word-break: break-all">{{ activation_url }}</p>
-
-    <p>
-      If you have any questions or need assistance, don't hesitate to reach out
-      to our support team. We're always happy to help!
-    </p>
-  </div>
-</div>
+      <p style="margin: 20px 0 0 0;">
+        If you have any questions or need assistance, don't hesitate to reach out
+        to our support team. We're always happy to help!
+      </p>
+    </td>
+  </tr>
+</table>
 {% endblock %}

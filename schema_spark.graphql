@@ -8,6 +8,11 @@ input AcceptAmbassadorInvitationInput {
   coordinates: [Float!] = null
 }
 
+input AcceptByTokenInput {
+  clientMutationId: ID = null
+  token: String!
+}
+
 type AcceptInvitationResponse {
   success: Boolean!
   message: String!
@@ -2594,6 +2599,7 @@ type Mutation {
   createPublicAmbassador(input: CreatePublicAmbassadorInput!): PublicAmbassadorCreationResponse!
   createAmbassadorInvitation(input: CreateAmbassadorInvitationInput!): AmbassadorInvitationResponse!
   acceptAmbassadorInvitation(input: AcceptAmbassadorInvitationInput!): AcceptInvitationResponse!
+  acceptByToken(input: AcceptByTokenInput!): AcceptInvitationResponse!
   approveAmbassador(input: ApproveAmbassadorInput!): ApproveAmbassadorResponse!
   createAmbassador(input: CreateAmbassadorInput!): CreateAmbassadorResponse!
   updateAmbassador(input: UpdateAmbassadorInput!): UpdateAmbassadorResponse!
@@ -4480,8 +4486,8 @@ type UserType {
   isActive: Boolean!
   dateJoined: DateTime!
   status: UserStatusType!
-  email: String!
   id: ID!
+  email: String!
   lastName: String
 
   """Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only."""

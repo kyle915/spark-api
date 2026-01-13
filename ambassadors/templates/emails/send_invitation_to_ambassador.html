@@ -1,0 +1,109 @@
+{% extends "emails/base.html" %} {% block content %}
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+  <tr>
+    <td style="font-size: 18px; font-weight: 600; color: #333333; padding-bottom: 15px;">
+      {% if invitation.ambassador.user.first_name %}
+        Hello, {{ invitation.ambassador.user.first_name }}!
+      {% else %}
+        Hello!
+      {% endif %}
+    </td>
+  </tr>
+  <tr>
+    <td style="font-size: 16px; color: #555555; line-height: 1.6;">
+      {% if invitation.job %}
+      <p style="margin: 0 0 20px 0;">You have been invited to a job! 🎉</p>
+      {% else %}
+      <p style="margin: 0 0 20px 0;">You have been invited to an event! 🎉</p>
+      {% endif %}
+
+      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #f9f9f9; border-radius: 5px; margin: 20px 0;">
+        <tr>
+          <td style="padding: 20px;">
+            <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+              <tr>
+                <td style="padding: 5px 0;"><strong>Event:</strong> {{ invitation.event.name }}</td>
+              </tr>
+              
+              {% if invitation.job %}
+                {% if invitation.job.job_title %}
+                <tr>
+                  <td style="padding: 5px 0;">
+                    <strong>Job Title:</strong> {{ invitation.job.job_title.name }}
+                  </td>
+                </tr>
+                {% endif %}
+                <tr>
+                  <td style="padding: 5px 0;">
+                    <strong>Job Name:</strong> {{ invitation.job.name }}
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding: 5px 0;">
+                    <strong>Job Description:</strong> {{ invitation.job.description }}
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding: 5px 0;">
+                    <strong>Job Address:</strong> {{ invitation.job.address }}
+                  </td>
+                </tr>
+                {% if invitation.job.rate %}
+                <tr>
+                  <td style="padding: 5px 0;">
+                    <strong>Job Rate:</strong> {{ invitation.job.rate.amount }}
+                  </td>
+                </tr>
+                {% endif %}
+                {% comment %} Event information {% endcomment %}
+                 {% if invitation.job.event%}
+                 <tr>
+                  <td style="padding: 5px 0;">
+                    <strong>Event Name:</strong> {{ invitation.job.event.name }}
+                  </td>
+                 </tr>
+                 <tr>
+                  <td style="padding: 5px 0;">
+                    <strong>Event Description:</strong> {{ invitation.job.event.description }}
+                  </td>
+                 </tr>
+                 <tr>
+                  <td style="padding: 5px 0;">
+                    <strong>Event Address:</strong> {{ invitation.job.event.address }}
+                  </td>
+                 </tr>
+                 <tr>
+                  <td style="padding: 5px 0;">
+                    <strong>Event Date:</strong> {{ invitation.job.event.start_date|date:"F d, Y" }}
+                  </td>
+                 </tr>
+                 {% endif %}
+              {% endif %}
+            </table>
+          </td>
+        </tr>
+      </table>
+
+      <p style="margin: 20px 0;">
+        To accept the invitation, please click the button below:
+      </p>
+
+      <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin: 20px 0;">
+        <tr>
+          <td align="center" style="background-color: #4a90e2; border-radius: 5px;">
+            <a href="{{ invitation.accept_url }}" style="display: inline-block; padding: 12px 30px; color: #ffffff; text-decoration: none; font-weight: 600; border-radius: 5px;">Accept Invitation</a>
+          </td>
+        </tr>
+      </table>
+
+      <p style="margin: 20px 0;">
+        If you have any questions about this event or your application, 
+        please don't hesitate to reach out to our support team.
+      </p>
+
+      <p style="margin: 0;">We appreciate your interest and look forward to working with you!</p>
+    </td>
+  </tr>
+</table>
+{% endblock %}
+
