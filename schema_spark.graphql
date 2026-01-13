@@ -204,8 +204,6 @@ type AmbassadorGroupCountableEdge {
 
 input AmbassadorGroupFiltersInput {
   search: String = null
-  jobId: ID = null
-  jobUuid: ID = null
 }
 
 type AmbassadorGroupResponse {
@@ -305,6 +303,7 @@ input AmbassadorJobFiltersInput {
   clientMutationId: ID = null
   tenantId: ID = null
   status: AmbassadorJobStatusFilter = null
+  statuses: [AmbassadorJobStatusFilter!] = null
   statusId: ID = null
   statusSlug: String = null
 }
@@ -313,6 +312,7 @@ enum AmbassadorJobStatusFilter {
   APPROVED
   DECLINED
   PENDING
+  INVITED
 }
 
 input AmbassadorNoteFiltersInput {
@@ -2167,6 +2167,7 @@ input JobFiltersInput {
   tenantId: ID = null
   eventId: ID = null
   status: JobStatusFilter = null
+  statuses: [JobStatusFilter!] = null
 }
 
 """
@@ -2348,8 +2349,10 @@ type JobRequirementTypeDetailResponse {
 }
 
 enum JobStatusFilter {
-  OPEN
-  CLOSED
+  PENDING
+  APPROVED
+  DECLINED
+  INVITED
 }
 
 """
@@ -2872,7 +2875,7 @@ type Query {
   activeAmbassadors(first: Int = null, after: String = null, last: Int = null, before: String = null, filters: ActiveAmbassadorFiltersInput = null): AmbassadorCountableConnection!
   ambassadors(first: Int = null, after: String = null, last: Int = null, before: String = null, filters: AmbassadorFiltersInput = null): AmbassadorCountableConnection!
   ambassador(id: ID = null, uuid: ID = null): Ambassador
-  ambassadorProfile(id: ID = null, uuid: ID = null): AmbassadorProfile
+  ambassadorProfile(id: ID = null, uuid: ID = null, userId: ID = null): AmbassadorProfile
   ambassadorReviews(first: Int = null, after: String = null, last: Int = null, before: String = null, filters: AmbassadorReviewFiltersInput = null): AmbassadorReviewTypeCountableConnection!
   ambassadorReview(reviewId: ID!): AmbassadorReviewType
   ambassadorNotes(first: Int = null, after: String = null, last: Int = null, before: String = null, filters: AmbassadorNoteFiltersInput = null): AmbassadorNoteTypeCountableConnection!
@@ -3335,6 +3338,7 @@ type Request implements Node {
   date: String
   startTime: String
   endTime: String
+  storeManagers: [RequestStoreManager!]!
 }
 
 type RequestCountableConnection {
