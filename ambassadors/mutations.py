@@ -276,6 +276,10 @@ class AmbassadorMutations:
     ) -> AcceptInvitationResponse:
         return await AcceptInvitationService.accept(input, info)
 
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def accept_by_token(self, info: strawberry.Info, input: inputs.AcceptByTokenInput) -> AcceptInvitationResponse:
+        return await AcceptInvitationService.accept_by_token(input, info)
+
     @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
     async def approve_ambassador(
         self,

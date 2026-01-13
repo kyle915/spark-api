@@ -478,6 +478,55 @@ class AcceptInvitationService(BaseAmbassadorService):
                 input_obj=input,
             )
 
+    @classmethod
+    async def accept_by_token(
+        cls,
+        input: inputs.AcceptByTokenInput,
+        info: strawberry.Info,
+    ) -> AcceptInvitationResponse:
+        """Accept an ambassador invitation by token."""
+        try:
+            user = info.context.request.user
+            token = input.token
+            invitation = await AmbassadorInvitation.objects._by_token(token)
+            invitation.is_usable(raise_exception=True)
+
+            def get_ambassador():
+                try:
+                    ambassador = Ambassador.objects.get(user=user)
+                except Ambassador.DoesNotExist:
+                    ambassador = Ambassador.objects.create(
+                        user=user,
+                        created_by=user,
+                        updated_by=user,
+                    )
+                return ambassador
+            ambassador = await sync_to_async(get_ambassador)()
+            invitation.ambassador = ambassador
+
+            def update_invitation_job():
+                from jobs.models import AmbassadorJob
+                if not invitation.job:
+                    return
+                AmbassadorJob.objects.accept_from_invitation(invitation)
+            await sync_to_async(update_invitation_job)()
+
+            await cls.mark_invitation_used(invitation, ambassador, user)
+            return build_mutation_response(
+                AcceptInvitationResponse,
+                success=True,
+                message="Invitation accepted successfully.",
+                input_obj=input,
+                ambassador=ambassador,
+            )
+        except (ValueError, TypeError, GraphQLError, AmbassadorInvitation.DoesNotExist) as e:
+            return build_mutation_response(
+                AcceptInvitationResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
 
 class ApproveAmbassadorService(BaseAmbassadorService):
     """Service for approving ambassadors."""
@@ -2515,13 +2564,6 @@ class AmbassadorGroupMutationService(BaseMutationService):
             raise GraphQLError(
                 f"Ambassadors with IDs {missing_ids} not found.")
 
-        # invited_status = None
-        # if job:
-        #     # prepare the invited status
-        #     invited_status = job_models.Status.objects.get_invited(
-        #         tenant_id=job.tenant_id, user=self.user
-        #     )
-
         user_groups = []
         for ambassador in ambassadors:
             # assign the user to the group
@@ -2534,17 +2576,6 @@ class AmbassadorGroupMutationService(BaseMutationService):
 
             if not job:
                 continue
-            # create the ambassador job
-            # job_models.AmbassadorJob.objects.create(
-            #     ambassador=ambassador,
-            #     job=job,
-            #     tenant=job.tenant,
-            #     status=invited_status,
-            #     rate=job.rate,
-            #     appear_as_rfp=True,
-            #     created_by=self.user,
-            #     updated_by=self.user,
-            # )
             job_models.AmbassadorJob.objects.create_and_invite(
                 job=job,
                 ambassador=ambassador,

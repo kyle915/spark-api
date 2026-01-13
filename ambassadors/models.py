@@ -160,6 +160,19 @@ class AmbassadorInvitation(Asyncable, models.Model):
     def accept_url(self):
         return f"{settings.AMBASSADOR_FRONTEND_URL}/invitations/?token={self.token}"
 
+    def is_usable(self, raise_exception: bool = False):
+        from django.utils import timezone
+        now = timezone.now()
+        message: str = ""
+        if self.expires_at <= now:
+            message = "This invitation has expired."
+        if self.is_used:
+            message = "This invitation has already been used."
+
+        if raise_exception and message:
+            raise ValueError(message)
+        return message == ''
+
 
 class AmbassadorReview(Asyncable, models.Model):
     id = models.BigAutoField(primary_key=True)
