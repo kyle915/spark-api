@@ -121,6 +121,14 @@ class AmbassadorInvitation(Asyncable, models.Model):
         blank=True,
         related_name="invitation",
     )
+    # If the user is invited to a specific job, we need to ensure that.
+    job = models.ForeignKey(
+        "jobs.Job",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="invitations",
+    )
 
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -147,6 +155,10 @@ class AmbassadorInvitation(Asyncable, models.Model):
             models.Index(fields=["token"]),
             models.Index(fields=["expires_at"]),
         ]
+
+    @property
+    def accept_url(self):
+        return f"{settings.AMBASSADOR_FRONTEND_URL}/invitations/?token={self.token}"
 
 
 class AmbassadorReview(Asyncable, models.Model):

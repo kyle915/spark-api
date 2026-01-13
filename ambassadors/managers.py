@@ -1,10 +1,13 @@
 from asgiref.sync import sync_to_async
+import secrets
+from datetime import timedelta
 import strawberry
-
+from django.utils import timezone
 from django.db import models
 
-from tenants.models import Tenant
+from tenants.models import Tenant, User
 from utils.models import BaseManager as UtilsBaseManager
+from .constants import INVITATION_EXPIRY_DAYS
 
 
 class BaseManager(UtilsBaseManager):
@@ -43,6 +46,55 @@ class AmbassadorInvitationManager(BaseManager, models.Manager):
     async def _by_token(self, token: str):
         """Return ambassador invitation by token but in async way."""
         return await sync_to_async(self.by_token)(token)
+
+    def check_by_email(self, email: str):
+        from .models import AmbassadorInvitation
+        now = timezone.now()
+        return AmbassadorInvitation.objects.filter(
+            email=email,
+            is_used=False,
+            expires_at__gt=now,
+        ).exists()
+
+    async def _check_by_email(self, email: str):
+        return await sync_to_async(self.check_by_email)(email)
+
+    def create_token(self, email: str, **kwargs):
+        if self.check_by_email(email):
+            raise ValueError(
+                "An active invitation already exists for this email.")
+
+        tenant = kwargs.get("tenant", None)
+        if not tenant:
+            raise ValueError("tenant parameter is required.")
+
+        invited_by = kwargs.get("invited_by", None)
+        if not invited_by:
+            raise ValueError("invited_by parameter is required.")
+
+        now = timezone.now()
+        token = secrets.token_urlsafe(32)
+        expires_at = now + timedelta(days=INVITATION_EXPIRY_DAYS)
+        return self.create(
+            email=email,
+            token=token,
+            expires_at=expires_at,
+            invited_by=invited_by,
+            tenant=tenant,
+            job=kwargs.get("job", None),
+            ambassador=kwargs.get("ambassador", None),
+            created_by=invited_by,
+            updated_by=invited_by,
+        )
+
+    async def _create_token(self, email: str, **kwargs):
+        return await sync_to_async(self.create_token)(email, **kwargs)
+
+    def create_and_send_invite(self, email: str, **kwargs):
+        from .envelopes import SendInvitationMailToAmbassadorMailer
+        invitation = self.create_token(email, **kwargs)
+        SendInvitationMailToAmbassadorMailer(invitation).send()
+        return invitation
 
 
 class AmbassadorReviewManager(BaseManager, models.Manager):

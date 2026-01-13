@@ -1,70 +1,91 @@
 {% extends "emails/base.html" %} {% block content %}
-<div class="content">
-  <div class="greeting">
-    Hello!
-  </div>
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+  <tr>
+    <td style="font-size: 18px; font-weight: 600; color: #333333; padding-bottom: 15px;">
+      Hello!
+    </td>
+  </tr>
+  <tr>
+    <td style="font-size: 16px; color: #555555; line-height: 1.6;">
+      <p style="margin: 0 0 20px 0;">You have received a new application for an event! 📋</p>
 
-  <div class="welcome-message">
-    <p>You have received a new application for an event! 📋</p>
-
-    <p>
-      An ambassador has applied to one of your events. Here are the details:
-    </p>
-
-    <div style="background-color: #f9f9f9; padding: 20px; border-radius: 5px; margin: 20px 0;">
-      <p style="margin: 10px 0;">
-        <strong>Ambassador:</strong> 
-        {% if application.ambassador.user.first_name %}
-          {{ application.ambassador.user.first_name }}
-          {% if application.ambassador.user.last_name %}
-            {{ application.ambassador.user.last_name }}
-          {% endif %}
-        {% else %}
-          {{ application.ambassador.user.email }}
-        {% endif %}
+      <p style="margin: 0 0 20px 0;">
+        An ambassador has applied to one of your events. Here are the details:
       </p>
 
-      <p style="margin: 10px 0;"><strong>Event:</strong> {{ application.event.name }}</p>
-      
-      {% if application.event.date %}
-        <p style="margin: 10px 0;">
-          <strong>Date:</strong> {{ application.event.date|date:"F d, Y" }}
-        </p>
-      {% endif %}
-      
-      {% if application.event.start_time %}
-        <p style="margin: 10px 0;">
-          <strong>Time:</strong> {{ application.event.start_time|date:"g:i A" }}
-          {% if application.event.end_time %}
-            - {{ application.event.end_time|date:"g:i A" }}
-          {% endif %}
-        </p>
-      {% endif %}
-      
-      {% if application.event.address %}
-        <p style="margin: 10px 0;"><strong>Location:</strong> {{ application.event.address }}</p>
-      {% endif %}
+      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #f9f9f9; border-radius: 5px; margin: 20px 0;">
+        <tr>
+          <td style="padding: 20px;">
+            <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+              <tr>
+                <td style="padding: 5px 0;">
+                  <strong>Ambassador:</strong> 
+                  {% if application.ambassador.user.first_name %}
+                    {{ application.ambassador.user.first_name }}
+                    {% if application.ambassador.user.last_name %}
+                      {{ application.ambassador.user.last_name }}
+                    {% endif %}
+                  {% else %}
+                    {{ application.ambassador.user.email }}
+                  {% endif %}
+                </td>
+              </tr>
 
-      <p style="margin: 10px 0;">
-        <strong>Application Status:</strong> 
-        {% if application.is_approved %}
-          <span style="color: #28a745;">Approved</span>
-        {% else %}
-          <span style="color: #ffc107;">Pending Review</span>
-        {% endif %}
+              <tr>
+                <td style="padding: 5px 0;"><strong>Event:</strong> {{ application.event.name }}</td>
+              </tr>
+              
+              {% if application.event.date %}
+                <tr>
+                  <td style="padding: 5px 0;">
+                    <strong>Date:</strong> {{ application.event.date|date:"F d, Y" }}
+                  </td>
+                </tr>
+              {% endif %}
+              
+              {% if application.event.start_time %}
+                <tr>
+                  <td style="padding: 5px 0;">
+                    <strong>Time:</strong> {{ application.event.start_time|date:"g:i A" }}
+                    {% if application.event.end_time %}
+                      - {{ application.event.end_time|date:"g:i A" }}
+                    {% endif %}
+                  </td>
+                </tr>
+              {% endif %}
+              
+              {% if application.event.address %}
+                <tr>
+                  <td style="padding: 5px 0;"><strong>Location:</strong> {{ application.event.address }}</td>
+                </tr>
+              {% endif %}
+
+              <tr>
+                <td style="padding: 5px 0;">
+                  <strong>Application Status:</strong> 
+                  {% if application.is_approved %}
+                    <span style="color: #28a745;">Approved</span>
+                  {% else %}
+                    <span style="color: #ffc107;">Pending Review</span>
+                  {% endif %}
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+      </table>
+
+      <p style="margin: 20px 0;">
+        Please review this application and take appropriate action. 
+        You can approve or decline the application from your dashboard.
       </p>
-    </div>
 
-    <p>
-      Please review this application and take appropriate action. 
-      You can approve or decline the application from your dashboard.
-    </p>
-
-    <p>
-      If you have any questions or need assistance, don't hesitate to reach out 
-      to our support team.
-    </p>
-  </div>
-</div>
+      <p style="margin: 0;">
+        If you have any questions or need assistance, don't hesitate to reach out 
+        to our support team.
+      </p>
+    </td>
+  </tr>
+</table>
 {% endblock %}
 

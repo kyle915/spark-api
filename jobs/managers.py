@@ -1,5 +1,12 @@
+from typing import TYPE_CHECKING
+
 from django.db import models
 from utils.models import BaseManager
+
+if TYPE_CHECKING:
+    from jobs.models import Job, Status
+    from ambassadors.models import Ambassador
+    from tenants.models import User
 
 
 class StatusManager(BaseManager, models.Manager):
@@ -37,4 +44,34 @@ class JobManager(BaseManager, models.Manager):
 class AmbassadorJobManager(BaseManager, models.Manager):
     """Manager for AmbassadorJob model with async support."""
 
-    pass
+    def create_and_invite(self, job: "Job", ambassador: "Ambassador", action_by: "User"):
+        from ambassadors.models import AmbassadorInvitation
+        from jobs.models import Status
+
+        invited_status = None
+        if job:
+            # prepare the invited status
+            invited_status = Status.objects.get_invited(
+                tenant_id=job.tenant_id, user=action_by
+            )
+
+        ambassador_job = self.create(
+            ambassador=ambassador,
+            job=job,
+            tenant=job.tenant,
+            status=invited_status,
+            rate=job.rate,
+            appear_as_rfp=True,
+            created_by=action_by,
+            updated_by=action_by,
+        )
+
+        AmbassadorInvitation.objects.create_and_send_invite(
+            email=ambassador.user.email,
+            ambassador=ambassador,
+            tenant=job.tenant,
+            invited_by=action_by,
+            job=job,
+        )
+
+        return ambassador_job
