@@ -304,6 +304,16 @@ class Request(Node):
     client: Client | None = None
     distributor: Distributor | None = None
     retailer: Retailer | None = None
+
+    @strawberry.field
+    def store_managers(self) -> List["RequestStoreManager"]:
+        cached = getattr(self, "_prefetched_objects_cache", {}).get(
+            "requests_stores_manager"
+        )
+        if cached is not None:
+            return list(cached)
+        return list(self.requests_stores_manager.all())
+
     request_type: RequestType | None = None
     status: RequestStatus | None = None
     tenant_id: strawberry.ID

@@ -615,6 +615,10 @@ class RequestQueriesService(BaseEventQueriesService):
         """Get the model for the service."""
         return models.Request
 
+    def get_queryset(self) -> QuerySet:
+        """Get the queryset for the service."""
+        return self.get_model().objects.prefetch_related("requests_stores_manager")
+
 
 class RequestStoreManagerQueriesService(BaseEventQueriesService):
     """Service for request store manager queries."""

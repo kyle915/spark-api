@@ -1,55 +1,72 @@
 {% extends "emails/base.html" %} {% block content %}
-<div class="content">
-  <div class="greeting">
-    {% if application.ambassador.user.first_name %}
-      Hello, {{ application.ambassador.user.first_name }}!
-    {% else %}
-      Hello!
-    {% endif %}
-  </div>
-
-  <div class="welcome-message">
-    <p>Thank you for applying to an event! 🎉</p>
-
-    <p>
-      We've received your application and wanted to confirm the details:
-    </p>
-
-    <div style="background-color: #f9f9f9; padding: 20px; border-radius: 5px; margin: 20px 0;">
-      <p style="margin: 10px 0;"><strong>Event:</strong> {{ application.event.name }}</p>
-      
-      {% if application.event.date %}
-        <p style="margin: 10px 0;">
-          <strong>Date:</strong> {{ application.event.date|date:"F d, Y" }}
-        </p>
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+  <tr>
+    <td style="font-size: 18px; font-weight: 600; color: #333333; padding-bottom: 15px;">
+      {% if application.ambassador.user.first_name %}
+        Hello, {{ application.ambassador.user.first_name }}!
+      {% else %}
+        Hello!
       {% endif %}
-      
-      {% if application.event.start_time %}
-        <p style="margin: 10px 0;">
-          <strong>Time:</strong> {{ application.event.start_time|date:"g:i A" }}
-          {% if application.event.end_time %}
-            - {{ application.event.end_time|date:"g:i A" }}
-          {% endif %}
-        </p>
-      {% endif %}
-      
-      {% if application.event.address %}
-        <p style="margin: 10px 0;"><strong>Location:</strong> {{ application.event.address }}</p>
-      {% endif %}
-    </div>
+    </td>
+  </tr>
+  <tr>
+    <td style="font-size: 16px; color: #555555; line-height: 1.6;">
+      <p style="margin: 0 0 20px 0;">Thank you for applying to an event! 🎉</p>
 
-    <p>
-      Your application is currently <strong>pending approval</strong>. 
-      You'll be notified once a decision has been made.
-    </p>
+      <p style="margin: 0 0 20px 0;">
+        We've received your application and wanted to confirm the details:
+      </p>
 
-    <p>
-      If you have any questions about this event or your application, 
-      please don't hesitate to reach out to our support team.
-    </p>
+      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #f9f9f9; border-radius: 5px; margin: 20px 0;">
+        <tr>
+          <td style="padding: 20px;">
+            <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+              <tr>
+                <td style="padding: 5px 0;"><strong>Event:</strong> {{ application.event.name }}</td>
+              </tr>
+              
+              {% if application.event.date %}
+                <tr>
+                  <td style="padding: 5px 0;">
+                    <strong>Date:</strong> {{ application.event.date|date:"F d, Y" }}
+                  </td>
+                </tr>
+              {% endif %}
+              
+              {% if application.event.start_time %}
+                <tr>
+                  <td style="padding: 5px 0;">
+                    <strong>Time:</strong> {{ application.event.start_time|date:"g:i A" }}
+                    {% if application.event.end_time %}
+                      - {{ application.event.end_time|date:"g:i A" }}
+                    {% endif %}
+                  </td>
+                </tr>
+              {% endif %}
+              
+              {% if application.event.address %}
+                <tr>
+                  <td style="padding: 5px 0;"><strong>Location:</strong> {{ application.event.address }}</td>
+                </tr>
+              {% endif %}
+            </table>
+          </td>
+        </tr>
+      </table>
 
-    <p>We appreciate your interest and look forward to working with you!</p>
-  </div>
-</div>
+      <p style="margin: 20px 0;">
+        Your application is currently <strong>pending approval</strong>. 
+        You'll be notified once a decision has been made.
+      </p>
+
+      <p style="margin: 20px 0;">
+        If you have any questions about this event or your application, 
+        please don't hesitate to reach out to our support team.
+      </p>
+
+      <p style="margin: 0;">We appreciate your interest and look forward to working with you!</p>
+    </td>
+  </tr>
+</table>
 {% endblock %}
 

@@ -130,7 +130,6 @@ class TestAddAmbassadorsToGroup(AmbassadorsGraphQLTestCase):
             name="Test Job",
             code="JOB-ADD-001",
             address="123 Test St",
-            company=self.company,
             event=self.event,
             job_title=self.job_title,
             tenant=self.tenant,

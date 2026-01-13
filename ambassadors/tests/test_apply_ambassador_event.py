@@ -1,9 +1,10 @@
 """
-Tests for apply_ambassador_event mutation.
+Tests for apply_ambassador_event mutation and envelope mailers.
 
 This module tests:
 - apply_ambassador_event (authenticated mutation)
 - MailChain email sending functionality
+- SendInvitationMailToAmbassadorMailer envelope mailer
 """
 import pytest
 import strawberry_django  # noqa: F401
@@ -201,8 +202,8 @@ class TestApplyAmbassadorEvent(AmbassadorsGraphQLTestCase):
         # Create the mailer
         mailer = NotifyApplicationToClientMailer(application)
 
-        # Get the envelope
-        envelope = mailer.envelope()
+        # Get the envelope (wrap in sync_to_async since envelope() does database queries)
+        envelope = await sync_to_async(mailer.envelope)()
 
         # Verify the envelope has the client user's email
         assert self.client_user.email in envelope.to_emails
@@ -251,3 +252,169 @@ class TestApplyAmbassadorEvent(AmbassadorsGraphQLTestCase):
 
         assert response.data["applyAmbassadorEvent"]["success"] is False
         assert response.data["applyAmbassadorEvent"]["message"] == "Already applied to this event"
+
+
+@pytest.mark.django_db(transaction=True)
+class TestSendInvitationMailToAmbassadorMailer(AmbassadorsGraphQLTestCase):
+    """Tests for SendInvitationMailToAmbassadorMailer envelope mailer."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self, db):
+        """Set up test data."""
+        from jobs import models as job_models
+        self.system_user = self.get_system_user()
+        self.roles = self.setup_default_roles()
+        self.tenant = self.create_tenant(name="Invitation Mailer Test Tenant")
+
+        # Use UUID for user to ensure uniqueness across test runs
+        unique_id = str(uuid.uuid4())[:8]
+        self.client_user = self.create_user(
+            username=f"client_mailer_{unique_id}@test.com",
+            email=f"client_mailer_{unique_id}@test.com",
+            role=self.roles['client']
+        )
+        self.create_tenanted_user(self.client_user, self.tenant)
+
+        # Create ambassador user and ambassador
+        self.ambassador_user = self.create_user(
+            username=f"ambassador_mailer_{unique_id}@test.com",
+            email=f"ambassador_mailer_{unique_id}@test.com",
+            role=self.roles['ambassador']
+        )
+        self.create_tenanted_user(self.ambassador_user, self.tenant)
+        self.ambassador = self.create_ambassador(
+            user=self.ambassador_user,
+            created_by=self.system_user,
+        )
+
+        # Create job-related test data
+        self.event = self.create_event(
+            name="Test Event",
+            tenant=self.tenant,
+            address="123 Test St"
+        )
+        self.job_title = job_models.JobTitle.objects.create(
+            name="Promoter",
+            tenant=self.tenant,
+            created_by=self.system_user
+        )
+        self.rate_type = job_models.RateType.objects.create(
+            name="Hourly",
+            tenant=self.tenant,
+            created_by=self.system_user
+        )
+        self.rate = job_models.Rate.objects.create(
+            amount=75.0,
+            rate_type=self.rate_type,
+            tenant=self.tenant,
+            created_by=self.system_user
+        )
+        self.job = job_models.Job.objects.create(
+            name="Test Job",
+            code="JOB-MAILER-001",
+            address="123 Test St",
+            event=self.event,
+            job_title=self.job_title,
+            tenant=self.tenant,
+            rate=self.rate,
+            created_by=self.system_user
+        )
+
+    @pytest.mark.asyncio
+    async def test_send_invitation_mail_to_ambassador_mailer_envelope(self):
+        """Test that SendInvitationMailToAmbassadorMailer creates correct envelope."""
+        from django.utils import timezone
+        from datetime import timedelta
+        from ambassadors.models import AmbassadorInvitation
+        from ambassadors.envelopes import SendInvitationMailToAmbassadorMailer
+        from ambassadors.constants import INVITATION_EXPIRY_DAYS
+
+        # Create an invitation with job and ambassador
+        invitation = await sync_to_async(AmbassadorInvitation.objects.create)(
+            email=self.ambassador_user.email,
+            token="test-token-123",
+            expires_at=timezone.now() + timedelta(days=INVITATION_EXPIRY_DAYS),
+            invited_by=self.client_user,
+            tenant=self.tenant,
+            job=self.job,
+            ambassador=self.ambassador,
+            created_by=self.client_user,
+            updated_by=self.client_user,
+        )
+
+        # Create the mailer
+        mailer = SendInvitationMailToAmbassadorMailer(invitation)
+
+        # Get the envelope
+        envelope = mailer.envelope()
+
+        # Verify envelope properties
+        assert envelope.subject == "You have been invited to a job"
+        assert envelope.template == "ambassadors.templates.emails.send_invitation_to_ambassador"
+        assert envelope.to_emails == [invitation.email]
+        assert envelope.context["invitation"] == invitation
+
+    @pytest.mark.asyncio
+    async def test_send_invitation_mail_to_ambassador_mailer_template_renders(self):
+        """Test that the template renders correctly without syntax errors."""
+        from django.utils import timezone
+        from datetime import timedelta
+        from ambassadors.models import AmbassadorInvitation
+        from ambassadors.envelopes import SendInvitationMailToAmbassadorMailer
+        from ambassadors.constants import INVITATION_EXPIRY_DAYS
+
+        # Create an invitation with job and ambassador
+        invitation = await sync_to_async(AmbassadorInvitation.objects.create)(
+            email=self.ambassador_user.email,
+            token="test-token-render-123",
+            expires_at=timezone.now() + timedelta(days=INVITATION_EXPIRY_DAYS),
+            invited_by=self.client_user,
+            tenant=self.tenant,
+            job=self.job,
+            ambassador=self.ambassador,
+            created_by=self.client_user,
+            updated_by=self.client_user,
+        )
+
+        # Create the mailer
+        mailer = SendInvitationMailToAmbassadorMailer(invitation)
+
+        # Get the envelope
+        envelope = mailer.envelope()
+
+        # Test that template renders without syntax errors
+        rendered_html = envelope.render_template()
+        assert rendered_html is not None
+        assert len(rendered_html) > 0
+        # Verify the template contains expected content
+        assert "invited" in rendered_html.lower() or "invitation" in rendered_html.lower()
+
+    @pytest.mark.asyncio
+    async def test_send_invitation_mail_to_ambassador_mailer_sends(self):
+        """Test that the mailer can send (with mocked dispatch)."""
+        from django.utils import timezone
+        from datetime import timedelta
+        from ambassadors.models import AmbassadorInvitation
+        from ambassadors.envelopes import SendInvitationMailToAmbassadorMailer
+        from ambassadors.constants import INVITATION_EXPIRY_DAYS
+
+        # Create an invitation
+        invitation = await sync_to_async(AmbassadorInvitation.objects.create)(
+            email=self.ambassador_user.email,
+            token="test-token-send-123",
+            expires_at=timezone.now() + timedelta(days=INVITATION_EXPIRY_DAYS),
+            invited_by=self.client_user,
+            tenant=self.tenant,
+            job=self.job,
+            ambassador=self.ambassador,
+            created_by=self.client_user,
+            updated_by=self.client_user,
+        )
+
+        # Create the mailer
+        mailer = SendInvitationMailToAmbassadorMailer(invitation)
+
+        # Test that mailer can send (with mocked dispatch)
+        with patch.object(mailer, 'dispatch') as mock_dispatch:
+            mailer.send_now()
+            mock_dispatch.assert_called_once()
