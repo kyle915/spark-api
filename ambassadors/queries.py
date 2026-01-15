@@ -8,6 +8,7 @@ from django.db.models import QuerySet, Model
 from ambassadors import types
 from ambassadors import models
 from ambassadors import inputs
+from jobs import models as job_models
 from utils.graphql.permissions import StrictIsAuthenticated, IsClientOrSparkAdmin
 from events import models as event_models
 from events import types as event_types
@@ -799,6 +800,20 @@ class AttendanceQueriesService(BaseQueriesService):
                 queryset = queryset.filter(job_id=job_id)
             except (TypeError, ValueError, GraphQLError):
                 raise GraphQLError("Invalid job ID.")
+        if filters.ambassador_job_id:
+            try:
+                ambassador_job_id = resolve_id_to_int(filters.ambassador_job_id)
+                ambassador_job = job_models.AmbassadorJob.objects.get(
+                    id=ambassador_job_id
+                )
+                queryset = queryset.filter(
+                    ambassador_id=ambassador_job.ambassador_id,
+                    job_id=ambassador_job.job_id,
+                )
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Invalid ambassador job ID.")
+            except job_models.AmbassadorJob.DoesNotExist:
+                raise GraphQLError("Ambassador job not found.")
         if filters.event_id:
             try:
                 event_id = resolve_id_to_int(filters.event_id)
