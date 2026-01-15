@@ -633,6 +633,7 @@ input AttendanceFiltersInput {
   clientMutationId: ID = null
   tenantId: ID = null
   jobId: ID = null
+  ambassadorJobId: ID = null
   eventId: ID = null
   attendanceStatusId: ID = null
   sourceId: ID = null
@@ -4486,13 +4487,13 @@ type UserType {
   isActive: Boolean!
   dateJoined: DateTime!
   status: UserStatusType!
-  id: ID!
-  email: String!
-  lastName: String
 
   """Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only."""
   username: String!
+  lastName: String
+  email: String!
   firstName: String
+  id: ID!
   archived: Boolean!
   verified: Boolean!
 }
