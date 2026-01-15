@@ -347,6 +347,7 @@ class AttendanceFiltersInput(BaseTenantInput):
     """Filtros para attendances."""
 
     job_id: strawberry.ID | None = None
+    ambassador_job_id: strawberry.ID | None = None
     event_id: strawberry.ID | None = None
     attendance_status_id: strawberry.ID | None = None
     source_id: strawberry.ID | None = None
