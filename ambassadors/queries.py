@@ -51,6 +51,7 @@ class AmbassadorEventsFiltersInput:
     """Filters for ambassador-scoped events."""
 
     ambassador_uuid: strawberry.ID | None = None
+    event_id: strawberry.ID | None = None
     types: list[strawberry.ID] | None = None
     statuses: list[AmbassadorEventStatus] | None = None
     start_date: str | None = None
@@ -281,6 +282,9 @@ class AmbassadorEventQueries:
             if filters.ambassador_uuid:
                 queryset = queryset.filter(
                     ambassador__uuid=filters.ambassador_uuid)
+            if filters.event_id:
+                event_id = _resolve_filter_id(filters.event_id, "event")
+                queryset = queryset.filter(event_id=event_id)
             if filters.types:
                 type_ids = _resolve_filter_id_list(filters.types, "event type")
                 queryset = queryset.filter(event__event_type_id__in=type_ids)
@@ -364,6 +368,7 @@ class AmbassadorManagementQueries:
         after: str | None = None,
         last: int | None = None,
         before: str | None = None,
+        q: str | None = None,
         filters: inputs.ActiveAmbassadorFiltersInput | None = None,
     ) -> CountableConnection[types.Ambassador]:
         """Get all active ambassadors (client/spark-admin only)."""
@@ -376,6 +381,7 @@ class AmbassadorManagementQueries:
             after=after,
             last=last,
             before=before,
+            q=q,
             filters=filters,
         )
 

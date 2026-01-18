@@ -5,6 +5,7 @@ from graphql import GraphQLError
 from asgiref.sync import sync_to_async
 
 from jobs import models, inputs, types
+from ambassadors.models import AmbassadorEvent
 from utils.graphql.mixins import (
     BaseMutationService,
     SparkGraphQLMixin,
@@ -446,6 +447,49 @@ class AmbassadorJobMutationService(BaseMutationService):
     def get_model(self) -> Model:
         """Get the model for the service."""
         return models.AmbassadorJob
+
+    @classmethod
+    async def create(
+        cls,
+        input: inputs.CreateAmbassadorJobInput,
+        info: strawberry.Info,
+        *,
+        response_class: type | None = None,
+        model_field_name: str | None = None,
+        create_message: str | None = None,
+    ) -> types.AmbassadorJobDetailResponse:
+        response = await super().create(
+            input,
+            info,
+            response_class=response_class,
+            model_field_name=model_field_name,
+            create_message=create_message,
+        )
+
+        if not getattr(response, "success", False):
+            return response
+
+        ambassador_job = getattr(response, "ambassador_job", None)
+        if ambassador_job is None:
+            return response
+
+        job = await models.Job.objects.only("id", "event_id").aget(
+            id=ambassador_job.job_id
+        )
+        if not await AmbassadorEvent.objects.filter(
+            ambassador_id=ambassador_job.ambassador_id,
+            event_id=job.event_id,
+        ).aexists():
+            await AmbassadorEvent.objects.acreate(
+                ambassador_id=ambassador_job.ambassador_id,
+                event_id=job.event_id,
+                tenant_id=ambassador_job.tenant_id,
+                is_approved=False,
+                created_by_id=ambassador_job.created_by_id,
+                updated_by_id=ambassador_job.updated_by_id,
+            )
+
+        return response
 
 
 @strawberry.type

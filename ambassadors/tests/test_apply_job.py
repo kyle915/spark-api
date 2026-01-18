@@ -1,5 +1,6 @@
 import pytest
 from config.schema_spark import schema_spark
+from ambassadors.models import AmbassadorEvent
 from jobs import models as job_models
 from jobs.tests.base import JobsGraphQLTestCase
 
@@ -69,6 +70,11 @@ class TestApplyAmbassadorJob(JobsGraphQLTestCase):
             ambassador=self.ambassador, job=self.job
         ).aexists()
         assert exists is True
+
+        event_exists = await AmbassadorEvent.objects.filter(
+            ambassador=self.ambassador, event=self.event
+        ).aexists()
+        assert event_exists is True
 
     @pytest.mark.asyncio
     async def test_apply_ambassador_job_already_applied(self):
