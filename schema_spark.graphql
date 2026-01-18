@@ -2404,7 +2404,7 @@ type JobTitleDetailResponse {
 }
 
 """
-Location(id, uuid, name, code, zip, tenant, created_by, updated_by, created_at, updated_at)
+Location(id, uuid, name, code, zip, tenant, state, created_by, updated_by, created_at, updated_at)
 """
 type Location implements Node {
   """The Globally Unique ID of this object"""
@@ -4487,13 +4487,13 @@ type UserType {
   isActive: Boolean!
   dateJoined: DateTime!
   status: UserStatusType!
+  email: String!
+  id: ID!
+  lastName: String
 
   """Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only."""
   username: String!
-  lastName: String
-  email: String!
   firstName: String
-  id: ID!
   archived: Boolean!
   verified: Boolean!
 }

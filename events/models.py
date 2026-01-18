@@ -2,7 +2,7 @@ from uuid6 import uuid7
 from django.db import models, transaction
 from django.contrib.postgres.fields import ArrayField
 from django.conf import settings
-from tenants.models import Tenant
+from tenants.models import Tenant, Role
 
 from .managers import (
     ClientManager,
@@ -38,6 +38,29 @@ class TimeZone(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
 
+class State(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    name = models.CharField(max_length=50)
+    code = models.CharField(max_length=50)
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="state_created_by",
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="state_updated_by",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
 class Location(models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
@@ -48,6 +71,11 @@ class Location(models.Model):
     tenant = models.ForeignKey(
         Tenant, on_delete=models.RESTRICT, related_name="locations"
     )
+
+    state = models.ForeignKey(
+        State, on_delete=models.RESTRICT, related_name="location", null=True
+    )
+
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
@@ -96,8 +124,8 @@ class Client(Asyncable, models.Model):
 class Distributor(models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
-    name = models.CharField(max_length=50)
-    email = models.CharField(max_length=254)
+    name = models.CharField(max_length=255)
+    email = models.CharField(max_length=254, null=True)
 
     location = models.ForeignKey(Location, on_delete=models.RESTRICT)
     tenant = models.ForeignKey(
@@ -123,9 +151,9 @@ class Distributor(models.Model):
 class Retailer(models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
-    name = models.CharField(max_length=50)
-    address = models.CharField(max_length=100)
-    store_contact = models.CharField(max_length=50)
+    name = models.CharField(max_length=255)
+    address = models.CharField(max_length=100, null=True)
+    store_contact = models.CharField(max_length=50, null=True)
 
     location = models.ForeignKey(Location, on_delete=models.RESTRICT)
     tenant = models.ForeignKey(
@@ -549,7 +577,7 @@ class EventType(WithDefaultAttribute, models.Model):
 class Event(models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
-    name = models.CharField(max_length=50)
+    name = models.CharField(max_length=255)
     date = models.DateTimeField(null=True)
     coordinates = ArrayField(
         models.FloatField(),
@@ -648,3 +676,210 @@ class GoogleCalendarEvent(models.Model):
 
     def __str__(self):
         return f"Event {self.event.id} -> Google Calendar {self.google_event_id} for user {self.user.id}"
+
+
+class UserDistributor(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    name = models.CharField(max_length=100)
+
+    distributor = models.ForeignKey(
+        Distributor,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="user_distributor",
+    )
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="user_distributor",
+    )
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="user_distributor_created_by",
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="user_distributor_updated_by",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
+class UserLocation(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    name = models.CharField(max_length=100)
+
+    location = models.ForeignKey(
+        Location,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="user_location",
+    )
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="user_location",
+    )
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="user_location_created_by",
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="user_location_updated_by",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
+class NotificationGroup(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    name = models.CharField(max_length=255)
+    state = models.BooleanField(default=False)
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="notification_group_created_by",
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="notification_group_updated_by",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
+class NotificationGroupUser(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="notification_group_user",
+    )
+
+    notification_group = models.ForeignKey(
+        NotificationGroup,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="notification_group_user",
+    )
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="notification_group_user_created_by",
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="notification_group_user_updated_by",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
+class NotificationGroupLocation(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+
+    location = models.ForeignKey(
+        Location,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="notification_group_location",
+    )
+
+    notification_group = models.ForeignKey(
+        NotificationGroup,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="notification_group_location",
+    )
+
+    state = models.ForeignKey(
+        State,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="notification_group_location",
+    )
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="notification_group_location_created_by",
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="notification_group_location_updated_by",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
+class NotificationGroupRole(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+
+    role = models.ForeignKey(
+        Role,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="notification_group_role",
+    )
+
+    notification_group = models.ForeignKey(
+        NotificationGroup,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="notification_group_role",
+    )
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="notification_group_role_created_by",
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="notification_group_role_updated_by",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
