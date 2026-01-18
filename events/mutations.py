@@ -283,6 +283,7 @@ class EventMutations:
                     request_id = resolve_id_to_int(request_id)
                 except (TypeError, ValueError, GraphQLError):
                     raise GraphQLError("Invalid request ID.")
+                input.request_id = request_id
                 request: models.Request = await sync_to_async(
                     models.Request.objects.get
                 )(id=request_id)
@@ -1445,6 +1446,11 @@ class RequestMutations:
             user: User = await service.get_user(info)
             if user.role_id == ROLE_ID.Ambassadors:
                 raise GraphQLError("You are not authorized to approve requests.")
+
+            try:
+                input.id = resolve_id_to_int(input.id)
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Invalid request ID.")
 
             # Get the request first to access its tenant
             request: models.Request = await sync_to_async(models.Request.objects.get)(

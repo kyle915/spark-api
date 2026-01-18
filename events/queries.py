@@ -977,6 +977,11 @@ class DistributorQueries:
             tenant_uuid=tenant_uuid,
         )
 
+        queryset = service.get_ordered_queryset(tenant_id=resolved_tenant_id, q=q)
+        if filters and filters.location_id:
+            location_id = _resolve_filter_id(filters.location_id, "location")
+            queryset = queryset.filter(location_id=location_id)
+
         return await service.get_connection(
             tenant_id=resolved_tenant_id,
             q=q,
@@ -984,6 +989,7 @@ class DistributorQueries:
             after=after,
             last=last,
             before=before,
+            queryset=queryset,
         )
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
@@ -1071,6 +1077,11 @@ class RetailerQueries:
             tenant_uuid=tenant_uuid,
         )
 
+        queryset = service.get_ordered_queryset(tenant_id=resolved_tenant_id, q=q)
+        if filters and filters.location_id:
+            location_id = _resolve_filter_id(filters.location_id, "location")
+            queryset = queryset.filter(location_id=location_id)
+
         return await service.get_connection(
             tenant_id=resolved_tenant_id,
             q=q,
@@ -1078,6 +1089,7 @@ class RetailerQueries:
             after=after,
             last=last,
             before=before,
+            queryset=queryset,
         )
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])

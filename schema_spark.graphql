@@ -1715,7 +1715,7 @@ type Distributor implements Node {
   id: ID!
   uuid: String!
   name: String!
-  email: String!
+  email: String
   tenantId: ID!
   location: Location
   createdAt: String!
@@ -1747,6 +1747,7 @@ input DistributorFiltersInput {
   clientMutationId: ID = null
   tenantId: ID = null
   tenantUuid: ID = null
+  locationId: ID = null
 }
 
 type DistributorOption {
@@ -3523,8 +3524,8 @@ type Retailer implements Node {
   id: ID!
   uuid: String!
   name: String!
-  address: String!
-  storeContact: String!
+  address: String
+  storeContact: String
   tenantId: ID!
   location: Location
   createdAt: String!
@@ -3556,6 +3557,7 @@ input RetailerFiltersInput {
   clientMutationId: ID = null
   tenantId: ID = null
   tenantUuid: ID = null
+  locationId: ID = null
 }
 
 type RetailerOption {

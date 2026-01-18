@@ -746,17 +746,19 @@ class AmbassadorGroupQueriesService(BaseQueriesService):
         if not filters:
             return queryset
 
-        if filters.job_id:
+        job_id = getattr(filters, "job_id", None)
+        if job_id:
             try:
-                job_id = resolve_id_to_int(filters.job_id)
+                job_id = resolve_id_to_int(job_id)
                 queryset = queryset.filter(
                     members__ambassador__ambassador_jobs__job_id=job_id
                 ).distinct()
             except (TypeError, ValueError, GraphQLError):
                 raise GraphQLError("Invalid job ID.")
-        if filters.job_uuid:
+        job_uuid = getattr(filters, "job_uuid", None)
+        if job_uuid:
             queryset = queryset.filter(
-                members__ambassador__ambassador_jobs__job__uuid=filters.job_uuid
+                members__ambassador__ambassador_jobs__job__uuid=job_uuid
             ).distinct()
 
         return queryset
