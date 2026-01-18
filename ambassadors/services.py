@@ -224,8 +224,12 @@ class PublicAmbassadorCreationService(BaseAmbassadorService):
         cls,
         input: inputs.CreatePublicAmbassadorInput,
         info: strawberry.Info,
+        ambassador_is_active: bool | None = None,
     ) -> PublicAmbassadorCreationResponse:
         """Create a public ambassador account (inactive by default)."""
+        ambassador_is_active = (
+            ambassador_is_active if ambassador_is_active is not None else False
+        )
         # Validate passwords match
         password_error = validate_passwords_match(
             input, PublicAmbassadorCreationResponse
@@ -260,7 +264,7 @@ class PublicAmbassadorCreationService(BaseAmbassadorService):
                 user=user,
                 address=input.address,
                 coordinates=input.coordinates or [],
-                is_active=False,  # Requires manual approval
+                is_active=ambassador_is_active,  # Requires manual approval by default
                 created_by=user,
                 updated_by=user,
             )

@@ -1112,6 +1112,17 @@ input CreateAmbassadorToAmbassadorReviewInput {
   ambassadorId: ID!
 }
 
+input CreateAmbassadorWithUserInput {
+  clientMutationId: ID = null
+  firstName: String!
+  email: String!
+  password1: String!
+  password2: String!
+  address: String = null
+  coordinates: [Float!] = null
+  isActive: Boolean = null
+}
+
 input CreateAttendanceInput {
   clientMutationId: ID = null
   tenantId: ID = null
@@ -2600,6 +2611,7 @@ type Mutation {
   applyAmbassadorEvent(eventId: ID!, ambassadorId: ID = null): ApplyAmbassadorEventResponse!
   applyAmbassadorJob(jobId: ID!): ApplyAmbassadorJobResponse!
   createPublicAmbassador(input: CreatePublicAmbassadorInput!): PublicAmbassadorCreationResponse!
+  createAmbassadorWithUser(input: CreateAmbassadorWithUserInput!): PublicAmbassadorCreationResponse!
   createAmbassadorInvitation(input: CreateAmbassadorInvitationInput!): AmbassadorInvitationResponse!
   acceptAmbassadorInvitation(input: AcceptAmbassadorInvitationInput!): AcceptInvitationResponse!
   acceptByToken(input: AcceptByTokenInput!): AcceptInvitationResponse!

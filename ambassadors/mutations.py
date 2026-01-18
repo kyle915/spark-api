@@ -277,7 +277,19 @@ class AmbassadorMutations:
         info: strawberry.Info,
         input: inputs.CreatePublicAmbassadorInput,
     ) -> PublicAmbassadorCreationResponse:
-        return await PublicAmbassadorCreationService.create(input, info)
+        return await PublicAmbassadorCreationService.create(
+            input, info, ambassador_is_active=False
+        )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def create_ambassador_with_user(
+        self,
+        info: strawberry.Info,
+        input: inputs.CreateAmbassadorWithUserInput,
+    ) -> PublicAmbassadorCreationResponse:
+        return await PublicAmbassadorCreationService.create(
+            input, info, ambassador_is_active=input.is_active
+        )
 
     @relay.mutation(permission_classes=[StrictIsAuthenticated])
     async def create_ambassador_invitation(
