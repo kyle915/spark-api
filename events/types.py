@@ -146,7 +146,7 @@ class ClientDetailResponse:
 class Distributor(Node):
     uuid: str
     name: str
-    email: str
+    email: str | None
     tenant_id: strawberry.ID
     location: Location | None = None
     created_at: str
@@ -165,8 +165,8 @@ class DistributorDetailResponse:
 class Retailer(Node):
     uuid: str
     name: str
-    address: str
-    store_contact: str
+    address: str | None
+    store_contact: str | None
     tenant_id: strawberry.ID
     location: Location | None = None
     created_at: str

@@ -224,8 +224,12 @@ class PublicAmbassadorCreationService(BaseAmbassadorService):
         cls,
         input: inputs.CreatePublicAmbassadorInput,
         info: strawberry.Info,
+        ambassador_is_active: bool | None = None,
     ) -> PublicAmbassadorCreationResponse:
         """Create a public ambassador account (inactive by default)."""
+        ambassador_is_active = (
+            ambassador_is_active if ambassador_is_active is not None else False
+        )
         # Validate passwords match
         password_error = validate_passwords_match(
             input, PublicAmbassadorCreationResponse
@@ -260,7 +264,7 @@ class PublicAmbassadorCreationService(BaseAmbassadorService):
                 user=user,
                 address=input.address,
                 coordinates=input.coordinates or [],
-                is_active=False,  # Requires manual approval
+                is_active=ambassador_is_active,  # Requires manual approval by default
                 created_by=user,
                 updated_by=user,
             )
@@ -590,8 +594,9 @@ class CreateAmbassadorService(BaseAmbassadorService):
         user = info.context.request.user
 
         try:
-            target_user = await sync_to_async(User.objects.get)(pk=int(input.user_id))
-        except (User.DoesNotExist, ValueError, TypeError):
+            resolved_user_id = resolve_id_to_int(input.user_id)
+            target_user = await sync_to_async(User.objects.get)(pk=resolved_user_id)
+        except (User.DoesNotExist, ValueError, TypeError, GraphQLError):
             return build_mutation_response(
                 CreateAmbassadorResponse,
                 success=False,
@@ -1235,6 +1240,7 @@ class AmbassadorQueriesService(SparkGraphQLMixin):
         after: str | None = None,
         last: int | None = None,
         before: str | None = None,
+        q: str | None = None,
         filters: inputs.ActiveAmbassadorFiltersInput | None = None,
     ) -> CountableConnection[AmbassadorType]:
         """Get all active ambassadors."""
@@ -1253,6 +1259,13 @@ class AmbassadorQueriesService(SparkGraphQLMixin):
                         Q(user__first_name__icontains=filters.name)
                         | Q(user__last_name__icontains=filters.name)
                     )
+            if q:
+                queryset = queryset.filter(
+                    Q(user__email__icontains=q)
+                    | Q(user__first_name__icontains=q)
+                    | Q(user__last_name__icontains=q)
+                    | Q(address__icontains=q)
+                )
 
             return queryset.order_by("-created_at")
 

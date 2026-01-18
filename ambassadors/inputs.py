@@ -17,6 +17,13 @@ class CreatePublicAmbassadorInput(SparkGraphQLInput):
 
 
 @strawberry.input
+class CreateAmbassadorWithUserInput(CreatePublicAmbassadorInput):
+    """Input for authenticated ambassador creation with active option."""
+
+    is_active: bool | None = None
+
+
+@strawberry.input
 class CreateAmbassadorInvitationInput(BaseTenantInput):
     """Input for creating ambassador invitation."""
 
@@ -347,6 +354,7 @@ class AttendanceFiltersInput(BaseTenantInput):
     """Filtros para attendances."""
 
     job_id: strawberry.ID | None = None
+    ambassador_job_id: strawberry.ID | None = None
     event_id: strawberry.ID | None = None
     attendance_status_id: strawberry.ID | None = None
     source_id: strawberry.ID | None = None
