@@ -14,7 +14,7 @@ from jobs.types import AmbassadorJob as AmbassadorJobType
 
 from events.models import Event
 from utils.graphql.permissions import StrictIsAuthenticated, IsClientOrSparkAdmin
-from utils.graphql.mixins import BaseMutationService
+from utils.graphql.mixins import BaseMutationService, resolve_id_to_int
 
 from .models import (
     Ambassador,
@@ -153,8 +153,9 @@ class AmbassadorMutations:
 
         if ambassador_id:
             try:
-                ambassador = await Ambassador.objects.aget(id=ambassador_id)
-            except (Ambassador.DoesNotExist, ValueError):
+                resolved_ambassador_id = resolve_id_to_int(ambassador_id)
+                ambassador = await Ambassador.objects.aget(id=resolved_ambassador_id)
+            except (Ambassador.DoesNotExist, ValueError, TypeError, GraphQLError):
                 return ApplyAmbassadorEventResponse(
                     success=False, message="Ambassador profile not found"
                 )
@@ -167,8 +168,11 @@ class AmbassadorMutations:
                 )
 
         try:
-            event = await Event.objects.select_related("tenant").aget(id=event_id)
-        except Event.DoesNotExist:
+            resolved_event_id = resolve_id_to_int(event_id)
+            event = await Event.objects.select_related("tenant").aget(
+                id=resolved_event_id
+            )
+        except (Event.DoesNotExist, ValueError, TypeError, GraphQLError):
             return ApplyAmbassadorEventResponse(
                 success=False, message="Event not found"
             )
@@ -213,8 +217,11 @@ class AmbassadorMutations:
             )
 
         try:
-            job = await Job.objects.select_related("tenant", "rate").aget(id=job_id)
-        except Job.DoesNotExist:
+            resolved_job_id = resolve_id_to_int(job_id)
+            job = await Job.objects.select_related("tenant", "rate", "event").aget(
+                id=resolved_job_id
+            )
+        except (Job.DoesNotExist, ValueError, TypeError, GraphQLError):
             return ApplyAmbassadorJobResponse(success=False, message="Job not found")
 
         if await AmbassadorJobModel.objects.filter(
@@ -248,6 +255,18 @@ class AmbassadorMutations:
             updated_by=user,
         )
 
+        if not await AmbassadorEvent.objects.filter(
+            ambassador=ambassador, event=job.event
+        ).aexists():
+            await AmbassadorEvent.objects.acreate(
+                ambassador=ambassador,
+                event=job.event,
+                tenant=job.tenant,
+                is_approved=False,
+                created_by=user,
+                updated_by=user,
+            )
+
         return ApplyAmbassadorJobResponse(
             success=True, message="Application successful", application=application
         )
@@ -258,7 +277,19 @@ class AmbassadorMutations:
         info: strawberry.Info,
         input: inputs.CreatePublicAmbassadorInput,
     ) -> PublicAmbassadorCreationResponse:
-        return await PublicAmbassadorCreationService.create(input, info)
+        return await PublicAmbassadorCreationService.create(
+            input, info, ambassador_is_active=False
+        )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def create_ambassador_with_user(
+        self,
+        info: strawberry.Info,
+        input: inputs.CreateAmbassadorWithUserInput,
+    ) -> PublicAmbassadorCreationResponse:
+        return await PublicAmbassadorCreationService.create(
+            input, info, ambassador_is_active=input.is_active
+        )
 
     @relay.mutation(permission_classes=[StrictIsAuthenticated])
     async def create_ambassador_invitation(

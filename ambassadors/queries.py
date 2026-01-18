@@ -8,6 +8,7 @@ from django.db.models import QuerySet, Model
 from ambassadors import types
 from ambassadors import models
 from ambassadors import inputs
+from jobs import models as job_models
 from utils.graphql.permissions import StrictIsAuthenticated, IsClientOrSparkAdmin
 from events import models as event_models
 from events import types as event_types
@@ -50,6 +51,7 @@ class AmbassadorEventsFiltersInput:
     """Filters for ambassador-scoped events."""
 
     ambassador_uuid: strawberry.ID | None = None
+    event_id: strawberry.ID | None = None
     types: list[strawberry.ID] | None = None
     statuses: list[AmbassadorEventStatus] | None = None
     start_date: str | None = None
@@ -280,6 +282,9 @@ class AmbassadorEventQueries:
             if filters.ambassador_uuid:
                 queryset = queryset.filter(
                     ambassador__uuid=filters.ambassador_uuid)
+            if filters.event_id:
+                event_id = _resolve_filter_id(filters.event_id, "event")
+                queryset = queryset.filter(event_id=event_id)
             if filters.types:
                 type_ids = _resolve_filter_id_list(filters.types, "event type")
                 queryset = queryset.filter(event__event_type_id__in=type_ids)
@@ -363,6 +368,7 @@ class AmbassadorManagementQueries:
         after: str | None = None,
         last: int | None = None,
         before: str | None = None,
+        q: str | None = None,
         filters: inputs.ActiveAmbassadorFiltersInput | None = None,
     ) -> CountableConnection[types.Ambassador]:
         """Get all active ambassadors (client/spark-admin only)."""
@@ -375,6 +381,7 @@ class AmbassadorManagementQueries:
             after=after,
             last=last,
             before=before,
+            q=q,
             filters=filters,
         )
 
@@ -745,17 +752,19 @@ class AmbassadorGroupQueriesService(BaseQueriesService):
         if not filters:
             return queryset
 
-        if filters.job_id:
+        job_id = getattr(filters, "job_id", None)
+        if job_id:
             try:
-                job_id = resolve_id_to_int(filters.job_id)
+                job_id = resolve_id_to_int(job_id)
                 queryset = queryset.filter(
                     members__ambassador__ambassador_jobs__job_id=job_id
                 ).distinct()
             except (TypeError, ValueError, GraphQLError):
                 raise GraphQLError("Invalid job ID.")
-        if filters.job_uuid:
+        job_uuid = getattr(filters, "job_uuid", None)
+        if job_uuid:
             queryset = queryset.filter(
-                members__ambassador__ambassador_jobs__job__uuid=filters.job_uuid
+                members__ambassador__ambassador_jobs__job__uuid=job_uuid
             ).distinct()
 
         return queryset
@@ -799,6 +808,20 @@ class AttendanceQueriesService(BaseQueriesService):
                 queryset = queryset.filter(job_id=job_id)
             except (TypeError, ValueError, GraphQLError):
                 raise GraphQLError("Invalid job ID.")
+        if filters.ambassador_job_id:
+            try:
+                ambassador_job_id = resolve_id_to_int(filters.ambassador_job_id)
+                ambassador_job = job_models.AmbassadorJob.objects.get(
+                    id=ambassador_job_id
+                )
+                queryset = queryset.filter(
+                    ambassador_id=ambassador_job.ambassador_id,
+                    job_id=ambassador_job.job_id,
+                )
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Invalid ambassador job ID.")
+            except job_models.AmbassadorJob.DoesNotExist:
+                raise GraphQLError("Ambassador job not found.")
         if filters.event_id:
             try:
                 event_id = resolve_id_to_int(filters.event_id)
