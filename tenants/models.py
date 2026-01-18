@@ -90,9 +90,9 @@ class TenantTheme(models.Model):
 
 
 class Role(models.Model):
-    AMBASSADOR_SLUG = 'ambassador'
-    SPARK_ADMIN_SLUG = 'spark-admin'
-    CLIENT_SLUG = 'client'
+    AMBASSADOR_SLUG = "ambassador"
+    SPARK_ADMIN_SLUG = "spark-admin"
+    CLIENT_SLUG = "client"
 
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
@@ -148,15 +148,15 @@ class Role(models.Model):
         return self.slug == Role.AMBASSADOR_SLUG
 
     @staticmethod
-    async def get_ambassador_role() -> 'Role':
+    async def get_ambassador_role() -> "Role":
         return await sync_to_async(Role.objects.get)(slug=Role.AMBASSADOR_SLUG)
 
     @staticmethod
-    async def get_spark_admin_role() -> 'Role':
+    async def get_spark_admin_role() -> "Role":
         return await sync_to_async(Role.objects.get)(slug=Role.SPARK_ADMIN_SLUG)
 
     @staticmethod
-    async def get_client_role() -> 'Role':
+    async def get_client_role() -> "Role":
         return await sync_to_async(Role.objects.get)(slug=Role.CLIENT_SLUG)
 
 
@@ -164,8 +164,7 @@ class User(AbstractUser):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     image = models.ImageField(upload_to="users/images", null=True)
-    role = models.ForeignKey(
-        Role, on_delete=models.RESTRICT, related_name="users")
+    role = models.ForeignKey(Role, on_delete=models.RESTRICT, related_name="users")
 
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -198,9 +197,7 @@ class User(AbstractUser):
         Returns:
             Tenant: The tenant for the user.
         """
-        return TenantedUser.objects.get(
-            user=self, is_active=True
-        ).tenant
+        return TenantedUser.objects.get(user=self, is_active=True).tenant
 
     def get_tenant(
         self,
@@ -209,7 +206,7 @@ class User(AbstractUser):
     ) -> Tenant | None:
         """Get the tenant for the user by id or uuid.
 
-        @TODO: Maybe we should check performance of this method. 
+        @TODO: Maybe we should check performance of this method.
         Maybe we should cache the tenant for the user for the given tenant_id.
 
         Returns:
@@ -301,6 +298,7 @@ class TenantedRole(models.Model):
 
 class GoogleCalendarConnection(models.Model):
     """Model to store Google Calendar OAuth connection for users."""
+
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
 
@@ -341,11 +339,13 @@ class GoogleCalendarConnection(models.Model):
     def get_access_token(self) -> str:
         """Get decrypted access token."""
         from utils.encryption import decrypt_token
+
         return decrypt_token(self.access_token)
 
     def set_access_token(self, token: str):
         """Set encrypted access token."""
         from utils.encryption import encrypt_token
+
         self.access_token = encrypt_token(token)
 
     def get_refresh_token(self) -> str | None:
@@ -353,6 +353,7 @@ class GoogleCalendarConnection(models.Model):
         if not self.refresh_token:
             return None
         from utils.encryption import decrypt_token
+
         return decrypt_token(self.refresh_token)
 
     def set_refresh_token(self, token: str | None):
@@ -361,4 +362,5 @@ class GoogleCalendarConnection(models.Model):
             self.refresh_token = None
             return
         from utils.encryption import encrypt_token
+
         self.refresh_token = encrypt_token(token)

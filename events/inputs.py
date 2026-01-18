@@ -86,11 +86,13 @@ class LocationFiltersInput(BaseTenantInput):
 @strawberry.input
 class DistributorFiltersInput(BaseTenantInput):
     tenant_uuid: strawberry.ID | None = None
+    location_id: strawberry.ID | None = None
 
 
 @strawberry.input
 class RetailerFiltersInput(BaseTenantInput):
     tenant_uuid: strawberry.ID | None = None
+    location_id: strawberry.ID | None = None
 
 
 @strawberry.input
