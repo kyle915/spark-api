@@ -567,6 +567,11 @@ type ApproveAmbassadorResponse {
   ambassador: Ambassador
 }
 
+input ApproveEventInput {
+  clientMutationId: ID = null
+  id: ID!
+}
+
 input ApproveRecapInput {
   clientMutationId: ID = null
   id: ID!
@@ -584,6 +589,11 @@ type ApproveRequestResponse {
   clientMutationId: ID
   request: Request
   event: Event
+}
+
+input ArchiveEventInput {
+  clientMutationId: ID = null
+  id: ID!
 }
 
 """
@@ -1906,6 +1916,8 @@ type EventStatusDetailResponse {
 enum EventStatusFilterEnum {
   APPROVED
   DECLINED
+  SUSPENDED
+  ARCHIVED
   PENDING
 }
 
@@ -2503,6 +2515,9 @@ type Mutation {
   createRequestByUrl(input: CreateRequestWithDependenciesInput!, requestUrlName: String!): RequestDetailResponse!
   createEvent(input: CreateEventInput!): EventDetailResponse!
   updateEvent(input: UpdateEventInput!): EventDetailResponse!
+  suspendEvent(input: SuspendEventInput!): EventDetailResponse!
+  archiveEvent(input: ArchiveEventInput!): EventDetailResponse!
+  approveEvent(input: ApproveEventInput!): EventDetailResponse!
   createEventType(input: CreateEventTypeInput!): EventTypeDetailResponse!
   updateEventType(input: UpdateEventTypeInput!): EventTypeDetailResponse!
   createEventStatus(input: CreateEventStatusInput!): EventStatusDetailResponse!
@@ -2869,7 +2884,7 @@ type Query {
   publicDistributors(requestUrlName: String!, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: DistributorFiltersInput = null): DistributorCountableConnection!
   distributors(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: DistributorFiltersInput = null): DistributorCountableConnection!
   distributor(id: ID = null, uuid: ID = null): Distributor
-  publicRetailer(requestUrlName: String!, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: RetailerFiltersInput = null): RetailerCountableConnection!
+  publicRetailers(requestUrlName: String!, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: RetailerFiltersInput = null): RetailerCountableConnection!
   retailers(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: RetailerFiltersInput = null): RetailerCountableConnection!
   retailer(id: ID = null, uuid: ID = null): Retailer
   publicProductTypes(requestUrlName: String!, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): ProductTypeCountableConnection!
@@ -3773,6 +3788,11 @@ type StatusDetailResponse {
   message: String!
   clientMutationId: ID
   status: Status
+}
+
+input SuspendEventInput {
+  clientMutationId: ID = null
+  id: ID!
 }
 
 input TenantFiltersInput {
