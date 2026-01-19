@@ -34,6 +34,8 @@ DEFAULT_STATUS_TEMPLATES = [
     {"name": "Pending", "is_default": True},
     {"name": "Approved", "is_default": False},
     {"name": "Declined", "is_default": False},
+    {"name": "Archived", "is_default": False},
+    {"name": "Suspended", "is_default": False},
 ]
 DEFAULT_JOB_STATUS_TEMPLATES = [
     {"name": "Pending", "slug": "pending"},
@@ -195,8 +197,7 @@ async def _check_client_or_spark_admin(request_user):
 
 async def _get_active_tenant_ids(user) -> list[int]:
     return await sync_to_async(list)(
-        user.tenanted_users.filter(
-            is_active=True).values_list("tenant_id", flat=True)
+        user.tenanted_users.filter(is_active=True).values_list("tenant_id", flat=True)
     )
 
 
@@ -291,7 +292,9 @@ async def register_user_with_role(
             "ambassador": settings.AMBASSADOR_FRONTEND_URL,
             "spark-admin": settings.ADMIN_FRONTEND_URL,
         }
-        activation_url = f"{frontend_url[role.slug]}/verify-account?token={activation_token}"
+        activation_url = (
+            f"{frontend_url[role.slug]}/verify-account?token={activation_token}"
+        )
         verification_email = EmailVerificationMailer(user, activation_url)
         await verification_email.send_async()
 
@@ -330,7 +333,9 @@ class AmbassadorsCustomRegister:
             )
 
         # Handle optional tenant_id
-        resolved_tenant_id = resolve_id_to_int(input.tenant_id) if input.tenant_id else None
+        resolved_tenant_id = (
+            resolve_id_to_int(input.tenant_id) if input.tenant_id else None
+        )
 
         return await register_user_with_role(
             first_name=input.first_name,
@@ -444,8 +449,9 @@ class SparkUserMutations:
             )
 
         try:
-            resolved_tenant_id = resolve_id_to_int(
-                input.tenant_id) if input.tenant_id else None
+            resolved_tenant_id = (
+                resolve_id_to_int(input.tenant_id) if input.tenant_id else None
+            )
         except (TypeError, ValueError, GraphQLError):
             return RegisterResponse(
                 success=False,
@@ -552,8 +558,7 @@ class SparkUserMutations:
 
         if input.email:
             email_exists = await sync_to_async(
-                User.objects.exclude(pk=target_user.pk).filter(
-                    email=input.email).exists
+                User.objects.exclude(pk=target_user.pk).filter(email=input.email).exists
             )()
             if email_exists:
                 return UpdateUserResponse(
@@ -839,7 +844,9 @@ class ClientsCustomRegister:
             )
 
         # Handle optional tenant_id
-        resolved_tenant_id = resolve_id_to_int(input.tenant_id) if input.tenant_id else None
+        resolved_tenant_id = (
+            resolve_id_to_int(input.tenant_id) if input.tenant_id else None
+        )
 
         return await register_user_with_role(
             first_name=input.first_name,
@@ -969,9 +976,7 @@ class SparkTenantMutations:
                         templates=DEFAULT_STATUS_TEMPLATES,
                     ):
                         for status in templates:
-                            status_slug = status.get("slug") or slugify(
-                                status["name"]
-                            )
+                            status_slug = status.get("slug") or slugify(status["name"])
                             payload = {
                                 "name": status["name"],
                                 "slug": status_slug,
@@ -1114,8 +1119,7 @@ class SparkTenantMutations:
                     tenant.name = input.name
                     # Generate new request_url_name when name is updated
                     random_chars = "".join(
-                        random.choices(string.ascii_letters +
-                                       string.digits, k=4)
+                        random.choices(string.ascii_letters + string.digits, k=4)
                     )
                     slugified_name = slugify(input.name)
                     tenant.request_url_name = f"{slugified_name}-{random_chars}".lower()

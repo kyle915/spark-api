@@ -39,6 +39,8 @@ class CoordinatesFilterInput:
 class EventStatusFilterEnum(str, Enum):
     APPROVED = "approved"
     DECLINED = "declined"
+    SUSPENDED = "suspended"
+    ARCHIVED = "archived"
     PENDING = "pending"
 
 
@@ -137,6 +139,21 @@ class CreateEventInput(BaseNameableInput):
 
 @strawberry.input
 class UpdateEventInput(CreateEventInput):
+    id: strawberry.ID
+
+
+@strawberry.input
+class SuspendEventInput(SparkGraphQLInput):
+    id: strawberry.ID
+
+
+@strawberry.input
+class ArchiveEventInput(SparkGraphQLInput):
+    id: strawberry.ID
+
+
+@strawberry.input
+class ApproveEventInput(SparkGraphQLInput):
     id: strawberry.ID
 
 
