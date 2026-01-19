@@ -234,7 +234,9 @@ class EventQueries:
         offset_minutes = Case(
             When(timezone__offset__lt=-24, then=F("timezone__offset")),
             When(timezone__offset__gt=24, then=F("timezone__offset")),
-            When(request__timezone__offset__lt=-24, then=F("request__timezone__offset")),
+            When(
+                request__timezone__offset__lt=-24, then=F("request__timezone__offset")
+            ),
             When(request__timezone__offset__gt=24, then=F("request__timezone__offset")),
             default=ExpressionWrapper(
                 offset_value * Value(60), output_field=IntegerField()
@@ -298,9 +300,7 @@ class EventQueries:
 
         if filters:
             if filters.event_type_id:
-                event_type_id = _resolve_filter_id(
-                    filters.event_type_id, "event type"
-                )
+                event_type_id = _resolve_filter_id(filters.event_type_id, "event type")
                 queryset = queryset.filter(event_type_id=event_type_id)
             if filters.event_status:
                 queryset = queryset.filter(status__slug=filters.event_status.value)
@@ -389,9 +389,7 @@ class EventQueries:
 
         if filters:
             if filters.event_type_id:
-                event_type_id = _resolve_filter_id(
-                    filters.event_type_id, "event type"
-                )
+                event_type_id = _resolve_filter_id(filters.event_type_id, "event type")
                 queryset = queryset.filter(event_type_id=event_type_id)
             if filters.event_status:
                 queryset = queryset.filter(status__slug=filters.event_status.value)
@@ -450,9 +448,7 @@ class EventQueries:
 
         if filters:
             if filters.event_type_id:
-                event_type_id = _resolve_filter_id(
-                    filters.event_type_id, "event type"
-                )
+                event_type_id = _resolve_filter_id(filters.event_type_id, "event type")
                 queryset = queryset.filter(event_type_id=event_type_id)
             if filters.event_status:
                 queryset = queryset.filter(status__slug=filters.event_status.value)
@@ -860,6 +856,41 @@ class LocationQueriesService(BaseEventQueriesService):
 
 @strawberry.type
 class LocationQueries:
+    @strawberry.field
+    async def public_locations(
+        self,
+        info: strawberry.Info,
+        request_url_name: str,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        q: str | None = None,
+    ) -> CountableConnection[types.Location]:
+        """Get public locations filtered by tenant request_url_name."""
+        service = LocationQueriesService()
+        try:
+            tenant = await sync_to_async(Tenant.objects.get)(
+                request_url_name=request_url_name
+            )
+        except Tenant.DoesNotExist:
+            return await service.get_connection(
+                queryset=service.get_model().objects.none(),
+                first=first,
+                after=after,
+                last=last,
+                before=before,
+            )
+
+        return await service.get_connection(
+            tenant_id=tenant.id,
+            q=q,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+        )
+
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def locations(
         self,
@@ -931,6 +962,7 @@ class DistributorQueries:
         last: int | None = None,
         before: str | None = None,
         q: str | None = None,
+        filters: DistributorFiltersInput | None = None,
     ) -> CountableConnection[types.Distributor]:
         """Get public distributors filtered by tenant request_url_name."""
         service = DistributorQueriesService()
@@ -947,6 +979,11 @@ class DistributorQueries:
                 before=before,
             )
 
+        queryset = service.get_ordered_queryset(tenant_id=tenant.id, q=q)
+        if filters and filters.location_id:
+            location_id = _resolve_filter_id(filters.location_id, "location")
+            queryset = queryset.filter(location_id=location_id)
+
         return await service.get_connection(
             tenant_id=tenant.id,
             q=q,
@@ -954,6 +991,7 @@ class DistributorQueries:
             after=after,
             last=last,
             before=before,
+            queryset=queryset,
         )
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
@@ -1022,7 +1060,7 @@ class RetailerQueriesService(BaseEventQueriesService):
 @strawberry.type
 class RetailerQueries:
     @strawberry.field
-    async def public_retailer(
+    async def public_retailers(
         self,
         info: strawberry.Info,
         request_url_name: str,
@@ -1031,6 +1069,7 @@ class RetailerQueries:
         last: int | None = None,
         before: str | None = None,
         q: str | None = None,
+        filters: RetailerFiltersInput | None = None,
     ) -> CountableConnection[types.Retailer]:
         """Get public retailers filtered by tenant request_url_name."""
         service = RetailerQueriesService()
@@ -1047,6 +1086,11 @@ class RetailerQueries:
                 before=before,
             )
 
+        queryset = service.get_ordered_queryset(tenant_id=tenant.id, q=q)
+        if filters and filters.location_id:
+            location_id = _resolve_filter_id(filters.location_id, "location")
+            queryset = queryset.filter(location_id=location_id)
+
         return await service.get_connection(
             tenant_id=tenant.id,
             q=q,
@@ -1054,6 +1098,7 @@ class RetailerQueries:
             after=after,
             last=last,
             before=before,
+            queryset=queryset,
         )
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])

@@ -2866,10 +2866,10 @@ type Query {
   publicClients(requestUrlName: String!, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): ClientCountableConnection!
   clients(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: ClientFiltersInput = null): ClientCountableConnection!
   client(id: ID = null, uuid: ID = null): Client
-  publicDistributors(requestUrlName: String!, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): DistributorCountableConnection!
+  publicDistributors(requestUrlName: String!, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: DistributorFiltersInput = null): DistributorCountableConnection!
   distributors(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: DistributorFiltersInput = null): DistributorCountableConnection!
   distributor(id: ID = null, uuid: ID = null): Distributor
-  publicRetailer(requestUrlName: String!, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): RetailerCountableConnection!
+  publicRetailer(requestUrlName: String!, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: RetailerFiltersInput = null): RetailerCountableConnection!
   retailers(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: RetailerFiltersInput = null): RetailerCountableConnection!
   retailer(id: ID = null, uuid: ID = null): Retailer
   publicProductTypes(requestUrlName: String!, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): ProductTypeCountableConnection!
@@ -2887,6 +2887,7 @@ type Query {
   request(id: ID = null, uuid: ID = null): Request
   requestStoreManagers(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: RequestStoreManagerFiltersInput = null): RequestStoreManagerCountableConnection!
   requestStoreManager(id: ID = null, uuid: ID = null): RequestStoreManager
+  publicLocations(requestUrlName: String!, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): LocationCountableConnection!
   locations(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: LocationFiltersInput = null): LocationCountableConnection!
   location(id: ID = null, uuid: ID = null): Location
   timezones(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): TimeZoneCountableConnection!
