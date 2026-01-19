@@ -567,6 +567,11 @@ type ApproveAmbassadorResponse {
   ambassador: Ambassador
 }
 
+input ApproveEventInput {
+  clientMutationId: ID = null
+  id: ID!
+}
+
 input ApproveRecapInput {
   clientMutationId: ID = null
   id: ID!
@@ -584,6 +589,11 @@ type ApproveRequestResponse {
   clientMutationId: ID
   request: Request
   event: Event
+}
+
+input ArchiveEventInput {
+  clientMutationId: ID = null
+  id: ID!
 }
 
 """
@@ -1895,6 +1905,8 @@ type EventStatusDetailResponse {
 enum EventStatusFilterEnum {
   APPROVED
   DECLINED
+  SUSPENDED
+  ARCHIVED
   PENDING
 }
 
@@ -2491,6 +2503,9 @@ type MonthlyPerformanceTrend {
 type Mutation {
   createEvent(input: CreateEventInput!): EventDetailResponse!
   updateEvent(input: UpdateEventInput!): EventDetailResponse!
+  suspendEvent(input: SuspendEventInput!): EventDetailResponse!
+  archiveEvent(input: ArchiveEventInput!): EventDetailResponse!
+  approveEvent(input: ApproveEventInput!): EventDetailResponse!
   createRequestByUrl(input: CreateRequestWithDependenciesInput!, requestUrlName: String!): RequestDetailResponse!
   createEventType(input: CreateEventTypeInput!): EventTypeDetailResponse!
   updateEventType(input: UpdateEventTypeInput!): EventTypeDetailResponse!
@@ -3761,6 +3776,11 @@ type StatusDetailResponse {
   message: String!
   clientMutationId: ID
   status: Status
+}
+
+input SuspendEventInput {
+  clientMutationId: ID = null
+  id: ID!
 }
 
 input TenantFiltersInput {

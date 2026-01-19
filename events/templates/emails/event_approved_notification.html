@@ -1,0 +1,70 @@
+{% extends "emails/base.html" %} {% block content %}
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+  <tr>
+    <td style="font-size: 18px; font-weight: 600; color: #333333; padding-bottom: 15px;">
+      Hello!
+    </td>
+  </tr>
+  <tr>
+    <td style="font-size: 16px; color: #555555; line-height: 1.6;">
+      <p style="margin: 0 0 20px 0;">An event has been approved for your location group.</p>
+
+      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #f9f9f9; border-radius: 5px; margin: 20px 0;">
+        <tr>
+          <td style="padding: 20px;">
+            <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+              <tr>
+                <td style="padding: 5px 0;"><strong>Event:</strong> {{ event.name }}</td>
+              </tr>
+
+              {% if event.date %}
+                <tr>
+                  <td style="padding: 5px 0;">
+                    <strong>Date:</strong> {{ event.date|date:"F d, Y" }}
+                  </td>
+                </tr>
+              {% endif %}
+
+              {% if event.start_time %}
+                <tr>
+                  <td style="padding: 5px 0;">
+                    <strong>Time:</strong> {{ event.start_time|date:"g:i A" }}
+                    {% if event.end_time %}
+                      - {{ event.end_time|date:"g:i A" }}
+                    {% endif %}
+                  </td>
+                </tr>
+              {% endif %}
+
+              {% if event.address %}
+                <tr>
+                  <td style="padding: 5px 0;"><strong>Address:</strong> {{ event.address }}</td>
+                </tr>
+              {% endif %}
+
+              <tr>
+                <td style="padding: 5px 0;">
+                  <strong>Location:</strong> {{ location.name }}
+                  {% if location.state %}
+                    ({{ location.state.code }})
+                  {% endif %}
+                </td>
+              </tr>
+
+              {% if location.zip %}
+                <tr>
+                  <td style="padding: 5px 0;"><strong>ZIP:</strong> {{ location.zip }}</td>
+                </tr>
+              {% endif %}
+            </table>
+          </td>
+        </tr>
+      </table>
+
+      <p style="margin: 20px 0 0 0;">
+        You can review the event details in your dashboard.
+      </p>
+    </td>
+  </tr>
+</table>
+{% endblock %}
