@@ -292,6 +292,37 @@ async def _resolve_event_location(
     return None
 
 
+async def _resolve_notification_group_ids(
+    location: models.Location,
+    tenant_id: int | None,
+) -> list[int]:
+    if not location:
+        return []
+
+    resolved_tenant_id = tenant_id or location.tenant_id
+    location_groups = models.NotificationGroupLocation.objects.filter(
+        location_id=location.id,
+        location__tenant_id=resolved_tenant_id,
+        notification_group__state=False,
+    ).values_list("notification_group_id", flat=True)
+
+    if location.state_id:
+        state_groups = models.NotificationGroupLocation.objects.filter(
+            state_id=location.state_id,
+            location__tenant_id=resolved_tenant_id,
+            notification_group__state=True,
+        ).values_list("notification_group_id", flat=True)
+        state_group_ids = await sync_to_async(list)(state_groups.distinct())
+    else:
+        state_group_ids = []
+
+    location_group_ids = await sync_to_async(list)(location_groups.distinct())
+    if not state_group_ids:
+        return location_group_ids
+
+    return list(set(location_group_ids + state_group_ids))
+
+
 async def _notify_notification_group_users_for_event(
     event: models.Event,
     location: models.Location | None,
@@ -299,10 +330,9 @@ async def _notify_notification_group_users_for_event(
     if not location:
         return
 
-    group_ids = await sync_to_async(list)(
-        models.NotificationGroupLocation.objects.filter(location_id=location.id)
-        .values_list("notification_group_id", flat=True)
-        .distinct()
+    group_ids = await _resolve_notification_group_ids(
+        location=location,
+        tenant_id=event.tenant_id,
     )
     if not group_ids:
         return
@@ -311,6 +341,8 @@ async def _notify_notification_group_users_for_event(
         models.NotificationGroupUser.objects.filter(
             notification_group_id__in=group_ids,
             user__is_active=True,
+            user__tenanted_users__tenant_id=event.tenant_id,
+            user__tenanted_users__is_active=True,
         )
         .exclude(user__email__isnull=True)
         .exclude(user__email="")
@@ -615,9 +647,6 @@ class EventMutations:
             event.status = approved_status
             event.updated_by = user
             await sync_to_async(event.save)()
-
-            location = await _resolve_event_location(event)
-            await _notify_notification_group_users_for_event(event, location)
 
             return build_mutation_response(
                 types.EventDetailResponse,
@@ -1678,10 +1707,9 @@ async def _notify_notification_group_users_for_request(
     if not location:
         return
 
-    group_ids = await sync_to_async(list)(
-        models.NotificationGroupLocation.objects.filter(location_id=location.id)
-        .values_list("notification_group_id", flat=True)
-        .distinct()
+    group_ids = await _resolve_notification_group_ids(
+        location=location,
+        tenant_id=request.tenant_id,
     )
     if not group_ids:
         return
@@ -1690,6 +1718,8 @@ async def _notify_notification_group_users_for_request(
         models.NotificationGroupUser.objects.filter(
             notification_group_id__in=group_ids,
             user__is_active=True,
+            user__tenanted_users__tenant_id=request.tenant_id,
+            user__tenanted_users__is_active=True,
         )
         .exclude(user__email__isnull=True)
         .exclude(user__email="")
@@ -1714,10 +1744,9 @@ async def _notify_notification_group_users_for_request_created(
     if not location:
         return
 
-    group_ids = await sync_to_async(list)(
-        models.NotificationGroupLocation.objects.filter(location_id=location.id)
-        .values_list("notification_group_id", flat=True)
-        .distinct()
+    group_ids = await _resolve_notification_group_ids(
+        location=location,
+        tenant_id=request.tenant_id,
     )
     if not group_ids:
         return
@@ -1726,6 +1755,8 @@ async def _notify_notification_group_users_for_request_created(
         models.NotificationGroupUser.objects.filter(
             notification_group_id__in=group_ids,
             user__is_active=True,
+            user__tenanted_users__tenant_id=request.tenant_id,
+            user__tenanted_users__is_active=True,
         )
         .exclude(user__email__isnull=True)
         .exclude(user__email="")

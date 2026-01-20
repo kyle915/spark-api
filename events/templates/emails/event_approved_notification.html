@@ -51,10 +51,28 @@
                 </td>
               </tr>
 
-              {% if location.zip %}
-                <tr>
-                  <td style="padding: 5px 0;"><strong>ZIP:</strong> {{ location.zip }}</td>
-                </tr>
+              {% if event.request %}
+                {% if event.request.retailer or event.request.retailer_name %}
+                  <tr>
+                    <td style="padding: 5px 0;">
+                      <strong>Retailer:</strong> {{ event.request.retailer.name|default:event.request.retailer_name }}
+                    </td>
+                  </tr>
+                {% endif %}
+
+                {% if event.request.distributor or event.request.distributor_name %}
+                  <tr>
+                    <td style="padding: 5px 0;">
+                      <strong>Distributor:</strong> {{ event.request.distributor.name|default:event.request.distributor_name }}
+                    </td>
+                  </tr>
+                {% endif %}
+
+                {% if event.request.request_type %}
+                  <tr>
+                    <td style="padding: 5px 0;"><strong>Request Type:</strong> {{ event.request.request_type.name }}</td>
+                  </tr>
+                {% endif %}
               {% endif %}
             </table>
           </td>
