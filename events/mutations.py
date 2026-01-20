@@ -1175,7 +1175,17 @@ class ProductMutations:
     ) -> types.ProductDetailResponse:
         """Update an existing product."""
         old_image_path: str | None = None
-        if input.image is not None and input.id:
+        try:
+            input.id = resolve_id_to_int(input.id)
+        except (TypeError, ValueError, GraphQLError):
+            return build_mutation_response(
+                types.ProductDetailResponse,
+                success=False,
+                message="Invalid product ID.",
+                input_obj=input,
+            )
+
+        if input.image is not None:
             try:
                 existing_product: models.Product = await sync_to_async(
                     models.Product.objects.get
@@ -1229,6 +1239,11 @@ class ProductMutations:
         try:
             user: User = await service.get_user(info)
             is_spark_request = service.is_spark_schema_request(info, user=user)
+
+            try:
+                input.id = resolve_id_to_int(input.id)
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Invalid product ID.")
 
             try:
                 product: models.Product = await sync_to_async(
