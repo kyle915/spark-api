@@ -1,0 +1,86 @@
+{% extends "emails/base.html" %} {% block content %}
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+  <tr>
+    <td style="font-size: 18px; font-weight: 600; color: #333333; padding-bottom: 15px;">
+      Hello!
+    </td>
+  </tr>
+  <tr>
+    <td style="font-size: 16px; color: #555555; line-height: 1.6;">
+      <p style="margin: 0 0 20px 0;">A request has been approved for your location group.</p>
+
+      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #f9f9f9; border-radius: 5px; margin: 20px 0;">
+        <tr>
+          <td style="padding: 20px;">
+            <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+              <tr>
+                <td style="padding: 5px 0;"><strong>Request:</strong> {{ request.name }}</td>
+              </tr>
+
+              {% if request.date %}
+                <tr>
+                  <td style="padding: 5px 0;">
+                    <strong>Date:</strong> {{ request.date|date:"F d, Y" }}
+                  </td>
+                </tr>
+              {% endif %}
+
+              {% if request.start_time %}
+                <tr>
+                  <td style="padding: 5px 0;">
+                    <strong>Time:</strong> {{ request.start_time|date:"g:i A" }}
+                    {% if request.end_time %}
+                      - {{ request.end_time|date:"g:i A" }}
+                    {% endif %}
+                  </td>
+                </tr>
+              {% endif %}
+
+              {% if request.address %}
+                <tr>
+                  <td style="padding: 5px 0;"><strong>Address:</strong> {{ request.address }}</td>
+                </tr>
+              {% endif %}
+
+              <tr>
+                <td style="padding: 5px 0;">
+                  <strong>Location:</strong> {{ location.name }}
+                  {% if location.state %}
+                    ({{ location.state.code }})
+                  {% endif %}
+                </td>
+              </tr>
+
+              {% if request.retailer or request.retailer_name %}
+                <tr>
+                  <td style="padding: 5px 0;">
+                    <strong>Retailer:</strong> {{ request.retailer.name|default:request.retailer_name }}
+                  </td>
+                </tr>
+              {% endif %}
+
+              {% if request.distributor or request.distributor_name %}
+                <tr>
+                  <td style="padding: 5px 0;">
+                    <strong>Distributor:</strong> {{ request.distributor.name|default:request.distributor_name }}
+                  </td>
+                </tr>
+              {% endif %}
+
+              {% if request.request_type %}
+                <tr>
+                  <td style="padding: 5px 0;"><strong>Request Type:</strong> {{ request.request_type.name }}</td>
+                </tr>
+              {% endif %}
+            </table>
+          </td>
+        </tr>
+      </table>
+
+      <p style="margin: 20px 0 0 0;">
+        You can review the request details in your dashboard.
+      </p>
+    </td>
+  </tr>
+</table>
+{% endblock %}
