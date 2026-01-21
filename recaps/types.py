@@ -129,6 +129,7 @@ class Recap(Node):
     total_engagements: int | None
     products_sold: int | None
     total_earnings: float | None
+    account_spend_amount: float | None
 
     # Relationships
     consumer_engagements: List[ConsumerEngagements]
