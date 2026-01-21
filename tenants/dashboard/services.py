@@ -276,23 +276,13 @@ class DashboardQueriesService(SparkGraphQLMixin):
         Get available quarters from event data.
 
         Args:
-            years_back: Number of years back to include (default 2)
+            years_back: Number of years back to include (unused)
 
         Returns:
-            List of quarter strings like ["Q1 2025", "Q2 2025", ...]
+            List of quarter strings like ["Q1 2026", "Q2 2026", ...]
         """
-        now = timezone.now().date()
-        current_year = now.year
-
-        # Generate quarters for the last N years + current year
-        quarters = []
-        for year_offset in range(years_back, -1, -1):  # e.g., 2, 1, 0
-            year = current_year - year_offset
-            for quarter_num in range(1, 5):
-                quarter_string = f"Q{quarter_num} {year}"
-                quarters.append(quarter_string)
-
-        return quarters
+        year = 2026
+        return [f"Q{quarter_num} {year}" for quarter_num in range(1, 5)]
 
     def _apply_event_dashboard_filters(
         self,
