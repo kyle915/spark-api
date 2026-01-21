@@ -1640,6 +1640,7 @@ class RequestWithDependenciesMutationService(BaseMutationService):
     def _save_sync(self, params: dict[str, Any]) -> models.Request:
         """Synchronous save method to handle transaction."""
         with transaction.atomic():
+            store_manager_id = params.pop("store_manager_id", None)
             # Create the request
             request = models.Request(**params)
             if self.user:
@@ -1651,6 +1652,26 @@ class RequestWithDependenciesMutationService(BaseMutationService):
                 request.tenant_id = self.tenant_id
 
             request.save()
+
+            if store_manager_id:
+                try:
+                    manager = models.RequestStoreManager.objects.get(
+                        id=store_manager_id
+                    )
+                except models.RequestStoreManager.DoesNotExist:
+                    raise GraphQLError("Request store manager not found.")
+
+                if manager.tenant_id and manager.tenant_id != request.tenant_id:
+                    raise GraphQLError(
+                        "Request store manager belongs to a different tenant."
+                    )
+
+                manager.request = request
+                if not manager.tenant_id:
+                    manager.tenant_id = request.tenant_id
+                if self.user:
+                    manager.updated_by = self.user
+                manager.save()
 
             # Create details
             if self.input.details:
