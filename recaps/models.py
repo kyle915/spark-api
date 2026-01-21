@@ -265,7 +265,7 @@ class SalesPerformance(models.Model):
 class ConsumerFeedback(models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
-    demographics = models.CharField(max_length=100, null=True)
+    demographics = models.TextField(null=True)
     feedback = models.TextField(null=True)
     quotes = models.TextField(null=True)
     positive_stories = models.TextField(null=True)
