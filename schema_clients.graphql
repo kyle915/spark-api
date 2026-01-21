@@ -1443,15 +1443,18 @@ input CreateRequestInput {
   coordinates: [Float!]!
   timezoneId: ID!
   requestTypeId: ID!
-  clientName: String!
-  clientEmail: String!
-  distributorName: String!
-  distributorEmail: String!
-  retailerName: String!
-  retailerAddress: String!
-  retailerStoreContact: String!
-  storeManagerName: String!
-  storeManagerPhone: String!
+  distributorId: ID = null
+  retailerId: ID = null
+  storeManagerId: ID = null
+  clientName: String = null
+  clientEmail: String = null
+  distributorName: String = null
+  distributorEmail: String = null
+  retailerName: String = null
+  retailerAddress: String = null
+  retailerStoreContact: String = null
+  storeManagerName: String = null
+  storeManagerPhone: String = null
   details: [CreateRequestDetailInput!]!
   products: [CreateRequestProductInput!]!
 }
