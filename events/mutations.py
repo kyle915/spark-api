@@ -27,6 +27,7 @@ from .envelopes import (
     EventApprovedNotificationMailer,
     RequestApprovedNotificationMailer,
     RequestCreatedNotificationMailer,
+    ClientRequestCreatedNotificationMailer,
 )
 from utils.gcs import delete_blob, extract_blob_name_from_url
 from tenants.models import Tenant, User
@@ -1606,12 +1607,17 @@ class PublicRequestMutations:
             request: models.Request = await service.save()
             request_with_relations: models.Request = await sync_to_async(
                 models.Request.objects.select_related(
+                    "tenant",
+                    "request_type",
                     "retailer__location__state",
                     "distributor__location__state",
                 ).get
             )(id=request.id)
             location = await _resolve_request_location(request_with_relations)
             await _notify_notification_group_users_for_request_created(
+                request_with_relations, location
+            )
+            await _notify_spark_admins_for_client_request(
                 request_with_relations, location
             )
             return build_mutation_response(
@@ -1714,11 +1720,20 @@ class RequestWithDependenciesMutationService(BaseMutationService):
 async def _resolve_request_location(
     request: models.Request,
 ) -> models.Location | None:
-    if request.retailer and request.retailer.location_id:
-        return request.retailer.location
-    if request.distributor and request.distributor.location_id:
-        return request.distributor.location
-    return None
+    def _get_location() -> models.Location | None:
+        req = (
+            models.Request.objects.select_related(
+                "retailer__location",
+                "distributor__location",
+            ).get(id=request.id)
+        )
+        if req.retailer and req.retailer.location_id:
+            return req.retailer.location
+        if req.distributor and req.distributor.location_id:
+            return req.distributor.location
+        return None
+
+    return await sync_to_async(_get_location)()
 
 
 async def _notify_notification_group_users_for_request(
@@ -1795,6 +1810,31 @@ async def _notify_notification_group_users_for_request_created(
     await sync_to_async(mailer.send)()
 
 
+async def _notify_spark_admins_for_client_request(
+    request: models.Request,
+    location: models.Location | None,
+) -> None:
+    to_emails = await sync_to_async(list)(
+        User.objects.filter(
+            role__slug="spark-admin",
+            is_active=True,
+        )
+        .exclude(email__isnull=True)
+        .exclude(email="")
+        .values_list("email", flat=True)
+        .distinct()
+    )
+    if not to_emails:
+        return
+
+    mailer = ClientRequestCreatedNotificationMailer(
+        request=request,
+        location=location,
+        to_emails=to_emails,
+    )
+    await sync_to_async(mailer.send)()
+
+
 @strawberry.type
 class RequestMutations:
     @relay.mutation(permission_classes=[StrictIsAuthenticated])
@@ -1805,17 +1845,30 @@ class RequestMutations:
     ) -> types.RequestDetailResponse:
         """Create a new request as an authenticated user."""
         try:
-            request: models.Request = (
-                await RequestWithDependenciesMutationService.process_create_or_update(
-                    input=input, info=info
+            service = RequestWithDependenciesMutationService.with_input(input)
+            await service.set_user_and_tenant(info)
+            request: models.Request = await service.save()
+            request_with_relations: models.Request = await sync_to_async(
+                models.Request.objects.select_related(
+                    "tenant",
+                    "request_type",
+                    "retailer__location__state",
+                    "distributor__location__state",
+                ).get
+            )(id=request.id)
+
+            is_client = service.user is not None and await service.user.role.is_client
+            if is_client:
+                location = await _resolve_request_location(request_with_relations)
+                await _notify_spark_admins_for_client_request(
+                    request_with_relations, location
                 )
-            )
             return build_mutation_response(
                 types.RequestDetailResponse,
                 success=True,
                 message="Request created successfully.",
                 input_obj=input,
-                request=request,
+                request=request_with_relations,
             )
         except GraphQLError as e:
             return build_mutation_response(

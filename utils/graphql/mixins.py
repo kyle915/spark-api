@@ -1,4 +1,5 @@
 import base64
+import logging
 import strawberry
 from typing import Any, Union, Type
 from graphql import GraphQLError
@@ -13,6 +14,7 @@ from tenants.models import Tenant
 from utils.graphql.inputs import SparkGraphQLInput
 
 User = get_user_model()
+logger = logging.getLogger(__name__)
 
 
 def decode_global_id(global_id: str) -> int:
@@ -153,7 +155,7 @@ class SparkGraphQLMixin:
     async def get_tenant(
         self,
         user: User,
-        tenant_id: int | None = None,
+        tenant_id: int | str | None = None,
         tenant_uuid: str | None = None,
     ) -> Tenant:
         """Get the tenant for the user.
@@ -166,9 +168,16 @@ class SparkGraphQLMixin:
         Returns:
             Tenant: The tenant for the user.
         """
+        resolved_tenant_id: int | None = None
+        if tenant_id is not None:
+            try:
+                resolved_tenant_id = resolve_id_to_int(tenant_id)
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Invalid tenant ID.")
+
         try:
             return await sync_to_async(user.get_tenant)(
-                tenant_id,
+                resolved_tenant_id,
                 tenant_uuid,
             )
         except Exception as e:
