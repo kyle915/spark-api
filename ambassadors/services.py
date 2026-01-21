@@ -1,6 +1,7 @@
 """Services for ambassador mutations and queries."""
 
 import asyncio
+import sys
 import secrets
 from datetime import timedelta, datetime
 from typing import Any
@@ -1273,14 +1274,20 @@ class AmbassadorQueriesService(SparkGraphQLMixin):
 
         from utils.graphql.relay import connection_from_queryset_async
 
+        no_pagination = all(
+            value is None for value in (first, after, last, before)
+        )
+        default_limit = sys.maxsize if no_pagination else 10
+        max_limit = sys.maxsize if no_pagination else 50
+
         return await connection_from_queryset_async(
             queryset,
             first=first,
             after=after,
             last=last,
             before=before,
-            default_limit=10,
-            max_limit=50,
+            default_limit=default_limit,
+            max_limit=max_limit,
         )
 
 
