@@ -1,3 +1,4 @@
+import strawberry
 import datetime
 
 import strawberry
@@ -22,6 +23,11 @@ from utils.graphql.relay import ensure_relay_mutation
 from utils.graphql.types import SparkGraphQLErrorResponse
 from utils.graphql.mixins import SparkGraphQLMixin, resolve_id_to_int
 from utils.utils import ROLE_ID, build_mutation_response
+from .envelopes import (
+    EventApprovedNotificationMailer,
+    RequestApprovedNotificationMailer,
+    RequestCreatedNotificationMailer,
+)
 from utils.gcs import delete_blob, extract_blob_name_from_url
 from tenants.models import Tenant, User
 
@@ -254,10 +260,104 @@ class EventMutationService(BaseMutationService):
     async def save(self) -> Model:
         """Save event keeping start/end times as provided (no TZ conversion)."""
         if self.input:
-            self.input.start_time = self._strip_tzinfo(getattr(self.input, "start_time", None))
-            self.input.end_time = self._strip_tzinfo(getattr(self.input, "end_time", None))
+            self.input.start_time = self._strip_tzinfo(
+                getattr(self.input, "start_time", None)
+            )
+            self.input.end_time = self._strip_tzinfo(
+                getattr(self.input, "end_time", None)
+            )
 
         return await super().save()
+
+
+async def _resolve_event_location(
+    event: models.Event,
+) -> models.Location | None:
+    if not event.request_id:
+        return None
+
+    try:
+        request: models.Request = await sync_to_async(
+            models.Request.objects.select_related(
+                "retailer__location", "distributor__location"
+            ).get
+        )(id=event.request_id)
+    except models.Request.DoesNotExist:
+        return None
+
+    if request.retailer and request.retailer.location_id:
+        return request.retailer.location
+    if request.distributor and request.distributor.location_id:
+        return request.distributor.location
+    return None
+
+
+async def _resolve_notification_group_ids(
+    location: models.Location,
+    tenant_id: int | None,
+) -> list[int]:
+    if not location:
+        return []
+
+    resolved_tenant_id = tenant_id or location.tenant_id
+    location_groups = models.NotificationGroupLocation.objects.filter(
+        location_id=location.id,
+        location__tenant_id=resolved_tenant_id,
+        notification_group__state=False,
+    ).values_list("notification_group_id", flat=True)
+
+    if location.state_id:
+        state_groups = models.NotificationGroupLocation.objects.filter(
+            state_id=location.state_id,
+            location__tenant_id=resolved_tenant_id,
+            notification_group__state=True,
+        ).values_list("notification_group_id", flat=True)
+        state_group_ids = await sync_to_async(list)(state_groups.distinct())
+    else:
+        state_group_ids = []
+
+    location_group_ids = await sync_to_async(list)(location_groups.distinct())
+    if not state_group_ids:
+        return location_group_ids
+
+    return list(set(location_group_ids + state_group_ids))
+
+
+async def _notify_notification_group_users_for_event(
+    event: models.Event,
+    location: models.Location | None,
+) -> None:
+    if not location:
+        return
+
+    group_ids = await _resolve_notification_group_ids(
+        location=location,
+        tenant_id=event.tenant_id,
+    )
+    if not group_ids:
+        return
+
+    to_emails = await sync_to_async(list)(
+        models.NotificationGroupUser.objects.filter(
+            notification_group_id__in=group_ids,
+            user__is_active=True,
+            user__tenanted_users__tenant_id=event.tenant_id,
+            user__tenanted_users__is_active=True,
+        )
+        .exclude(user__email__isnull=True)
+        .exclude(user__email="")
+        .values_list("user__email", flat=True)
+        .distinct()
+    )
+    if not to_emails:
+        return
+
+    mailer = EventApprovedNotificationMailer(
+        event=event,
+        location=location,
+        to_emails=to_emails,
+    )
+    await sync_to_async(mailer.send)()
 
 
 @strawberry.type
@@ -1406,9 +1506,7 @@ class RequestStoreManagerMutationService(BaseMutationService):
             except (TypeError, ValueError, GraphQLError):
                 raise GraphQLError("Invalid request ID.")
             try:
-                request = await sync_to_async(models.Request.objects.get)(
-                    id=request_id
-                )
+                request = await sync_to_async(models.Request.objects.get)(id=request_id)
             except models.Request.DoesNotExist:
                 raise GraphQLError("Request not found.")
         else:
@@ -1483,9 +1581,7 @@ class RequestStoreManagerMutationService(BaseMutationService):
             and manager.tenant_id != tenant_id
             and not is_admin
         ):
-            raise GraphQLError(
-                "You cannot move store managers to a different tenant."
-            )
+            raise GraphQLError("You cannot move store managers to a different tenant.")
 
 
 @strawberry.type
@@ -1508,12 +1604,22 @@ class PublicRequestMutations:
                     request_url_name=request_url_name
                 )
             request: models.Request = await service.save()
+            request_with_relations: models.Request = await sync_to_async(
+                models.Request.objects.select_related(
+                    "retailer__location__state",
+                    "distributor__location__state",
+                ).get
+            )(id=request.id)
+            location = await _resolve_request_location(request_with_relations)
+            await _notify_notification_group_users_for_request_created(
+                request_with_relations, location
+            )
             return build_mutation_response(
                 types.RequestDetailResponse,
                 success=True,
                 message="Request created successfully.",
                 input_obj=input,
-                request=request,
+                request=request_with_relations,
             )
         except GraphQLError as e:
             return build_mutation_response(
@@ -1534,6 +1640,7 @@ class RequestWithDependenciesMutationService(BaseMutationService):
     def _save_sync(self, params: dict[str, Any]) -> models.Request:
         """Synchronous save method to handle transaction."""
         with transaction.atomic():
+            store_manager_id = params.pop("store_manager_id", None)
             # Create the request
             request = models.Request(**params)
             if self.user:
@@ -1545,6 +1652,26 @@ class RequestWithDependenciesMutationService(BaseMutationService):
                 request.tenant_id = self.tenant_id
 
             request.save()
+
+            if store_manager_id:
+                try:
+                    manager = models.RequestStoreManager.objects.get(
+                        id=store_manager_id
+                    )
+                except models.RequestStoreManager.DoesNotExist:
+                    raise GraphQLError("Request store manager not found.")
+
+                if manager.tenant_id and manager.tenant_id != request.tenant_id:
+                    raise GraphQLError(
+                        "Request store manager belongs to a different tenant."
+                    )
+
+                manager.request = request
+                if not manager.tenant_id:
+                    manager.tenant_id = request.tenant_id
+                if self.user:
+                    manager.updated_by = self.user
+                manager.save()
 
             # Create details
             if self.input.details:
@@ -1560,9 +1687,7 @@ class RequestWithDependenciesMutationService(BaseMutationService):
             # Create products
             if self.input.products:
                 for product_input in self.input.products:
-                    product_params = self._normalize_id_fields(
-                        product_input.to_dict()
-                    )
+                    product_params = self._normalize_id_fields(product_input.to_dict())
                     product = models.RequestProduct(**product_params)
                     product.request = request
                     product.tenant_id = request.tenant_id
@@ -1584,6 +1709,90 @@ class RequestWithDependenciesMutationService(BaseMutationService):
         params = self._normalize_id_fields(params)
 
         return await sync_to_async(self._save_sync)(params)
+
+
+async def _resolve_request_location(
+    request: models.Request,
+) -> models.Location | None:
+    if request.retailer and request.retailer.location_id:
+        return request.retailer.location
+    if request.distributor and request.distributor.location_id:
+        return request.distributor.location
+    return None
+
+
+async def _notify_notification_group_users_for_request(
+    request: models.Request,
+    location: models.Location | None,
+) -> None:
+    if not location:
+        return
+
+    group_ids = await _resolve_notification_group_ids(
+        location=location,
+        tenant_id=request.tenant_id,
+    )
+    if not group_ids:
+        return
+
+    to_emails = await sync_to_async(list)(
+        models.NotificationGroupUser.objects.filter(
+            notification_group_id__in=group_ids,
+            user__is_active=True,
+            user__tenanted_users__tenant_id=request.tenant_id,
+            user__tenanted_users__is_active=True,
+        )
+        .exclude(user__email__isnull=True)
+        .exclude(user__email="")
+        .values_list("user__email", flat=True)
+        .distinct()
+    )
+    if not to_emails:
+        return
+
+    mailer = RequestApprovedNotificationMailer(
+        request=request,
+        location=location,
+        to_emails=to_emails,
+    )
+    await sync_to_async(mailer.send)()
+
+
+async def _notify_notification_group_users_for_request_created(
+    request: models.Request,
+    location: models.Location | None,
+) -> None:
+    if not location:
+        return
+
+    group_ids = await _resolve_notification_group_ids(
+        location=location,
+        tenant_id=request.tenant_id,
+    )
+    if not group_ids:
+        return
+
+    to_emails = await sync_to_async(list)(
+        models.NotificationGroupUser.objects.filter(
+            notification_group_id__in=group_ids,
+            user__is_active=True,
+            user__tenanted_users__tenant_id=request.tenant_id,
+            user__tenanted_users__is_active=True,
+        )
+        .exclude(user__email__isnull=True)
+        .exclude(user__email="")
+        .values_list("user__email", flat=True)
+        .distinct()
+    )
+    if not to_emails:
+        return
+
+    mailer = RequestCreatedNotificationMailer(
+        request=request,
+        location=location,
+        to_emails=to_emails,
+    )
+    await sync_to_async(mailer.send)()
 
 
 @strawberry.type
@@ -1663,9 +1872,12 @@ class RequestMutations:
                 raise GraphQLError("Invalid request ID.")
 
             # Get the request first to access its tenant
-            request: models.Request = await sync_to_async(models.Request.objects.get)(
-                id=input.id
-            )
+            request: models.Request = await sync_to_async(
+                models.Request.objects.select_related(
+                    "retailer__location__state",
+                    "distributor__location__state",
+                ).get
+            )(id=input.id)
             # Get tenant using tenant_id to avoid async context issues with foreign key access
             tenant: Tenant = await sync_to_async(Tenant.objects.get)(
                 id=request.tenant_id
@@ -1691,6 +1903,10 @@ class RequestMutations:
                 )
             request.status = approval_status
             await sync_to_async(request.save)()
+
+            location = await _resolve_request_location(request)
+            await _notify_notification_group_users_for_request(request, location)
+
             return build_mutation_response(
                 types.ApproveRequestResponse,
                 success=True,
@@ -1726,6 +1942,11 @@ class RequestMutations:
             user: User = await service.get_user(info)
             if user.role_id == ROLE_ID.Ambassadors:
                 raise GraphQLError("You are not authorized to decline requests.")
+
+            try:
+                input.id = resolve_id_to_int(input.id)
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Invalid request ID.")
 
             # Get the request first to access its tenant
             request: models.Request = await sync_to_async(models.Request.objects.get)(
@@ -1873,12 +2094,12 @@ class TimeZoneMutations:
 
         try:
             timezone = await sync_to_async(models.TimeZone.objects.get)(id=input.id)
-            
+
             timezone.name = input.name
             timezone.code = input.code
             timezone.offset = input.offset
             timezone.updated_by = user
-            
+
             await sync_to_async(timezone.save)()
 
             return types.TimeZoneResponse(
@@ -1887,7 +2108,7 @@ class TimeZoneMutations:
                 timezone=timezone,
             )
         except models.TimeZone.DoesNotExist:
-             return types.TimeZoneResponse(
+            return types.TimeZoneResponse(
                 success=False,
                 message="Timezone not found.",
             )

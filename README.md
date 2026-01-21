@@ -157,6 +157,11 @@ The Google Calendar integration uses django-rq for asynchronous task processing.
 uv run python manage.py rqworker high default low
 ```
 
+Macos:
+```bash
+OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES uv run python manage.py rqworker default
+```
+
 This starts a worker that processes jobs from the `high`, `default`, and `low` queues (in that priority order).
 
 **Note:** The RQ worker must be running for Google Calendar sync tasks to execute. Events will be queued but not processed if the worker is not running.
