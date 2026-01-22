@@ -108,6 +108,15 @@ class EventStatusDetailResponse:
     event_status: EventStatus | None = None
 
 
+@strawberry_django.type(models.State)
+class State(Node):
+    uuid: str
+    name: str
+    code: str
+    created_at: str
+    updated_at: str
+
+
 @strawberry_django.type(models.Location)
 class Location(Node):
     uuid: str
@@ -115,6 +124,7 @@ class Location(Node):
     code: str
     zip: str
     tenant_id: strawberry.ID
+    state: State | None = None
     created_at: str
     updated_at: str
 

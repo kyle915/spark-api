@@ -2443,6 +2443,7 @@ type Location implements Node {
   code: String!
   zip: String!
   tenantId: ID!
+  state: State
   createdAt: String!
   updatedAt: String!
 }
@@ -3759,6 +3760,19 @@ type SparkUserType implements Node {
   firstName: String!
   lastName: String!
   image: DjangoImageType
+}
+
+"""
+State(id, uuid, name, code, created_by, updated_by, created_at, updated_at)
+"""
+type State implements Node {
+  """The Globally Unique ID of this object"""
+  id: ID!
+  uuid: String!
+  name: String!
+  code: String!
+  createdAt: String!
+  updatedAt: String!
 }
 
 """
