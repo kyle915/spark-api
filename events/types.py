@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from typing import List
 
 import strawberry
@@ -6,6 +8,7 @@ from strawberry.relay import Node
 
 import datetime
 from django.utils import timezone
+from asgiref.sync import sync_to_async
 from tenants.types import TenantType
 from utils.gcs import extract_blob_name_from_url, generate_download_url
 
@@ -105,6 +108,15 @@ class EventStatusDetailResponse:
     event_status: EventStatus | None = None
 
 
+@strawberry_django.type(models.State)
+class State(Node):
+    uuid: str
+    name: str
+    code: str
+    created_at: str
+    updated_at: str
+
+
 @strawberry_django.type(models.Location)
 class Location(Node):
     uuid: str
@@ -112,6 +124,7 @@ class Location(Node):
     code: str
     zip: str
     tenant_id: strawberry.ID
+    state: State | None = None
     created_at: str
     updated_at: str
 
@@ -306,13 +319,25 @@ class Request(Node):
     retailer: Retailer | None = None
 
     @strawberry.field
-    def store_managers(self) -> List["RequestStoreManager"]:
+    def store_managers(self) -> List[RequestStoreManager]:
         cached = getattr(self, "_prefetched_objects_cache", {}).get(
             "requests_stores_manager"
         )
         if cached is not None:
             return list(cached)
         return list(self.requests_stores_manager.all())
+
+    @strawberry.field
+    async def products(self) -> List[Product]:
+        cached = getattr(self, "_prefetched_objects_cache", {}).get(
+            "request_product"
+        )
+        if cached is not None:
+            return [item.product for item in cached if item.product]
+        items = await sync_to_async(list)(
+            self.request_product.select_related("product").all()
+        )
+        return [item.product for item in items if item.product]
 
     request_type: RequestType | None = None
     status: RequestStatus | None = None
