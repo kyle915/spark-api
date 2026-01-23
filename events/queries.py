@@ -307,6 +307,20 @@ class EventQueries:
             if filters.request_id:
                 request_id = _resolve_filter_id(filters.request_id, "request")
                 queryset = queryset.filter(request_id=request_id)
+            if filters.retailer_state_id:
+                retailer_state_id = _resolve_filter_id(
+                    filters.retailer_state_id, "retailer state"
+                )
+                queryset = queryset.filter(
+                    request__retailer__location__state_id=retailer_state_id
+                )
+            if filters.distributor_state_id:
+                distributor_state_id = _resolve_filter_id(
+                    filters.distributor_state_id, "distributor state"
+                )
+                queryset = queryset.filter(
+                    request__distributor__location__state_id=distributor_state_id
+                )
             if filters.date:
                 queryset = queryset.filter(request__date=filters.date)
 
@@ -396,6 +410,20 @@ class EventQueries:
             if filters.request_id:
                 request_id = _resolve_filter_id(filters.request_id, "request")
                 queryset = queryset.filter(request_id=request_id)
+            if filters.retailer_state_id:
+                retailer_state_id = _resolve_filter_id(
+                    filters.retailer_state_id, "retailer state"
+                )
+                queryset = queryset.filter(
+                    request__retailer__location__state_id=retailer_state_id
+                )
+            if filters.distributor_state_id:
+                distributor_state_id = _resolve_filter_id(
+                    filters.distributor_state_id, "distributor state"
+                )
+                queryset = queryset.filter(
+                    request__distributor__location__state_id=distributor_state_id
+                )
 
         queryset = EventQueries._filter_events_for_local_today(queryset).order_by(
             "start_time"
@@ -455,6 +483,20 @@ class EventQueries:
             if filters.request_id:
                 request_id = _resolve_filter_id(filters.request_id, "request")
                 queryset = queryset.filter(request_id=request_id)
+            if filters.retailer_state_id:
+                retailer_state_id = _resolve_filter_id(
+                    filters.retailer_state_id, "retailer state"
+                )
+                queryset = queryset.filter(
+                    request__retailer__location__state_id=retailer_state_id
+                )
+            if filters.distributor_state_id:
+                distributor_state_id = _resolve_filter_id(
+                    filters.distributor_state_id, "distributor state"
+                )
+                queryset = queryset.filter(
+                    request__distributor__location__state_id=distributor_state_id
+                )
 
         queryset = EventQueries._filter_events_for_local_today(queryset)
 
@@ -613,7 +655,17 @@ class RequestQueriesService(BaseEventQueriesService):
 
     def get_queryset(self) -> QuerySet:
         """Get the queryset for the service."""
-        return self.get_model().objects.prefetch_related("requests_stores_manager")
+        return (
+            self.get_model()
+            .objects.select_related(
+                "distributor__location__state",
+                "retailer__location__state",
+            )
+            .prefetch_related(
+                "requests_stores_manager",
+                "request_product__product",
+            )
+        )
 
 
 class RequestStoreManagerQueriesService(BaseEventQueriesService):
@@ -938,6 +990,65 @@ class LocationQueries:
                 id=id, uuid=str(uuid) if uuid else None, tenant_id=tenant_id
             )
             return location
+        except GraphQLError:
+            return None
+
+
+class StateQueriesService(BaseEventQueriesService):
+    """Service for state queries."""
+
+    ordering: tuple[str, ...] = ("name",)
+
+    def get_model(self) -> Model:
+        """Get the model for the service."""
+        return models.State
+
+    def get_filtered_queryset(
+        self, tenant_id: int | None = None, q: str | None = None
+    ) -> QuerySet:
+        """Get the filtered queryset for the service."""
+        queryset = self.get_queryset()
+        if q:
+            queryset = queryset.filter(name__icontains=q)
+        return queryset
+
+
+@strawberry.type
+class StateQueries:
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def states(
+        self,
+        info: strawberry.Info,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        q: str | None = None,
+    ) -> CountableConnection[types.State]:
+        """Get all states."""
+        service = StateQueriesService()
+        return await service.get_connection(
+            q=q,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+            default_limit=100,
+        )
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def state(
+        self,
+        info: strawberry.Info,
+        id: strawberry.ID | None = None,
+        uuid: strawberry.ID | None = None,
+    ) -> types.State | None:
+        """Get a single state."""
+        try:
+            service = StateQueriesService()
+            return await service.get_record(
+                id=id, uuid=str(uuid) if uuid else None
+            )
         except GraphQLError:
             return None
 

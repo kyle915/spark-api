@@ -1414,6 +1414,7 @@ input CreateRecapInput {
   files: [RecapFileInput!]!
   productsSold: Int = null
   totalEarnings: Float = null
+  accountSpendAmount: Float = null
   jobId: ID = null
   retailerId: ID = null
   ambassadorId: ID = null
@@ -1876,6 +1877,8 @@ input EventFiltersInput {
   eventTypeId: ID = null
   eventStatus: EventStatusFilterEnum = null
   requestId: ID = null
+  retailerStateId: ID = null
+  distributorStateId: ID = null
   date: String = null
   coordinates: CoordinatesFilterInput = null
 }
@@ -2442,6 +2445,7 @@ type Location implements Node {
   code: String!
   zip: String!
   tenantId: ID!
+  state: State
   createdAt: String!
   updatedAt: String!
 }
@@ -2908,6 +2912,8 @@ type Query {
   publicLocations(requestUrlName: String!, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): LocationCountableConnection!
   locations(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: LocationFiltersInput = null): LocationCountableConnection!
   location(id: ID = null, uuid: ID = null): Location
+  states(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): StateCountableConnection!
+  state(id: ID = null, uuid: ID = null): State
   timezones(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): TimeZoneCountableConnection!
   publicTimezones(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): TimeZoneCountableConnection!
   recaps(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: RecapFiltersInput = null): RecapCountableConnection!
@@ -3162,7 +3168,7 @@ input RateTypeFiltersInput {
 }
 
 """
-Recap(id, uuid, name, submited_at, total_engagements, products_sold, total_earnings, approved, timezone, event, ambassador, job, retailer, created_by, updated_by, created_at, updated_at)
+Recap(id, uuid, name, submited_at, total_engagements, products_sold, total_earnings, account_spend_amount, approved, timezone, event, ambassador, job, retailer, created_by, updated_by, created_at, updated_at)
 """
 type Recap implements Node {
   """The Globally Unique ID of this object"""
@@ -3181,6 +3187,7 @@ type Recap implements Node {
   totalEngagements: Int
   productsSold: Int
   totalEarnings: Float
+  accountSpendAmount: Float
   consumerEngagements: [ConsumerEngagements!]!
   productSamples: [ProductSamples!]!
   salesPerformance: [SalesPerformance!]!
@@ -3389,6 +3396,7 @@ type Request implements Node {
   startTime: String
   endTime: String
   storeManagers: [RequestStoreManager!]!
+  products: [Product!]!
 }
 
 type RequestCountableConnection {
@@ -3756,6 +3764,33 @@ type SparkUserType implements Node {
   firstName: String!
   lastName: String!
   image: DjangoImageType
+}
+
+"""
+State(id, uuid, name, code, created_by, updated_by, created_at, updated_at)
+"""
+type State implements Node {
+  """The Globally Unique ID of this object"""
+  id: ID!
+  uuid: String!
+  name: String!
+  code: String!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type StateCountableConnection {
+  pageInfo: PageInfo!
+  edges: [StateCountableEdge!]!
+  totalCount: Int!
+}
+
+type StateCountableEdge {
+  """A cursor for use in pagination"""
+  cursor: String!
+
+  """The item at the end of the edge"""
+  node: State!
 }
 
 """
@@ -4309,6 +4344,7 @@ input UpdateRecapInput {
   files: [RecapFileInput!]!
   productsSold: Int = null
   totalEarnings: Float = null
+  accountSpendAmount: Float = null
   jobId: ID = null
   retailerId: ID = null
   ambassadorId: ID = null

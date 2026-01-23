@@ -168,6 +168,7 @@ class RecapMutationService(SparkGraphQLMixin):
                     total_engagements=total_engagements,
                     products_sold=self.input.products_sold,
                     total_earnings=self.input.total_earnings,
+                    account_spend_amount=self.input.account_spend_amount,
                     job=job,
                     retailer=retailer,
                     ambassador=ambassador,
@@ -400,6 +401,7 @@ class RecapMutationService(SparkGraphQLMixin):
                 # Update the recap
                 recap.name = self.input.name
                 recap.event = event
+                recap.account_spend_amount = self.input.account_spend_amount
                 if self.input.job_id is not None:
                     recap.job = job
                 if self.input.retailer_id is not None:
