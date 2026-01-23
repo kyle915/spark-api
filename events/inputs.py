@@ -50,6 +50,8 @@ class EventFiltersInput(BaseTenantInput):
     event_type_id: strawberry.ID | None = None
     event_status: EventStatusFilterEnum | None = None
     request_id: strawberry.ID | None = None
+    retailer_state_id: strawberry.ID | None = None
+    distributor_state_id: strawberry.ID | None = None
     date: str | None = None
     coordinates: CoordinatesFilterInput | None = None
 
