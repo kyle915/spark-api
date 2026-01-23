@@ -25,6 +25,7 @@ class EventQueryAmbassadors(
     queries.EventQueries,
     queries.EventTypeQueries,
     queries.EventStatusQueries,
+    queries.StateQueries,
     queries.TimeZoneQueries,
 ):
     pass
@@ -45,6 +46,7 @@ class EventQueryClient(
     queries.RequestQueries,
     queries.RequestStoreManagerQueries,
     queries.LocationQueries,
+    queries.StateQueries,
     queries.TimeZoneQueries,
 ):
     pass
@@ -63,6 +65,7 @@ class EventQueryMobile(
     queries.RetailerQueries,
     queries.ProductTypeQueries,
     queries.ProductQueries,
+    queries.StateQueries,
     queries.TimeZoneQueries,
 ):
     pass
