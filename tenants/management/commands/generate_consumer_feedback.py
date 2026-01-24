@@ -268,10 +268,11 @@ class Command(BaseCommand):
         # Get or create default EventType and EventStatus
         event_type = EventType.objects.filter(is_default=True).first()
         if not event_type:
-            event_type = EventType.objects.first()
+            event_type = EventType.objects.filter(tenant=tenant).first()
             if not event_type:
                 event_type = EventType.objects.create(
                     name="Sampling Event",
+                    tenant=tenant,
                     is_default=True,
                     created_by=user,
                 )
@@ -279,18 +280,21 @@ class Command(BaseCommand):
                     self.style.SUCCESS(f"Created EventType: {event_type.name}")
                 )
 
-        event_status = EventStatus.objects.filter(is_default=True).first()
+        event_status = EventStatus.objects.filter(
+            tenant=tenant, is_default=True).first()
         if not event_status:
-            event_status = EventStatus.objects.first()
+            event_status = EventStatus.objects.filter(tenant=tenant).first()
             if not event_status:
                 event_status = EventStatus.objects.create(
                     name="Completed",
                     slug="completed",
+                    tenant=tenant,
                     is_default=True,
                     created_by=user,
                 )
                 self.stdout.write(
-                    self.style.SUCCESS(f"Created EventStatus: {event_status.name}")
+                    self.style.SUCCESS(
+                        f"Created EventStatus: {event_status.name}")
                 )
 
         # Calculate date range (today to 5 days past)
