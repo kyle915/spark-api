@@ -34,18 +34,18 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.SERVER_SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -H ${{ secrets.SERVER_HOST }} >> ~/.ssh/known_hosts
+          ssh-keyscan -p ${{ secrets.SERVER_PORT }} -H ${{ secrets.SERVER_HOST }} >> ~/.ssh/known_hosts
       
       # ------------------------------------
       # DEPLOY + BACKUP + AUTO ROLLBACK
       # ------------------------------------
       - name: Deploy to GCE (with Auto Rollback + Logging)
         run: |
-          ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << 'EOF'
+          ssh -p ${{ secrets.SERVER_PORT }} ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << 'EOF'
 
-            APP_DIR="/home/spark/spark-api"
-            BACKUP_DIR="/home/spark/deploy_backups"
-            LOG_DIR="/home/spark/deploy_logs"
+            APP_DIR="/home/wern/spark-api"
+            BACKUP_DIR="/home/wern/deploy_backups"
+            LOG_DIR="/home/wern/deploy_logs"
 
             mkdir -p $BACKUP_DIR
             mkdir -p $LOG_DIR
@@ -58,7 +58,7 @@ jobs:
             echo ">>> Log file: $LOG_FILE" | tee -a $LOG_FILE
 
             echo ">>> Creating backup..." | tee -a $LOG_FILE
-            cd /home/spark
+            cd /home/wern
             zip -r "$BACKUP_FILE" spark-api \
               -x "spark-api/*.sock" \
               -x "spark-api/*.pid" \
@@ -124,7 +124,7 @@ jobs:
 
             echo ">>> Restoring backup..." | tee -a $LOG_FILE
             rm -rf $APP_DIR 2>&1 | tee -a $LOG_FILE
-            unzip "$BACKUP_FILE" -d /home/spark/ 2>&1 | tee -a $LOG_FILE
+            unzip "$BACKUP_FILE" -d /home/wern/ 2>&1 | tee -a $LOG_FILE
 
             echo ">>> Resyncing dependencies after rollback..." | tee -a $LOG_FILE
             cd $APP_DIR
