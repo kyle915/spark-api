@@ -1,4 +1,4 @@
-name: Deploy to Server (merged PR -> develop, UV + Auto Rollback + Logging)
+name: Deploy to Develop (merged PR -> develop, UV + Auto Rollback + Logging)
 
 on:
   pull_request:
@@ -14,44 +14,38 @@ jobs:
 
     steps:
       # ------------------------------------
-      # CHECKOUT
+      # LOCAL CI USING UV
       # ------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ------------------------------------
-      # INSTALL UV
-      # ------------------------------------
       - name: Install uv
         run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
-      - name: Sync dependencies locally
+      - name: Sync dependencies (uv)
         run: uv sync
-
       # ------------------------------------
-      # SSH CONFIGURATION (with custom port)
+      # SSH CONFIGURATION
       # ------------------------------------
       - name: Prepare SSH
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.SERVER_SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
-
-          # Add host fingerprint to known_hosts
-          ssh-keyscan -p ${{ secrets.SERVER_PORT }} -H ${{ secrets.SERVER_HOST }} >> ~/.ssh/known_hosts
+          ssh-keyscan -H ${{ secrets.SERVER_HOST }} >> ~/.ssh/known_hosts
       
       # ------------------------------------
       # DEPLOY + BACKUP + AUTO ROLLBACK
       # ------------------------------------
-      - name: Deploy to server (with Auto Rollback + Logging)
+      - name: Deploy to GCE (with Auto Rollback + Logging)
         run: |
-          ssh -p ${{ secrets.SERVER_PORT }} ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << 'EOF'
+          ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << 'EOF'
 
-            APP_DIR="/home/wern/spark-api"
-            BACKUP_DIR="/home/wern/deploy_backups"
-            LOG_DIR="/home/wern/deploy_logs"
+            APP_DIR="/home/spark/spark-api"
+            BACKUP_DIR="/home/spark/deploy_backups"
+            LOG_DIR="/home/spark/deploy_logs"
 
             mkdir -p $BACKUP_DIR
             mkdir -p $LOG_DIR
@@ -64,7 +58,7 @@ jobs:
             echo ">>> Log file: $LOG_FILE" | tee -a $LOG_FILE
 
             echo ">>> Creating backup..." | tee -a $LOG_FILE
-            cd /home/wern
+            cd /home/spark
             zip -r "$BACKUP_FILE" spark-api \
               -x "spark-api/*.sock" \
               -x "spark-api/*.pid" \
@@ -94,27 +88,33 @@ jobs:
             uv run python manage.py migrate 2>&1 | tee -a $LOG_FILE
 
             echo ">>> Restarting spark service..." | tee -a $LOG_FILE
-            sudo systemctl restart spark 2>&1 | tee -a $LOG_FILE
+            sudo systemctl restart spark >/dev/null 2>&1 &
+            echo ">>> spark restart command issued" | tee -a $LOG_FILE
 
             echo ">>> Waiting for health check..." | tee -a $LOG_FILE
-            sleep 10
 
-            HEALTH_RESPONSE=$(curl -s -w "\n%{http_code}" \
-            -X POST http://localhost/api/v1/graphql/spark \
-            -H "Host: spark-api-dev.wern.co" \
-            -H "Content-Type: application/json" \
-            -d '{"query":"query { healthcheck }"}')
+            for i in {1..12}; do
+              HEALTH_RESPONSE=$(curl -s -w "\n%{http_code}" \
+                -X POST http://localhost/api/v1/graphql/spark \
+                -H "Host: spark-api-dev.wern.co" \
+                -H "Content-Type: application/json" \
+                -d '{"query":"query { healthcheck }"}')
 
-            STATUS=$(echo "$HEALTH_RESPONSE" | tail -n 1)
-            BODY=$(echo "$HEALTH_RESPONSE" | sed '$d')
+              STATUS=$(echo "$HEALTH_RESPONSE" | tail -n 1)
+              BODY=$(echo "$HEALTH_RESPONSE" | sed '$d')
 
-            echo ">>> Healthcheck status: $STATUS" | tee -a $LOG_FILE
-            echo ">>> Response body: $BODY" | tee -a $LOG_FILE
+              echo "Attempt $i → status: $STATUS" | tee -a $LOG_FILE
 
-            if [ "$STATUS" = "200" ] && echo "$BODY" | grep -q '"healthcheck"[[:space:]]*:[[:space:]]*"ok"'; then
-                echo ">>> Health check OK (GraphQL responded successfully)." | tee -a $LOG_FILE
+              if [ "$STATUS" = "200" ] && echo "$BODY" | grep -q '"healthcheck"[[:space:]]*:[[:space:]]*"ok"'; then
+                echo ">>> Health check OK" | tee -a $LOG_FILE
                 exit 0
-            fi
+              fi
+
+              sleep 5
+            done
+
+            echo "❌ Health check failed after restart" | tee -a $LOG_FILE
+            exit 1
 
             # -----------------------------
             # AUTO ROLLBACK ON FAILURE
@@ -124,7 +124,7 @@ jobs:
 
             echo ">>> Restoring backup..." | tee -a $LOG_FILE
             rm -rf $APP_DIR 2>&1 | tee -a $LOG_FILE
-            unzip "$BACKUP_FILE" -d /home/wern/ 2>&1 | tee -a $LOG_FILE
+            unzip "$BACKUP_FILE" -d /home/spark/ 2>&1 | tee -a $LOG_FILE
 
             echo ">>> Resyncing dependencies after rollback..." | tee -a $LOG_FILE
             cd $APP_DIR
