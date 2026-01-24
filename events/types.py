@@ -304,6 +304,7 @@ class Request(Node):
 
     address: str
     coordinates: List[float]
+    requestor_email: str | None = None
     client_name: str | None = None
     client_email: str | None = None
     distributor_name: str | None = None
