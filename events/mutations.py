@@ -28,6 +28,7 @@ from .envelopes import (
     RequestApprovedNotificationMailer,
     RequestCreatedNotificationMailer,
     ClientRequestCreatedNotificationMailer,
+    RequestorRequestCreatedMailer,
 )
 from utils.gcs import delete_blob, extract_blob_name_from_url
 from tenants.models import Tenant, User
@@ -1652,10 +1653,13 @@ class PublicRequestMutations:
             )(id=request.id)
             location = await _resolve_request_location(request_with_relations)
             await _notify_notification_group_users_for_request_created(
-                request_with_relations, location
+                request_with_relations, location, delay_seconds=0
             )
             await _notify_spark_admins_for_client_request(
-                request_with_relations, location
+                request_with_relations, location, delay_seconds=1
+            )
+            await _notify_requestor_for_request_created(
+                request_with_relations, location, delay_seconds=2
             )
             return build_mutation_response(
                 types.RequestDetailResponse,
@@ -1832,6 +1836,7 @@ async def _notify_notification_group_users_for_request(
 async def _notify_notification_group_users_for_request_created(
     request: models.Request,
     location: models.Location | None,
+    delay_seconds: int | float | None = None,
 ) -> None:
     if not location:
         return
@@ -1863,12 +1868,13 @@ async def _notify_notification_group_users_for_request_created(
         location=location,
         to_emails=to_emails,
     )
-    await sync_to_async(mailer.send)()
+    await sync_to_async(mailer.send)(delay_seconds=delay_seconds)
 
 
 async def _notify_spark_admins_for_client_request(
     request: models.Request,
     location: models.Location | None,
+    delay_seconds: int | float | None = None,
 ) -> None:
     to_emails = await sync_to_async(list)(
         User.objects.filter(
@@ -1888,7 +1894,24 @@ async def _notify_spark_admins_for_client_request(
         location=location,
         to_emails=to_emails,
     )
-    await sync_to_async(mailer.send)()
+    await sync_to_async(mailer.send)(delay_seconds=delay_seconds)
+
+
+async def _notify_requestor_for_request_created(
+    request: models.Request,
+    location: models.Location | None,
+    delay_seconds: int | float | None = None,
+) -> None:
+    requestor_email = (request.requestor_email or "").strip()
+    if not requestor_email:
+        return
+
+    mailer = RequestorRequestCreatedMailer(
+        request=request,
+        location=location,
+        to_emails=[requestor_email],
+    )
+    await sync_to_async(mailer.send)(delay_seconds=delay_seconds)
 
 
 @strawberry.type

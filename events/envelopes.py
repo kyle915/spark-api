@@ -110,3 +110,26 @@ class ClientRequestCreatedNotificationMailer(Mailer):
                 ),
             },
         )
+
+
+class RequestorRequestCreatedMailer(Mailer):
+    def __init__(
+        self,
+        request: models.Request,
+        location: models.Location | None,
+        to_emails: list[str],
+    ) -> None:
+        self.request = request
+        self.location = location
+        self.to_emails = to_emails
+
+    def envelope(self) -> Envelope:
+        return Envelope(
+            subject="We received your request",
+            template="events.templates.emails.request_created_requestor_notification",
+            to_emails=self.to_emails,
+            context={
+                "request": self.request,
+                "location": self.location,
+            },
+        )
