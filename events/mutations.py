@@ -1694,6 +1694,25 @@ class RequestWithDependenciesMutationService(BaseMutationService):
             elif self.tenant_id:
                 request.tenant_id = self.tenant_id
 
+            if self.is_public:
+                approval_status = models.RequestStatus.objects.get_by_slug(
+                    slug="approved", tenant=request.tenant_id
+                )
+                if not approval_status:
+                    raise GraphQLError(
+                        "Approval status not found. Please ensure you have a status with slug 'approved'."
+                    )
+                request.status = approval_status
+            else:
+                pending_status = models.RequestStatus.objects.get_by_slug(
+                    slug="pending", tenant=request.tenant_id
+                )
+                if not pending_status:
+                    raise GraphQLError(
+                        "Pending status not found. Please ensure you have a status with slug 'pending'."
+                    )
+                request.status = pending_status
+
             request.save()
 
             if store_manager_id:
