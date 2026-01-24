@@ -14,7 +14,7 @@ import hashlib
 import json
 from asgiref.sync import sync_to_async
 from django.db.models import (
-    Count, Q, Sum
+    Case, Count, Q, Sum, When, IntegerField
 )
 from django.db.models.functions import (
     TruncMonth
@@ -1064,3 +1064,89 @@ class DashboardQueries:
         cache.set(cache_key, result, ttl)
 
         return result
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def latest_insights(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID | None = None,
+    ) -> types.Insights | None:
+        """Get the latest Insights ordered by created_at for a tenant."""
+        from tenants import models as tenant_models
+        from utils.graphql.mixins import resolve_id_to_int
+
+        async def _execute_query():
+            user = info.context.request.user
+
+            # Resolve tenant_id if provided
+            resolved_tenant_id = None
+            if tenant_id:
+                try:
+                    resolved_tenant_id = resolve_id_to_int(tenant_id)
+                except (ValueError, TypeError):
+                    return None
+
+            # Get tenant - use user's tenant if not specified
+            if not resolved_tenant_id:
+                # Get user's tenant
+                tenanted_user = await sync_to_async(
+                    tenant_models.TenantedUser.objects.filter(
+                        user=user, is_active=True
+                    ).select_related("tenant").first
+                )()
+                if not tenanted_user:
+                    return None
+                resolved_tenant_id = tenanted_user.tenant.id
+
+            # Get latest insights for the tenant
+            latest_insights = await sync_to_async(
+                tenant_models.Insights.objects.filter(
+                    tenant_id=resolved_tenant_id
+                )
+                .select_related("tenant")
+                .prefetch_related("reports")
+                .order_by("-created_at")
+                .first
+            )()
+
+            if not latest_insights:
+                return None
+
+            # Build reports list
+            # Order by priority level (high=3, medium=2, low=1) then by created_at
+            priority_order = Case(
+                When(priority="high", then=3),
+                When(priority="medium", then=2),
+                When(priority="low", then=1),
+                default=0,
+                output_field=IntegerField(),
+            )
+            reports_queryset = latest_insights.reports.all().annotate(
+                priority_order=priority_order
+            ).order_by("-priority_order", "created_at")
+            reports_list_data = await sync_to_async(list)(reports_queryset)
+            reports_list = []
+            for report in reports_list_data:
+                reports_list.append(
+                    types.InsightReport(
+                        id=strawberry.ID(str(report.id)),
+                        uuid=str(report.uuid),
+                        title=report.title,
+                        content=report.content,
+                        priority=report.priority,
+                        createdAt=report.created_at.isoformat(),
+                    )
+                )
+
+            return types.Insights(
+                id=strawberry.ID(str(latest_insights.id)),
+                uuid=str(latest_insights.uuid),
+                tenantId=strawberry.ID(str(latest_insights.tenant.id)),
+                fromDate=latest_insights.from_date.isoformat(),
+                toDate=latest_insights.to_date.isoformat(),
+                totalFeedbackCount=latest_insights.total_feedback_count,
+                reports=reports_list,
+                createdAt=latest_insights.created_at.isoformat(),
+            )
+
+        return await _execute_query()

@@ -2092,6 +2092,26 @@ type GroupTypeResponse {
   groupType: GroupType
 }
 
+type InsightReport {
+  id: ID!
+  uuid: String!
+  title: String!
+  content: String!
+  priority: String!
+  createdAt: String!
+}
+
+type Insights {
+  id: ID!
+  uuid: String!
+  tenantId: ID!
+  fromDate: String!
+  toDate: String!
+  totalFeedbackCount: Int!
+  reports: [InsightReport!]!
+  createdAt: String!
+}
+
 input InviteAmbassadorsToJobInput {
   clientMutationId: ID = null
   tenantId: ID = null
@@ -2999,6 +3019,7 @@ type Query {
   eventDashboard(filters: EventDashboardFiltersInput = null): EventDashboard!
   recapDashboardFilterOptions: RecapDashboardFilterOptions!
   recapDashboard(filters: RecapDashboardFiltersInput = null): RecapDashboard!
+  latestInsights(tenantId: ID = null): Insights
   getUploadUrl(filePath: String!, contentType: String! = "image/jpeg"): UploadUrlResponse!
   getDownloadUrl(filePath: String!): String!
 }
@@ -4541,13 +4562,13 @@ type UserType {
   isActive: Boolean!
   dateJoined: DateTime!
   status: UserStatusType!
-  email: String!
   id: ID!
-  lastName: String
+  email: String!
+  firstName: String
 
   """Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only."""
   username: String!
-  firstName: String
+  lastName: String
   archived: Boolean!
   verified: Boolean!
 }
