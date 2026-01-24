@@ -39,7 +39,7 @@ jobs:
       # ------------------------------------
       # DEPLOY + BACKUP + AUTO ROLLBACK
       # ------------------------------------
-      - name: Deploy to GCE (with Auto Rollback + Logging)
+      - name: Deploy to Dev server (with Auto Rollback + Logging)
         run: |
           ssh -p ${{ secrets.SERVER_PORT }} ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << 'EOF'
 
