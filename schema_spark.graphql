@@ -1445,6 +1445,7 @@ input CreateRequestInput {
   distributorId: ID = null
   retailerId: ID = null
   storeManagerId: ID = null
+  requestorEmail: String = null
   clientName: String = null
   clientEmail: String = null
   distributorName: String = null
@@ -1498,6 +1499,7 @@ input CreateRequestWithDependenciesInput {
   requestTypeId: ID!
   distributorId: ID = null
   retailerId: ID = null
+  requestorEmail: String = null
   clientName: String!
   clientEmail: String!
   distributorName: String!
@@ -3366,7 +3368,7 @@ input RemoveAmbassadorsFromGroupInput {
 }
 
 """
-Request(id, uuid, name, date, start_time, end_time, address, coordinates, client_name, client_email, distributor_name, distributor_email, retailer_name, retailer_address, retailer_store_contact, store_manager_name, store_manager_phone, timezone, client, distributor, retailer, request_type, status, tenant, created_by, updated_by, created_at, updated_at)
+Request(id, uuid, name, date, start_time, end_time, address, requestor_email, coordinates, client_name, client_email, distributor_name, distributor_email, retailer_name, retailer_address, retailer_store_contact, store_manager_name, store_manager_phone, timezone, client, distributor, retailer, request_type, status, tenant, created_by, updated_by, created_at, updated_at)
 """
 type Request implements Node {
   """The Globally Unique ID of this object"""
@@ -3375,6 +3377,7 @@ type Request implements Node {
   name: String!
   address: String!
   coordinates: [Float!]!
+  requestorEmail: String
   clientName: String
   clientEmail: String
   distributorName: String
@@ -4371,6 +4374,7 @@ input UpdateRequestInput {
   requestTypeId: ID!
   distributorId: ID!
   retailerId: ID!
+  requestorEmail: String = null
   storeManagerName: String!
   storeManagerPhone: String!
   details: [CreateRequestDetailInput!]!
