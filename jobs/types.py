@@ -217,6 +217,11 @@ class Job(Node):
         """Attendance records linked to this job."""
         return await sync_to_async(list)(self.attendance.all())
 
+    @strawberry.field
+    async def ambassador_jobs(self) -> List[AmbassadorJob]:
+        """Ambassador assignments linked to this job."""
+        return await sync_to_async(list)(self.ambassador_jobs.all())
+
 
 @strawberry.type
 class JobDetailResponse:

@@ -28,6 +28,7 @@ from .envelopes import (
     RequestApprovedNotificationMailer,
     RequestCreatedNotificationMailer,
     ClientRequestCreatedNotificationMailer,
+    RequestorRequestCreatedMailer,
 )
 from utils.gcs import delete_blob, extract_blob_name_from_url
 from tenants.models import Tenant, User
@@ -1465,6 +1466,43 @@ class RequestMutationService(BaseMutationService):
         """Get the model for the service."""
         return models.Request
 
+    async def _replace_request_products(
+        self, request: models.Request
+    ) -> None:
+        """Replace request products when input provides a list."""
+        products = getattr(self.input, "products", None)
+        if products is None:
+            return
+
+        product_ids: list[int] = []
+        for product_input in products:
+            product_params = self._normalize_id_fields(product_input.to_dict())
+            product_id = product_params.get("product_id")
+            if product_id:
+                product_ids.append(product_id)
+
+        def _sync_replace() -> None:
+            with transaction.atomic():
+                models.RequestProduct.objects.filter(request_id=request.id).delete()
+                for product_id in product_ids:
+                    request_product = models.RequestProduct(
+                        request_id=request.id,
+                        product_id=product_id,
+                        tenant_id=request.tenant_id,
+                    )
+                    if self.user:
+                        request_product.created_by = self.user
+                        request_product.updated_by = self.user
+                    request_product.save()
+
+        await sync_to_async(_sync_replace)()
+
+    async def save(self) -> Model:
+        """Save request and update related products if provided."""
+        request = await super().save()
+        await self._replace_request_products(request)
+        return request
+
 
 class RequestStoreManagerMutationService(BaseMutationService):
     """Service for request store manager mutations."""
@@ -1615,10 +1653,13 @@ class PublicRequestMutations:
             )(id=request.id)
             location = await _resolve_request_location(request_with_relations)
             await _notify_notification_group_users_for_request_created(
-                request_with_relations, location
+                request_with_relations, location, delay_seconds=0
             )
             await _notify_spark_admins_for_client_request(
-                request_with_relations, location
+                request_with_relations, location, delay_seconds=1
+            )
+            await _notify_requestor_for_request_created(
+                request_with_relations, location, delay_seconds=2
             )
             return build_mutation_response(
                 types.RequestDetailResponse,
@@ -1656,6 +1697,25 @@ class RequestWithDependenciesMutationService(BaseMutationService):
                 request.tenant_id = self.input.tenant_id
             elif self.tenant_id:
                 request.tenant_id = self.tenant_id
+
+            if self.is_public:
+                approval_status = models.RequestStatus.objects.get_by_slug(
+                    slug="approved", tenant=request.tenant_id
+                )
+                if not approval_status:
+                    raise GraphQLError(
+                        "Approval status not found. Please ensure you have a status with slug 'approved'."
+                    )
+                request.status = approval_status
+            else:
+                pending_status = models.RequestStatus.objects.get_by_slug(
+                    slug="pending", tenant=request.tenant_id
+                )
+                if not pending_status:
+                    raise GraphQLError(
+                        "Pending status not found. Please ensure you have a status with slug 'pending'."
+                    )
+                request.status = pending_status
 
             request.save()
 
@@ -1776,6 +1836,7 @@ async def _notify_notification_group_users_for_request(
 async def _notify_notification_group_users_for_request_created(
     request: models.Request,
     location: models.Location | None,
+    delay_seconds: int | float | None = None,
 ) -> None:
     if not location:
         return
@@ -1807,12 +1868,13 @@ async def _notify_notification_group_users_for_request_created(
         location=location,
         to_emails=to_emails,
     )
-    await sync_to_async(mailer.send)()
+    await sync_to_async(mailer.send)(delay_seconds=delay_seconds)
 
 
 async def _notify_spark_admins_for_client_request(
     request: models.Request,
     location: models.Location | None,
+    delay_seconds: int | float | None = None,
 ) -> None:
     to_emails = await sync_to_async(list)(
         User.objects.filter(
@@ -1832,7 +1894,24 @@ async def _notify_spark_admins_for_client_request(
         location=location,
         to_emails=to_emails,
     )
-    await sync_to_async(mailer.send)()
+    await sync_to_async(mailer.send)(delay_seconds=delay_seconds)
+
+
+async def _notify_requestor_for_request_created(
+    request: models.Request,
+    location: models.Location | None,
+    delay_seconds: int | float | None = None,
+) -> None:
+    requestor_email = (request.requestor_email or "").strip()
+    if not requestor_email:
+        return
+
+    mailer = RequestorRequestCreatedMailer(
+        request=request,
+        location=location,
+        to_emails=[requestor_email],
+    )
+    await sync_to_async(mailer.send)(delay_seconds=delay_seconds)
 
 
 @strawberry.type

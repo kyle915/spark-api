@@ -1,7 +1,10 @@
-import resend
-from typing import Any
-from asgiref.sync import sync_to_async
+import datetime
 import logging
+from typing import Any
+
+import django_rq
+import resend
+from asgiref.sync import sync_to_async
 
 from django.conf import settings
 from django.template.loader import get_template as django_get_template
@@ -240,7 +243,7 @@ class Mailer:
         """
         self.dispatch()
 
-    def send(self) -> None:
+    def send(self, delay_seconds: int | float | None = None) -> None:
         """
         It sends the email using rq workers so we send in the background.
 
@@ -249,12 +252,17 @@ class Mailer:
         without blocking the current request.
         """
         envelope: Envelope = self.envelope()
-
         queues = Queues()
-        queues.default.add(
-            send_email_task,
-            payload=envelope.compile(),
-        )
+        if delay_seconds and delay_seconds > 0:
+            scheduler = django_rq.get_scheduler("default")
+            scheduler.enqueue_in(
+                datetime.timedelta(seconds=delay_seconds),
+                send_email_task,
+                payload=envelope.compile(),
+            )
+            return
+
+        queues.default.add(send_email_task, payload=envelope.compile())
 
 
 class MailChain:
