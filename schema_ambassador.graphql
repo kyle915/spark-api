@@ -580,6 +580,7 @@ input CreateRequestWithDependenciesInput {
   requestTypeId: ID!
   distributorId: ID = null
   retailerId: ID = null
+  requestorEmail: String = null
   clientName: String!
   clientEmail: String!
   distributorName: String!
@@ -1206,6 +1207,7 @@ type Request implements Node {
   name: String!
   address: String!
   coordinates: [Float!]!
+  requestorEmail: String
   clientName: String
   clientEmail: String
   distributorName: String

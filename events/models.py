@@ -313,6 +313,7 @@ class Request(models.Model):
     start_time = models.DateTimeField(null=True, db_index=True)
     end_time = models.DateTimeField(null=True, blank=True)
     address = models.CharField(max_length=100)
+    requestor_email = models.CharField(max_length=254, null=True)
     coordinates = ArrayField(
         models.FloatField(),
         size=2,
