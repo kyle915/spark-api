@@ -2148,6 +2148,7 @@ type Job implements Node {
   createdAt: String!
   updatedAt: String!
   attendances: [Attendance!]!
+  ambassadorJobs: [AmbassadorJob!]!
 }
 
 type JobCountableConnection {

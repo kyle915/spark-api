@@ -2,6 +2,7 @@ import strawberry
 from enum import Enum
 from graphql import GraphQLError
 from django.db.models import Prefetch
+from asgiref.sync import sync_to_async
 
 from utils.graphql.inputs import BaseTenantInput, SparkGraphQLInput
 from utils.graphql.permissions import StrictIsAuthenticated
@@ -532,6 +533,35 @@ class JobQueriesService(JobsBaseQueriesService):
         """Get the model for the service."""
         return models.Job
 
+    async def get_record(
+        self,
+        id: strawberry.ID | None = None,
+        tenant_id: strawberry.ID | None = None,
+        uuid: str | None = None,
+    ) -> Model | None:
+        """Get a single record by id or uuid with prefetched relations."""
+        if id is None and uuid is None:
+            raise GraphQLError("Record identifier is required.")
+
+        filters: dict[str, object] = {}
+        if id is not None:
+            try:
+                filters["id"] = resolve_id_to_int(id)
+            except (TypeError, ValueError, GraphQLError) as exc:
+                raise GraphQLError("Invalid ID.") from exc
+        if uuid is not None:
+            filters["uuid"] = uuid
+        if tenant_id is not None:
+            filters["tenant_id"] = tenant_id
+
+        queryset = self.get_queryset()
+        try:
+            return await sync_to_async(queryset.get)(**filters)
+        except self.get_model().DoesNotExist:
+            raise GraphQLError("Record not found.")
+        except self.get_model().MultipleObjectsReturned:
+            raise GraphQLError("Multiple records found for the given identifier.")
+
     def get_queryset(self) -> QuerySet:
         """Get jobs with related attendance and ambassadors prefetched."""
         return (
@@ -549,6 +579,15 @@ class JobQueriesService(JobsBaseQueriesService):
                     queryset=ambassador_models.Attendance.objects.select_related(
                         "ambassador",
                         "ambassador__user",
+                    ),
+                ),
+                Prefetch(
+                    "ambassador_jobs",
+                    queryset=models.AmbassadorJob.objects.select_related(
+                        "ambassador",
+                        "ambassador__user",
+                        "status",
+                        "rate",
                     ),
                 ),
             )
