@@ -1465,6 +1465,43 @@ class RequestMutationService(BaseMutationService):
         """Get the model for the service."""
         return models.Request
 
+    async def _replace_request_products(
+        self, request: models.Request
+    ) -> None:
+        """Replace request products when input provides a list."""
+        products = getattr(self.input, "products", None)
+        if products is None:
+            return
+
+        product_ids: list[int] = []
+        for product_input in products:
+            product_params = self._normalize_id_fields(product_input.to_dict())
+            product_id = product_params.get("product_id")
+            if product_id:
+                product_ids.append(product_id)
+
+        def _sync_replace() -> None:
+            with transaction.atomic():
+                models.RequestProduct.objects.filter(request_id=request.id).delete()
+                for product_id in product_ids:
+                    request_product = models.RequestProduct(
+                        request_id=request.id,
+                        product_id=product_id,
+                        tenant_id=request.tenant_id,
+                    )
+                    if self.user:
+                        request_product.created_by = self.user
+                        request_product.updated_by = self.user
+                    request_product.save()
+
+        await sync_to_async(_sync_replace)()
+
+    async def save(self) -> Model:
+        """Save request and update related products if provided."""
+        request = await super().save()
+        await self._replace_request_products(request)
+        return request
+
 
 class RequestStoreManagerMutationService(BaseMutationService):
     """Service for request store manager mutations."""
