@@ -245,3 +245,6 @@ AMBASSADOR_FRONTEND_URL = env(
     "AMBASSADOR_FRONTEND_URL", default="http://localhost:3000"
 )
 ADMIN_FRONTEND_URL = env("ADMIN_FRONTEND_URL", default="http://localhost:3000")
+
+# Gemini AI Configuration
+GEMINI_API_KEY = env("GEMINI_API_KEY", default="")

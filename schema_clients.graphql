@@ -1765,6 +1765,7 @@ input DistributorFiltersInput {
   tenantId: ID = null
   tenantUuid: ID = null
   locationId: ID = null
+  stateId: ID = null
 }
 
 type DistributorOption {
@@ -2090,6 +2091,26 @@ type GroupTypeResponse {
   message: String!
   clientMutationId: ID
   groupType: GroupType
+}
+
+type InsightReport {
+  id: ID!
+  uuid: String!
+  title: String!
+  content: String!
+  priority: String!
+  createdAt: String!
+}
+
+type Insights {
+  id: ID!
+  uuid: String!
+  tenantId: ID!
+  fromDate: String!
+  toDate: String!
+  totalFeedbackCount: Int!
+  reports: [InsightReport!]!
+  createdAt: String!
 }
 
 input InviteAmbassadorsToJobInput {
@@ -2902,6 +2923,7 @@ type Query {
   publicLocations(requestUrlName: String!, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): LocationCountableConnection!
   locations(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: LocationFiltersInput = null): LocationCountableConnection!
   location(id: ID = null, uuid: ID = null): Location
+  publicStates(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): StateCountableConnection!
   states(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): StateCountableConnection!
   state(id: ID = null, uuid: ID = null): State
   timezones(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): TimeZoneCountableConnection!
@@ -2999,6 +3021,7 @@ type Query {
   eventDashboard(filters: EventDashboardFiltersInput = null): EventDashboard!
   recapDashboardFilterOptions: RecapDashboardFilterOptions!
   recapDashboard(filters: RecapDashboardFiltersInput = null): RecapDashboard!
+  latestInsights(tenantId: ID = null): Insights
   getUploadUrl(filePath: String!, contentType: String! = "image/jpeg"): UploadUrlResponse!
   getDownloadUrl(filePath: String!): String!
 }
@@ -3590,6 +3613,7 @@ input RetailerFiltersInput {
   tenantId: ID = null
   tenantUuid: ID = null
   locationId: ID = null
+  stateId: ID = null
 }
 
 type RetailerOption {
@@ -4541,13 +4565,13 @@ type UserType {
   isActive: Boolean!
   dateJoined: DateTime!
   status: UserStatusType!
+  lastName: String
   email: String!
   id: ID!
-  lastName: String
+  firstName: String
 
   """Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only."""
   username: String!
-  firstName: String
   archived: Boolean!
   verified: Boolean!
 }
