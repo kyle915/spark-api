@@ -1015,6 +1015,27 @@ class StateQueriesService(BaseEventQueriesService):
 
 @strawberry.type
 class StateQueries:
+    @strawberry.field
+    async def public_states(
+        self,
+        info: strawberry.Info,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        q: str | None = None,
+    ) -> CountableConnection[types.State]:
+        """Get all states without authentication."""
+        service = StateQueriesService()
+        return await service.get_connection(
+            q=q,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+            default_limit=100,
+        )
+
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def states(
         self,
@@ -1094,6 +1115,9 @@ class DistributorQueries:
         if filters and filters.location_id:
             location_id = _resolve_filter_id(filters.location_id, "location")
             queryset = queryset.filter(location_id=location_id)
+        if filters and filters.state_id:
+            state_id = _resolve_filter_id(filters.state_id, "state")
+            queryset = queryset.filter(location__state_id=state_id)
 
         return await service.get_connection(
             tenant_id=tenant.id,
@@ -1130,6 +1154,9 @@ class DistributorQueries:
         if filters and filters.location_id:
             location_id = _resolve_filter_id(filters.location_id, "location")
             queryset = queryset.filter(location_id=location_id)
+        if filters and filters.state_id:
+            state_id = _resolve_filter_id(filters.state_id, "state")
+            queryset = queryset.filter(location__state_id=state_id)
 
         return await service.get_connection(
             tenant_id=resolved_tenant_id,
@@ -1201,6 +1228,9 @@ class RetailerQueries:
         if filters and filters.location_id:
             location_id = _resolve_filter_id(filters.location_id, "location")
             queryset = queryset.filter(location_id=location_id)
+        if filters and filters.state_id:
+            state_id = _resolve_filter_id(filters.state_id, "state")
+            queryset = queryset.filter(location__state_id=state_id)
 
         return await service.get_connection(
             tenant_id=tenant.id,
@@ -1237,6 +1267,9 @@ class RetailerQueries:
         if filters and filters.location_id:
             location_id = _resolve_filter_id(filters.location_id, "location")
             queryset = queryset.filter(location_id=location_id)
+        if filters and filters.state_id:
+            state_id = _resolve_filter_id(filters.state_id, "state")
+            queryset = queryset.filter(location__state_id=state_id)
 
         return await service.get_connection(
             tenant_id=resolved_tenant_id,

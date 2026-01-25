@@ -1776,6 +1776,7 @@ input DistributorFiltersInput {
   tenantId: ID = null
   tenantUuid: ID = null
   locationId: ID = null
+  stateId: ID = null
 }
 
 type DistributorOption {
@@ -2935,6 +2936,7 @@ type Query {
   publicLocations(requestUrlName: String!, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): LocationCountableConnection!
   locations(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: LocationFiltersInput = null): LocationCountableConnection!
   location(id: ID = null, uuid: ID = null): Location
+  publicStates(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): StateCountableConnection!
   states(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): StateCountableConnection!
   state(id: ID = null, uuid: ID = null): State
   timezones(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): TimeZoneCountableConnection!
@@ -3623,6 +3625,7 @@ input RetailerFiltersInput {
   tenantId: ID = null
   tenantUuid: ID = null
   locationId: ID = null
+  stateId: ID = null
 }
 
 type RetailerOption {
@@ -4588,13 +4591,13 @@ type UserType {
   isActive: Boolean!
   dateJoined: DateTime!
   status: UserStatusType!
+  lastName: String
   email: String!
+  id: ID!
   firstName: String
 
   """Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only."""
   username: String!
-  id: ID!
-  lastName: String
   archived: Boolean!
   verified: Boolean!
 }
