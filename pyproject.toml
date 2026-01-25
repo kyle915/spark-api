@@ -28,7 +28,9 @@ dependencies = [
     "django-extensions>=4.1",
     "ipython>=9.8.0",
     "weasyprint>=67.0",
-    "rq-scheduler>=0.14.0",
+    "google-generativeai>=0.8.0",
+    "grpcio>=1.76.0",
+    "rq-scheduler>=0.14.0"
 ]
 
 [tool.pyrefly]
@@ -46,6 +48,13 @@ dev = [
     "pytest>=8.0.0",
     "pytest-django>=4.8.0",
     "pytest-asyncio>=0.23.0",
+]
+
+[tool.uv]
+# Override dependency resolution to allow google-generativeai despite conflict
+# This allows both google-cloud-storage and google-generativeai to coexist
+override-dependencies = [
+    "google-api-core>=2.11.0,<2.27.0",
 ]
 
 [tool]
