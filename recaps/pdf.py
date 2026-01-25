@@ -78,9 +78,26 @@ def build_recap_pdf(recap, images: Iterable[dict[str, bytes]]) -> bytes:
     def safe(value) -> str:
         return "N/A" if value in (None, "") else str(value)
 
+    def format_user_name(user) -> str:
+        if not user:
+            return "N/A"
+        first_name = getattr(user, "first_name", "") or ""
+        last_name = getattr(user, "last_name", "") or ""
+        full_name = f"{first_name} {last_name}".strip()
+        if full_name:
+            return full_name
+        return getattr(user, "username", None) or str(user)
+
+    def format_user_email(user) -> str:
+        if not user:
+            return "N/A"
+        return getattr(user, "email", None) or "N/A"
+
     ambassador_user = None
     if getattr(recap, "ambassador", None) and getattr(recap.ambassador, "user", None):
         ambassador_user = recap.ambassador.user
+    ambassador_name = format_user_name(ambassador_user)
+    ambassador_email = format_user_email(ambassador_user)
 
     engagements = list(getattr(recap, "consumer_engagements", []).all())
     engagement = engagements[0] if engagements else None
@@ -153,7 +170,8 @@ def build_recap_pdf(recap, images: Iterable[dict[str, bytes]]) -> bytes:
         <div><span>Submitted At</span><strong>{
         format_dt(getattr(recap, "submited_at", None))
     }</strong></div>
-        <div><span>Ambassador</span><strong>{safe(ambassador_user)}</strong></div>
+        <div><span>Ambassador</span><strong>{safe(ambassador_name)}</strong></div>
+        <div><span>Ambassador Email</span><strong>{safe(ambassador_email)}</strong></div>
         <div><span>Job</span><strong>{
         safe(getattr(recap.job, "name", None))
     }</strong></div>
