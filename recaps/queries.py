@@ -34,7 +34,7 @@ class BaseRecapQueriesService(SparkGraphQLMixin):
         """Get the queryset for the service."""
         return (
             self.get_model()
-            .objects.select_related("event", "job")
+            .objects.select_related("event", "job", "retailer")
             .prefetch_related(
                 Prefetch(
                     "recap_files",
@@ -61,12 +61,17 @@ class BaseRecapQueriesService(SparkGraphQLMixin):
         )
 
     def get_filtered_queryset(
-        self, event_id: int | None = None, q: str | None = None
+        self,
+        event_id: int | None = None,
+        retailer_id: int | None = None,
+        q: str | None = None,
     ) -> QuerySet:
         """Get the filtered queryset for the service."""
         queryset = self.get_queryset()
         if event_id:
             queryset = queryset.filter(event_id=event_id)
+        if retailer_id:
+            queryset = queryset.filter(retailer_id=retailer_id)
         if q:
             queryset = queryset.filter(name__icontains=q)
         return queryset
@@ -74,11 +79,12 @@ class BaseRecapQueriesService(SparkGraphQLMixin):
     def get_ordered_queryset(
         self,
         event_id: int | None = None,
+        retailer_id: int | None = None,
         q: str | None = None,
         ordering: tuple[str, ...] | None = None,
     ) -> QuerySet:
         """Return the filtered queryset with ordering applied."""
-        queryset = self.get_filtered_queryset(event_id, q)
+        queryset = self.get_filtered_queryset(event_id, retailer_id, q)
         ordering = ordering or self.ordering
         if ordering:
             queryset = queryset.order_by(*ordering)
@@ -88,6 +94,7 @@ class BaseRecapQueriesService(SparkGraphQLMixin):
         self,
         *,
         event_id: int | None = None,
+        retailer_id: int | None = None,
         q: str | None = None,
         first: int | None = None,
         after: str | None = None,
@@ -100,7 +107,7 @@ class BaseRecapQueriesService(SparkGraphQLMixin):
     ) -> CountableConnection[Model]:
         """Return a Relay compliant connection for the queryset."""
         if queryset is None:
-            queryset = self.get_ordered_queryset(event_id, q, ordering)
+            queryset = self.get_ordered_queryset(event_id, retailer_id, q, ordering)
         try:
             return await connection_from_queryset_async(
                 queryset,
@@ -141,11 +148,17 @@ class RecapQueriesService(BaseRecapQueriesService):
         *,
         user,
         event_id: int | None = None,
+        retailer_id: int | None = None,
         q: str | None = None,
         ordering: tuple[str, ...] | None = None,
     ) -> QuerySet:
         """Return recaps linked to events assigned to the ambassador user."""
-        queryset = self.get_ordered_queryset(event_id=event_id, q=q, ordering=ordering)
+        queryset = self.get_ordered_queryset(
+            event_id=event_id,
+            retailer_id=retailer_id,
+            q=q,
+            ordering=ordering,
+        )
         return queryset.filter(
             event__ambassadors_events__ambassador__user=user
         ).distinct()
@@ -350,10 +363,18 @@ class RecapQueries:
         event_id: int | None = (
             resolve_id_to_int(filters.event_id) if filters and filters.event_id else None
         )
-        queryset = service.get_ordered_queryset(event_id=event_id, q=q)
+        retailer_id: int | None = (
+            resolve_id_to_int(filters.retailer_id)
+            if filters and filters.retailer_id
+            else None
+        )
+        queryset = service.get_ordered_queryset(
+            event_id=event_id, retailer_id=retailer_id, q=q
+        )
 
         return await service.get_connection(
             event_id=event_id,
+            retailer_id=retailer_id,
             q=q,
             first=first,
             after=after,
@@ -497,14 +518,21 @@ class RecapMobileQueries:
         event_id: int | None = (
             resolve_id_to_int(filters.event_id) if filters and filters.event_id else None
         )
+        retailer_id: int | None = (
+            resolve_id_to_int(filters.retailer_id)
+            if filters and filters.retailer_id
+            else None
+        )
         queryset = service.get_ambassador_queryset(
             user=user,
             event_id=event_id,
+            retailer_id=retailer_id,
             q=q,
         )
 
         return await service.get_connection(
             event_id=event_id,
+            retailer_id=retailer_id,
             q=q,
             first=first,
             after=after,
