@@ -185,6 +185,7 @@ class UpdateEventStatusInput(CreateEventStatusInput):
 class CreateLocationInput(BaseNameableInput):
     code: str
     zip: str
+    state_id: strawberry.ID | None = None
 
 
 @strawberry.input

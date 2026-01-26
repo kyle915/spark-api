@@ -1338,6 +1338,7 @@ input CreateLocationInput {
   name: String!
   code: String!
   zip: String!
+  stateId: ID = null
 }
 
 input CreateOrUpdateTenantThemeInput {
@@ -4306,6 +4307,7 @@ input UpdateLocationInput {
   name: String!
   code: String!
   zip: String!
+  stateId: ID = null
   id: ID!
 }
 
