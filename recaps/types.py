@@ -121,6 +121,8 @@ class Recap(Node):
     event_id: strawberry.ID
     job_id: strawberry.ID | None
     job: job_types.Job | None
+    retailer_id: strawberry.ID | None
+    retailer: event_types.Retailer | None
     recap_file: RecapFile
     recap_file_id: strawberry.ID
     created_at: str
