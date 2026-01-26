@@ -3207,6 +3207,8 @@ type Recap implements Node {
   eventId: ID!
   jobId: ID
   job: Job
+  retailerId: ID
+  retailer: Retailer
   recapFile: RecapFile!
   recapFileId: ID!
   createdAt: String!
@@ -3321,6 +3323,7 @@ input RecapFileInput {
 input RecapFiltersInput {
   clientMutationId: ID = null
   eventId: ID = null
+  retailerId: ID = null
 }
 
 type RecapMonthlyDataPoint {
