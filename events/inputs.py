@@ -87,6 +87,7 @@ class ClientFiltersInput(BaseTenantInput):
 @strawberry.input
 class LocationFiltersInput(BaseTenantInput):
     tenant_uuid: strawberry.ID | None = None
+    state_id: strawberry.ID | None = None
 
 
 @strawberry.input
