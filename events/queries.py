@@ -323,6 +323,8 @@ class EventQueries:
                 )
             if filters.date:
                 queryset = queryset.filter(request__date=filters.date)
+            if filters.edited is not None:
+                queryset = queryset.filter(updated_by__isnull=not filters.edited)
 
             if filters.coordinates:
                 from django.db.models import F
@@ -424,6 +426,8 @@ class EventQueries:
                 queryset = queryset.filter(
                     request__distributor__location__state_id=distributor_state_id
                 )
+            if filters.edited is not None:
+                queryset = queryset.filter(updated_by__isnull=not filters.edited)
 
         queryset = EventQueries._filter_events_for_local_today(queryset).order_by(
             "start_time"
@@ -497,6 +501,8 @@ class EventQueries:
                 queryset = queryset.filter(
                     request__distributor__location__state_id=distributor_state_id
                 )
+            if filters.edited is not None:
+                queryset = queryset.filter(updated_by__isnull=not filters.edited)
 
         queryset = EventQueries._filter_events_for_local_today(queryset)
 
@@ -660,6 +666,8 @@ class RequestQueriesService(BaseEventQueriesService):
             .objects.select_related(
                 "distributor__location__state",
                 "retailer__location__state",
+                "created_by",
+                "updated_by",
             )
             .prefetch_related(
                 "requests_stores_manager",
@@ -718,6 +726,8 @@ class RequestQueries:
                 queryset = queryset.filter(distributor_id=distributor_id)
             if filters.date:
                 queryset = queryset.filter(date=filters.date)
+            if filters.edited is not None:
+                queryset = queryset.filter(updated_by__isnull=not filters.edited)
 
         return await service.get_connection(
             tenant_id=resolved_tenant_id,

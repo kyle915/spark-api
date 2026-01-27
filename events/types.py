@@ -9,7 +9,7 @@ from strawberry.relay import Node
 import datetime
 from django.utils import timezone
 from asgiref.sync import sync_to_async
-from tenants.types import TenantType
+from tenants.types import SparkUserType, TenantType
 from utils.gcs import extract_blob_name_from_url, generate_download_url
 
 from . import models
@@ -343,6 +343,8 @@ class Request(Node):
     request_type: RequestType | None = None
     status: RequestStatus | None = None
     tenant_id: strawberry.ID
+    created_by: SparkUserType | None = None
+    updated_by: SparkUserType | None = None
     created_at: str
     updated_at: str
 
