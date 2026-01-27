@@ -371,6 +371,8 @@ class RecapQueries:
         queryset = service.get_ordered_queryset(
             event_id=event_id, retailer_id=retailer_id, q=q
         )
+        if filters and filters.edited is not None:
+            queryset = queryset.filter(updated_by__isnull=not filters.edited)
 
         return await service.get_connection(
             event_id=event_id,
@@ -529,6 +531,8 @@ class RecapMobileQueries:
             retailer_id=retailer_id,
             q=q,
         )
+        if filters and filters.edited is not None:
+            queryset = queryset.filter(updated_by__isnull=not filters.edited)
 
         return await service.get_connection(
             event_id=event_id,

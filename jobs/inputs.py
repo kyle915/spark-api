@@ -158,6 +158,7 @@ class JobFiltersInput(BaseTenantInput):
     event_id: strawberry.ID | None = None
     status: JobStatusFilter | None = None
     statuses: list[JobStatusFilter] | None = None
+    edited: bool | None = None
 
 
 @strawberry.input
