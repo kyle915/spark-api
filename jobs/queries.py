@@ -637,6 +637,8 @@ class JobQueries:
                         tenant_id
                     )
                 queryset = queryset.filter(**status_filter_kwargs).distinct()
+            if filters.edited is not None:
+                queryset = queryset.filter(updated_by__isnull=not filters.edited)
 
         return await service.get_connection(
             tenant_id=tenant_id,
@@ -930,6 +932,8 @@ class AmbassadorJobQueries:
                 queryset = queryset.filter(event_id=event_id)
             except (TypeError, ValueError, GraphQLError):
                 raise GraphQLError("Invalid event ID.")
+        if filters and filters.edited is not None:
+            queryset = queryset.filter(updated_by__isnull=not filters.edited)
         return await service.get_connection(
             tenant_id=tenant_id,
             first=first,

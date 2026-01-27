@@ -1885,6 +1885,7 @@ input EventFiltersInput {
   distributorStateId: ID = null
   date: String = null
   coordinates: CoordinatesFilterInput = null
+  edited: Boolean = null
 }
 
 """
@@ -2238,6 +2239,7 @@ input JobFiltersInput {
   eventId: ID = null
   status: JobStatusFilter = null
   statuses: [JobStatusFilter!] = null
+  edited: Boolean = null
 }
 
 """
@@ -2500,6 +2502,7 @@ input LocationFiltersInput {
   clientMutationId: ID = null
   tenantId: ID = null
   tenantUuid: ID = null
+  stateId: ID = null
 }
 
 enum ManageAmbassadorJobAssignmentAction {
@@ -3324,6 +3327,7 @@ input RecapFiltersInput {
   clientMutationId: ID = null
   eventId: ID = null
   retailerId: ID = null
+  edited: Boolean = null
 }
 
 type RecapMonthlyDataPoint {
@@ -3421,6 +3425,8 @@ type Request implements Node {
   requestType: RequestType
   status: RequestStatus
   tenantId: ID!
+  createdBy: SparkUserType
+  updatedBy: SparkUserType
   createdAt: String!
   updatedAt: String!
   date: String
@@ -3460,6 +3466,7 @@ input RequestFiltersInput {
   retailerId: ID = null
   distributorId: ID = null
   date: String = null
+  edited: Boolean = null
 }
 
 """

@@ -110,8 +110,8 @@ class BaseEventQueriesService(SparkGraphQLMixin):
         after: str | None = None,
         last: int | None = None,
         before: str | None = None,
-        default_limit: int = 10,
-        max_limit: int = 50,
+        default_limit: int = 100,
+        max_limit: int = 100,
         ordering: tuple[str, ...] | None = None,
         queryset: QuerySet | None = None,
     ) -> CountableConnection[Model]:
@@ -323,6 +323,8 @@ class EventQueries:
                 )
             if filters.date:
                 queryset = queryset.filter(request__date=filters.date)
+            if filters.edited is not None:
+                queryset = queryset.filter(updated_by__isnull=not filters.edited)
 
             if filters.coordinates:
                 from django.db.models import F
@@ -424,6 +426,8 @@ class EventQueries:
                 queryset = queryset.filter(
                     request__distributor__location__state_id=distributor_state_id
                 )
+            if filters.edited is not None:
+                queryset = queryset.filter(updated_by__isnull=not filters.edited)
 
         queryset = EventQueries._filter_events_for_local_today(queryset).order_by(
             "start_time"
@@ -497,6 +501,8 @@ class EventQueries:
                 queryset = queryset.filter(
                     request__distributor__location__state_id=distributor_state_id
                 )
+            if filters.edited is not None:
+                queryset = queryset.filter(updated_by__isnull=not filters.edited)
 
         queryset = EventQueries._filter_events_for_local_today(queryset)
 
@@ -660,6 +666,8 @@ class RequestQueriesService(BaseEventQueriesService):
             .objects.select_related(
                 "distributor__location__state",
                 "retailer__location__state",
+                "created_by",
+                "updated_by",
             )
             .prefetch_related(
                 "requests_stores_manager",
@@ -718,6 +726,8 @@ class RequestQueries:
                 queryset = queryset.filter(distributor_id=distributor_id)
             if filters.date:
                 queryset = queryset.filter(date=filters.date)
+            if filters.edited is not None:
+                queryset = queryset.filter(updated_by__isnull=not filters.edited)
 
         return await service.get_connection(
             tenant_id=resolved_tenant_id,
@@ -964,6 +974,11 @@ class LocationQueries:
             tenant_uuid=tenant_uuid,
         )
 
+        queryset = service.get_ordered_queryset(tenant_id=resolved_tenant_id, q=q)
+        if filters and filters.state_id:
+            state_id = _resolve_filter_id(filters.state_id, "state")
+            queryset = queryset.filter(state_id=state_id)
+
         return await service.get_connection(
             tenant_id=resolved_tenant_id,
             q=q,
@@ -973,6 +988,7 @@ class LocationQueries:
             before=before,
             default_limit=50,
             max_limit=100,
+            queryset=queryset,
         )
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
@@ -1067,9 +1083,7 @@ class StateQueries:
         """Get a single state."""
         try:
             service = StateQueriesService()
-            return await service.get_record(
-                id=id, uuid=str(uuid) if uuid else None
-            )
+            return await service.get_record(id=id, uuid=str(uuid) if uuid else None)
         except GraphQLError:
             return None
 
