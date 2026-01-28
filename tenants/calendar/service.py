@@ -2,7 +2,7 @@
 Google Calendar API service for creating, updating, and deleting calendar events.
 """
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date as date_type
 from typing import Optional, Tuple
 from django.conf import settings
 from django.utils import timezone
@@ -137,8 +137,8 @@ class GoogleCalendarService:
         Build a timezone-aware datetime from date and time values.
 
         Args:
-            date: Date object
-            time_value: Time object or None
+            date: Date object or datetime object (used only if time_value is a time object)
+            time_value: Time object, datetime object, or None
 
         Returns:
             Timezone-aware datetime or None if time_value is None
@@ -146,8 +146,23 @@ class GoogleCalendarService:
         if not time_value:
             return None
 
-        dt = datetime.combine(date, time_value)
-        if timezone.is_aware(timezone.now()):
+        # If time_value is already a datetime, use it directly
+        if isinstance(time_value, datetime):
+            dt = time_value
+        # If time_value is a time object, combine with date
+        # Extract date from date parameter if it's a datetime
+        else:
+            if isinstance(date, datetime):
+                date_obj = date.date()
+            elif isinstance(date, date_type):
+                date_obj = date
+            else:
+                raise ValueError(
+                    f"date parameter must be date or datetime, got {type(date)}")
+            dt = datetime.combine(date_obj, time_value)
+
+        # Ensure timezone-aware
+        if not timezone.is_aware(dt):
             dt = timezone.make_aware(dt)
         return dt
 
