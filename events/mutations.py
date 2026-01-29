@@ -1680,6 +1680,8 @@ class PublicRequestMutations:
 class RequestWithDependenciesMutationService(BaseMutationService):
     """Service for request with dependencies mutations."""
 
+    auto_approve: bool = False
+
     def get_model(self) -> Model:
         """Get the model for the service."""
         return models.Request
@@ -1699,6 +1701,15 @@ class RequestWithDependenciesMutationService(BaseMutationService):
                 request.tenant_id = self.tenant_id
 
             if self.is_public:
+                pending_status = models.RequestStatus.objects.get_by_slug(
+                    slug="pending", tenant=request.tenant_id
+                )
+                if not pending_status:
+                    raise GraphQLError(
+                        "Pending status not found. Please ensure you have a status with slug 'pending'."
+                    )
+                request.status = pending_status
+            elif self.auto_approve:
                 approval_status = models.RequestStatus.objects.get_by_slug(
                     slug="approved", tenant=request.tenant_id
                 )
@@ -1767,6 +1778,10 @@ class RequestWithDependenciesMutationService(BaseMutationService):
         """Save the request with dependencies."""
         # validate the input
         await self.validations()
+
+        if self.user:
+            role = getattr(self.user, "role", None)
+            self.auto_approve = await role.is_client if role else False
 
         # set the parameters
         params: dict[str, Any] = self.input.to_dict(

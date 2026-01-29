@@ -10,25 +10,45 @@ from .schema_mobile import schema_mobile
 
 urlpatterns = [
     path(
-        "api/v1/graphql/spark",
-        csrf_exempt(AsyncGraphQLView.as_view(schema=schema_spark)),
+        "api/v483927/graphql/spark",
+        csrf_exempt(
+            AsyncGraphQLView.as_view(
+                schema=schema_spark,
+                graphiql=settings.DEBUG,
+            )
+        ),
     ),
     path(
-        "api/v1/graphql/clients",
-        csrf_exempt(AsyncGraphQLView.as_view(schema=schema_clients)),
+        "api/v615204/graphql/clients",
+        csrf_exempt(
+            AsyncGraphQLView.as_view(
+                schema=schema_clients,
+                graphiql=settings.DEBUG,
+            )
+        ),
     ),
     path(
-        "api/v1/graphql/ambassadors",
-        csrf_exempt(AsyncGraphQLView.as_view(schema=schema_ambassador)),
+        "api/v839471/graphql/ambassadors",
+        csrf_exempt(
+            AsyncGraphQLView.as_view(
+                schema=schema_ambassador,
+                graphiql=settings.DEBUG,
+            )
+        ),
     ),
     path(
-        "api/v1/graphql/mobile",
-        csrf_exempt(AsyncGraphQLView.as_view(schema=schema_mobile)),
+        "api/v270986/graphql/mobile",
+        csrf_exempt(
+            AsyncGraphQLView.as_view(
+                schema=schema_mobile,
+                graphiql=settings.DEBUG,
+            )
+        ),
     ),
 ]
 
 # Add RQ dashboard in DEBUG mode
 if settings.DEBUG:
     urlpatterns += [
-        path('django-rq/', include('django_rq.urls')),
+        path("django-rq/", include("django_rq.urls")),
     ]
