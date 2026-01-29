@@ -95,7 +95,7 @@ jobs:
 
             for i in {1..12}; do
               HEALTH_RESPONSE=$(curl -s -w "\n%{http_code}" \
-                -X POST http://localhost/api/v1/graphql/spark \
+                -X POST http://localhost/api/v483927/graphql/spark \
                 -H "Host: spark-api-prod.igniteproductions.co" \
                 -H "Content-Type: application/json" \
                 -d '{"query":"query { healthcheck }"}')
