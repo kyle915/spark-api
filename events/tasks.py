@@ -27,6 +27,9 @@ def sync_event_to_google_calendar(user_id: int, event_id: int):
     try:
         user = User.objects.get(id=user_id)
         event = Event.objects.get(id=event_id)
+        logger.info(
+            f"Syncing event {event.name} to Google Calendar for user {user.pk}"
+        )
 
         # Check if user has active Google Calendar connection
         try:
