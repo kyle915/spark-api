@@ -299,7 +299,8 @@ class RequestStatus(WithDefaultAttribute, models.Model):
             # Set the create event flag to false if the current status is set to true
             if self.create_event:
                 (
-                    RequestStatus.objects.filter(tenant=self.tenant, create_event=True)
+                    RequestStatus.objects.filter(
+                        tenant=self.tenant, create_event=True)
                     .exclude(pk=self.pk)
                     .update(create_event=False)
                 )
@@ -614,6 +615,21 @@ class Event(models.Model):
     )
     status = models.ForeignKey(
         EventStatus,
+        on_delete=models.RESTRICT,
+        null=True,
+        blank=True,
+        related_name="events",
+    )
+
+    retailer = models.ForeignKey(
+        Retailer,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="events",
+    )
+    distributor = models.ForeignKey(
+        Distributor,
         on_delete=models.RESTRICT,
         null=True,
         blank=True,

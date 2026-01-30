@@ -3,7 +3,6 @@ Tests for Google Calendar RQ jobs.
 
 This module tests:
 - sync_event_to_google_calendar
-- update_event_in_google_calendar
 - sync_event_to_all_connected_users
 """
 import pytest
@@ -17,7 +16,6 @@ from events.models import Client, Distributor, Retailer, Location
 from ambassadors.models import Ambassador, AmbassadorEvent
 from events.tasks import (
     sync_event_to_google_calendar,
-    update_event_in_google_calendar,
     sync_event_to_all_connected_users
 )
 from utils.utils import ROLE_ID
@@ -178,159 +176,39 @@ class TestGoogleCalendarTasks:
         assert result is None  # Task doesn't return value
 
     @patch('events.tasks.GoogleCalendarService')
-    def test_sync_event_to_google_calendar_skips_when_event_has_no_request(
-        self,
-        mock_service_class,
-    ):
-        """Event without request should not be synced for any role."""
+    def test_sync_event_to_google_calendar_user_not_found(self, mock_service_class):
+        """Test that sync raises User.DoesNotExist when user doesn't exist."""
         mock_service = MagicMock()
         mock_service_class.return_value = mock_service
 
-        # Remove the request from the event
-        self.event.request = None
-        self.event.save()
-
-        result = sync_event_to_google_calendar(self.user.id, self.event.id)
-
-        # Service should never be called
-        mock_service_class.assert_not_called()
-        assert result is None
-
-    @patch('events.tasks.GoogleCalendarService')
-    def test_sync_event_to_google_calendar_skips_when_event_not_approved(
-        self,
-        mock_service_class,
-    ):
-        """Event with a non-approved status should not be synced."""
-        mock_service = MagicMock()
-        mock_service_class.return_value = mock_service
-
-        # Create a non-approved status and assign it to the event
-        draft_status = EventStatus.objects.create(
-            name="Draft",
-            tenant=self.tenant,
-            created_by=self.user,
-        )
-        self.event.status = draft_status
-        self.event.save()
-
-        result = sync_event_to_google_calendar(self.user.id, self.event.id)
+        with pytest.raises(User.DoesNotExist):
+            sync_event_to_google_calendar(99999, self.event.id)
 
         mock_service_class.assert_not_called()
-        assert result is None
 
     @patch('events.tasks.GoogleCalendarService')
-    def test_sync_event_to_google_calendar_ambassador_requires_approved_link(
-        self,
-        mock_service_class,
-    ):
-        """Ambassador should not receive event without an approved AmbassadorEvent link."""
+    def test_sync_event_to_google_calendar_event_not_found(self, mock_service_class):
+        """Test that sync raises Event.DoesNotExist when event doesn't exist."""
         mock_service = MagicMock()
         mock_service_class.return_value = mock_service
 
-        # Create ambassador role and user
-        ambassador_role, _ = Role.objects.update_or_create(
-            pk=ROLE_ID.Ambassadors,
-            defaults={
-                "name": "Ambassador",
-                "slug": Role.AMBASSADOR_SLUG,
-            },
-        )
-        ambassador_user = User.objects.create_user(
-            username="ambassador",
-            email="ambassador@test.com",
-            password="testpass123",
-            role=ambassador_role,
-        )
-        TenantedUser.objects.create(
-            user=ambassador_user,
-            tenant=self.tenant,
-            is_active=True,
-            created_by=self.user,
-        )
-        # Active Google Calendar connection for ambassador
-        connection = GoogleCalendarConnection.objects.create(
-            user=ambassador_user,
-            created_by=ambassador_user,
-            updated_by=ambassador_user,
-            is_active=True,
-            calendar_id="primary",
-        )
-        connection.set_access_token("test_access_token")
-        connection.set_refresh_token("test_refresh_token")
-        connection.token_expiry = timezone.now() + timedelta(hours=1)
-        connection.save()
+        with pytest.raises(Event.DoesNotExist):
+            sync_event_to_google_calendar(self.user.id, 99999)
 
-        # No AmbassadorEvent link created here
-        result = sync_event_to_google_calendar(
-            ambassador_user.id, self.event.id)
-
-        # Should be skipped by _user_should_receive_event
         mock_service_class.assert_not_called()
-        assert result is None
 
     @patch('events.tasks.GoogleCalendarService')
-    def test_sync_event_to_google_calendar_ambassador_with_approved_link(
-        self,
-        mock_service_class,
-    ):
-        """Ambassador should receive event when there is an approved AmbassadorEvent link."""
+    def test_sync_event_to_google_calendar_sync_fails(self, mock_service_class):
+        """Test that sync raises exception when sync_event returns None."""
         mock_service = MagicMock()
+        mock_service.sync_event.return_value = None
         mock_service_class.return_value = mock_service
 
-        # Create ambassador role and user
-        ambassador_role, _ = Role.objects.update_or_create(
-            pk=ROLE_ID.Ambassadors,
-            defaults={
-                "name": "Ambassador",
-                "slug": Role.AMBASSADOR_SLUG,
-            },
-        )
-        ambassador_user = User.objects.create_user(
-            username="ambassador2",
-            email="ambassador2@test.com",
-            password="testpass123",
-            role=ambassador_role,
-        )
-        TenantedUser.objects.create(
-            user=ambassador_user,
-            tenant=self.tenant,
-            is_active=True,
-            created_by=self.user,
-        )
-        # Active Google Calendar connection for ambassador
-        connection = GoogleCalendarConnection.objects.create(
-            user=ambassador_user,
-            created_by=ambassador_user,
-            updated_by=ambassador_user,
-            is_active=True,
-            calendar_id="primary",
-        )
-        connection.set_access_token("test_access_token")
-        connection.set_refresh_token("test_refresh_token")
-        connection.token_expiry = timezone.now() + timedelta(hours=1)
-        connection.save()
+        with pytest.raises(Exception, match="Failed to create Google Calendar event"):
+            sync_event_to_google_calendar(self.user.id, self.event.id)
 
-        # Create ambassador and approved AmbassadorEvent link
-        ambassador = Ambassador.objects.create(
-            user=ambassador_user,
-            created_by=self.user,
-        )
-        AmbassadorEvent.objects.create(
-            ambassador=ambassador,
-            tenant=self.tenant,
-            event=self.event,
-            is_approved=True,
-            created_by=self.user,
-        )
-
-        result = sync_event_to_google_calendar(
-            ambassador_user.id, self.event.id)
-
-        # Service should be called for the ambassador user
-        mock_service_class.assert_called_once_with(ambassador_user)
+        mock_service_class.assert_called_once_with(self.user)
         mock_service.sync_event.assert_called_once()
-        assert result is None
 
     @patch('events.tasks.GoogleCalendarService')
     def test_sync_event_to_google_calendar_no_connection(self, mock_service_class):
@@ -346,66 +224,24 @@ class TestGoogleCalendarTasks:
         assert result is None
         # Note: Service won't be called if connection check fails, so no need to verify mock
 
-    @patch('events.tasks.GoogleCalendarService')
-    def test_update_event_in_google_calendar_success(self, mock_service_class):
-        """Test successful event update in Google Calendar."""
-        # Mock the service instance and its methods
-        mock_service = MagicMock()
-        mock_service.sync_event.return_value = "google_event_123"
-        # Configure the class to return our mock instance when instantiated
-        mock_service_class.return_value = mock_service
-
-        # Execute task
-        result = update_event_in_google_calendar(
-            self.user.id,
-            self.event.id,
-            "google_event_123"
-        )
-
-        # Verify service was instantiated and called
-        mock_service_class.assert_called_once_with(self.user)
-        mock_service.sync_event.assert_called_once()
-        assert result is None
-
-    @patch('events.tasks.Queues')
-    def test_sync_event_to_all_connected_users(self, mock_queues_class):
-        """Test syncing event to all connected users."""
-        # Create another user with connection
-        user2 = User.objects.create_user(
-            username="testuser2",
-            email="test2@test.com",
-            password="testpass123",
-            role=self.role
-        )
-        TenantedUser.objects.create(
-            user=user2,
-            tenant=self.tenant,
-            is_active=True,
-            created_by=self.user
-        )
-        connection2 = GoogleCalendarConnection.objects.create(
-            user=user2,
-            created_by=user2,
-            updated_by=user2,
-            is_active=True
-        )
-        connection2.set_access_token("test_access_token")
-        connection2.set_refresh_token("test_refresh_token")
-        connection2.token_expiry = timezone.now() + timedelta(hours=1)
-        connection2.save()
-
-        # Mock Queues instance
-        mock_queues = MagicMock()
-        mock_queues_class.return_value = mock_queues
+    @patch('events.jobs.google_calendar_jobs.EventGoogleCalendarJob')
+    def test_sync_event_to_all_connected_users(self, mock_job_class):
+        """Test syncing event to all connected users via EventGoogleCalendarJob."""
+        # Mock the job instance
+        mock_job = MagicMock()
+        mock_job_class.return_value = mock_job
 
         # Execute task
         result = sync_event_to_all_connected_users(
             self.event.id, self.tenant.id)
 
-        # Verify sync jobs were enqueued for both users via our Queues helper
-        assert mock_queues.default.add.call_count == 2
-        calls = mock_queues.default.add.call_args_list
-        # All calls should target sync_event_to_google_calendar with event id
-        assert all(
-            call[0][0] == sync_event_to_google_calendar for call in calls)
+        # Verify job was instantiated with event_id
+        mock_job_class.assert_called_once_with(self.event.id)
+        # Verify handle() was called
+        mock_job.handle.assert_called_once()
         assert result is None
+
+    def test_sync_event_to_all_connected_users_event_not_found(self):
+        """Test that sync_event_to_all_connected_users raises Event.DoesNotExist."""
+        with pytest.raises(Event.DoesNotExist):
+            sync_event_to_all_connected_users(99999, self.tenant.id)
