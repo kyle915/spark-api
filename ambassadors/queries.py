@@ -1,9 +1,10 @@
+import logging
 import asyncio
 import strawberry
 from enum import Enum
 from asgiref.sync import sync_to_async
 from graphql import GraphQLError
-from django.db.models import QuerySet, Model
+from django.db.models import Exists, Model, OuterRef, QuerySet
 
 from ambassadors import types
 from ambassadors import models
@@ -145,8 +146,7 @@ class AmbassadorsTenantQueriesService(BaseQueriesService):
     ) -> int | None:
         """Allow spark-admin/ambassador to query any tenant; clients stay restricted."""
         user = await self.get_user(info)
-        filters_tenant_id = getattr(
-            filters, "tenant_id", None) if filters else None
+        filters_tenant_id = getattr(filters, "tenant_id", None) if filters else None
         role_slug = self.get_role_slug(user)
         resolved_tenant_id: int | None = None
 
@@ -172,8 +172,7 @@ class AmbassadorsTenantQueriesService(BaseQueriesService):
             )
             return tenant.id
         except GraphQLError as exc:
-            membership_error = "not a member of this tenant" in str(
-                exc).lower()
+            membership_error = "not a member of this tenant" in str(exc).lower()
             if membership_error and role_slug != "client":
                 raise GraphQLError("Tenant access denied.") from exc
             raise
@@ -196,9 +195,8 @@ class AmbassadorEventQueriesService(BaseAmbassadorQueriesService):
 
     def get_ambassador_queryset(self, user, filter_by_user: bool = True) -> QuerySet:
         """Return ambassador events, optionally filtered by user."""
-        queryset = (
-            self.get_model()
-            .objects.select_related("ambassador__user", "event__request", "event__status", "event__event_type")
+        queryset = self.get_model().objects.select_related(
+            "ambassador__user", "event__request", "event__status", "event__event_type"
         )
 
         if filter_by_user:
@@ -273,15 +271,13 @@ class AmbassadorEventQueries:
         role_slug = service.get_role_slug(user)
         filter_by_user = role_slug == "ambassador"
 
-        queryset = service.get_ambassador_queryset(
-            user, filter_by_user=filter_by_user)
+        queryset = service.get_ambassador_queryset(user, filter_by_user=filter_by_user)
         if q:
             queryset = queryset.filter(event__name__icontains=q)
 
         if filters:
             if filters.ambassador_uuid:
-                queryset = queryset.filter(
-                    ambassador__uuid=filters.ambassador_uuid)
+                queryset = queryset.filter(ambassador__uuid=filters.ambassador_uuid)
             if filters.event_id:
                 event_id = _resolve_filter_id(filters.event_id, "event")
                 queryset = queryset.filter(event_id=event_id)
@@ -290,14 +286,11 @@ class AmbassadorEventQueries:
                 queryset = queryset.filter(event__event_type_id__in=type_ids)
             if filters.statuses:
                 status_slugs = [status.value for status in filters.statuses]
-                queryset = queryset.filter(
-                    event__status__slug__in=status_slugs)
+                queryset = queryset.filter(event__status__slug__in=status_slugs)
             if filters.start_date:
-                queryset = queryset.filter(
-                    event__request__date__gte=filters.start_date)
+                queryset = queryset.filter(event__request__date__gte=filters.start_date)
             if filters.end_date:
-                queryset = queryset.filter(
-                    event__request__date__lte=filters.end_date)
+                queryset = queryset.filter(event__request__date__lte=filters.end_date)
 
         queryset = queryset.order_by(*service.ordering)
 
@@ -425,9 +418,13 @@ class AmbassadorManagementQueries:
 
         try:
             if id:
-                ambassador = await sync_to_async(models.Ambassador.objects.select_related("user").get)(id=id)
+                ambassador = await sync_to_async(
+                    models.Ambassador.objects.select_related("user").get
+                )(id=id)
             else:
-                ambassador = await sync_to_async(models.Ambassador.objects.select_related("user").get)(uuid=uuid)
+                ambassador = await sync_to_async(
+                    models.Ambassador.objects.select_related("user").get
+                )(uuid=uuid)
             return ambassador
         except models.Ambassador.DoesNotExist:
             return None
@@ -494,9 +491,7 @@ class AmbassadorProfileQueries:
             return await sync_to_async(list)(queryset)
 
         async def fetch_notes():
-            queryset = models.AmbassadorNote.objects.filter(
-                ambassador_id=ambassador_id
-            )
+            queryset = models.AmbassadorNote.objects.filter(ambassador_id=ambassador_id)
             return await sync_to_async(list)(queryset)
 
         async def fetch_work_history():
@@ -548,6 +543,7 @@ class AmbassadorReviewQueries:
     ) -> CountableConnection[types.AmbassadorReviewType]:
         """Get ambassador reviews with filters (authenticated users only)."""
         from .services import AmbassadorReviewQueriesService
+
         service = AmbassadorReviewQueriesService()
         return await service.get_ambassador_reviews(
             info=info,
@@ -566,12 +562,15 @@ class AmbassadorReviewQueries:
     ) -> types.AmbassadorReviewType | None:
         """Get a single ambassador review by ID (authenticated users only)."""
         from .models import AmbassadorReview
+
         try:
+
             @sync_to_async
             def get_review():
                 return AmbassadorReview.objects.select_related(
                     "ambassador", "client", "tenant"
                 ).get(pk=int(review_id))
+
             return await get_review()
         except (AmbassadorReview.DoesNotExist, ValueError, TypeError):
             return None
@@ -593,6 +592,7 @@ class AmbassadorNoteQueries:
     ) -> CountableConnection[types.AmbassadorNoteType]:
         """Get ambassador notes with filters (authenticated users only)."""
         from .services import AmbassadorNoteQueriesService
+
         service = AmbassadorNoteQueriesService()
         return await service.get_ambassador_notes(
             info=info,
@@ -611,12 +611,15 @@ class AmbassadorNoteQueries:
     ) -> types.AmbassadorNoteType | None:
         """Get a single ambassador note by ID (authenticated users only)."""
         from .models import AmbassadorNote
+
         try:
+
             @sync_to_async
             def get_note():
                 return AmbassadorNote.objects.select_related(
                     "ambassador", "tenant", "created_by", "updated_by"
                 ).get(pk=int(note_id))
+
             return await get_note()
         except (AmbassadorNote.DoesNotExist, ValueError, TypeError):
             return None
@@ -638,6 +641,7 @@ class SkillQueries:
     ) -> CountableConnection[types.SkillType]:
         """Get skills with filters (authenticated users only)."""
         from .services import SkillQueriesService
+
         service = SkillQueriesService()
         return await service.get_skills(
             info=info,
@@ -656,6 +660,7 @@ class SkillQueries:
     ) -> types.SkillType | None:
         """Get a single skill by ID (authenticated users only)."""
         from .models import Skill
+
         try:
             skill = await Skill.objects._by_id(skill_id)
             return skill
@@ -679,6 +684,7 @@ class AmbassadorSkillQueries:
     ) -> CountableConnection[types.AmbassadorSkillType]:
         """Get ambassador skills with filters (authenticated users only)."""
         from .services import AmbassadorSkillQueriesService
+
         service = AmbassadorSkillQueriesService()
         return await service.get_ambassador_skills(
             info=info,
@@ -697,6 +703,7 @@ class AmbassadorSkillQueries:
     ) -> types.AmbassadorSkillType | None:
         """Get a single ambassador skill by ID (authenticated users only)."""
         from .models import AmbassadorSkill
+
         try:
             ambassador_skill = await AmbassadorSkill.objects._by_id(ambassador_skill_id)
             return ambassador_skill
@@ -811,17 +818,16 @@ class AttendanceQueriesService(BaseQueriesService):
         if filters.ambassador_job_id:
             try:
                 ambassador_job_id = resolve_id_to_int(filters.ambassador_job_id)
-                ambassador_job = job_models.AmbassadorJob.objects.get(
-                    id=ambassador_job_id
-                )
-                queryset = queryset.filter(
-                    ambassador_id=ambassador_job.ambassador_id,
-                    job_id=ambassador_job.job_id,
-                )
             except (TypeError, ValueError, GraphQLError):
                 raise GraphQLError("Invalid ambassador job ID.")
-            except job_models.AmbassadorJob.DoesNotExist:
-                raise GraphQLError("Ambassador job not found.")
+            ambassador_job_match = job_models.AmbassadorJob.objects.filter(
+                id=ambassador_job_id,
+                ambassador_id=OuterRef("ambassador_id"),
+                job_id=OuterRef("job_id"),
+            )
+            queryset = queryset.annotate(
+                ambassador_job_match=Exists(ambassador_job_match)
+            ).filter(ambassador_job_match=True)
         if filters.event_id:
             try:
                 event_id = resolve_id_to_int(filters.event_id)
@@ -830,11 +836,8 @@ class AttendanceQueriesService(BaseQueriesService):
                 raise GraphQLError("Invalid event ID.")
         if filters.attendance_status_id:
             try:
-                attendance_status_id = resolve_id_to_int(
-                    filters.attendance_status_id)
-                queryset = queryset.filter(
-                    attendance_status_id=attendance_status_id
-                )
+                attendance_status_id = resolve_id_to_int(filters.attendance_status_id)
+                queryset = queryset.filter(attendance_status_id=attendance_status_id)
             except (TypeError, ValueError, GraphQLError):
                 raise GraphQLError("Invalid attendance status ID.")
         if filters.source_id:
@@ -845,8 +848,7 @@ class AttendanceQueriesService(BaseQueriesService):
                 raise GraphQLError("Invalid source ID.")
         if filters.attendace_type_id:
             try:
-                attendace_type_id = resolve_id_to_int(
-                    filters.attendace_type_id)
+                attendace_type_id = resolve_id_to_int(filters.attendace_type_id)
                 queryset = queryset.filter(attendace_type_id=attendace_type_id)
             except (TypeError, ValueError, GraphQLError):
                 raise GraphQLError("Invalid attendance type ID.")
