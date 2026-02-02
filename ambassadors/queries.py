@@ -1080,6 +1080,37 @@ class AmbassadorGroupQueries:
 @strawberry.type
 class AttendanceMobileQueries:
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def attendance_types(
+        self,
+        info: strawberry.Info,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        q: str | None = None,
+    ) -> CountableConnection[types.AttendanceType]:
+        service = AttendanceTypeQueriesService()
+        await service.get_user(info)
+        return await service.get_connection(
+            q=q,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+        )
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def attendance_type(
+        self, info: strawberry.Info, id: strawberry.ID
+    ) -> types.AttendanceType | None:
+        try:
+            service = AttendanceTypeQueriesService()
+            await service.get_user(info)
+            return await service.get_record(id)
+        except GraphQLError:
+            return None
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def attendances_mobile(
         self,
         info: strawberry.Info,
