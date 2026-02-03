@@ -307,6 +307,7 @@ class CreateRequestInput(BaseNameableInput):
     start_time: str
     end_time: str
     address: str
+    notes: str | None = None
     coordinates: List[float]
     timezone_id: strawberry.ID
     request_type_id: strawberry.ID
@@ -334,6 +335,7 @@ class UpdateRequestInput(BaseNameableInput):
     start_time: str
     end_time: str
     address: str
+    notes: str | None = None
     coordinates: List[float]
     timezone_id: strawberry.ID
     request_type_id: strawberry.ID
@@ -352,6 +354,7 @@ class CreateRequestWithDependenciesInput(BaseNameableInput):
     start_time: str
     end_time: str
     address: str
+    notes: str | None = None
     coordinates: List[float]
     timezone_id: strawberry.ID
     request_type_id: strawberry.ID
