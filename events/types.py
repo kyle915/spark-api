@@ -392,6 +392,8 @@ class Event(Node):
     is_national: bool
     notes: str | None = None
     request: Request | None = None
+    retailer: Retailer | None = None
+    distributor: Distributor | None = None
     created_at: str
     updated_at: str
     tenant_id: strawberry.ID

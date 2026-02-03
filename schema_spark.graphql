@@ -1229,6 +1229,8 @@ input CreateEventInput {
   name: String!
   eventTypeId: ID!
   requestId: ID = null
+  retailerId: ID = null
+  distributorId: ID = null
   timezoneId: ID = null
   date: String!
   address: String!
@@ -1795,7 +1797,7 @@ type DjangoImageType {
 }
 
 """
-Event(id, uuid, name, date, coordinates, timezone, tenant, request, event_type, status, start_time, end_time, address, notes, is_national, created_by, updated_by, created_at, updated_at)
+Event(id, uuid, name, date, coordinates, timezone, tenant, request, event_type, status, retailer, distributor, start_time, end_time, address, notes, is_national, created_by, updated_by, created_at, updated_at)
 """
 type Event implements Node {
   """The Globally Unique ID of this object"""
@@ -1807,6 +1809,8 @@ type Event implements Node {
   isNational: Boolean!
   notes: String
   request: Request
+  retailer: Retailer
+  distributor: Distributor
   createdAt: String!
   updatedAt: String!
   tenantId: ID!
@@ -1881,6 +1885,8 @@ input EventFiltersInput {
   eventTypeId: ID = null
   eventStatus: EventStatusFilterEnum = null
   requestId: ID = null
+  retailerId: ID = null
+  distributorId: ID = null
   retailerStateId: ID = null
   distributorStateId: ID = null
   date: String = null
@@ -4196,6 +4202,8 @@ input UpdateEventInput {
   name: String!
   eventTypeId: ID!
   requestId: ID = null
+  retailerId: ID = null
+  distributorId: ID = null
   timezoneId: ID = null
   date: String!
   address: String!
