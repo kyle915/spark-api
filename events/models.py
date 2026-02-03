@@ -299,8 +299,7 @@ class RequestStatus(WithDefaultAttribute, models.Model):
             # Set the create event flag to false if the current status is set to true
             if self.create_event:
                 (
-                    RequestStatus.objects.filter(
-                        tenant=self.tenant, create_event=True)
+                    RequestStatus.objects.filter(tenant=self.tenant, create_event=True)
                     .exclude(pk=self.pk)
                     .update(create_event=False)
                 )
@@ -315,6 +314,7 @@ class Request(models.Model):
     end_time = models.DateTimeField(null=True, blank=True)
     address = models.CharField(max_length=100)
     requestor_email = models.CharField(max_length=254, null=True)
+    notes = models.TextField(null=True)
     coordinates = ArrayField(
         models.FloatField(),
         size=2,

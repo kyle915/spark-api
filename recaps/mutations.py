@@ -401,7 +401,13 @@ class RecapMutationService(SparkGraphQLMixin):
                 # Update the recap
                 recap.name = self.input.name
                 recap.event = event
+                recap.products_sold = self.input.products_sold
+                recap.total_earnings = self.input.total_earnings
                 recap.account_spend_amount = self.input.account_spend_amount
+                if self.input.consumer_engagements is not None:
+                    recap.total_engagements = (
+                        self.input.consumer_engagements.total_consumer
+                    )
                 if self.input.job_id is not None:
                     recap.job = job
                 if self.input.retailer_id is not None:
@@ -410,6 +416,153 @@ class RecapMutationService(SparkGraphQLMixin):
                     recap.ambassador = ambassador
                 recap.updated_by = self.user
                 recap.save()
+
+                if self.input.consumer_feedback is not None:
+                    consumer_feedback = (
+                        models.ConsumerFeedback.objects.filter(recap=recap)
+                        .order_by("-created_at")
+                        .first()
+                    )
+                    if consumer_feedback:
+                        consumer_feedback.demographics = (
+                            self.input.consumer_feedback.demographics
+                        )
+                        consumer_feedback.feedback = self.input.consumer_feedback.feedback
+                        consumer_feedback.quotes = self.input.consumer_feedback.quotes
+                        consumer_feedback.positive_stories = (
+                            self.input.consumer_feedback.positive_stories
+                        )
+                        consumer_feedback.reasons_to_decline = (
+                            self.input.consumer_feedback.reasons_to_decline
+                        )
+                        consumer_feedback.updated_by = self.user
+                        consumer_feedback.save(
+                            update_fields=[
+                                "demographics",
+                                "feedback",
+                                "quotes",
+                                "positive_stories",
+                                "reasons_to_decline",
+                                "updated_by",
+                                "updated_at",
+                            ]
+                        )
+                    else:
+                        models.ConsumerFeedback.objects.create(
+                            recap=recap,
+                            created_by=self.user,
+                            demographics=self.input.consumer_feedback.demographics,
+                            feedback=self.input.consumer_feedback.feedback,
+                            quotes=self.input.consumer_feedback.quotes,
+                            positive_stories=self.input.consumer_feedback.positive_stories,
+                            reasons_to_decline=self.input.consumer_feedback.reasons_to_decline,
+                        )
+
+                if self.input.account_feedback is not None:
+                    account_feedback = (
+                        models.AccountFeedback.objects.filter(recap=recap)
+                        .order_by("-created_at")
+                        .first()
+                    )
+                    if account_feedback:
+                        account_feedback.do_differently_feedback = (
+                            self.input.account_feedback.do_differently_feedback
+                        )
+                        account_feedback.feedback = self.input.account_feedback.feedback
+                        account_feedback.corpo_card = self.input.account_feedback.corpo_card
+                        account_feedback.updated_by = self.user
+                        account_feedback.save(
+                            update_fields=[
+                                "do_differently_feedback",
+                                "feedback",
+                                "corpo_card",
+                                "updated_by",
+                                "updated_at",
+                            ]
+                        )
+                    else:
+                        models.AccountFeedback.objects.create(
+                            recap=recap,
+                            created_by=self.user,
+                            do_differently_feedback=self.input.account_feedback.do_differently_feedback,
+                            feedback=self.input.account_feedback.feedback,
+                            corpo_card=self.input.account_feedback.corpo_card,
+                        )
+
+                if self.input.consumer_engagements is not None:
+                    consumer_engagement = (
+                        models.ConsumerEngagements.objects.filter(recap=recap)
+                        .order_by("-created_at")
+                        .first()
+                    )
+                    if consumer_engagement:
+                        consumer_engagement.total_consumer = (
+                            self.input.consumer_engagements.total_consumer
+                        )
+                        consumer_engagement.first_time_consumers = (
+                            self.input.consumer_engagements.first_time_consumers
+                        )
+                        consumer_engagement.brand_aware_consumers = (
+                            self.input.consumer_engagements.brand_aware_consumers
+                        )
+                        consumer_engagement.willing_to_purchase_consumers = (
+                            self.input.consumer_engagements.willing_to_purchase_consumers
+                        )
+                        consumer_engagement.not_willing_consumers = (
+                            self.input.consumer_engagements.not_willing_consumers
+                        )
+                        consumer_engagement.updated_by = self.user
+                        consumer_engagement.save(
+                            update_fields=[
+                                "total_consumer",
+                                "first_time_consumers",
+                                "brand_aware_consumers",
+                                "willing_to_purchase_consumers",
+                                "not_willing_consumers",
+                                "updated_by",
+                                "updated_at",
+                            ]
+                        )
+                    else:
+                        models.ConsumerEngagements.objects.create(
+                            recap=recap,
+                            created_by=self.user,
+                            total_consumer=self.input.consumer_engagements.total_consumer,
+                            first_time_consumers=self.input.consumer_engagements.first_time_consumers,
+                            brand_aware_consumers=self.input.consumer_engagements.brand_aware_consumers,
+                            willing_to_purchase_consumers=self.input.consumer_engagements.willing_to_purchase_consumers,
+                            not_willing_consumers=self.input.consumer_engagements.not_willing_consumers,
+                        )
+
+                if self.input.product_samples is not None:
+                    models.ProductSamples.objects.filter(recap=recap).delete()
+                    for sample in self.input.product_samples:
+                        try:
+                            product_id = resolve_id_to_int(sample.product_id)
+                            models.ProductSamples.objects.create(
+                                recap=recap,
+                                created_by=self.user,
+                                product_id=product_id,
+                                quantity=sample.quantity,
+                            )
+                        except (TypeError, ValueError, GraphQLError):
+                            raise GraphQLError(f"Invalid product ID: {sample.product_id}")
+
+                if self.input.sales_performance is not None:
+                    models.SalesPerformance.objects.filter(recap=recap).delete()
+                    for sale in self.input.sales_performance:
+                        try:
+                            product_id = resolve_id_to_int(sale.product_id)
+                            type_of_good_id = resolve_id_to_int(sale.type_of_good_id)
+                            models.SalesPerformance.objects.create(
+                                recap=recap,
+                                created_by=self.user,
+                                product_id=product_id,
+                                type_of_good_id=type_of_good_id,
+                                price=sale.price,
+                            )
+                        except (TypeError, ValueError, GraphQLError):
+                            raise GraphQLError("Invalid product or type of good ID")
 
                 for recap_file in final_files:
                     if recap_file.recap_id != recap.id:
