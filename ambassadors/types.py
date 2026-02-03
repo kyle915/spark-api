@@ -22,6 +22,7 @@ class Ambassador(Node):
     uuid: str
     rating: int
     address: str | None
+    phone: str | None
     coordinates: list[float]
     is_active: bool
     user: SparkUserType

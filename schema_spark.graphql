@@ -63,7 +63,7 @@ type AddAmbassadorsToGroupResponse {
 }
 
 """
-Ambassador(id, uuid, rating, address, coordinates, is_active, user, created_by, updated_by, created_at, updated_at)
+Ambassador(id, uuid, rating, address, phone, coordinates, is_active, user, created_by, updated_by, created_at, updated_at)
 """
 type Ambassador implements Node {
   """The Globally Unique ID of this object"""
@@ -71,6 +71,7 @@ type Ambassador implements Node {
   uuid: String!
   rating: Int!
   address: String
+  phone: String
   coordinates: [Float!]!
   isActive: Boolean!
   user: SparkUserType!
@@ -1129,6 +1130,7 @@ input CreateAmbassadorWithUserInput {
   password1: String!
   password2: String!
   address: String = null
+  phone: String = null
   coordinates: [Float!] = null
   isActive: Boolean = null
 }
@@ -1381,6 +1383,7 @@ input CreatePublicAmbassadorInput {
   password1: String!
   password2: String!
   address: String = null
+  phone: String = null
   coordinates: [Float!] = null
 }
 
@@ -4553,6 +4556,7 @@ input UpsertAmbassadorProfileInput {
   ambassadorId: ID = null
   ambassadorUuid: ID = null
   address: String = null
+  phone: String = null
   coordinates: [Float!] = null
   isActive: Boolean = null
   rating: Int = null
