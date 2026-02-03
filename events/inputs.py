@@ -50,6 +50,8 @@ class EventFiltersInput(BaseTenantInput):
     event_type_id: strawberry.ID | None = None
     event_status: EventStatusFilterEnum | None = None
     request_id: strawberry.ID | None = None
+    retailer_id: strawberry.ID | None = None
+    distributor_id: strawberry.ID | None = None
     retailer_state_id: strawberry.ID | None = None
     distributor_state_id: strawberry.ID | None = None
     date: str | None = None
@@ -134,6 +136,8 @@ class BaseNameableInput(BaseTenantInput):
 class CreateEventInput(BaseNameableInput):
     event_type_id: strawberry.ID
     request_id: strawberry.ID | None = None
+    retailer_id: strawberry.ID | None = None
+    distributor_id: strawberry.ID | None = None
     timezone_id: strawberry.ID | None = None
     date: str
     address: str
@@ -303,6 +307,7 @@ class CreateRequestInput(BaseNameableInput):
     start_time: str
     end_time: str
     address: str
+    notes: str | None = None
     coordinates: List[float]
     timezone_id: strawberry.ID
     request_type_id: strawberry.ID
@@ -330,6 +335,7 @@ class UpdateRequestInput(BaseNameableInput):
     start_time: str
     end_time: str
     address: str
+    notes: str | None = None
     coordinates: List[float]
     timezone_id: strawberry.ID
     request_type_id: strawberry.ID
@@ -348,6 +354,7 @@ class CreateRequestWithDependenciesInput(BaseNameableInput):
     start_time: str
     end_time: str
     address: str
+    notes: str | None = None
     coordinates: List[float]
     timezone_id: strawberry.ID
     request_type_id: strawberry.ID

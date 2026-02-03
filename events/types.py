@@ -303,6 +303,7 @@ class Request(Node):
         return _serialize_dt(_get_field(self, "end_time"), offset_minutes=offset)
 
     address: str
+    notes: str | None = None
     coordinates: List[float]
     requestor_email: str | None = None
     client_name: str | None = None
@@ -392,6 +393,8 @@ class Event(Node):
     is_national: bool
     notes: str | None = None
     request: Request | None = None
+    retailer: Retailer | None = None
+    distributor: Distributor | None = None
     created_at: str
     updated_at: str
     tenant_id: strawberry.ID
