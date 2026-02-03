@@ -119,6 +119,16 @@ class BaseSocialAuthMutations:
                     client_mutation_id=client_mutation_id,
                 )
 
+            user_exists = await sync_to_async(
+                User.objects.filter(email=email).exists
+            )()
+            if not user_exists:
+                return SocialAuthResponse(
+                    success=False,
+                    message="Email not registered in the platform",
+                    client_mutation_id=client_mutation_id,
+                )
+
             # Authenticate or create user
             user, is_new = await authenticate_or_create_social_user(
                 email=email,

@@ -18,6 +18,7 @@ from django.db.models import (
     Func,
     IntegerField,
     Model,
+    Q,
     QuerySet,
     Value,
     When,
@@ -307,19 +308,34 @@ class EventQueries:
             if filters.request_id:
                 request_id = _resolve_filter_id(filters.request_id, "request")
                 queryset = queryset.filter(request_id=request_id)
+            if filters.retailer_id:
+                retailer_id = _resolve_filter_id(filters.retailer_id, "retailer")
+                queryset = queryset.filter(
+                    Q(retailer_id=retailer_id) | Q(request__retailer_id=retailer_id)
+                )
+            if filters.distributor_id:
+                distributor_id = _resolve_filter_id(
+                    filters.distributor_id, "distributor"
+                )
+                queryset = queryset.filter(
+                    Q(distributor_id=distributor_id)
+                    | Q(request__distributor_id=distributor_id)
+                )
             if filters.retailer_state_id:
                 retailer_state_id = _resolve_filter_id(
                     filters.retailer_state_id, "retailer state"
                 )
                 queryset = queryset.filter(
-                    request__retailer__location__state_id=retailer_state_id
+                    Q(retailer__location__state_id=retailer_state_id)
+                    | Q(request__retailer__location__state_id=retailer_state_id)
                 )
             if filters.distributor_state_id:
                 distributor_state_id = _resolve_filter_id(
                     filters.distributor_state_id, "distributor state"
                 )
                 queryset = queryset.filter(
-                    request__distributor__location__state_id=distributor_state_id
+                    Q(distributor__location__state_id=distributor_state_id)
+                    | Q(request__distributor__location__state_id=distributor_state_id)
                 )
             if filters.date:
                 queryset = queryset.filter(request__date=filters.date)
@@ -412,19 +428,34 @@ class EventQueries:
             if filters.request_id:
                 request_id = _resolve_filter_id(filters.request_id, "request")
                 queryset = queryset.filter(request_id=request_id)
+            if filters.retailer_id:
+                retailer_id = _resolve_filter_id(filters.retailer_id, "retailer")
+                queryset = queryset.filter(
+                    Q(retailer_id=retailer_id) | Q(request__retailer_id=retailer_id)
+                )
+            if filters.distributor_id:
+                distributor_id = _resolve_filter_id(
+                    filters.distributor_id, "distributor"
+                )
+                queryset = queryset.filter(
+                    Q(distributor_id=distributor_id)
+                    | Q(request__distributor_id=distributor_id)
+                )
             if filters.retailer_state_id:
                 retailer_state_id = _resolve_filter_id(
                     filters.retailer_state_id, "retailer state"
                 )
                 queryset = queryset.filter(
-                    request__retailer__location__state_id=retailer_state_id
+                    Q(retailer__location__state_id=retailer_state_id)
+                    | Q(request__retailer__location__state_id=retailer_state_id)
                 )
             if filters.distributor_state_id:
                 distributor_state_id = _resolve_filter_id(
                     filters.distributor_state_id, "distributor state"
                 )
                 queryset = queryset.filter(
-                    request__distributor__location__state_id=distributor_state_id
+                    Q(distributor__location__state_id=distributor_state_id)
+                    | Q(request__distributor__location__state_id=distributor_state_id)
                 )
             if filters.edited is not None:
                 queryset = queryset.filter(updated_by__isnull=not filters.edited)
@@ -487,19 +518,34 @@ class EventQueries:
             if filters.request_id:
                 request_id = _resolve_filter_id(filters.request_id, "request")
                 queryset = queryset.filter(request_id=request_id)
+            if filters.retailer_id:
+                retailer_id = _resolve_filter_id(filters.retailer_id, "retailer")
+                queryset = queryset.filter(
+                    Q(retailer_id=retailer_id) | Q(request__retailer_id=retailer_id)
+                )
+            if filters.distributor_id:
+                distributor_id = _resolve_filter_id(
+                    filters.distributor_id, "distributor"
+                )
+                queryset = queryset.filter(
+                    Q(distributor_id=distributor_id)
+                    | Q(request__distributor_id=distributor_id)
+                )
             if filters.retailer_state_id:
                 retailer_state_id = _resolve_filter_id(
                     filters.retailer_state_id, "retailer state"
                 )
                 queryset = queryset.filter(
-                    request__retailer__location__state_id=retailer_state_id
+                    Q(retailer__location__state_id=retailer_state_id)
+                    | Q(request__retailer__location__state_id=retailer_state_id)
                 )
             if filters.distributor_state_id:
                 distributor_state_id = _resolve_filter_id(
                     filters.distributor_state_id, "distributor state"
                 )
                 queryset = queryset.filter(
-                    request__distributor__location__state_id=distributor_state_id
+                    Q(distributor__location__state_id=distributor_state_id)
+                    | Q(request__distributor__location__state_id=distributor_state_id)
                 )
             if filters.edited is not None:
                 queryset = queryset.filter(updated_by__isnull=not filters.edited)

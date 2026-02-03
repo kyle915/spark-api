@@ -314,6 +314,7 @@ class Request(models.Model):
     end_time = models.DateTimeField(null=True, blank=True)
     address = models.CharField(max_length=100)
     requestor_email = models.CharField(max_length=254, null=True)
+    notes = models.TextField(null=True)
     coordinates = ArrayField(
         models.FloatField(),
         size=2,
@@ -614,6 +615,21 @@ class Event(models.Model):
     )
     status = models.ForeignKey(
         EventStatus,
+        on_delete=models.RESTRICT,
+        null=True,
+        blank=True,
+        related_name="events",
+    )
+
+    retailer = models.ForeignKey(
+        Retailer,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="events",
+    )
+    distributor = models.ForeignKey(
+        Distributor,
         on_delete=models.RESTRICT,
         null=True,
         blank=True,
