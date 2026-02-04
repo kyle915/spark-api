@@ -23,13 +23,15 @@ class GoogleCalendarOAuthHelper:
     """Helper class for Google Calendar OAuth operations."""
 
     @staticmethod
-    def create_oauth_flow() -> Flow:
+    def create_oauth_flow(client_origin: str) -> Flow:
         """
         Create a Google OAuth flow instance.
 
         Returns:
             Configured OAuth Flow instance
         """
+        redirect_uri = f"{client_origin}/auth/google-calendar/callback"
+        print(f"Redirect URI: {redirect_uri}")
         flow = Flow.from_client_config(
             {
                 "web": {
@@ -37,12 +39,12 @@ class GoogleCalendarOAuthHelper:
                     "client_secret": settings.GOOGLE_OAUTH_CLIENT_SECRET,
                     "auth_uri": "https://accounts.google.com/o/oauth2/auth",
                     "token_uri": "https://oauth2.googleapis.com/token",
-                    "redirect_uris": [settings.GOOGLE_OAUTH_REDIRECT_URI],
+                    "redirect_uris": [redirect_uri],
                 }
             },
             scopes=GOOGLE_CALENDAR_SCOPES,
         )
-        flow.redirect_uri = settings.GOOGLE_OAUTH_REDIRECT_URI
+        flow.redirect_uri = redirect_uri
         return flow
 
     @staticmethod
