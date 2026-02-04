@@ -1,9 +1,11 @@
 """
 Google Calendar API service for creating, updating, and deleting calendar events.
 """
+
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date as date_type, timezone as dt_timezone
 from typing import Optional, Tuple
+from zoneinfo import ZoneInfo
 from django.conf import settings
 from django.utils import timezone
 from google.oauth2.credentials import Credentials
@@ -13,7 +15,7 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 from tenants.models import GoogleCalendarConnection, User
-from events.models import Event, GoogleCalendarEvent
+from events.models import Event, GoogleCalendarEvent, TimeZone
 from .constants import GOOGLE_CALENDAR_SCOPES
 
 logger = logging.getLogger(__name__)
@@ -37,12 +39,12 @@ class GoogleCalendarService:
         if not self.connection:
             try:
                 self.connection = GoogleCalendarConnection.objects.get(
-                    user=self.user,
-                    is_active=True
+                    user=self.user, is_active=True
                 )
             except GoogleCalendarConnection.DoesNotExist:
                 logger.warning(
-                    f"No active Google Calendar connection for user {self.user.id}")
+                    f"No active Google Calendar connection for user {self.user.id}"
+                )
                 return None
         return self.connection
 
@@ -68,10 +70,10 @@ class GoogleCalendarService:
         credentials = Credentials(
             token=access_token,
             refresh_token=refresh_token,
-            token_uri='https://oauth2.googleapis.com/token',
+            token_uri="https://oauth2.googleapis.com/token",
             client_id=settings.GOOGLE_OAUTH_CLIENT_ID,
             client_secret=settings.GOOGLE_OAUTH_CLIENT_SECRET,
-            scopes=GOOGLE_CALENDAR_SCOPES
+            scopes=GOOGLE_CALENDAR_SCOPES,
         )
 
         # Check if token needs refresh
@@ -89,11 +91,13 @@ class GoogleCalendarService:
                     logger.info(f"Refreshed token for user {self.user.id}")
                 except Exception as e:
                     logger.error(
-                        f"Failed to refresh token for user {self.user.id}: {e}")
+                        f"Failed to refresh token for user {self.user.id}: {e}"
+                    )
                     return None
             else:
                 logger.error(
-                    f"Token expired and no refresh token for user {self.user.id}")
+                    f"Token expired and no refresh token for user {self.user.id}"
+                )
                 return None
 
         return credentials
@@ -105,9 +109,11 @@ class GoogleCalendarService:
             return None
 
         http = AuthorizedHttp(credentials)
-        return build('calendar', 'v3', http=http)
+        return build("calendar", "v3", http=http)
 
-    def _ensure_service_and_connection(self) -> Tuple[Optional[object], Optional[GoogleCalendarConnection]]:
+    def _ensure_service_and_connection(
+        self,
+    ) -> Tuple[Optional[object], Optional[GoogleCalendarConnection]]:
         """
         Ensure both service and connection are available.
 
@@ -120,25 +126,98 @@ class GoogleCalendarService:
         service = self._get_service()
         if not service:
             logger.error(
-                f"Cannot perform operation: no service for user {self.user.id}")
+                f"Cannot perform operation: no service for user {self.user.id}"
+            )
             return None, None
 
         connection = self._get_connection()
         if not connection:
             logger.error(
-                f"Cannot perform operation: no active connection for user {self.user.id}")
+                f"Cannot perform operation: no active connection for user {self.user.id}"
+            )
             return None, None
 
         return service, connection
 
     @staticmethod
-    def _build_datetime(date, time_value) -> Optional[datetime]:
+    def _resolve_timezone(
+        _timezone: TimeZone | None,
+    ) -> tuple[dt_timezone, Optional[str]]:
+        """
+        Resolve a timezone to tzinfo + optional IANA name.
+        Prefer a stable IANA mapping (DST-aware), otherwise fall back to fixed offset.
+        """
+        if _timezone:
+            tz_code = (_timezone.code or "").strip().upper()
+            tz_name_raw = (_timezone.name or "").strip()
+            # Map app-specific names/codes to IANA zones to preserve DST.
+            mapped = {
+                "EASTERN": "America/New_York",
+                "CENTRAL": "America/Chicago",
+                "MOUNTAIN": "America/Denver",
+                "PACIFIC": "America/Los_Angeles",
+                "ALASKA": "America/Anchorage",
+                "HAWAII-ALEUTIAN": "Pacific/Honolulu",
+                "HAWAII–ALEUTIAN": "Pacific/Honolulu",
+                "EST": "America/New_York",
+                "EDT": "America/New_York",
+                "CST": "America/Chicago",
+                "CDT": "America/Chicago",
+                "MST": "America/Denver",
+                "MDT": "America/Denver",
+                "PST": "America/Los_Angeles",
+                "PDT": "America/Los_Angeles",
+                "AKST": "America/Anchorage",
+                "AKDT": "America/Anchorage",
+                "HST": "Pacific/Honolulu",
+                "HDT": "Pacific/Honolulu",
+            }
+            candidate = mapped.get(tz_code) or mapped.get(tz_name_raw.upper())
+            if candidate:
+                try:
+                    return ZoneInfo(candidate), candidate
+                except Exception:
+                    pass
+
+            if tz_name_raw:
+                candidates = [tz_name_raw]
+                if tz_name_raw.startswith("Americas/"):
+                    candidates.append("America/" + tz_name_raw[len("Americas/"):])
+                for candidate in candidates:
+                    try:
+                        return ZoneInfo(candidate), candidate
+                    except Exception:
+                        continue
+
+            if _timezone.offset is not None:
+                offset_value = int(_timezone.offset)
+                # Some rows store minutes (e.g., -300) instead of hours. Normalize.
+                if abs(offset_value) > 24:
+                    offset_minutes = offset_value
+                else:
+                    offset_minutes = offset_value * 60
+                tzinfo = dt_timezone(timedelta(minutes=offset_minutes))
+                tz_name = None
+                if offset_minutes % 60 == 0:
+                    # Etc/GMT has inverted sign (Etc/GMT+6 == UTC-6)
+                    offset_hours = int(offset_minutes / 60)
+                    sign = "+" if offset_hours < 0 else "-"
+                    tz_name = f"Etc/GMT{sign}{abs(offset_hours)}"
+                return tzinfo, tz_name
+
+        return dt_timezone.utc, "UTC"
+
+    @staticmethod
+    def _build_datetime(
+        date, time_value, _timezone: TimeZone | None = None
+    ) -> Optional[datetime]:
         """
         Build a timezone-aware datetime from date and time values.
 
         Args:
-            date: Date object
-            time_value: Time object or None
+            date: Date object or datetime object (used only if time_value is a time object)
+            time_value: Time object, datetime object, or None
+            _timezone: TimeZone model instance (uses timezone.name for IANA name) or None (defaults to UTC)
 
         Returns:
             Timezone-aware datetime or None if time_value is None
@@ -146,13 +225,44 @@ class GoogleCalendarService:
         if not time_value:
             return None
 
-        dt = datetime.combine(date, time_value)
-        if timezone.is_aware(timezone.now()):
-            dt = timezone.make_aware(dt)
+        # Build datetime from date and time_value.
+        # Treat stored datetimes as local clock time (do not convert between TZs).
+        if isinstance(date, datetime):
+            date_obj = date.date()
+        elif isinstance(date, date_type):
+            date_obj = date
+        else:
+            date_obj = None
+
+        if isinstance(time_value, datetime):
+            time_part = time_value.time().replace(tzinfo=None)
+            if not date_obj:
+                date_obj = time_value.date()
+            dt = datetime.combine(date_obj, time_part)
+        else:
+            if not date_obj:
+                raise ValueError(
+                    f"date parameter must be date or datetime, got {type(date)}"
+                )
+            dt = datetime.combine(date_obj, time_value)
+
+        tzinfo, _ = GoogleCalendarService._resolve_timezone(_timezone)
+
+        if timezone.is_aware(dt):
+            dt = dt.astimezone(tzinfo)
+        else:
+            dt = dt.replace(tzinfo=tzinfo)
+
+        logger.info(f"Datetime: {dt}")
         return dt
 
-    def _handle_http_error(self, error: HttpError, operation: str, google_event_id: Optional[str] = None,
-                           treat_404_as_success: bool = False) -> bool:
+    def _handle_http_error(
+        self,
+        error: HttpError,
+        operation: str,
+        google_event_id: Optional[str] = None,
+        treat_404_as_success: bool = False,
+    ) -> bool:
         """
         Handle HttpError exceptions consistently.
 
@@ -169,11 +279,13 @@ class GoogleCalendarService:
 
         if error.resp.status == 404:
             logger.warning(
-                f"Google Calendar event{event_id_context} not found for user {self.user.id} during {operation}")
+                f"Google Calendar event{event_id_context} not found for user {self.user.id} during {operation}"
+            )
             return treat_404_as_success
         else:
             logger.error(
-                f"Failed to {operation} Google Calendar event{event_id_context} for user {self.user.id}: {error}")
+                f"Failed to {operation} Google Calendar event{event_id_context} for user {self.user.id}: {error}"
+            )
             return False
 
     def test_connection(self) -> bool:
@@ -195,23 +307,30 @@ class GoogleCalendarService:
                 calendarId=connection.calendar_id,
                 maxResults=1,
                 singleEvents=True,
-                orderBy='startTime'
+                orderBy="startTime",
             ).execute()
 
             logger.info(
-                f"Google Calendar connection test successful for user {self.user.id}")
+                f"Google Calendar connection test successful for user {self.user.id}"
+            )
             return True
         except HttpError as e:
             logger.warning(
-                f"Google Calendar connection test failed for user {self.user.id}: {e}")
+                f"Google Calendar connection test failed for user {self.user.id}: {e}"
+            )
             return False
         except Exception as e:
             logger.error(
-                f"Unexpected error testing Google Calendar connection for user {self.user.id}: {e}")
+                f"Unexpected error testing Google Calendar connection for user {self.user.id}: {e}"
+            )
             return False
 
-    def _format_event_data(self, event: Event, event_type_name: Optional[str] = None,
-                           status_name: Optional[str] = None) -> dict:
+    def _format_event_data(
+        self,
+        event: Event,
+        event_type_name: Optional[str] = None,
+        status_name: Optional[str] = None,
+    ) -> dict:
         """
         Format Event model data for Google Calendar API.
 
@@ -231,7 +350,8 @@ class GoogleCalendarService:
         # Validate that event has a request
         if not event.request:
             raise ValueError(
-                f"Event {event.id} must have a request to sync to Google Calendar")
+                f"Event {event.id} must have a request to sync to Google Calendar"
+            )
 
         # Build description with event details
         description_parts = []
@@ -241,43 +361,64 @@ class GoogleCalendarService:
             description_parts.append(f"Type: {event_type_name}")
         if status_name:
             description_parts.append(f"Status: {status_name}")
-        description = "\n".join(
-            description_parts) if description_parts else None
+        description = "\n".join(description_parts) if description_parts else None
+
+        # Get timezone: event.timezone or event.request.timezone, default None (UTC)
+        event_timezone = event.timezone
+        if not event_timezone and event.request:
+            event_timezone = event.request.timezone
 
         # Get date from request (required)
-        event_date = event.request.date
+        event_date = event.date
 
         # Get start and end times from request
-        if not event.request.start_time:
+        if not event.start_time:
             raise ValueError(
-                f"Request {event.request.id} must have a start_time to sync event to Google Calendar")
+                f"Request {event.request.id} must have a start_time to sync event to Google Calendar"
+            )
 
         start_datetime = self._build_datetime(
-            event_date, event.request.start_time)
+            event_date, event.start_time, event_timezone
+        )
 
-        # Use request.end_time if available, otherwise default to 1 hour after start
-        end_datetime = self._build_datetime(event_date, event.request.end_time)
+        end_datetime = self._build_datetime(event_date, event.end_time, event_timezone)
         if not end_datetime:
             end_datetime = start_datetime + timedelta(hours=1)
 
+        tzinfo, tz_name = self._resolve_timezone(event_timezone)
+
+        if tz_name:
+            # When providing timeZone, send local wall time without offset.
+            start_local = start_datetime.astimezone(tzinfo).replace(tzinfo=None)
+            end_local = end_datetime.astimezone(tzinfo).replace(tzinfo=None)
+            start_iso = start_local.replace(microsecond=0).isoformat()
+            end_iso = end_local.replace(microsecond=0).isoformat()
+        else:
+            start_iso = start_datetime.replace(microsecond=0).isoformat()
+            end_iso = end_datetime.replace(microsecond=0).isoformat()
+
         event_data = {
-            'summary': event.name,
-            'description': description,
-            'location': event.address or None,
-            'start': {
-                'dateTime': start_datetime.isoformat(),
-                'timeZone': str(timezone.get_current_timezone()),
+            "summary": event.name,
+            "description": description,
+            "location": event.address or None,
+            "start": {
+                "dateTime": start_iso,
             },
-            'end': {
-                'dateTime': end_datetime.isoformat(),
-                'timeZone': str(timezone.get_current_timezone()),
+            "end": {
+                "dateTime": end_iso,
             },
         }
-
+        if tz_name:
+            event_data["start"]["timeZone"] = tz_name
+            event_data["end"]["timeZone"] = tz_name
         return event_data
 
-    def sync_event(self, event: Event, event_type_name: Optional[str] = None,
-                   status_name: Optional[str] = None) -> Optional[str]:
+    def sync_event(
+        self,
+        event: Event,
+        event_type_name: Optional[str] = None,
+        status_name: Optional[str] = None,
+    ) -> Optional[str]:
         """
         Sync an event to Google Calendar - creates if doesn't exist, updates if it does.
         This prevents duplicates by checking for existing mappings.
@@ -290,17 +431,28 @@ class GoogleCalendarService:
         Returns:
             Google Calendar event ID or None if sync failed
         """
+        connection = self._get_connection()
+        if connection:
+            logger.info(
+                f"Syncing event {event.id} to Google Calendar for user {self.user.id} using calendar '{connection.calendar_id}'"
+            )
+        else:
+            logger.warning(
+                f"No active Google Calendar connection for user {self.user.id}"
+            )
+
         # Check if we already have a Google Calendar event ID for this user/event
         try:
-            mapping = GoogleCalendarEvent.objects.get(
-                event=event, user=self.user)
+            mapping = GoogleCalendarEvent.objects.get(event=event, user=self.user)
             google_event_id = mapping.google_event_id
 
             # Update existing event
             logger.info(
-                f"Found existing Google Calendar event {google_event_id} for event {event.id} and user {self.user.id}, updating...")
+                f"Found existing Google Calendar event {google_event_id} for event {event.id} and user {self.user.id}, updating..."
+            )
             success = self.update_event(
-                google_event_id, event, event_type_name, status_name)
+                google_event_id, event, event_type_name, status_name
+            )
 
             if success:
                 return google_event_id
@@ -308,17 +460,23 @@ class GoogleCalendarService:
                 # Update failed, might be deleted in Google Calendar
                 # Delete the mapping and create a new event
                 logger.warning(
-                    f"Update failed for Google Calendar event {google_event_id}, deleting mapping and creating new event")
+                    f"Update failed for Google Calendar event {google_event_id}, deleting mapping and creating new event"
+                )
                 mapping.delete()
                 return self.create_event(event, event_type_name, status_name)
         except GoogleCalendarEvent.DoesNotExist:
             # No existing mapping, create new event
             logger.info(
-                f"No existing Google Calendar event for event {event.id} and user {self.user.id}, creating new...")
+                f"No existing Google Calendar event for event {event.id} and user {self.user.id}, creating new..."
+            )
             return self.create_event(event, event_type_name, status_name)
 
-    def create_event(self, event: Event, event_type_name: Optional[str] = None,
-                     status_name: Optional[str] = None) -> Optional[str]:
+    def create_event(
+        self,
+        event: Event,
+        event_type_name: Optional[str] = None,
+        status_name: Optional[str] = None,
+    ) -> Optional[str]:
         """
         Create a calendar event in Google Calendar.
 
@@ -335,39 +493,61 @@ class GoogleCalendarService:
             return None
 
         try:
-            event_data = self._format_event_data(
-                event, event_type_name, status_name)
-            created_event = service.events().insert(
-                calendarId=connection.calendar_id,
-                body=event_data
-            ).execute()
-
-            google_event_id = created_event.get('id')
+            calendar_id = connection.calendar_id
             logger.info(
-                f"Created Google Calendar event {google_event_id} for user {self.user.id}")
+                f"Creating Google Calendar event for user {self.user.id} in calendar '{calendar_id}'"
+            )
+
+            event_data = self._format_event_data(event, event_type_name, status_name)
+            logger.debug(
+                f"Event data to create: summary={event_data.get('summary')}, "
+                f"start={event_data.get('start')}, end={event_data.get('end')}, "
+                f"location={event_data.get('location')}"
+            )
+
+            created_event = (
+                service.events()
+                .insert(calendarId=calendar_id, body=event_data)
+                .execute()
+            )
+
+            google_event_id = created_event.get("id")
+            logger.info(
+                f"Created Google Calendar event {google_event_id} for user {self.user.id} in calendar '{calendar_id}'. "
+                f"Event summary: {created_event.get('summary')}, "
+                f"Start: {created_event.get('start')}, "
+                f"End: {created_event.get('end')}, "
+                f"Status: {created_event.get('status')}, "
+                f"Visibility: {created_event.get('visibility', 'default')}"
+            )
 
             # Store the mapping
             GoogleCalendarEvent.objects.create(
-                event=event,
-                user=self.user,
-                google_event_id=google_event_id
+                event=event, user=self.user, google_event_id=google_event_id
             )
             logger.info(
-                f"Stored Google Calendar event mapping for event {event.id} and user {self.user.id}")
+                f"Stored Google Calendar event mapping for event {event.id} and user {self.user.id}"
+            )
 
             return google_event_id
         except HttpError as e:
             logger.error(
-                f"Failed to create Google Calendar event for user {self.user.id}: {e}")
+                f"Failed to create Google Calendar event for user {self.user.id} in calendar '{connection.calendar_id}': {e}"
+            )
             return None
         except Exception as e:
             logger.error(
-                f"Unexpected error creating Google Calendar event for user {self.user.id}: {e}")
+                f"Unexpected error creating Google Calendar event for user {self.user.id}: {e}"
+            )
             return None
 
-    def update_event(self, google_event_id: str, event: Event,
-                     event_type_name: Optional[str] = None,
-                     status_name: Optional[str] = None) -> bool:
+    def update_event(
+        self,
+        google_event_id: str,
+        event: Event,
+        event_type_name: Optional[str] = None,
+        status_name: Optional[str] = None,
+    ) -> bool:
         """
         Update an existing calendar event in Google Calendar.
 
@@ -385,31 +565,62 @@ class GoogleCalendarService:
             return False
 
         try:
+            calendar_id = connection.calendar_id
+            logger.info(
+                f"Updating Google Calendar event {google_event_id} for user {self.user.id} in calendar '{calendar_id}'"
+            )
+
             # Get existing event first
-            existing_event = service.events().get(
-                calendarId=connection.calendar_id,
-                eventId=google_event_id
-            ).execute()
+            existing_event = (
+                service.events()
+                .get(calendarId=calendar_id, eventId=google_event_id)
+                .execute()
+            )
 
             # Update with new data
-            event_data = self._format_event_data(
-                event, event_type_name, status_name)
+            event_data = self._format_event_data(event, event_type_name, status_name)
+            logger.info(f"Event data to update: {event_data}")
             existing_event.update(event_data)
-
-            updated_event = service.events().update(
-                calendarId=connection.calendar_id,
-                eventId=google_event_id,
-                body=existing_event
-            ).execute()
+            updated_event = (
+                service.events()
+                .update(
+                    calendarId=calendar_id, eventId=google_event_id, body=existing_event
+                )
+                .execute()
+            )
 
             logger.info(
-                f"Updated Google Calendar event {google_event_id} for user {self.user.id}")
-            return True
+                f"Updated Google Calendar event {google_event_id} for user {self.user.id} in calendar '{calendar_id}'. "
+                f"Event summary: {updated_event.get('summary')}, "
+                f"Start: {updated_event.get('start')}, "
+                f"End: {updated_event.get('end')}, "
+                f"Status: {updated_event.get('status')}, "
+                f"Visibility: {updated_event.get('visibility', 'default')}"
+            )
+
+            # Verify the event exists after update
+            try:
+                service.events().get(
+                    calendarId=calendar_id, eventId=google_event_id
+                ).execute()
+                logger.info(
+                    f"Verified event {google_event_id} exists in calendar '{calendar_id}' after update"
+                )
+                return True
+            except HttpError as verify_error:
+                logger.error(
+                    f"Failed to verify event {google_event_id} exists after update: {verify_error}"
+                )
+                return False
+
         except HttpError as e:
-            return self._handle_http_error(e, "update", google_event_id, treat_404_as_success=False)
+            return self._handle_http_error(
+                e, "update", google_event_id, treat_404_as_success=False
+            )
         except Exception as e:
             logger.error(
-                f"Unexpected error updating Google Calendar event for user {self.user.id}: {e}")
+                f"Unexpected error updating Google Calendar event for user {self.user.id}: {e}"
+            )
             return False
 
     def delete_event(self, google_event_id: str) -> bool:
@@ -428,16 +639,19 @@ class GoogleCalendarService:
 
         try:
             service.events().delete(
-                calendarId=connection.calendar_id,
-                eventId=google_event_id
+                calendarId=connection.calendar_id, eventId=google_event_id
             ).execute()
 
             logger.info(
-                f"Deleted Google Calendar event {google_event_id} for user {self.user.id}")
+                f"Deleted Google Calendar event {google_event_id} for user {self.user.id}"
+            )
             return True
         except HttpError as e:
-            return self._handle_http_error(e, "delete", google_event_id, treat_404_as_success=True)
+            return self._handle_http_error(
+                e, "delete", google_event_id, treat_404_as_success=True
+            )
         except Exception as e:
             logger.error(
-                f"Unexpected error deleting Google Calendar event for user {self.user.id}: {e}")
+                f"Unexpected error deleting Google Calendar event for user {self.user.id}: {e}"
+            )
             return False

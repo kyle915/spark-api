@@ -46,6 +46,7 @@ class Ambassador(Asyncable, models.Model):
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     rating = models.IntegerField(default=0)
     address = models.CharField(max_length=100, null=True)
+    phone = models.CharField(max_length=100, null=True)
     coordinates = ArrayField(
         models.FloatField(),
         size=2,
@@ -162,6 +163,7 @@ class AmbassadorInvitation(Asyncable, models.Model):
 
     def is_usable(self, raise_exception: bool = False):
         from django.utils import timezone
+
         now = timezone.now()
         message: str = ""
         if self.expires_at <= now:
@@ -171,7 +173,7 @@ class AmbassadorInvitation(Asyncable, models.Model):
 
         if raise_exception and message:
             raise ValueError(message)
-        return message == ''
+        return message == ""
 
 
 class AmbassadorReview(Asyncable, models.Model):

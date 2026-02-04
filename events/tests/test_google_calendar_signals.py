@@ -15,8 +15,6 @@ from tenants.models import Role, Tenant, TenantedUser, GoogleCalendarConnection
 from events.models import Event, EventType, EventStatus, Request, RequestType, RequestStatus
 from events.models import Client, Distributor, Retailer, Location
 from ambassadors.models import Ambassador, AmbassadorEvent
-from events.tasks import sync_event_to_google_calendar, sync_event_to_all_connected_users
-from utils.utils import ROLE_ID
 
 User = get_user_model()
 
@@ -162,7 +160,7 @@ class TestGoogleCalendarSignals:
         """Test that Event created by non-ambassador triggers sync to all users."""
         from events.tasks import sync_event_to_all_connected_users
 
-        event = Event.objects.create(
+        Event.objects.create(
             name="Test Event",
             tenant=self.tenant,
             event_type=self.event_type,
@@ -172,14 +170,16 @@ class TestGoogleCalendarSignals:
             created_by=self.client_user  # Non-ambassador
         )
 
-        # Signal should trigger sync job
-        mock_add.assert_called_once_with(
-            sync_event_to_all_connected_users, event.id, self.tenant.id)
+        # Signal should trigger sync job with only event.id (no tenant_id)
+        mock_add.assert_called_once()
+        call_args = mock_add.call_args[0]
+        assert call_args[0] == sync_event_to_all_connected_users
+        assert call_args[1] == Event.objects.latest('id').id
 
     @patch('events.signals.queues.default.add')
     def test_event_created_by_ambassador_skips_sync(self, mock_add):
         """Test that Event created by ambassador skips sync (handled by AmbassadorEvent)."""
-        event = Event.objects.create(
+        Event.objects.create(
             name="Test Event",
             tenant=self.tenant,
             event_type=self.event_type,
@@ -192,10 +192,12 @@ class TestGoogleCalendarSignals:
         # Signal should not trigger sync (will be handled by AmbassadorEvent signal)
         mock_add.assert_not_called()
 
-    @patch('events.signals.queues.default.add')
-    def test_ambassador_event_created_triggers_sync(self, mock_add):
-        """Test that AmbassadorEvent creation triggers sync for ambassador."""
-        from events.tasks import sync_event_to_google_calendar, sync_event_to_all_connected_users
+    @patch('events.jobs.google_calendar_jobs.EventGoogleCalendarJob')
+    def test_ambassador_event_created_triggers_sync(self, mock_job_class):
+        """Test that AmbassadorEvent creation triggers sync via EventGoogleCalendarJob."""
+        # Mock the job instance
+        mock_job = MagicMock()
+        mock_job_class.return_value = mock_job
 
         event = Event.objects.create(
             name="Test Event",
@@ -206,11 +208,6 @@ class TestGoogleCalendarSignals:
             request=self.request,
             created_by=self.client_user
         )
-
-        # Event creation triggers sync to all connected users (first call)
-        assert mock_add.call_count == 1
-        mock_add.assert_called_with(
-            sync_event_to_all_connected_users, event.id, self.tenant.id)
 
         ambassador_event = AmbassadorEvent.objects.create(
             ambassador=self.ambassador,
@@ -219,19 +216,17 @@ class TestGoogleCalendarSignals:
             created_by=self.ambassador_user  # Ambassador creates the AmbassadorEvent
         )
 
-        # AmbassadorEvent creation should trigger sync job for the ambassador (second call)
-        assert mock_add.call_count == 2
-        # Check the last call was for the ambassador sync
-        mock_add.assert_any_call(
-            sync_event_to_google_calendar,
-            self.ambassador_user.id,
-            event.id
-        )
+        # Verify job was instantiated with event_id from AmbassadorEvent
+        mock_job_class.assert_called_once_with(ambassador_event.event_id)
+        # Verify send_to_ambassadors() was called
+        mock_job.send_to_ambassadors.assert_called_once()
 
-    @patch('events.signals.queues.default.add')
-    def test_ambassador_event_created_by_non_ambassador_skips_sync(self, mock_add):
-        """Test that AmbassadorEvent created by non-ambassador doesn't trigger sync."""
-        from events.tasks import sync_event_to_all_connected_users
+    @patch('events.jobs.google_calendar_jobs.EventGoogleCalendarJob')
+    def test_ambassador_event_signal_calls_job(self, mock_job_class):
+        """Test that AmbassadorEvent signal properly instantiates and calls job."""
+        # Mock the job instance
+        mock_job = MagicMock()
+        mock_job_class.return_value = mock_job
 
         event = Event.objects.create(
             name="Test Event",
@@ -243,18 +238,14 @@ class TestGoogleCalendarSignals:
             created_by=self.client_user
         )
 
-        # Event creation triggers sync to all connected users (first call)
-        assert mock_add.call_count == 1
-        mock_add.assert_called_with(
-            sync_event_to_all_connected_users, event.id, self.tenant.id)
-
         ambassador_event = AmbassadorEvent.objects.create(
             ambassador=self.ambassador,
             event=event,
             tenant=self.tenant,
-            created_by=self.client_user  # Non-ambassador creates the AmbassadorEvent
+            created_by=self.client_user
         )
 
-        # AmbassadorEvent creation by non-ambassador should NOT trigger additional sync
-        # Only the Event signal should have been called (still 1 call)
-        assert mock_add.call_count == 1
+        # Verify job was instantiated with event_id from AmbassadorEvent
+        mock_job_class.assert_called_once_with(ambassador_event.event_id)
+        # Verify send_to_ambassadors() was called
+        mock_job.send_to_ambassadors.assert_called_once()

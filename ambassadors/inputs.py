@@ -13,6 +13,7 @@ class CreatePublicAmbassadorInput(SparkGraphQLInput):
     password1: str
     password2: str
     address: str | None = None
+    phone: str | None = None
     coordinates: List[float] | None = None  # [latitude, longitude]
 
 
@@ -223,6 +224,7 @@ class UpsertAmbassadorProfileInput(SparkGraphQLInput):
     ambassador_id: strawberry.ID | None = None
     ambassador_uuid: strawberry.ID | None = None
     address: str | None = None
+    phone: str | None = None
     coordinates: List[float] | None = None
     is_active: bool | None = None
     rating: int | None = None
