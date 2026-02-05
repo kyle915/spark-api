@@ -99,7 +99,7 @@ class RecapFile(models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     name = models.TextField(null=True)
-    file = models.FileField(upload_to="recap_files/", null=True)
+    file = models.FileField(upload_to="recap_files/", max_length=1024, null=True)
     approved = models.BooleanField(default=False)
 
     recap = models.ForeignKey(
