@@ -36,7 +36,7 @@ class FileRecapCategory(models.Model):
 class Recap(models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
-    name = models.CharField(max_length=100, null=False)
+    name = models.TextField(null=False)
     submited_at = models.DateTimeField(null=True)
     total_engagements = models.IntegerField(null=True)
     products_sold = models.IntegerField(null=True)
