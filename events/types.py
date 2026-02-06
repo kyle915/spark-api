@@ -39,18 +39,13 @@ def _get_field(instance, name: str):
         return None
 
 
-def _get_offset_minutes_from_timezone(tz_obj) -> int:
-    """Return timezone offset in minutes from a TimeZone model (default 0)."""
+def _get_offset_minutes_from_instance(instance) -> int:
+    """Return timezone offset in minutes without extra queries."""
     try:
-        offset = getattr(tz_obj, "offset", None)
-        return int(offset) if offset is not None else 0
+        tz = getattr(instance, "timezone", None)
+        return int(tz.offset) if tz and tz.offset is not None else 0
     except Exception:
         return 0
-
-
-def _get_related_from_cache(instance, field_name: str):
-    """Return related object if already fetched, avoiding sync DB hits in async resolvers."""
-    return instance.__dict__.get(field_name)
 
 
 @strawberry_django.type(models.EventType)
@@ -283,23 +278,16 @@ class Request(Node):
     # Date/time fields returned as stored, without server TZ conversion
     @strawberry.field
     def date(self) -> str | None:
-        offset = _get_offset_minutes_from_timezone(
-            _get_related_from_cache(self, "timezone")
-        )
-        return _serialize_dt(_get_field(self, "date"), offset_minutes=offset)
+        return _serialize_dt(_get_field(self, "date"), offset_minutes=0)
 
     @strawberry.field
     def start_time(self) -> str | None:
-        offset = _get_offset_minutes_from_timezone(
-            _get_related_from_cache(self, "timezone")
-        )
+        offset = _get_offset_minutes_from_instance(self)
         return _serialize_dt(_get_field(self, "start_time"), offset_minutes=offset)
 
     @strawberry.field
     def end_time(self) -> str | None:
-        offset = _get_offset_minutes_from_timezone(
-            _get_related_from_cache(self, "timezone")
-        )
+        offset = _get_offset_minutes_from_instance(self)
         return _serialize_dt(_get_field(self, "end_time"), offset_minutes=offset)
 
     address: str
@@ -331,9 +319,7 @@ class Request(Node):
 
     @strawberry.field
     async def products(self) -> List[Product]:
-        cached = getattr(self, "_prefetched_objects_cache", {}).get(
-            "request_product"
-        )
+        cached = getattr(self, "_prefetched_objects_cache", {}).get("request_product")
         if cached is not None:
             return [item.product for item in cached if item.product]
         items = await sync_to_async(list)(
@@ -417,29 +403,16 @@ class Event(Node):
 
     @strawberry.field
     def date(self) -> str | None:
-        tz = _get_related_from_cache(self, "timezone")
-        if not tz:
-            req = _get_related_from_cache(self, "request")
-            tz = _get_related_from_cache(req, "timezone") if req else None
-        offset = _get_offset_minutes_from_timezone(tz)
-        return _serialize_dt(_get_field(self, "date"), offset_minutes=offset)
+        return _serialize_dt(_get_field(self, "date"), offset_minutes=0)
 
     @strawberry.field
     def start_time(self) -> str | None:
-        tz = _get_related_from_cache(self, "timezone")
-        if not tz:
-            req = _get_related_from_cache(self, "request")
-            tz = _get_related_from_cache(req, "timezone") if req else None
-        offset = _get_offset_minutes_from_timezone(tz)
+        offset = _get_offset_minutes_from_instance(self)
         return _serialize_dt(_get_field(self, "start_time"), offset_minutes=offset)
 
     @strawberry.field
     def end_time(self) -> str | None:
-        tz = _get_related_from_cache(self, "timezone")
-        if not tz:
-            req = _get_related_from_cache(self, "request")
-            tz = _get_related_from_cache(req, "timezone") if req else None
-        offset = _get_offset_minutes_from_timezone(tz)
+        offset = _get_offset_minutes_from_instance(self)
         return _serialize_dt(_get_field(self, "end_time"), offset_minutes=offset)
 
 

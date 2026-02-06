@@ -153,7 +153,7 @@ class BaseEventQueriesService(SparkGraphQLMixin):
             raise GraphQLError("Record not found.")
 
         try:
-            return await sync_to_async(self.get_model().objects.get)(**filters)
+            return await sync_to_async(self.get_queryset().get)(**filters)
         except self.get_model().DoesNotExist:
             raise GraphQLError("Record not found.")
 
@@ -221,7 +221,11 @@ class EventQueriesService(BaseEventQueriesService):
 
     def get_queryset(self) -> QuerySet:
         """Get the queryset for the service."""
-        return self.get_model().objects.select_related("tenant")
+        return self.get_model().objects.select_related(
+            "tenant",
+            "timezone",
+            "request",
+        )
 
 
 @strawberry.type
@@ -710,6 +714,7 @@ class RequestQueriesService(BaseEventQueriesService):
         return (
             self.get_model()
             .objects.select_related(
+                "timezone",
                 "distributor__location__state",
                 "retailer__location__state",
                 "created_by",
