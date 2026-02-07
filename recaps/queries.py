@@ -34,7 +34,7 @@ class BaseRecapQueriesService(SparkGraphQLMixin):
         """Get the queryset for the service."""
         return (
             self.get_model()
-            .objects.select_related("event", "job", "retailer")
+            .objects.select_related("event", "event__timezone", "job", "retailer")
             .prefetch_related(
                 Prefetch(
                     "recap_files",
