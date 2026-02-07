@@ -237,40 +237,6 @@ class EventMutationService(BaseMutationService):
         """Get the model for the service."""
         return models.Event
 
-    @staticmethod
-    def _strip_tzinfo(dt_value: Any) -> Any:
-        """Remove timezone info to keep provided clock time unchanged."""
-        if dt_value is None:
-            return None
-
-        if isinstance(dt_value, datetime.datetime):
-            return dt_value.replace(tzinfo=None)
-
-        if isinstance(dt_value, str):
-            cleaned_value = dt_value
-            if dt_value.endswith("Z"):
-                cleaned_value = dt_value[:-1] + "+00:00"
-
-            try:
-                parsed = datetime.datetime.fromisoformat(cleaned_value)
-                return parsed.replace(tzinfo=None)
-            except ValueError:
-                return dt_value
-
-        return dt_value
-
-    async def save(self) -> Model:
-        """Save event keeping start/end times as provided (no TZ conversion)."""
-        if self.input:
-            self.input.start_time = self._strip_tzinfo(
-                getattr(self.input, "start_time", None)
-            )
-            self.input.end_time = self._strip_tzinfo(
-                getattr(self.input, "end_time", None)
-            )
-
-        return await super().save()
-
 
 async def _resolve_event_location(
     event: models.Event,
@@ -1646,6 +1612,7 @@ class PublicRequestMutations:
             request_with_relations: models.Request = await sync_to_async(
                 models.Request.objects.select_related(
                     "tenant",
+                    "timezone",
                     "request_type",
                     "retailer__location__state",
                     "distributor__location__state",
@@ -1945,6 +1912,7 @@ class RequestMutations:
             request_with_relations: models.Request = await sync_to_async(
                 models.Request.objects.select_related(
                     "tenant",
+                    "timezone",
                     "request_type",
                     "retailer__location__state",
                     "distributor__location__state",
@@ -1985,6 +1953,9 @@ class RequestMutations:
                     input=input, info=info
                 )
             )
+            request = await sync_to_async(
+                models.Request.objects.select_related("timezone").get
+            )(id=request.id)
             return build_mutation_response(
                 types.RequestDetailResponse,
                 success=True,
@@ -2021,6 +1992,7 @@ class RequestMutations:
             # Get the request first to access its tenant
             request: models.Request = await sync_to_async(
                 models.Request.objects.select_related(
+                    "timezone",
                     "retailer__location__state",
                     "distributor__location__state",
                 ).get
@@ -2096,9 +2068,9 @@ class RequestMutations:
                 raise GraphQLError("Invalid request ID.")
 
             # Get the request first to access its tenant
-            request: models.Request = await sync_to_async(models.Request.objects.get)(
-                id=input.id
-            )
+            request: models.Request = await sync_to_async(
+                models.Request.objects.select_related("timezone").get
+            )(id=input.id)
             # Get tenant using tenant_id to avoid async context issues with foreign key access
             tenant: Tenant = await sync_to_async(Tenant.objects.get)(
                 id=request.tenant_id
