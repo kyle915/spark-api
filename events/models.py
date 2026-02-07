@@ -37,6 +37,9 @@ class TimeZone(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
     updated_at = models.DateTimeField(auto_now=True)
 
+    def __str__(self):
+        return f"{self.offset}"
+
 
 class State(models.Model):
     id = models.BigAutoField(primary_key=True)
