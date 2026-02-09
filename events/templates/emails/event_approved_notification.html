@@ -17,20 +17,20 @@
                 <td style="padding: 5px 0;"><strong>Event:</strong> {{ event.name }}</td>
               </tr>
 
-              {% if event.date %}
+              {% if event_date %}
                 <tr>
                   <td style="padding: 5px 0;">
-                    <strong>Date:</strong> {{ event.date|date:"F d, Y" }}
+                    <strong>Date:</strong> {{ event_date|default:"-" }}
                   </td>
                 </tr>
               {% endif %}
 
-              {% if event.start_time %}
+              {% if event_start_time %}
                 <tr>
                   <td style="padding: 5px 0;">
-                    <strong>Time:</strong> {{ event.start_time|date:"g:i A" }}
-                    {% if event.end_time %}
-                      - {{ event.end_time|date:"g:i A" }}
+                    <strong>Time:</strong> {{ event_start_time|default:"-" }}
+                    {% if event_end_time %}
+                      - {{ event_end_time|default:"-" }}
                     {% endif %}
                   </td>
                 </tr>
