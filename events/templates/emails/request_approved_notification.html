@@ -20,17 +20,17 @@
               {% if request.date %}
                 <tr>
                   <td style="padding: 5px 0;">
-                    <strong>Date:</strong> {{ request.date|date:"F d, Y" }}
+                    <strong>Date:</strong> {{ request_date|default:"-" }}
                   </td>
                 </tr>
               {% endif %}
 
-              {% if request.start_time %}
+              {% if request_start_time %}
                 <tr>
                   <td style="padding: 5px 0;">
-                    <strong>Time:</strong> {{ request.start_time|date:"g:i A" }}
-                    {% if request.end_time %}
-                      - {{ request.end_time|date:"g:i A" }}
+                    <strong>Time:</strong> {{ request_start_time|default:"-" }}
+                    {% if request_end_time %}
+                      - {{ request_end_time|default:"-" }}
                     {% endif %}
                   </td>
                 </tr>
