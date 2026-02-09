@@ -1419,6 +1419,8 @@ input CreateRecapInput {
   eventId: ID!
   files: [RecapFileInput!]!
   productsSold: Int = null
+  totalCansSold: Int = null
+  totalPacksSold: Int = null
   totalEarnings: Float = null
   accountSpendAmount: Float = null
   jobId: ID = null
@@ -3209,7 +3211,7 @@ input RateTypeFiltersInput {
 }
 
 """
-Recap(id, uuid, name, submited_at, total_engagements, products_sold, total_earnings, account_spend_amount, approved, timezone, event, ambassador, job, retailer, created_by, updated_by, created_at, updated_at)
+Recap(id, uuid, name, submited_at, total_engagements, products_sold, total_earnings, total_cans_sold, total_packs_sold, account_spend_amount, approved, timezone, event, ambassador, job, retailer, created_by, updated_by, created_at, updated_at)
 """
 type Recap implements Node {
   """The Globally Unique ID of this object"""
@@ -3229,6 +3231,8 @@ type Recap implements Node {
   updatedAt: String!
   totalEngagements: Int
   productsSold: Int
+  totalCansSold: Int
+  totalPacksSold: Int
   totalEarnings: Float
   accountSpendAmount: Float
   consumerEngagements: [ConsumerEngagements!]!
@@ -4397,6 +4401,8 @@ input UpdateRecapInput {
   eventId: ID!
   files: [RecapFileInput!]!
   productsSold: Int = null
+  totalCansSold: Int = null
+  totalPacksSold: Int = null
   totalEarnings: Float = null
   accountSpendAmount: Float = null
   jobId: ID = null

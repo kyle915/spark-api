@@ -73,6 +73,8 @@ class CreateRecapInput(SparkGraphQLInput):
     files: List[RecapFileInput]
     
     products_sold: int | None = None
+    total_cans_sold: int | None = None
+    total_packs_sold: int | None = None
     total_earnings: float | None = None
     account_spend_amount: float | None = None
     
