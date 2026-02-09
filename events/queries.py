@@ -342,7 +342,7 @@ class EventQueries:
                     | Q(request__distributor__location__state_id=distributor_state_id)
                 )
             if filters.date:
-                queryset = queryset.filter(request__date=filters.date)
+                queryset = queryset.filter(date__date=filters.date)
             if filters.edited is not None:
                 queryset = queryset.filter(updated_by__isnull=not filters.edited)
 
@@ -776,7 +776,7 @@ class RequestQueries:
                 )
                 queryset = queryset.filter(distributor_id=distributor_id)
             if filters.date:
-                queryset = queryset.filter(date=filters.date)
+                queryset = queryset.filter(date__date=filters.date)
             if filters.edited is not None:
                 queryset = queryset.filter(updated_by__isnull=not filters.edited)
 
