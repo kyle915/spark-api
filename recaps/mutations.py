@@ -167,6 +167,8 @@ class RecapMutationService(SparkGraphQLMixin):
                     created_by=self.user,
                     total_engagements=total_engagements,
                     products_sold=self.input.products_sold,
+                    total_cans_sold=self.input.total_cans_sold,
+                    total_packs_sold=self.input.total_packs_sold,
                     total_earnings=self.input.total_earnings,
                     account_spend_amount=self.input.account_spend_amount,
                     job=job,
@@ -402,6 +404,8 @@ class RecapMutationService(SparkGraphQLMixin):
                 recap.name = self.input.name
                 recap.event = event
                 recap.products_sold = self.input.products_sold
+                recap.total_cans_sold = self.input.total_cans_sold
+                recap.total_packs_sold = self.input.total_packs_sold
                 recap.total_earnings = self.input.total_earnings
                 recap.account_spend_amount = self.input.account_spend_amount
                 if self.input.consumer_engagements is not None:

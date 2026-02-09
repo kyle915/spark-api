@@ -130,6 +130,8 @@ class Recap(Node):
 
     total_engagements: int | None
     products_sold: int | None
+    total_cans_sold: int | None
+    total_packs_sold: int | None
     total_earnings: float | None
     account_spend_amount: float | None
 
