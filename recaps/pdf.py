@@ -184,6 +184,12 @@ def build_recap_pdf(recap, images: Iterable[dict[str, bytes]]) -> bytes:
         <div><span>Products Sold</span><strong>{
         safe(recap.products_sold)
     }</strong></div>
+        <div><span>Total Cans Sold</span><strong>{
+        safe(getattr(recap, "total_cans_sold", None))
+    }</strong></div>
+        <div><span>Total Packs Sold</span><strong>{
+        safe(getattr(recap, "total_packs_sold", None))
+    }</strong></div>
         <div><span>Total Earnings</span><strong>{
         safe(recap.total_earnings)
     }</strong></div>
