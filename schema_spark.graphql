@@ -3320,6 +3320,7 @@ type RecapFile implements Node {
   fileRecapCategoryId: ID
   createdAt: String!
   updatedAt: String!
+  fileType: FileType!
   fileRecapCategory: FileRecapCategory
   file: String
 }
