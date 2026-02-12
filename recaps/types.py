@@ -22,6 +22,7 @@ class RecapFile(Node):
     created_at: str
     updated_at: str
 
+    file_type: ambassador_types.FileType
     file_recap_category: FileRecapCategory | None
 
     @strawberry.field
