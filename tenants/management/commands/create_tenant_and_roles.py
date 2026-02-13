@@ -56,8 +56,12 @@ class Command(BaseCommand):
             try:
                 # First, create a temporary System role (we'll update it later with the user)
                 # Or use one of the roles we're about to create
-                temp_role, _ = Role.objects.get_or_create(
-                    name='System',
+                temp_role, _ = Role.objects.update_or_create(
+                    pk=4,
+                    defaults={
+                        'name': 'System',
+                        'slug': 'system_user',
+                    }
                 )
 
                 # Now create the system user with the role
