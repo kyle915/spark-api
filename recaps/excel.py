@@ -7,12 +7,23 @@ from openpyxl import Workbook
 
 from utils.gcs import extract_blob_name_from_url, generate_download_url
 
+SIGNED_URL_EXPIRATION_MINUTES = 60 * 24 * 7
+
 
 def _format_dt(value) -> str:
     if not value:
         return ""
     try:
         return value.isoformat()
+    except Exception:
+        return str(value)
+
+
+def _format_date_mdy(value) -> str:
+    if not value:
+        return ""
+    try:
+        return value.strftime("%m/%d/%Y")
     except Exception:
         return str(value)
 
@@ -62,8 +73,6 @@ def build_recaps_xlsx(recaps: Iterable[object]) -> bytes:
             "recap_uuid",
             "recap_name",
             "approved",
-            "submitted_at",
-            "event_id",
             "event_uuid",
             "event_name",
             "event_date",
@@ -164,11 +173,9 @@ def build_recaps_xlsx(recaps: Iterable[object]) -> bytes:
                 _safe(getattr(recap, "uuid", None)),
                 _safe(getattr(recap, "name", None)),
                 bool(getattr(recap, "approved", False)),
-                _format_dt(getattr(recap, "submited_at", None)),
-                _safe(getattr(recap, "event_id", None)),
                 _safe(getattr(getattr(recap, "event", None), "uuid", None)),
                 _safe(getattr(getattr(recap, "event", None), "name", None)),
-                _format_dt(getattr(getattr(recap, "event", None), "date", None)),
+                _format_date_mdy(getattr(getattr(recap, "event", None), "date", None)),
                 _safe(getattr(getattr(recap, "event", None), "address", None)),
                 _get_retailer_name(recap),
                 _get_distributor_name(recap),
@@ -248,7 +255,15 @@ def build_recaps_xlsx(recaps: Iterable[object]) -> bytes:
             signed_url = ""
             blob_name = extract_blob_name_from_url(str(file_path)) if file_path else None
             if blob_name:
-                signed_url = generate_download_url(blob_name)
+                signed_url = generate_download_url(
+                    blob_name, expiration_minutes=SIGNED_URL_EXPIRATION_MINUTES
+                )
+            display_name = getattr(recap_file, "name", None) or ""
+            if not display_name and file_path:
+                try:
+                    display_name = str(file_path).rsplit("/", 1)[-1]
+                except Exception:
+                    display_name = ""
             files_sheet.append(
                 [
                     _safe(getattr(recap, "uuid", None)),
@@ -263,9 +278,13 @@ def build_recaps_xlsx(recaps: Iterable[object]) -> bytes:
                         )
                     ),
                     bool(getattr(recap_file, "approved", False)),
-                    signed_url,
+                    display_name or signed_url,
                 ]
             )
+            if signed_url:
+                cell = files_sheet.cell(row=files_sheet.max_row, column=7)
+                cell.hyperlink = signed_url
+                cell.style = "Hyperlink"
 
     output = BytesIO()
     wb.save(output)

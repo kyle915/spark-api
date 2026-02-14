@@ -8,6 +8,8 @@ from django.contrib.auth import get_user_model
 from django.db.models import Model, Prefetch, Q
 from django.db import transaction
 from django.utils import timezone
+from django.conf import settings
+from django.utils.text import slugify
 
 from recaps import types
 from recaps import models
@@ -27,6 +29,7 @@ from utils.gcs import (
     upload_bytes,
     download_blob_bytes,
     generate_download_url,
+    get_gcs_client,
 )
 from recaps.pdf import build_recap_pdf, should_embed_recap_file, is_image_bytes
 from recaps.excel import build_recaps_xlsx
@@ -828,7 +831,19 @@ class RecapMutationService(SparkGraphQLMixin):
         xlsx_bytes = await build_xlsx_for_tenant()
 
         timestamp = timezone.now().strftime("%Y%m%d%H%M%S")
-        blob_name = f"recaps/exports/tenant-{tenant.id}-{timestamp}.xlsx"
+        tenant_slug = slugify(getattr(tenant, "name", "") or "tenant")
+        export_prefix = f"recaps/exports/{tenant_slug}-"
+        blob_name = f"{export_prefix}{timestamp}.xlsx"
+
+        @sync_to_async
+        def delete_previous_exports():
+            client = get_gcs_client()
+            bucket = client.bucket(settings.GS_BUCKET_NAME)
+            for blob in bucket.list_blobs(prefix=export_prefix):
+                if blob.name != blob_name:
+                    blob.delete()
+
+        await delete_previous_exports()
         upload_bytes(
             blob_name,
             xlsx_bytes,
@@ -857,21 +872,35 @@ class RecapMutationService(SparkGraphQLMixin):
                     .select_related(
                         "event__request__retailer",
                         "event__request__distributor",
+                        "event__tenant",
                         "ambassador",
                         "ambassador__user",
                     )
                     .get(id=recap_id)
                 )
             except models.Recap.DoesNotExist:
-                return None, None
-            return build_recaps_xlsx([recap]), recap.uuid
+                return None, None, None
+            tenant_name = getattr(getattr(recap, "event", None), "tenant", None)
+            return build_recaps_xlsx([recap]), recap.uuid, getattr(tenant_name, "name", None)
 
-        xlsx_bytes, recap_uuid = await build_xlsx_for_recap()
+        xlsx_bytes, recap_uuid, tenant_name = await build_xlsx_for_recap()
         if xlsx_bytes is None or recap_uuid is None:
             raise GraphQLError("Recap not found.")
 
         timestamp = timezone.now().strftime("%Y%m%d%H%M%S")
-        blob_name = f"recaps/exports/recap-{recap_uuid}-{timestamp}.xlsx"
+        tenant_slug = slugify(tenant_name or "tenant")
+        export_prefix = f"recaps/exports/{tenant_slug}-{recap_uuid}-"
+        blob_name = f"{export_prefix}{timestamp}.xlsx"
+
+        @sync_to_async
+        def delete_previous_exports():
+            client = get_gcs_client()
+            bucket = client.bucket(settings.GS_BUCKET_NAME)
+            for blob in bucket.list_blobs(prefix=export_prefix):
+                if blob.name != blob_name:
+                    blob.delete()
+
+        await delete_previous_exports()
         upload_bytes(
             blob_name,
             xlsx_bytes,
