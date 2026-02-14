@@ -1995,6 +1995,16 @@ input EventTypeFiltersInput {
 "\n     Errors messages and codes mapped to\n    fields or non fields errors.\n    Example:\n    {\n        field_name: [\n            {\n                \"message\": \"error message\",\n                \"code\": \"error_code\"\n            }\n        ],\n        other_field: [\n            {\n                \"message\": \"error message\",\n                \"code\": \"error_code\"\n            }\n        ],\n        nonFieldErrors: [\n            {\n                \"message\": \"error message\",\n                \"code\": \"error_code\"\n            }\n        ]\n    }\n    "
 scalar ExpectedError
 
+input ExportRecapXlsxInput {
+  clientMutationId: ID = null
+  id: ID!
+}
+
+input ExportRecapsXlsxInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+}
+
 """
 FileRecapCategory(id, uuid, name, tenant, created_by, updated_by, created_at, updated_at)
 """
@@ -2601,6 +2611,8 @@ type Mutation {
   deleteRecapFile(input: DeleteRecapFileInput!): RecapFileDetailResponse!
   approveRecap(input: ApproveRecapInput!): RecapDetailResponse!
   generateRecapPdf(input: GenerateRecapPdfInput!): RecapFileDetailResponse!
+  exportRecapsXlsx(input: ExportRecapsXlsxInput!): RecapExportResponse!
+  exportRecapXlsx(input: ExportRecapXlsxInput!): RecapExportResponse!
   register(input: BaseRegisterInput!): RegisterResponse!
   socialAuthGoogle(input: GoogleSocialAuthInput!): SocialAuthResponse!
   socialAuthApple(input: AppleSocialAuthInput!): SocialAuthResponse!
@@ -3305,6 +3317,13 @@ type RecapDetailResponse {
   message: String!
   clientMutationId: ID
   recap: Recap
+}
+
+type RecapExportResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  fileUrl: String
 }
 
 """
