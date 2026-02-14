@@ -4627,13 +4627,13 @@ type UserType {
   isActive: Boolean!
   dateJoined: DateTime!
   status: UserStatusType!
-  lastName: String
   email: String!
   id: ID!
-  firstName: String
+  lastName: String
 
   """Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only."""
   username: String!
+  firstName: String
   archived: Boolean!
   verified: Boolean!
 }
