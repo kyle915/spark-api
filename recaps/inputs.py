@@ -124,3 +124,8 @@ class ExportRecapsXlsxInput(SparkGraphQLInput):
 @strawberry.input
 class ExportRecapXlsxInput(SparkGraphQLInput):
     id: strawberry.ID
+
+
+@strawberry.input
+class RecapFileDownloadUrlInput(SparkGraphQLInput):
+    uuid: strawberry.ID

@@ -2,13 +2,9 @@ from __future__ import annotations
 
 from io import BytesIO
 from typing import Iterable
-
 from openpyxl import Workbook
 
-from utils.gcs import extract_blob_name_from_url, generate_download_url
-
-SIGNED_URL_EXPIRATION_MINUTES = 60 * 24 * 7
-
+from utils.gcs import extract_blob_name_from_url
 
 def _format_dt(value) -> str:
     if not value:
@@ -62,8 +58,12 @@ def _get_distributor_name(recap) -> str:
     return getattr(distributor, "name", "") or ""
 
 
-def build_recaps_xlsx(recaps: Iterable[object]) -> bytes:
+def build_recaps_xlsx(
+    recaps: Iterable[object],
+    frontend_base_url: str | None = None,
+) -> bytes:
     """Build an Excel report containing recap data and related tables."""
+    recaps_list = list(recaps)
     wb = Workbook()
 
     recap_sheet = wb.active
@@ -163,7 +163,7 @@ def build_recaps_xlsx(recaps: Iterable[object]) -> bytes:
         ]
     )
 
-    for recap in recaps:
+    for recap in recaps_list:
         ambassador_user = None
         if getattr(recap, "ambassador", None) and getattr(recap.ambassador, "user", None):
             ambassador_user = recap.ambassador.user
@@ -252,12 +252,14 @@ def build_recaps_xlsx(recaps: Iterable[object]) -> bytes:
 
         for recap_file in getattr(recap, "recap_files", []).all():
             file_path = getattr(recap_file, "file", None)
-            signed_url = ""
             blob_name = extract_blob_name_from_url(str(file_path)) if file_path else None
-            if blob_name:
-                signed_url = generate_download_url(
-                    blob_name, expiration_minutes=SIGNED_URL_EXPIRATION_MINUTES
+            signed_url = ""
+            if frontend_base_url:
+                recap_file_id = getattr(recap_file, "uuid", None) or getattr(
+                    recap_file, "id", None
                 )
+                if recap_file_id is not None:
+                    signed_url = f"{frontend_base_url}/recaps/files/{recap_file_id}"
             display_name = getattr(recap_file, "name", None) or ""
             if not display_name and file_path:
                 try:
