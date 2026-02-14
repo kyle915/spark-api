@@ -813,6 +813,13 @@ class RecapMutationService(SparkGraphQLMixin):
                 user=self.user,
             )
 
+        client_origin = (
+            self.info.context.request.META.get("HTTP_ORIGIN")
+            if self.info and self.info.context and self.info.context.request
+            else None
+        )
+        frontend_base_url = client_origin or settings.ADMIN_FRONTEND_URL
+
         @sync_to_async
         def build_xlsx_for_tenant():
             queryset = (
@@ -826,7 +833,7 @@ class RecapMutationService(SparkGraphQLMixin):
                 )
             )
             recaps = list(queryset.filter(event__tenant_id=tenant.id))
-            return build_recaps_xlsx(recaps)
+            return build_recaps_xlsx(recaps, frontend_base_url=frontend_base_url)
 
         xlsx_bytes = await build_xlsx_for_tenant()
 
@@ -863,6 +870,13 @@ class RecapMutationService(SparkGraphQLMixin):
         except (TypeError, ValueError, GraphQLError):
             raise GraphQLError("Invalid recap ID.")
 
+        client_origin = (
+            self.info.context.request.META.get("HTTP_ORIGIN")
+            if self.info and self.info.context and self.info.context.request
+            else None
+        )
+        frontend_base_url = client_origin or settings.ADMIN_FRONTEND_URL
+
         @sync_to_async
         def build_xlsx_for_recap():
             try:
@@ -881,7 +895,11 @@ class RecapMutationService(SparkGraphQLMixin):
             except models.Recap.DoesNotExist:
                 return None, None, None
             tenant_name = getattr(getattr(recap, "event", None), "tenant", None)
-            return build_recaps_xlsx([recap]), recap.uuid, getattr(tenant_name, "name", None)
+            return (
+                build_recaps_xlsx([recap], frontend_base_url=frontend_base_url),
+                recap.uuid,
+                getattr(tenant_name, "name", None),
+            )
 
         xlsx_bytes, recap_uuid, tenant_name = await build_xlsx_for_recap()
         if xlsx_bytes is None or recap_uuid is None:
@@ -908,6 +926,40 @@ class RecapMutationService(SparkGraphQLMixin):
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             ),
         )
+        return generate_download_url(blob_name)
+
+    async def get_recap_file_download_url(self) -> str:
+        """Return a signed download URL for a recap file."""
+        if not isinstance(self.input, inputs.RecapFileDownloadUrlInput):
+            raise GraphQLError("Invalid input type.")
+
+        recap_file_uuid = str(self.input.uuid)
+
+        if self.is_spark_schema_request(self.info, user=self.user):
+            @sync_to_async
+            def fetch_recap_file():
+                return models.RecapFile.objects.select_related(
+                    "recap",
+                    "recap__event",
+                ).get(uuid=recap_file_uuid)
+        else:
+            tenant = await self.get_user_tenant(self.info, user=self.user)
+
+            @sync_to_async
+            def fetch_recap_file():
+                return models.RecapFile.objects.select_related(
+                    "recap",
+                    "recap__event",
+                ).get(uuid=recap_file_uuid, recap__event__tenant_id=tenant.id)
+
+        try:
+            recap_file = await fetch_recap_file()
+        except models.RecapFile.DoesNotExist:
+            raise GraphQLError("Recap file not found.")
+
+        blob_name = extract_blob_name_from_url(str(recap_file.file))
+        if not blob_name:
+            raise GraphQLError("Recap file not found.")
         return generate_download_url(blob_name)
 
 
@@ -1119,6 +1171,32 @@ class RecapMutations:
         except GraphQLError as e:
             return build_mutation_response(
                 types.RecapExportResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def recap_file_download_url(
+        self,
+        info: strawberry.Info,
+        input: inputs.RecapFileDownloadUrlInput,
+    ) -> types.RecapFileUrlResponse:
+        """Return a signed download URL for a recap file."""
+        try:
+            service = RecapMutationService.with_input(input)
+            await service.set_user(info)
+            file_url = await service.get_recap_file_download_url()
+            return build_mutation_response(
+                types.RecapFileUrlResponse,
+                success=True,
+                message="Recap file URL generated successfully.",
+                input_obj=input,
+                file_url=file_url,
+            )
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.RecapFileUrlResponse,
                 success=False,
                 message=str(e),
                 input_obj=input,
