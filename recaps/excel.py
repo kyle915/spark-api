@@ -259,7 +259,7 @@ def build_recaps_xlsx(
                     recap_file, "id", None
                 )
                 if recap_file_id is not None:
-                    signed_url = f"{frontend_base_url}/recaps/files/{recap_file_id}"
+                    signed_url = f"{frontend_base_url}/recap/file/{recap_file_id}"
             display_name = getattr(recap_file, "name", None) or ""
             if not display_name and file_path:
                 try:
