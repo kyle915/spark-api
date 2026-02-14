@@ -8,6 +8,7 @@ from typing import Any
 
 import strawberry
 from asgiref.sync import sync_to_async
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.db.models import Q
@@ -15,6 +16,7 @@ from django.utils import timezone
 from graphql import GraphQLError
 
 from tenants.models import Role, Tenant, TenantedUser
+from tenants.envelopes import EmailVerificationMailer
 from gqlauth.core.utils import get_token
 from utils.utils import build_mutation_response
 from utils.graphql.inputs import SparkGraphQLInput
@@ -273,6 +275,17 @@ class PublicAmbassadorCreationService(BaseAmbassadorService):
 
             # Generate activation token
             activation_token = await sync_to_async(get_token)(user, "activation")
+            frontend_urls = {
+                "client": settings.CLIENT_FRONTEND_URL,
+                "ambassador": settings.AMBASSADOR_FRONTEND_URL,
+                "spark-admin": settings.ADMIN_FRONTEND_URL,
+            }
+            activation_url = (
+                f"{frontend_urls.get(role.slug, settings.AMBASSADOR_FRONTEND_URL)}/"
+                f"verify-account?token={activation_token}"
+            )
+            verification_email = EmailVerificationMailer(user, activation_url)
+            await verification_email.send_async()
 
             return build_mutation_response(
                 PublicAmbassadorCreationResponse,
