@@ -2613,6 +2613,7 @@ type Mutation {
   generateRecapPdf(input: GenerateRecapPdfInput!): RecapFileDetailResponse!
   exportRecapsXlsx(input: ExportRecapsXlsxInput!): RecapExportResponse!
   exportRecapXlsx(input: ExportRecapXlsxInput!): RecapExportResponse!
+  recapFileDownloadUrl(input: RecapFileDownloadUrlInput!): RecapFileUrlResponse!
   register(input: BaseRegisterInput!): RegisterResponse!
   socialAuthGoogle(input: GoogleSocialAuthInput!): SocialAuthResponse!
   socialAuthApple(input: AppleSocialAuthInput!): SocialAuthResponse!
@@ -3351,11 +3352,23 @@ type RecapFileDetailResponse {
   recapFile: RecapFile
 }
 
+input RecapFileDownloadUrlInput {
+  clientMutationId: ID = null
+  uuid: ID!
+}
+
 input RecapFileInput {
   clientMutationId: ID = null
   file: String!
   fileTypeId: ID = null
   fileRecapCategoryId: ID = null
+}
+
+type RecapFileUrlResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  fileUrl: String
 }
 
 input RecapFiltersInput {
