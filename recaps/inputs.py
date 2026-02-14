@@ -114,3 +114,13 @@ class ApproveRecapInput(SparkGraphQLInput):
 @strawberry.input
 class GenerateRecapPdfInput(SparkGraphQLInput):
     id: strawberry.ID
+
+
+@strawberry.input
+class ExportRecapsXlsxInput(SparkGraphQLInput):
+    tenant_id: strawberry.ID | None = None
+
+
+@strawberry.input
+class ExportRecapXlsxInput(SparkGraphQLInput):
+    id: strawberry.ID

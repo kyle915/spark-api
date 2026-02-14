@@ -44,6 +44,14 @@ class RecapFileDetailResponse:
     recap_file: RecapFile | None = None
 
 
+@strawberry.type
+class RecapExportResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    file_url: str | None = None
+
+
 @strawberry_django.type(models.ConsumerEngagements)
 class ConsumerEngagements(Node):
     uuid: str
