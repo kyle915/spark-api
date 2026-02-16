@@ -723,6 +723,7 @@ class RequestQueriesService(BaseEventQueriesService):
             .prefetch_related(
                 "requests_stores_manager",
                 "request_product__product",
+                "event_set",
             )
         )
 
