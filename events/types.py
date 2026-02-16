@@ -327,6 +327,13 @@ class Request(Node):
         )
         return [item.product for item in items if item.product]
 
+    @strawberry.field
+    async def event(self) -> Event | None:
+        cached = getattr(self, "_prefetched_objects_cache", {}).get("event_set")
+        if cached is not None:
+            return cached[0] if cached else None
+        return await sync_to_async(self.event_set.first)()
+
     request_type: RequestType | None = None
     status: RequestStatus | None = None
     tenant_id: strawberry.ID
