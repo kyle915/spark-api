@@ -3484,6 +3484,7 @@ type Request implements Node {
   endTime: String
   storeManagers: [RequestStoreManager!]!
   products: [Product!]!
+  event: Event
 }
 
 type RequestCountableConnection {
