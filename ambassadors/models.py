@@ -45,7 +45,7 @@ class Ambassador(Asyncable, models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     rating = models.IntegerField(default=0)
-    address = models.CharField(max_length=100, null=True)
+    address = models.TextField(null=True)
     phone = models.CharField(max_length=100, null=True)
     coordinates = ArrayField(
         models.FloatField(),
@@ -53,6 +53,10 @@ class Ambassador(Asyncable, models.Model):
         default=list,
     )
     is_active = models.BooleanField(default=False)
+    location = models.ForeignKey(
+        Location, on_delete=models.RESTRICT, null=True, related_name="ambassador"
+    )
+    t_shirt_size = models.CharField(max_length=100, null=True)
 
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,

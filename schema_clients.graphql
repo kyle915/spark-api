@@ -1984,6 +1984,16 @@ input EventTypeFiltersInput {
 "\n     Errors messages and codes mapped to\n    fields or non fields errors.\n    Example:\n    {\n        field_name: [\n            {\n                \"message\": \"error message\",\n                \"code\": \"error_code\"\n            }\n        ],\n        other_field: [\n            {\n                \"message\": \"error message\",\n                \"code\": \"error_code\"\n            }\n        ],\n        nonFieldErrors: [\n            {\n                \"message\": \"error message\",\n                \"code\": \"error_code\"\n            }\n        ]\n    }\n    "
 scalar ExpectedError
 
+input ExportRecapXlsxInput {
+  clientMutationId: ID = null
+  id: ID!
+}
+
+input ExportRecapsXlsxInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+}
+
 """
 FileRecapCategory(id, uuid, name, tenant, created_by, updated_by, created_at, updated_at)
 """
@@ -2590,6 +2600,9 @@ type Mutation {
   deleteRecapFile(input: DeleteRecapFileInput!): RecapFileDetailResponse!
   approveRecap(input: ApproveRecapInput!): RecapDetailResponse!
   generateRecapPdf(input: GenerateRecapPdfInput!): RecapFileDetailResponse!
+  exportRecapsXlsx(input: ExportRecapsXlsxInput!): RecapExportResponse!
+  exportRecapXlsx(input: ExportRecapXlsxInput!): RecapExportResponse!
+  recapFileDownloadUrl(input: RecapFileDownloadUrlInput!): RecapFileUrlResponse!
   register(input: ClientRegisterInput!): RegisterResponse!
   socialAuthGoogle(input: GoogleSocialAuthInput!): SocialAuthResponse!
   socialAuthApple(input: AppleSocialAuthInput!): SocialAuthResponse!
@@ -3295,6 +3308,13 @@ type RecapDetailResponse {
   recap: Recap
 }
 
+type RecapExportResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  fileUrl: String
+}
+
 """
 RecapFile(id, uuid, name, file, approved, recap, file_type, file_recap_category, created_by, updated_by, created_at, updated_at)
 """
@@ -3320,11 +3340,23 @@ type RecapFileDetailResponse {
   recapFile: RecapFile
 }
 
+input RecapFileDownloadUrlInput {
+  clientMutationId: ID = null
+  uuid: ID!
+}
+
 input RecapFileInput {
   clientMutationId: ID = null
   file: String!
   fileTypeId: ID = null
   fileRecapCategoryId: ID = null
+}
+
+type RecapFileUrlResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  fileUrl: String
 }
 
 input RecapFiltersInput {
@@ -3440,6 +3472,7 @@ type Request implements Node {
   endTime: String
   storeManagers: [RequestStoreManager!]!
   products: [Product!]!
+  event: Event
 }
 
 type RequestCountableConnection {
