@@ -820,6 +820,10 @@ class UpsertAmbassadorProfileService(BaseAmbassadorService):
                 ambassador.address = input.address
             if input.phone is not None:
                 ambassador.phone = input.phone
+            if input.location_id is not None:
+                ambassador.location_id = resolve_id_to_int(input.location_id)
+            if input.t_shirt_size is not None:
+                ambassador.t_shirt_size = input.t_shirt_size
             if input.coordinates is not None:
                 ambassador.coordinates = input.coordinates
             if input.is_active is not None:

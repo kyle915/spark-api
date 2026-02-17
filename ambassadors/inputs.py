@@ -223,6 +223,8 @@ class UpsertAmbassadorProfileInput(SparkGraphQLInput):
 
     ambassador_id: strawberry.ID | None = None
     ambassador_uuid: strawberry.ID | None = None
+    location_id: strawberry.ID | None = None
+    t_shirt_size: str | None = None
     address: str | None = None
     phone: str | None = None
     coordinates: List[float] | None = None
