@@ -30,8 +30,18 @@ from .envelopes import (
     ClientRequestCreatedNotificationMailer,
     RequestorRequestCreatedMailer,
 )
-from utils.gcs import delete_blob, extract_blob_name_from_url
+from utils.gcs import (
+    delete_blob,
+    download_blob_bytes,
+    extract_blob_name_from_url,
+    generate_download_url,
+    upload_bytes,
+)
 from tenants.models import Tenant, User
+from events.batch_requests import (
+    build_request_batch_template_xlsx,
+    import_requests_from_excel_bytes,
+)
 
 ensure_relay_mutation()
 
@@ -1898,6 +1908,187 @@ async def _notify_requestor_for_request_created(
 
 @strawberry.type
 class RequestMutations:
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def request_batch_template_download_url(
+        self,
+        info: strawberry.Info,
+        input: inputs.RequestBatchTemplateInput,
+    ) -> types.RequestBatchTemplateResponse:
+        """Generate and return a signed download URL for the batch request template."""
+        try:
+            service = RequestMutationService()
+            user: User = await service.get_user(info)
+            is_spark_request = service.is_spark_schema_request(info, user=user)
+
+            input_tenant_id = getattr(input, "tenant_id", None)
+            tenant_id: int
+
+            if is_spark_request and input_tenant_id:
+                tenant_id = await service._resolve_tenant_without_membership(
+                    input_tenant_id
+                )
+            else:
+                resolved_tenant_id: int | None = None
+                if input_tenant_id not in (None, ""):
+                    resolved_tenant_id = resolve_id_to_int(input_tenant_id)
+                tenant = await service.get_tenant(user, resolved_tenant_id)
+                tenant_id = tenant.id
+
+            template_bytes = await sync_to_async(build_request_batch_template_xlsx)(
+                tenant_id=tenant_id
+            )
+            timestamp = datetime.datetime.utcnow().strftime("%Y%m%d%H%M%S")
+            blob_name = (
+                f"requests/import-templates/tenant-{tenant_id}/"
+                f"requests-import-template-{timestamp}.xlsx"
+            )
+
+            await sync_to_async(upload_bytes)(
+                blob_name,
+                template_bytes,
+                content_type=(
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                ),
+            )
+            file_url = await sync_to_async(generate_download_url)(blob_name)
+
+            return build_mutation_response(
+                types.RequestBatchTemplateResponse,
+                success=True,
+                message="Template URL generated successfully.",
+                input_obj=input,
+                file_url=file_url,
+            )
+        except (GraphQLError, ValueError) as e:
+            return build_mutation_response(
+                types.RequestBatchTemplateResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+                file_url=None,
+            )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def import_requests_batch(
+        self,
+        info: strawberry.Info,
+        input: inputs.ImportRequestsBatchInput,
+    ) -> types.RequestBatchImportResponse:
+        """Import requests from an Excel file stored in GCS."""
+        try:
+            service = RequestMutationService()
+            user: User = await service.get_user(info)
+            is_spark_request = service.is_spark_schema_request(info, user=user)
+
+            input_tenant_id = getattr(input, "tenant_id", None)
+            tenant_id: int
+
+            if is_spark_request and input_tenant_id:
+                tenant_id = await service._resolve_tenant_without_membership(
+                    input_tenant_id
+                )
+            else:
+                resolved_tenant_id: int | None = None
+                if input_tenant_id not in (None, ""):
+                    resolved_tenant_id = resolve_id_to_int(input_tenant_id)
+                tenant = await service.get_tenant(user, resolved_tenant_id)
+                tenant_id = tenant.id
+
+            default_timezone_id = (
+                resolve_id_to_int(input.default_timezone_id)
+                if input.default_timezone_id not in (None, "")
+                else None
+            )
+            default_request_type_id = (
+                resolve_id_to_int(input.default_request_type_id)
+                if input.default_request_type_id not in (None, "")
+                else None
+            )
+
+            blob_name = extract_blob_name_from_url(input.file)
+            if not blob_name:
+                raise GraphQLError("Invalid file path.")
+
+            file_bytes = await sync_to_async(download_blob_bytes)(blob_name)
+            if not file_bytes:
+                raise GraphQLError("Batch file not found.")
+
+            sheet_name: str | int = input.sheet_name
+            if isinstance(sheet_name, str) and sheet_name.isdigit():
+                sheet_name = int(sheet_name)
+
+            result = await sync_to_async(import_requests_from_excel_bytes)(
+                file_bytes=file_bytes,
+                tenant_id=tenant_id,
+                created_by_id=user.id,
+                default_timezone_id=default_timezone_id,
+                default_request_type_id=default_request_type_id,
+                sheet_name=sheet_name,
+                dry_run=input.dry_run,
+                rollback_on_error=input.rollback_on_error,
+            )
+
+            rows = [
+                types.RequestBatchRowResult(
+                    row_number=row.row_number,
+                    success=row.success,
+                    message=row.message,
+                    request_id=str(row.request_id) if row.request_id else None,
+                    request_uuid=row.request_uuid,
+                )
+                for row in result.rows
+            ]
+            errors = [
+                f"row {row.row_number}: {error_part.strip()}"
+                for row in result.rows
+                if (not row.success)
+                and row.message != "Rolled back because another row failed."
+                for error_part in str(row.message).split("|")
+                if error_part.strip()
+            ]
+            if not errors and result.failed_count > 0:
+                errors = [
+                    f"row {row.row_number}: {row.message}"
+                    for row in result.rows
+                    if not row.success
+                ]
+
+            return build_mutation_response(
+                types.RequestBatchImportResponse,
+                success=result.failed_count == 0,
+                message=(
+                    "Batch validated successfully."
+                    if input.dry_run and result.failed_count == 0
+                    else "Batch validation finished with errors."
+                    if input.dry_run
+                    else "Batch failed and was rolled back."
+                    if result.rolled_back
+                    else "Batch imported successfully."
+                    if result.failed_count == 0
+                    else "Batch imported with row errors."
+                ),
+                input_obj=input,
+                total_rows=result.total_rows,
+                success_count=result.success_count,
+                failed_count=result.failed_count,
+                rolled_back=result.rolled_back,
+                errors=errors,
+                rows=rows,
+            )
+        except (GraphQLError, ValueError) as e:
+            return build_mutation_response(
+                types.RequestBatchImportResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+                total_rows=0,
+                success_count=0,
+                failed_count=0,
+                rolled_back=False,
+                errors=[str(e)],
+                rows=[],
+            )
+
     @relay.mutation(permission_classes=[StrictIsAuthenticated])
     async def create_request(
         self,
