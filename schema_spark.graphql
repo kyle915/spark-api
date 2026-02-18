@@ -63,7 +63,7 @@ type AddAmbassadorsToGroupResponse {
 }
 
 """
-Ambassador(id, uuid, rating, address, phone, coordinates, is_active, user, created_by, updated_by, created_at, updated_at)
+Ambassador(id, uuid, rating, address, phone, coordinates, is_active, location, t_shirt_size, user, created_by, updated_by, created_at, updated_at)
 """
 type Ambassador implements Node {
   """The Globally Unique ID of this object"""
@@ -74,6 +74,8 @@ type Ambassador implements Node {
   phone: String
   coordinates: [Float!]!
   isActive: Boolean!
+  location: Location
+  tShirtSize: String
   user: SparkUserType!
   createdAt: String!
   updatedAt: String!
@@ -2129,6 +2131,17 @@ type GroupTypeResponse {
   groupType: GroupType
 }
 
+input ImportRequestsBatchInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  file: String!
+  defaultTimezoneId: ID = null
+  defaultRequestTypeId: ID = null
+  sheetName: String! = "0"
+  dryRun: Boolean! = false
+  rollbackOnError: Boolean! = true
+}
+
 type InsightReport {
   id: ID!
   uuid: String!
@@ -2597,6 +2610,8 @@ type Mutation {
   updateRequestType(input: UpdateRequestTypeInput!): RequestTypeDetailResponse!
   createRequestStatus(input: CreateRequestStatusInput!): RequestStatusDetailResponse!
   updateRequestStatus(input: UpdateRequestStatusInput!): RequestStatusDetailResponse!
+  requestBatchTemplateDownloadUrl(input: RequestBatchTemplateInput!): RequestBatchTemplateResponse!
+  importRequestsBatch(input: ImportRequestsBatchInput!): RequestBatchImportResponse!
   createRequest(input: CreateRequestInput!): RequestDetailResponse!
   updateRequest(input: UpdateRequestInput!): RequestDetailResponse!
   approveRequest(input: ApproveRequestInput!): ApproveRequestResponse!
@@ -3485,6 +3500,38 @@ type Request implements Node {
   storeManagers: [RequestStoreManager!]!
   products: [Product!]!
   event: Event
+}
+
+type RequestBatchImportResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  totalRows: Int!
+  successCount: Int!
+  failedCount: Int!
+  rolledBack: Boolean!
+  errors: [String!]!
+  rows: [RequestBatchRowResult!]!
+}
+
+type RequestBatchRowResult {
+  rowNumber: Int!
+  success: Boolean!
+  message: String!
+  requestId: ID
+  requestUuid: String
+}
+
+input RequestBatchTemplateInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+}
+
+type RequestBatchTemplateResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  fileUrl: String
 }
 
 type RequestCountableConnection {
@@ -4596,6 +4643,8 @@ input UpsertAmbassadorProfileInput {
   clientMutationId: ID = null
   ambassadorId: ID = null
   ambassadorUuid: ID = null
+  locationId: ID = null
+  tShirtSize: String = null
   address: String = null
   phone: String = null
   coordinates: [Float!] = null

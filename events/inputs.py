@@ -375,6 +375,21 @@ class CreateRequestWithDependenciesInput(BaseNameableInput):
 
 
 @strawberry.input
+class ImportRequestsBatchInput(BaseTenantInput):
+    file: str
+    default_timezone_id: strawberry.ID | None = None
+    default_request_type_id: strawberry.ID | None = None
+    sheet_name: str = "0"
+    dry_run: bool = False
+    rollback_on_error: bool = True
+
+
+@strawberry.input
+class RequestBatchTemplateInput(BaseTenantInput):
+    pass
+
+
+@strawberry.input
 class CreateRequestStoreManagerInput(BaseTenantInput):
     name: str
     phone: str

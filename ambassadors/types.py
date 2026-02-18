@@ -5,7 +5,7 @@ from asgiref.sync import sync_to_async
 
 from . import models
 from tenants.types import SparkUserType
-from events.types import Event
+from events.types import Event, Location
 
 
 @strawberry_django.type(models.FileType)
@@ -25,6 +25,8 @@ class Ambassador(Node):
     phone: str | None
     coordinates: list[float]
     is_active: bool
+    location: Location | None
+    t_shirt_size: str | None
     user: SparkUserType
     created_at: str
     updated_at: str

@@ -208,6 +208,35 @@ uv run pytest tenants/tests/test_google_calendar_mutations.py -v
 | `uv run python manage.py rqworker high default low` | Start RQ worker for background tasks |
 | `redis-cli ping` | Check if Redis is running |
 | `uv run python manage.py sync_events_to_google_calendar` | Sync existing events to Google Calendar for all connected users |
+| `uv run python manage.py import_requests_batch --template-out /tmp/requests_template.xlsx` | Generate batch import template for requests |
+| `uv run python manage.py import_requests_batch --file /tmp/requests.xlsx --tenant-id 1 --user-id 2` | Import requests in batch from Excel |
+
+### Import Requests in Batch (Excel)
+
+Use `openpyxl` to import multiple `Request` records at once:
+
+```bash
+# 1) Generate template
+uv run python manage.py import_requests_batch --template-out /tmp/requests_template.xlsx
+
+# 2) Validate without inserting
+uv run python manage.py import_requests_batch \
+  --file /tmp/requests.xlsx \
+  --tenant-id 1 \
+  --user-id 2 \
+  --dry-run
+
+# 3) Import
+uv run python manage.py import_requests_batch \
+  --file /tmp/requests.xlsx \
+  --tenant-id 1 \
+  --user-id 2
+```
+
+Optional defaults:
+- `--default-timezone-id`
+- `--default-request-type-id`
+- `--sheet-name` (sheet index or name)
 
 ### Sync Events to Google Calendar
 

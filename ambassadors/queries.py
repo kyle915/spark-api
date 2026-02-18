@@ -419,11 +419,15 @@ class AmbassadorManagementQueries:
         try:
             if id:
                 ambassador = await sync_to_async(
-                    models.Ambassador.objects.select_related("user").get
+                    models.Ambassador.objects.select_related(
+                        "user", "location", "location__state"
+                    ).get
                 )(id=id)
             else:
                 ambassador = await sync_to_async(
-                    models.Ambassador.objects.select_related("user").get
+                    models.Ambassador.objects.select_related(
+                        "user", "location", "location__state"
+                    ).get
                 )(uuid=uuid)
             return ambassador
         except models.Ambassador.DoesNotExist:
@@ -458,7 +462,9 @@ class AmbassadorProfileQueries:
             filters = {"user_id": resolved_user_id}
 
         try:
-            ambassador = await models.Ambassador.objects.select_related("user").aget(
+            ambassador = await models.Ambassador.objects.select_related(
+                "user", "location", "location__state"
+            ).aget(
                 **filters
             )
         except models.Ambassador.DoesNotExist:
