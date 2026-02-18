@@ -372,6 +372,36 @@ class RequestDetailResponse:
 
 
 @strawberry.type
+class RequestBatchRowResult:
+    row_number: int
+    success: bool
+    message: str
+    request_id: strawberry.ID | None = None
+    request_uuid: str | None = None
+
+
+@strawberry.type
+class RequestBatchImportResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    total_rows: int
+    success_count: int
+    failed_count: int
+    rolled_back: bool
+    errors: List[str]
+    rows: List[RequestBatchRowResult]
+
+
+@strawberry.type
+class RequestBatchTemplateResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    file_url: str | None = None
+
+
+@strawberry.type
 class RequestListResponse:
     total_pages: int
     requests: List[Request]
