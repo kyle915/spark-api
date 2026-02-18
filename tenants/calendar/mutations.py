@@ -70,7 +70,8 @@ class GoogleCalendarMutations:
                 await sync_to_async(existing_connection.save)()
 
             # Create OAuth flow and generate state
-            flow = GoogleCalendarOAuthHelper.create_oauth_flow()
+            flow = GoogleCalendarOAuthHelper.create_oauth_flow(
+                client_origin=info.context.request.META.get('HTTP_ORIGIN'))
             state = GoogleCalendarOAuthHelper.generate_state_token()
 
             # Store state for validation
@@ -124,8 +125,10 @@ class GoogleCalendarMutations:
                     input_obj=input,
                 )
 
-            # Create OAuth flow and exchange code for tokens
-            flow = GoogleCalendarOAuthHelper.create_oauth_flow()
+            # Create OAuth flow and exchange code for tokens  
+            flow = GoogleCalendarOAuthHelper.create_oauth_flow(
+                client_origin=info.context.request.META.get('HTTP_ORIGIN')
+            )
             flow.fetch_token(code=input.code)
             credentials = flow.credentials
 

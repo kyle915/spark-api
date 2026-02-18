@@ -63,7 +63,7 @@ type AddAmbassadorsToGroupResponse {
 }
 
 """
-Ambassador(id, uuid, rating, address, phone, coordinates, is_active, user, created_by, updated_by, created_at, updated_at)
+Ambassador(id, uuid, rating, address, phone, coordinates, is_active, location, t_shirt_size, user, created_by, updated_by, created_at, updated_at)
 """
 type Ambassador implements Node {
   """The Globally Unique ID of this object"""
@@ -74,6 +74,8 @@ type Ambassador implements Node {
   phone: String
   coordinates: [Float!]!
   isActive: Boolean!
+  location: Location
+  tShirtSize: String
   user: SparkUserType!
   createdAt: String!
   updatedAt: String!
@@ -1419,6 +1421,8 @@ input CreateRecapInput {
   eventId: ID!
   files: [RecapFileInput!]!
   productsSold: Int = null
+  totalCansSold: Int = null
+  totalPacksSold: Int = null
   totalEarnings: Float = null
   accountSpendAmount: Float = null
   jobId: ID = null
@@ -1993,6 +1997,16 @@ input EventTypeFiltersInput {
 "\n     Errors messages and codes mapped to\n    fields or non fields errors.\n    Example:\n    {\n        field_name: [\n            {\n                \"message\": \"error message\",\n                \"code\": \"error_code\"\n            }\n        ],\n        other_field: [\n            {\n                \"message\": \"error message\",\n                \"code\": \"error_code\"\n            }\n        ],\n        nonFieldErrors: [\n            {\n                \"message\": \"error message\",\n                \"code\": \"error_code\"\n            }\n        ]\n    }\n    "
 scalar ExpectedError
 
+input ExportRecapXlsxInput {
+  clientMutationId: ID = null
+  id: ID!
+}
+
+input ExportRecapsXlsxInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+}
+
 """
 FileRecapCategory(id, uuid, name, tenant, created_by, updated_by, created_at, updated_at)
 """
@@ -2115,6 +2129,17 @@ type GroupTypeResponse {
   message: String!
   clientMutationId: ID
   groupType: GroupType
+}
+
+input ImportRequestsBatchInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  file: String!
+  defaultTimezoneId: ID = null
+  defaultRequestTypeId: ID = null
+  sheetName: String! = "0"
+  dryRun: Boolean! = false
+  rollbackOnError: Boolean! = true
 }
 
 type InsightReport {
@@ -2585,6 +2610,8 @@ type Mutation {
   updateRequestType(input: UpdateRequestTypeInput!): RequestTypeDetailResponse!
   createRequestStatus(input: CreateRequestStatusInput!): RequestStatusDetailResponse!
   updateRequestStatus(input: UpdateRequestStatusInput!): RequestStatusDetailResponse!
+  requestBatchTemplateDownloadUrl(input: RequestBatchTemplateInput!): RequestBatchTemplateResponse!
+  importRequestsBatch(input: ImportRequestsBatchInput!): RequestBatchImportResponse!
   createRequest(input: CreateRequestInput!): RequestDetailResponse!
   updateRequest(input: UpdateRequestInput!): RequestDetailResponse!
   approveRequest(input: ApproveRequestInput!): ApproveRequestResponse!
@@ -2599,6 +2626,9 @@ type Mutation {
   deleteRecapFile(input: DeleteRecapFileInput!): RecapFileDetailResponse!
   approveRecap(input: ApproveRecapInput!): RecapDetailResponse!
   generateRecapPdf(input: GenerateRecapPdfInput!): RecapFileDetailResponse!
+  exportRecapsXlsx(input: ExportRecapsXlsxInput!): RecapExportResponse!
+  exportRecapXlsx(input: ExportRecapXlsxInput!): RecapExportResponse!
+  recapFileDownloadUrl(input: RecapFileDownloadUrlInput!): RecapFileUrlResponse!
   register(input: BaseRegisterInput!): RegisterResponse!
   socialAuthGoogle(input: GoogleSocialAuthInput!): SocialAuthResponse!
   socialAuthApple(input: AppleSocialAuthInput!): SocialAuthResponse!
@@ -3209,7 +3239,7 @@ input RateTypeFiltersInput {
 }
 
 """
-Recap(id, uuid, name, submited_at, total_engagements, products_sold, total_earnings, account_spend_amount, approved, timezone, event, ambassador, job, retailer, created_by, updated_by, created_at, updated_at)
+Recap(id, uuid, name, submited_at, total_engagements, products_sold, total_earnings, total_cans_sold, total_packs_sold, account_spend_amount, approved, timezone, event, ambassador, job, retailer, created_by, updated_by, created_at, updated_at)
 """
 type Recap implements Node {
   """The Globally Unique ID of this object"""
@@ -3229,6 +3259,8 @@ type Recap implements Node {
   updatedAt: String!
   totalEngagements: Int
   productsSold: Int
+  totalCansSold: Int
+  totalPacksSold: Int
   totalEarnings: Float
   accountSpendAmount: Float
   consumerEngagements: [ConsumerEngagements!]!
@@ -3303,6 +3335,13 @@ type RecapDetailResponse {
   recap: Recap
 }
 
+type RecapExportResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  fileUrl: String
+}
+
 """
 RecapFile(id, uuid, name, file, approved, recap, file_type, file_recap_category, created_by, updated_by, created_at, updated_at)
 """
@@ -3316,6 +3355,7 @@ type RecapFile implements Node {
   fileRecapCategoryId: ID
   createdAt: String!
   updatedAt: String!
+  fileType: FileType!
   fileRecapCategory: FileRecapCategory
   file: String
 }
@@ -3327,6 +3367,11 @@ type RecapFileDetailResponse {
   recapFile: RecapFile
 }
 
+input RecapFileDownloadUrlInput {
+  clientMutationId: ID = null
+  uuid: ID!
+}
+
 input RecapFileInput {
   clientMutationId: ID = null
   file: String!
@@ -3334,10 +3379,18 @@ input RecapFileInput {
   fileRecapCategoryId: ID = null
 }
 
+type RecapFileUrlResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  fileUrl: String
+}
+
 input RecapFiltersInput {
   clientMutationId: ID = null
   eventId: ID = null
   retailerId: ID = null
+  eventAddress: String = null
   edited: Boolean = null
 }
 
@@ -3446,6 +3499,39 @@ type Request implements Node {
   endTime: String
   storeManagers: [RequestStoreManager!]!
   products: [Product!]!
+  event: Event
+}
+
+type RequestBatchImportResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  totalRows: Int!
+  successCount: Int!
+  failedCount: Int!
+  rolledBack: Boolean!
+  errors: [String!]!
+  rows: [RequestBatchRowResult!]!
+}
+
+type RequestBatchRowResult {
+  rowNumber: Int!
+  success: Boolean!
+  message: String!
+  requestId: ID
+  requestUuid: String
+}
+
+input RequestBatchTemplateInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+}
+
+type RequestBatchTemplateResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  fileUrl: String
 }
 
 type RequestCountableConnection {
@@ -4397,6 +4483,8 @@ input UpdateRecapInput {
   eventId: ID!
   files: [RecapFileInput!]!
   productsSold: Int = null
+  totalCansSold: Int = null
+  totalPacksSold: Int = null
   totalEarnings: Float = null
   accountSpendAmount: Float = null
   jobId: ID = null
@@ -4555,6 +4643,8 @@ input UpsertAmbassadorProfileInput {
   clientMutationId: ID = null
   ambassadorId: ID = null
   ambassadorUuid: ID = null
+  locationId: ID = null
+  tShirtSize: String = null
   address: String = null
   phone: String = null
   coordinates: [Float!] = null
@@ -4619,13 +4709,13 @@ type UserType {
   isActive: Boolean!
   dateJoined: DateTime!
   status: UserStatusType!
-  lastName: String
   email: String!
   id: ID!
-  firstName: String
+  lastName: String
 
   """Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only."""
   username: String!
+  firstName: String
   archived: Boolean!
   verified: Boolean!
 }

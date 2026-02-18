@@ -8,10 +8,13 @@ from django.contrib.auth import get_user_model
 from django.db.models import Model, Prefetch, Q
 from django.db import transaction
 from django.utils import timezone
+from django.conf import settings
+from django.utils.text import slugify
 
 from recaps import types
 from recaps import models
 from recaps import inputs
+from recaps.queries import RecapQueriesService
 from ambassadors.models import FileType, Ambassador
 from events.models import Event, Retailer
 from jobs.models import Job
@@ -25,8 +28,11 @@ from utils.gcs import (
     delete_blob,
     upload_bytes,
     download_blob_bytes,
+    generate_download_url,
+    get_gcs_client,
 )
 from recaps.pdf import build_recap_pdf, should_embed_recap_file, is_image_bytes
+from recaps.excel import build_recaps_xlsx
 
 ensure_relay_mutation()
 
@@ -167,6 +173,8 @@ class RecapMutationService(SparkGraphQLMixin):
                     created_by=self.user,
                     total_engagements=total_engagements,
                     products_sold=self.input.products_sold,
+                    total_cans_sold=self.input.total_cans_sold,
+                    total_packs_sold=self.input.total_packs_sold,
                     total_earnings=self.input.total_earnings,
                     account_spend_amount=self.input.account_spend_amount,
                     job=job,
@@ -402,6 +410,8 @@ class RecapMutationService(SparkGraphQLMixin):
                 recap.name = self.input.name
                 recap.event = event
                 recap.products_sold = self.input.products_sold
+                recap.total_cans_sold = self.input.total_cans_sold
+                recap.total_packs_sold = self.input.total_packs_sold
                 recap.total_earnings = self.input.total_earnings
                 recap.account_spend_amount = self.input.account_spend_amount
                 if self.input.consumer_engagements is not None:
@@ -778,6 +788,180 @@ class RecapMutationService(SparkGraphQLMixin):
                 delete_blob(existing_blob_name)
         return recap_file
 
+    async def export_recaps_xlsx(self) -> str:
+        """Generate an Excel report with all recaps for a tenant and return a signed URL."""
+        if not isinstance(self.input, inputs.ExportRecapsXlsxInput):
+            raise GraphQLError("Invalid input type.")
+
+        resolved_tenant_id: int | None = None
+        if self.input.tenant_id not in (None, ""):
+            try:
+                resolved_tenant_id = resolve_id_to_int(self.input.tenant_id)
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Invalid tenant ID.")
+
+        if self.is_spark_schema_request(self.info, user=self.user):
+            if resolved_tenant_id is None:
+                raise GraphQLError("Tenant ID is required.")
+            tenant = await self._get_tenant_without_membership(
+                tenant_id=resolved_tenant_id
+            )
+        else:
+            tenant = await self.get_user_tenant(
+                self.info,
+                tenant_id=resolved_tenant_id,
+                user=self.user,
+            )
+
+        client_origin = (
+            self.info.context.request.META.get("HTTP_ORIGIN")
+            if self.info and self.info.context and self.info.context.request
+            else None
+        )
+        frontend_base_url = client_origin or settings.ADMIN_FRONTEND_URL
+
+        @sync_to_async
+        def build_xlsx_for_tenant():
+            queryset = (
+                RecapQueriesService()
+                .get_queryset()
+                .select_related(
+                    "event__request__retailer",
+                    "event__request__distributor",
+                    "ambassador",
+                    "ambassador__user",
+                )
+            )
+            recaps = list(queryset.filter(event__tenant_id=tenant.id))
+            return build_recaps_xlsx(recaps, frontend_base_url=frontend_base_url)
+
+        xlsx_bytes = await build_xlsx_for_tenant()
+
+        timestamp = timezone.now().strftime("%Y%m%d%H%M%S")
+        tenant_slug = slugify(getattr(tenant, "name", "") or "tenant")
+        export_prefix = f"recaps/exports/{tenant_slug}-"
+        blob_name = f"{export_prefix}{timestamp}.xlsx"
+
+        @sync_to_async
+        def delete_previous_exports():
+            client = get_gcs_client()
+            bucket = client.bucket(settings.GS_BUCKET_NAME)
+            for blob in bucket.list_blobs(prefix=export_prefix):
+                if blob.name != blob_name:
+                    blob.delete()
+
+        await delete_previous_exports()
+        upload_bytes(
+            blob_name,
+            xlsx_bytes,
+            content_type=(
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            ),
+        )
+        return generate_download_url(blob_name)
+
+    async def export_recap_xlsx(self) -> str:
+        """Generate an Excel report for a single recap and return a signed URL."""
+        if not isinstance(self.input, inputs.ExportRecapXlsxInput):
+            raise GraphQLError("Invalid input type.")
+
+        try:
+            recap_id = resolve_id_to_int(self.input.id)
+        except (TypeError, ValueError, GraphQLError):
+            raise GraphQLError("Invalid recap ID.")
+
+        client_origin = (
+            self.info.context.request.META.get("HTTP_ORIGIN")
+            if self.info and self.info.context and self.info.context.request
+            else None
+        )
+        frontend_base_url = client_origin or settings.ADMIN_FRONTEND_URL
+
+        @sync_to_async
+        def build_xlsx_for_recap():
+            try:
+                recap = (
+                    RecapQueriesService()
+                    .get_queryset()
+                    .select_related(
+                        "event__request__retailer",
+                        "event__request__distributor",
+                        "event__tenant",
+                        "ambassador",
+                        "ambassador__user",
+                    )
+                    .get(id=recap_id)
+                )
+            except models.Recap.DoesNotExist:
+                return None, None, None
+            tenant_name = getattr(getattr(recap, "event", None), "tenant", None)
+            return (
+                build_recaps_xlsx([recap], frontend_base_url=frontend_base_url),
+                recap.uuid,
+                getattr(tenant_name, "name", None),
+            )
+
+        xlsx_bytes, recap_uuid, tenant_name = await build_xlsx_for_recap()
+        if xlsx_bytes is None or recap_uuid is None:
+            raise GraphQLError("Recap not found.")
+
+        timestamp = timezone.now().strftime("%Y%m%d%H%M%S")
+        tenant_slug = slugify(tenant_name or "tenant")
+        export_prefix = f"recaps/exports/{tenant_slug}-{recap_uuid}-"
+        blob_name = f"{export_prefix}{timestamp}.xlsx"
+
+        @sync_to_async
+        def delete_previous_exports():
+            client = get_gcs_client()
+            bucket = client.bucket(settings.GS_BUCKET_NAME)
+            for blob in bucket.list_blobs(prefix=export_prefix):
+                if blob.name != blob_name:
+                    blob.delete()
+
+        await delete_previous_exports()
+        upload_bytes(
+            blob_name,
+            xlsx_bytes,
+            content_type=(
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            ),
+        )
+        return generate_download_url(blob_name)
+
+    async def get_recap_file_download_url(self) -> str:
+        """Return a signed download URL for a recap file."""
+        if not isinstance(self.input, inputs.RecapFileDownloadUrlInput):
+            raise GraphQLError("Invalid input type.")
+
+        recap_file_uuid = str(self.input.uuid)
+
+        if self.is_spark_schema_request(self.info, user=self.user):
+            @sync_to_async
+            def fetch_recap_file():
+                return models.RecapFile.objects.select_related(
+                    "recap",
+                    "recap__event",
+                ).get(uuid=recap_file_uuid)
+        else:
+            tenant = await self.get_user_tenant(self.info, user=self.user)
+
+            @sync_to_async
+            def fetch_recap_file():
+                return models.RecapFile.objects.select_related(
+                    "recap",
+                    "recap__event",
+                ).get(uuid=recap_file_uuid, recap__event__tenant_id=tenant.id)
+
+        try:
+            recap_file = await fetch_recap_file()
+        except models.RecapFile.DoesNotExist:
+            raise GraphQLError("Recap file not found.")
+
+        blob_name = extract_blob_name_from_url(str(recap_file.file))
+        if not blob_name:
+            raise GraphQLError("Recap file not found.")
+        return generate_download_url(blob_name)
+
 
 @strawberry.type
 class RecapMutations:
@@ -935,6 +1119,84 @@ class RecapMutations:
         except GraphQLError as e:
             return build_mutation_response(
                 types.RecapFileDetailResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def export_recaps_xlsx(
+        self,
+        info: strawberry.Info,
+        input: inputs.ExportRecapsXlsxInput,
+    ) -> types.RecapExportResponse:
+        """Export all recaps for a tenant to an Excel file."""
+        try:
+            service = RecapMutationService.with_input(input)
+            await service.set_user(info)
+            file_url = await service.export_recaps_xlsx()
+            return build_mutation_response(
+                types.RecapExportResponse,
+                success=True,
+                message="Recaps exported successfully.",
+                input_obj=input,
+                file_url=file_url,
+            )
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.RecapExportResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def export_recap_xlsx(
+        self,
+        info: strawberry.Info,
+        input: inputs.ExportRecapXlsxInput,
+    ) -> types.RecapExportResponse:
+        """Export a single recap to an Excel file."""
+        try:
+            service = RecapMutationService.with_input(input)
+            await service.set_user(info)
+            file_url = await service.export_recap_xlsx()
+            return build_mutation_response(
+                types.RecapExportResponse,
+                success=True,
+                message="Recap exported successfully.",
+                input_obj=input,
+                file_url=file_url,
+            )
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.RecapExportResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def recap_file_download_url(
+        self,
+        info: strawberry.Info,
+        input: inputs.RecapFileDownloadUrlInput,
+    ) -> types.RecapFileUrlResponse:
+        """Return a signed download URL for a recap file."""
+        try:
+            service = RecapMutationService.with_input(input)
+            await service.set_user(info)
+            file_url = await service.get_recap_file_download_url()
+            return build_mutation_response(
+                types.RecapFileUrlResponse,
+                success=True,
+                message="Recap file URL generated successfully.",
+                input_obj=input,
+                file_url=file_url,
+            )
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.RecapFileUrlResponse,
                 success=False,
                 message=str(e),
                 input_obj=input,

@@ -22,6 +22,7 @@ class RecapFile(Node):
     created_at: str
     updated_at: str
 
+    file_type: ambassador_types.FileType
     file_recap_category: FileRecapCategory | None
 
     @strawberry.field
@@ -41,6 +42,22 @@ class RecapFileDetailResponse:
     message: str
     client_mutation_id: strawberry.ID | None = None
     recap_file: RecapFile | None = None
+
+
+@strawberry.type
+class RecapExportResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    file_url: str | None = None
+
+
+@strawberry.type
+class RecapFileUrlResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    file_url: str | None = None
 
 
 @strawberry_django.type(models.ConsumerEngagements)
@@ -130,6 +147,8 @@ class Recap(Node):
 
     total_engagements: int | None
     products_sold: int | None
+    total_cans_sold: int | None
+    total_packs_sold: int | None
     total_earnings: float | None
     account_spend_amount: float | None
 

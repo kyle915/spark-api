@@ -30,7 +30,11 @@ dependencies = [
     "weasyprint>=67.0",
     "google-generativeai>=0.8.0",
     "grpcio>=1.76.0",
-    "rq-scheduler>=0.14.0"
+    "rq-scheduler>=0.14.0",
+    "openpyxl>=3.1.5",
+    "numpy<2.0.0; python_version < '3.13'",
+    "numpy>=2.0.0; python_version >= '3.13'",
+    "pandas>=2.2.0,<3.0.0",
 ]
 
 [tool.pyrefly]

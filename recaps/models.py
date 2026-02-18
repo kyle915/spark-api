@@ -41,6 +41,8 @@ class Recap(models.Model):
     total_engagements = models.IntegerField(null=True)
     products_sold = models.IntegerField(null=True)
     total_earnings = models.DecimalField(max_digits=10, decimal_places=4, null=True)
+    total_cans_sold = models.IntegerField(null=True)
+    total_packs_sold = models.IntegerField(null=True)
     account_spend_amount = models.DecimalField(
         max_digits=10, decimal_places=4, null=True
     )
@@ -99,7 +101,7 @@ class RecapFile(models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     name = models.TextField(null=True)
-    file = models.FileField(upload_to="recap_files/", null=True)
+    file = models.FileField(upload_to="recap_files/", max_length=1024, null=True)
     approved = models.BooleanField(default=False)
 
     recap = models.ForeignKey(

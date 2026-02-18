@@ -153,7 +153,7 @@ class BaseEventQueriesService(SparkGraphQLMixin):
             raise GraphQLError("Record not found.")
 
         try:
-            return await sync_to_async(self.get_model().objects.get)(**filters)
+            return await sync_to_async(self.get_queryset().get)(**filters)
         except self.get_model().DoesNotExist:
             raise GraphQLError("Record not found.")
 
@@ -221,7 +221,11 @@ class EventQueriesService(BaseEventQueriesService):
 
     def get_queryset(self) -> QuerySet:
         """Get the queryset for the service."""
-        return self.get_model().objects.select_related("tenant")
+        return self.get_model().objects.select_related(
+            "tenant",
+            "timezone",
+            "request",
+        )
 
 
 @strawberry.type
@@ -338,7 +342,7 @@ class EventQueries:
                     | Q(request__distributor__location__state_id=distributor_state_id)
                 )
             if filters.date:
-                queryset = queryset.filter(request__date=filters.date)
+                queryset = queryset.filter(date__date=filters.date)
             if filters.edited is not None:
                 queryset = queryset.filter(updated_by__isnull=not filters.edited)
 
@@ -710,6 +714,7 @@ class RequestQueriesService(BaseEventQueriesService):
         return (
             self.get_model()
             .objects.select_related(
+                "timezone",
                 "distributor__location__state",
                 "retailer__location__state",
                 "created_by",
@@ -718,6 +723,7 @@ class RequestQueriesService(BaseEventQueriesService):
             .prefetch_related(
                 "requests_stores_manager",
                 "request_product__product",
+                "event_set",
             )
         )
 
@@ -771,7 +777,7 @@ class RequestQueries:
                 )
                 queryset = queryset.filter(distributor_id=distributor_id)
             if filters.date:
-                queryset = queryset.filter(date=filters.date)
+                queryset = queryset.filter(date__date=filters.date)
             if filters.edited is not None:
                 queryset = queryset.filter(updated_by__isnull=not filters.edited)
 
