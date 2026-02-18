@@ -9,7 +9,7 @@ from events.batch_requests import (
 class Command(BaseCommand):
     help = (
         "Importa requests de forma masiva desde un archivo Excel "
-        "(usa pandas + openpyxl)."
+        "(usa openpyxl)."
     )
 
     def add_arguments(self, parser):
