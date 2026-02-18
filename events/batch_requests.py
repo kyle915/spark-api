@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 from io import BytesIO
 from pathlib import Path
 from typing import Any
 import datetime
-from difflib import SequenceMatcher
 
-import pandas as pd
 from django.contrib.auth import get_user_model
 from django.db import transaction
+from openpyxl import Workbook, load_workbook
 
 from events.models import (
     Client,
@@ -113,72 +113,64 @@ def build_request_batch_template_xlsx(tenant_id: int | None = None) -> bytes:
         "table_size": 1,
         "product_ids": "3,7,10",
     }
-    requests_df = pd.DataFrame([sample], columns=TEMPLATE_COLUMNS)
 
-    timezone_rows = list(
-        TimeZone.objects.all()
-        .order_by("id")
-        .values("id", "name", "code")
-    )
-    timezones_df = pd.DataFrame(timezone_rows, columns=["id", "name", "code"])
+    wb = Workbook()
 
+    ws_requests = wb.active
+    ws_requests.title = "Requests"
+    ws_requests.append(TEMPLATE_COLUMNS)
+    ws_requests.append([sample.get(col) for col in TEMPLATE_COLUMNS])
+
+    ws_timezones = wb.create_sheet("TimeZones")
+    ws_timezones.append(["id", "name", "code"])
+    for row in TimeZone.objects.all().order_by("id").values_list("id", "name", "code"):
+        ws_timezones.append(list(row))
+
+    ws_request_types = wb.create_sheet("RequestTypes")
+    ws_request_types.append(["id", "name"])
     request_type_qs = RequestType.objects.all()
     if tenant_id:
         request_type_qs = request_type_qs.filter(tenant_id=tenant_id)
-    request_type_rows = list(
-        request_type_qs.order_by("id").values("id", "name")
-    )
-    request_types_df = pd.DataFrame(request_type_rows, columns=["id", "name"])
+    for row in request_type_qs.order_by("id").values_list("id", "name"):
+        ws_request_types.append(list(row))
 
+    ws_event_types = wb.create_sheet("EventTypes")
+    ws_event_types.append(["id", "name"])
     event_type_qs = EventType.objects.all()
     if tenant_id:
         event_type_qs = event_type_qs.filter(tenant_id=tenant_id)
-    event_type_rows = list(event_type_qs.order_by("id").values("id", "name"))
-    event_types_df = pd.DataFrame(event_type_rows, columns=["id", "name"])
+    for row in event_type_qs.order_by("id").values_list("id", "name"):
+        ws_event_types.append(list(row))
 
+    ws_cities = wb.create_sheet("Cities")
+    ws_cities.append(["id", "name", "code", "zip", "state_id", "state_name"])
     location_qs = Location.objects.select_related("state").all()
     if tenant_id:
         location_qs = location_qs.filter(tenant_id=tenant_id)
-    location_rows = [
-        {
-            "id": row["id"],
-            "name": row["name"],
-            "code": row["code"],
-            "zip": row["zip"],
-            "state_id": row["state_id"],
-            "state_name": row["state__name"],
-        }
-        for row in location_qs.order_by("id").values(
-            "id", "name", "code", "zip", "state_id", "state__name"
+    for row in location_qs.order_by("id").values(
+        "id", "name", "code", "zip", "state_id", "state__name"
+    ):
+        ws_cities.append(
+            [
+                row["id"],
+                row["name"],
+                row["code"],
+                row["zip"],
+                row["state_id"],
+                row["state__name"],
+            ]
         )
-    ]
-    locations_df = pd.DataFrame(
-        location_rows,
-        columns=["id", "name", "code", "zip", "state_id", "state_name"],
-    )
 
+    ws_products = wb.create_sheet("Products")
+    ws_products.append(["id", "name", "product_type"])
     product_qs = Product.objects.all()
     if tenant_id:
         product_qs = product_qs.filter(tenant_id=tenant_id)
-    product_rows = [
-        {
-            "id": row["id"],
-            "name": row["name"],
-            "product_type": row["product_type__name"],
-        }
-        for row in product_qs.order_by("id").values("id", "name", "product_type__name")
-    ]
-    products_df = pd.DataFrame(product_rows, columns=["id", "name", "product_type"])
+    for row in product_qs.order_by("id").values("id", "name", "product_type__name"):
+        ws_products.append([row["id"], row["name"], row["product_type__name"]])
 
     buffer = BytesIO()
-    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-        requests_df.to_excel(writer, sheet_name="Requests", index=False)
-        timezones_df.to_excel(writer, sheet_name="TimeZones", index=False)
-        request_types_df.to_excel(writer, sheet_name="RequestTypes", index=False)
-        event_types_df.to_excel(writer, sheet_name="EventTypes", index=False)
-        locations_df.to_excel(writer, sheet_name="Cities", index=False)
-        products_df.to_excel(writer, sheet_name="Products", index=False)
-
+    wb.save(buffer)
     buffer.seek(0)
     return buffer.read()
 
@@ -222,9 +214,12 @@ def import_requests_from_excel(
             f"{default_request_type_id}"
         )
 
-    df = pd.read_excel(file_path, sheet_name=sheet_name, engine="openpyxl")
-    return _import_requests_from_dataframe(
-        df=df,
+    wb = load_workbook(filename=file_path, data_only=True)
+    headers, rows = _read_rows_from_workbook(wb, sheet_name)
+
+    return _import_requests_from_rows(
+        headers=headers,
+        rows=rows,
         tenant_id=tenant_id,
         tenant_name=tenant.name,
         created_by=created_by,
@@ -272,9 +267,12 @@ def import_requests_from_excel_bytes(
             f"{default_request_type_id}"
         )
 
-    df = pd.read_excel(BytesIO(file_bytes), sheet_name=sheet_name, engine="openpyxl")
-    return _import_requests_from_dataframe(
-        df=df,
+    wb = load_workbook(filename=BytesIO(file_bytes), data_only=True)
+    headers, rows = _read_rows_from_workbook(wb, sheet_name)
+
+    return _import_requests_from_rows(
+        headers=headers,
+        rows=rows,
         tenant_id=tenant_id,
         tenant_name=tenant.name,
         created_by=created_by,
@@ -286,9 +284,47 @@ def import_requests_from_excel_bytes(
     )
 
 
-def _import_requests_from_dataframe(
+def _read_rows_from_workbook(
+    wb,
+    sheet_name: str | int,
+) -> tuple[list[str], list[dict[str, Any]]]:
+    if isinstance(sheet_name, int):
+        if sheet_name < 0 or sheet_name >= len(wb.worksheets):
+            raise ValueError(f"sheet_name index out of range: {sheet_name}")
+        ws = wb.worksheets[sheet_name]
+    else:
+        if sheet_name not in wb.sheetnames:
+            raise ValueError(f"sheet_name not found: {sheet_name}")
+        ws = wb[sheet_name]
+
+    header_cells = next(ws.iter_rows(min_row=1, max_row=1, values_only=True), None)
+    if not header_cells:
+        raise ValueError("Excel sheet has no header row.")
+
+    headers = [str(cell).strip().lower() if cell is not None else "" for cell in header_cells]
+    if all(not h for h in headers):
+        raise ValueError("Excel sheet header is empty.")
+
+    rows: list[dict[str, Any]] = []
+    for row_values in ws.iter_rows(min_row=2, values_only=True):
+        if row_values is None:
+            continue
+        if all(_is_empty(value) for value in row_values):
+            continue
+        row_dict: dict[str, Any] = {}
+        for i, header in enumerate(headers):
+            if not header:
+                continue
+            row_dict[header] = row_values[i] if i < len(row_values) else None
+        rows.append(row_dict)
+
+    return headers, rows
+
+
+def _import_requests_from_rows(
     *,
-    df: pd.DataFrame,
+    headers: list[str],
+    rows: list[dict[str, Any]],
     tenant_id: int,
     tenant_name: str,
     created_by: User,
@@ -298,30 +334,23 @@ def _import_requests_from_dataframe(
     dry_run: bool,
     rollback_on_error: bool,
 ) -> BatchRequestImportResult:
-    df.columns = [str(c).strip().lower() for c in df.columns]
-    df = df.where(pd.notnull(df), None)
-
-    missing_columns = [col for col in REQUIRED_COLUMNS if col not in df.columns]
+    missing_columns = [col for col in REQUIRED_COLUMNS if col not in headers]
     if missing_columns:
-        raise ValueError(
-            "Missing required columns: " + ", ".join(sorted(missing_columns))
-        )
+        raise ValueError("Missing required columns: " + ", ".join(sorted(missing_columns)))
 
-    if not default_timezone_id and "timezone_code" not in df.columns:
+    if not default_timezone_id and "timezone_code" not in headers:
         raise ValueError(
             "Column 'timezone_code' is required when default_timezone_id is not provided."
         )
 
-    if not default_request_type_id and "request_type_id" not in df.columns:
+    if not default_request_type_id and "request_type_id" not in headers:
         raise ValueError(
             "Column 'request_type_id' is required when default_request_type_id is not provided."
         )
-    if "event_type_id" not in df.columns:
+
+    if "event_type_id" not in headers:
         raise ValueError("Column 'event_type_id' is required.")
 
-    results: list[BatchRequestRowResult] = []
-    success_count = 0
-    failed_count = 0
     approved_event_status = EventStatus.objects.filter(
         slug="approved",
         tenant_id=tenant_id,
@@ -331,13 +360,18 @@ def _import_requests_from_dataframe(
             "Approved event status not found for tenant. Create status with slug 'approved'."
         )
 
-    def _process_rows() -> None:
+    results: list[BatchRequestRowResult] = []
+    success_count = 0
+    failed_count = 0
+
+    def _process() -> None:
         nonlocal success_count, failed_count, results
-        for index, row in df.iterrows():
-            row_number = index + 2  # header row + 1-indexed excel line
+
+        for idx, row in enumerate(rows):
+            row_number = idx + 2
             try:
                 parsed = _parse_row(
-                    row=row.to_dict(),
+                    row=row,
                     tenant_id=tenant_id,
                     tenant_name=tenant_name,
                     default_timezone_id=default_timezone_id,
@@ -376,13 +410,9 @@ def _import_requests_from_dataframe(
                     request.save()
 
                     if parsed["store_manager_id"]:
-                        manager = RequestStoreManager.objects.get(
-                            id=parsed["store_manager_id"]
-                        )
+                        manager = RequestStoreManager.objects.get(id=parsed["store_manager_id"])
                         if manager.tenant_id and manager.tenant_id != tenant_id:
-                            raise ValueError(
-                                "store_manager_id belongs to another tenant."
-                            )
+                            raise ValueError("store_manager_id belongs to another tenant.")
                         manager.request = request
                         if not manager.tenant_id:
                             manager.tenant_id = tenant_id
@@ -446,10 +476,10 @@ def _import_requests_from_dataframe(
 
     rolled_back = False
     if dry_run or not rollback_on_error:
-        _process_rows()
+        _process()
     else:
         with transaction.atomic():
-            _process_rows()
+            _process()
             if failed_count > 0:
                 rolled_back = True
                 transaction.set_rollback(True)
@@ -465,7 +495,7 @@ def _import_requests_from_dataframe(
                 row.message = "Rolled back because another row failed."
 
     return BatchRequestImportResult(
-        total_rows=len(df.index),
+        total_rows=len(rows),
         success_count=success_count,
         failed_count=failed_count,
         rows=results,
@@ -497,6 +527,7 @@ def _parse_row(
     address = _capture(_required_str, row, "address")
     latitude = _capture(_optional_float, row.get("latitude"), "latitude")
     longitude = _capture(_optional_float, row.get("longitude"), "longitude")
+
     if (latitude is None) != (longitude is None):
         errors.append("latitude and longitude must be provided together.")
 
@@ -506,6 +537,7 @@ def _parse_row(
 
     timezone_id: int | None = None
     timezone_obj: TimeZone | None = None
+
     if timezone_code:
         timezone = TimeZone.objects.filter(code__iexact=timezone_code).order_by("id").first()
         if not timezone:
@@ -515,6 +547,7 @@ def _parse_row(
             timezone_id = timezone.id
     else:
         timezone_id = default_timezone_id
+
     request_type_id = request_type_id or default_request_type_id
 
     if not timezone_id:
@@ -545,6 +578,7 @@ def _parse_row(
         errors.append(
             f"request_type_id does not exist for tenant '{tenant_name}': {request_type_id}"
         )
+
     if event_type_id and not EventType.objects.filter(id=event_type_id, tenant_id=tenant_id).exists():
         errors.append(
             f"event_type_id does not exist for tenant '{tenant_name}': {event_type_id}"
@@ -555,37 +589,24 @@ def _parse_row(
         errors.append(f"client_id does not exist for tenant '{tenant_name}': {client_id}")
 
     distributor_id = _capture(_optional_int, row.get("distributor_id"), "distributor_id")
-    if distributor_id and not Distributor.objects.filter(
-        id=distributor_id, tenant_id=tenant_id
-    ).exists():
+    if distributor_id and not Distributor.objects.filter(id=distributor_id, tenant_id=tenant_id).exists():
         errors.append(f"distributor_id does not exist for tenant '{tenant_name}': {distributor_id}")
 
     retailer_id = _capture(_optional_int, row.get("retailer_id"), "retailer_id")
-    if retailer_id and not Retailer.objects.filter(
-        id=retailer_id, tenant_id=tenant_id
-    ).exists():
+    if retailer_id and not Retailer.objects.filter(id=retailer_id, tenant_id=tenant_id).exists():
         errors.append(f"retailer_id does not exist for tenant '{tenant_name}': {retailer_id}")
 
     store_manager_id = _capture(_optional_int, row.get("store_manager_id"), "store_manager_id")
-    if store_manager_id and not RequestStoreManager.objects.filter(
-        id=store_manager_id
-    ).exists():
+    if store_manager_id and not RequestStoreManager.objects.filter(id=store_manager_id).exists():
         errors.append(f"store_manager_id does not exist: {store_manager_id}")
 
     product_ids = _capture(_parse_int_list, row.get("product_ids")) or []
     if product_ids:
         unique_product_ids = sorted(set(product_ids))
         existing_product_ids = set(
-            Product.objects.filter(
-                id__in=unique_product_ids,
-                tenant_id=tenant_id,
-            ).values_list("id", flat=True)
+            Product.objects.filter(id__in=unique_product_ids, tenant_id=tenant_id).values_list("id", flat=True)
         )
-        missing_product_ids = [
-            product_id
-            for product_id in unique_product_ids
-            if product_id not in existing_product_ids
-        ]
+        missing_product_ids = [pid for pid in unique_product_ids if pid not in existing_product_ids]
         if missing_product_ids:
             errors.append(
                 f"product_ids not found for tenant '{tenant_name}': "
@@ -595,29 +616,24 @@ def _parse_row(
     table_size = _capture(_optional_int, row.get("table_size"), "table_size")
     create_detail = table_size is not None
     is_table_needed = table_size is not None
-
     if table_size is not None and table_size <= 0:
         errors.append("table_size must be greater than 0.")
 
     city_name = _optional_str(row.get("city"))
     if city_name is None:
         city_name = _optional_str(row.get("city_code"))
+
     location_id: int | None = None
     if city_name:
-        location_qs = Location.objects.filter(
-            tenant_id=tenant_id,
-            name__iexact=city_name,
-        ).order_by("id")
+        location_qs = Location.objects.filter(tenant_id=tenant_id, name__iexact=city_name).order_by("id")
         location_count = location_qs.count()
         if location_count == 0:
             errors.append(f"city does not exist for tenant '{tenant_name}': {city_name}")
         elif location_count > 1:
             errors.append("Multiple cities found with that name. Please use a unique city name.")
         else:
-            location = location_qs.first()
-            location_id = location.id
+            location_id = location_qs.first().id
     else:
-        # Backward compatibility for previous template versions
         location_id = _capture(_optional_int, row.get("location_id"), "location_id")
 
     if location_id:
@@ -628,7 +644,6 @@ def _parse_row(
         else:
             state_id = location.state_id
     else:
-        location = None
         state_id = None
 
     distributor_name = _optional_str(row.get("distributor_name"))
@@ -683,16 +698,8 @@ def _parse_row(
     if errors:
         raise ValueError(" | ".join(errors))
 
-    coordinates_request = (
-        [latitude, longitude]
-        if latitude is not None and longitude is not None
-        else []
-    )
-    coordinates_event = (
-        [latitude, longitude]
-        if latitude is not None and longitude is not None
-        else None
-    )
+    coordinates_request = [latitude, longitude] if latitude is not None and longitude is not None else []
+    coordinates_event = [latitude, longitude] if latitude is not None and longitude is not None else None
 
     return {
         "name": name,
@@ -733,10 +740,7 @@ def _is_empty(value: Any) -> bool:
         return True
     if isinstance(value, str) and value.strip() == "":
         return True
-    try:
-        return bool(pd.isna(value))
-    except Exception:
-        return False
+    return False
 
 
 def _required_str(row: dict[str, Any], field_name: str) -> str:
@@ -756,10 +760,20 @@ def _required_date(row: dict[str, Any], field_name: str) -> datetime.date:
     value = row.get(field_name)
     if _is_empty(value):
         raise ValueError(f"{field_name} is required.")
-    dt = pd.to_datetime(value, errors="coerce")
-    if pd.isna(dt):
-        raise ValueError(f"{field_name} must use date format mm/dd/yyyy.")
-    return dt.date()
+
+    if isinstance(value, datetime.datetime):
+        return value.date()
+    if isinstance(value, datetime.date):
+        return value
+
+    text = str(value).strip()
+    for fmt in ("%m/%d/%Y", "%Y-%m-%d", "%m-%d-%Y"):
+        try:
+            return datetime.datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+
+    raise ValueError(f"{field_name} must use date format mm/dd/yyyy.")
 
 
 def _required_time(row: dict[str, Any], field_name: str) -> datetime.time:
@@ -767,24 +781,25 @@ def _required_time(row: dict[str, Any], field_name: str) -> datetime.time:
     if _is_empty(value):
         raise ValueError(f"{field_name} is required.")
 
-    # Excel can provide pure time cells as datetime.time
+    if isinstance(value, datetime.datetime):
+        return value.time().replace(second=0, microsecond=0)
     if isinstance(value, datetime.time):
         return value.replace(second=0, microsecond=0)
 
+    if isinstance(value, (int, float)) and 0 <= float(value) < 1:
+        seconds_in_day = int(float(value) * 24 * 60 * 60)
+        hours = seconds_in_day // 3600
+        minutes = (seconds_in_day % 3600) // 60
+        return datetime.time(hour=hours, minute=minutes)
+
     text = str(value).strip()
+    for fmt in ("%H:%M", "%H:%M:%S", "%I:%M %p"):
+        try:
+            return datetime.datetime.strptime(text, fmt).time().replace(second=0, microsecond=0)
+        except ValueError:
+            continue
 
-    # Strict 24h format first: HH:MM
-    try:
-        parsed = datetime.datetime.strptime(text, "%H:%M")
-        return parsed.time()
-    except ValueError:
-        pass
-
-    # Fallback for Excel datetime-like values
-    dt = pd.to_datetime(value, errors="coerce")
-    if pd.isna(dt):
-        raise ValueError(f"{field_name} must use time format HH:MM (example 14:00).")
-    return dt.to_pydatetime().time().replace(second=0, microsecond=0)
+    raise ValueError(f"{field_name} must use time format HH:MM (example 14:00).")
 
 
 def _optional_float(value: Any, field_name: str) -> float | None:
@@ -828,7 +843,6 @@ def _normalize_offset_minutes(offset_value: int | None) -> int:
     if offset_value is None:
         return 0
     value = int(offset_value)
-    # Some records store hours (-6), others store minutes (-360).
     if abs(value) > 24:
         return value
     return value * 60
@@ -860,9 +874,6 @@ def _find_best_name_match(queryset, provided_name: str, entity_label: str):
     if not candidates:
         return None
 
-    # LIKE behavior in both directions:
-    # 1) db value contains input
-    # 2) input contains db value
     like_candidates = []
     for candidate in candidates:
         db_name = _normalize_name(getattr(candidate, "name", ""))
@@ -871,7 +882,6 @@ def _find_best_name_match(queryset, provided_name: str, entity_label: str):
         if provided in db_name or db_name in provided:
             like_candidates.append(candidate)
 
-    # Fallback to all candidates in same city/state and choose best by similarity.
     pool = like_candidates if like_candidates else candidates
     scored = [
         (candidate, _name_similarity(provided_name, getattr(candidate, "name", "")))

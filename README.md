@@ -213,7 +213,7 @@ uv run pytest tenants/tests/test_google_calendar_mutations.py -v
 
 ### Import Requests in Batch (Excel)
 
-Use `pandas` + `openpyxl` to import multiple `Request` records at once:
+Use `openpyxl` to import multiple `Request` records at once:
 
 ```bash
 # 1) Generate template
