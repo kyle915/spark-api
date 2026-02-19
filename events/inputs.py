@@ -87,8 +87,7 @@ class ClientFiltersInput(BaseTenantInput):
 
 
 @strawberry.input
-class LocationFiltersInput(BaseTenantInput):
-    tenant_uuid: strawberry.ID | None = None
+class LocationFiltersInput(SparkGraphQLInput):
     state_id: strawberry.ID | None = None
 
 
@@ -129,6 +128,11 @@ class ProductFiltersInput(BaseTenantInput):
 
 @strawberry.input
 class BaseNameableInput(BaseTenantInput):
+    name: str
+
+
+@strawberry.input
+class BaseNameOnlyInput(SparkGraphQLInput):
     name: str
 
 
@@ -189,7 +193,7 @@ class UpdateEventStatusInput(CreateEventStatusInput):
 
 
 @strawberry.input
-class CreateLocationInput(BaseNameableInput):
+class CreateLocationInput(BaseNameOnlyInput):
     code: str
     zip: str
     state_id: strawberry.ID | None = None

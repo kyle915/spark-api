@@ -90,7 +90,6 @@ class TestGoogleCalendarTasks:
             name="Test Location",
             code="TEST",
             zip="12345",
-            tenant=self.tenant,
             created_by=self.user
         )
         self.client = Client.objects.create(

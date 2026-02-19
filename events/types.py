@@ -118,7 +118,6 @@ class Location(Node):
     name: str
     code: str
     zip: str
-    tenant_id: strawberry.ID
     state: State | None = None
     created_at: str
     updated_at: str

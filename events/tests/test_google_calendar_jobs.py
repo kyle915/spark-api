@@ -180,7 +180,6 @@ class TestEventGoogleCalendarJob:
             name="Test Location",
             code="TEST",
             zip="12345",
-            tenant=self.tenant,
             state=self.state,
             created_by=self.admin_user
         )
