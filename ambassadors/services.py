@@ -776,9 +776,7 @@ class UpsertAmbassadorProfileService(BaseAmbassadorService):
             )
 
         tenant = None
-        needs_tenant = any(
-            section is not None for section in (input.notes, input.skills)
-        )
+        needs_tenant = input.notes is not None
         if needs_tenant:
             try:
                 tenant = await cls().get_user_tenant(
@@ -885,7 +883,6 @@ class UpsertAmbassadorProfileService(BaseAmbassadorService):
                         AmbassadorSkill(
                             ambassador=ambassador,
                             skill_id=skill_id_int,
-                            tenant=tenant,
                             created_by=user,
                             updated_by=user,
                         )
@@ -1895,20 +1892,10 @@ class CreateSkillService(BaseAmbassadorService):
         """Create a skill (authenticated users only)."""
         user = info.context.request.user
 
-        # Resolve tenant
-        service_instance = cls()
-        tenant = await service_instance.get_user_tenant(
-            info,
-            tenant_id=input.tenant_id,
-            tenant_uuid=None,
-            user=user,
-        )
-
         # Create skill
         try:
             skill = await Skill.objects._create(
                 name=input.name,
-                tenant=tenant,
                 created_by=user,
                 updated_by=user,
             )
@@ -2078,11 +2065,14 @@ class SkillQueriesService(SparkGraphQLMixin):
 
         @sync_to_async
         def get_queryset():
-            queryset = Skill.objects.select_related("tenant")
+            queryset = Skill.objects.all()
 
-            # Filter by tenant
+            # Skill is global; tenant filter scopes through ambassador-skill assignments.
             if tenant_id:
-                queryset = queryset.filter(tenant_id=tenant_id)
+                queryset = queryset.filter(
+                    ambassadors_skills__ambassador__user__tenanted_users__tenant_id=tenant_id,
+                    ambassadors_skills__ambassador__user__tenanted_users__is_active=True,
+                ).distinct()
 
             if filters:
                 # Search in name
@@ -2150,11 +2140,11 @@ class CreateAmbassadorSkillService(BaseAmbassadorService):
             ).exists()
 
         ambassador_belongs_to_tenant = await check_ambassador_tenant()
-        if not ambassador_belongs_to_tenant or skill.tenant_id != tenant.id:
+        if not ambassador_belongs_to_tenant:
             return build_mutation_response(
                 CreateAmbassadorSkillResponse,
                 success=False,
-                message="Ambassador and skill must belong to the same tenant.",
+                message="Ambassador must belong to the selected tenant.",
                 input_obj=input,
             )
 
@@ -2175,7 +2165,6 @@ class CreateAmbassadorSkillService(BaseAmbassadorService):
             ambassador_skill = await AmbassadorSkill.objects._create(
                 ambassador=ambassador,
                 skill=skill,
-                tenant=tenant,
                 created_by=user,
                 updated_by=user,
             )
@@ -2301,12 +2290,15 @@ class AmbassadorSkillQueriesService(SparkGraphQLMixin):
         @sync_to_async
         def get_queryset():
             queryset = AmbassadorSkill.objects.select_related(
-                "ambassador", "skill", "tenant"
+                "ambassador", "skill"
             )
 
             # Filter by tenant
             if tenant_id:
-                queryset = queryset.filter(tenant_id=tenant_id)
+                queryset = queryset.filter(
+                    ambassador__user__tenanted_users__tenant_id=tenant_id,
+                    ambassador__user__tenanted_users__is_active=True,
+                ).distinct()
 
             if filters:
                 # Filter by ambassador

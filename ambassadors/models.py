@@ -349,13 +349,6 @@ class Skill(Asyncable, models.Model):
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     name = models.CharField(max_length=50)
 
-    tenant = models.ForeignKey(
-        Tenant,
-        on_delete=models.RESTRICT,
-        null=False,
-        related_name="skills",
-    )
-
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
@@ -379,12 +372,6 @@ class AmbassadorSkill(Asyncable, models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
 
-    tenant = models.ForeignKey(
-        Tenant,
-        on_delete=models.RESTRICT,
-        null=False,
-        related_name="ambassadors_skills",
-    )
     ambassador = models.ForeignKey(
         Ambassador,
         on_delete=models.RESTRICT,

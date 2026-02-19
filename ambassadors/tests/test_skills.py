@@ -56,7 +56,6 @@ class TestCreateSkill(AmbassadorsGraphQLTestCase):
                     skill {
                         id
                         name
-                        tenantId
                     }
                 }
             }
@@ -82,14 +81,12 @@ class TestCreateSkill(AmbassadorsGraphQLTestCase):
         assert "created successfully" in result.data["createSkill"]["message"].lower()
         assert result.data["createSkill"]["clientMutationId"] == "test-123"
         assert result.data["createSkill"]["skill"]["name"] == "Python Programming"
-        assert result.data["createSkill"]["skill"]["tenantId"] == str(self.tenant.id)
 
         # Verify in DB
         @sync_to_async
         def get_skill():
-            return Skill.objects.select_related('tenant', 'created_by').get(name="Python Programming")
+            return Skill.objects.select_related('created_by').get(name="Python Programming")
         skill = await get_skill()
-        assert skill.tenant_id == self.tenant.id
         assert skill.created_by == self.user
 
     @pytest.mark.asyncio
@@ -124,7 +121,6 @@ class TestCreateSkill(AmbassadorsGraphQLTestCase):
         assert result.data is not None
         assert result.data["createSkill"]["success"] is True
         assert result.data["createSkill"]["skill"]["name"] == "JavaScript Programming"
-        assert result.data["createSkill"]["skill"]["tenantId"] == str(tenant2.id)
 
     @pytest.mark.asyncio
     async def test_create_skill_unauthorized(self):
@@ -167,7 +163,6 @@ class TestUpdateSkill(AmbassadorsGraphQLTestCase):
         system_user = self.get_system_user()
         self.skill = Skill.objects.create(
             name="Old Skill Name",
-            tenant=self.tenant,
             created_by=system_user,
             updated_by=system_user,
         )
@@ -277,7 +272,6 @@ class TestDeleteSkill(AmbassadorsGraphQLTestCase):
         system_user = self.get_system_user()
         self.skill = Skill.objects.create(
             name="Skill To Delete",
-            tenant=self.tenant,
             created_by=system_user,
             updated_by=system_user,
         )
@@ -375,19 +369,16 @@ class TestSkillQueries(AmbassadorsGraphQLTestCase):
         system_user = self.get_system_user()
         self.skill1 = Skill.objects.create(
             name="Python",
-            tenant=self.tenant,
             created_by=system_user,
             updated_by=system_user,
         )
         self.skill2 = Skill.objects.create(
             name="JavaScript",
-            tenant=self.tenant,
             created_by=system_user,
             updated_by=system_user,
         )
         self.skill3 = Skill.objects.create(
             name="React",
-            tenant=self.tenant,
             created_by=system_user,
             updated_by=system_user,
         )
@@ -405,7 +396,6 @@ class TestSkillQueries(AmbassadorsGraphQLTestCase):
                         node {
                             id
                             name
-                            tenantId
                         }
                     }
                     totalCount
@@ -459,7 +449,6 @@ class TestSkillQueries(AmbassadorsGraphQLTestCase):
                 skill(skillId: "{self.skill1.id}") {{
                     id
                     name
-                    tenantId
                 }}
             }}
         """
@@ -563,7 +552,6 @@ class TestCreateAmbassadorSkill(AmbassadorsGraphQLTestCase):
         system_user = self.get_system_user()
         self.skill = Skill.objects.create(
             name="Python Programming",
-            tenant=self.tenant,
             created_by=system_user,
             updated_by=system_user,
         )
@@ -581,7 +569,6 @@ class TestCreateAmbassadorSkill(AmbassadorsGraphQLTestCase):
                         id
                         ambassadorId
                         skillId
-                        tenantId
                     }
                 }
             }
@@ -611,12 +598,11 @@ class TestCreateAmbassadorSkill(AmbassadorsGraphQLTestCase):
 
         # Verify in DB
         ambassador_skill = await sync_to_async(
-            AmbassadorSkill.objects.select_related('tenant', 'created_by').get
+            AmbassadorSkill.objects.select_related('created_by').get
         )(
             ambassador=self.ambassador,
             skill=self.skill
         )
-        assert ambassador_skill.tenant == self.tenant
         assert ambassador_skill.created_by == self.client_user
 
     @pytest.mark.asyncio
@@ -648,7 +634,6 @@ class TestCreateAmbassadorSkill(AmbassadorsGraphQLTestCase):
             return AmbassadorSkill.objects.create(
                 ambassador=self.ambassador,
                 skill=self.skill,
-                tenant=self.tenant,
                 created_by=system_user,
                 updated_by=system_user,
             )
@@ -707,29 +692,23 @@ class TestCreateAmbassadorSkill(AmbassadorsGraphQLTestCase):
         assert "skill not found" in result.data["createAmbassadorSkill"]["message"].lower()
 
     @pytest.mark.asyncio
-    async def test_create_ambassador_skill_different_tenant(self):
-        """Test creating ambassador skill when ambassador and skill belong to different tenants."""
+    async def test_create_ambassador_skill_without_skill_tenant(self):
+        """Skill no longer belongs to tenant, so assignment is validated by ambassador tenant only."""
         @sync_to_async
         def create_skill():
-            tenant2 = self.create_tenant(name="Different Tenant")
             system_user = self.get_system_user()
             skill2 = Skill.objects.create(
                 name="Different Skill",
-                tenant=tenant2,
                 created_by=system_user,
                 updated_by=system_user,
             )
             return skill2
         skill2 = await create_skill()
 
-        # Don't pass tenantId - let it use client_user's tenant (self.tenant)
-        # But skill2 belongs to tenant2, so it should fail validation
         variables = {
             "input": {
                 "ambassadorId": str(self.ambassador.id),
                 "skillId": str(skill2.id),
-                # No tenantId - will use client_user's tenant (self.tenant)
-                # But skill2 is in tenant2, so should fail
             }
         }
 
@@ -738,8 +717,7 @@ class TestCreateAmbassadorSkill(AmbassadorsGraphQLTestCase):
         )
 
         assert result.data is not None
-        assert result.data["createAmbassadorSkill"]["success"] is False
-        assert "same tenant" in result.data["createAmbassadorSkill"]["message"].lower()
+        assert result.data["createAmbassadorSkill"]["success"] is True
 
     @pytest.mark.asyncio
     async def test_create_ambassador_skill_unauthorized(self):
@@ -795,7 +773,6 @@ class TestDeleteAmbassadorSkill(AmbassadorsGraphQLTestCase):
         system_user = self.get_system_user()
         self.skill = Skill.objects.create(
             name="Python Programming",
-            tenant=self.tenant,
             created_by=system_user,
             updated_by=system_user,
         )
@@ -803,7 +780,6 @@ class TestDeleteAmbassadorSkill(AmbassadorsGraphQLTestCase):
         self.ambassador_skill = AmbassadorSkill.objects.create(
             ambassador=self.ambassador,
             skill=self.skill,
-            tenant=self.tenant,
             created_by=system_user,
             updated_by=system_user,
         )
@@ -931,13 +907,11 @@ class TestAmbassadorSkillQueries(AmbassadorsGraphQLTestCase):
         system_user = self.get_system_user()
         self.skill1 = Skill.objects.create(
             name="Python",
-            tenant=self.tenant,
             created_by=system_user,
             updated_by=system_user,
         )
         self.skill2 = Skill.objects.create(
             name="JavaScript",
-            tenant=self.tenant,
             created_by=system_user,
             updated_by=system_user,
         )
@@ -945,21 +919,18 @@ class TestAmbassadorSkillQueries(AmbassadorsGraphQLTestCase):
         self.ambassador_skill1 = AmbassadorSkill.objects.create(
             ambassador=self.ambassador1,
             skill=self.skill1,
-            tenant=self.tenant,
             created_by=system_user,
             updated_by=system_user,
         )
         self.ambassador_skill2 = AmbassadorSkill.objects.create(
             ambassador=self.ambassador1,
             skill=self.skill2,
-            tenant=self.tenant,
             created_by=system_user,
             updated_by=system_user,
         )
         self.ambassador_skill3 = AmbassadorSkill.objects.create(
             ambassador=self.ambassador2,
             skill=self.skill1,
-            tenant=self.tenant,
             created_by=system_user,
             updated_by=system_user,
         )
@@ -1056,7 +1027,6 @@ class TestAmbassadorSkillQueries(AmbassadorsGraphQLTestCase):
                     id
                     ambassadorId
                     skillId
-                    tenantId
                 }}
             }}
         """
@@ -1105,14 +1075,12 @@ class TestAmbassadorSkillQueries(AmbassadorsGraphQLTestCase):
             )
             skill3 = Skill.objects.create(
                 name="React",
-                tenant=tenant2,
                 created_by=system_user,
                 updated_by=system_user,
             )
             AmbassadorSkill.objects.create(
                 ambassador=ambassador3,
                 skill=skill3,
-                tenant=tenant2,
                 created_by=system_user,
                 updated_by=system_user,
             )
@@ -1125,7 +1093,6 @@ class TestAmbassadorSkillQueries(AmbassadorsGraphQLTestCase):
                     edges {
                         node {
                             id
-                            tenantId
                         }
                     }
                     totalCount
@@ -1139,9 +1106,8 @@ class TestAmbassadorSkillQueries(AmbassadorsGraphQLTestCase):
 
         assert result.errors is None
         assert result.data is not None
-        # Should only see skills from user's tenant
-        for edge in result.data["ambassadorSkills"]["edges"]:
-            assert edge["node"]["tenantId"] == str(self.tenant.id)
+        # Should only see ambassador skills from user's tenant.
+        assert result.data["ambassadorSkills"]["totalCount"] == 3
 
     @pytest.mark.asyncio
     async def test_ambassador_skills_unauthorized(self):
@@ -1165,4 +1131,3 @@ class TestAmbassadorSkillQueries(AmbassadorsGraphQLTestCase):
 
         assert result.data is None
         assert result.errors is not None
-
