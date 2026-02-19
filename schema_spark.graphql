@@ -4638,6 +4638,7 @@ input UpsertAmbassadorProfileInput {
   tShirtSize: String = null
   address: String = null
   phone: String = null
+  image: String = null
   coordinates: [Float!] = null
   isActive: Boolean = null
   rating: Int = null

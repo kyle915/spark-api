@@ -824,6 +824,10 @@ class UpsertAmbassadorProfileService(BaseAmbassadorService):
                 ambassador.phone = input.phone
             if input.about_me is not None:
                 ambassador.about_me = input.about_me
+            if input.image is not None:
+                ambassador.user.image = input.image
+                ambassador.user.updated_by = user
+                ambassador.user.save(update_fields=["image", "updated_by", "updated_at"])
             if input.location_id is not None:
                 ambassador.location_id = resolve_id_to_int(input.location_id)
             if input.t_shirt_size is not None:

@@ -232,6 +232,7 @@ class UpsertAmbassadorProfileInput(SparkGraphQLInput):
     address: str | None = None
     phone: str | None = None
     about_me: str | None = None
+    image: str | None = None
     coordinates: List[float] | None = None
     is_active: bool | None = None
     rating: int | None = None
