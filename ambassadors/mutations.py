@@ -325,6 +325,7 @@ class AmbassadorMutations:
         info: strawberry.Info,
         input: inputs.CreateAmbassadorInput,
     ) -> CreateAmbassadorResponse:
+        """Create ambassador profile including optional about_me."""
         return await CreateAmbassadorService.create(input, info)
 
     @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
@@ -333,6 +334,7 @@ class AmbassadorMutations:
         info: strawberry.Info,
         input: inputs.UpdateAmbassadorInput,
     ) -> UpdateAmbassadorResponse:
+        """Update ambassador profile fields including about_me."""
         return await UpdateAmbassadorService.update(input, info)
 
     @relay.mutation(permission_classes=[StrictIsAuthenticated])
@@ -341,6 +343,7 @@ class AmbassadorMutations:
         info: strawberry.Info,
         input: inputs.UpsertAmbassadorProfileInput,
     ) -> UpsertAmbassadorProfileResponse:
+        """Upsert ambassador profile and related data, including about_me."""
         return await UpsertAmbassadorProfileService.upsert(input, info)
 
     @relay.mutation(permission_classes=[IsClientOrSparkAdmin])

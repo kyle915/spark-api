@@ -388,7 +388,7 @@ class AmbassadorManagementQueries:
         before: str | None = None,
         filters: inputs.AmbassadorFiltersInput | None = None,
     ) -> CountableConnection[types.Ambassador]:
-        """List ambassadors with filters for status, rating, name, and email."""
+        """List ambassadors with filters for status, rating, name, email, address and about_me."""
         from .services import AmbassadorQueriesService
 
         service = AmbassadorQueriesService()
