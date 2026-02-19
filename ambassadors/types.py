@@ -23,6 +23,7 @@ class Ambassador(Node):
     rating: int
     address: str | None
     phone: str | None
+    about_me: str | None
     coordinates: list[float]
     is_active: bool
     location: Location | None

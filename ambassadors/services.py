@@ -267,6 +267,7 @@ class PublicAmbassadorCreationService(BaseAmbassadorService):
                 user=user,
                 address=input.address,
                 phone=input.phone,
+                about_me=input.about_me,
                 coordinates=input.coordinates or [],
                 is_active=ambassador_is_active,  # Requires manual approval by default
                 created_by=user,
@@ -641,6 +642,7 @@ class CreateAmbassadorService(BaseAmbassadorService):
             ambassador = Ambassador(
                 user=target_user,
                 address=input.address,
+                about_me=input.about_me,
                 coordinates=input.coordinates or [],
                 is_active=input.is_active or False,
                 rating=input.rating or 0,
@@ -689,6 +691,8 @@ class UpdateAmbassadorService(BaseAmbassadorService):
             def update_ambassador():
                 if input.address is not None:
                     ambassador.address = input.address
+                if input.about_me is not None:
+                    ambassador.about_me = input.about_me
                 if input.coordinates is not None:
                     ambassador.coordinates = input.coordinates
                 if input.is_active is not None:
@@ -818,6 +822,8 @@ class UpsertAmbassadorProfileService(BaseAmbassadorService):
                 ambassador.address = input.address
             if input.phone is not None:
                 ambassador.phone = input.phone
+            if input.about_me is not None:
+                ambassador.about_me = input.about_me
             if input.location_id is not None:
                 ambassador.location_id = resolve_id_to_int(input.location_id)
             if input.t_shirt_size is not None:
@@ -1257,14 +1263,17 @@ class AmbassadorQueriesService(SparkGraphQLMixin):
                 # Search by address
                 if filters.address:
                     queryset = queryset.filter(address__icontains=filters.address)
+                if filters.about_me:
+                    queryset = queryset.filter(about_me__icontains=filters.about_me)
 
-                # General search across email, name, and address
+                # General search across email, name, address and about_me
                 if filters.search:
                     queryset = queryset.filter(
                         Q(user__email__icontains=filters.search)
                         | Q(user__first_name__icontains=filters.search)
                         | Q(user__last_name__icontains=filters.search)
                         | Q(address__icontains=filters.search)
+                        | Q(about_me__icontains=filters.search)
                     )
 
             return queryset.order_by("-created_at")
@@ -1301,6 +1310,7 @@ class AmbassadorQueriesService(SparkGraphQLMixin):
                     | Q(user__first_name__icontains=q)
                     | Q(user__last_name__icontains=q)
                     | Q(address__icontains=q)
+                    | Q(about_me__icontains=q)
                 )
 
             return queryset.order_by("-created_at")

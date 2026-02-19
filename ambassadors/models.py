@@ -47,6 +47,7 @@ class Ambassador(Asyncable, models.Model):
     rating = models.IntegerField(default=0)
     address = models.TextField(null=True)
     phone = models.CharField(max_length=100, null=True)
+    about_me = models.TextField(null=True)
     coordinates = ArrayField(
         models.FloatField(),
         size=2,

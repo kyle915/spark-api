@@ -14,6 +14,7 @@ class CreatePublicAmbassadorInput(SparkGraphQLInput):
     password2: str
     address: str | None = None
     phone: str | None = None
+    about_me: str | None = None
     coordinates: List[float] | None = None  # [latitude, longitude]
 
 
@@ -81,6 +82,7 @@ class AmbassadorFiltersInput:
     email: str | None = None  # Search by user email (partial match)
     name: str | None = None  # Search by user first_name or last_name
     address: str | None = None  # Search by address (partial match)
+    about_me: str | None = None  # Search by about_me (partial match)
     search: str | None = None  # General search across email, name, address
 
 
@@ -90,6 +92,7 @@ class UpdateAmbassadorInput(SparkGraphQLInput):
 
     ambassador_id: strawberry.ID
     address: str | None = None
+    about_me: str | None = None
     coordinates: List[float] | None = None
     is_active: bool | None = None
     tenant_id: strawberry.ID | None = None  # For assigning to tenant
@@ -101,6 +104,7 @@ class CreateAmbassadorInput(SparkGraphQLInput):
 
     user_id: strawberry.ID
     address: str | None = None
+    about_me: str | None = None
     coordinates: List[float] | None = None
     is_active: bool | None = None
     rating: int | None = None
@@ -227,6 +231,7 @@ class UpsertAmbassadorProfileInput(SparkGraphQLInput):
     t_shirt_size: str | None = None
     address: str | None = None
     phone: str | None = None
+    about_me: str | None = None
     coordinates: List[float] | None = None
     is_active: bool | None = None
     rating: int | None = None
