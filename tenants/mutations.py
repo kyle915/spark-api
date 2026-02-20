@@ -42,6 +42,7 @@ DEFAULT_JOB_STATUS_TEMPLATES = [
     {"name": "Approved", "slug": "approved"},
     {"name": "Declined", "slug": "declined"},
     {"name": "Invited", "slug": "invited"},
+    {"name": "Complete", "slug": "complete"},
 ]
 DEFAULT_ATTENDANCE_STATUS_TEMPLATES = [
     {"name": "Pending", "slug": "pending"},
