@@ -1131,12 +1131,7 @@ class AttendanceMobileQueries:
         service = AttendanceQueriesService()
         user = await service.get_user(info)
 
-        try:
-            ambassador = await models.Ambassador.objects.aget(user=user)
-        except models.Ambassador.DoesNotExist:
-            queryset = service.get_queryset().none()
-        else:
-            queryset = service.get_queryset().filter(ambassador=ambassador)
+        queryset = service.get_queryset().filter(ambassador__user=user)
 
         queryset = service.apply_filters(queryset, filters)
         queryset = queryset.order_by(*service.ordering)
@@ -1157,14 +1152,9 @@ class AttendanceMobileQueries:
         user = await service.get_user(info)
 
         try:
-            ambassador = await models.Ambassador.objects.aget(user=user)
-        except models.Ambassador.DoesNotExist:
-            return None
-
-        try:
             return await sync_to_async(service.get_model().objects.get)(
                 id=id,
-                ambassador=ambassador,
+                ambassador__user=user,
             )
         except GraphQLError:
             return None

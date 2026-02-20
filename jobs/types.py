@@ -308,6 +308,7 @@ class JobRequirementFileDetailResponse:
 @strawberry_django.type(models.AmbassadorJob)
 class AmbassadorJob(Node):
     uuid: str
+    accepted_terms: bool
     appear_as_rfp: bool
     tenant_id: strawberry.ID
     ambassador_id: strawberry.ID

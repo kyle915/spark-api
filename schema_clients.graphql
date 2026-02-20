@@ -63,7 +63,7 @@ type AddAmbassadorsToGroupResponse {
 }
 
 """
-Ambassador(id, uuid, rating, address, phone, coordinates, is_active, user, created_by, updated_by, created_at, updated_at)
+Ambassador(id, uuid, rating, address, phone, about_me, coordinates, is_active, location, t_shirt_size, user, created_by, updated_by, created_at, updated_at)
 """
 type Ambassador implements Node {
   """The Globally Unique ID of this object"""
@@ -72,8 +72,11 @@ type Ambassador implements Node {
   rating: Int!
   address: String
   phone: String
+  aboutMe: String
   coordinates: [Float!]!
   isActive: Boolean!
+  location: Location
+  tShirtSize: String
   user: SparkUserType!
   createdAt: String!
   updatedAt: String!
@@ -175,6 +178,7 @@ input AmbassadorFiltersInput {
   email: String = null
   name: String = null
   address: String = null
+  aboutMe: String = null
   search: String = null
 }
 
@@ -433,7 +437,7 @@ input AmbassadorSkillInput {
 }
 
 """
-AmbassadorSkill(id, uuid, tenant, ambassador, skill, created_by, updated_by, created_at, updated_at)
+AmbassadorSkill(id, uuid, ambassador, skill, created_by, updated_by, created_at, updated_at)
 """
 type AmbassadorSkillType implements Node {
   """The Globally Unique ID of this object"""
@@ -441,7 +445,6 @@ type AmbassadorSkillType implements Node {
   uuid: String!
   ambassadorId: ID!
   skillId: ID!
-  tenantId: ID!
   skill: SkillType!
   createdAt: String!
   updatedAt: String!
@@ -1045,6 +1048,7 @@ input CreateAmbassadorInput {
   clientMutationId: ID = null
   userId: ID!
   address: String = null
+  aboutMe: String = null
   coordinates: [Float!] = null
   isActive: Boolean = null
   rating: Int = null
@@ -1133,6 +1137,7 @@ input CreateAmbassadorWithUserInput {
   password2: String!
   address: String = null
   phone: String = null
+  aboutMe: String = null
   coordinates: [Float!] = null
   isActive: Boolean = null
 }
@@ -1340,7 +1345,6 @@ input CreateJobTitleInput {
 
 input CreateLocationInput {
   clientMutationId: ID = null
-  tenantId: ID = null
   name: String!
   code: String!
   zip: String!
@@ -1386,6 +1390,7 @@ input CreatePublicAmbassadorInput {
   password2: String!
   address: String = null
   phone: String = null
+  aboutMe: String = null
   coordinates: [Float!] = null
 }
 
@@ -2118,6 +2123,17 @@ type GroupTypeResponse {
   groupType: GroupType
 }
 
+input ImportRequestsBatchInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+  file: String!
+  defaultTimezoneId: ID = null
+  defaultRequestTypeId: ID = null
+  sheetName: String! = "0"
+  dryRun: Boolean! = false
+  rollbackOnError: Boolean! = true
+}
+
 type InsightReport {
   id: ID!
   uuid: String!
@@ -2474,7 +2490,7 @@ type JobTitleDetailResponse {
 }
 
 """
-Location(id, uuid, name, code, zip, tenant, state, created_by, updated_by, created_at, updated_at)
+Location(id, uuid, name, code, zip, state, created_by, updated_by, created_at, updated_at)
 """
 type Location implements Node {
   """The Globally Unique ID of this object"""
@@ -2483,7 +2499,6 @@ type Location implements Node {
   name: String!
   code: String!
   zip: String!
-  tenantId: ID!
   state: State
   createdAt: String!
   updatedAt: String!
@@ -2512,8 +2527,6 @@ type LocationDetailResponse {
 
 input LocationFiltersInput {
   clientMutationId: ID = null
-  tenantId: ID = null
-  tenantUuid: ID = null
   stateId: ID = null
 }
 
@@ -2586,6 +2599,8 @@ type Mutation {
   updateRequestType(input: UpdateRequestTypeInput!): RequestTypeDetailResponse!
   createRequestStatus(input: CreateRequestStatusInput!): RequestStatusDetailResponse!
   updateRequestStatus(input: UpdateRequestStatusInput!): RequestStatusDetailResponse!
+  requestBatchTemplateDownloadUrl(input: RequestBatchTemplateInput!): RequestBatchTemplateResponse!
+  importRequestsBatch(input: ImportRequestsBatchInput!): RequestBatchImportResponse!
   createRequest(input: CreateRequestInput!): RequestDetailResponse!
   updateRequest(input: UpdateRequestInput!): RequestDetailResponse!
   approveRequest(input: ApproveRequestInput!): ApproveRequestResponse!
@@ -2950,7 +2965,7 @@ type Query {
   request(id: ID = null, uuid: ID = null): Request
   requestStoreManagers(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: RequestStoreManagerFiltersInput = null): RequestStoreManagerCountableConnection!
   requestStoreManager(id: ID = null, uuid: ID = null): RequestStoreManager
-  publicLocations(requestUrlName: String!, first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): LocationCountableConnection!
+  publicLocations(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): LocationCountableConnection!
   locations(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null, filters: LocationFiltersInput = null): LocationCountableConnection!
   location(id: ID = null, uuid: ID = null): Location
   publicStates(first: Int = null, after: String = null, last: Int = null, before: String = null, q: String = null): StateCountableConnection!
@@ -3475,6 +3490,38 @@ type Request implements Node {
   event: Event
 }
 
+type RequestBatchImportResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  totalRows: Int!
+  successCount: Int!
+  failedCount: Int!
+  rolledBack: Boolean!
+  errors: [String!]!
+  rows: [RequestBatchRowResult!]!
+}
+
+type RequestBatchRowResult {
+  rowNumber: Int!
+  success: Boolean!
+  message: String!
+  requestId: ID
+  requestUuid: String
+}
+
+input RequestBatchTemplateInput {
+  clientMutationId: ID = null
+  tenantId: ID = null
+}
+
+type RequestBatchTemplateResponse {
+  success: Boolean!
+  message: String!
+  clientMutationId: ID
+  fileUrl: String
+}
+
 type RequestCountableConnection {
   pageInfo: PageInfo!
   edges: [RequestCountableEdge!]!
@@ -3762,15 +3809,12 @@ input SkillFiltersInput {
   search: String = null
 }
 
-"""
-Skill(id, uuid, name, tenant, created_by, updated_by, created_at, updated_at)
-"""
+"""Skill(id, uuid, name, created_by, updated_by, created_at, updated_at)"""
 type SkillType implements Node {
   """The Globally Unique ID of this object"""
   id: ID!
   uuid: String!
   name: String!
-  tenantId: ID!
   createdAt: String!
   updatedAt: String!
 }
@@ -4071,6 +4115,7 @@ input UpdateAmbassadorInput {
   clientMutationId: ID = null
   ambassadorId: ID!
   address: String = null
+  aboutMe: String = null
   coordinates: [Float!] = null
   isActive: Boolean = null
   tenantId: ID = null
@@ -4354,7 +4399,6 @@ input UpdateJobTitleInput {
 
 input UpdateLocationInput {
   clientMutationId: ID = null
-  tenantId: ID = null
   name: String!
   code: String!
   zip: String!
@@ -4570,8 +4614,12 @@ input UpsertAmbassadorProfileInput {
   clientMutationId: ID = null
   ambassadorId: ID = null
   ambassadorUuid: ID = null
+  locationId: ID = null
+  tShirtSize: String = null
   address: String = null
   phone: String = null
+  aboutMe: String = null
+  image: String = null
   coordinates: [Float!] = null
   isActive: Boolean = null
   rating: Int = null
@@ -4634,13 +4682,13 @@ type UserType {
   isActive: Boolean!
   dateJoined: DateTime!
   status: UserStatusType!
-  email: String!
   id: ID!
   lastName: String
 
   """Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only."""
   username: String!
   firstName: String
+  email: String!
   archived: Boolean!
   verified: Boolean!
 }

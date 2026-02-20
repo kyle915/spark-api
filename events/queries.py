@@ -278,6 +278,19 @@ class EventQueries:
             ),
         ).filter(event_local_date=F("current_local_date"))
 
+    @staticmethod
+    def _apply_event_date_filters(
+        queryset: QuerySet, filters: EventFiltersInput
+    ) -> QuerySet:
+        """Apply date filters to events, supporting exact date and date ranges."""
+        if filters.date:
+            return queryset.filter(date__date=filters.date)
+        if filters.start_date:
+            queryset = queryset.filter(date__date__gte=filters.start_date)
+        if filters.end_date:
+            queryset = queryset.filter(date__date__lte=filters.end_date)
+        return queryset
+
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def events(
         self,
@@ -341,8 +354,7 @@ class EventQueries:
                     Q(distributor__location__state_id=distributor_state_id)
                     | Q(request__distributor__location__state_id=distributor_state_id)
                 )
-            if filters.date:
-                queryset = queryset.filter(date__date=filters.date)
+            queryset = EventQueries._apply_event_date_filters(queryset, filters)
             if filters.edited is not None:
                 queryset = queryset.filter(updated_by__isnull=not filters.edited)
 
@@ -461,6 +473,7 @@ class EventQueries:
                     Q(distributor__location__state_id=distributor_state_id)
                     | Q(request__distributor__location__state_id=distributor_state_id)
                 )
+            queryset = EventQueries._apply_event_date_filters(queryset, filters)
             if filters.edited is not None:
                 queryset = queryset.filter(updated_by__isnull=not filters.edited)
 
@@ -551,6 +564,7 @@ class EventQueries:
                     Q(distributor__location__state_id=distributor_state_id)
                     | Q(request__distributor__location__state_id=distributor_state_id)
                 )
+            queryset = EventQueries._apply_event_date_filters(queryset, filters)
             if filters.edited is not None:
                 queryset = queryset.filter(updated_by__isnull=not filters.edited)
 

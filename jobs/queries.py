@@ -17,6 +17,15 @@ from jobs.inputs import JobFiltersInput, JobStatusFilter, RateTypeFiltersInput
 from ambassadors import models as ambassador_models
 
 
+def _apply_job_date_filters(queryset: QuerySet, filters: JobFiltersInput) -> QuerySet:
+    """Apply optional date range filters using job start_date."""
+    if filters.start_date:
+        queryset = queryset.filter(start_date__date__gte=filters.start_date)
+    if filters.end_date:
+        queryset = queryset.filter(start_date__date__lte=filters.end_date)
+    return queryset
+
+
 class JobsBaseQueriesService(BaseQueriesService):
     """Jobs-specific base service to adjust tenant error handling."""
 
@@ -623,6 +632,7 @@ class JobQueries:
                     queryset = queryset.filter(event_id=event_id)
                 except (TypeError, ValueError, GraphQLError):
                     raise GraphQLError("Invalid event ID.")
+            queryset = _apply_job_date_filters(queryset, filters)
             status_values = []
             if filters.statuses:
                 status_values.extend([status.value for status in filters.statuses])
@@ -897,6 +907,7 @@ class AmbassadorJobFiltersInput(BaseTenantInput):
     statuses: list[AmbassadorJobStatusFilter] | None = None
     status_id: strawberry.ID | None = None
     status_slug: str | None = None
+    accepted_terms: bool | None = None
 
 
 @strawberry.type
@@ -932,6 +943,8 @@ class AmbassadorJobQueries:
                 queryset = queryset.filter(event_id=event_id)
             except (TypeError, ValueError, GraphQLError):
                 raise GraphQLError("Invalid event ID.")
+        if filters:
+            queryset = _apply_job_date_filters(queryset, filters)
         if filters and filters.edited is not None:
             queryset = queryset.filter(updated_by__isnull=not filters.edited)
         return await service.get_connection(
@@ -963,6 +976,65 @@ class AmbassadorJobQueries:
         )
 
         if filters:
+            if filters.accepted_terms is not None:
+                queryset = queryset.filter(accepted_terms=filters.accepted_terms)
+            if filters.status_id:
+                try:
+                    status_id = resolve_id_to_int(filters.status_id)
+                    queryset = queryset.filter(status_id=status_id)
+                except (TypeError, ValueError, GraphQLError):
+                    raise GraphQLError("Invalid status ID.")
+            elif filters.status_slug:
+                status_filter_kwargs = {"status__slug": filters.status_slug}
+                if tenant_id:
+                    status_filter_kwargs["status__tenant_id"] = tenant_id
+                queryset = queryset.filter(**status_filter_kwargs)
+            else:
+                status_values = []
+                if filters.statuses:
+                    status_values.extend([status.value for status in filters.statuses])
+                if filters.status:
+                    status_values.append(filters.status.value)
+                if status_values:
+                    status_filter_kwargs = {"status__slug__in": status_values}
+                    if tenant_id:
+                        status_filter_kwargs["status__tenant_id"] = tenant_id
+                    queryset = queryset.filter(**status_filter_kwargs)
+
+        return await service.get_connection(
+            tenant_id=tenant_id,
+            q=q,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+            queryset=queryset,
+        )
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def ambassador_jobs_mobile(
+        self,
+        info: strawberry.Info,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        q: str | None = None,
+        filters: AmbassadorJobFiltersInput | None = None,
+    ) -> CountableConnection[types.AmbassadorJob]:
+        """Get ambassador jobs for the logged ambassador user (mobile)."""
+        service = AmbassadorJobQueriesService()
+        tenant_id = await service.resolve_query_tenant_id(info, filters=filters)
+        user = await service.get_user(info)
+
+        queryset = service.get_ordered_queryset(
+            tenant_id=tenant_id,
+            q=q,
+        ).filter(ambassador__user=user)
+
+        if filters:
+            if filters.accepted_terms is not None:
+                queryset = queryset.filter(accepted_terms=filters.accepted_terms)
             if filters.status_id:
                 try:
                     status_id = resolve_id_to_int(filters.status_id)
@@ -1015,6 +1087,42 @@ class AmbassadorJobQueries:
                 enforce_tenant=role_slug != "ambassador",
             )
         except GraphQLError:
+            return None
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def ambassador_job_mobile(
+        self,
+        info: strawberry.Info,
+        id: strawberry.ID | None = None,
+        uuid: strawberry.ID | None = None,
+    ) -> types.AmbassadorJob | None:
+        """Get a single ambassador job limited to the logged ambassador user."""
+        if id is None and uuid is None:
+            return None
+
+        service = AmbassadorJobQueriesService()
+        user = await service.get_user(info)
+        filters: dict[str, int | str] = {}
+        if id is not None:
+            try:
+                filters["id"] = resolve_id_to_int(id)
+            except (TypeError, ValueError, GraphQLError):
+                return None
+        if uuid is not None:
+            filters["uuid"] = str(uuid)
+
+        try:
+            return await sync_to_async(
+                models.AmbassadorJob.objects.select_related(
+                    "ambassador__user", "job", "status", "rate", "tenant"
+                ).get
+            )(
+                ambassador__user=user,
+                **filters,
+            )
+        except models.AmbassadorJob.DoesNotExist:
+            return None
+        except models.AmbassadorJob.MultipleObjectsReturned:
             return None
 
 
