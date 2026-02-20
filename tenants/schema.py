@@ -617,6 +617,46 @@ class QueryMobile(TenantThemingQuery):
     def me(self, info) -> CustomUserType:
         return info.context.request.user
 
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def tenants(
+        self,
+        info,
+        user_uuid: strawberry.ID | None = None,
+        filters: TenantFiltersInput | None = None,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+    ) -> CountableConnection[TenantType]:
+        queryset = Tenant.objects.all()
+        if user_uuid:
+            queryset = queryset.filter(
+                tenanted_users__is_active=True,
+                tenanted_users__user__uuid=user_uuid,
+            )
+
+        if filters:
+            if filters.name:
+                queryset = queryset.filter(name__icontains=filters.name)
+            if filters.request_url_name:
+                queryset = queryset.filter(
+                    request_url_name__icontains=filters.request_url_name
+                )
+
+        queryset = queryset.distinct()
+        try:
+            return await connection_from_queryset_async(
+                queryset,
+                first=first,
+                after=after,
+                last=last,
+                before=before,
+                default_limit=10,
+                max_limit=100,
+            )
+        except ValueError as exc:
+            raise GraphQLError(str(exc)) from exc
+
 
 class AppointmentSlot:
     pass
