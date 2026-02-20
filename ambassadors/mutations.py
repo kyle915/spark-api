@@ -204,7 +204,10 @@ class AmbassadorMutations:
 
     @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
     async def apply_ambassador_job(
-        self, info: Info, job_id: strawberry.ID
+        self,
+        info: Info,
+        job_id: strawberry.ID,
+        accepted_terms: bool = False,
     ) -> ApplyAmbassadorJobResponse:
         user = info.context.request.user
         # Manual check removed as StrictIsAuthenticated handles it
@@ -250,6 +253,7 @@ class AmbassadorMutations:
             tenant=job.tenant,
             status=status,
             rate=job.rate,
+            accepted_terms=accepted_terms,
             appear_as_rfp=False,
             created_by=user,
             updated_by=user,

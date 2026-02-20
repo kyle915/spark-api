@@ -907,6 +907,7 @@ class AmbassadorJobFiltersInput(BaseTenantInput):
     statuses: list[AmbassadorJobStatusFilter] | None = None
     status_id: strawberry.ID | None = None
     status_slug: str | None = None
+    accepted_terms: bool | None = None
 
 
 @strawberry.type
@@ -975,6 +976,8 @@ class AmbassadorJobQueries:
         )
 
         if filters:
+            if filters.accepted_terms is not None:
+                queryset = queryset.filter(accepted_terms=filters.accepted_terms)
             if filters.status_id:
                 try:
                     status_id = resolve_id_to_int(filters.status_id)
@@ -1030,6 +1033,8 @@ class AmbassadorJobQueries:
         ).filter(ambassador__user=user)
 
         if filters:
+            if filters.accepted_terms is not None:
+                queryset = queryset.filter(accepted_terms=filters.accepted_terms)
             if filters.status_id:
                 try:
                     status_id = resolve_id_to_int(filters.status_id)
