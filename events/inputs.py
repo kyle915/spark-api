@@ -55,6 +55,8 @@ class EventFiltersInput(BaseTenantInput):
     retailer_state_id: strawberry.ID | None = None
     distributor_state_id: strawberry.ID | None = None
     date: str | None = None
+    start_date: str | None = None
+    end_date: str | None = None
     coordinates: CoordinatesFilterInput | None = None
     edited: bool | None = None
 

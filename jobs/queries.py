@@ -17,6 +17,15 @@ from jobs.inputs import JobFiltersInput, JobStatusFilter, RateTypeFiltersInput
 from ambassadors import models as ambassador_models
 
 
+def _apply_job_date_filters(queryset: QuerySet, filters: JobFiltersInput) -> QuerySet:
+    """Apply optional date range filters using job start_date."""
+    if filters.start_date:
+        queryset = queryset.filter(start_date__date__gte=filters.start_date)
+    if filters.end_date:
+        queryset = queryset.filter(start_date__date__lte=filters.end_date)
+    return queryset
+
+
 class JobsBaseQueriesService(BaseQueriesService):
     """Jobs-specific base service to adjust tenant error handling."""
 
@@ -623,6 +632,7 @@ class JobQueries:
                     queryset = queryset.filter(event_id=event_id)
                 except (TypeError, ValueError, GraphQLError):
                     raise GraphQLError("Invalid event ID.")
+            queryset = _apply_job_date_filters(queryset, filters)
             status_values = []
             if filters.statuses:
                 status_values.extend([status.value for status in filters.statuses])
@@ -932,6 +942,8 @@ class AmbassadorJobQueries:
                 queryset = queryset.filter(event_id=event_id)
             except (TypeError, ValueError, GraphQLError):
                 raise GraphQLError("Invalid event ID.")
+        if filters:
+            queryset = _apply_job_date_filters(queryset, filters)
         if filters and filters.edited is not None:
             queryset = queryset.filter(updated_by__isnull=not filters.edited)
         return await service.get_connection(
