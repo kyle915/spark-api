@@ -98,8 +98,9 @@ class TestEnvelope:
             mock_get_template.return_value = mock_template
             result = envelope.render_template()
             assert result == "<html>Rendered</html>"
-            mock_template.render.assert_called_once_with(
-                {"user": {"first_name": "John"}})
+            render_context = mock_template.render.call_args[0][0]
+            assert render_context["user"] == {"first_name": "John"}
+            assert "EMAIL_LOGO_CID" in render_context
 
     def test_render_template_with_empty_context(self):
         """Test render_template handles empty context."""
@@ -110,7 +111,8 @@ class TestEnvelope:
             mock_template.render.return_value = "<html>Rendered</html>"
             mock_get_template.return_value = mock_template
             envelope.render_template()
-            mock_template.render.assert_called_once_with({})
+            render_context = mock_template.render.call_args[0][0]
+            assert "EMAIL_LOGO_CID" in render_context
 
     def test_compile(self):
         """Test compile returns correct dictionary."""
