@@ -1,6 +1,10 @@
 import datetime
 import logging
+import mimetypes
 from typing import Any
+from pathlib import Path
+from email import encoders
+from email.mime.base import MIMEBase
 
 import django_rq
 import resend
@@ -28,6 +32,7 @@ class Envelope:
     to_emails: list[str] = []
     headers: dict = {}
     html: str = ""
+    attachments: list[dict[str, Any]] = []
 
     def __init__(self, **kwargs: Any) -> None:
         """
@@ -40,6 +45,7 @@ class Envelope:
         self.to_emails = kwargs.get("to_emails", self.to_emails)
         self.headers = kwargs.get("headers", self.headers)
         self.html = kwargs.get("html", self.html)
+        self.attachments = kwargs.get("attachments", self.attachments)
 
     def get_template(self) -> Template:
         """
@@ -67,13 +73,16 @@ class Envelope:
             return self.html
 
         template = self.get_template()
-        return template.render(self.context or {})
+        context = dict(self.context or {})
+        context.setdefault("EMAIL_LOGO_CID", settings.EMAIL_LOGO_CID)
+        context.setdefault("EMAIL_LOGO_URL", settings.EMAIL_LOGO_URL)
+        return template.render(context)
 
     def compile(self) -> dict:
         """
         Compile the envelope to a dictionary.
         """
-        return {
+        payload = {
             "from": self.from_email,
             "to": self.to_emails,
             "subject": self.subject,
@@ -81,6 +90,9 @@ class Envelope:
             "template": self.template,
             "headers": self.headers,
         }
+        if self.attachments:
+            payload["attachments"] = self.attachments
+        return payload
 
     @staticmethod
     def from_dict(payload: dict) -> "Envelope":
@@ -100,6 +112,7 @@ class Envelope:
             template=payload.get("template"),
             headers=payload.get("headers"),
             html=payload.get("html"),
+            attachments=payload.get("attachments", []),
         )
 
 
@@ -125,6 +138,8 @@ class ResendMailDriver(MailDriver):
             "html": envelope.render_template(),
             "headers": envelope.headers,
         }
+        if envelope.attachments:
+            params["attachments"] = envelope.attachments
         resend.Emails.send(params)
 
 
@@ -143,6 +158,32 @@ class MailpitMailDriver(MailDriver):
             headers=envelope.headers,
         )
         email.attach_alternative(html_content, "text/html")
+        for attachment in envelope.attachments or []:
+            filename = attachment.get("filename") or "attachment"
+            content = attachment.get("content")
+            if content is None:
+                continue
+            mimetype = attachment.get("content_type") or mimetypes.guess_type(
+                filename
+            )[0] or "application/octet-stream"
+            maintype, subtype = mimetype.split("/", 1)
+            payload = bytes(content) if isinstance(content, list) else content
+            if isinstance(payload, str):
+                payload = payload.encode("utf-8")
+
+            part = MIMEBase(maintype, subtype)
+            part.set_payload(payload)
+            encoders.encode_base64(part)
+            part.add_header("Content-Type", mimetype, name=filename)
+            content_id = attachment.get("content_id") or attachment.get(
+                "inline_content_id"
+            )
+            if content_id:
+                part.add_header("Content-Disposition", "inline", filename=filename)
+                part.add_header("Content-ID", f"<{content_id}>")
+            else:
+                part.add_header("Content-Disposition", "attachment", filename=filename)
+            email.attach(part)
         email.send()
 
 
@@ -225,8 +266,55 @@ class Mailer:
             self.driver = MailDrivers()
         return self.driver
 
+    def _resolve_logo_path(self) -> Path | None:
+        logo_path = getattr(settings, "EMAIL_LOGO_PATH", "")
+        if not logo_path:
+            return None
+        path = Path(logo_path)
+        if not path.is_absolute():
+            path = Path(settings.BASE_DIR) / path
+        return path
+
+    def _build_logo_attachment(self) -> dict[str, Any] | None:
+        logo_path = self._resolve_logo_path()
+        if logo_path is None or not logo_path.exists():
+            return None
+        try:
+            raw = logo_path.read_bytes()
+        except OSError:
+            return None
+
+        mime_type = mimetypes.guess_type(logo_path.name)[0] or "image/png"
+        return {
+            "filename": logo_path.name,
+            "content": list(raw),
+            "content_type": mime_type,
+            "content_id": settings.EMAIL_LOGO_CID,
+        }
+
+    def _prepare_envelope(self, envelope: Envelope) -> Envelope:
+        context = dict(envelope.context or {})
+        context.setdefault("EMAIL_LOGO_CID", settings.EMAIL_LOGO_CID)
+        context.setdefault("EMAIL_LOGO_URL", settings.EMAIL_LOGO_URL)
+        envelope.context = context
+
+        attachments = list(envelope.attachments or [])
+        logo_cid = settings.EMAIL_LOGO_CID
+        already_has_logo = any(
+            (a.get("content_id") or a.get("inline_content_id")) == logo_cid
+            for a in attachments
+            if isinstance(a, dict)
+        )
+        if not already_has_logo:
+            logo_attachment = self._build_logo_attachment()
+            if logo_attachment:
+                attachments.append(logo_attachment)
+        envelope.attachments = attachments
+        return envelope
+
     def dispatch(self) -> None:
-        self.get_driver().send(self.envelope())
+        envelope = self._prepare_envelope(self.envelope())
+        self.get_driver().send(envelope)
 
     async def send_async(self) -> None:
         """Send the email asynchronously. (background processing)
@@ -252,6 +340,7 @@ class Mailer:
         without blocking the current request.
         """
         envelope: Envelope = self.envelope()
+        envelope = self._prepare_envelope(envelope)
         queues = Queues()
         if delay_seconds and delay_seconds > 0:
             scheduler = django_rq.get_scheduler("default")
