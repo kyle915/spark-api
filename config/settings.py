@@ -247,6 +247,15 @@ AMBASSADOR_FRONTEND_URL = env(
     "AMBASSADOR_FRONTEND_URL", default="http://localhost:3000"
 )
 ADMIN_FRONTEND_URL = env("ADMIN_FRONTEND_URL", default="http://localhost:3000")
+EMAIL_LOGO_CID = env("EMAIL_LOGO_CID", default="spark-logo")
+EMAIL_LOGO_PATH = env(
+    "EMAIL_LOGO_PATH",
+    default=str(BASE_DIR / "tenants/static/tenants/spark_logo.png"),
+)
+EMAIL_LOGO_URL = env(
+    "EMAIL_LOGO_URL",
+    default="",
+)
 
 # Gemini AI Configuration
 GEMINI_API_KEY = env("GEMINI_API_KEY", default="")
