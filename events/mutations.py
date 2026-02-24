@@ -655,6 +655,71 @@ class EventMutations:
                 input_obj=input,
             )
 
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def decline_event(
+        self,
+        info: strawberry.Info,
+        input: inputs.DeclineEventInput,
+    ) -> types.EventDetailResponse:
+        """Decline an event."""
+        try:
+            service = EventMutationService()
+            user: User = await service.get_user(info)
+
+            try:
+                input.id = resolve_id_to_int(input.id)
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Invalid event ID.")
+
+            event: models.Event = await sync_to_async(models.Event.objects.get)(
+                id=input.id
+            )
+
+            is_spark_admin = await user.role.is_spark_admin
+            if not is_spark_admin:
+                try:
+                    await sync_to_async(user.get_tenant)(tenant_id=event.tenant_id)
+                except Exception:
+                    raise GraphQLError(
+                        "You are not authorized to decline events for this tenant."
+                    )
+
+            declined_status = await sync_to_async(models.EventStatus.objects.get)(
+                slug="declined", tenant_id=event.tenant_id
+            )
+            event.status = declined_status
+            event.updated_by = user
+            await sync_to_async(event.save)()
+
+            return build_mutation_response(
+                types.EventDetailResponse,
+                success=True,
+                message="Event declined successfully.",
+                input_obj=input,
+                event=event,
+            )
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.EventDetailResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+        except models.Event.DoesNotExist:
+            return build_mutation_response(
+                types.EventDetailResponse,
+                success=False,
+                message="Event not found.",
+                input_obj=input,
+            )
+        except models.EventStatus.DoesNotExist:
+            return build_mutation_response(
+                types.EventDetailResponse,
+                success=False,
+                message="Declined event status not found. Please ensure you have a status with slug 'declined' for this tenant.",
+                input_obj=input,
+            )
+
 
 class EventTypeMutationService(BaseMutationService):
     """Service for event type mutations."""
