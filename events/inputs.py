@@ -169,6 +169,11 @@ class ApproveEventInput(SparkGraphQLInput):
 
 
 @strawberry.input
+class DeclineEventInput(SparkGraphQLInput):
+    id: strawberry.ID
+
+
+@strawberry.input
 class CreateEventTypeInput(BaseNameableInput):
     is_default: bool = False
 
