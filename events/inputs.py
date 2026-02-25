@@ -293,6 +293,7 @@ class ApproveRequestInput(SparkGraphQLInput):
 @strawberry.input
 class DeclineRequestInput(SparkGraphQLInput):
     id: strawberry.ID
+    decline_reason: str | None = None
 
 
 @strawberry.input
