@@ -794,6 +794,20 @@ class RequestQueries:
                     filters.distributor_id, "distributor"
                 )
                 queryset = queryset.filter(distributor_id=distributor_id)
+            if filters.retailer_state_id:
+                retailer_state_id = _resolve_filter_id(
+                    filters.retailer_state_id, "retailer state"
+                )
+                queryset = queryset.filter(
+                    retailer__location__state_id=retailer_state_id
+                )
+            if filters.distributor_state_id:
+                distributor_state_id = _resolve_filter_id(
+                    filters.distributor_state_id, "distributor state"
+                )
+                queryset = queryset.filter(
+                    distributor__location__state_id=distributor_state_id
+                )
             if filters.date:
                 queryset = queryset.filter(date__date=filters.date)
             if filters.edited is not None:
