@@ -74,6 +74,7 @@ class RequestFiltersInput(BaseTenantInput):
     client_id: strawberry.ID | None = None
     retailer_id: strawberry.ID | None = None
     distributor_id: strawberry.ID | None = None
+    request_type_id: strawberry.ID | None = None
     retailer_state_id: strawberry.ID | None = None
     distributor_state_id: strawberry.ID | None = None
     date: str | None = None

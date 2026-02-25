@@ -794,6 +794,11 @@ class RequestQueries:
                     filters.distributor_id, "distributor"
                 )
                 queryset = queryset.filter(distributor_id=distributor_id)
+            if filters.request_type_id:
+                request_type_id = _resolve_filter_id(
+                    filters.request_type_id, "request type"
+                )
+                queryset = queryset.filter(request_type_id=request_type_id)
             if filters.retailer_state_id:
                 retailer_state_id = _resolve_filter_id(
                     filters.retailer_state_id, "retailer state"
