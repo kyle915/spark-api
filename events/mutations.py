@@ -2273,6 +2273,7 @@ class RequestMutations:
                     "Approval status not found. Please ensure you have a status with slug 'approved'."
                 )
             request.status = approval_status
+            request.approved_by = user
             await sync_to_async(request.save)()
 
             location = await _resolve_request_location(request)

@@ -340,6 +340,7 @@ class Request(Node):
     tenant_id: strawberry.ID
     created_by: SparkUserType | None = None
     updated_by: SparkUserType | None = None
+    approved_by: SparkUserType | None = None
     created_at: str
     updated_at: str
 
