@@ -316,6 +316,7 @@ class Request(models.Model):
     start_time = models.DateTimeField(null=True, db_index=True)
     end_time = models.DateTimeField(null=True, blank=True)
     address = models.CharField(max_length=100)
+    decline_reason = models.TextField(null=True)
     requestor_email = models.CharField(max_length=254, null=True)
     notes = models.TextField(null=True)
     coordinates = ArrayField(
@@ -387,6 +388,12 @@ class Request(models.Model):
         on_delete=models.RESTRICT,
         null=True,
         related_name="request_updated_by",
+    )
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="request_approved_by",
     )
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
     updated_at = models.DateTimeField(auto_now=True)
