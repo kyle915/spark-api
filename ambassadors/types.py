@@ -23,6 +23,7 @@ class Ambassador(Node):
     rating: int
     address: str | None
     phone: str | None
+    about_me: str | None
     coordinates: list[float]
     is_active: bool
     location: Location | None
@@ -198,7 +199,6 @@ class DeleteAmbassadorNoteResponse:
 class SkillType(Node):
     uuid: str
     name: str
-    tenant_id: strawberry.ID
     created_at: str
     updated_at: str
 
@@ -231,7 +231,6 @@ class AmbassadorSkillType(Node):
     uuid: str
     ambassador_id: strawberry.ID
     skill_id: strawberry.ID
-    tenant_id: strawberry.ID
     skill: SkillType
     created_at: str
     updated_at: str

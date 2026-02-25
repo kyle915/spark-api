@@ -104,7 +104,6 @@ class TestGoogleCalendarSignals:
             name="Test Location",
             code="TEST",
             zip="12345",
-            tenant=self.tenant,
             created_by=self.client_user
         )
         self.client = Client.objects.create(

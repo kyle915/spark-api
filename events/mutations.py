@@ -118,7 +118,7 @@ class BaseMutationService(SparkGraphQLMixin):
             existing_obj = await sync_to_async(model_class.objects.get)(
                 id=self.input.id
             )
-            self.tenant_id = existing_obj.tenant_id
+            self.tenant_id = getattr(existing_obj, "tenant_id", None)
         else:
             # Non-spark user or spark user creating without tenant_id
             tenant = await self.get_tenant(self.user, tenant_id)
@@ -220,7 +220,8 @@ class BaseMutationService(SparkGraphQLMixin):
             setattr(model, key, value)
 
         # set the tenant id
-        setattr(model, "tenant_id", self.tenant_id)
+        if hasattr(model, "tenant_id"):
+            setattr(model, "tenant_id", self.tenant_id)
         await sync_to_async(model.save)()
         return model
 
@@ -277,17 +278,14 @@ async def _resolve_notification_group_ids(
     if not location:
         return []
 
-    resolved_tenant_id = tenant_id or location.tenant_id
     location_groups = models.NotificationGroupLocation.objects.filter(
         location_id=location.id,
-        location__tenant_id=resolved_tenant_id,
         notification_group__state=False,
     ).values_list("notification_group_id", flat=True)
 
     if location.state_id:
         state_groups = models.NotificationGroupLocation.objects.filter(
             state_id=location.state_id,
-            location__tenant_id=resolved_tenant_id,
             notification_group__state=True,
         ).values_list("notification_group_id", flat=True)
         state_group_ids = await sync_to_async(list)(state_groups.distinct())

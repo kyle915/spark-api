@@ -147,7 +147,6 @@ class JobsGraphQLTestCase(BaseGraphQLTestCase):
             name=name,
             code=code,
             zip=zip_code,
-            tenant=tenant,
             created_by=system_user,
             **kwargs
         )

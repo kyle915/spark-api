@@ -278,6 +278,19 @@ class EventQueries:
             ),
         ).filter(event_local_date=F("current_local_date"))
 
+    @staticmethod
+    def _apply_event_date_filters(
+        queryset: QuerySet, filters: EventFiltersInput
+    ) -> QuerySet:
+        """Apply date filters to events, supporting exact date and date ranges."""
+        if filters.date:
+            return queryset.filter(date__date=filters.date)
+        if filters.start_date:
+            queryset = queryset.filter(date__date__gte=filters.start_date)
+        if filters.end_date:
+            queryset = queryset.filter(date__date__lte=filters.end_date)
+        return queryset
+
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def events(
         self,
@@ -341,8 +354,7 @@ class EventQueries:
                     Q(distributor__location__state_id=distributor_state_id)
                     | Q(request__distributor__location__state_id=distributor_state_id)
                 )
-            if filters.date:
-                queryset = queryset.filter(date__date=filters.date)
+            queryset = EventQueries._apply_event_date_filters(queryset, filters)
             if filters.edited is not None:
                 queryset = queryset.filter(updated_by__isnull=not filters.edited)
 
@@ -465,6 +477,7 @@ class EventQueries:
                     Q(distributor__location__state_id=distributor_state_id)
                     | Q(request__distributor__location__state_id=distributor_state_id)
                 )
+            queryset = EventQueries._apply_event_date_filters(queryset, filters)
             if filters.edited is not None:
                 queryset = queryset.filter(updated_by__isnull=not filters.edited)
 
@@ -555,6 +568,7 @@ class EventQueries:
                     Q(distributor__location__state_id=distributor_state_id)
                     | Q(request__distributor__location__state_id=distributor_state_id)
                 )
+            queryset = EventQueries._apply_event_date_filters(queryset, filters)
             if filters.edited is not None:
                 queryset = queryset.filter(updated_by__isnull=not filters.edited)
 
@@ -973,6 +987,40 @@ class LocationQueriesService(BaseEventQueriesService):
         """Get the model for the service."""
         return models.Location
 
+    def get_filtered_queryset(
+        self, tenant_id: int | None = None, q: str | None = None
+    ) -> QuerySet:
+        """Return global location queryset."""
+        queryset = self.get_queryset().select_related("state")
+        if q:
+            queryset = queryset.filter(name__icontains=q)
+        return queryset
+
+    async def get_record(
+        self,
+        id: strawberry.ID | None = None,
+        tenant_id: strawberry.ID | None = None,
+        uuid: str | None = None,
+    ) -> Model | None:
+        """Get a single location using id/uuid (global scope)."""
+        queryset = self.get_queryset().select_related("state")
+
+        filters: dict[str, object] = {}
+        if id not in (None, ""):
+            try:
+                filters["id"] = resolve_id_to_int(id)
+            except (TypeError, ValueError, GraphQLError) as exc:
+                raise GraphQLError("Invalid ID.") from exc
+        if uuid not in (None, ""):
+            filters["uuid"] = uuid
+        if "id" not in filters and "uuid" not in filters:
+            raise GraphQLError("Record not found.")
+
+        try:
+            return await sync_to_async(queryset.get)(**filters)
+        except self.get_model().DoesNotExist:
+            raise GraphQLError("Record not found.")
+
 
 @strawberry.type
 class LocationQueries:
@@ -980,30 +1028,15 @@ class LocationQueries:
     async def public_locations(
         self,
         info: strawberry.Info,
-        request_url_name: str,
         first: int | None = None,
         after: str | None = None,
         last: int | None = None,
         before: str | None = None,
         q: str | None = None,
     ) -> CountableConnection[types.Location]:
-        """Get public locations filtered by tenant request_url_name."""
+        """Get public locations globally."""
         service = LocationQueriesService()
-        try:
-            tenant = await sync_to_async(Tenant.objects.get)(
-                request_url_name=request_url_name
-            )
-        except Tenant.DoesNotExist:
-            return await service.get_connection(
-                queryset=service.get_model().objects.none(),
-                first=first,
-                after=after,
-                last=last,
-                before=before,
-            )
-
         return await service.get_connection(
-            tenant_id=tenant.id,
             q=q,
             first=first,
             after=after,
@@ -1024,21 +1057,13 @@ class LocationQueries:
     ) -> CountableConnection[types.Location]:
         """Get all locations."""
         service = LocationQueriesService()
-        tenant_id: strawberry.ID | None = filters.tenant_id if filters else None
-        tenant_uuid: strawberry.ID | None = filters.tenant_uuid if filters else None
-        resolved_tenant_id = await service.resolve_tenant_id(
-            info,
-            tenant_id=tenant_id,
-            tenant_uuid=tenant_uuid,
-        )
-
-        queryset = service.get_ordered_queryset(tenant_id=resolved_tenant_id, q=q)
+        await service.get_user(info)
+        queryset = service.get_ordered_queryset(q=q)
         if filters and filters.state_id:
             state_id = _resolve_filter_id(filters.state_id, "state")
             queryset = queryset.filter(state_id=state_id)
 
         return await service.get_connection(
-            tenant_id=resolved_tenant_id,
             q=q,
             first=first,
             after=after,
@@ -1059,10 +1084,8 @@ class LocationQueries:
         """Get a single location."""
         try:
             service = LocationQueriesService()
-            tenant_id = await service.resolve_tenant_id(info)
-            location = await service.get_record(
-                id=id, uuid=str(uuid) if uuid else None, tenant_id=tenant_id
-            )
+            await service.get_user(info)
+            location = await service.get_record(id=id, uuid=str(uuid) if uuid else None)
             return location
         except GraphQLError:
             return None
