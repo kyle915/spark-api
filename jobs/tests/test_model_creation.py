@@ -81,7 +81,6 @@ class TestJobsModelCreation(JobsGraphQLTestCase):
         assert location.name == "New York"
         assert location.code == "NYC"
         assert location.zip == "10001"
-        assert location.tenant == tenant
         assert location.created_by is not None
 
     def test_create_event(self):

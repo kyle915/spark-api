@@ -119,7 +119,7 @@ class SkillManager(BaseManager, models.Manager):
 
     def by_id(self, id: int | str | strawberry.ID):
         """Return by ID with select_related."""
-        return self.select_related("tenant").get(pk=int(id))
+        return self.get(pk=int(id))
 
 
 class AmbassadorSkillManager(BaseManager, models.Manager):
@@ -127,7 +127,7 @@ class AmbassadorSkillManager(BaseManager, models.Manager):
 
     def by_id(self, id: int | str | strawberry.ID):
         """Return by ID with select_related."""
-        return self.select_related("ambassador", "skill", "tenant").get(pk=int(id))
+        return self.select_related("ambassador", "skill").get(pk=int(id))
 
     async def _exists_by_ambassador_and_skill(self, ambassador_id: int, skill_id: int):
         """Check if an AmbassadorSkill exists for this ambassador and skill combination (async)."""

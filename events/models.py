@@ -71,10 +71,6 @@ class Location(models.Model):
     code = models.CharField(max_length=50)
     zip = models.CharField(max_length=10)
 
-    tenant = models.ForeignKey(
-        Tenant, on_delete=models.RESTRICT, related_name="locations"
-    )
-
     state = models.ForeignKey(
         State, on_delete=models.RESTRICT, related_name="location", null=True
     )

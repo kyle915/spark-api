@@ -267,6 +267,7 @@ class PublicAmbassadorCreationService(BaseAmbassadorService):
                 user=user,
                 address=input.address,
                 phone=input.phone,
+                about_me=input.about_me,
                 coordinates=input.coordinates or [],
                 is_active=ambassador_is_active,  # Requires manual approval by default
                 created_by=user,
@@ -641,6 +642,7 @@ class CreateAmbassadorService(BaseAmbassadorService):
             ambassador = Ambassador(
                 user=target_user,
                 address=input.address,
+                about_me=input.about_me,
                 coordinates=input.coordinates or [],
                 is_active=input.is_active or False,
                 rating=input.rating or 0,
@@ -689,6 +691,8 @@ class UpdateAmbassadorService(BaseAmbassadorService):
             def update_ambassador():
                 if input.address is not None:
                     ambassador.address = input.address
+                if input.about_me is not None:
+                    ambassador.about_me = input.about_me
                 if input.coordinates is not None:
                     ambassador.coordinates = input.coordinates
                 if input.is_active is not None:
@@ -776,9 +780,7 @@ class UpsertAmbassadorProfileService(BaseAmbassadorService):
             )
 
         tenant = None
-        needs_tenant = any(
-            section is not None for section in (input.notes, input.skills)
-        )
+        needs_tenant = input.notes is not None
         if needs_tenant:
             try:
                 tenant = await cls().get_user_tenant(
@@ -820,6 +822,12 @@ class UpsertAmbassadorProfileService(BaseAmbassadorService):
                 ambassador.address = input.address
             if input.phone is not None:
                 ambassador.phone = input.phone
+            if input.about_me is not None:
+                ambassador.about_me = input.about_me
+            if input.image is not None:
+                ambassador.user.image = input.image
+                ambassador.user.updated_by = user
+                ambassador.user.save(update_fields=["image", "updated_by", "updated_at"])
             if input.location_id is not None:
                 ambassador.location_id = resolve_id_to_int(input.location_id)
             if input.t_shirt_size is not None:
@@ -885,7 +893,6 @@ class UpsertAmbassadorProfileService(BaseAmbassadorService):
                         AmbassadorSkill(
                             ambassador=ambassador,
                             skill_id=skill_id_int,
-                            tenant=tenant,
                             created_by=user,
                             updated_by=user,
                         )
@@ -1260,14 +1267,17 @@ class AmbassadorQueriesService(SparkGraphQLMixin):
                 # Search by address
                 if filters.address:
                     queryset = queryset.filter(address__icontains=filters.address)
+                if filters.about_me:
+                    queryset = queryset.filter(about_me__icontains=filters.about_me)
 
-                # General search across email, name, and address
+                # General search across email, name, address and about_me
                 if filters.search:
                     queryset = queryset.filter(
                         Q(user__email__icontains=filters.search)
                         | Q(user__first_name__icontains=filters.search)
                         | Q(user__last_name__icontains=filters.search)
                         | Q(address__icontains=filters.search)
+                        | Q(about_me__icontains=filters.search)
                     )
 
             return queryset.order_by("-created_at")
@@ -1304,6 +1314,7 @@ class AmbassadorQueriesService(SparkGraphQLMixin):
                     | Q(user__first_name__icontains=q)
                     | Q(user__last_name__icontains=q)
                     | Q(address__icontains=q)
+                    | Q(about_me__icontains=q)
                 )
 
             return queryset.order_by("-created_at")
@@ -1895,20 +1906,10 @@ class CreateSkillService(BaseAmbassadorService):
         """Create a skill (authenticated users only)."""
         user = info.context.request.user
 
-        # Resolve tenant
-        service_instance = cls()
-        tenant = await service_instance.get_user_tenant(
-            info,
-            tenant_id=input.tenant_id,
-            tenant_uuid=None,
-            user=user,
-        )
-
         # Create skill
         try:
             skill = await Skill.objects._create(
                 name=input.name,
-                tenant=tenant,
                 created_by=user,
                 updated_by=user,
             )
@@ -2078,11 +2079,14 @@ class SkillQueriesService(SparkGraphQLMixin):
 
         @sync_to_async
         def get_queryset():
-            queryset = Skill.objects.select_related("tenant")
+            queryset = Skill.objects.all()
 
-            # Filter by tenant
+            # Skill is global; tenant filter scopes through ambassador-skill assignments.
             if tenant_id:
-                queryset = queryset.filter(tenant_id=tenant_id)
+                queryset = queryset.filter(
+                    ambassadors_skills__ambassador__user__tenanted_users__tenant_id=tenant_id,
+                    ambassadors_skills__ambassador__user__tenanted_users__is_active=True,
+                ).distinct()
 
             if filters:
                 # Search in name
@@ -2150,11 +2154,11 @@ class CreateAmbassadorSkillService(BaseAmbassadorService):
             ).exists()
 
         ambassador_belongs_to_tenant = await check_ambassador_tenant()
-        if not ambassador_belongs_to_tenant or skill.tenant_id != tenant.id:
+        if not ambassador_belongs_to_tenant:
             return build_mutation_response(
                 CreateAmbassadorSkillResponse,
                 success=False,
-                message="Ambassador and skill must belong to the same tenant.",
+                message="Ambassador must belong to the selected tenant.",
                 input_obj=input,
             )
 
@@ -2175,7 +2179,6 @@ class CreateAmbassadorSkillService(BaseAmbassadorService):
             ambassador_skill = await AmbassadorSkill.objects._create(
                 ambassador=ambassador,
                 skill=skill,
-                tenant=tenant,
                 created_by=user,
                 updated_by=user,
             )
@@ -2301,12 +2304,15 @@ class AmbassadorSkillQueriesService(SparkGraphQLMixin):
         @sync_to_async
         def get_queryset():
             queryset = AmbassadorSkill.objects.select_related(
-                "ambassador", "skill", "tenant"
+                "ambassador", "skill"
             )
 
             # Filter by tenant
             if tenant_id:
-                queryset = queryset.filter(tenant_id=tenant_id)
+                queryset = queryset.filter(
+                    ambassador__user__tenanted_users__tenant_id=tenant_id,
+                    ambassador__user__tenanted_users__is_active=True,
+                ).distinct()
 
             if filters:
                 # Filter by ambassador
