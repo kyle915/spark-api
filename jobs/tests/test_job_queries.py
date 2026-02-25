@@ -330,3 +330,149 @@ class TestAmbassadorJobQueries(JobsGraphQLTestCase):
         assert result.data is not None, f"Result data is None. Errors: {result.errors}"
         assert result.data["availableJobs"] is not None
         assert result.data["availableJobs"]["totalCount"] >= 1
+
+
+@pytest.mark.django_db(transaction=True)
+class TestMobileAmbassadorJobQueries(JobsGraphQLTestCase):
+    """Tests for mobile ambassador job queries."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self, db):
+        from config.schema_mobile import schema_mobile
+        self.roles = self.setup_default_roles()
+        self.tenant = self.create_tenant(name="Test Company")
+
+        self.ambassador_user = self.create_user(
+            username="mobile_ambassador@test.com",
+            email="mobile_ambassador@test.com",
+            role=self.roles["ambassador"],
+            password="testpass123",
+        )
+        self.ambassador = self.create_ambassador(user=self.ambassador_user)
+        self.create_tenanted_user(user=self.ambassador_user, tenant=self.tenant)
+
+        self.other_ambassador_user = self.create_user(
+            username="other_mobile_ambassador@test.com",
+            email="other_mobile_ambassador@test.com",
+            role=self.roles["ambassador"],
+            password="testpass123",
+        )
+        self.other_ambassador = self.create_ambassador(user=self.other_ambassador_user)
+        self.create_tenanted_user(user=self.other_ambassador_user, tenant=self.tenant)
+
+        self.location = self.create_location(
+            name="Test Location",
+            code="TEST",
+            zip_code="12345",
+            tenant=self.tenant,
+        )
+        self.event = self.create_event(
+            name="Test Event",
+            tenant=self.tenant,
+            address="123 Test St",
+        )
+        self.job_title = self.create_job_title(
+            name="Software Engineer",
+            tenant=self.tenant,
+        )
+        self.job = self.create_job(
+            name="Mobile Job",
+            code="MOBILE-001",
+            address="Mobile Address",
+            event=self.event,
+            job_title=self.job_title,
+            tenant=self.tenant,
+            public=True,
+            ongoing=True,
+            closed=False,
+        )
+        self.status = self.create_status(name="Pending", tenant=self.tenant, slug="pending")
+        self.rate_type = self.create_rate_type(name="Hour", tenant=self.tenant)
+        self.rate = self.create_rate(amount=25.0, rate_type=self.rate_type, tenant=self.tenant)
+
+        self.own_ambassador_job = self.create_ambassador_job(
+            ambassador=self.ambassador,
+            job=self.job,
+            status=self.status,
+            rate=self.rate,
+            tenant=self.tenant,
+        )
+        self.other_ambassador_job = self.create_ambassador_job(
+            ambassador=self.other_ambassador,
+            job=self.job,
+            status=self.status,
+            rate=self.rate,
+            tenant=self.tenant,
+        )
+
+        self.schema = schema_mobile
+        self.endpoint_path = "/api/v270986/graphql/mobile"
+
+    @pytest.mark.asyncio
+    async def test_ambassador_jobs_mobile_returns_only_logged_user_records(self):
+        query = """
+        query AmbassadorJobsMobileQuery($first: Int) {
+            ambassadorJobsMobile(first: $first) {
+                edges {
+                    node {
+                        id
+                    }
+                }
+                totalCount
+            }
+        }
+        """
+        variables = {"first": 10}
+
+        result = await self._execute_query_authenticated(
+            query, variables, self.ambassador_user, self.endpoint_path
+        )
+
+        assert result.errors is None
+        assert result.data is not None
+        assert result.data["ambassadorJobsMobile"] is not None
+        assert result.data["ambassadorJobsMobile"]["totalCount"] == 1
+        returned_ids = [
+            edge["node"]["id"] for edge in result.data["ambassadorJobsMobile"]["edges"]
+        ]
+        assert str(self.own_ambassador_job.id) in returned_ids
+        assert str(self.other_ambassador_job.id) not in returned_ids
+
+    @pytest.mark.asyncio
+    async def test_ambassador_job_mobile_returns_logged_user_record(self):
+        query = """
+        query AmbassadorJobMobileQuery($id: ID!) {
+            ambassadorJobMobile(id: $id) {
+                id
+            }
+        }
+        """
+        variables = {"id": str(self.own_ambassador_job.id)}
+
+        result = await self._execute_query_authenticated(
+            query, variables, self.ambassador_user, self.endpoint_path
+        )
+
+        assert result.errors is None
+        assert result.data is not None
+        assert result.data["ambassadorJobMobile"] is not None
+        assert result.data["ambassadorJobMobile"]["id"] == str(self.own_ambassador_job.id)
+
+    @pytest.mark.asyncio
+    async def test_ambassador_job_mobile_hides_other_ambassador_record(self):
+        query = """
+        query AmbassadorJobMobileQuery($id: ID!) {
+            ambassadorJobMobile(id: $id) {
+                id
+            }
+        }
+        """
+        variables = {"id": str(self.other_ambassador_job.id)}
+
+        result = await self._execute_query_authenticated(
+            query, variables, self.ambassador_user, self.endpoint_path
+        )
+
+        assert result.errors is None
+        assert result.data is not None
+        assert result.data["ambassadorJobMobile"] is None

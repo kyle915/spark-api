@@ -145,8 +145,6 @@ def build_request_batch_template_xlsx(tenant_id: int | None = None) -> bytes:
     ws_cities = wb.create_sheet("Cities")
     ws_cities.append(["id", "name", "code", "zip", "state_id", "state_name"])
     location_qs = Location.objects.select_related("state").all()
-    if tenant_id:
-        location_qs = location_qs.filter(tenant_id=tenant_id)
     for row in location_qs.order_by("id").values(
         "id", "name", "code", "zip", "state_id", "state__name"
     ):
@@ -625,7 +623,7 @@ def _parse_row(
 
     location_id: int | None = None
     if city_name:
-        location_qs = Location.objects.filter(tenant_id=tenant_id, name__iexact=city_name).order_by("id")
+        location_qs = Location.objects.filter(name__iexact=city_name).order_by("id")
         location_count = location_qs.count()
         if location_count == 0:
             errors.append(f"city does not exist for tenant '{tenant_name}': {city_name}")
@@ -637,9 +635,9 @@ def _parse_row(
         location_id = _capture(_optional_int, row.get("location_id"), "location_id")
 
     if location_id:
-        location = Location.objects.filter(id=location_id, tenant_id=tenant_id).first()
+        location = Location.objects.filter(id=location_id).first()
         if not location:
-            errors.append(f"location_id does not exist for tenant '{tenant_name}': {location_id}")
+            errors.append(f"location_id does not exist: {location_id}")
             state_id = None
         else:
             state_id = location.state_id
