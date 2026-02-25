@@ -291,6 +291,7 @@ class Request(Node):
         return _serialize_dt(_get_field(self, "end_time"), offset_minutes=offset)
 
     address: str
+    decline_reason: str | None = None
     notes: str | None = None
     coordinates: List[float]
     requestor_email: str | None = None

@@ -1640,9 +1640,15 @@ input DeclineAmbassadorJobInput {
   ambassadorJobId: ID!
 }
 
+input DeclineEventInput {
+  clientMutationId: ID = null
+  id: ID!
+}
+
 input DeclineRequestInput {
   clientMutationId: ID = null
   id: ID!
+  declineReason: String = null
 }
 
 type DeclineRequestResponse {
@@ -2589,6 +2595,7 @@ type Mutation {
   suspendEvent(input: SuspendEventInput!): EventDetailResponse!
   archiveEvent(input: ArchiveEventInput!): EventDetailResponse!
   approveEvent(input: ApproveEventInput!): EventDetailResponse!
+  declineEvent(input: DeclineEventInput!): EventDetailResponse!
   createEventType(input: CreateEventTypeInput!): EventTypeDetailResponse!
   updateEventType(input: UpdateEventTypeInput!): EventTypeDetailResponse!
   createEventStatus(input: CreateEventStatusInput!): EventStatusDetailResponse!
@@ -3463,7 +3470,7 @@ input RemoveAmbassadorsFromGroupInput {
 }
 
 """
-Request(id, uuid, name, date, start_time, end_time, address, requestor_email, notes, coordinates, client_name, client_email, distributor_name, distributor_email, retailer_name, retailer_address, retailer_store_contact, store_manager_name, store_manager_phone, timezone, client, distributor, retailer, request_type, status, tenant, created_by, updated_by, created_at, updated_at)
+Request(id, uuid, name, date, start_time, end_time, address, decline_reason, requestor_email, notes, coordinates, client_name, client_email, distributor_name, distributor_email, retailer_name, retailer_address, retailer_store_contact, store_manager_name, store_manager_phone, timezone, client, distributor, retailer, request_type, status, tenant, created_by, updated_by, approved_by, created_at, updated_at)
 """
 type Request implements Node {
   """The Globally Unique ID of this object"""
@@ -3471,6 +3478,7 @@ type Request implements Node {
   uuid: String!
   name: String!
   address: String!
+  declineReason: String
   notes: String
   coordinates: [Float!]!
   requestorEmail: String
