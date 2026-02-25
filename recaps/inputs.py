@@ -8,6 +8,8 @@ from utils.graphql.inputs import SparkGraphQLInput
 class RecapFiltersInput(SparkGraphQLInput):
     event_id: strawberry.ID | None = None
     retailer_id: strawberry.ID | None = None
+    state_id: strawberry.ID | None = None
+    event_date: str | None = None
     event_address: str | None = None
     edited: bool | None = None
 
