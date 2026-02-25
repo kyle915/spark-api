@@ -20,8 +20,24 @@
               <td align="center" style="padding: 40px 40px 20px 40px;">
                 <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
                   <tr>
-                    <td align="center" style="font-size: 32px; font-weight: bold; color: #4a90e2;">
-                      Spark
+                    <td align="center">
+                      {% if EMAIL_LOGO_CID %}
+                        <img
+                          src="cid:{{ EMAIL_LOGO_CID }}"
+                          alt="Spark"
+                          width="180"
+                          style="display: block; margin: 0 auto; height: auto; border: 0; outline: none; text-decoration: none;"
+                        />
+                      {% elif EMAIL_LOGO_URL %}
+                        <img
+                          src="{{ EMAIL_LOGO_URL }}"
+                          alt="Spark"
+                          width="180"
+                          style="display: block; margin: 0 auto; height: auto; border: 0; outline: none; text-decoration: none;"
+                        />
+                      {% else %}
+                        <span style="font-size: 32px; font-weight: bold; color: #4a90e2;">Spark</span>
+                      {% endif %}
                     </td>
                   </tr>
                 </table>

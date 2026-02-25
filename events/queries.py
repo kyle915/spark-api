@@ -381,6 +381,10 @@ class EventQueries:
                     distance__lte=range_val
                 )
                 queryset = queryset.order_by("distance", "start_time")
+            else:
+                queryset = queryset.order_by("-date")
+        else:
+            queryset = queryset.order_by("-date")
 
         return await service.get_connection(
             tenant_id=resolved_tenant_id,
@@ -794,6 +798,8 @@ class RequestQueries:
                 queryset = queryset.filter(date__date=filters.date)
             if filters.edited is not None:
                 queryset = queryset.filter(updated_by__isnull=not filters.edited)
+
+        queryset = queryset.order_by("-date")
 
         return await service.get_connection(
             tenant_id=resolved_tenant_id,
