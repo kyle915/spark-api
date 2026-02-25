@@ -1505,9 +1505,7 @@ class RequestMutationService(BaseMutationService):
         """Get the model for the service."""
         return models.Request
 
-    async def _replace_request_products(
-        self, request: models.Request
-    ) -> None:
+    async def _replace_request_products(self, request: models.Request) -> None:
         """Replace request products when input provides a list."""
         products = getattr(self.input, "products", None)
         if products is None:
@@ -1836,12 +1834,10 @@ async def _resolve_request_location(
     request: models.Request,
 ) -> models.Location | None:
     def _get_location() -> models.Location | None:
-        req = (
-            models.Request.objects.select_related(
-                "retailer__location",
-                "distributor__location",
-            ).get(id=request.id)
-        )
+        req = models.Request.objects.select_related(
+            "retailer__location",
+            "distributor__location",
+        ).get(id=request.id)
         if req.retailer and req.retailer.location_id:
             return req.retailer.location
         if req.distributor and req.distributor.location_id:
@@ -2275,6 +2271,7 @@ class RequestMutations:
                     "Approval status not found. Please ensure you have a status with slug 'approved'."
                 )
             request.status = approval_status
+            request.approved_by = user
             await sync_to_async(request.save)()
 
             location = await _resolve_request_location(request)
@@ -2343,12 +2340,13 @@ class RequestMutations:
             # Get the decline status for this tenant
             decline_status = await sync_to_async(
                 models.RequestStatus.objects.get_by_slug
-            )(slug="decline", tenant=tenant.id)
+            )(slug="declined", tenant=tenant.id)
             if not decline_status:
                 raise GraphQLError(
                     "Decline status not found. Please ensure you have a status with slug 'decline'."
                 )
             request.status = decline_status
+            request.decline_reason = input.decline_reason
             await sync_to_async(request.save)()
 
             return build_mutation_response(
