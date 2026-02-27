@@ -147,6 +147,7 @@ class CreateEventInput(BaseNameableInput):
     request_id: strawberry.ID | None = None
     retailer_id: strawberry.ID | None = None
     distributor_id: strawberry.ID | None = None
+    rmm_asigned_id: strawberry.ID | None = None
     timezone_id: strawberry.ID | None = None
     date: str
     address: str
@@ -329,6 +330,7 @@ class CreateRequestInput(BaseNameableInput):
     distributor_id: strawberry.ID | None = None
     retailer_id: strawberry.ID | None = None
     store_manager_id: strawberry.ID | None = None
+    rmm_asigned_id: strawberry.ID | None = None
     requestor_email: str | None = None
     client_name: str | None = None
     client_email: str | None = None
@@ -356,6 +358,7 @@ class UpdateRequestInput(BaseNameableInput):
     request_type_id: strawberry.ID
     distributor_id: strawberry.ID
     retailer_id: strawberry.ID
+    rmm_asigned_id: strawberry.ID | None = None
     requestor_email: str | None = None
     store_manager_name: str
     store_manager_phone: str
