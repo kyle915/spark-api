@@ -12,9 +12,12 @@ from utils.graphql.mixins import resolve_id_to_int
 from jobs import models
 from django.db.models import QuerySet
 from django.db.models import Model
+from django.db.models import F, Q
+from django.db.models.functions import ACos, Cos, Radians, Sin
 from jobs import types
 from jobs.inputs import JobFiltersInput, JobStatusFilter, RateTypeFiltersInput
 from ambassadors import models as ambassador_models
+from events.inputs import CoordinatesFilterInput, DistanceUnit
 
 
 def _apply_job_date_filters(queryset: QuerySet, filters: JobFiltersInput) -> QuerySet:
@@ -23,6 +26,50 @@ def _apply_job_date_filters(queryset: QuerySet, filters: JobFiltersInput) -> Que
         queryset = queryset.filter(start_date__date__gte=filters.start_date)
     if filters.end_date:
         queryset = queryset.filter(start_date__date__lte=filters.end_date)
+    return queryset
+
+
+def _apply_available_job_filters(queryset: QuerySet, filters: JobFiltersInput) -> QuerySet:
+    """Apply optional filters specific to available jobs."""
+    if filters.location_id:
+        try:
+            location_id = resolve_id_to_int(filters.location_id)
+        except (TypeError, ValueError, GraphQLError) as exc:
+            raise GraphQLError("Invalid location ID.") from exc
+        queryset = queryset.filter(
+            Q(event__retailer__location_id=location_id)
+            | Q(event__distributor__location_id=location_id)
+            | Q(event__request__retailer__location_id=location_id)
+            | Q(event__request__distributor__location_id=location_id)
+        )
+
+    if filters.coordinates:
+        if len(filters.coordinates.coordinates) != 2:
+            raise GraphQLError("Coordinates must contain latitude and longitude.")
+        lat = filters.coordinates.coordinates[0]
+        lon = filters.coordinates.coordinates[1]
+        range_value = filters.coordinates.range
+        if range_value < 0:
+            raise GraphQLError("Range must be a non-negative value.")
+
+        # Calculate distance in miles using event coordinates.
+        distance_expr = 3959 * ACos(
+            Cos(Radians(lat))
+            * Cos(Radians(F("event__coordinates__0")))
+            * Cos(Radians(F("event__coordinates__1")) - Radians(lon))
+            + Sin(Radians(lat)) * Sin(Radians(F("event__coordinates__0")))
+        )
+
+        # Input range is treated as miles; if km is sent, convert to miles.
+        range_in_miles = (
+            range_value * 0.621371
+            if filters.coordinates.unit == DistanceUnit.KILOMETERS
+            else range_value
+        )
+        queryset = queryset.annotate(event_distance=distance_expr).filter(
+            event_distance__lte=range_in_miles
+        )
+
     return queryset
 
 
@@ -908,10 +955,76 @@ class AmbassadorJobFiltersInput(BaseTenantInput):
     status_id: strawberry.ID | None = None
     status_slug: str | None = None
     accepted_terms: bool | None = None
+    job_id: strawberry.ID | None = None
+    start_date: str | None = None
+    end_date: str | None = None
+    coordinates: CoordinatesFilterInput | None = None
 
 
 @strawberry.type
 class AmbassadorJobQueries:
+    @staticmethod
+    def _apply_ambassador_job_filters(
+        queryset: QuerySet,
+        filters: AmbassadorJobFiltersInput,
+        tenant_id: int | None = None,
+    ) -> QuerySet:
+        """Apply ambassador-job filters for mobile and web queries."""
+        if filters.accepted_terms is not None:
+            queryset = queryset.filter(accepted_terms=filters.accepted_terms)
+        if filters.job_id:
+            try:
+                job_id = resolve_id_to_int(filters.job_id)
+                queryset = queryset.filter(job_id=job_id)
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Invalid job ID.")
+        if filters.start_date:
+            queryset = queryset.filter(job__start_date__date__gte=filters.start_date)
+        if filters.end_date:
+            queryset = queryset.filter(job__start_date__date__lte=filters.end_date)
+        if filters.coordinates:
+            if len(filters.coordinates.coordinates) != 2:
+                raise GraphQLError(
+                    "Coordinates must contain latitude and longitude."
+                )
+            lat = filters.coordinates.coordinates[0]
+            lon = filters.coordinates.coordinates[1]
+            range_val = filters.coordinates.range
+            unit = filters.coordinates.unit
+            earth_radius = 6371 if unit == DistanceUnit.KILOMETERS else 3959
+            distance_expr = earth_radius * ACos(
+                Cos(Radians(lat))
+                * Cos(Radians(F("job__event__coordinates__0")))
+                * Cos(Radians(F("job__event__coordinates__1")) - Radians(lon))
+                + Sin(Radians(lat)) * Sin(Radians(F("job__event__coordinates__0")))
+            )
+            queryset = queryset.annotate(event_distance=distance_expr).filter(
+                event_distance__lte=range_val
+            )
+        if filters.status_id:
+            try:
+                status_id = resolve_id_to_int(filters.status_id)
+                queryset = queryset.filter(status_id=status_id)
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Invalid status ID.")
+        elif filters.status_slug:
+            status_filter_kwargs = {"status__slug": filters.status_slug}
+            if tenant_id:
+                status_filter_kwargs["status__tenant_id"] = tenant_id
+            queryset = queryset.filter(**status_filter_kwargs)
+        else:
+            status_values = []
+            if filters.statuses:
+                status_values.extend([status.value for status in filters.statuses])
+            if filters.status:
+                status_values.append(filters.status.value)
+            if status_values:
+                status_filter_kwargs = {"status__slug__in": status_values}
+                if tenant_id:
+                    status_filter_kwargs["status__tenant_id"] = tenant_id
+                queryset = queryset.filter(**status_filter_kwargs)
+        return queryset
+
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def available_jobs(
         self,
@@ -945,6 +1058,7 @@ class AmbassadorJobQueries:
                 raise GraphQLError("Invalid event ID.")
         if filters:
             queryset = _apply_job_date_filters(queryset, filters)
+            queryset = _apply_available_job_filters(queryset, filters)
         if filters and filters.edited is not None:
             queryset = queryset.filter(updated_by__isnull=not filters.edited)
         return await service.get_connection(
@@ -976,30 +1090,11 @@ class AmbassadorJobQueries:
         )
 
         if filters:
-            if filters.accepted_terms is not None:
-                queryset = queryset.filter(accepted_terms=filters.accepted_terms)
-            if filters.status_id:
-                try:
-                    status_id = resolve_id_to_int(filters.status_id)
-                    queryset = queryset.filter(status_id=status_id)
-                except (TypeError, ValueError, GraphQLError):
-                    raise GraphQLError("Invalid status ID.")
-            elif filters.status_slug:
-                status_filter_kwargs = {"status__slug": filters.status_slug}
-                if tenant_id:
-                    status_filter_kwargs["status__tenant_id"] = tenant_id
-                queryset = queryset.filter(**status_filter_kwargs)
-            else:
-                status_values = []
-                if filters.statuses:
-                    status_values.extend([status.value for status in filters.statuses])
-                if filters.status:
-                    status_values.append(filters.status.value)
-                if status_values:
-                    status_filter_kwargs = {"status__slug__in": status_values}
-                    if tenant_id:
-                        status_filter_kwargs["status__tenant_id"] = tenant_id
-                    queryset = queryset.filter(**status_filter_kwargs)
+            queryset = self._apply_ambassador_job_filters(
+                queryset=queryset,
+                filters=filters,
+                tenant_id=tenant_id,
+            )
 
         return await service.get_connection(
             tenant_id=tenant_id,
@@ -1033,30 +1128,11 @@ class AmbassadorJobQueries:
         ).filter(ambassador__user=user)
 
         if filters:
-            if filters.accepted_terms is not None:
-                queryset = queryset.filter(accepted_terms=filters.accepted_terms)
-            if filters.status_id:
-                try:
-                    status_id = resolve_id_to_int(filters.status_id)
-                    queryset = queryset.filter(status_id=status_id)
-                except (TypeError, ValueError, GraphQLError):
-                    raise GraphQLError("Invalid status ID.")
-            elif filters.status_slug:
-                status_filter_kwargs = {"status__slug": filters.status_slug}
-                if tenant_id:
-                    status_filter_kwargs["status__tenant_id"] = tenant_id
-                queryset = queryset.filter(**status_filter_kwargs)
-            else:
-                status_values = []
-                if filters.statuses:
-                    status_values.extend([status.value for status in filters.statuses])
-                if filters.status:
-                    status_values.append(filters.status.value)
-                if status_values:
-                    status_filter_kwargs = {"status__slug__in": status_values}
-                    if tenant_id:
-                        status_filter_kwargs["status__tenant_id"] = tenant_id
-                    queryset = queryset.filter(**status_filter_kwargs)
+            queryset = self._apply_ambassador_job_filters(
+                queryset=queryset,
+                filters=filters,
+                tenant_id=tenant_id,
+            )
 
         return await service.get_connection(
             tenant_id=tenant_id,
@@ -1095,31 +1171,40 @@ class AmbassadorJobQueries:
         info: strawberry.Info,
         id: strawberry.ID | None = None,
         uuid: strawberry.ID | None = None,
+        filters: AmbassadorJobFiltersInput | None = None,
     ) -> types.AmbassadorJob | None:
         """Get a single ambassador job limited to the logged ambassador user."""
-        if id is None and uuid is None:
+        if id is None and uuid is None and filters is None:
             return None
 
         service = AmbassadorJobQueriesService()
         user = await service.get_user(info)
-        filters: dict[str, int | str] = {}
+        tenant_id = await service.resolve_query_tenant_id(info, filters=filters)
+        lookup_filters: dict[str, int | str] = {}
         if id is not None:
             try:
-                filters["id"] = resolve_id_to_int(id)
+                lookup_filters["id"] = resolve_id_to_int(id)
             except (TypeError, ValueError, GraphQLError):
                 return None
         if uuid is not None:
-            filters["uuid"] = str(uuid)
+            lookup_filters["uuid"] = str(uuid)
 
         try:
-            return await sync_to_async(
-                models.AmbassadorJob.objects.select_related(
-                    "ambassador__user", "job", "status", "rate", "tenant"
-                ).get
-            )(
+            queryset = models.AmbassadorJob.objects.select_related(
+                "ambassador__user", "job", "job__event", "status", "rate", "tenant"
+            ).filter(
                 ambassador__user=user,
-                **filters,
+                **lookup_filters,
             )
+            if tenant_id:
+                queryset = queryset.filter(tenant_id=tenant_id)
+            if filters is not None:
+                queryset = self._apply_ambassador_job_filters(
+                    queryset=queryset,
+                    filters=filters,
+                    tenant_id=tenant_id,
+                )
+            return await sync_to_async(queryset.get)()
         except models.AmbassadorJob.DoesNotExist:
             return None
         except models.AmbassadorJob.MultipleObjectsReturned:

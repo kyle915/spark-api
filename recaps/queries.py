@@ -81,7 +81,9 @@ class BaseRecapQueriesService(SparkGraphQLMixin):
         if retailer_id:
             queryset = queryset.filter(retailer_id=retailer_id)
         if state_id:
-            queryset = queryset.filter(job__event__retailer__location__state_id=state_id)
+            queryset = queryset.filter(
+                job__event__retailer__location__state_id=state_id
+            )
         if event_date:
             queryset = queryset.filter(job__event__date__date=event_date)
         if event_address:
@@ -201,7 +203,8 @@ class RecapQueriesService(BaseRecapQueriesService):
             ordering=ordering,
         )
         return queryset.filter(
-            event__ambassadors_events__ambassador__user=user
+            event__ambassadors_events__ambassador__user=user,
+            ambassador__user=user,
         ).distinct()
 
     async def get_ambassador_record_by_uuid(self, *, user, uuid: str) -> Model:
@@ -402,7 +405,9 @@ class RecapQueries:
         user = await service.get_user(info)
 
         event_id: int | None = (
-            resolve_id_to_int(filters.event_id) if filters and filters.event_id else None
+            resolve_id_to_int(filters.event_id)
+            if filters and filters.event_id
+            else None
         )
         retailer_id: int | None = (
             resolve_id_to_int(filters.retailer_id)
@@ -410,7 +415,9 @@ class RecapQueries:
             else None
         )
         state_id: int | None = (
-            resolve_id_to_int(filters.state_id) if filters and filters.state_id else None
+            resolve_id_to_int(filters.state_id)
+            if filters and filters.state_id
+            else None
         )
         event_date = filters.event_date if filters else None
         event_address = filters.event_address if filters else None
@@ -551,6 +558,7 @@ class RecapQueries:
         except GraphQLError:
             return None
 
+
 @strawberry.type
 class RecapMobileQueries:
     @strawberry.field(
@@ -572,7 +580,9 @@ class RecapMobileQueries:
         user = await service.get_user(info)
 
         event_id: int | None = (
-            resolve_id_to_int(filters.event_id) if filters and filters.event_id else None
+            resolve_id_to_int(filters.event_id)
+            if filters and filters.event_id
+            else None
         )
         retailer_id: int | None = (
             resolve_id_to_int(filters.retailer_id)
@@ -580,7 +590,9 @@ class RecapMobileQueries:
             else None
         )
         state_id: int | None = (
-            resolve_id_to_int(filters.state_id) if filters and filters.state_id else None
+            resolve_id_to_int(filters.state_id)
+            if filters and filters.state_id
+            else None
         )
         event_date = filters.event_date if filters else None
         event_address = filters.event_address if filters else None
