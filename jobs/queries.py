@@ -12,7 +12,7 @@ from utils.graphql.mixins import resolve_id_to_int
 from jobs import models
 from django.db.models import QuerySet
 from django.db.models import Model
-from django.db.models import F
+from django.db.models import F, Q
 from django.db.models.functions import ACos, Cos, Radians, Sin
 from jobs import types
 from jobs.inputs import JobFiltersInput, JobStatusFilter, RateTypeFiltersInput
@@ -26,6 +26,50 @@ def _apply_job_date_filters(queryset: QuerySet, filters: JobFiltersInput) -> Que
         queryset = queryset.filter(start_date__date__gte=filters.start_date)
     if filters.end_date:
         queryset = queryset.filter(start_date__date__lte=filters.end_date)
+    return queryset
+
+
+def _apply_available_job_filters(queryset: QuerySet, filters: JobFiltersInput) -> QuerySet:
+    """Apply optional filters specific to available jobs."""
+    if filters.location_id:
+        try:
+            location_id = resolve_id_to_int(filters.location_id)
+        except (TypeError, ValueError, GraphQLError) as exc:
+            raise GraphQLError("Invalid location ID.") from exc
+        queryset = queryset.filter(
+            Q(event__retailer__location_id=location_id)
+            | Q(event__distributor__location_id=location_id)
+            | Q(event__request__retailer__location_id=location_id)
+            | Q(event__request__distributor__location_id=location_id)
+        )
+
+    if filters.coordinates:
+        if len(filters.coordinates.coordinates) != 2:
+            raise GraphQLError("Coordinates must contain latitude and longitude.")
+        lat = filters.coordinates.coordinates[0]
+        lon = filters.coordinates.coordinates[1]
+        range_value = filters.coordinates.range
+        if range_value < 0:
+            raise GraphQLError("Range must be a non-negative value.")
+
+        # Calculate distance in miles using event coordinates.
+        distance_expr = 3959 * ACos(
+            Cos(Radians(lat))
+            * Cos(Radians(F("event__coordinates__0")))
+            * Cos(Radians(F("event__coordinates__1")) - Radians(lon))
+            + Sin(Radians(lat)) * Sin(Radians(F("event__coordinates__0")))
+        )
+
+        # Input range is treated as miles; if km is sent, convert to miles.
+        range_in_miles = (
+            range_value * 0.621371
+            if filters.coordinates.unit == DistanceUnit.KILOMETERS
+            else range_value
+        )
+        queryset = queryset.annotate(event_distance=distance_expr).filter(
+            event_distance__lte=range_in_miles
+        )
+
     return queryset
 
 
@@ -1014,6 +1058,7 @@ class AmbassadorJobQueries:
                 raise GraphQLError("Invalid event ID.")
         if filters:
             queryset = _apply_job_date_filters(queryset, filters)
+            queryset = _apply_available_job_filters(queryset, filters)
         if filters and filters.edited is not None:
             queryset = queryset.filter(updated_by__isnull=not filters.edited)
         return await service.get_connection(
