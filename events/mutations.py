@@ -443,6 +443,9 @@ class EventMutations:
             event: models.Event = await EventMutationService.process_create_or_update(
                 input=input, info=info
             )
+            event = await sync_to_async(
+                models.Event.objects.select_related("rmm_asigned").get
+            )(id=event.id)
             return build_mutation_response(
                 types.EventDetailResponse,
                 success=True,
@@ -2204,7 +2207,7 @@ class RequestMutations:
                 )
             )
             request = await sync_to_async(
-                models.Request.objects.select_related("timezone").get
+                models.Request.objects.select_related("timezone", "rmm_asigned").get
             )(id=request.id)
             return build_mutation_response(
                 types.RequestDetailResponse,

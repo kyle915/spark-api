@@ -65,23 +65,32 @@ class DashboardQueries:
                 for item in distributors_data
             ] if distributors_data else None
 
-            # Get unique retailers (RMMs) from events
-            retailers_data = await sync_to_async(list)(
-                events_with_recaps.select_related('request__retailer')
-                .filter(request__retailer__isnull=False)
-                .values('request__retailer_id', 'request__retailer__name', 'request__retailer__address')
+            # Get unique assigned RMM users from events
+            rmms_data = await sync_to_async(list)(
+                events_with_recaps.select_related('rmm_asigned')
+                .filter(rmm_asigned__isnull=False)
+                .values(
+                    'rmm_asigned_id',
+                    'rmm_asigned__first_name',
+                    'rmm_asigned__last_name',
+                    'rmm_asigned__email',
+                )
                 .distinct()
-                .order_by('request__retailer__name')
+                .order_by('rmm_asigned__first_name', 'rmm_asigned__last_name')
             )
 
             rmms = [
                 types.RetailerOption(
-                    id=str(item['request__retailer_id']),
-                    name=item['request__retailer__name'],
-                    address=item['request__retailer__address']
+                    id=str(item['rmm_asigned_id']),
+                    name=(
+                        f"{(item['rmm_asigned__first_name'] or '').strip()} "
+                        f"{(item['rmm_asigned__last_name'] or '').strip()}"
+                    ).strip()
+                    or (item['rmm_asigned__email'] or ''),
+                    address=''
                 )
-                for item in retailers_data
-            ] if retailers_data else None
+                for item in rmms_data
+            ] if rmms_data else None
 
             # Get available quarters (from all events, not tenant-specific)
             quarters_list = service._get_available_quarters(years_back=2)
@@ -501,45 +510,32 @@ class DashboardQueries:
                 for item in distributors_data
             ] if distributors_data else None
 
-            # Get unique retailers (RMMs) from recaps
-            # Try recap.retailer first, then event.request.retailer
-            retailers_from_recap = await sync_to_async(list)(
-                recaps.select_related('retailer')
-                .filter(retailer__isnull=False)
-                .values('retailer_id', 'retailer__name', 'retailer__address')
-                .distinct()
-            )
-
-            retailers_from_event = await sync_to_async(list)(
-                recaps.select_related('event__request__retailer')
-                .filter(
-                    event__request__retailer__isnull=False,
-                    retailer__isnull=True  # Only get ones not already in recap.retailer
+            # Get unique assigned RMM users from recap events
+            rmms_data = await sync_to_async(list)(
+                recaps.select_related('event__rmm_asigned')
+                .filter(event__rmm_asigned__isnull=False)
+                .values(
+                    'event__rmm_asigned_id',
+                    'event__rmm_asigned__first_name',
+                    'event__rmm_asigned__last_name',
+                    'event__rmm_asigned__email',
                 )
-                .values('event__request__retailer_id', 'event__request__retailer__name', 'event__request__retailer__address')
                 .distinct()
+                .order_by('event__rmm_asigned__first_name', 'event__rmm_asigned__last_name')
             )
 
-            retailer_dict = {}
-            for item in retailers_from_recap:
-                r_id = item['retailer_id']
-                if r_id not in retailer_dict:
-                    retailer_dict[r_id] = types.RetailerOption(
-                        id=str(r_id),
-                        name=item['retailer__name'],
-                        address=item['retailer__address'] or ''
-                    )
-
-            for item in retailers_from_event:
-                r_id = item['event__request__retailer_id']
-                if r_id not in retailer_dict:
-                    retailer_dict[r_id] = types.RetailerOption(
-                        id=str(r_id),
-                        name=item['event__request__retailer__name'],
-                        address=item['event__request__retailer__address'] or ''
-                    )
-
-            rmms = list(retailer_dict.values()) if retailer_dict else None
+            rmms = [
+                types.RetailerOption(
+                    id=str(item['event__rmm_asigned_id']),
+                    name=(
+                        f"{(item['event__rmm_asigned__first_name'] or '').strip()} "
+                        f"{(item['event__rmm_asigned__last_name'] or '').strip()}"
+                    ).strip()
+                    or (item['event__rmm_asigned__email'] or ''),
+                    address=''
+                )
+                for item in rmms_data
+            ] if rmms_data else None
 
             # Get available quarters (from all recaps, not tenant-specific)
             quarters_list = service._get_available_quarters(years_back=2)

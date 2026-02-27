@@ -347,10 +347,15 @@ class DashboardQueriesService(SparkGraphQLMixin):
                 except (ValueError, AttributeError):
                     pass
 
-        # RMM (Retailer) filter
-        if filters.rmm_id:
-            rmm_id = self._resolve_filter_id(filters.rmm_id, "retailer")
-            queryset = queryset.filter(request__retailer_id=rmm_id)
+        # RMM assigned user filter
+        if filters.rmm_asigned_id:
+            rmm_asigned_id = self._resolve_filter_id(
+                filters.rmm_asigned_id, "rmm_asigned"
+            )
+            queryset = queryset.filter(
+                Q(rmm_asigned_id=rmm_asigned_id)
+                | Q(request__rmm_asigned_id=rmm_asigned_id)
+            )
 
         # Distributor filter
         if filters.distributor_id:
@@ -436,9 +441,11 @@ class DashboardQueriesService(SparkGraphQLMixin):
                 filter_dict['end_date'] = filters.end_date
 
         # Other filters
-        if filters.rmm_id:
-            rmm_id = self._resolve_filter_id(filters.rmm_id, "retailer")
-            filter_dict['rmm_id'] = str(rmm_id)
+        if filters.rmm_asigned_id:
+            rmm_asigned_id = self._resolve_filter_id(
+                filters.rmm_asigned_id, "rmm_asigned"
+            )
+            filter_dict['rmm_asigned_id'] = str(rmm_asigned_id)
         if filters.distributor_id:
             distributor_id = self._resolve_filter_id(
                 filters.distributor_id, "distributor"
@@ -518,12 +525,14 @@ class DashboardQueriesService(SparkGraphQLMixin):
                 except (ValueError, AttributeError):
                     pass
 
-        # RMM (Retailer) filter
-        if filters.rmm_id:
-            rmm_id = self._resolve_filter_id(filters.rmm_id, "retailer")
+        # RMM assigned user filter
+        if filters.rmm_asigned_id:
+            rmm_asigned_id = self._resolve_filter_id(
+                filters.rmm_asigned_id, "rmm_asigned"
+            )
             queryset = queryset.filter(
-                Q(retailer_id=rmm_id) |
-                Q(event__request__retailer_id=rmm_id)
+                Q(event__rmm_asigned_id=rmm_asigned_id)
+                | Q(event__request__rmm_asigned_id=rmm_asigned_id)
             )
 
         # Distributor filter
@@ -610,9 +619,11 @@ class DashboardQueriesService(SparkGraphQLMixin):
                 filter_dict['end_date'] = filters.end_date
 
         # Other filters
-        if filters.rmm_id:
-            rmm_id = self._resolve_filter_id(filters.rmm_id, "retailer")
-            filter_dict['rmm_id'] = str(rmm_id)
+        if filters.rmm_asigned_id:
+            rmm_asigned_id = self._resolve_filter_id(
+                filters.rmm_asigned_id, "rmm_asigned"
+            )
+            filter_dict['rmm_asigned_id'] = str(rmm_asigned_id)
         if filters.distributor_id:
             distributor_id = self._resolve_filter_id(
                 filters.distributor_id, "distributor"
