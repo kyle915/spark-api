@@ -120,6 +120,7 @@ class RecentEvent:
 class EventDashboard:
     """Main Event Dashboard response."""
     metrics: EventDashboardMetrics
+    global_kpis: RecapGlobalKPIs
     monthly_trends: MonthlyPerformanceTrend
     performance_insights: PerformanceInsights
     recent_events: List[RecentEvent] | None = None
@@ -134,6 +135,23 @@ class RecapDashboardFilterOptions:
     rmms: List[RetailerOption] | None = None  # RMM = Retailer
     quarters: List[QuarterOption] | None = None
     tenants: List[TenantOption] | None = None
+
+
+@strawberry.type
+class RecapGlobalKPIByRMM:
+    """Global cans/packs sold KPI grouped by RMM."""
+    rmm_id: strawberry.ID
+    rmm_name: str
+    single_cans_sold: int
+    multi_packs_sold: int
+
+
+@strawberry.type
+class RecapGlobalKPIs:
+    """Global cans/packs sold KPIs for Recap Dashboard."""
+    single_cans_sold: int
+    multi_packs_sold: int
+    by_rmm: List[RecapGlobalKPIByRMM]
 
 
 @strawberry.type

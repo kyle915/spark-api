@@ -52,6 +52,14 @@ class DashboardGraphQLTestCase(EventsGraphQLTestCase):
         )
         self.create_tenanted_user(user=self.client_user, tenant=self.tenant)
 
+        self.rmm_user = self.create_user(
+            username="rmm@test.com",
+            email="rmm@test.com",
+            role=self.roles['client'],
+            password="testpass123"
+        )
+        self.create_tenanted_user(user=self.rmm_user, tenant=self.tenant)
+
         # Create prerequisite data
         self.location = self.create_location(
             name="Test Location",
@@ -144,7 +152,8 @@ class DashboardGraphQLTestCase(EventsGraphQLTestCase):
             address="Address 1",
             request=self.request1,
             event_type=self.event_type,
-            status=self.event_status
+            status=self.event_status,
+            rmm_asigned=self.rmm_user
         )
 
         self.event2 = self.create_event(
@@ -153,7 +162,8 @@ class DashboardGraphQLTestCase(EventsGraphQLTestCase):
             address="Address 2",
             request=self.request2,
             event_type=self.event_type,
-            status=self.event_status
+            status=self.event_status,
+            rmm_asigned=self.rmm_user
         )
 
         # Create company and jobs
@@ -220,6 +230,8 @@ class DashboardGraphQLTestCase(EventsGraphQLTestCase):
             retailer=self.retailer,
             total_engagements=100,
             products_sold=50,
+            total_cans_sold=24,
+            total_packs_sold=12,
             total_earnings=1000.0,
             approved=True,
             created_by=self.get_system_user()
@@ -243,6 +255,8 @@ class DashboardGraphQLTestCase(EventsGraphQLTestCase):
             ambassador=self.ambassador,
             total_engagements=80,
             products_sold=40,
+            total_cans_sold=18,
+            total_packs_sold=9,
             total_earnings=800.0,
             approved=False,
             created_by=self.get_system_user()
@@ -282,6 +296,7 @@ class DashboardGraphQLTestCase(EventsGraphQLTestCase):
             request=self.request3,
             event_type=self.event_type,
             status=self.event_status,
+            rmm_asigned=self.rmm_user,
             date=timezone.make_aware(datetime.combine(future_date, time(10, 0))),
             start_time=timezone.make_aware(datetime.combine(future_date, time(10, 0)))
         )
@@ -293,6 +308,8 @@ class DashboardGraphQLTestCase(EventsGraphQLTestCase):
             ambassador=self.ambassador,
             total_engagements=120,
             products_sold=60,
+            total_cans_sold=30,
+            total_packs_sold=15,
             total_earnings=1200.0,
             approved=True,
             created_by=self.get_system_user()
@@ -311,4 +328,3 @@ class DashboardGraphQLTestCase(EventsGraphQLTestCase):
         # Set schema and endpoint for tests
         self.schema = schema_clients
         self.endpoint_path = "/api/v1/graphql/clients"
-

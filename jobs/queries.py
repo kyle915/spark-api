@@ -1090,7 +1090,7 @@ class AmbassadorJobQueries:
         )
 
         if filters:
-            queryset = self._apply_ambassador_job_filters(
+            queryset = AmbassadorJobQueries._apply_ambassador_job_filters(
                 queryset=queryset,
                 filters=filters,
                 tenant_id=tenant_id,
@@ -1128,7 +1128,7 @@ class AmbassadorJobQueries:
         ).filter(ambassador__user=user)
 
         if filters:
-            queryset = self._apply_ambassador_job_filters(
+            queryset = AmbassadorJobQueries._apply_ambassador_job_filters(
                 queryset=queryset,
                 filters=filters,
                 tenant_id=tenant_id,
@@ -1199,7 +1199,7 @@ class AmbassadorJobQueries:
             if tenant_id:
                 queryset = queryset.filter(tenant_id=tenant_id)
             if filters is not None:
-                queryset = self._apply_ambassador_job_filters(
+                queryset = AmbassadorJobQueries._apply_ambassador_job_filters(
                     queryset=queryset,
                     filters=filters,
                     tenant_id=tenant_id,
