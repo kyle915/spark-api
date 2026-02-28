@@ -68,6 +68,7 @@ class BaseRecapQueriesService(SparkGraphQLMixin):
     def get_filtered_queryset(
         self,
         event_id: int | None = None,
+        rmm_asigned_id: int | None = None,
         retailer_id: int | None = None,
         state_id: int | None = None,
         event_date: str | None = None,
@@ -78,6 +79,8 @@ class BaseRecapQueriesService(SparkGraphQLMixin):
         queryset = self.get_queryset()
         if event_id:
             queryset = queryset.filter(event_id=event_id)
+        if rmm_asigned_id:
+            queryset = queryset.filter(event__rmm_asigned_id=rmm_asigned_id)
         if retailer_id:
             queryset = queryset.filter(retailer_id=retailer_id)
         if state_id:
@@ -95,6 +98,7 @@ class BaseRecapQueriesService(SparkGraphQLMixin):
     def get_ordered_queryset(
         self,
         event_id: int | None = None,
+        rmm_asigned_id: int | None = None,
         retailer_id: int | None = None,
         state_id: int | None = None,
         event_date: str | None = None,
@@ -105,6 +109,7 @@ class BaseRecapQueriesService(SparkGraphQLMixin):
         """Return the filtered queryset with ordering applied."""
         queryset = self.get_filtered_queryset(
             event_id,
+            rmm_asigned_id,
             retailer_id,
             state_id,
             event_date,
@@ -120,6 +125,7 @@ class BaseRecapQueriesService(SparkGraphQLMixin):
         self,
         *,
         event_id: int | None = None,
+        rmm_asigned_id: int | None = None,
         retailer_id: int | None = None,
         state_id: int | None = None,
         event_date: str | None = None,
@@ -138,6 +144,7 @@ class BaseRecapQueriesService(SparkGraphQLMixin):
         if queryset is None:
             queryset = self.get_ordered_queryset(
                 event_id,
+                rmm_asigned_id,
                 retailer_id,
                 state_id,
                 event_date,
@@ -185,6 +192,7 @@ class RecapQueriesService(BaseRecapQueriesService):
         *,
         user,
         event_id: int | None = None,
+        rmm_asigned_id: int | None = None,
         retailer_id: int | None = None,
         state_id: int | None = None,
         event_date: str | None = None,
@@ -195,6 +203,7 @@ class RecapQueriesService(BaseRecapQueriesService):
         """Return recaps linked to events assigned to the ambassador user."""
         queryset = self.get_ordered_queryset(
             event_id=event_id,
+            rmm_asigned_id=rmm_asigned_id,
             retailer_id=retailer_id,
             state_id=state_id,
             event_date=event_date,
@@ -409,6 +418,11 @@ class RecapQueries:
             if filters and filters.event_id
             else None
         )
+        rmm_asigned_id: int | None = (
+            resolve_id_to_int(filters.rmm_asigned_id)
+            if filters and filters.rmm_asigned_id
+            else None
+        )
         retailer_id: int | None = (
             resolve_id_to_int(filters.retailer_id)
             if filters and filters.retailer_id
@@ -423,6 +437,7 @@ class RecapQueries:
         event_address = filters.event_address if filters else None
         queryset = service.get_ordered_queryset(
             event_id=event_id,
+            rmm_asigned_id=rmm_asigned_id,
             retailer_id=retailer_id,
             state_id=state_id,
             event_date=event_date,
@@ -434,6 +449,7 @@ class RecapQueries:
 
         return await service.get_connection(
             event_id=event_id,
+            rmm_asigned_id=rmm_asigned_id,
             retailer_id=retailer_id,
             state_id=state_id,
             event_date=event_date,
@@ -584,6 +600,11 @@ class RecapMobileQueries:
             if filters and filters.event_id
             else None
         )
+        rmm_asigned_id: int | None = (
+            resolve_id_to_int(filters.rmm_asigned_id)
+            if filters and filters.rmm_asigned_id
+            else None
+        )
         retailer_id: int | None = (
             resolve_id_to_int(filters.retailer_id)
             if filters and filters.retailer_id
@@ -599,6 +620,7 @@ class RecapMobileQueries:
         queryset = service.get_ambassador_queryset(
             user=user,
             event_id=event_id,
+            rmm_asigned_id=rmm_asigned_id,
             retailer_id=retailer_id,
             state_id=state_id,
             event_date=event_date,
@@ -610,6 +632,7 @@ class RecapMobileQueries:
 
         return await service.get_connection(
             event_id=event_id,
+            rmm_asigned_id=rmm_asigned_id,
             retailer_id=retailer_id,
             state_id=state_id,
             event_date=event_date,
