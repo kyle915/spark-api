@@ -446,8 +446,61 @@ class DashboardQueries:
                     )
                 )
 
+            # Global KPIs for dashboard view (respecting active filters/date range)
+            recap_queryset = recap_models.Recap.objects.filter(
+                event__in=events_with_recaps
+            )
+
+            global_kpis_data = await sync_to_async(
+                lambda: recap_queryset.aggregate(
+                    single_cans_sold=Sum('total_cans_sold', default=0),
+                    multi_packs_sold=Sum('total_packs_sold', default=0),
+                )
+            )()
+
+            global_by_rmm_data = await sync_to_async(list)(
+                recap_queryset.select_related('event__rmm_asigned')
+                .filter(event__rmm_asigned__isnull=False)
+                .values(
+                    'event__rmm_asigned_id',
+                    'event__rmm_asigned__first_name',
+                    'event__rmm_asigned__last_name',
+                    'event__rmm_asigned__email',
+                )
+                .annotate(
+                    single_cans_sold=Sum('total_cans_sold', default=0),
+                    multi_packs_sold=Sum('total_packs_sold', default=0),
+                )
+                .order_by(
+                    'event__rmm_asigned__first_name',
+                    'event__rmm_asigned__last_name',
+                    'event__rmm_asigned__email',
+                )
+            )
+
+            global_kpis_by_rmm = [
+                types.RecapGlobalKPIByRMM(
+                    rmm_id=str(item['event__rmm_asigned_id']),
+                    rmm_name=(
+                        f"{(item['event__rmm_asigned__first_name'] or '').strip()} "
+                        f"{(item['event__rmm_asigned__last_name'] or '').strip()}"
+                    ).strip()
+                    or (item['event__rmm_asigned__email'] or ''),
+                    single_cans_sold=item['single_cans_sold'] or 0,
+                    multi_packs_sold=item['multi_packs_sold'] or 0,
+                )
+                for item in global_by_rmm_data
+            ]
+
+            global_kpis = types.RecapGlobalKPIs(
+                single_cans_sold=global_kpis_data['single_cans_sold'] or 0,
+                multi_packs_sold=global_kpis_data['multi_packs_sold'] or 0,
+                by_rmm=global_kpis_by_rmm
+            )
+
             return types.EventDashboard(
                 metrics=metrics,
+                global_kpis=global_kpis,
                 monthly_trends=monthly_trends,
                 performance_insights=performance_insights,
                 recent_events=recent_events if recent_events else None
