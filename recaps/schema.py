@@ -7,6 +7,7 @@ from recaps import queries
 @strawberry.type
 class RecapQuerySpark(
     queries.RecapQueries,
+    queries.RecapMobileQueries,
 ):
     pass
 
