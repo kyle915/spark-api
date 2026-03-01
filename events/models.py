@@ -126,7 +126,15 @@ class Distributor(models.Model):
     name = models.CharField(max_length=255)
     email = models.CharField(max_length=254, null=True)
 
-    location = models.ForeignKey(Location, on_delete=models.RESTRICT)
+    location = models.ForeignKey(Location, on_delete=models.RESTRICT, null=True)
+
+    state = models.ForeignKey(
+        State,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="distributor",
+    )
+
     tenant = models.ForeignKey(
         Tenant, on_delete=models.RESTRICT, related_name="distributors"
     )
@@ -153,8 +161,10 @@ class Retailer(models.Model):
     name = models.CharField(max_length=255)
     address = models.CharField(max_length=100, null=True)
     store_contact = models.CharField(max_length=50, null=True)
+    is_national = models.BooleanField(default=False)
 
-    location = models.ForeignKey(Location, on_delete=models.RESTRICT)
+    location = models.ForeignKey(Location, on_delete=models.RESTRICT, null=True)
+
     tenant = models.ForeignKey(
         Tenant, on_delete=models.RESTRICT, related_name="retailes"
     )
@@ -562,6 +572,7 @@ class EventType(WithDefaultAttribute, models.Model):
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     name = models.CharField(max_length=50)
     is_default = models.BooleanField(default=False, db_index=True)
+    slug = models.SlugField(max_length=50, null=True)
 
     tenant = models.ForeignKey(
         Tenant,

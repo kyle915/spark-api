@@ -51,10 +51,10 @@ DEFAULT_ATTENDANCE_STATUS_TEMPLATES = [
 ]
 
 DEFAULT_EVENT_TYPES = [
-    {"name": "Sampling", "is_default": True},
-    {"name": "Promotion", "is_default": False},
-    {"name": "Launch", "is_default": False},
-    {"name": "Special Event", "is_default": False},
+    {"name": "Sampling", "slug": "sampling", "is_default": True},
+    {"name": "Promotion", "slug": "promotion", "is_default": False},
+    {"name": "Launch", "slug": "launch", "is_default": False},
+    {"name": "Special Event", "slug": "special-event", "is_default": False},
 ]
 
 DEFAULT_REQUEST_TYPES = [
@@ -1006,6 +1006,7 @@ class SparkTenantMutations:
                     for event_type in DEFAULT_EVENT_TYPES:
                         EventType.objects.create(
                             name=event_type["name"],
+                            slug=event_type.get("slug") or slugify(event_type["name"]),
                             tenant=tenant,
                             created_by=user,
                             is_default=event_type["is_default"],
