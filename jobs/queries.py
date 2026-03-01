@@ -12,7 +12,7 @@ from utils.graphql.mixins import resolve_id_to_int
 from jobs import models
 from django.db.models import QuerySet
 from django.db.models import Model
-from django.db.models import F, Q
+from django.db.models import BooleanField, Exists, F, OuterRef, Q, Value
 from django.db.models.functions import ACos, Cos, Radians, Sin
 from jobs import types
 from jobs.inputs import JobFiltersInput, JobStatusFilter, RateTypeFiltersInput
@@ -1049,7 +1049,18 @@ class AmbassadorJobQueries:
         ).prefetch_related("job_requirements")
 
         if role_slug == "ambassador":
-            queryset = queryset.exclude(ambassador_jobs__ambassador__user=user)
+            queryset = queryset.annotate(
+                applied=Exists(
+                    models.AmbassadorJob.objects.filter(
+                        job_id=OuterRef("pk"),
+                        ambassador__user=user,
+                    )
+                )
+            )
+        else:
+            queryset = queryset.annotate(
+                applied=Value(False, output_field=BooleanField())
+            )
         if filters and filters.event_id:
             try:
                 event_id = resolve_id_to_int(filters.event_id)
