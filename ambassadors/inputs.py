@@ -227,6 +227,8 @@ class UpsertAmbassadorProfileInput(SparkGraphQLInput):
 
     ambassador_id: strawberry.ID | None = None
     ambassador_uuid: strawberry.ID | None = None
+    first_name: str | None = None
+    last_name: str | None = None
     location_id: strawberry.ID | None = None
     t_shirt_size: str | None = None
     address: str | None = None

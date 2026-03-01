@@ -818,6 +818,19 @@ class UpsertAmbassadorProfileService(BaseAmbassadorService):
                     updated_by=user,
                 )
 
+            user_fields_to_update: list[str] = []
+            if input.first_name is not None:
+                ambassador.user.first_name = input.first_name
+                user_fields_to_update.append("first_name")
+            if input.last_name is not None:
+                ambassador.user.last_name = input.last_name
+                user_fields_to_update.append("last_name")
+            if user_fields_to_update:
+                ambassador.user.updated_by = user
+                ambassador.user.save(
+                    update_fields=[*user_fields_to_update, "updated_by", "updated_at"]
+                )
+
             if input.address is not None:
                 ambassador.address = input.address
             if input.phone is not None:
