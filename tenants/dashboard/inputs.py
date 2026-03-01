@@ -22,8 +22,8 @@ class EventDashboardFiltersInput(BaseTenantInput):
     # Quarter filter (takes precedence over start_date/end_date if provided)
     quarter: str | None = None  # Quarter string like "Q1 2025"
 
-    # RMM filter (RMM = Retailer)
-    rmm_id: strawberry.ID | None = None  # Retailer ID
+    # RMM assigned user filter
+    rmm_asigned_id: strawberry.ID | None = None
 
     # Distributor filter
     distributor_id: strawberry.ID | None = None
@@ -43,8 +43,8 @@ class RecapDashboardFiltersInput(BaseTenantInput):
     # Quarter filter (takes precedence over start_date/end_date if provided)
     quarter: str | None = None  # Quarter string like "Q1 2025"
 
-    # RMM filter (RMM = Retailer)
-    rmm_id: strawberry.ID | None = None  # Retailer ID
+    # RMM assigned user filter
+    rmm_asigned_id: strawberry.ID | None = None
 
     # Distributor filter
     distributor_id: strawberry.ID | None = None

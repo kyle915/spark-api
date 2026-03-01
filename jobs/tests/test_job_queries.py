@@ -245,6 +245,51 @@ class TestSparkJobQueries(JobsGraphQLTestCase):
         assert result.data["job"] is not None
         assert result.data["job"]["name"] == "Spark Job"
 
+    @pytest.mark.asyncio
+    async def test_ambassador_jobs_query_with_status_filter(self):
+        """Test ambassadorJobs query accepts status filter without resolver errors."""
+        ambassador_user = self.create_user(
+            username="spark_query_ambassador@test.com",
+            email="spark_query_ambassador@test.com",
+            role=self.roles["ambassador"],
+            password="testpass123",
+        )
+        ambassador = self.create_ambassador(user=ambassador_user)
+        self.create_tenanted_user(user=ambassador_user, tenant=self.tenant)
+        status = self.create_status(name="Pending", tenant=self.tenant, slug="pending")
+        rate_type = self.create_rate_type(name="Hour", tenant=self.tenant)
+        rate = self.create_rate(amount=25.0, rate_type=rate_type, tenant=self.tenant)
+        self.create_ambassador_job(
+            ambassador=ambassador,
+            job=self.job,
+            status=status,
+            rate=rate,
+            tenant=self.tenant,
+        )
+
+        query = """
+        query AmbassadorJobsPendingQuery($first: Int) {
+            ambassadorJobs(first: $first, filters: { status: PENDING }) {
+                totalCount
+                edges {
+                    node {
+                        id
+                    }
+                }
+            }
+        }
+        """
+        variables = {"first": 10}
+
+        result = await self._execute_query_authenticated(
+            query, variables, self.spark_user, self.endpoint_path
+        )
+
+        assert result.errors is None
+        assert result.data is not None
+        assert result.data["ambassadorJobs"] is not None
+        assert result.data["ambassadorJobs"]["totalCount"] >= 1
+
 
 @pytest.mark.django_db(transaction=True)
 class TestAmbassadorJobQueries(JobsGraphQLTestCase):

@@ -84,6 +84,16 @@ class TestEventDashboardQueries(DashboardGraphQLTestCase):
                     brandAwareness
                     purchaseIntent
                 }
+                globalKpis {
+                    singleCansSold
+                    multiPacksSold
+                    byRmm {
+                        rmmId
+                        rmmName
+                        singleCansSold
+                        multiPacksSold
+                    }
+                }
                 monthlyTrends {
                     dataPoints {
                         month
@@ -123,6 +133,13 @@ class TestEventDashboardQueries(DashboardGraphQLTestCase):
         assert isinstance(data['metrics']['consumersSampled'], int)
         assert 0 <= data['metrics']['brandAwareness'] <= 100
         assert 0 <= data['metrics']['purchaseIntent'] <= 100
+        assert data['globalKpis'] is not None
+        assert data['globalKpis']['singleCansSold'] == 72
+        assert data['globalKpis']['multiPacksSold'] == 36
+        assert data['globalKpis']['byRmm'] is not None
+        assert len(data['globalKpis']['byRmm']) >= 1
+        assert data['globalKpis']['byRmm'][0]['singleCansSold'] == 72
+        assert data['globalKpis']['byRmm'][0]['multiPacksSold'] == 36
         assert data['monthlyTrends'] is not None
         assert data['performanceInsights'] is not None
 

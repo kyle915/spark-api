@@ -337,6 +337,7 @@ class Request(Node):
     request_type: RequestType | None = None
     status: RequestStatus | None = None
     tenant_id: strawberry.ID
+    rmm_asigned: SparkUserType | None = None
     created_by: SparkUserType | None = None
     updated_by: SparkUserType | None = None
     approved_by: SparkUserType | None = None
@@ -426,6 +427,7 @@ class Event(Node):
     event_type: EventType | None = None
     status: EventStatus | None = None
     timezone: TimeZone | None = None
+    rmm_asigned: SparkUserType | None = None
 
     @strawberry.field
     def tenant_image(self) -> str | None:

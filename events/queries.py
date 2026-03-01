@@ -28,7 +28,7 @@ from django.db.models.functions import Cast, Coalesce
 
 from events import types
 from events import models
-from tenants.models import Tenant
+from tenants.models import Tenant, TenantedUser, Role
 from events.inputs import (
     EventFiltersInput,
     EventTypeFiltersInput,
@@ -225,6 +225,7 @@ class EventQueriesService(BaseEventQueriesService):
             "tenant",
             "timezone",
             "request",
+            "rmm_asigned",
         )
 
 
@@ -735,6 +736,7 @@ class RequestQueriesService(BaseEventQueriesService):
                 "timezone",
                 "distributor__location__state",
                 "retailer__location__state",
+                "rmm_asigned",
                 "created_by",
                 "updated_by",
             )
@@ -794,6 +796,25 @@ class RequestQueries:
                     filters.distributor_id, "distributor"
                 )
                 queryset = queryset.filter(distributor_id=distributor_id)
+            if filters.request_type_id:
+                request_type_id = _resolve_filter_id(
+                    filters.request_type_id, "request type"
+                )
+                queryset = queryset.filter(request_type_id=request_type_id)
+            if filters.retailer_state_id:
+                retailer_state_id = _resolve_filter_id(
+                    filters.retailer_state_id, "retailer state"
+                )
+                queryset = queryset.filter(
+                    retailer__location__state_id=retailer_state_id
+                )
+            if filters.distributor_state_id:
+                distributor_state_id = _resolve_filter_id(
+                    filters.distributor_state_id, "distributor state"
+                )
+                queryset = queryset.filter(
+                    distributor__location__state_id=distributor_state_id
+                )
             if filters.date:
                 queryset = queryset.filter(date__date=filters.date)
             if filters.edited is not None:
@@ -960,6 +981,58 @@ class ClientQueries:
             last=last,
             before=before,
         )
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def rmm_clients(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID | None = None,
+        tenant_uuid: strawberry.ID | None = None,
+        q: str | None = None,
+    ) -> List[types.SparkUserType]:
+        """Get active client users for RMM filter selects."""
+        service = ClientQueriesService()
+        resolved_tenant_id = await service.resolve_tenant_id(
+            info,
+            tenant_id=tenant_id,
+            tenant_uuid=tenant_uuid,
+        )
+
+        queryset = (
+            TenantedUser.objects.filter(
+                is_active=True,
+                user__is_active=True,
+                user__role__slug=Role.CLIENT_SLUG,
+            )
+            .select_related("user")
+            .order_by(
+                "user__first_name",
+                "user__last_name",
+                "user__email",
+                "user_id",
+            )
+        )
+
+        if resolved_tenant_id:
+            queryset = queryset.filter(tenant_id=resolved_tenant_id)
+
+        if q:
+            query = q.strip()
+            if query:
+                queryset = queryset.filter(
+                    Q(user__first_name__icontains=query)
+                    | Q(user__last_name__icontains=query)
+                    | Q(user__email__icontains=query)
+                    | Q(user__username__icontains=query)
+                )
+
+        rows = await sync_to_async(list)(queryset)
+        users_by_id: dict[int, object] = {}
+        for row in rows:
+            if row.user_id not in users_by_id:
+                users_by_id[row.user_id] = row.user
+
+        return list(users_by_id.values())
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def client(

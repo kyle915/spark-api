@@ -68,7 +68,10 @@ class BaseRecapQueriesService(SparkGraphQLMixin):
     def get_filtered_queryset(
         self,
         event_id: int | None = None,
+        rmm_asigned_id: int | None = None,
         retailer_id: int | None = None,
+        state_id: int | None = None,
+        event_date: str | None = None,
         event_address: str | None = None,
         q: str | None = None,
     ) -> QuerySet:
@@ -76,8 +79,16 @@ class BaseRecapQueriesService(SparkGraphQLMixin):
         queryset = self.get_queryset()
         if event_id:
             queryset = queryset.filter(event_id=event_id)
+        if rmm_asigned_id:
+            queryset = queryset.filter(event__rmm_asigned_id=rmm_asigned_id)
         if retailer_id:
             queryset = queryset.filter(retailer_id=retailer_id)
+        if state_id:
+            queryset = queryset.filter(
+                job__event__retailer__location__state_id=state_id
+            )
+        if event_date:
+            queryset = queryset.filter(job__event__date__date=event_date)
         if event_address:
             queryset = queryset.filter(event__address__icontains=event_address)
         if q:
@@ -87,13 +98,24 @@ class BaseRecapQueriesService(SparkGraphQLMixin):
     def get_ordered_queryset(
         self,
         event_id: int | None = None,
+        rmm_asigned_id: int | None = None,
         retailer_id: int | None = None,
+        state_id: int | None = None,
+        event_date: str | None = None,
         event_address: str | None = None,
         q: str | None = None,
         ordering: tuple[str, ...] | None = None,
     ) -> QuerySet:
         """Return the filtered queryset with ordering applied."""
-        queryset = self.get_filtered_queryset(event_id, retailer_id, event_address, q)
+        queryset = self.get_filtered_queryset(
+            event_id,
+            rmm_asigned_id,
+            retailer_id,
+            state_id,
+            event_date,
+            event_address,
+            q,
+        )
         ordering = ordering or self.ordering
         if ordering:
             queryset = queryset.order_by(*ordering)
@@ -103,7 +125,10 @@ class BaseRecapQueriesService(SparkGraphQLMixin):
         self,
         *,
         event_id: int | None = None,
+        rmm_asigned_id: int | None = None,
         retailer_id: int | None = None,
+        state_id: int | None = None,
+        event_date: str | None = None,
         event_address: str | None = None,
         q: str | None = None,
         first: int | None = None,
@@ -118,7 +143,14 @@ class BaseRecapQueriesService(SparkGraphQLMixin):
         """Return a Relay compliant connection for the queryset."""
         if queryset is None:
             queryset = self.get_ordered_queryset(
-                event_id, retailer_id, event_address, q, ordering
+                event_id,
+                rmm_asigned_id,
+                retailer_id,
+                state_id,
+                event_date,
+                event_address,
+                q,
+                ordering,
             )
         try:
             return await connection_from_queryset_async(
@@ -160,7 +192,10 @@ class RecapQueriesService(BaseRecapQueriesService):
         *,
         user,
         event_id: int | None = None,
+        rmm_asigned_id: int | None = None,
         retailer_id: int | None = None,
+        state_id: int | None = None,
+        event_date: str | None = None,
         event_address: str | None = None,
         q: str | None = None,
         ordering: tuple[str, ...] | None = None,
@@ -168,13 +203,17 @@ class RecapQueriesService(BaseRecapQueriesService):
         """Return recaps linked to events assigned to the ambassador user."""
         queryset = self.get_ordered_queryset(
             event_id=event_id,
+            rmm_asigned_id=rmm_asigned_id,
             retailer_id=retailer_id,
+            state_id=state_id,
+            event_date=event_date,
             event_address=event_address,
             q=q,
             ordering=ordering,
         )
         return queryset.filter(
-            event__ambassadors_events__ambassador__user=user
+            event__ambassadors_events__ambassador__user=user,
+            ambassador__user=user,
         ).distinct()
 
     async def get_ambassador_record_by_uuid(self, *, user, uuid: str) -> Model:
@@ -375,17 +414,33 @@ class RecapQueries:
         user = await service.get_user(info)
 
         event_id: int | None = (
-            resolve_id_to_int(filters.event_id) if filters and filters.event_id else None
+            resolve_id_to_int(filters.event_id)
+            if filters and filters.event_id
+            else None
+        )
+        rmm_asigned_id: int | None = (
+            resolve_id_to_int(filters.rmm_asigned_id)
+            if filters and filters.rmm_asigned_id
+            else None
         )
         retailer_id: int | None = (
             resolve_id_to_int(filters.retailer_id)
             if filters and filters.retailer_id
             else None
         )
+        state_id: int | None = (
+            resolve_id_to_int(filters.state_id)
+            if filters and filters.state_id
+            else None
+        )
+        event_date = filters.event_date if filters else None
         event_address = filters.event_address if filters else None
         queryset = service.get_ordered_queryset(
             event_id=event_id,
+            rmm_asigned_id=rmm_asigned_id,
             retailer_id=retailer_id,
+            state_id=state_id,
+            event_date=event_date,
             event_address=event_address,
             q=q,
         )
@@ -394,7 +449,10 @@ class RecapQueries:
 
         return await service.get_connection(
             event_id=event_id,
+            rmm_asigned_id=rmm_asigned_id,
             retailer_id=retailer_id,
+            state_id=state_id,
+            event_date=event_date,
             event_address=event_address,
             q=q,
             first=first,
@@ -516,6 +574,7 @@ class RecapQueries:
         except GraphQLError:
             return None
 
+
 @strawberry.type
 class RecapMobileQueries:
     @strawberry.field(
@@ -537,18 +596,34 @@ class RecapMobileQueries:
         user = await service.get_user(info)
 
         event_id: int | None = (
-            resolve_id_to_int(filters.event_id) if filters and filters.event_id else None
+            resolve_id_to_int(filters.event_id)
+            if filters and filters.event_id
+            else None
+        )
+        rmm_asigned_id: int | None = (
+            resolve_id_to_int(filters.rmm_asigned_id)
+            if filters and filters.rmm_asigned_id
+            else None
         )
         retailer_id: int | None = (
             resolve_id_to_int(filters.retailer_id)
             if filters and filters.retailer_id
             else None
         )
+        state_id: int | None = (
+            resolve_id_to_int(filters.state_id)
+            if filters and filters.state_id
+            else None
+        )
+        event_date = filters.event_date if filters else None
         event_address = filters.event_address if filters else None
         queryset = service.get_ambassador_queryset(
             user=user,
             event_id=event_id,
+            rmm_asigned_id=rmm_asigned_id,
             retailer_id=retailer_id,
+            state_id=state_id,
+            event_date=event_date,
             event_address=event_address,
             q=q,
         )
@@ -557,7 +632,10 @@ class RecapMobileQueries:
 
         return await service.get_connection(
             event_id=event_id,
+            rmm_asigned_id=rmm_asigned_id,
             retailer_id=retailer_id,
+            state_id=state_id,
+            event_date=event_date,
             event_address=event_address,
             q=q,
             first=first,

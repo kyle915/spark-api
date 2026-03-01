@@ -7,7 +7,10 @@ from utils.graphql.inputs import SparkGraphQLInput
 @strawberry.input
 class RecapFiltersInput(SparkGraphQLInput):
     event_id: strawberry.ID | None = None
+    rmm_asigned_id: strawberry.ID | None = None
     retailer_id: strawberry.ID | None = None
+    state_id: strawberry.ID | None = None
+    event_date: str | None = None
     event_address: str | None = None
     edited: bool | None = None
 

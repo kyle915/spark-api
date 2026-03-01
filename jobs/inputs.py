@@ -3,6 +3,7 @@ from enum import Enum
 from typing import List
 
 from utils.graphql.inputs import SparkGraphQLInput
+from events.inputs import CoordinatesFilterInput
 
 
 from utils.graphql.inputs import BaseNameableInput, BaseTenantInput
@@ -156,10 +157,12 @@ class JobStatusFilter(str, Enum):
 @strawberry.input
 class JobFiltersInput(BaseTenantInput):
     event_id: strawberry.ID | None = None
+    location_id: strawberry.ID | None = None
     status: JobStatusFilter | None = None
     statuses: list[JobStatusFilter] | None = None
     start_date: str | None = None
     end_date: str | None = None
+    coordinates: CoordinatesFilterInput | None = None
     edited: bool | None = None
 
 

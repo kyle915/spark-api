@@ -372,6 +372,13 @@ class Request(models.Model):
         related_name="requests",
     )
 
+    rmm_asigned = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="requests",
+    )
+
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
@@ -647,6 +654,13 @@ class Event(models.Model):
     address = models.CharField(max_length=100, null=False, default="")
     notes = models.TextField(null=True, blank=True)
     is_national = models.BooleanField(default=False)
+
+    rmm_asigned = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="events",
+    )
 
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
