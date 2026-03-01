@@ -2,19 +2,15 @@
 <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
   <tr>
     <td style="font-size: 16px; color: #444444; line-height: 1.6;">
-      <p style="margin: 0 0 16px 0;">
-        Hi {{ request.name|default:"there" }},
-      </p>
-
+      <p style="margin: 0 0 16px 0;">Hi {{ request.name|default:"there" }},</p>
       <p style="margin: 0 0 20px 0;">
-        Your activation request has been submitted successfully. Since your account isn't the primary
-        approver for this brand, it's been routed to the brand POC for review.
+        Your activation request just went through and, since it came directly from your account, it is already approved.
       </p>
 
-      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="margin: 0 0 20px 0; border: 2px solid #b78a10; background-color: #f4eed9;">
+      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="margin: 0 0 20px 0; border: 2px solid #29934a; background-color: #edf7ef;">
         <tr>
-          <td align="center" style="padding: 10px; font-size: 26px; font-weight: 800; color: #b78a10; letter-spacing: 0.5px;">
-            PENDING APPROVAL
+          <td align="center" style="padding: 10px; font-size: 26px; font-weight: 800; color: #268344; letter-spacing: 0.5px;">
+            AUTO-APPROVED
           </td>
         </tr>
       </table>
@@ -22,13 +18,7 @@
       <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="border: 1px solid #d8d8d8; border-collapse: collapse; margin: 0 0 28px 0;">
         <tr>
           <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Request ID</td>
-          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">
-            {% if request.id %}
-              REQ-{{ request.id }}
-            {% else %}
-              -
-            {% endif %}
-          </td>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ request_id }}</td>
         </tr>
         <tr>
           <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Brand / Campaign</td>
@@ -40,18 +30,7 @@
         </tr>
         <tr>
           <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Location(s)</td>
-          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">
-            {% if location %}
-              {{ location.name }}
-              {% if location.state %}
-                , {{ location.state.code }}
-              {% endif %}
-            {% elif request.address %}
-              {{ request.address }}
-            {% else %}
-              -
-            {% endif %}
-          </td>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ location_name }}</td>
         </tr>
         <tr>
           <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Date(s)</td>
@@ -71,28 +50,40 @@
           </td>
         </tr>
         <tr>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Special Requirements</td>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ request.notes|default:"-" }}</td>
+        </tr>
+        <tr>
           <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Submitted By</td>
-          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">
-            {{ request.name|default:"-" }} ({{ request.requestor_email|default:request.client_email|default:"-" }})
-          </td>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ submitted_name }} ({{ submitted_email }})</td>
         </tr>
       </table>
 
       <h3 style="margin: 0 0 12px 0; color: #202036; font-size: 22px;">What Happens Next</h3>
       <ol style="margin: 0 0 24px 24px; padding: 0; color: #444444;">
-        <li style="margin: 0 0 8px 0;">The brand will review and approve or decline your request.</li>
-        <li style="margin: 0 0 8px 0;">You'll receive an email as soon as a decision is made.</li>
-        <li style="margin: 0;">If approved, a calendar invite will be sent to you and the brand POC automatically.</li>
+        <li style="margin: 0 0 8px 0;">We'll match your activation with qualified Brand Ambassadors from our network.</li>
+        <li style="margin: 0 0 8px 0;">You'll receive a staffing confirmation once BA(s) are locked in.</li>
+        <li style="margin: 0 0 8px 0;">A calendar invite has been sent to your email with the activation details.</li>
+        <li style="margin: 0;">If we need any additional details, we'll reach out directly.</li>
       </ol>
 
-      <p style="margin: 0 0 12px 0; font-size: 13px; color: #555555; line-height: 1.6;">
-        Sit tight - most approvals come through within 24-48 hours. If you need to make changes
-        before the brand POC reviews, you can update the request directly in Spark.
+      <table role="presentation" cellspacing="0" cellpadding="0" border="0" align="center" style="margin: 20px auto 0 auto;">
+        <tr>
+          <td align="center">
+            <a href="https://spark.igniteproductions.co/requests/list"
+               style="display: inline-block; padding: 12px 18px; border: 2px solid #f05a28; color: #202036; text-decoration: none; font-weight: 700; font-size: 15px;">
+              View Your Request in Spark
+            </a>
+          </td>
+        </tr>
+      </table>
+
+      <p style="margin: 24px 0 18px 0; font-size: 13px; color: #555555; line-height: 1.5;">
+        Thanks for getting this one rolling. We'll take it from here.
       </p>
       <p style="margin: 0; font-size: 12px; font-weight: 700; color: #555555;">The Ignite Team</p>
       <p style="margin: 2px 0 0 0; font-size: 12px; color: #555555;">Ignite Productions LLC</p>
       <p style="margin: 2px 0 0 0; font-size: 12px; color: #555555;">events@igniteproductions.co | 775.406.0435</p>
-
     </td>
   </tr>
 </table>

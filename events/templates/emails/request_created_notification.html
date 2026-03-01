@@ -1,78 +1,74 @@
 {% extends "emails/base.html" %} {% block content %}
 <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
   <tr>
-    <td style="font-size: 18px; font-weight: 600; color: #333333; padding-bottom: 15px;">
-      Hello!
-    </td>
-  </tr>
-  <tr>
-    <td style="font-size: 16px; color: #555555; line-height: 1.6;">
-      <p style="margin: 0 0 20px 0;">A new request has been created for your location group. Please login to approve/decline.</p>
+    <td style="font-size: 16px; color: #444444; line-height: 1.6;">
+      <p style="margin: 0 0 16px 0;">
+        Hi {{ recipient_name|default:"there" }},
+      </p>
 
-      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #f9f9f9; border-radius: 5px; margin: 20px 0;">
+      <p style="margin: 0 0 20px 0;">
+        You've got a new activation request that needs your sign-off.
+        <strong>{{ request.name|default:"Submitter" }}</strong>
+        submitted this on behalf of <strong>{{ request.tenant.name|default:"-" }}</strong> - here are the details:
+      </p>
+
+      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="margin: 0 0 20px 0; border: 2px solid #b78a10; background-color: #f4eed9;">
         <tr>
-          <td style="padding: 20px;">
-            <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
-              <tr>
-                <td style="padding: 5px 0;"><strong>Request:</strong> {{ request.name }}</td>
-              </tr>
+          <td align="center" style="padding: 10px; font-size: 26px; font-weight: 800; color: #b78a10; letter-spacing: 0.5px;">
+            AWAITING YOUR APPROVAL
+          </td>
+        </tr>
+      </table>
 
-              {% if request.date %}
-                <tr>
-                  <td style="padding: 5px 0;">
-                    <strong>Date:</strong> {{ request_date|default:"-" }}
-                  </td>
-                </tr>
+      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="border: 1px solid #d8d8d8; border-collapse: collapse; margin: 0 0 28px 0;">
+        <tr>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Request ID</td>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">
+            {% if request.id %}
+              REQ-{{ request.id }}
+            {% else %}
+              -
+            {% endif %}
+          </td>
+        </tr>
+        <tr>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Brand / Campaign</td>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ request.tenant.name|default:"-" }} - {{ request.name|default:"-" }}</td>
+        </tr>
+        <tr>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Activation Type</td>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ request.request_type.name|default:"-" }}</td>
+        </tr>
+        <tr>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Location(s)</td>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">
+            {{ location.name|default:"-" }}
+            {% if location.state %}
+              , {{ location.state.code }}
+            {% endif %}
+          </td>
+        </tr>
+        <tr>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Date(s)</td>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ request_date|default:"-" }}</td>
+        </tr>
+        <tr>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Time</td>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">
+            {% if request_start_time %}
+              {{ request_start_time|default:"-" }}
+              {% if request_end_time %}
+                - {{ request_end_time|default:"-" }}
               {% endif %}
-
-              {% if request_start_time %}
-                <tr>
-                  <td style="padding: 5px 0;">
-                    <strong>Time:</strong> {{ request_start_time|default:"-" }}
-                    {% if request_end_time %}
-                      - {{ request_end_time|default:"-" }}
-                    {% endif %}
-                  </td>
-                </tr>
-              {% endif %}
-
-              {% if request.address %}
-                <tr>
-                  <td style="padding: 5px 0;"><strong>Address:</strong> {{ request.address }}</td>
-                </tr>
-              {% endif %}
-
-              <tr>
-                <td style="padding: 5px 0;">
-                  <strong>Location:</strong> {{ location.name }}
-                  {% if location.state %}
-                    ({{ location.state.code }})
-                  {% endif %}
-                </td>
-              </tr>
-
-              {% if request.retailer or request.retailer_name %}
-                <tr>
-                  <td style="padding: 5px 0;">
-                    <strong>Retailer:</strong> {{ request.retailer.name|default:request.retailer_name }}
-                  </td>
-                </tr>
-              {% endif %}
-
-              {% if request.distributor or request.distributor_name %}
-                <tr>
-                  <td style="padding: 5px 0;">
-                    <strong>Distributor:</strong> {{ request.distributor.name|default:request.distributor_name }}
-                  </td>
-                </tr>
-              {% endif %}
-
-              {% if request.request_type %}
-                <tr>
-                  <td style="padding: 5px 0;"><strong>Request Type:</strong> {{ request.request_type.name }}</td>
-                </tr>
-              {% endif %}
-            </table>
+            {% else %}
+              -
+            {% endif %}
+          </td>
+        </tr>
+        <tr>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Submitted By</td>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">
+            {{ request.name|default:"-" }} ({{ request.requestor_email|default:request.client_email|default:"-" }})
           </td>
         </tr>
       </table>
@@ -87,6 +83,18 @@
           </td>
         </tr>
       </table>
+
+      <p style="margin: 24px 0 12px 0; font-size: 13px; color: #555555; line-height: 1.6;">
+        If you deny the request, you'll be prompted to provide a brief explanation. This will be shared
+        with the submitter along with your contact info so they can follow up if needed.
+      </p>
+      <p style="margin: 0 0 18px 0; font-size: 13px; color: #555555; line-height: 1.6;">
+        The submitter is waiting on your call - try to review within 48 hours so we can get staffing in
+        motion if it's a go.
+      </p>
+      <p style="margin: 0; font-size: 12px; font-weight: 700; color: #555555;">The Ignite Team</p>
+      <p style="margin: 2px 0 0 0; font-size: 12px; color: #555555;">Ignite Productions LLC</p>
+      <p style="margin: 2px 0 0 0; font-size: 12px; color: #555555;">events@igniteproductions.co | 775.406.0435</p>
     </td>
   </tr>
 </table>
