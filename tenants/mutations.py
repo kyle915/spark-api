@@ -1,13 +1,16 @@
 import strawberry
 from strawberry import relay
 from enum import Enum
+from datetime import timedelta
 from graphql import GraphQLError
 from django.contrib.auth import get_user_model
 from gqlauth.core.utils import get_token
 from asgiref.sync import sync_to_async
 import random
+import secrets
 import string
 from django.utils.text import slugify
+from django.utils import timezone
 from gqlauth.models import UserStatus
 from django.conf import settings
 from django.db import transaction
@@ -17,11 +20,11 @@ from utils.graphql.relay import ensure_relay_mutation
 from utils.graphql.mixins import resolve_id_to_int
 from utils.utils import ROLE_ID
 from utils.gcs import delete_blob, extract_blob_name_from_url
-from .models import Role, TenantedUser, Tenant, TenantTheme
+from .models import Role, TenantedUser, Tenant, TenantTheme, PasswordResetCode
 from .types import TenantType, TenantThemeType
 from .inputs import CreateOrUpdateTenantThemeInput
 from .social_auth import BaseSocialAuthMutations, SocialAuthResponse
-from .envelopes import EmailVerificationMailer
+from .envelopes import EmailVerificationMailer, ForgotPasswordCodeMailer
 from events.models import EventStatus, EventType, RequestStatus, RequestType
 from jobs.models import Status as JobStatus, RateType
 from recaps.models import FileRecapCategory, TypeOfGood
@@ -153,6 +156,19 @@ class ChangeUserPasswordInput(SparkGraphQLInput):
 
 @strawberry.input
 class ChangeOwnPasswordInput(SparkGraphQLInput):
+    password1: str
+    password2: str
+
+
+@strawberry.input
+class ForgotPasswordInput(SparkGraphQLInput):
+    email: str
+
+
+@strawberry.input
+class ResetPasswordWithCodeInput(SparkGraphQLInput):
+    email: str
+    code: str
     password1: str
     password2: str
 
@@ -421,6 +437,143 @@ class SparkCustomRegister:
 
 @strawberry.type
 class SparkUserMutations:
+    @relay.mutation
+    async def forgot_password(
+        self,
+        info: strawberry.Info,
+        input: ForgotPasswordInput,
+    ) -> UpdateUserResponse:
+        email = input.email.strip().lower()
+        generic_message = (
+            "If the email exists, we have sent a 4-digit verification code."
+        )
+
+        if not email:
+            return UpdateUserResponse(
+                success=False,
+                message="Email is required.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        user = await sync_to_async(
+            lambda: User.objects.filter(email__iexact=email)
+            .select_related("role")
+            .first()
+        )()
+        if not user:
+            return UpdateUserResponse(
+                success=True,
+                message=generic_message,
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        expires_minutes = int(
+            getattr(settings, "PASSWORD_RESET_CODE_EXPIRY_MINUTES", 15)
+        )
+        code = f"{secrets.randbelow(10000):04d}"
+        expires_at = timezone.now() + timedelta(minutes=expires_minutes)
+
+        @sync_to_async
+        def create_reset_code():
+            with transaction.atomic():
+                PasswordResetCode.objects.filter(user=user, is_used=False).update(
+                    is_used=True,
+                    used_at=timezone.now(),
+                )
+                return PasswordResetCode.objects.create(
+                    user=user,
+                    code=code,
+                    expires_at=expires_at,
+                )
+
+        await create_reset_code()
+
+        try:
+            forgot_password_mailer = ForgotPasswordCodeMailer(
+                user=user,
+                code=code,
+                expires_minutes=expires_minutes,
+            )
+            await forgot_password_mailer.send_async()
+        except Exception:
+            return UpdateUserResponse(
+                success=False,
+                message="Unable to send verification code. Please try again.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        return UpdateUserResponse(
+            success=True,
+            message=generic_message,
+            client_mutation_id=input.client_mutation_id,
+        )
+
+    @relay.mutation
+    async def reset_password_with_code(
+        self,
+        info: strawberry.Info,
+        input: ResetPasswordWithCodeInput,
+    ) -> UpdateUserResponse:
+        email = input.email.strip().lower()
+        code = input.code.strip()
+        if input.password1 != input.password2:
+            return UpdateUserResponse(
+                success=False,
+                message="Passwords do not match.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        if not (len(code) == 4 and code.isdigit()):
+            return UpdateUserResponse(
+                success=False,
+                message="Code must be a 4-digit number.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        @sync_to_async
+        def reset_password():
+            user = User.objects.filter(email__iexact=email).first()
+            if not user:
+                return False
+
+            reset_code = (
+                PasswordResetCode.objects.filter(
+                    user=user,
+                    code=code,
+                    is_used=False,
+                    expires_at__gt=timezone.now(),
+                )
+                .order_by("-created_at")
+                .first()
+            )
+            if not reset_code:
+                return False
+
+            with transaction.atomic():
+                user.set_password(input.password1)
+                user.save(update_fields=["password"])
+                reset_code.is_used = True
+                reset_code.used_at = timezone.now()
+                reset_code.save(update_fields=["is_used", "used_at"])
+                PasswordResetCode.objects.filter(user=user, is_used=False).exclude(
+                    pk=reset_code.pk
+                ).update(is_used=True, used_at=timezone.now())
+            return True
+
+        was_reset = await reset_password()
+        if not was_reset:
+            return UpdateUserResponse(
+                success=False,
+                message="Invalid code or email.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        return UpdateUserResponse(
+            success=True,
+            message="Password updated successfully.",
+            client_mutation_id=input.client_mutation_id,
+        )
+
     @relay.mutation
     async def create_user(
         self,
