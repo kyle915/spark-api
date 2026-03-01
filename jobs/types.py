@@ -222,6 +222,11 @@ class Job(Node):
         """Ambassador assignments linked to this job."""
         return await sync_to_async(list)(self.ambassador_jobs.all())
 
+    @strawberry.field(name="applied")
+    def resolve_applied(self) -> bool:
+        """Whether the current ambassador user already applied to this job."""
+        return bool(getattr(self, "applied", False))
+
 
 @strawberry.type
 class JobDetailResponse:

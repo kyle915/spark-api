@@ -26,9 +26,11 @@ from utils.utils import ROLE_ID, build_mutation_response
 from .envelopes import (
     EventApprovedNotificationMailer,
     RequestApprovedNotificationMailer,
+    RequestorRequestApprovedMailer,
     RequestCreatedNotificationMailer,
     ClientRequestCreatedNotificationMailer,
     RequestorRequestCreatedMailer,
+    RequestorRequestAutoApprovedMailer,
 )
 from utils.gcs import (
     delete_blob,
@@ -1902,7 +1904,7 @@ async def _notify_notification_group_users_for_request_created(
     if not group_ids:
         return
 
-    to_emails = await sync_to_async(list)(
+    recipients = await sync_to_async(list)(
         models.NotificationGroupUser.objects.filter(
             notification_group_id__in=group_ids,
             user__is_active=True,
@@ -1911,18 +1913,29 @@ async def _notify_notification_group_users_for_request_created(
         )
         .exclude(user__email__isnull=True)
         .exclude(user__email="")
-        .values_list("user__email", flat=True)
+        .values("user__email", "user__first_name", "user__last_name")
         .distinct()
     )
-    if not to_emails:
+    if not recipients:
         return
 
-    mailer = RequestCreatedNotificationMailer(
-        request=request,
-        location=location,
-        to_emails=to_emails,
-    )
-    await sync_to_async(mailer.send)(delay_seconds=delay_seconds)
+    for recipient in recipients:
+        recipient_email = (recipient.get("user__email") or "").strip()
+        if not recipient_email:
+            continue
+        first_name = (recipient.get("user__first_name") or "").strip()
+        last_name = (recipient.get("user__last_name") or "").strip()
+        recipient_name = " ".join([part for part in [first_name, last_name] if part])
+        if not recipient_name:
+            recipient_name = recipient_email
+
+        mailer = RequestCreatedNotificationMailer(
+            request=request,
+            location=location,
+            to_emails=[recipient_email],
+            recipient_name=recipient_name,
+        )
+        await sync_to_async(mailer.send)(delay_seconds=delay_seconds)
 
 
 async def _notify_spark_admins_for_client_request(
@@ -1961,6 +1974,50 @@ async def _notify_requestor_for_request_created(
         return
 
     mailer = RequestorRequestCreatedMailer(
+        request=request,
+        location=location,
+        to_emails=[requestor_email],
+    )
+    await sync_to_async(mailer.send)(delay_seconds=delay_seconds)
+
+
+async def _notify_requestor_for_request_approved(
+    request: models.Request,
+    location: models.Location | None,
+    delay_seconds: int | float | None = None,
+) -> None:
+    requestor_email = (request.requestor_email or "").strip()
+    if not requestor_email:
+        return
+
+    mailer = RequestorRequestApprovedMailer(
+        request=request,
+        location=location,
+        to_emails=[requestor_email],
+    )
+    await sync_to_async(mailer.send)(delay_seconds=delay_seconds)
+
+
+async def _notify_requestor_for_request_auto_approved(
+    request: models.Request,
+    location: models.Location | None,
+    delay_seconds: int | float | None = None,
+) -> None:
+    requestor_email = (request.requestor_email or "").strip()
+    if not requestor_email and request.created_by_id:
+        requestor_email = await sync_to_async(
+            lambda: (
+                User.objects.filter(id=request.created_by_id)
+                .values_list("email", flat=True)
+                .first()
+                or ""
+            )
+        )()
+        requestor_email = requestor_email.strip()
+    if not requestor_email:
+        return
+
+    mailer = RequestorRequestAutoApprovedMailer(
         request=request,
         location=location,
         to_emails=[requestor_email],
@@ -2178,6 +2235,9 @@ class RequestMutations:
                 await _notify_spark_admins_for_client_request(
                     request_with_relations, location
                 )
+                await _notify_requestor_for_request_auto_approved(
+                    request_with_relations, location, delay_seconds=1
+                )
             return build_mutation_response(
                 types.RequestDetailResponse,
                 success=True,
@@ -2279,6 +2339,7 @@ class RequestMutations:
 
             location = await _resolve_request_location(request)
             await _notify_notification_group_users_for_request(request, location)
+            await _notify_requestor_for_request_approved(request, location)
 
             return build_mutation_response(
                 types.ApproveRequestResponse,
