@@ -53,6 +53,7 @@ class EventType(Node):
     uuid: str
     name: str
     is_default: bool
+    slug: str | None
     tenant_id: strawberry.ID
     created_at: str
     updated_at: str

@@ -572,6 +572,7 @@ class EventType(WithDefaultAttribute, models.Model):
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     name = models.CharField(max_length=50)
     is_default = models.BooleanField(default=False, db_index=True)
+    slug = models.SlugField(max_length=50, null=True)
 
     tenant = models.ForeignKey(
         Tenant,
