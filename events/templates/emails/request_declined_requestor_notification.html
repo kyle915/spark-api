@@ -1,0 +1,80 @@
+{% extends "emails/base.html" %} {% block content %}
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+  <tr>
+    <td style="font-size: 16px; color: #444444; line-height: 1.6;">
+      <p style="margin: 0 0 16px 0;">Hi {{ submitted_name|default:"there" }},</p>
+
+      <p style="margin: 0 0 20px 0;">
+        We wanted to let you know that your activation request was reviewed by
+        <strong>{{ reviewed_by_name|default:"-" }}</strong> and was not approved at this time.
+      </p>
+
+      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="margin: 0 0 20px 0; border: 2px solid #cf3f34; background-color: #fdf1ef;">
+        <tr>
+          <td align="center" style="padding: 10px; font-size: 26px; font-weight: 800; color: #c2362b; letter-spacing: 0.5px;">
+            NOT APPROVED
+          </td>
+        </tr>
+      </table>
+
+      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="border: 1px solid #d8d8d8; border-collapse: collapse; margin: 0 0 28px 0;">
+        <tr>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Request ID</td>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ request_id }}</td>
+        </tr>
+        <tr>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Brand / Campaign</td>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ request.tenant.name|default:"-" }} - {{ request.name|default:"-" }}</td>
+        </tr>
+        <tr>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Location</td>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ location_name }}</td>
+        </tr>
+        <tr>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Date(s)</td>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ request_date|default:"-" }}</td>
+        </tr>
+        <tr>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Reviewed By</td>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ reviewed_by_name|default:"-" }}</td>
+        </tr>
+      </table>
+
+      <h3 style="margin: 0 0 12px 0; color: #202036; font-size: 22px;">Reason Provided</h3>
+      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="margin: 0 0 28px 0; border: 1px solid #cf3f34; background-color: #f7efef;">
+        <tr>
+          <td style="padding: 14px;">
+            <p style="margin: 0 0 6px 0; font-weight: 700; color: #202036;">
+              From {{ reviewed_by_name|default:"-" }}:
+            </p>
+            <p style="margin: 0; color: #444444;">
+              {{ decline_reason|default:"No reason provided."|linebreaksbr }}
+            </p>
+          </td>
+        </tr>
+      </table>
+
+      <h3 style="margin: 0 0 12px 0; color: #202036; font-size: 32px;">Want to Try Again?</h3>
+      <p style="margin: 0 0 18px 0; font-size: 13px; color: #555555; line-height: 1.5;">
+        No hard feelings - sometimes the timing, scope, or details just need adjusting. You can revise
+        your request and resubmit it for another review.
+      </p>
+      <h3 style="margin: 0 0 12px 0; color: #202036; font-size: 22px;">Need to Discuss?</h3>
+      <p style="margin: 0 0 8px 0; font-size: 13px; color: #555555; line-height: 1.5;">
+        If you'd like to talk through the decision, you can reach the Brand POC directly:
+      </p>
+      <ul style="margin: 0 0 12px 20px; padding: 0; color: #555555;">
+        <li style="margin: 0;">
+          {{ reviewed_by_name|default:"-" }} - {{ reviewed_by_email|default:"-" }}
+        </li>
+      </ul>
+      <p style="margin: 0 0 18px 0; font-size: 13px; color: #555555; line-height: 1.5;">
+        We're here to help make it work. Reach out anytime.
+      </p>
+      <p style="margin: 0; font-size: 12px; font-weight: 700; color: #555555;">The Ignite Team</p>
+      <p style="margin: 2px 0 0 0; font-size: 12px; color: #555555;">Ignite Productions LLC</p>
+      <p style="margin: 2px 0 0 0; font-size: 12px; color: #555555;">events@igniteproductions.co | 775.406.0435</p>
+    </td>
+  </tr>
+</table>
+{% endblock %}

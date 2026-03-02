@@ -27,6 +27,7 @@ from .envelopes import (
     EventApprovedNotificationMailer,
     RequestApprovedNotificationMailer,
     RequestorRequestApprovedMailer,
+    RequestorRequestDeclinedMailer,
     RequestCreatedNotificationMailer,
     ClientRequestCreatedNotificationMailer,
     RequestorRequestCreatedMailer,
@@ -1998,6 +1999,27 @@ async def _notify_requestor_for_request_approved(
     await sync_to_async(mailer.send)(delay_seconds=delay_seconds)
 
 
+async def _notify_requestor_for_request_declined(
+    request: models.Request,
+    location: models.Location | None,
+    reviewed_by_name: str | None = None,
+    reviewed_by_email: str | None = None,
+    delay_seconds: int | float | None = None,
+) -> None:
+    requestor_email = (request.requestor_email or "").strip()
+    if not requestor_email:
+        return
+
+    mailer = RequestorRequestDeclinedMailer(
+        request=request,
+        location=location,
+        to_emails=[requestor_email],
+        reviewed_by_name=reviewed_by_name,
+        reviewed_by_email=reviewed_by_email,
+    )
+    await sync_to_async(mailer.send)(delay_seconds=delay_seconds)
+
+
 async def _notify_requestor_for_request_auto_approved(
     request: models.Request,
     location: models.Location | None,
@@ -2412,6 +2434,15 @@ class RequestMutations:
             request.status = decline_status
             request.decline_reason = input.decline_reason
             await sync_to_async(request.save)()
+            location = await _resolve_request_location(request)
+            reviewed_by_name = (user.get_full_name() or user.email or "").strip() or "-"
+            reviewed_by_email = (user.email or "").strip() or "-"
+            await _notify_requestor_for_request_declined(
+                request=request,
+                location=location,
+                reviewed_by_name=reviewed_by_name,
+                reviewed_by_email=reviewed_by_email,
+            )
 
             return build_mutation_response(
                 types.DeclineRequestResponse,
