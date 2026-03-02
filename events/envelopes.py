@@ -186,6 +186,60 @@ class RequestorRequestApprovedMailer(Mailer):
         )
 
 
+class RequestorRequestDeclinedMailer(Mailer):
+    def __init__(
+        self,
+        request: models.Request,
+        location: models.Location | None,
+        to_emails: list[str],
+        reviewed_by_name: str | None = None,
+        reviewed_by_email: str | None = None,
+    ) -> None:
+        self.request = request
+        self.location = location
+        self.to_emails = to_emails
+        self.reviewed_by_name = reviewed_by_name
+        self.reviewed_by_email = reviewed_by_email
+
+    def envelope(self) -> Envelope:
+        offset = _get_timezone_offset_minutes(self.request)
+        request_id = f"REQ-{self.request.id}" if self.request.id else "-"
+        location_name = "-"
+        if self.location and self.location.name:
+            location_name = self.location.name
+            if self.location.state:
+                location_name = f"{location_name}, {self.location.state.code}"
+        elif self.request.address:
+            location_name = self.request.address
+
+        submitted_name = self.request.name or "there"
+
+        return Envelope(
+            subject="Update on your activation request - revision needed",
+            template="events.templates.emails.request_declined_requestor_notification",
+            to_emails=self.to_emails,
+            headers={"Reply-To": "events@igniteproductions.co"},
+            from_email=getattr(
+                settings,
+                "DEFAULT_FROM_EMAIL",
+                "Spark by Ignite <no-reply@igniteproductions.co>",
+            ),
+            context={
+                "request": self.request,
+                "location": self.location,
+                "request_id": request_id,
+                "location_name": location_name,
+                "submitted_name": submitted_name,
+                "reviewed_by_name": self.reviewed_by_name or "-",
+                "reviewed_by_email": self.reviewed_by_email or "-",
+                "decline_reason": self.request.decline_reason or "",
+                "request_date": _format_dt_no_tz(
+                    self.request.date, "%m/%d/%Y", offset
+                ),
+            },
+        )
+
+
 class RequestCreatedNotificationMailer(Mailer):
     def __init__(
         self,
