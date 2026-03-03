@@ -193,10 +193,31 @@ class RecapMonthlyTrends:
 
 @strawberry.type
 class BestRecapMonth:
-    """Best performing month for Recap Dashboard."""
+    """Best performing month for Recap Dashboard (month with most recaps)."""
     month: str  # e.g., "2025-06"
     recaps_count: int
     consumers_count: int
+
+
+@strawberry.type
+class TopConvertingMarket:
+    """Market/retailer with the highest conversion rate (first by conversion desc)."""
+    market_name: str
+    conversion_rate: float  # Percentage (0-100+)
+
+
+@strawberry.type
+class MarketWithWillingness:
+    """Market/retailer with the highest count of willing-to-purchase consumers."""
+    market_name: str
+    willing_count: int
+
+
+@strawberry.type
+class MarketWithBrandAwareness:
+    """Market/retailer with the highest count of brand-aware consumers."""
+    market_name: str
+    brand_aware_count: int
 
 
 @strawberry.type
@@ -210,6 +231,9 @@ class RecapPerformanceInsights:
     willing_to_purchase_percentage: float  # Percentage
     best_month: BestRecapMonth | None = None
     growth_rate: float  # Percentage (recaps growth vs last year)
+    top_converting_market: TopConvertingMarket | None = None
+    highest_willingness_to_buy: MarketWithWillingness | None = None
+    strongest_brand_awareness: MarketWithBrandAwareness | None = None
 
 
 @strawberry.type

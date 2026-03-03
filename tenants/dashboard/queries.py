@@ -885,6 +885,104 @@ class DashboardQueries:
                 data_points=monthly_points
             )
 
+            # Market Analysis (grouped by retailer) - run before performance_insights
+            # so we can derive top_converting_market, highest_willingness_to_buy, strongest_brand_awareness
+            market_data_recap = await sync_to_async(list)(
+                base_queryset.select_related('retailer')
+                .filter(retailer__isnull=False)
+                .values('retailer_id', 'retailer__name')
+                .annotate(
+                    consumers=Sum(
+                        'consumer_engagements__total_consumer', default=0),
+                    purchases=Sum('products_sold', default=0),
+                    demos=Sum('total_engagements', default=0),
+                    willing=Sum(
+                        'consumer_engagements__willing_to_purchase_consumers', default=0),
+                    brand_aware=Sum(
+                        'consumer_engagements__brand_aware_consumers', default=0)
+                )
+            )
+
+            market_data_event = await sync_to_async(list)(
+                base_queryset.select_related('event__request__retailer')
+                .filter(
+                    retailer__isnull=True,
+                    event__request__retailer__isnull=False
+                )
+                .values('event__request__retailer_id', 'event__request__retailer__name')
+                .annotate(
+                    consumers=Sum(
+                        'consumer_engagements__total_consumer', default=0),
+                    purchases=Sum('products_sold', default=0),
+                    demos=Sum('total_engagements', default=0),
+                    willing=Sum(
+                        'consumer_engagements__willing_to_purchase_consumers', default=0),
+                    brand_aware=Sum(
+                        'consumer_engagements__brand_aware_consumers', default=0)
+                )
+            )
+
+            market_dict = {}
+            for item in market_data_recap:
+                r_id = item['retailer_id']
+                if r_id not in market_dict:
+                    market_dict[r_id] = {
+                        'market_id': r_id,
+                        'market_name': item['retailer__name'],
+                        'consumers': 0,
+                        'purchases': 0,
+                        'demos': 0,
+                        'willing': 0,
+                        'brand_aware': 0
+                    }
+                market_dict[r_id]['consumers'] += item['consumers'] or 0
+                market_dict[r_id]['purchases'] += item['purchases'] or 0
+                market_dict[r_id]['demos'] += item['demos'] or 0
+                market_dict[r_id]['willing'] += item['willing'] or 0
+                market_dict[r_id]['brand_aware'] += item['brand_aware'] or 0
+
+            for item in market_data_event:
+                r_id = item['event__request__retailer_id']
+                if r_id not in market_dict:
+                    market_dict[r_id] = {
+                        'market_id': r_id,
+                        'market_name': item['event__request__retailer__name'],
+                        'consumers': 0,
+                        'purchases': 0,
+                        'demos': 0,
+                        'willing': 0,
+                        'brand_aware': 0
+                    }
+                market_dict[r_id]['consumers'] += item['consumers'] or 0
+                market_dict[r_id]['purchases'] += item['purchases'] or 0
+                market_dict[r_id]['demos'] += item['demos'] or 0
+                market_dict[r_id]['willing'] += item['willing'] or 0
+                market_dict[r_id]['brand_aware'] += item['brand_aware'] or 0
+
+            market_points = []
+            for market in market_dict.values():
+                market_consumers = market['consumers']
+                market_willing = market['willing']
+                market_conversion = (
+                    (market_willing / market_consumers * 100)
+                    if market_consumers > 0 else 0.0
+                )
+                market_efficiency = (
+                    (market['purchases'] / market_consumers * 100)
+                    if market_consumers > 0 else 0.0
+                )
+                market_points.append(
+                    types.MarketPerformanceData(
+                        market_id=str(market['market_id']),
+                        market_name=market['market_name'] or '',
+                        consumers=market_consumers,
+                        purchases=market['purchases'],
+                        conversion=round(market_conversion, 1),
+                        demos=market['demos'],
+                        efficiency=round(market_efficiency, 1)
+                    )
+                )
+
             # Performance Insights
             new_customers = consumers_data['total_first_time'] or 0
             new_customers_percentage = (
