@@ -821,12 +821,9 @@ class DashboardQueries:
                     )()
                     prev_revenue = prev_revenue_data['total'] or 0.0
 
-                    prev_conversion_rate = (
+                    prev_conversion_rate = clamp_percentage(
                         (prev_total_willing / prev_total_consumers * 100)
                         if prev_total_consumers > 0 else 0.0
-                    )
-                    prev_conversion_rate = max(
-                        0.0, min(prev_conversion_rate, 100.0)
                     )
 
                     comparison_values = types.RecapComparisonValues(
