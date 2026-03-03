@@ -10,6 +10,7 @@ from typing import Any, Type, TypeVar, Union
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
+from django.conf import settings
 from django.db.models import Model
 from django.db import transaction
 from django.db.models.deletion import RestrictedError
@@ -29,7 +30,6 @@ from .envelopes import (
     RequestorRequestApprovedMailer,
     RequestorRequestDeclinedMailer,
     RequestCreatedNotificationMailer,
-    ClientRequestCreatedNotificationMailer,
     RequestorRequestCreatedMailer,
     RequestorRequestAutoApprovedMailer,
 )
@@ -1944,25 +1944,7 @@ async def _notify_spark_admins_for_client_request(
     location: models.Location | None,
     delay_seconds: int | float | None = None,
 ) -> None:
-    to_emails = await sync_to_async(list)(
-        User.objects.filter(
-            role__slug="spark-admin",
-            is_active=True,
-        )
-        .exclude(email__isnull=True)
-        .exclude(email="")
-        .values_list("email", flat=True)
-        .distinct()
-    )
-    if not to_emails:
-        return
-
-    mailer = ClientRequestCreatedNotificationMailer(
-        request=request,
-        location=location,
-        to_emails=to_emails,
-    )
-    await sync_to_async(mailer.send)(delay_seconds=delay_seconds)
+    return
 
 
 async def _notify_requestor_for_request_created(
@@ -1982,6 +1964,25 @@ async def _notify_requestor_for_request_created(
     await sync_to_async(mailer.send)(delay_seconds=delay_seconds)
 
 
+def _get_request_review_copy_emails(exclude_email: str | None = None) -> list[str]:
+    configured_emails = getattr(settings, "REQUEST_REVIEW_COPY_EMAILS", []) or []
+    normalized_exclude = (exclude_email or "").strip().lower()
+    unique_emails: list[str] = []
+    seen_emails: set[str] = set()
+
+    for email in configured_emails:
+        normalized_email = (email or "").strip()
+        if not normalized_email:
+            continue
+        key = normalized_email.lower()
+        if key == normalized_exclude or key in seen_emails:
+            continue
+        seen_emails.add(key)
+        unique_emails.append(normalized_email)
+
+    return unique_emails
+
+
 async def _notify_requestor_for_request_approved(
     request: models.Request,
     location: models.Location | None,
@@ -1997,6 +1998,17 @@ async def _notify_requestor_for_request_approved(
         to_emails=[requestor_email],
     )
     await sync_to_async(mailer.send)(delay_seconds=delay_seconds)
+
+    copy_emails = _get_request_review_copy_emails(exclude_email=requestor_email)
+    if not copy_emails:
+        return
+
+    copy_mailer = RequestorRequestApprovedMailer(
+        request=request,
+        location=location,
+        to_emails=copy_emails,
+    )
+    await sync_to_async(copy_mailer.send)(delay_seconds=delay_seconds)
 
 
 async def _notify_requestor_for_request_declined(
@@ -2018,6 +2030,19 @@ async def _notify_requestor_for_request_declined(
         reviewed_by_email=reviewed_by_email,
     )
     await sync_to_async(mailer.send)(delay_seconds=delay_seconds)
+
+    copy_emails = _get_request_review_copy_emails(exclude_email=requestor_email)
+    if not copy_emails:
+        return
+
+    copy_mailer = RequestorRequestDeclinedMailer(
+        request=request,
+        location=location,
+        to_emails=copy_emails,
+        reviewed_by_name=reviewed_by_name,
+        reviewed_by_email=reviewed_by_email,
+    )
+    await sync_to_async(copy_mailer.send)(delay_seconds=delay_seconds)
 
 
 async def _notify_requestor_for_request_auto_approved(
