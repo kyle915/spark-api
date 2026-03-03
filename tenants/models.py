@@ -460,3 +460,44 @@ class InsightReport(models.Model):
 
     def __str__(self):
         return f"{self.title} ({self.priority})"
+
+
+class Goal(models.Model):
+    """
+    Per-user, per-tenant, per-year goals (target values only).
+    Current values are computed at query time from events and ConsumerEngagements.
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    tenant = models.ForeignKey(
+        Tenant, on_delete=models.RESTRICT, related_name="goals"
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        related_name="goals",
+    )
+    year = models.IntegerField(null=False)
+
+    # Target values (nullable so only set goals are stored)
+    event_target_goal = models.IntegerField(null=True, blank=True)
+    consumer_sampling_goal = models.IntegerField(null=True, blank=True)
+    brand_awareness_goal = models.FloatField(null=True, blank=True)
+    purchase_intent_goal = models.FloatField(null=True, blank=True)
+    female_participation_goal = models.FloatField(null=True, blank=True)
+    first_time_buyers_goal = models.IntegerField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["tenant", "user", "year"],
+                name="tenants_goal_tenant_user_year_uniq",
+            )
+        ]
+
+    def __str__(self):
+        return f"Goals {self.year} for user {self.user_id} @ tenant {self.tenant_id}"
