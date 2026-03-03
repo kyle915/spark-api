@@ -22,6 +22,7 @@ from utils.graphql.inputs import SparkGraphQLInput
 from utils.graphql.permissions import StrictIsAuthenticated
 from utils.graphql.relay import ensure_relay_mutation
 from utils.graphql.mixins import SparkGraphQLMixin, resolve_id_to_int
+from utils.graphql.validation import validate_consumer_engagements_counts
 from utils.utils import build_mutation_response
 from utils.gcs import (
     extract_blob_name_from_url,
@@ -165,6 +166,13 @@ class RecapMutationService(SparkGraphQLMixin):
                 # Create the Recap instance
                 total_engagements = 0
                 if self.input.consumer_engagements:
+                    validate_consumer_engagements_counts(
+                        total_consumer=self.input.consumer_engagements.total_consumer,
+                        first_time_consumers=self.input.consumer_engagements.first_time_consumers,
+                        brand_aware_consumers=self.input.consumer_engagements.brand_aware_consumers,
+                        willing_to_purchase_consumers=self.input.consumer_engagements.willing_to_purchase_consumers,
+                        not_willing_consumers=self.input.consumer_engagements.not_willing_consumers,
+                    )
                     total_engagements = self.input.consumer_engagements.total_consumer
 
                 recap = models.Recap(
@@ -415,6 +423,13 @@ class RecapMutationService(SparkGraphQLMixin):
                 recap.total_earnings = self.input.total_earnings
                 recap.account_spend_amount = self.input.account_spend_amount
                 if self.input.consumer_engagements is not None:
+                    validate_consumer_engagements_counts(
+                        total_consumer=self.input.consumer_engagements.total_consumer,
+                        first_time_consumers=self.input.consumer_engagements.first_time_consumers,
+                        brand_aware_consumers=self.input.consumer_engagements.brand_aware_consumers,
+                        willing_to_purchase_consumers=self.input.consumer_engagements.willing_to_purchase_consumers,
+                        not_willing_consumers=self.input.consumer_engagements.not_willing_consumers,
+                    )
                     recap.total_engagements = (
                         self.input.consumer_engagements.total_consumer
                     )

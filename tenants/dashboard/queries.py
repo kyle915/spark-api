@@ -22,6 +22,7 @@ from django.db.models.functions import (
 from django.utils import timezone
 
 from utils.graphql.permissions import StrictIsAuthenticated
+from utils.graphql.validation import clamp_percentage
 from . import types, inputs
 from .services import DashboardQueriesService
 from events import models as event_models
@@ -241,12 +242,13 @@ class DashboardQueries:
             total_brand_aware = consumer_data['total_brand_aware'] or 0
             total_willing_to_purchase = consumer_data['total_willing_to_purchase'] or 0
 
-            # Calculate percentages
-            brand_awareness = (
+            # Calculate percentages (always clamp to 0-100)
+            brand_awareness = clamp_percentage(
                 (total_brand_aware / consumers_sampled * 100)
                 if consumers_sampled > 0 else 0.0
             )
-            purchase_intent = (
+
+            purchase_intent = clamp_percentage(
                 (total_willing_to_purchase / consumers_sampled * 100)
                 if consumers_sampled > 0 else 0.0
             )
@@ -301,11 +303,11 @@ class DashboardQueries:
                     prev_brand_aware = prev_consumer_data['total_brand_aware'] or 0
                     prev_willing = prev_consumer_data['total_willing_to_purchase'] or 0
 
-                    prev_brand_awareness = (
+                    prev_brand_awareness = clamp_percentage(
                         (prev_brand_aware / prev_consumers * 100)
                         if prev_consumers > 0 else 0.0
                     )
-                    prev_purchase_intent = (
+                    prev_purchase_intent = clamp_percentage(
                         (prev_willing / prev_consumers * 100)
                         if prev_consumers > 0 else 0.0
                     )
@@ -356,7 +358,7 @@ class DashboardQueries:
 
                 consumers = item['consumers_sampled'] or 0
                 willing = item['willing_to_purchase'] or 0
-                conversion_rate = (
+                conversion_rate = clamp_percentage(
                     (willing / consumers * 100) if consumers > 0 else 0.0
                 )
 
@@ -747,7 +749,7 @@ class DashboardQueries:
             total_purchases = total_purchases_data['total'] or 0
 
             # Conversion Rate
-            conversion_rate = (
+            conversion_rate = clamp_percentage(
                 (total_willing / total_consumers_sampled * 100)
                 if total_consumers_sampled > 0 else 0.0
             )
@@ -823,6 +825,9 @@ class DashboardQueries:
                         (prev_total_willing / prev_total_consumers * 100)
                         if prev_total_consumers > 0 else 0.0
                     )
+                    prev_conversion_rate = max(
+                        0.0, min(prev_conversion_rate, 100.0)
+                    )
 
                     comparison_values = types.RecapComparisonValues(
                         total_consumers_sampled=prev_total_consumers,
@@ -865,7 +870,7 @@ class DashboardQueries:
                     '%Y-%m') if item['month'] else ''
                 consumers_month = item['consumers'] or 0
                 willing_month = item['willing'] or 0
-                conversion_month = (
+                conversion_month = clamp_percentage(
                     (willing_month / consumers_month * 100)
                     if consumers_month > 0 else 0.0
                 )
@@ -963,11 +968,11 @@ class DashboardQueries:
             for market in market_dict.values():
                 market_consumers = market['consumers']
                 market_willing = market['willing']
-                market_conversion = (
+                market_conversion = clamp_percentage(
                     (market_willing / market_consumers * 100)
                     if market_consumers > 0 else 0.0
                 )
-                market_efficiency = (
+                market_efficiency = clamp_percentage(
                     (market['purchases'] / market_consumers * 100)
                     if market_consumers > 0 else 0.0
                 )
@@ -985,18 +990,18 @@ class DashboardQueries:
 
             # Performance Insights
             new_customers = consumers_data['total_first_time'] or 0
-            new_customers_percentage = (
+            new_customers_percentage = clamp_percentage(
                 (new_customers / total_consumers_sampled * 100)
                 if total_consumers_sampled > 0 else 0.0
             )
 
             brand_awareness = consumers_data['total_brand_aware'] or 0
-            brand_awareness_percentage = (
+            brand_awareness_percentage = clamp_percentage(
                 (brand_awareness / total_consumers_sampled * 100)
                 if total_consumers_sampled > 0 else 0.0
             )
 
-            willing_to_purchase_percentage = (
+            willing_to_purchase_percentage = clamp_percentage(
                 (total_willing / total_consumers_sampled * 100)
                 if total_consumers_sampled > 0 else 0.0
             )

@@ -9,6 +9,7 @@ import pytest
 import strawberry_django  # noqa: F401
 from datetime import datetime, timedelta, time
 from asgiref.sync import sync_to_async
+from django.db.models import Sum
 from django.utils import timezone
 from django.core.cache import cache
 from tenants.dashboard.tests.base import DashboardGraphQLTestCase
@@ -384,6 +385,74 @@ class TestRecapDashboardQueries(DashboardGraphQLTestCase):
             assert 'recapsCount' in insights['bestMonth']
             assert 'consumersCount' in insights['bestMonth']
             assert insights['bestMonth']['recapsCount'] >= 0
+
+    @pytest.mark.asyncio
+    async def test_recap_dashboard_percentages_are_clamped_to_100(self):
+        """Percentages should be capped at 100 even with inconsistent data."""
+        from recaps import models as recap_models
+
+        # Create inconsistent consumer engagement data (brand aware and willing > total)
+        await sync_to_async(recap_models.ConsumerEngagements.objects.create)(
+            recap=self.recap1,
+            total_consumer=10,
+            first_time_consumers=0,
+            brand_aware_consumers=200,
+            willing_to_purchase_consumers=200,
+            not_willing_consumers=0,
+            created_by=self.get_system_user(),
+        )
+
+        # Sanity check: raw aggregate ratios (without clamping) would exceed 100%
+        agg = await sync_to_async(
+            lambda: recap_models.ConsumerEngagements.objects.filter(
+                recap__in=[self.recap1, self.recap2, self.recap3]
+            ).aggregate(
+                total_consumers=Sum("total_consumer"),
+                total_brand_aware=Sum("brand_aware_consumers"),
+                total_willing=Sum("willing_to_purchase_consumers"),
+            )
+        )()
+        raw_brand_awareness = (
+            agg["total_brand_aware"] / agg["total_consumers"] * 100
+            if agg["total_consumers"] > 0
+            else 0.0
+        )
+        raw_purchase_intent = (
+            agg["total_willing"] / agg["total_consumers"] * 100
+            if agg["total_consumers"] > 0
+            else 0.0
+        )
+        assert raw_brand_awareness > 100.0
+        assert raw_purchase_intent > 100.0
+
+        query = """
+        query {
+            recapDashboard {
+                metrics {
+                    conversionRate
+                }
+                performanceInsights {
+                    brandAwarenessPercentage
+                    willingToPurchasePercentage
+                }
+            }
+        }
+        """
+
+        result = await self._execute_query_authenticated(
+            query,
+            {},
+            self.client_user,
+        )
+
+        assert result.errors is None
+        data = result.data["recapDashboard"]
+        metrics = data["metrics"]
+        insights = data["performanceInsights"]
+
+        assert 0.0 <= metrics["conversionRate"] <= 100.0
+        assert insights["brandAwarenessPercentage"] == pytest.approx(100.0)
+        assert insights["willingToPurchasePercentage"] == pytest.approx(100.0)
 
     @pytest.mark.asyncio
     async def test_recap_dashboard_performance_insight_cards_two_retailers(self):

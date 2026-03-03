@@ -9,6 +9,7 @@ import pytest
 import strawberry_django  # noqa: F401
 from datetime import timedelta
 from asgiref.sync import sync_to_async
+from django.db.models import Sum
 from django.utils import timezone
 from django.core.cache import cache
 from tenants.dashboard.tests.base import DashboardGraphQLTestCase
@@ -273,6 +274,60 @@ class TestEventDashboardQueries(DashboardGraphQLTestCase):
 
         # Purchase intent should be percentage
         assert 0 <= metrics['purchaseIntent'] <= 100
+
+    @pytest.mark.asyncio
+    async def test_event_dashboard_percentages_are_clamped_to_100(self):
+        """Percentages should be capped at 100 even with inconsistent data."""
+        from recaps import models as recap_models
+
+        # Create inconsistent consumer engagement data (brand aware > total)
+        await sync_to_async(recap_models.ConsumerEngagements.objects.create)(
+            recap=self.recap1,
+            total_consumer=10,
+            first_time_consumers=0,
+            brand_aware_consumers=200,
+            willing_to_purchase_consumers=0,
+            not_willing_consumers=0,
+            created_by=self.get_system_user(),
+        )
+
+        # Sanity check: raw aggregate ratio (without clamping) would exceed 100%
+        agg = await sync_to_async(
+            lambda: recap_models.ConsumerEngagements.objects.filter(
+                recap__event__in=[self.event1, self.event2, self.event3]
+            ).aggregate(
+                total_consumers=Sum("total_consumer"),
+                total_brand_aware=Sum("brand_aware_consumers"),
+            )
+        )()
+        raw_percentage = (
+            agg["total_brand_aware"] / agg["total_consumers"] * 100
+            if agg["total_consumers"] > 0
+            else 0.0
+        )
+        assert raw_percentage > 100.0
+
+        query = """
+        query {
+            eventDashboard {
+                metrics {
+                    brandAwareness
+                    purchaseIntent
+                }
+            }
+        }
+        """
+
+        result = await self._execute_query_authenticated(
+            query,
+            {},
+            self.client_user,
+        )
+
+        assert result.errors is None
+        metrics = result.data["eventDashboard"]["metrics"]
+        assert metrics["brandAwareness"] == pytest.approx(100.0)
+        assert 0.0 <= metrics["purchaseIntent"] <= 100.0
 
     @pytest.mark.asyncio
     async def test_event_dashboard_monthly_trends(self):
