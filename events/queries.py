@@ -225,6 +225,7 @@ class EventQueriesService(BaseEventQueriesService):
             "tenant",
             "timezone",
             "request",
+            "retailer",
             "rmm_asigned",
         )
 
@@ -1249,6 +1250,10 @@ class DistributorQueriesService(BaseEventQueriesService):
         """Get the model for the service."""
         return models.Distributor
 
+    def get_queryset(self) -> QuerySet:
+        """Get the queryset for the service."""
+        return self.get_model().objects.select_related("location", "state")
+
 
 @strawberry.type
 class DistributorQueries:
@@ -1285,7 +1290,7 @@ class DistributorQueries:
             queryset = queryset.filter(location_id=location_id)
         if filters and filters.state_id:
             state_id = _resolve_filter_id(filters.state_id, "state")
-            queryset = queryset.filter(location__state_id=state_id)
+            queryset = queryset.filter(state_id=state_id)
 
         return await service.get_connection(
             tenant_id=tenant.id,
@@ -1324,7 +1329,7 @@ class DistributorQueries:
             queryset = queryset.filter(location_id=location_id)
         if filters and filters.state_id:
             state_id = _resolve_filter_id(filters.state_id, "state")
-            queryset = queryset.filter(location__state_id=state_id)
+            queryset = queryset.filter(state_id=state_id)
 
         return await service.get_connection(
             tenant_id=resolved_tenant_id,
@@ -1361,6 +1366,10 @@ class RetailerQueriesService(BaseEventQueriesService):
     def get_model(self) -> Model:
         """Get the model for the service."""
         return models.Retailer
+
+    def get_queryset(self) -> QuerySet:
+        """Get the queryset for the service."""
+        return self.get_model().objects.select_related("location")
 
 
 @strawberry.type
@@ -1399,6 +1408,8 @@ class RetailerQueries:
         if filters and filters.state_id:
             state_id = _resolve_filter_id(filters.state_id, "state")
             queryset = queryset.filter(location__state_id=state_id)
+        if filters and filters.is_national is not None:
+            queryset = queryset.filter(is_national=filters.is_national)
 
         return await service.get_connection(
             tenant_id=tenant.id,
@@ -1438,6 +1449,8 @@ class RetailerQueries:
         if filters and filters.state_id:
             state_id = _resolve_filter_id(filters.state_id, "state")
             queryset = queryset.filter(location__state_id=state_id)
+        if filters and filters.is_national is not None:
+            queryset = queryset.filter(is_national=filters.is_national)
 
         return await service.get_connection(
             tenant_id=resolved_tenant_id,
