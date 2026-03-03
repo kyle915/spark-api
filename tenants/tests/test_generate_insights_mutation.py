@@ -96,7 +96,7 @@ class TestGenerateInsightsMutation(BaseGraphQLTestCase):
         await sync_to_async(self.create_tenanted_user)(
             user=user, tenant=self.tenant, is_active=True
         )
-        self._create_event_and_recap_with_feedback()
+        await sync_to_async(self._create_event_and_recap_with_feedback)()
 
         mock_model = MagicMock()
         mock_response = MagicMock()
@@ -281,7 +281,7 @@ class TestGenerateInsightsMutation(BaseGraphQLTestCase):
         await sync_to_async(self.create_tenanted_user)(
             user=user, tenant=self.tenant, is_active=True
         )
-        other_tenant = self.create_tenant(name="Other Tenant")
+        other_tenant = await sync_to_async(self.create_tenant)(name="Other Tenant")
 
         mutation = """
         mutation GenerateInsightsOtherTenant($tenantId: ID!) {
@@ -311,7 +311,7 @@ class TestGenerateInsightsMutation(BaseGraphQLTestCase):
         await sync_to_async(self.create_tenanted_user)(
             user=spark_user, tenant=self.tenant, is_active=True
         )
-        other_tenant = self.create_tenant(name="Other Tenant")
+        other_tenant = await sync_to_async(self.create_tenant)(name="Other Tenant")
 
         mock_queue = MagicMock()
         with patch("tenants.dashboard.mutations.Queues") as mock_queues_class:

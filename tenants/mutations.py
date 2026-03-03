@@ -1197,11 +1197,10 @@ class SparkTenantMutations:
                             created_by=user,
                         )
 
-                    # Skills
+                    # Skills (Skill model is global, no tenant FK)
                     for skill in DEFAULT_SKILLS:
                         Skill.objects.create(
                             name=skill,
-                            tenant=tenant,
                             created_by=user,
                         )
 

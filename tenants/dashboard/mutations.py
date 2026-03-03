@@ -28,6 +28,10 @@ class GenerateInsightsPayload:
     insights: types.Insights | None = None
 
 
+# When schema uses merge_types, root can be None; use this instance for mixin methods.
+_mixin = SparkGraphQLMixin()
+
+
 @strawberry.type
 class DashboardMutations(SparkGraphQLMixin):
     """Dashboard mutations for Spark and Clients schemas."""
@@ -48,8 +52,9 @@ class DashboardMutations(SparkGraphQLMixin):
         Optional date range defaults to last 24 hours. If enqueue is True, the job
         is queued to RQ and the response indicates enqueued (no insights in response).
         """
-        user = await self.get_user(info)
-        tenant = await self.get_user_tenant(info, tenant_id=tenant_id, user=user)
+        root = self if self is not None else _mixin
+        user = await root.get_user(info)
+        tenant = await root.get_user_tenant(info, tenant_id=tenant_id, user=user)
 
         from_d = parse_iso_date_optional(from_date, "fromDate")
         to_d = parse_iso_date_optional(to_date, "toDate")
