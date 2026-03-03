@@ -5,7 +5,7 @@ Covers: get_goals, get_or_create_goal, extract_goal_updates, upsert_goals,
 build_goals_progress, get_current_values_for_user, ensure_goals_for_tenant_users.
 """
 from datetime import timedelta
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from django.utils import timezone
@@ -326,12 +326,19 @@ class TestGetCurrentValuesForUser(DashboardGraphQLTestCase):
 
 @pytest.mark.django_db(transaction=True)
 class TestEnsureGoalsForTenantUsers(DashboardGraphQLTestCase):
-    """Tests for ensure_goals_for_tenant_users."""
+    """Tests for ensure_goals_for_tenant_users (bulk goal creation per tenant)."""
 
     def test_ensure_goals_creates_for_each_active_user(self):
         count = ensure_goals_for_tenant_users(self.tenant.id, 2025)
         assert count >= 2
         assert Goal.objects.filter(tenant_id=self.tenant.id, year=2025).count() >= 2
+
+    def test_ensure_goals_exact_count_matches_active_users(self):
+        """Count returned equals number of active tenanted users when no goals exist."""
+        active_count = self.tenant.tenanted_users.filter(is_active=True).count()
+        count = ensure_goals_for_tenant_users(self.tenant.id, 2025)
+        assert count == active_count
+        assert Goal.objects.filter(tenant_id=self.tenant.id, year=2025).count() == active_count
 
     def test_ensure_goals_idempotent_second_call_creates_zero(self):
         ensure_goals_for_tenant_users(self.tenant.id, 2025)
@@ -341,3 +348,52 @@ class TestEnsureGoalsForTenantUsers(DashboardGraphQLTestCase):
     def test_ensure_goals_returns_zero_for_nonexistent_tenant(self):
         count = ensure_goals_for_tenant_users(999999, 2025)
         assert count == 0
+
+    def test_ensure_goals_returns_zero_when_no_active_users(self):
+        """Tenant with only inactive tenanted users gets no goals created."""
+        empty_tenant = self.create_tenant(name="Empty Tenant")
+        self.create_tenanted_user(user=self.client_user, tenant=empty_tenant, is_active=False)
+        count = ensure_goals_for_tenant_users(empty_tenant.id, 2025)
+        assert count == 0
+        assert Goal.objects.filter(tenant_id=empty_tenant.id, year=2025).count() == 0
+
+    def test_ensure_goals_creates_only_for_missing_users(self):
+        """When some users already have goals, only missing users get new goals."""
+        # Give one user a goal already
+        get_or_create_goal(self.tenant.id, self.rmm_user.id, 2025)
+        active_count = self.tenant.tenanted_users.filter(is_active=True).count()
+        count = ensure_goals_for_tenant_users(self.tenant.id, 2025)
+        assert count == active_count - 1
+        assert Goal.objects.filter(tenant_id=self.tenant.id, year=2025).count() == active_count
+
+    def test_ensure_goals_excludes_inactive_tenanted_users(self):
+        """Inactive tenanted users do not get goals."""
+        extra_user = self.create_user(
+            username="inactive@test.com",
+            email="inactive@test.com",
+            role=self.roles["client"],
+            password="testpass123",
+        )
+        self.create_tenanted_user(user=extra_user, tenant=self.tenant, is_active=False)
+        active_count = self.tenant.tenanted_users.filter(is_active=True).count()
+        count = ensure_goals_for_tenant_users(self.tenant.id, 2025)
+        assert count == active_count
+        assert Goal.objects.filter(tenant_id=self.tenant.id, year=2025, user_id=extra_user.id).count() == 0
+
+    @patch("tenants.dashboard.goals_service.BULK_GOAL_CREATE_BATCH_SIZE", 2)
+    def test_ensure_goals_bulk_batching_respected(self):
+        """When missing users exceed batch size, all are still created (batched bulk_create)."""
+        big_tenant = self.create_tenant(name="Big Tenant")
+        role = self.roles["client"]
+        num_users = 5  # More than patched batch size of 2
+        for i in range(num_users):
+            user = self.create_user(
+                username=f"bulkuser{i}@test.com",
+                email=f"bulkuser{i}@test.com",
+                role=role,
+                password="testpass123",
+            )
+            self.create_tenanted_user(user=user, tenant=big_tenant, is_active=True)
+        count = ensure_goals_for_tenant_users(big_tenant.id, 2025)
+        assert count == num_users
+        assert Goal.objects.filter(tenant_id=big_tenant.id, year=2025).count() == num_users
