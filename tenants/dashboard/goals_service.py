@@ -193,22 +193,50 @@ def get_current_values_for_user(
 # Bulk: ensure goals for all tenant users
 # ---------------------------------------------------------------------------
 
+BULK_GOAL_CREATE_BATCH_SIZE = 1000
+
+
 def ensure_goals_for_tenant_users(tenant_id: int, year: int) -> int:
     """
     Ensure a Goal row exists for every active user in the tenant.
+    Uses bulk_create for missing goals to avoid O(n) round-trips for large tenants.
     Returns the number of new goals created.
     """
     if not Tenant.objects.filter(id=tenant_id).exists():
         return 0
 
-    user_ids = TenantedUser.objects.filter(
-        tenant_id=tenant_id,
-        is_active=True,
-    ).values_list("user_id", flat=True).distinct()
+    active_user_ids = set(
+        TenantedUser.objects.filter(
+            tenant_id=tenant_id,
+            is_active=True,
+        ).values_list("user_id", flat=True).distinct()
+    )
+    if not active_user_ids:
+        return 0
 
-    created = 0
-    for uid in user_ids:
-        _, was_created = get_or_create_goal(tenant_id, uid, year)
-        if was_created:
-            created += 1
-    return created
+    existing_user_ids = set(
+        Goal.objects.filter(
+            tenant_id=tenant_id,
+            year=year,
+            user_id__in=active_user_ids,
+        ).values_list("user_id", flat=True)
+    )
+    missing_user_ids = active_user_ids - existing_user_ids
+    if not missing_user_ids:
+        return 0
+
+    total_created = 0
+    missing_list = list(missing_user_ids)
+    for i in range(0, len(missing_list), BULK_GOAL_CREATE_BATCH_SIZE):
+        batch = missing_list[i : i + BULK_GOAL_CREATE_BATCH_SIZE]
+        goals = [
+            Goal(
+                tenant_id=tenant_id,
+                user_id=uid,
+                year=year,
+            )
+            for uid in batch
+        ]
+        Goal.objects.bulk_create(goals)
+        total_created += len(goals)
+    return total_created

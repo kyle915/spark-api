@@ -15,8 +15,10 @@ from utils.graphql.permissions import StrictIsAuthenticated
 from utils.graphql.validation import parse_iso_date_optional
 from utils.queues import Queues
 
-from . import types
-from .queries import insights_model_to_graphql
+from . import types, inputs
+from .goals_service import extract_goal_updates, upsert_goals
+from .queries import _goal_model_to_graphql, insights_model_to_graphql
+from .tasks import create_goals_for_tenant, create_goals_for_all_tenants
 
 
 @strawberry.type
@@ -89,3 +91,46 @@ class DashboardMutations(SparkGraphQLMixin):
             )
         except ValueError as e:
             raise GraphQLError(str(e))
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def set_goals(
+        self,
+        info: strawberry.Info,
+        input: inputs.SetGoalsInput,
+    ) -> types.Goal:
+        """Create or update goals for the authenticated user for the given tenant and year."""
+        root = self if self is not None else _mixin
+        user = await root.get_user(info)
+        tenant = await root.get_user_tenant(info, tenant_id=input.tenant_id, user=user)
+
+        goal_model = await sync_to_async(upsert_goals)(
+            tenant.id,
+            user.id,
+            input.year,
+            extract_goal_updates(input),
+        )
+        return _goal_model_to_graphql(goal_model, current=None)
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def enqueue_create_goals_for_tenant(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID,
+        year: int,
+    ) -> types.EnqueueCreateGoalsForTenantPayload:
+        """Enqueue a job to create goals for every user in the tenant for the given year."""
+        root = self if self is not None else _mixin
+        user = await root.get_user(info)
+        tenant = await root.get_user_tenant(info, tenant_id=tenant_id, user=user)
+        Queues().default.add(create_goals_for_tenant, tenant.id, year)
+        return types.EnqueueCreateGoalsForTenantPayload(success=True, enqueued=True)
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def enqueue_create_goals_for_all_tenants(
+        self,
+        info: strawberry.Info,
+        year: int,
+    ) -> types.EnqueueCreateGoalsForAllTenantsPayload:
+        """Enqueue a job that will enqueue one create_goals_for_tenant job per tenant for the given year."""
+        Queues().default.add(create_goals_for_all_tenants, year)
+        return types.EnqueueCreateGoalsForAllTenantsPayload(success=True, enqueued=True)

@@ -454,6 +454,8 @@ class DashboardQueriesService(SparkGraphQLMixin):
         tenant_id = self._resolve_filter_tenant_id(filters)
         if tenant_id:
             filter_dict['tenant_id'] = str(tenant_id)
+        if getattr(filters, 'year', None) is not None:
+            filter_dict['year'] = str(filters.year)
 
         return filter_dict
 
