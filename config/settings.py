@@ -239,6 +239,7 @@ MAIL_DRIVER = env("MAIL_DRIVER", default="mailpit")  # mailpit, resend
 RESEND_API_KEY = env("RESEND_API_KEY", default="")
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL",
                          default="Spark <onboarding@resend.dev>")
+REQUEST_REVIEW_COPY_EMAILS = env.list("REQUEST_REVIEW_COPY_EMAILS", default=[])
 
 
 CLIENT_FRONTEND_URL = env("CLIENT_FRONTEND_URL",
