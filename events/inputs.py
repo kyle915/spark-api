@@ -108,6 +108,7 @@ class RetailerFiltersInput(BaseTenantInput):
     tenant_uuid: strawberry.ID | None = None
     location_id: strawberry.ID | None = None
     state_id: strawberry.ID | None = None
+    is_national: bool | None = None
 
 
 @strawberry.input
