@@ -157,6 +157,7 @@ class Distributor(Node):
     email: str | None
     tenant_id: strawberry.ID
     location: Location | None = None
+    state: State | None = None
     created_at: str
     updated_at: str
 
@@ -175,6 +176,7 @@ class Retailer(Node):
     name: str
     address: str | None
     store_contact: str | None
+    is_national: bool
     tenant_id: strawberry.ID
     location: Location | None = None
     created_at: str
@@ -273,7 +275,21 @@ class RequestStatusDetailResponse:
 @strawberry_django.type(models.Request)
 class Request(Node):
     uuid: str
-    name: str
+
+    @strawberry.field
+    def name(self) -> str:
+        request_name = _get_field(self, "name") or ""
+
+        retailer_name = _get_field(self, "retailer_name")
+        if not retailer_name:
+            fields_cache = getattr(self._state, "fields_cache", {})
+            retailer = fields_cache.get("retailer")
+            if retailer and getattr(retailer, "name", None):
+                retailer_name = retailer.name
+
+        if retailer_name:
+            return f"{request_name} - {retailer_name}".strip()
+        return request_name
 
     # Date/time fields returned as stored, without server TZ conversion
     @strawberry.field
@@ -413,7 +429,6 @@ class RequestListResponse:
 @strawberry_django.type(models.Event)
 class Event(Node):
     uuid: str
-    name: str
     coordinates: List[float] | None = None
     address: str
     is_national: bool
@@ -441,6 +456,29 @@ class Event(Node):
             return None
 
         return generate_download_url(blob_name)
+
+    @strawberry.field
+    def name(self) -> str:
+        event_name = _get_field(self, "name") or ""
+
+        retailer_name = None
+        fields_cache = getattr(self._state, "fields_cache", {})
+        retailer = fields_cache.get("retailer")
+        request = fields_cache.get("request")
+
+        if retailer and getattr(retailer, "name", None):
+            retailer_name = retailer.name
+        elif request and getattr(request, "retailer_name", None):
+            retailer_name = request.retailer_name
+        elif request:
+            request_fields_cache = getattr(request._state, "fields_cache", {})
+            request_retailer = request_fields_cache.get("retailer")
+            if request_retailer and getattr(request_retailer, "name", None):
+                retailer_name = request_retailer.name
+
+        if retailer_name:
+            return f"{event_name} - {retailer_name}".strip()
+        return event_name
 
     @strawberry.field
     def date(self) -> str | None:
