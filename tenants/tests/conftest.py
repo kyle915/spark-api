@@ -2,36 +2,39 @@
 Pytest configuration for tenants app tests.
 
 This file configures the test database to use PostgreSQL (spark_tests database)
-to avoid affecting the development PostgreSQL database.
+via TEST_DATABASE_URL so tests never touch the development database.
+
+If you see "relation \"tenants_*\" does not exist" errors, recreate the test DB
+once with: uv run python -m pytest tenants --no-reuse-db
 """
 
+import os
+
 import pytest
-from django.conf import settings
 import environ
+from django.conf import settings
 
 env = environ.Env()
+
+# Default test DB URL when TEST_DATABASE_URL is not set (e.g. CI or env without .env).
+TEST_DATABASE_URL_DEFAULT = "postgres:///spark_tests"
 
 
 @pytest.fixture(scope="session")
 def django_db_modify_db_settings():
     """
-    Override database settings to use PostgreSQL spark_tests database for tests.
-    This ensures tests don't affect the development PostgreSQL database.
+    Override database settings to use the test database from TEST_DATABASE_URL.
 
-    This fixture runs before the database is created and modifies the
-    database settings to use PostgreSQL with spark_tests database.
+    Uses TEST_DATABASE_URL from the environment, or postgres:///spark_tests if unset,
+    so the test run never uses the development database.
     """
-    # Start with the default database settings to preserve all required keys
-    # (like AUTOCOMMIT, ATOMIC_REQUESTS, etc.)
+    # Preserve required keys (AUTOCOMMIT, ATOMIC_REQUESTS, etc.)
     db_config = settings.DATABASES["default"].copy()
 
-    # Override only the connection parameters for the test database
-    # DATABASE_URL format: postgres:///spark_tests
-    # This means: localhost, default port (5432), default user, database=spark_tests
-    import os
-
-    os.environ["DATABASE_URL"] = os.environ.get("TEST_DATABASE_URL")
+    test_url = os.environ.get("TEST_DATABASE_URL") or TEST_DATABASE_URL_DEFAULT
+    os.environ["DATABASE_URL"] = test_url
     test_db_config = env.db()
+    # Ensure test DB is always the one from TEST_DATABASE_URL (default: postgres:///spark_tests)
     db_config.update(
         {
             "ENGINE": test_db_config.get("ENGINE", db_config.get("ENGINE")),
@@ -51,6 +54,9 @@ def django_db_modify_db_settings():
     if "OPTIONS" not in db_config:
         db_config["OPTIONS"] = {}
 
+    # Use test database name exactly "spark_tests" (no test_ prefix)
+    db_config.setdefault("TEST", {})["NAME"] = "spark_tests"
+
     settings.DATABASES["default"] = db_config
 
 
@@ -64,12 +70,10 @@ def enable_db_access_for_all_tests(db):
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _apply_migrations_for_reused_db(django_db_setup, django_db_blocker):
+def _apply_migrations_for_reused_db(django_db_modify_db_settings, django_db_setup, django_db_blocker):
     """
-    Ensure the reused test DB schema is up-to-date.
-
-    With --reuse-db, pytest-django can keep an existing database that may be missing
-    newer tables. Running migrations once per session makes the suite deterministic.
+    When using --reuse-db, ensure the test DB schema is up-to-date by running
+    migrations once per session. No-op when the DB is created fresh (no --reuse-db).
     """
     from django.core.management import call_command
 

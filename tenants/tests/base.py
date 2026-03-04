@@ -256,6 +256,7 @@ class BaseGraphQLTestCase:
             def __init__(self, wsgi_request, path):
                 self.wsgi_request = wsgi_request
                 self.user = wsgi_request.user
+                self.META = getattr(wsgi_request, "META", {})
                 # Create a scope dict that the middleware expects
                 # The middleware expects USER_OR_ERROR_KEY with a UserOrError-like object
                 self.scope = {
