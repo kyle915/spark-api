@@ -30,6 +30,7 @@ from .types import (
     AmbassadorInvitationResponse,
     AcceptInvitationResponse,
     ApproveAmbassadorResponse,
+    DisableAmbassadorResponse,
     CreateAmbassadorResponse,
     UpdateAmbassadorResponse,
     DeleteInvitationResponse,
@@ -59,6 +60,7 @@ from .services import (
     AmbassadorInvitationService,
     AcceptInvitationService,
     ApproveAmbassadorService,
+    DisableAmbassadorService,
     CreateAmbassadorService,
     UpdateAmbassadorService,
     DeleteInvitationService,
@@ -323,6 +325,14 @@ class AmbassadorMutations:
     ) -> ApproveAmbassadorResponse:
         return await ApproveAmbassadorService.approve(input, info)
 
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def disable_ambassador(
+        self,
+        info: strawberry.Info,
+        input: inputs.DisableAmbassadorInput,
+    ) -> DisableAmbassadorResponse:
+        return await DisableAmbassadorService.disable(input, info)
+
     @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
     async def create_ambassador(
         self,
@@ -445,6 +455,16 @@ class AmbassadorMutations:
         input: inputs.DeleteAmbassadorSkillInput,
     ) -> DeleteAmbassadorSkillResponse:
         return await DeleteAmbassadorSkillService.delete(input, info)
+
+
+@strawberry.type
+class AmbassadorMobileMutations:
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def disable_ambassador_mobile(
+        self,
+        info: strawberry.Info,
+    ) -> DisableAmbassadorResponse:
+        return await DisableAmbassadorService.disable_mobile(info)
 
 
 @strawberry.type
