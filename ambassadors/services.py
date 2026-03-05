@@ -47,6 +47,7 @@ from .types import (
     AmbassadorInvitationResponse,
     AcceptInvitationResponse,
     ApproveAmbassadorResponse,
+    DisableAmbassadorResponse,
     CreateAmbassadorResponse,
     UpdateAmbassadorResponse,
     DeleteInvitationResponse,
@@ -661,6 +662,129 @@ class CreateAmbassadorService(BaseAmbassadorService):
             input_obj=input,
             ambassador=ambassador,
         )
+
+
+class DisableAmbassadorService(BaseAmbassadorService):
+    """Service for disabling ambassadors and associated user accounts."""
+
+    @classmethod
+    async def disable(
+        cls,
+        input: inputs.DisableAmbassadorInput,
+        info: strawberry.Info,
+    ) -> DisableAmbassadorResponse:
+        """Disable an ambassador and their associated user account."""
+        user = info.context.request.user
+        role_slug = cls().get_role_slug(user)
+
+        try:
+            ambassador_id = resolve_id_to_int(input.ambassador_id)
+            ambassador = await Ambassador.objects.select_related("user").aget(
+                id=ambassador_id
+            )
+        except (Ambassador.DoesNotExist, ValueError, TypeError, GraphQLError):
+            return build_mutation_response(
+                DisableAmbassadorResponse,
+                success=False,
+                message="Ambassador not found.",
+                input_obj=input,
+            )
+
+        is_client_or_spark = role_slug in {"client", "spark-admin"}
+        is_own_ambassador = role_slug == "ambassador" and ambassador.user_id == user.id
+        if not (is_client_or_spark or is_own_ambassador):
+            return build_mutation_response(
+                DisableAmbassadorResponse,
+                success=False,
+                message="You do not have permission to disable this ambassador.",
+                input_obj=input,
+            )
+
+        try:
+            @sync_to_async
+            @transaction.atomic
+            def disable_ambassador():
+                ambassador.is_active = False
+                ambassador.updated_by = user
+                ambassador.save()
+
+                ambassador_user = ambassador.user
+                ambassador_user.is_active = False
+                ambassador_user.updated_by = user
+                ambassador_user.save()
+
+                return ambassador
+
+            ambassador = await disable_ambassador()
+
+            return build_mutation_response(
+                DisableAmbassadorResponse,
+                success=True,
+                message="Ambassador disabled successfully.",
+                input_obj=input,
+                ambassador=ambassador,
+            )
+        except Exception as e:
+            return build_mutation_response(
+                DisableAmbassadorResponse,
+                success=False,
+                message=f"Error disabling ambassador: {str(e)}",
+                input_obj=input,
+            )
+
+    @classmethod
+    async def disable_mobile(
+        cls,
+        info: strawberry.Info,
+    ) -> DisableAmbassadorResponse:
+        """Disable only the currently logged-in ambassador account."""
+        user = info.context.request.user
+        role_slug = cls().get_role_slug(user)
+        if role_slug != "ambassador":
+            return build_mutation_response(
+                DisableAmbassadorResponse,
+                success=False,
+                message="Only ambassadors can perform this action.",
+            )
+
+        try:
+            ambassador = await Ambassador.objects.select_related("user").aget(user=user)
+        except Ambassador.DoesNotExist:
+            return build_mutation_response(
+                DisableAmbassadorResponse,
+                success=False,
+                message="Ambassador profile not found.",
+            )
+
+        try:
+            @sync_to_async
+            @transaction.atomic
+            def disable_current_ambassador():
+                ambassador.is_active = False
+                ambassador.updated_by = user
+                ambassador.save()
+
+                ambassador_user = ambassador.user
+                ambassador_user.is_active = False
+                ambassador_user.updated_by = user
+                ambassador_user.save()
+
+                return ambassador
+
+            ambassador = await disable_current_ambassador()
+
+            return build_mutation_response(
+                DisableAmbassadorResponse,
+                success=True,
+                message="Ambassador disabled successfully.",
+                ambassador=ambassador,
+            )
+        except Exception as e:
+            return build_mutation_response(
+                DisableAmbassadorResponse,
+                success=False,
+                message=f"Error disabling ambassador: {str(e)}",
+            )
 
 
 class UpdateAmbassadorService(BaseAmbassadorService):

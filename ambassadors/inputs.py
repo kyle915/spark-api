@@ -59,6 +59,13 @@ class ApproveAmbassadorInput(SparkGraphQLInput):
 
 
 @strawberry.input
+class DisableAmbassadorInput(SparkGraphQLInput):
+    """Input for disabling an ambassador and their user account."""
+
+    ambassador_id: strawberry.ID
+
+
+@strawberry.input
 class AmbassadorInvitationFiltersInput:
     """Filters for ambassador invitation queries."""
 

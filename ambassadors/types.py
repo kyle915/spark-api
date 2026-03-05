@@ -103,6 +103,14 @@ class ApproveAmbassadorResponse:
 
 
 @strawberry.type
+class DisableAmbassadorResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    ambassador: Ambassador | None = None
+
+
+@strawberry.type
 class CreateAmbassadorResponse:
     success: bool
     message: str

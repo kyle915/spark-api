@@ -27,6 +27,45 @@ from .services import DashboardQueriesService
 from events import models as event_models
 
 
+async def insights_model_to_graphql(insights_model) -> types.Insights:
+    """
+    Build GraphQL Insights type from an ORM Insights instance.
+    Reused by latest_insights query and generateInsights mutation.
+    """
+    priority_order = Case(
+        When(priority="high", then=3),
+        When(priority="medium", then=2),
+        When(priority="low", then=1),
+        default=0,
+        output_field=IntegerField(),
+    )
+    reports_queryset = insights_model.reports.all().annotate(
+        priority_order=priority_order
+    ).order_by("-priority_order", "created_at")
+    reports_list_data = await sync_to_async(list)(reports_queryset)
+    reports_list = [
+        types.InsightReport(
+            id=strawberry.ID(str(r.id)),
+            uuid=str(r.uuid),
+            title=r.title,
+            content=r.content,
+            priority=r.priority,
+            createdAt=r.created_at.isoformat(),
+        )
+        for r in reports_list_data
+    ]
+    return types.Insights(
+        id=strawberry.ID(str(insights_model.id)),
+        uuid=str(insights_model.uuid),
+        tenantId=strawberry.ID(str(insights_model.tenant.id)),
+        fromDate=insights_model.from_date.isoformat(),
+        toDate=insights_model.to_date.isoformat(),
+        totalFeedbackCount=insights_model.total_feedback_count,
+        reports=reports_list,
+        createdAt=insights_model.created_at.isoformat(),
+    )
+
+
 @strawberry.type
 class DashboardQueries:
     """Dashboard queries for client dashboards."""
@@ -1161,41 +1200,6 @@ class DashboardQueries:
             if not latest_insights:
                 return None
 
-            # Build reports list
-            # Order by priority level (high=3, medium=2, low=1) then by created_at
-            priority_order = Case(
-                When(priority="high", then=3),
-                When(priority="medium", then=2),
-                When(priority="low", then=1),
-                default=0,
-                output_field=IntegerField(),
-            )
-            reports_queryset = latest_insights.reports.all().annotate(
-                priority_order=priority_order
-            ).order_by("-priority_order", "created_at")
-            reports_list_data = await sync_to_async(list)(reports_queryset)
-            reports_list = []
-            for report in reports_list_data:
-                reports_list.append(
-                    types.InsightReport(
-                        id=strawberry.ID(str(report.id)),
-                        uuid=str(report.uuid),
-                        title=report.title,
-                        content=report.content,
-                        priority=report.priority,
-                        createdAt=report.created_at.isoformat(),
-                    )
-                )
-
-            return types.Insights(
-                id=strawberry.ID(str(latest_insights.id)),
-                uuid=str(latest_insights.uuid),
-                tenantId=strawberry.ID(str(latest_insights.tenant.id)),
-                fromDate=latest_insights.from_date.isoformat(),
-                toDate=latest_insights.to_date.isoformat(),
-                totalFeedbackCount=latest_insights.total_feedback_count,
-                reports=reports_list,
-                createdAt=latest_insights.created_at.isoformat(),
-            )
+            return await insights_model_to_graphql(latest_insights)
 
         return await _execute_query()

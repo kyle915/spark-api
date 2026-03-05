@@ -34,6 +34,9 @@ dependencies = [
     "openpyxl>=3.1.5",
 ]
 
+[project.scripts]
+test = "pytest:main"
+
 [tool.pyrefly]
 project-includes = ["**/*.py*"]
 project-excludes = [
