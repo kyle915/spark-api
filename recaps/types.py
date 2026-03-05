@@ -140,8 +140,6 @@ class Recap(Node):
     job: job_types.Job | None
     retailer_id: strawberry.ID | None
     retailer: event_types.Retailer | None
-    recap_file: RecapFile
-    recap_file_id: strawberry.ID
     created_at: str
     updated_at: str
 
@@ -158,6 +156,18 @@ class Recap(Node):
     sales_performance: List[SalesPerformance]
     consumer_feedback: List[ConsumerFeedback]
     account_feedback: List[AccountFeedback]
+
+    @strawberry.field
+    def recap_file(self) -> RecapFile | None:
+        """Return first linked recap file for backward compatibility."""
+        files = list(self.recap_files.all())
+        return files[0] if files else None
+
+    @strawberry.field
+    def recap_file_id(self) -> strawberry.ID | None:
+        """Return id for the first linked recap file."""
+        files = list(self.recap_files.all())
+        return strawberry.ID(str(files[0].id)) if files else None
 
     @strawberry.field
     def recap_files(self) -> List[RecapFile]:
