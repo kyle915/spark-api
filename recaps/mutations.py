@@ -976,6 +976,11 @@ class RecapMutations:
             service = RecapMutationService.with_input(input)
             await service.set_user(info)
             recap = await service.create_recap()
+            # Reload with the same related-object strategy used by recap queries
+            # so mutation responses can include nested recap data consistently.
+            recap = await sync_to_async(RecapQueriesService().get_queryset().get)(
+                id=recap.id
+            )
             return build_mutation_response(
                 types.RecapDetailResponse,
                 success=True,

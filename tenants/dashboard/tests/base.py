@@ -182,7 +182,6 @@ class DashboardGraphQLTestCase(EventsGraphQLTestCase):
             name="Job 1",
             code="JOB-001",
             address="Job Address 1",
-            company=self.company,
             event=self.event1,
             job_title=self.job_title,
             tenant=self.tenant

@@ -63,6 +63,7 @@ class AmbassadorMutations(
 @strawberry.type
 class AmbassadorMutationsMobile(
     mutations.AmbassadorMutations,
+    mutations.AmbassadorMobileMutations,
     mutations.AttendanceMutations,
 ):
     pass

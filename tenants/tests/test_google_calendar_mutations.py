@@ -13,7 +13,7 @@ Test scenarios include:
 - Connection already exists
 """
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 from asgiref.sync import sync_to_async
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
@@ -45,16 +45,20 @@ class TestGoogleCalendarMutations(BaseGraphQLTestCase):
         self.endpoint_path = "/api/v1/graphql/spark"
 
     @pytest.mark.asyncio
-    @patch('tenants.calendar.utils.Flow')
-    async def test_connect_google_calendar_success(self, mock_flow_class):
+    @patch('tenants.calendar.mutations.GoogleCalendarOAuthHelper.create_oauth_flow')
+    @patch('tenants.calendar.mutations.GoogleCalendarOAuthHelper.generate_state_token')
+    @patch('tenants.calendar.mutations.GoogleCalendarOAuthHelper.store_state_in_cache')
+    async def test_connect_google_calendar_success(
+        self, mock_store_state, mock_gen_state, mock_create_flow
+    ):
         """Test successful Google Calendar connection initiation."""
-        # Mock the OAuth flow
         mock_flow = MagicMock()
         mock_flow.authorization_url.return_value = (
             "https://accounts.google.com/o/oauth2/auth?client_id=test",
             "state123"
         )
-        mock_flow_class.from_client_config.return_value = mock_flow
+        mock_create_flow.return_value = mock_flow
+        mock_gen_state.return_value = "state123"
 
         mutation = """
         mutation ConnectGoogleCalendar($input: ConnectGoogleCalendarInput!) {
@@ -127,14 +131,25 @@ class TestGoogleCalendarMutations(BaseGraphQLTestCase):
         mock_service.test_connection.assert_called_once()
 
     @pytest.mark.asyncio
-    @patch('tenants.calendar.utils.Flow')
+    @patch('tenants.calendar.mutations.GoogleCalendarOAuthHelper.create_oauth_flow')
+    @patch('tenants.calendar.mutations.GoogleCalendarOAuthHelper.generate_state_token')
+    @patch('tenants.calendar.mutations.GoogleCalendarOAuthHelper.store_state_in_cache')
     @patch('tenants.calendar.mutations.GoogleCalendarService')
     async def test_connect_google_calendar_reconnect_inactive_tokens(
         self,
         mock_service_class,
-        mock_flow_class,
+        mock_store_state,
+        mock_gen_state,
+        mock_create_flow,
     ):
         """Test reconnect flow when a connection exists but tokens are invalid/inactive."""
+        mock_flow = MagicMock()
+        mock_flow.authorization_url.return_value = (
+            "https://accounts.google.com/o/oauth2/auth?client_id=test",
+            "state456"
+        )
+        mock_create_flow.return_value = mock_flow
+        mock_gen_state.return_value = "state456"
         # Existing (but stale) connection
         connection = await sync_to_async(GoogleCalendarConnection.objects.create)(
             user=self.user,
@@ -150,14 +165,6 @@ class TestGoogleCalendarMutations(BaseGraphQLTestCase):
         mock_service = MagicMock()
         mock_service.test_connection.return_value = False
         mock_service_class.return_value = mock_service
-
-        # Mock OAuth flow to avoid real Google calls
-        mock_flow = MagicMock()
-        mock_flow.authorization_url.return_value = (
-            "https://accounts.google.com/o/oauth2/auth?client_id=test",
-            "state_reconnect",
-        )
-        mock_flow_class.from_client_config.return_value = mock_flow
 
         mutation = """
         mutation ConnectGoogleCalendar($input: ConnectGoogleCalendarInput!) {
@@ -191,22 +198,39 @@ class TestGoogleCalendarMutations(BaseGraphQLTestCase):
         mock_service.test_connection.assert_called_once()
 
     @pytest.mark.asyncio
-    @patch('tenants.calendar.utils.Flow')
-    async def test_google_calendar_callback_success(self, mock_flow_class):
+    @patch('tenants.calendar.mutations.GoogleCalendarOAuthHelper.get_or_create_connection')
+    @patch('tenants.calendar.mutations.GoogleCalendarOAuthHelper.create_oauth_flow')
+    async def test_google_calendar_callback_success(
+        self, mock_create_flow, mock_get_or_create
+    ):
         """Test successful Google Calendar OAuth callback."""
-        # Set up state in cache
+        from asgiref.sync import sync_to_async
+        # Set up state in cache (use helper's key format)
         state = "test_state_123"
         cache_key = f"google_calendar_oauth_state_{state}"
         cache.set(cache_key, self.user.id, timeout=600)
 
-        # Mock the OAuth flow
+        # Mock the OAuth flow and credentials
         mock_flow = MagicMock()
         mock_credentials = MagicMock()
         mock_credentials.token = "access_token_123"
         mock_credentials.refresh_token = "refresh_token_123"
         mock_credentials.expiry = None
         mock_flow.credentials = mock_credentials
-        mock_flow_class.from_client_config.return_value = mock_flow
+        mock_create_flow.return_value = mock_flow
+
+        connection = await sync_to_async(GoogleCalendarConnection.objects.create)(
+            user=self.user,
+            created_by=self.user,
+            updated_by=self.user,
+            access_token="",
+            is_active=False,
+        )
+
+        async def _return_connection(*args, **kwargs):
+            return (connection, True)
+
+        mock_get_or_create.side_effect = _return_connection
 
         mutation = """
         mutation GoogleCalendarCallback($input: GoogleCalendarCallbackInput!) {

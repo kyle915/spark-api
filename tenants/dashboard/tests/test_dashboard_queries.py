@@ -208,12 +208,12 @@ class TestEventDashboardQueries(DashboardGraphQLTestCase):
 
     @pytest.mark.asyncio
     async def test_event_dashboard_with_rmm_filter(self):
-        """Test event_dashboard query with RMM (retailer) filter."""
-        rmm_id = str(self.retailer.id)
+        """Test event_dashboard query with RMM assigned user filter."""
+        rmm_asigned_id = str(self.rmm_user.id)
         query = """
-        query EventDashboard($rmmId: ID) {
+        query EventDashboard($rmmAsignedId: ID) {
             eventDashboard(filters: {
-                rmmId: $rmmId
+                rmmAsignedId: $rmmAsignedId
             }) {
                 metrics {
                     totalEvents
@@ -225,7 +225,7 @@ class TestEventDashboardQueries(DashboardGraphQLTestCase):
 
         result = await self._execute_query_authenticated(
             query,
-            {'rmmId': rmm_id},
+            {'rmmAsignedId': rmm_asigned_id},
             self.client_user
         )
 

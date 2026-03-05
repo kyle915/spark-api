@@ -207,12 +207,12 @@ class TestRecapDashboardQueries(DashboardGraphQLTestCase):
 
     @pytest.mark.asyncio
     async def test_recap_dashboard_with_rmm_filter(self):
-        """Test recap_dashboard query with RMM (retailer) filter."""
-        rmm_id = str(self.retailer.id)
+        """Test recap_dashboard query with RMM assigned user filter."""
+        rmm_asigned_id = str(self.rmm_user.id)
         query = """
-        query RecapDashboard($rmmId: ID) {
+        query RecapDashboard($rmmAsignedId: ID) {
             recapDashboard(filters: {
-                rmmId: $rmmId
+                rmmAsignedId: $rmmAsignedId
             }) {
                 metrics {
                     totalConsumersSampled
@@ -224,7 +224,7 @@ class TestRecapDashboardQueries(DashboardGraphQLTestCase):
 
         result = await self._execute_query_authenticated(
             query,
-            {'rmmId': rmm_id},
+            {'rmmAsignedId': rmm_asigned_id},
             self.client_user
         )
 
