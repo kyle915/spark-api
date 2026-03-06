@@ -22,6 +22,7 @@ from django.db.models.functions import (
 from django.utils import timezone
 
 from utils.graphql.permissions import StrictIsAuthenticated
+from utils.graphql.validation import clamp_percentage
 from . import types, inputs
 from .services import DashboardQueriesService
 from events import models as event_models
@@ -241,12 +242,13 @@ class DashboardQueries:
             total_brand_aware = consumer_data['total_brand_aware'] or 0
             total_willing_to_purchase = consumer_data['total_willing_to_purchase'] or 0
 
-            # Calculate percentages
-            brand_awareness = (
+            # Calculate percentages (always clamp to 0-100)
+            brand_awareness = clamp_percentage(
                 (total_brand_aware / consumers_sampled * 100)
                 if consumers_sampled > 0 else 0.0
             )
-            purchase_intent = (
+
+            purchase_intent = clamp_percentage(
                 (total_willing_to_purchase / consumers_sampled * 100)
                 if consumers_sampled > 0 else 0.0
             )
@@ -301,11 +303,11 @@ class DashboardQueries:
                     prev_brand_aware = prev_consumer_data['total_brand_aware'] or 0
                     prev_willing = prev_consumer_data['total_willing_to_purchase'] or 0
 
-                    prev_brand_awareness = (
+                    prev_brand_awareness = clamp_percentage(
                         (prev_brand_aware / prev_consumers * 100)
                         if prev_consumers > 0 else 0.0
                     )
-                    prev_purchase_intent = (
+                    prev_purchase_intent = clamp_percentage(
                         (prev_willing / prev_consumers * 100)
                         if prev_consumers > 0 else 0.0
                     )
@@ -356,7 +358,7 @@ class DashboardQueries:
 
                 consumers = item['consumers_sampled'] or 0
                 willing = item['willing_to_purchase'] or 0
-                conversion_rate = (
+                conversion_rate = clamp_percentage(
                     (willing / consumers * 100) if consumers > 0 else 0.0
                 )
 
@@ -747,7 +749,7 @@ class DashboardQueries:
             total_purchases = total_purchases_data['total'] or 0
 
             # Conversion Rate
-            conversion_rate = (
+            conversion_rate = clamp_percentage(
                 (total_willing / total_consumers_sampled * 100)
                 if total_consumers_sampled > 0 else 0.0
             )
@@ -819,7 +821,7 @@ class DashboardQueries:
                     )()
                     prev_revenue = prev_revenue_data['total'] or 0.0
 
-                    prev_conversion_rate = (
+                    prev_conversion_rate = clamp_percentage(
                         (prev_total_willing / prev_total_consumers * 100)
                         if prev_total_consumers > 0 else 0.0
                     )
@@ -865,7 +867,7 @@ class DashboardQueries:
                     '%Y-%m') if item['month'] else ''
                 consumers_month = item['consumers'] or 0
                 willing_month = item['willing'] or 0
-                conversion_month = (
+                conversion_month = clamp_percentage(
                     (willing_month / consumers_month * 100)
                     if consumers_month > 0 else 0.0
                 )
@@ -885,34 +887,163 @@ class DashboardQueries:
                 data_points=monthly_points
             )
 
+            # Market Analysis (grouped by retailer) - run before performance_insights
+            # so we can derive top_converting_market, highest_willingness_to_buy, strongest_brand_awareness
+            market_data_recap = await sync_to_async(list)(
+                base_queryset.select_related('retailer')
+                .filter(retailer__isnull=False)
+                .values('retailer_id', 'retailer__name')
+                .annotate(
+                    consumers=Sum(
+                        'consumer_engagements__total_consumer', default=0),
+                    purchases=Sum('products_sold', default=0),
+                    demos=Sum('total_engagements', default=0),
+                    willing=Sum(
+                        'consumer_engagements__willing_to_purchase_consumers', default=0),
+                    brand_aware=Sum(
+                        'consumer_engagements__brand_aware_consumers', default=0)
+                )
+            )
+
+            market_data_event = await sync_to_async(list)(
+                base_queryset.select_related('event__request__retailer')
+                .filter(
+                    retailer__isnull=True,
+                    event__request__retailer__isnull=False
+                )
+                .values('event__request__retailer_id', 'event__request__retailer__name')
+                .annotate(
+                    consumers=Sum(
+                        'consumer_engagements__total_consumer', default=0),
+                    purchases=Sum('products_sold', default=0),
+                    demos=Sum('total_engagements', default=0),
+                    willing=Sum(
+                        'consumer_engagements__willing_to_purchase_consumers', default=0),
+                    brand_aware=Sum(
+                        'consumer_engagements__brand_aware_consumers', default=0)
+                )
+            )
+
+            market_dict = {}
+            for item in market_data_recap:
+                r_id = item['retailer_id']
+                if r_id not in market_dict:
+                    market_dict[r_id] = {
+                        'market_id': r_id,
+                        'market_name': item['retailer__name'],
+                        'consumers': 0,
+                        'purchases': 0,
+                        'demos': 0,
+                        'willing': 0,
+                        'brand_aware': 0
+                    }
+                market_dict[r_id]['consumers'] += item['consumers'] or 0
+                market_dict[r_id]['purchases'] += item['purchases'] or 0
+                market_dict[r_id]['demos'] += item['demos'] or 0
+                market_dict[r_id]['willing'] += item['willing'] or 0
+                market_dict[r_id]['brand_aware'] += item['brand_aware'] or 0
+
+            for item in market_data_event:
+                r_id = item['event__request__retailer_id']
+                if r_id not in market_dict:
+                    market_dict[r_id] = {
+                        'market_id': r_id,
+                        'market_name': item['event__request__retailer__name'],
+                        'consumers': 0,
+                        'purchases': 0,
+                        'demos': 0,
+                        'willing': 0,
+                        'brand_aware': 0
+                    }
+                market_dict[r_id]['consumers'] += item['consumers'] or 0
+                market_dict[r_id]['purchases'] += item['purchases'] or 0
+                market_dict[r_id]['demos'] += item['demos'] or 0
+                market_dict[r_id]['willing'] += item['willing'] or 0
+                market_dict[r_id]['brand_aware'] += item['brand_aware'] or 0
+
+            market_points = []
+            for market in market_dict.values():
+                market_consumers = market['consumers']
+                market_willing = market['willing']
+                market_conversion = clamp_percentage(
+                    (market_willing / market_consumers * 100)
+                    if market_consumers > 0 else 0.0
+                )
+                market_efficiency = clamp_percentage(
+                    (market['purchases'] / market_consumers * 100)
+                    if market_consumers > 0 else 0.0
+                )
+                market_points.append(
+                    types.MarketPerformanceData(
+                        market_id=str(market['market_id']),
+                        market_name=market['market_name'] or '',
+                        consumers=market_consumers,
+                        purchases=market['purchases'],
+                        conversion=round(market_conversion, 1),
+                        demos=market['demos'],
+                        efficiency=round(market_efficiency, 1)
+                    )
+                )
+
             # Performance Insights
             new_customers = consumers_data['total_first_time'] or 0
-            new_customers_percentage = (
+            new_customers_percentage = clamp_percentage(
                 (new_customers / total_consumers_sampled * 100)
                 if total_consumers_sampled > 0 else 0.0
             )
 
             brand_awareness = consumers_data['total_brand_aware'] or 0
-            brand_awareness_percentage = (
+            brand_awareness_percentage = clamp_percentage(
                 (brand_awareness / total_consumers_sampled * 100)
                 if total_consumers_sampled > 0 else 0.0
             )
 
-            willing_to_purchase_percentage = (
+            willing_to_purchase_percentage = clamp_percentage(
                 (total_willing / total_consumers_sampled * 100)
                 if total_consumers_sampled > 0 else 0.0
             )
 
-            # Best Month
+            # Best Month (most active = month with most recaps)
             best_month = None
             if monthly_points:
                 best_point = max(
-                    monthly_points, key=lambda x: x.consumers_sampled)
+                    monthly_points, key=lambda x: x.recaps_count)
                 best_month = types.BestRecapMonth(
                     month=best_point.month,
                     recaps_count=best_point.recaps_count,
                     consumers_count=best_point.consumers_sampled
                 )
+
+            # Derive performance insight cards from market data (no extra queries)
+            top_converting_market = None
+            if market_points:
+                top = max(market_points, key=lambda x: x.conversion)
+                top_converting_market = types.TopConvertingMarket(
+                    market_name=top.market_name,
+                    conversion_rate=top.conversion
+                )
+            highest_willingness_to_buy = None
+            if market_dict:
+                best_willing = max(
+                    market_dict.values(),
+                    key=lambda m: m['willing']
+                )
+                if best_willing['willing'] > 0:
+                    highest_willingness_to_buy = types.MarketWithWillingness(
+                        market_name=best_willing['market_name'] or '',
+                        willing_count=best_willing['willing']
+                    )
+            strongest_brand_awareness = None
+            if market_dict:
+                best_aware = max(
+                    market_dict.values(),
+                    key=lambda m: m['brand_aware']
+                )
+                if best_aware['brand_aware'] > 0:
+                    strongest_brand_awareness = types.MarketWithBrandAwareness(
+                        market_name=best_aware['market_name'] or '',
+                        brand_aware_count=best_aware['brand_aware']
+                    )
 
             # Growth Rate (recaps vs last year)
             growth_rate = 0.0
@@ -960,103 +1091,13 @@ class DashboardQueries:
                 willing_to_purchase_percentage=round(
                     willing_to_purchase_percentage, 1),
                 best_month=best_month,
-                growth_rate=round(growth_rate, 1)
+                growth_rate=round(growth_rate, 1),
+                top_converting_market=top_converting_market,
+                highest_willingness_to_buy=highest_willingness_to_buy,
+                strongest_brand_awareness=strongest_brand_awareness
             )
 
-            # Market Analysis (grouped by retailer)
-            # Get retailers from recap.retailer
-            market_data_recap = await sync_to_async(list)(
-                base_queryset.select_related('retailer')
-                .filter(retailer__isnull=False)
-                .values('retailer_id', 'retailer__name')
-                .annotate(
-                    consumers=Sum(
-                        'consumer_engagements__total_consumer', default=0),
-                    purchases=Sum('products_sold', default=0),
-                    demos=Sum('total_engagements', default=0),
-                    willing=Sum(
-                        'consumer_engagements__willing_to_purchase_consumers', default=0)
-                )
-            )
-
-            # Get retailers from event.request.retailer (where recap.retailer is null)
-            market_data_event = await sync_to_async(list)(
-                base_queryset.select_related('event__request__retailer')
-                .filter(
-                    retailer__isnull=True,
-                    event__request__retailer__isnull=False
-                )
-                .values('event__request__retailer_id', 'event__request__retailer__name')
-                .annotate(
-                    consumers=Sum(
-                        'consumer_engagements__total_consumer', default=0),
-                    purchases=Sum('products_sold', default=0),
-                    demos=Sum('total_engagements', default=0),
-                    willing=Sum(
-                        'consumer_engagements__willing_to_purchase_consumers', default=0)
-                )
-            )
-
-            # Combine and aggregate by retailer
-            market_dict = {}
-            for item in market_data_recap:
-                r_id = item['retailer_id']
-                if r_id not in market_dict:
-                    market_dict[r_id] = {
-                        'market_id': r_id,
-                        'market_name': item['retailer__name'],
-                        'consumers': 0,
-                        'purchases': 0,
-                        'demos': 0,
-                        'willing': 0
-                    }
-                market_dict[r_id]['consumers'] += item['consumers'] or 0
-                market_dict[r_id]['purchases'] += item['purchases'] or 0
-                market_dict[r_id]['demos'] += item['demos'] or 0
-                market_dict[r_id]['willing'] += item['willing'] or 0
-
-            for item in market_data_event:
-                r_id = item['event__request__retailer_id']
-                if r_id not in market_dict:
-                    market_dict[r_id] = {
-                        'market_id': r_id,
-                        'market_name': item['event__request__retailer__name'],
-                        'consumers': 0,
-                        'purchases': 0,
-                        'demos': 0,
-                        'willing': 0
-                    }
-                market_dict[r_id]['consumers'] += item['consumers'] or 0
-                market_dict[r_id]['purchases'] += item['purchases'] or 0
-                market_dict[r_id]['demos'] += item['demos'] or 0
-                market_dict[r_id]['willing'] += item['willing'] or 0
-
-            market_points = []
-            for market in market_dict.values():
-                market_consumers = market['consumers']
-                market_willing = market['willing']
-                market_conversion = (
-                    (market_willing / market_consumers * 100)
-                    if market_consumers > 0 else 0.0
-                )
-                # Efficiency: purchases / consumers * 100
-                market_efficiency = (
-                    (market['purchases'] / market_consumers * 100)
-                    if market_consumers > 0 else 0.0
-                )
-
-                market_points.append(
-                    types.MarketPerformanceData(
-                        market_id=str(market['market_id']),
-                        market_name=market['market_name'] or '',
-                        consumers=market_consumers,
-                        purchases=market['purchases'],
-                        conversion=round(market_conversion, 1),
-                        demos=market['demos'],
-                        efficiency=round(market_efficiency, 1)
-                    )
-                )
-
+            # Reuse market_points for market_analysis (already computed above)
             # Sort by consumers descending
             market_points.sort(key=lambda x: x.consumers, reverse=True)
 

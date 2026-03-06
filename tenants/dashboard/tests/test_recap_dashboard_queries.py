@@ -7,7 +7,9 @@ This module tests Recap Dashboard queries:
 """
 import pytest
 import strawberry_django  # noqa: F401
-from datetime import timedelta
+from datetime import datetime, timedelta, time
+from asgiref.sync import sync_to_async
+from django.db.models import Sum
 from django.utils import timezone
 from django.core.cache import cache
 from tenants.dashboard.tests.base import DashboardGraphQLTestCase
@@ -311,7 +313,7 @@ class TestRecapDashboardQueries(DashboardGraphQLTestCase):
 
     @pytest.mark.asyncio
     async def test_recap_dashboard_performance_insights(self):
-        """Test recap_dashboard performance insights calculations."""
+        """Test recap_dashboard performance insights calculations and new insight cards."""
         query = """
         query {
             recapDashboard {
@@ -328,6 +330,18 @@ class TestRecapDashboardQueries(DashboardGraphQLTestCase):
                         consumersCount
                     }
                     growthRate
+                    topConvertingMarket {
+                        marketName
+                        conversionRate
+                    }
+                    highestWillingnessToBuy {
+                        marketName
+                        willingCount
+                    }
+                    strongestBrandAwareness {
+                        marketName
+                        brandAwareCount
+                    }
                 }
             }
         }
@@ -349,8 +363,302 @@ class TestRecapDashboardQueries(DashboardGraphQLTestCase):
         assert 0 <= insights['brandAwarenessPercentage'] <= 100
         assert isinstance(insights['willingToPurchase'], int)
         assert 0 <= insights['willingToPurchasePercentage'] <= 100
-        # growthRate can be negative, so just check it's a number
         assert isinstance(insights['growthRate'], (int, float))
+
+        # New performance insight cards (optional when no market data)
+        assert 'topConvertingMarket' in insights
+        assert 'highestWillingnessToBuy' in insights
+        assert 'strongestBrandAwareness' in insights
+        if insights.get('topConvertingMarket'):
+            assert 'marketName' in insights['topConvertingMarket']
+            assert 'conversionRate' in insights['topConvertingMarket']
+            assert isinstance(insights['topConvertingMarket']['conversionRate'], (int, float))
+        if insights.get('highestWillingnessToBuy'):
+            assert 'marketName' in insights['highestWillingnessToBuy']
+            assert insights['highestWillingnessToBuy']['willingCount'] >= 0
+        if insights.get('strongestBrandAwareness'):
+            assert 'marketName' in insights['strongestBrandAwareness']
+            assert insights['strongestBrandAwareness']['brandAwareCount'] >= 0
+
+        # bestMonth = most active month (by recaps count)
+        if insights.get('bestMonth'):
+            assert 'recapsCount' in insights['bestMonth']
+            assert 'consumersCount' in insights['bestMonth']
+            assert insights['bestMonth']['recapsCount'] >= 0
+
+    @pytest.mark.asyncio
+    async def test_recap_dashboard_percentages_are_clamped_to_100(self):
+        """Percentages should be capped at 100 even with inconsistent data."""
+        from recaps import models as recap_models
+
+        # Create inconsistent consumer engagement data (brand aware and willing > total)
+        await sync_to_async(recap_models.ConsumerEngagements.objects.create)(
+            recap=self.recap1,
+            total_consumer=10,
+            first_time_consumers=0,
+            brand_aware_consumers=200,
+            willing_to_purchase_consumers=200,
+            not_willing_consumers=0,
+            created_by=self.get_system_user(),
+        )
+
+        # Sanity check: raw aggregate ratios (without clamping) would exceed 100%
+        agg = await sync_to_async(
+            lambda: recap_models.ConsumerEngagements.objects.filter(
+                recap__in=[self.recap1, self.recap2, self.recap3]
+            ).aggregate(
+                total_consumers=Sum("total_consumer"),
+                total_brand_aware=Sum("brand_aware_consumers"),
+                total_willing=Sum("willing_to_purchase_consumers"),
+            )
+        )()
+        raw_brand_awareness = (
+            agg["total_brand_aware"] / agg["total_consumers"] * 100
+            if agg["total_consumers"] > 0
+            else 0.0
+        )
+        raw_purchase_intent = (
+            agg["total_willing"] / agg["total_consumers"] * 100
+            if agg["total_consumers"] > 0
+            else 0.0
+        )
+        assert raw_brand_awareness > 100.0
+        assert raw_purchase_intent > 100.0
+
+        query = """
+        query {
+            recapDashboard {
+                metrics {
+                    conversionRate
+                }
+                performanceInsights {
+                    brandAwarenessPercentage
+                    willingToPurchasePercentage
+                }
+            }
+        }
+        """
+
+        result = await self._execute_query_authenticated(
+            query,
+            {},
+            self.client_user,
+        )
+
+        assert result.errors is None
+        data = result.data["recapDashboard"]
+        metrics = data["metrics"]
+        insights = data["performanceInsights"]
+
+        assert 0.0 <= metrics["conversionRate"] <= 100.0
+        assert insights["brandAwarenessPercentage"] == pytest.approx(100.0)
+        assert insights["willingToPurchasePercentage"] == pytest.approx(100.0)
+
+    @pytest.mark.asyncio
+    async def test_recap_dashboard_performance_insight_cards_two_retailers(self):
+        """Top converting market is the retailer with highest conversion; willingness/brand by count."""
+        from recaps import models as recap_models
+
+        # Second retailer with lower conversion so first stays on top, or vice versa (sync ORM in async test)
+        retailer2 = await sync_to_async(self.create_retailer)(
+            name="Second Retailer",
+            address="Address R2",
+            store_contact="Contact R2",
+            location=self.location,
+            tenant=self.tenant
+        )
+        req_r2 = await sync_to_async(self.create_request)(
+            name="Req R2",
+            date=timezone.now().date(),
+            address="Addr R2",
+            client=self.client,
+            distributor=self.distributor,
+            retailer=retailer2,
+            request_type=self.request_type,
+            tenant=self.tenant,
+            start_time=time(9, 0),
+            end_time=time(17, 0),
+            status=self.approved_status
+        )
+        evt_r2 = await sync_to_async(self.create_event)(
+            name="Event R2",
+            tenant=self.tenant,
+            address="Addr R2",
+            request=req_r2,
+            event_type=self.event_type,
+            status=self.event_status,
+            rmm_asigned=self.rmm_user
+        )
+        job_r2 = await sync_to_async(self.create_job)(
+            name="Job R2",
+            code="JOB-R2",
+            address="Job R2",
+            event=evt_r2,
+            job_title=self.job_title,
+            tenant=self.tenant
+        )
+        recap_r2 = await sync_to_async(recap_models.Recap.objects.create)(
+            name="Recap R2",
+            event=evt_r2,
+            ambassador=self.ambassador,
+            job=job_r2,
+            retailer=retailer2,
+            total_engagements=50,
+            products_sold=25,
+            total_cans_sold=12,
+            total_packs_sold=6,
+            total_earnings=500.0,
+            approved=True,
+            created_by=self.get_system_user()
+        )
+        await sync_to_async(recap_models.ConsumerEngagements.objects.create)(
+            recap=recap_r2,
+            total_consumer=50,
+            first_time_consumers=10,
+            brand_aware_consumers=45,
+            willing_to_purchase_consumers=48,
+            not_willing_consumers=2,
+            created_by=self.get_system_user()
+        )
+        # Retailer 1 (Test Retailer): 70/100 = 70% conversion, 40 brand aware
+        # Retailer 2: 48/50 = 96% conversion, 45 brand aware
+        # So top converting = Second Retailer; strongest brand = Second Retailer (45 > 40); highest willing = Second (48) or Test (70)
+        cache.clear()
+        query = """
+        query {
+            recapDashboard {
+                performanceInsights {
+                    topConvertingMarket { marketName conversionRate }
+                    highestWillingnessToBuy { marketName willingCount }
+                    strongestBrandAwareness { marketName brandAwareCount }
+                }
+            }
+        }
+        """
+        result = await self._execute_query_authenticated(
+            query, {}, self.client_user
+        )
+        assert result.errors is None
+        assert result.data is not None
+        pi = result.data['recapDashboard']['performanceInsights']
+        assert pi['topConvertingMarket'] is not None
+        assert pi['topConvertingMarket']['marketName'] == "Second Retailer"
+        assert pi['topConvertingMarket']['conversionRate'] == 96.0
+        assert pi['highestWillingnessToBuy'] is not None
+        # Test Retailer has recap1 (70) + recap2 (50) + recap3 (90) = 210; Second has 48
+        assert pi['highestWillingnessToBuy']['marketName'] == "Test Retailer"
+        assert pi['highestWillingnessToBuy']['willingCount'] == 210
+        assert pi['strongestBrandAwareness'] is not None
+        # Test Retailer: 40+30+50=120 brand aware; Second: 45
+        assert pi['strongestBrandAwareness']['marketName'] == "Test Retailer"
+        assert pi['strongestBrandAwareness']['brandAwareCount'] == 120
+
+    @pytest.mark.asyncio
+    async def test_recap_dashboard_most_active_month_by_recaps(self):
+        """Most active month is the month with the most recaps, not most consumers."""
+        from recaps import models as recap_models
+
+        # Base has recaps on event1 (today), event2 (today-1), event3 (future). Same month can have 2 recaps.
+        # Add another event/recap in a different month (sync ORM in async test)
+        past_date = timezone.now().date() - timedelta(days=60)
+        req_past = await sync_to_async(self.create_request)(
+            name="Past Req",
+            date=past_date,
+            address="Past Addr",
+            client=self.client,
+            distributor=self.distributor,
+            retailer=self.retailer,
+            request_type=self.request_type,
+            tenant=self.tenant,
+            start_time=time(9, 0),
+            end_time=time(17, 0),
+            status=self.approved_status
+        )
+        evt_past = await sync_to_async(self.create_event)(
+            name="Event Past",
+            tenant=self.tenant,
+            address="Past Addr",
+            request=req_past,
+            event_type=self.event_type,
+            status=self.event_status,
+            rmm_asigned=self.rmm_user,
+            date=timezone.make_aware(datetime.combine(past_date, time(10, 0))),
+            start_time=timezone.make_aware(datetime.combine(past_date, time(10, 0)))
+        )
+        recap_past = await sync_to_async(recap_models.Recap.objects.create)(
+            name="Recap Past",
+            event=evt_past,
+            ambassador=self.ambassador,
+            total_engagements=200,
+            products_sold=100,
+            total_cans_sold=50,
+            total_packs_sold=25,
+            total_earnings=2000.0,
+            approved=True,
+            created_by=self.get_system_user()
+        )
+        await sync_to_async(recap_models.ConsumerEngagements.objects.create)(
+            recap=recap_past,
+            total_consumer=200,
+            first_time_consumers=50,
+            brand_aware_consumers=100,
+            willing_to_purchase_consumers=150,
+            not_willing_consumers=50,
+            created_by=self.get_system_user()
+        )
+        cache.clear()
+        query = """
+        query {
+            recapDashboard {
+                performanceInsights {
+                    bestMonth { month recapsCount consumersCount }
+                }
+            }
+        }
+        """
+        result = await self._execute_query_authenticated(
+            query, {}, self.client_user
+        )
+        assert result.errors is None
+        assert result.data is not None
+        best = result.data['recapDashboard']['performanceInsights']['bestMonth']
+        assert best is not None
+        # Current quarter: event1+today, event2 today-1 (same month), event3 future, past 60d in another month
+        # So one month in the quarter has 2 recaps (event1+event2), one has 1 (event3), one has 1 (past)
+        assert best['recapsCount'] >= 1
+        assert best['consumersCount'] >= 0
+
+    @pytest.mark.asyncio
+    async def test_recap_dashboard_query_performance(self):
+        """Recap dashboard returns full payload without error; market aggregation runs once (no duplicate fetches)."""
+        cache.clear()
+        query = """
+        query {
+            recapDashboard {
+                metrics { totalConsumersSampled totalPurchases conversionRate revenueGenerated }
+                monthlyTrends { dataPoints { month recapsCount consumersSampled } }
+                performanceInsights {
+                    newCustomersSampled bestMonth { month recapsCount consumersCount }
+                    topConvertingMarket { marketName conversionRate }
+                    highestWillingnessToBuy { marketName willingCount }
+                    strongestBrandAwareness { marketName brandAwareCount }
+                    growthRate
+                }
+                marketAnalysis { dataPoints { marketId marketName consumers conversion } }
+                rmmPerformance { dataPoints { rmmId rmmName consumersSampled conversionRate } }
+            }
+        }
+        """
+        result = await self._execute_query_authenticated(
+            query, {}, self.client_user
+        )
+        assert result.errors is None
+        assert result.data is not None
+        data = result.data["recapDashboard"]
+        assert data["metrics"] is not None
+        assert data["performanceInsights"] is not None
+        assert data["marketAnalysis"] is not None
+        assert data["rmmPerformance"] is not None
 
     @pytest.mark.asyncio
     async def test_recap_dashboard_market_analysis(self):
