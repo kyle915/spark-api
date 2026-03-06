@@ -117,6 +117,16 @@ class RecentEvent:
 
 
 @strawberry.type
+class GoalProgress:
+    """Single goal progress item: name, target, current, percentage complete."""
+
+    name: str
+    target: float
+    current: float
+    percentage_complete: float  # 0-100, or 0 if target is 0
+
+
+@strawberry.type
 class EventDashboard:
     """Main Event Dashboard response."""
     metrics: EventDashboardMetrics
@@ -124,6 +134,7 @@ class EventDashboard:
     monthly_trends: MonthlyPerformanceTrend
     performance_insights: PerformanceInsights
     recent_events: List[RecentEvent] | None = None
+    goals_progress: List[GoalProgress] | None = None
 
 
 # Recap Dashboard Types
@@ -304,3 +315,43 @@ class Insights:
     totalFeedbackCount: int
     reports: List[InsightReport]
     createdAt: str
+
+
+@strawberry.type
+class Goal:
+    """Per-user, per-tenant, per-year goals (targets and optional current values for progress)."""
+
+    id: strawberry.ID
+    uuid: str
+    tenant_id: strawberry.ID
+    user_id: strawberry.ID
+    year: int
+    event_target_goal: int | None = None
+    consumer_sampling_goal: int | None = None
+    brand_awareness_goal: float | None = None
+    purchase_intent_goal: float | None = None
+    female_participation_goal: float | None = None
+    first_time_buyers_goal: int | None = None
+    # Current values (populated when date range provided; used for progress)
+    current_events_count: int | None = None
+    current_consumer_sampling: int | None = None
+    current_brand_awareness: float | None = None
+    current_purchase_intent: float | None = None
+    current_first_time_buyers: int | None = None
+    current_female_participation: float | None = None
+
+
+@strawberry.type
+class EnqueueCreateGoalsForTenantPayload:
+    """Result of enqueueCreateGoalsForTenant mutation."""
+
+    success: bool
+    enqueued: bool
+
+
+@strawberry.type
+class EnqueueCreateGoalsForAllTenantsPayload:
+    """Result of enqueueCreateGoalsForAllTenants mutation."""
+
+    success: bool
+    enqueued: bool
