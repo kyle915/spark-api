@@ -57,6 +57,7 @@ class RecapDashboardFiltersInput(BaseTenantInput):
 class SetGoalsInput(BaseTenantInput):
     """Input to create or update goals for a user for a given tenant and year."""
 
+    user_id: strawberry.ID | None = None
     year: int
     event_target_goal: int | None = None
     consumer_sampling_goal: int | None = None

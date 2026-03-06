@@ -149,6 +149,13 @@ def _goal_model_to_graphql(goal_model, current: dict | None = None) -> types.Goa
         id=strawberry.ID(str(goal_model.id)),
         uuid=str(goal_model.uuid),
         tenant_id=strawberry.ID(str(goal_model.tenant_id)),
+        user=types.GoalUser(
+            id=strawberry.ID(str(goal_model.user.id)),
+            uuid=str(goal_model.user.uuid),
+            email=goal_model.user.email,
+            first_name=goal_model.user.first_name,
+            last_name=goal_model.user.last_name,
+        ),
         user_id=strawberry.ID(str(goal_model.user_id)),
         year=goal_model.year,
         event_target_goal=goal_model.event_target_goal,
@@ -1416,3 +1423,43 @@ class DashboardQueries:
             )
 
         return _goal_model_to_graphql(goal_model, current)
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def goals_list(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID,
+        year: int | None = None,
+        user_id: strawberry.ID | None = None,
+    ) -> list[types.Goal]:
+        """
+        List goals for a tenant.
+
+        - if userId is provided, returns goals for that user
+        - if userId is not provided, returns all goals for the tenant
+        """
+        from tenants import models as tenant_models
+
+        try:
+            resolved_tenant_id = resolve_id_to_int(tenant_id)
+        except (TypeError, ValueError):
+            return []
+
+        target_user_id: int | None = None
+        if user_id is not None:
+            try:
+                target_user_id = resolve_id_to_int(user_id)
+            except (TypeError, ValueError):
+                return []
+
+        queryset = tenant_models.Goal.objects.filter(
+            tenant_id=resolved_tenant_id
+        ).select_related("user")
+        if year is not None:
+            queryset = queryset.filter(year=year)
+
+        if target_user_id is not None:
+            queryset = queryset.filter(user_id=target_user_id)
+
+        goal_models = await sync_to_async(list)(queryset.order_by("-year", "user_id"))
+        return [_goal_model_to_graphql(goal_model, current=None) for goal_model in goal_models]

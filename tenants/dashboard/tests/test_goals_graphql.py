@@ -164,6 +164,124 @@ class TestGoalsQuery(DashboardGraphQLTestCase):
         assert result.errors is None
         assert result.data["goals"] is None
 
+    @pytest.mark.asyncio
+    async def test_goals_list_returns_all_tenant_goals_for_client(self):
+        """goalsList returns tenant goals for client users."""
+        mutation = """
+        mutation SetGoals($input: SetGoalsInput!) {
+            setGoals(input: $input) { userId year eventTargetGoal }
+        }
+        """
+        await self._execute_mutation(
+            mutation,
+            {
+                "input": {
+                    "tenantId": str(self.tenant.id),
+                    "year": 2026,
+                    "eventTargetGoal": 10,
+                }
+            },
+            self.endpoint_path,
+            user=self.client_user,
+        )
+        await self._execute_mutation(
+            mutation,
+            {
+                "input": {
+                    "tenantId": str(self.tenant.id),
+                    "userId": str(self.rmm_user.id),
+                    "year": 2026,
+                    "eventTargetGoal": 20,
+                }
+            },
+            self.endpoint_path,
+            user=self.client_user,
+        )
+
+        query = """
+        query GoalsList($tenantId: ID!, $year: Int) {
+            goalsList(tenantId: $tenantId, year: $year) {
+                user { id }
+                year
+                eventTargetGoal
+            }
+        }
+        """
+        result = await self._execute_query_authenticated(
+            query,
+            {"tenantId": str(self.tenant.id), "year": 2026},
+            self.client_user,
+        )
+        assert result.errors is None
+        rows = result.data["goalsList"]
+        assert len(rows) == 2
+        returned_users = {row["user"]["id"] for row in rows}
+        assert returned_users == {str(self.client_user.id), str(self.rmm_user.id)}
+
+    @pytest.mark.asyncio
+    async def test_goals_list_for_non_client_user_returns_all_tenant_goals(self):
+        """If userId is not provided, goalsList returns all tenant goals."""
+        ambassador_user = await sync_to_async(self.create_user)(
+            username="amb-list@test.com",
+            email="amb-list@test.com",
+            role=self.roles["ambassador"],
+            password="testpass123",
+        )
+        await sync_to_async(self.create_tenanted_user)(
+            user=ambassador_user,
+            tenant=self.tenant,
+        )
+
+        mutation = """
+        mutation SetGoals($input: SetGoalsInput!) {
+            setGoals(input: $input) { userId year eventTargetGoal }
+        }
+        """
+        await self._execute_mutation(
+            mutation,
+            {
+                "input": {
+                    "tenantId": str(self.tenant.id),
+                    "year": 2026,
+                    "eventTargetGoal": 30,
+                }
+            },
+            self.endpoint_path,
+            user=ambassador_user,
+        )
+        await self._execute_mutation(
+            mutation,
+            {
+                "input": {
+                    "tenantId": str(self.tenant.id),
+                    "userId": str(self.rmm_user.id),
+                    "year": 2026,
+                    "eventTargetGoal": 40,
+                }
+            },
+            self.endpoint_path,
+            user=self.client_user,
+        )
+
+        query = """
+        query GoalsList($tenantId: ID!, $year: Int) {
+            goalsList(tenantId: $tenantId, year: $year) {
+                user { id }
+                year
+            }
+        }
+        """
+        result = await self._execute_query_authenticated(
+            query,
+            {"tenantId": str(self.tenant.id), "year": 2026},
+            ambassador_user,
+        )
+        assert result.errors is None
+        rows = result.data["goalsList"]
+        assert len(rows) == 2
+        returned_users = {row["user"]["id"] for row in rows}
+        assert returned_users == {str(ambassador_user.id), str(self.rmm_user.id)}
+
 
 @pytest.mark.django_db(transaction=True)
 class TestEventDashboardGoalsProgress(DashboardGraphQLTestCase):
@@ -349,6 +467,73 @@ class TestSetGoalsMutation(DashboardGraphQLTestCase):
         g = result.data["goals"]
         assert g["eventTargetGoal"] == 30
         assert g["consumerSamplingGoal"] == 600
+
+    @pytest.mark.asyncio
+    async def test_set_goals_allows_client_to_set_for_other_user(self):
+        """Client user can set goals for another user in the same tenant using userId."""
+        mutation = """
+        mutation SetGoals($input: SetGoalsInput!) {
+            setGoals(input: $input) {
+                userId
+                year
+                eventTargetGoal
+            }
+        }
+        """
+        result = await self._execute_mutation(
+            mutation,
+            {
+                "input": {
+                    "tenantId": str(self.tenant.id),
+                    "userId": str(self.rmm_user.id),
+                    "year": 2026,
+                    "eventTargetGoal": 45,
+                }
+            },
+            self.endpoint_path,
+            user=self.client_user,
+        )
+        assert result.errors is None, result.errors
+        payload = result.data["setGoals"]
+        assert payload["userId"] == str(self.rmm_user.id)
+        assert payload["year"] == 2026
+        assert payload["eventTargetGoal"] == 45
+
+    @pytest.mark.asyncio
+    async def test_set_goals_rejects_non_client_non_admin_setting_other_user(self):
+        """Non-client/non-admin users cannot set goals for another user."""
+        ambassador_user = await sync_to_async(self.create_user)(
+            username="ambassador-goals@test.com",
+            email="ambassador-goals@test.com",
+            role=self.roles["ambassador"],
+            password="testpass123",
+        )
+        await sync_to_async(self.create_tenanted_user)(
+            user=ambassador_user,
+            tenant=self.tenant,
+        )
+
+        mutation = """
+        mutation SetGoals($input: SetGoalsInput!) {
+            setGoals(input: $input) {
+                id
+            }
+        }
+        """
+        result = await self._execute_mutation(
+            mutation,
+            {
+                "input": {
+                    "tenantId": str(self.tenant.id),
+                    "userId": str(self.client_user.id),
+                    "year": 2026,
+                    "eventTargetGoal": 12,
+                }
+            },
+            self.endpoint_path,
+            user=ambassador_user,
+        )
+        assert result.errors is not None
 
     @pytest.mark.asyncio
     async def test_set_goals_requires_authentication(self):
