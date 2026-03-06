@@ -204,10 +204,10 @@ class DashboardQueriesService(SparkGraphQLMixin):
                 'recap_dashboard'
             ]
 
-        # Since we can't do wildcard deletion with default cache,
-        # we'll need to track keys or use Redis in production.
-        # For now, this is a placeholder that would need Redis or key tracking.
-        pass
+        for query_name in query_names:
+            version_key = f"dashboard:version:{query_name}:{tenant_id}"
+            current_version = cache.get(version_key, 0)
+            cache.set(version_key, current_version + 1, timeout=None)
 
     def _get_current_quarter(self) -> Tuple[str, date, date]:
         """

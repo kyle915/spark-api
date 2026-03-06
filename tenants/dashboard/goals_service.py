@@ -78,7 +78,7 @@ GOAL_TARGET_FIELDS = tuple(GOAL_FIELD_DEFAULTS.keys())
 
 def get_goals(tenant_id: int, user_id: int, year: int) -> Goal | None:
     """Return the Goal for the given tenant, user, and year, or None."""
-    return Goal.objects.filter(
+    return Goal.objects.select_related("user").filter(
         tenant_id=tenant_id,
         user_id=user_id,
         year=year,
@@ -122,7 +122,9 @@ def upsert_goals(
         setattr(goal, field_name, value)
         update_fields.append(field_name)
     goal.save(update_fields=update_fields)
-    return goal
+    # Ensure related user is eagerly loaded so async GraphQL resolvers
+    # don't trigger a synchronous lazy-load for goal.user.
+    return Goal.objects.select_related("user").get(pk=goal.pk)
 
 
 # ---------------------------------------------------------------------------

@@ -11,6 +11,7 @@ from graphql import GraphQLError
 from tenants.insights.service import InsightsService
 from tenants.insights.tasks import generate_insights_for_tenant
 from utils.graphql.mixins import SparkGraphQLMixin
+from utils.graphql.mixins import resolve_id_to_int
 from utils.graphql.permissions import StrictIsAuthenticated
 from utils.graphql.validation import parse_iso_date_optional
 from utils.queues import Queues
@@ -18,6 +19,7 @@ from utils.queues import Queues
 from . import types, inputs
 from .goals_service import extract_goal_updates, upsert_goals
 from .queries import _goal_model_to_graphql, insights_model_to_graphql
+from .services import DashboardQueriesService
 from .tasks import create_goals_for_tenant, create_goals_for_all_tenants
 
 
@@ -98,16 +100,47 @@ class DashboardMutations(SparkGraphQLMixin):
         info: strawberry.Info,
         input: inputs.SetGoalsInput,
     ) -> types.Goal:
-        """Create or update goals for the authenticated user for the given tenant and year."""
+        """Create or update goals for a user for the given tenant and year."""
+        from tenants import models as tenant_models
+
         root = self if self is not None else _mixin
         user = await root.get_user(info)
         tenant = await root.get_user_tenant(info, tenant_id=input.tenant_id, user=user)
+        target_user_id = user.id
+
+        if input.user_id is not None:
+            try:
+                target_user_id = resolve_id_to_int(input.user_id)
+            except (TypeError, ValueError):
+                raise GraphQLError("Invalid userId")
+
+            if target_user_id != user.id:
+                is_spark_admin = await user.role.is_spark_admin if getattr(user, "role", None) else False
+                is_client = await user.role.is_client if getattr(user, "role", None) else False
+                if not (is_spark_admin or is_client):
+                    raise GraphQLError("You do not have permission to set goals for other users.")
+
+            target_user_in_tenant = await sync_to_async(
+                tenant_models.TenantedUser.objects.filter(
+                    user_id=target_user_id,
+                    tenant_id=tenant.id,
+                    is_active=True,
+                ).exists
+            )()
+            if not target_user_in_tenant:
+                raise GraphQLError("Target user does not belong to the selected tenant.")
 
         goal_model = await sync_to_async(upsert_goals)(
             tenant.id,
-            user.id,
+            target_user_id,
             input.year,
             extract_goal_updates(input),
+        )
+        await sync_to_async(DashboardQueriesService.invalidate_cache_for_tenant)(
+            tenant.id, ["event_dashboard"]
+        )
+        await sync_to_async(DashboardQueriesService.invalidate_cache_for_tenant)(
+            0, ["event_dashboard"]
         )
         return _goal_model_to_graphql(goal_model, current=None)
 

@@ -318,12 +318,24 @@ class Insights:
 
 
 @strawberry.type
+class GoalUser:
+    """Minimal user object embedded in Goal responses."""
+
+    id: strawberry.ID
+    uuid: str
+    email: str
+    first_name: str
+    last_name: str
+
+
+@strawberry.type
 class Goal:
     """Per-user, per-tenant, per-year goals (targets and optional current values for progress)."""
 
     id: strawberry.ID
     uuid: str
     tenant_id: strawberry.ID
+    user: GoalUser
     user_id: strawberry.ID
     year: int
     event_target_goal: int | None = None
