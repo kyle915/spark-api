@@ -7,7 +7,7 @@ This module tests Event Dashboard queries:
 """
 import pytest
 import strawberry_django  # noqa: F401
-from datetime import timedelta
+from datetime import timedelta, time
 from asgiref.sync import sync_to_async
 from django.db.models import Sum
 from django.utils import timezone
@@ -206,6 +206,71 @@ class TestEventDashboardQueries(DashboardGraphQLTestCase):
         data = result.data['eventDashboard']
         assert data is not None
         assert data['metrics'] is not None
+
+    @pytest.mark.asyncio
+    async def test_event_dashboard_with_multiple_distributors_filter(self):
+        """Test event_dashboard query with multiple distributors filter."""
+        today = timezone.now().date()
+        other_distributor = self.create_distributor(
+            name="Other Distributor",
+            email="other-distributor@example.com",
+            location=self.location,
+            tenant=self.tenant,
+        )
+        other_request = self.create_request(
+            name="Request Other Distributor",
+            date=today,
+            address="Address Other Distributor",
+            client=self.client,
+            distributor=other_distributor,
+            retailer=self.retailer,
+            request_type=self.request_type,
+            tenant=self.tenant,
+            start_time=time(11, 0),
+            end_time=time(19, 0),
+            status=self.approved_status,
+        )
+        self.create_event(
+            name="Event Other Distributor",
+            tenant=self.tenant,
+            address="Address Other Distributor",
+            request=other_request,
+            event_type=self.event_type,
+            status=self.event_status,
+            rmm_asigned=self.rmm_user,
+        )
+
+        query = """
+        query EventDashboard($distributorId: ID, $distributorIds: [ID!]) {
+            single: eventDashboard(filters: {
+                distributorId: $distributorId
+            }) {
+                metrics {
+                    totalEvents
+                }
+            }
+            multiple: eventDashboard(filters: {
+                distributorIds: $distributorIds
+            }) {
+                metrics {
+                    totalEvents
+                }
+            }
+        }
+        """
+
+        result = await self._execute_query_authenticated(
+            query,
+            {
+                'distributorId': str(self.distributor.id),
+                'distributorIds': [str(self.distributor.id), str(other_distributor.id)],
+            },
+            self.client_user
+        )
+
+        assert result.errors is None
+        assert result.data is not None
+        assert result.data['single']['metrics']['totalEvents'] < result.data['multiple']['metrics']['totalEvents']
 
     @pytest.mark.asyncio
     async def test_event_dashboard_with_rmm_filter(self):
