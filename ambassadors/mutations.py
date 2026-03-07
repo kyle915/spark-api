@@ -78,6 +78,7 @@ from .services import (
     UpsertAmbassadorProfileService,
     GroupTypeMutationService,
     AmbassadorGroupMutationService,
+    set_ambassador_job_real_amount_from_clock_out,
 )
 from .envelopes import AmbassadorEventApplicationMailer, NotifyApplicationToClientMailer
 from utils.mailer import MailChain
@@ -94,7 +95,12 @@ class TenantOptionalMutationService(BaseMutationService):
         is_update: bool = hasattr(
             self.input, "id") and self.input.id is not None
         if is_update:
-            model = await sync_to_async(model_class.objects.get)(id=self.input.id)
+            model_id = getattr(self.input, "id", None)
+            try:
+                resolved_id = resolve_id_to_int(model_id)
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError(f"Invalid ID: {model_id}")
+            model = await sync_to_async(model_class.objects.get)(id=resolved_id)
             if self.user and hasattr(model, "updated_by"):
                 setattr(model, "updated_by", self.user)
         else:
@@ -102,9 +108,18 @@ class TenantOptionalMutationService(BaseMutationService):
             if self.user and hasattr(model, "created_by"):
                 setattr(model, "created_by", self.user)
             if self.is_public and getattr(self.input, "tenant_id", None):
-                self.tenant_id = self.input.tenant_id
+                try:
+                    self.tenant_id = resolve_id_to_int(self.input.tenant_id)
+                except (TypeError, ValueError, GraphQLError):
+                    raise GraphQLError(f"Invalid tenant_id: {self.input.tenant_id}")
 
         params: dict = self.input.to_dict(["tenant_id", "id"])
+        for key, value in list(params.items()):
+            if key.endswith("_id") and value is not None:
+                try:
+                    params[key] = resolve_id_to_int(value)
+                except (TypeError, ValueError, GraphQLError):
+                    raise GraphQLError(f"Invalid {key}: {value}")
         for key, value in params.items():
             setattr(model, key, value)
 
@@ -624,8 +639,14 @@ class AttendanceMutationService(TenantOptionalMutationService):
 
     async def save(self) -> Model:
         """Set status based on role before saving."""
+        is_update = hasattr(self.input, "id") and self.input.id is not None
         await self._assign_status_for_creator()
-        return await super().save()
+        attendance = await super().save()
+
+        if not is_update:
+            await set_ambassador_job_real_amount_from_clock_out(attendance)
+
+        return attendance
 
 
 @strawberry.type
