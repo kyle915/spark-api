@@ -18,7 +18,7 @@ from django.db.models import (
     Case, Count, Q, Sum, When, IntegerField
 )
 from django.db.models.functions import (
-    TruncMonth
+    TruncMonth, Coalesce
 )
 from django.utils import timezone
 
@@ -830,16 +830,16 @@ class DashboardQueries:
                   created_at__date__lte=end_date)
             )
 
-            # Get recaps with consumer engagements
-            recaps_with_engagements = base_queryset.filter(
-                consumer_engagements__isnull=False).distinct()
+            # Source of truth for consumer metrics:
+            # consumer engagements linked to the filtered recaps
+            consumer_engagements_qs = recap_models.ConsumerEngagements.objects.filter(
+                recap__in=base_queryset
+            )
 
             # Key Metrics
             # Total Consumers Sampled
             consumers_data = await sync_to_async(
-                lambda: recap_models.ConsumerEngagements.objects.filter(
-                    recap__in=recaps_with_engagements
-                ).aggregate(
+                lambda: consumer_engagements_qs.aggregate(
                     total_consumers=Sum('total_consumer', default=0),
                     total_willing=Sum(
                         'willing_to_purchase_consumers', default=0),
@@ -851,10 +851,13 @@ class DashboardQueries:
             total_consumers_sampled = consumers_data['total_consumers'] or 0
             total_willing = consumers_data['total_willing'] or 0
 
-            # Total Purchases (products_sold from Recap)
+            # Total Purchases (total_cans_sold + total_packs_sold from Recap)
             total_purchases_data = await sync_to_async(
                 lambda: base_queryset.aggregate(
-                    total=Sum('products_sold', default=0)
+                    total=(
+                        Coalesce(Sum('total_cans_sold'), 0)
+                        + Coalesce(Sum('total_packs_sold'), 0)
+                    )
                 )
             )()
             total_purchases = total_purchases_data['total'] or 0
@@ -902,13 +905,12 @@ class DashboardQueries:
                           created_at__date__lte=prev_end)
                     )
 
-                    prev_recaps_with_engagements = prev_recaps.filter(
-                        consumer_engagements__isnull=False).distinct()
+                    prev_consumer_engagements_qs = recap_models.ConsumerEngagements.objects.filter(
+                        recap__in=prev_recaps
+                    )
 
                     prev_consumers_data = await sync_to_async(
-                        lambda: recap_models.ConsumerEngagements.objects.filter(
-                            recap__in=prev_recaps_with_engagements
-                        ).aggregate(
+                        lambda: prev_consumer_engagements_qs.aggregate(
                             total_consumers=Sum('total_consumer', default=0),
                             total_willing=Sum(
                                 'willing_to_purchase_consumers', default=0)
@@ -920,7 +922,10 @@ class DashboardQueries:
 
                     prev_purchases_data = await sync_to_async(
                         lambda: prev_recaps.aggregate(
-                            total=Sum('products_sold', default=0)
+                            total=(
+                                Coalesce(Sum('total_cans_sold'), 0)
+                                + Coalesce(Sum('total_packs_sold'), 0)
+                            )
                         )
                     )()
                     prev_total_purchases = prev_purchases_data['total'] or 0
