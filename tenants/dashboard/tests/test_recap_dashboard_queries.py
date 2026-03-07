@@ -208,6 +208,101 @@ class TestRecapDashboardQueries(DashboardGraphQLTestCase):
         assert data['metrics'] is not None
 
     @pytest.mark.asyncio
+    async def test_recap_dashboard_with_multiple_distributors_filter(self):
+        """Test recap_dashboard query with multiple distributors filter."""
+        from recaps import models as recap_models
+
+        today = timezone.now().date()
+        other_distributor = self.create_distributor(
+            name="Other Distributor",
+            email="other-distributor@example.com",
+            location=self.location,
+            tenant=self.tenant,
+        )
+        other_request = self.create_request(
+            name="Request Other Distributor",
+            date=today,
+            address="Address Other Distributor",
+            client=self.client,
+            distributor=other_distributor,
+            retailer=self.retailer,
+            request_type=self.request_type,
+            tenant=self.tenant,
+            start_time=time(11, 0),
+            end_time=time(19, 0),
+            status=self.approved_status,
+        )
+        other_event = self.create_event(
+            name="Event Other Distributor",
+            tenant=self.tenant,
+            address="Address Other Distributor",
+            request=other_request,
+            event_type=self.event_type,
+            status=self.event_status,
+            rmm_asigned=self.rmm_user,
+            date=timezone.make_aware(datetime.combine(today, time(11, 0))),
+            start_time=timezone.make_aware(datetime.combine(today, time(11, 0))),
+        )
+        other_recap = recap_models.Recap.objects.create(
+            name="Recap Other Distributor",
+            event=other_event,
+            ambassador=self.ambassador,
+            job=self.job1,
+            retailer=self.retailer,
+            total_engagements=50,
+            products_sold=25,
+            total_cans_sold=10,
+            total_packs_sold=5,
+            total_earnings=500.0,
+            approved=True,
+            created_by=self.get_system_user()
+        )
+        recap_models.ConsumerEngagements.objects.create(
+            recap=other_recap,
+            total_consumer=50,
+            first_time_consumers=10,
+            brand_aware_consumers=20,
+            willing_to_purchase_consumers=30,
+            not_willing_consumers=20,
+            created_by=self.get_system_user()
+        )
+
+        query = """
+        query RecapDashboard($distributorId: ID, $distributorIds: [ID!]) {
+            single: recapDashboard(filters: {
+                distributorId: $distributorId
+            }) {
+                metrics {
+                    totalConsumersSampled
+                }
+            }
+            multiple: recapDashboard(filters: {
+                distributorIds: $distributorIds
+            }) {
+                metrics {
+                    totalConsumersSampled
+                }
+            }
+        }
+        """
+
+        result = await self._execute_query_authenticated(
+            query,
+            {
+                'distributorId': str(self.distributor.id),
+                'distributorIds': [str(self.distributor.id), str(other_distributor.id)],
+            },
+            self.client_user
+        )
+
+        assert result.errors is None
+        assert result.data is not None
+        assert (
+            result.data['single']['metrics']['totalConsumersSampled']
+            < result.data['multiple']['metrics']['totalConsumersSampled']
+        )
+
+    @pytest.mark.asyncio
     async def test_recap_dashboard_with_rmm_filter(self):
         """Test recap_dashboard query with RMM assigned user filter."""
         rmm_asigned_id = str(self.rmm_user.id)

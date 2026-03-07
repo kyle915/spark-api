@@ -27,6 +27,7 @@ class EventDashboardFiltersInput(BaseTenantInput):
 
     # Distributor filter
     distributor_id: strawberry.ID | None = None
+    distributor_ids: list[strawberry.ID] | None = None
 
     # Optional year for goals progress (e.g. 2025); when not set, year is derived from dashboard date range
     year: int | None = None
@@ -51,6 +52,7 @@ class RecapDashboardFiltersInput(BaseTenantInput):
 
     # Distributor filter
     distributor_id: strawberry.ID | None = None
+    distributor_ids: list[strawberry.ID] | None = None
 
 
 @strawberry.input
