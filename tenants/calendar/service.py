@@ -10,6 +10,7 @@ from django.conf import settings
 from django.utils import timezone
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
+from google.auth.exceptions import RefreshError
 from google_auth_httplib2 import AuthorizedHttp
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -89,6 +90,13 @@ class GoogleCalendarService:
                         connection.token_expiry = credentials.expiry
                     connection.save()
                     logger.info(f"Refreshed token for user {self.user.id}")
+                except RefreshError as e:
+                    logger.error(
+                        f"Failed to refresh token for user {self.user.id}: {e}"
+                    )
+                    if self._is_invalid_grant_error(e):
+                        self._deactivate_connection(connection)
+                    return None
                 except Exception as e:
                     logger.error(
                         f"Failed to refresh token for user {self.user.id}: {e}"
@@ -101,6 +109,27 @@ class GoogleCalendarService:
                 return None
 
         return credentials
+
+    @staticmethod
+    def _is_invalid_grant_error(error: Exception) -> bool:
+        """Return True when Google refresh fails because token grant is invalid."""
+        if "invalid_grant" in str(error).lower():
+            return True
+
+        for arg in getattr(error, "args", []):
+            if isinstance(arg, dict) and str(arg.get("error", "")).lower() == "invalid_grant":
+                return True
+        return False
+
+    def _deactivate_connection(self, connection: GoogleCalendarConnection) -> None:
+        """Deactivate broken OAuth connection so the user can reconnect cleanly."""
+        connection.is_active = False
+        connection.updated_by = self.user
+        connection.save(update_fields=["is_active", "updated_by", "updated_at"])
+        logger.warning(
+            "Deactivated Google Calendar connection for user %s due to invalid_grant; user must reconnect.",
+            self.user.id,
+        )
 
     def _get_service(self):
         """Get Google Calendar API service instance."""
@@ -225,19 +254,28 @@ class GoogleCalendarService:
         if not time_value:
             return None
 
+        tzinfo, _ = GoogleCalendarService._resolve_timezone(_timezone)
+
         # Build datetime from date and time_value.
-        # Treat stored datetimes as local clock time (do not convert between TZs).
+        # If values are timezone-aware datetimes, first convert to event timezone
+        # so we preserve the intended local wall time.
         if isinstance(date, datetime):
-            date_obj = date.date()
+            date_local = date.astimezone(tzinfo) if timezone.is_aware(date) else date
+            date_obj = date_local.date()
         elif isinstance(date, date_type):
             date_obj = date
         else:
             date_obj = None
 
         if isinstance(time_value, datetime):
-            time_part = time_value.time().replace(tzinfo=None)
+            time_local = (
+                time_value.astimezone(tzinfo)
+                if timezone.is_aware(time_value)
+                else time_value
+            )
+            time_part = time_local.time().replace(tzinfo=None)
             if not date_obj:
-                date_obj = time_value.date()
+                date_obj = time_local.date()
             dt = datetime.combine(date_obj, time_part)
         else:
             if not date_obj:
@@ -245,8 +283,6 @@ class GoogleCalendarService:
                     f"date parameter must be date or datetime, got {type(date)}"
                 )
             dt = datetime.combine(date_obj, time_value)
-
-        tzinfo, _ = GoogleCalendarService._resolve_timezone(_timezone)
 
         if timezone.is_aware(dt):
             dt = dt.astimezone(tzinfo)
@@ -334,10 +370,8 @@ class GoogleCalendarService:
         """
         Format Event model data for Google Calendar API.
 
-        IMPORTANT: Event must have a request. We get date, start_time, and end_time from the request.
-
         Args:
-            event: Event model instance (must have event.request)
+            event: Event model instance
             event_type_name: Optional event type name
             status_name: Optional status name
 
@@ -345,14 +379,8 @@ class GoogleCalendarService:
             Dictionary formatted for Google Calendar API
 
         Raises:
-            ValueError: If event doesn't have a request
+            ValueError: If event is missing required time data
         """
-        # Validate that event has a request
-        if not event.request:
-            raise ValueError(
-                f"Event {event.id} must have a request to sync to Google Calendar"
-            )
-
         # Build description with event details
         description_parts = []
         if event.notes:
@@ -368,29 +396,42 @@ class GoogleCalendarService:
         if not event_timezone and event.request:
             event_timezone = event.request.timezone
 
-        # Get date from request (required)
-        event_date = event.date
+        # Prefer Event fields; fallback to Request fields for legacy records.
+        event_date = event.date or (event.request.date if event.request else None)
+        event_start_time = event.start_time or (
+            event.request.start_time if event.request else None
+        )
+        event_end_time = event.end_time or (
+            event.request.end_time if event.request else None
+        )
 
-        # Get start and end times from request
-        if not event.start_time:
+        if not event_start_time:
             raise ValueError(
-                f"Request {event.request.id} must have a start_time to sync event to Google Calendar"
+                f"Event {event.id} must have start_time (or request.start_time) to sync to Google Calendar"
             )
 
         start_datetime = self._build_datetime(
-            event_date, event.start_time, event_timezone
+            event_date, event_start_time, event_timezone
         )
 
-        end_datetime = self._build_datetime(event_date, event.end_time, event_timezone)
+        end_datetime = self._build_datetime(event_date, event_end_time, event_timezone)
         if not end_datetime:
+            end_datetime = start_datetime + timedelta(hours=1)
+        elif end_datetime <= start_datetime:
+            logger.warning(
+                "Event %s has invalid time range (start=%s, end=%s). Adjusting end time to +1 hour.",
+                event.id,
+                start_datetime,
+                end_datetime,
+            )
             end_datetime = start_datetime + timedelta(hours=1)
 
         tzinfo, tz_name = self._resolve_timezone(event_timezone)
 
         if tz_name:
-            # When providing timeZone, send local wall time without offset.
-            start_local = start_datetime.astimezone(tzinfo).replace(tzinfo=None)
-            end_local = end_datetime.astimezone(tzinfo).replace(tzinfo=None)
+            # Send explicit offset to avoid ambiguous timezone normalization.
+            start_local = start_datetime.astimezone(tzinfo)
+            end_local = end_datetime.astimezone(tzinfo)
             start_iso = start_local.replace(microsecond=0).isoformat()
             end_iso = end_local.replace(microsecond=0).isoformat()
         else:
@@ -499,10 +540,14 @@ class GoogleCalendarService:
             )
 
             event_data = self._format_event_data(event, event_type_name, status_name)
-            logger.debug(
-                f"Event data to create: summary={event_data.get('summary')}, "
-                f"start={event_data.get('start')}, end={event_data.get('end')}, "
-                f"location={event_data.get('location')}"
+            logger.info(
+                "Google Calendar create payload for user %s event %s: start=%s end=%s timezone_start=%s timezone_end=%s",
+                self.user.id,
+                event.id,
+                event_data.get("start", {}).get("dateTime"),
+                event_data.get("end", {}).get("dateTime"),
+                event_data.get("start", {}).get("timeZone"),
+                event_data.get("end", {}).get("timeZone"),
             )
 
             created_event = (
@@ -570,21 +615,25 @@ class GoogleCalendarService:
                 f"Updating Google Calendar event {google_event_id} for user {self.user.id} in calendar '{calendar_id}'"
             )
 
-            # Get existing event first
-            existing_event = (
-                service.events()
-                .get(calendarId=calendar_id, eventId=google_event_id)
-                .execute()
-            )
-
-            # Update with new data
+            # Update with new data only. Avoid sending full existing payload because
+            # it can carry stale fields from previous versions.
             event_data = self._format_event_data(event, event_type_name, status_name)
-            logger.info(f"Event data to update: {event_data}")
-            existing_event.update(event_data)
+            logger.info(
+                "Google Calendar update payload for user %s event %s google_event_id=%s: start=%s end=%s timezone_start=%s timezone_end=%s",
+                self.user.id,
+                event.id,
+                google_event_id,
+                event_data.get("start", {}).get("dateTime"),
+                event_data.get("end", {}).get("dateTime"),
+                event_data.get("start", {}).get("timeZone"),
+                event_data.get("end", {}).get("timeZone"),
+            )
             updated_event = (
                 service.events()
-                .update(
-                    calendarId=calendar_id, eventId=google_event_id, body=existing_event
+                .patch(
+                    calendarId=calendar_id,
+                    eventId=google_event_id,
+                    body=event_data,
                 )
                 .execute()
             )

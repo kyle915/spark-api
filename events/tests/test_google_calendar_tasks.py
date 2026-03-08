@@ -223,6 +223,22 @@ class TestGoogleCalendarTasks:
         assert result is None
         # Note: Service won't be called if connection check fails, so no need to verify mock
 
+    @patch('events.tasks.GoogleCalendarService')
+    def test_sync_event_to_google_calendar_no_request(self, mock_service_class):
+        """Test event sync still runs when event has no request."""
+        mock_service = MagicMock()
+        mock_service.sync_event.return_value = "google_event_123"
+        mock_service_class.return_value = mock_service
+
+        self.event.request = None
+        self.event.save(update_fields=["request"])
+
+        result = sync_event_to_google_calendar(self.user.id, self.event.id)
+
+        assert result is None
+        mock_service_class.assert_called_once_with(self.user)
+        mock_service.sync_event.assert_called_once()
+
     @patch('events.jobs.google_calendar_jobs.EventGoogleCalendarJob')
     def test_sync_event_to_all_connected_users(self, mock_job_class):
         """Test syncing event to all connected users via EventGoogleCalendarJob."""
