@@ -1,0 +1,78 @@
+{% extends "emails/base.html" %} {% block content %}
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+  <tr>
+    <td style="font-size: 16px; color: #444444; line-height: 1.6;">
+      <p style="margin: 0 0 18px 0;">Hi {{ recipient_first_name|default:"there" }},</p>
+
+      <p style="margin: 0 0 20px 0;">
+        Good news - your activation is fully staffed and confirmed. Here's who's bringing your brand to life:
+      </p>
+
+      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="border: 1px solid #d8d8d8; border-collapse: collapse; margin: 0 0 28px 0;">
+        <tr>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Request ID</td>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ request_id|default:"-" }}</td>
+        </tr>
+        <tr>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Brand / Campaign</td>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ brand_name|default:"-" }} - {{ campaign_name|default:"-" }}</td>
+        </tr>
+        <tr>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Location</td>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ location_name|default:"-" }}</td>
+        </tr>
+        <tr>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Date</td>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ activation_date|default:"-" }}</td>
+        </tr>
+        <tr>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Time</td>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ start_time|default:"-" }} - {{ end_time|default:"-" }}</td>
+        </tr>
+        <tr>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Activation Fee</td>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">Per your SOW</td>
+        </tr>
+        <tr>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">BA(s) Assigned</td>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ bas_assigned|default:"-" }} Brand Ambassador(s)</td>
+        </tr>
+      </table>
+
+      <h3 style="margin: 0 0 12px 0; color: #202036; font-size: 32px;">What Your Team Will Deliver</h3>
+      <ul style="margin: 0 0 28px 20px; padding: 0; color: #444444;">
+        <li style="margin: 0 0 8px 0;">On-site brand representation per your campaign brief</li>
+        <li style="margin: 0 0 8px 0;">Real-time check-in/check-out via Spark (GPS-verified)</li>
+        <li style="margin: 0 0 8px 0;">Photo documentation of setup and activation</li>
+        <li style="margin: 0 0 8px 0;">Post-activation recap with performance notes</li>
+        <li style="margin: 0;">Any client-specific deliverables outlined in your SOW (e.g., lead capture, sample counts, survey responses)</li>
+      </ul>
+
+      <h3 style="margin: 0 0 12px 0; color: #202036; font-size: 32px;">Extensions &amp; Overages</h3>
+      <p style="margin: 0; color: #444444;">
+        If the activation runs beyond the agreed scope, our team will request approval in real time through Spark. Extensions are billed in 30-minute blocks at the rate specified in your SOW. No surprises, no after-the-fact invoices you didn't see coming.
+      </p>
+
+      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="margin: 24px 0; border: 2px solid #f15a24; background-color: #f2eae6;">
+        <tr>
+          <td align="center" style="padding: 24px 16px;">
+            <a href="https://spark.igniteproductions.co/" style="text-decoration: none; color: #202036; font-size: 22px; font-weight: 800; display: inline-block;">
+              📋 View Activation Details in Spark
+            </a>
+          </td>
+        </tr>
+      </table>
+
+      <p style="margin: 24px 0 8px 0; color: #444444;">
+        Need to adjust the date, time, or location? Reach out to your rep or reply here. We're flexible - just give us as much lead time as you can.
+      </p>
+      <p style="margin: 0 0 18px 0; color: #444444;">
+        We're locked and loaded. Let's make this one a highlight reel.
+      </p>
+      <p style="margin: 0; font-size: 12px; font-weight: 700; color: #555555;">The Ignite Team</p>
+      <p style="margin: 2px 0 0 0; font-size: 12px; color: #555555;">Ignite Productions LLC</p>
+      <p style="margin: 2px 0 0 0; font-size: 12px; color: #555555;">events@igniteproductions.co | 775.406.0435</p>
+    </td>
+  </tr>
+</table>
+{% endblock %}
