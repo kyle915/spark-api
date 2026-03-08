@@ -370,22 +370,37 @@ class TestEventGoogleCalendarJob:
         assert call[0][1] == self.admin_user.id
 
     @patch('events.jobs.google_calendar_jobs.Queues')
-    def test_send_to_admins_no_admins(self, mock_queues_class):
-        """Test handling when no admins exist."""
+    def test_send_to_admins_no_active_admins(self, mock_queues_class):
+        """Test handling when no active Spark Admin users exist."""
         mock_queues = MagicMock()
         mock_queues_class.return_value = mock_queues
 
-        # Deactivate all admin tenanted users
-        TenantedUser.objects.filter(
-            tenant=self.tenant,
-            user__role=self.admin_role
-        ).update(is_active=False)
+        # Deactivate all Spark Admin users globally
+        User.objects.filter(role=self.admin_role).update(is_active=False)
 
         job = EventGoogleCalendarJob(self.event.id)
         job.send_to_admins()
 
         # Should not queue anything
         mock_queues.default.add.assert_not_called()
+
+    @patch('events.jobs.google_calendar_jobs.Queues')
+    def test_send_to_admins_global_without_tenanted_user(self, mock_queues_class):
+        """Test that Spark Admin users receive events even without TenantedUser."""
+        mock_queues = MagicMock()
+        mock_queues_class.return_value = mock_queues
+
+        TenantedUser.objects.filter(user__in=[self.admin_user, self.admin_user2]).delete()
+
+        job = EventGoogleCalendarJob(self.event.id)
+        job.send_to_admins()
+
+        # Should still queue for both admin users with active connections
+        assert mock_queues.default.add.call_count == 2
+        calls = mock_queues.default.add.call_args_list
+        user_ids = [call[0][1] for call in calls]
+        assert self.admin_user.id in user_ids
+        assert self.admin_user2.id in user_ids
 
     @patch('events.jobs.google_calendar_jobs.Queues')
     def test_send_to_clients_success(self, mock_queues_class):

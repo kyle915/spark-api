@@ -21,12 +21,14 @@ class EventGoogleCalendarJob:
         self.send_to_ambassadors()
 
     def send_to_admins(self):
-        """Send the event to all admins of the tenant
-        """
+        """Send the event to all active Spark Admin users (global)."""
         admin_role: Role = self.roles.get(slug=Role.SPARK_ADMIN_SLUG)
-        tenanted_users = self.get_tenanted_users(admin_role)
-        for tenanted_user in tenanted_users:
-            self.send_to_user(tenanted_user.user)
+        admin_users = User.objects.filter(
+            role_id=admin_role.id,
+            is_active=True,
+        ).all()
+        for admin_user in admin_users:
+            self.send_to_user(admin_user)
 
     def send_to_clients(self):
         """Send the event to all clients of the tenant
