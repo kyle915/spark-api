@@ -15,10 +15,12 @@ from django.utils.text import slugify
 from recaps import types
 from recaps import models
 from recaps import inputs
+from recaps.envelopes import RecapApprovedNotificationMailer
 from recaps.queries import RecapQueriesService
 from ambassadors.models import FileType, Ambassador, Attendance
 from events.models import Event, Retailer
 from jobs.models import Job, AmbassadorJob
+from tenants.models import Role, TenantedUser
 from utils.graphql.inputs import SparkGraphQLInput
 from utils.graphql.permissions import StrictIsAuthenticated
 from utils.graphql.relay import ensure_relay_mutation
@@ -38,6 +40,49 @@ from recaps.excel import build_recaps_xlsx
 ensure_relay_mutation()
 
 User = get_user_model()
+
+
+async def _notify_recap_approved_to_rmm_or_clients(recap: models.Recap) -> None:
+    event = recap.event
+    rmm_user = getattr(event, "rmm_asigned", None)
+    fallback_reply_to = "events@igniteproductions.co"
+    reply_to_email = (
+        (getattr(rmm_user, "email", None) or "").strip() or fallback_reply_to
+    )
+
+    recipients: list[tuple[str, str]] = []
+    if rmm_user and rmm_user.email:
+        recipients.append(
+            (
+                rmm_user.email.strip(),
+                (rmm_user.first_name or "").strip(),
+            )
+        )
+    else:
+        rows = await sync_to_async(list)(
+            TenantedUser.objects.filter(
+                tenant_id=event.tenant_id,
+                is_active=True,
+                user__role__slug=Role.CLIENT_SLUG,
+            ).values("user__email", "user__first_name")
+        )
+        for row in rows:
+            email = (row.get("user__email") or "").strip()
+            if not email:
+                continue
+            recipients.append((email, (row.get("user__first_name") or "").strip()))
+
+    if not recipients:
+        return
+
+    for email, first_name in recipients:
+        mailer = RecapApprovedNotificationMailer(
+            recap=recap,
+            to_emails=[email],
+            recipient_first_name=first_name or None,
+            reply_to_email=reply_to_email,
+        )
+        await sync_to_async(mailer.send)()
 
 
 class RecapMutationService(SparkGraphQLMixin):
@@ -845,7 +890,23 @@ class RecapMutationService(SparkGraphQLMixin):
                 recap.save()
                 return recap
 
-        return await approve_recap_transaction()
+        recap = await approve_recap_transaction()
+        if self.input.approved:
+            recap = await sync_to_async(
+                models.Recap.objects.select_related(
+                    "event",
+                    "event__tenant",
+                    "event__rmm_asigned",
+                    "event__timezone",
+                    "job",
+                    "retailer",
+                    "timezone",
+                    "ambassador",
+                ).get
+            )(id=recap.id)
+            await _notify_recap_approved_to_rmm_or_clients(recap)
+
+        return recap
 
     async def generate_recap_pdf(self) -> models.RecapFile:
         """Generate a PDF with recap details and images, upload it, and return the file."""

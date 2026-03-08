@@ -1,0 +1,80 @@
+{% extends "emails/base.html" %} {% block content %}
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+  <tr>
+    <td style="font-size: 16px; color: #444444; line-height: 1.6;">
+      <p style="margin: 0 0 18px 0;">Hi {{ recipient_first_name|default:"there" }},</p>
+
+      <p style="margin: 0 0 20px 0;">
+        Your <strong>{{ brand_name|default:"-" }}</strong> activation at <strong>{{ location_name|default:"-" }}</strong> on <strong>{{ date_text|default:"-" }}</strong> is complete - and we've got the receipts. Here's your post-activation summary:
+      </p>
+
+      <h3 style="margin: 0 0 12px 0; color: #202036; font-size: 32px;">Activation Summary</h3>
+      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="border: 1px solid #d8d8d8; border-collapse: collapse; margin: 0 0 28px 0;">
+        <tr>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Request ID</td>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ request_id|default:"-" }}</td>
+        </tr>
+        <tr>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Brand / Campaign</td>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ brand_name|default:"-" }} - {{ campaign_name|default:"-" }}</td>
+        </tr>
+        <tr>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Location</td>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ location_name|default:"-" }}</td>
+        </tr>
+        <tr>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Date</td>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ date_text|default:"-" }}</td>
+        </tr>
+        <tr>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Scheduled Time</td>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ scheduled_start_time|default:"-" }} - {{ scheduled_end_time|default:"-" }}</td>
+        </tr>
+        <tr>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Actual Check-In</td>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ actual_check_in|default:"-" }}</td>
+        </tr>
+        <tr>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Actual Check-Out</td>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ actual_check_out|default:"-" }}</td>
+        </tr>
+        <tr>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">BA(s) On-Site</td>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ ba_on_site|default:"-" }}</td>
+        </tr>
+        <tr>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Extensions</td>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ extensions_text|default:"None" }}</td>
+        </tr>
+      </table>
+
+      <h3 style="margin: 0 0 12px 0; color: #202036; font-size: 32px;">Deliverables Included</h3>
+      <ul style="margin: 0 0 28px 20px; padding: 0; color: #444444;">
+        <li style="margin: 0 0 8px 0;"><strong>Photos:</strong> {{ photos_count|default:"0" }} activation photos attached / available in Spark</li>
+        <li style="margin: 0 0 8px 0;"><strong>Recap:</strong> Post-activation performance recap (reviewed and approved by Ignite)</li>
+        <li style="margin: 0;"><strong>Client-Specific Metrics:</strong> <em>{{ client_specific_metrics|default:"Samples distributed, leads captured, survey responses" }}</em></li>
+      </ul>
+
+      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="margin: 24px 0; border: 2px solid #f15a24; background-color: #f2eae6;">
+        <tr>
+          <td align="center" style="padding: 24px 16px;">
+            <a href="{{ recap_link }}" style="text-decoration: none; color: #202036; font-size: 22px; font-weight: 800; display: inline-block;">
+              📸 View Full Recap in Spark
+            </a>
+          </td>
+        </tr>
+      </table>
+
+      <p style="margin: 24px 0 8px 0; color: #444444;">
+        We love hearing what worked and what we can improve. If you have feedback on this activation, just reply to this email or drop a note in Spark - it goes directly to our ops team.
+      </p>
+      <p style="margin: 0 0 18px 0; color: #444444;">
+        Thanks for letting us bring this one to life. Already looking forward to the next one.
+      </p>
+      <p style="margin: 0; font-size: 12px; font-weight: 700; color: #555555;">The Ignite Team</p>
+      <p style="margin: 2px 0 0 0; font-size: 12px; color: #555555;">Ignite Productions LLC</p>
+      <p style="margin: 2px 0 0 0; font-size: 12px; color: #555555;">events@igniteproductions.co | 775.406.0435</p>
+    </td>
+  </tr>
+</table>
+{% endblock %}
