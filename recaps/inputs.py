@@ -6,6 +6,7 @@ from utils.graphql.inputs import SparkGraphQLInput
 
 @strawberry.input
 class RecapFiltersInput(SparkGraphQLInput):
+    tenant_id: strawberry.ID | None = None
     event_id: strawberry.ID | None = None
     event_type: strawberry.ID | None = None
     rmm_asigned_id: strawberry.ID | None = None
@@ -76,6 +77,9 @@ class CreateRecapInput(SparkGraphQLInput):
     name: str
     event_id: strawberry.ID
     files: List[RecapFileInput]
+    filling_for_ambassador: bool | None = None
+    late: bool | None = None
+    incomplete: bool | None = None
     
     products_sold: int | None = None
     total_cans_sold: int | None = None

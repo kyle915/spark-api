@@ -5,7 +5,9 @@ from graphql import GraphQLError
 from asgiref.sync import sync_to_async
 
 from jobs import models, inputs, types
+from jobs.envelopes import AmbassadorJobApprovedNotificationMailer
 from ambassadors.models import AmbassadorEvent
+from tenants.models import Role, TenantedUser
 from utils.graphql.mixins import (
     BaseMutationService,
     SparkGraphQLMixin,
@@ -16,6 +18,51 @@ from utils.graphql.relay import ensure_relay_mutation
 from utils.utils import build_mutation_response
 
 ensure_relay_mutation()
+
+
+async def _notify_approval_to_rmm_or_clients(
+    ambassador_job: models.AmbassadorJob,
+) -> None:
+    event = ambassador_job.job.event
+    rmm_user = getattr(event, "rmm_asigned", None)
+    fallback_reply_to = "events@igniteproductions.co"
+    reply_to_email = (
+        (getattr(rmm_user, "email", None) or "").strip() or fallback_reply_to
+    )
+
+    recipients: list[tuple[str, str]] = []
+    if rmm_user and rmm_user.email:
+        recipients.append(
+            (
+                rmm_user.email.strip(),
+                (rmm_user.first_name or "").strip(),
+            )
+        )
+    else:
+        rows = await sync_to_async(list)(
+            TenantedUser.objects.filter(
+                tenant_id=ambassador_job.tenant_id,
+                is_active=True,
+                user__role__slug=Role.CLIENT_SLUG,
+            ).values("user__email", "user__first_name")
+        )
+        for row in rows:
+            email = (row.get("user__email") or "").strip()
+            if not email:
+                continue
+            recipients.append((email, (row.get("user__first_name") or "").strip()))
+
+    if not recipients:
+        return
+
+    for email, first_name in recipients:
+        mailer = AmbassadorJobApprovedNotificationMailer(
+            ambassador_job=ambassador_job,
+            to_emails=[email],
+            recipient_first_name=first_name or None,
+            reply_to_email=reply_to_email,
+        )
+        await sync_to_async(mailer.send)()
 
 
 # Status Mutations
@@ -963,6 +1010,17 @@ class ApproveAmbassadorJobMutationService(SparkGraphQLMixin):
         ambassador_job.status = status
         ambassador_job.updated_by = user
         await sync_to_async(ambassador_job.save)()
+        ambassador_job = await sync_to_async(
+            models.AmbassadorJob.objects.select_related(
+                "job",
+                "job__event",
+                "job__event__timezone",
+                "job__event__rmm_asigned",
+                "tenant",
+                "status",
+            ).get
+        )(id=ambassador_job.id)
+        await _notify_approval_to_rmm_or_clients(ambassador_job)
 
         return build_mutation_response(
             types.AmbassadorJobDetailResponse,

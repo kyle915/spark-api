@@ -3,6 +3,7 @@ from strawberry import relay
 from graphql import GraphQLError
 from asgiref.sync import sync_to_async
 from typing import Any
+from decimal import Decimal
 
 from django.contrib.auth import get_user_model
 from django.db.models import Model, Prefetch, Q
@@ -14,10 +15,12 @@ from django.utils.text import slugify
 from recaps import types
 from recaps import models
 from recaps import inputs
+from recaps.envelopes import RecapApprovedNotificationMailer
 from recaps.queries import RecapQueriesService
-from ambassadors.models import FileType, Ambassador
+from ambassadors.models import FileType, Ambassador, Attendance
 from events.models import Event, Retailer
-from jobs.models import Job
+from jobs.models import Job, AmbassadorJob
+from tenants.models import Role, TenantedUser
 from utils.graphql.inputs import SparkGraphQLInput
 from utils.graphql.permissions import StrictIsAuthenticated
 from utils.graphql.relay import ensure_relay_mutation
@@ -37,6 +40,49 @@ from recaps.excel import build_recaps_xlsx
 ensure_relay_mutation()
 
 User = get_user_model()
+
+
+async def _notify_recap_approved_to_rmm_or_clients(recap: models.Recap) -> None:
+    event = recap.event
+    rmm_user = getattr(event, "rmm_asigned", None)
+    fallback_reply_to = "events@igniteproductions.co"
+    reply_to_email = (
+        (getattr(rmm_user, "email", None) or "").strip() or fallback_reply_to
+    )
+
+    recipients: list[tuple[str, str]] = []
+    if rmm_user and rmm_user.email:
+        recipients.append(
+            (
+                rmm_user.email.strip(),
+                (rmm_user.first_name or "").strip(),
+            )
+        )
+    else:
+        rows = await sync_to_async(list)(
+            TenantedUser.objects.filter(
+                tenant_id=event.tenant_id,
+                is_active=True,
+                user__role__slug=Role.CLIENT_SLUG,
+            ).values("user__email", "user__first_name")
+        )
+        for row in rows:
+            email = (row.get("user__email") or "").strip()
+            if not email:
+                continue
+            recipients.append((email, (row.get("user__first_name") or "").strip()))
+
+    if not recipients:
+        return
+
+    for email, first_name in recipients:
+        mailer = RecapApprovedNotificationMailer(
+            recap=recap,
+            to_emails=[email],
+            recipient_first_name=first_name or None,
+            reply_to_email=reply_to_email,
+        )
+        await sync_to_async(mailer.send)()
 
 
 class RecapMutationService(SparkGraphQLMixin):
@@ -63,6 +109,156 @@ class RecapMutationService(SparkGraphQLMixin):
         self.info = info
         self.user = await self.get_user(info)
         return self
+
+    def _is_recap_fully_completed(self) -> bool:
+        """Validate that recap input includes all optional sections and files."""
+        if not isinstance(self.input, inputs.CreateRecapInput):
+            return False
+        if self.input.incomplete is True:
+            return False
+
+        has_files = bool(self.input.files and len(self.input.files) > 0)
+        has_metrics = all(
+            value is not None
+            for value in (
+                self.input.products_sold,
+                self.input.total_cans_sold,
+                self.input.total_packs_sold,
+                self.input.total_earnings,
+                self.input.account_spend_amount,
+            )
+        )
+        has_consumer_engagements = self.input.consumer_engagements is not None
+        has_product_samples = bool(self.input.product_samples and len(self.input.product_samples) > 0)
+        has_sales_performance = bool(
+            self.input.sales_performance and len(self.input.sales_performance) > 0
+        )
+        has_consumer_feedback = self.input.consumer_feedback is not None and all(
+            bool((value or "").strip())
+            for value in (
+                self.input.consumer_feedback.demographics,
+                self.input.consumer_feedback.feedback,
+                self.input.consumer_feedback.quotes,
+                self.input.consumer_feedback.positive_stories,
+                self.input.consumer_feedback.reasons_to_decline,
+            )
+        )
+        has_account_feedback = self.input.account_feedback is not None and all(
+            bool((value or "").strip())
+            for value in (
+                self.input.account_feedback.do_differently_feedback,
+                self.input.account_feedback.feedback,
+                self.input.account_feedback.corpo_card,
+            )
+        )
+
+        return all(
+            (
+                has_files,
+                has_metrics,
+                has_consumer_engagements,
+                has_product_samples,
+                has_sales_performance,
+                has_consumer_feedback,
+                has_account_feedback,
+            )
+        )
+
+    @staticmethod
+    def _normalize_attendance_slug(slug: str | None) -> str:
+        return (slug or "").strip().lower().replace("-", "_")
+
+    async def _apply_time_based_recap_payment_rule(
+        self,
+        *,
+        event: Event,
+        job: Job | None,
+        ambassador: Ambassador | None,
+    ) -> None:
+        """
+        Rule:
+        - If recap is 100% complete:
+          - worked time <= 49% of event duration: set real_amount to 40% of rate.
+          - worked time >= 50% of event duration: set real_amount to 65% of rate.
+        - If recap is incomplete and worked time is 100% (or more):
+          - set real_amount to 85% of rate.
+        """
+        if not ambassador or not job:
+            return
+
+        is_full_recap = self._is_recap_fully_completed()
+
+        if not event.start_time or not event.end_time or event.end_time <= event.start_time:
+            return
+
+        attendance_filters = Q(ambassador=ambassador, event=event)
+        if job:
+            attendance_filters &= Q(job=job)
+
+        attendances = await sync_to_async(list)(
+            Attendance.objects.select_related("attendace_type")
+            .filter(attendance_filters)
+            .order_by("clock_time")
+        )
+        if not attendances:
+            return
+
+        clock_in_times = [
+            record.clock_time
+            for record in attendances
+            if self._normalize_attendance_slug(getattr(record.attendace_type, "slug", None))
+            == "clock_in"
+        ]
+        clock_out_times = [
+            record.clock_time
+            for record in attendances
+            if self._normalize_attendance_slug(getattr(record.attendace_type, "slug", None))
+            == "clock_out"
+        ]
+
+        event_minutes = int((event.end_time - event.start_time).total_seconds() // 60)
+        if event_minutes <= 0:
+            return
+
+        # Business rule: no clock-in means 0% worked time.
+        if not clock_in_times:
+            worked_percentage = 0
+        elif not clock_out_times:
+            worked_percentage = 0
+        else:
+            worked_minutes = int(
+                (max(clock_out_times) - min(clock_in_times)).total_seconds() // 60
+            )
+            if worked_minutes <= 0:
+                worked_percentage = 0
+            else:
+                worked_ratio = worked_minutes / event_minutes
+                worked_percentage = worked_ratio * 100
+
+        ambassador_job = await sync_to_async(
+            lambda: AmbassadorJob.objects.select_related("rate")
+            .filter(ambassador=ambassador, job=job)
+            .order_by("-created_at")
+            .first()
+        )()
+        if not ambassador_job or not ambassador_job.rate or ambassador_job.rate.amount is None:
+            return
+
+        if is_full_recap:
+            if worked_percentage >= 100:
+                ambassador_job.real_amount = ambassador_job.rate.amount
+            elif worked_percentage <= 49:
+                ambassador_job.real_amount = ambassador_job.rate.amount * Decimal("0.40")
+            elif worked_percentage >= 50:
+                ambassador_job.real_amount = ambassador_job.rate.amount * Decimal("0.65")
+            else:
+                return
+        elif worked_percentage >= 100:
+            ambassador_job.real_amount = ambassador_job.rate.amount * Decimal("0.85")
+        else:
+            return
+
+        await sync_to_async(ambassador_job.save)(update_fields=["real_amount", "updated_at"])
 
     async def create_recap(self) -> models.Recap:
         """Create a recap with multiple files."""
@@ -181,6 +377,12 @@ class RecapMutationService(SparkGraphQLMixin):
                     retailer=retailer,
                     ambassador=ambassador,
                 )
+                if self.input.filling_for_ambassador is not None:
+                    recap.filling_for_ambassador = self.input.filling_for_ambassador
+                if self.input.late is not None:
+                    recap.late = self.input.late
+                if self.input.incomplete is not None:
+                    recap.incomplete = self.input.incomplete
                 recap.save()
 
                 # Link recap to all recap files
@@ -252,7 +454,13 @@ class RecapMutationService(SparkGraphQLMixin):
 
                 return recap
 
-        return await create_recap_with_files()
+        recap = await create_recap_with_files()
+        await self._apply_time_based_recap_payment_rule(
+            event=event,
+            job=job,
+            ambassador=ambassador,
+        )
+        return recap
 
     async def update_recap(self) -> models.Recap:
         """Update a recap."""
@@ -424,6 +632,12 @@ class RecapMutationService(SparkGraphQLMixin):
                     recap.retailer = retailer
                 if self.input.ambassador_id is not None:
                     recap.ambassador = ambassador
+                if self.input.filling_for_ambassador is not None:
+                    recap.filling_for_ambassador = self.input.filling_for_ambassador
+                if self.input.late is not None:
+                    recap.late = self.input.late
+                if self.input.incomplete is not None:
+                    recap.incomplete = self.input.incomplete
                 recap.updated_by = self.user
                 recap.save()
 
@@ -596,6 +810,13 @@ class RecapMutationService(SparkGraphQLMixin):
             if blob_name:
                 delete_blob(blob_name)
 
+        if recap.filling_for_ambassador or recap.late or recap.incomplete:
+            await self._apply_time_based_recap_payment_rule(
+                event=recap.event,
+                job=recap.job,
+                ambassador=recap.ambassador,
+            )
+
         return recap
 
     async def delete_recap(self) -> bool:
@@ -669,7 +890,23 @@ class RecapMutationService(SparkGraphQLMixin):
                 recap.save()
                 return recap
 
-        return await approve_recap_transaction()
+        recap = await approve_recap_transaction()
+        if self.input.approved:
+            recap = await sync_to_async(
+                models.Recap.objects.select_related(
+                    "event",
+                    "event__tenant",
+                    "event__rmm_asigned",
+                    "event__timezone",
+                    "job",
+                    "retailer",
+                    "timezone",
+                    "ambassador",
+                ).get
+            )(id=recap.id)
+            await _notify_recap_approved_to_rmm_or_clients(recap)
+
+        return recap
 
     async def generate_recap_pdf(self) -> models.RecapFile:
         """Generate a PDF with recap details and images, upload it, and return the file."""

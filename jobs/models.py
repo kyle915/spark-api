@@ -547,6 +547,7 @@ class AmbassadorJob(models.Model):
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     recap_uploaded = models.BooleanField(default=False)
     accepted_terms = models.BooleanField(default=False)
+    real_amount = models.DecimalField(max_digits=14, decimal_places=4, null=True)
     appear_as_rfp = models.BooleanField(
         default=True
     )  # This bool is for record purposes that it was an invitation.

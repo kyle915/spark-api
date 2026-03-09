@@ -43,6 +43,9 @@ class Recap(models.Model):
     total_earnings = models.DecimalField(max_digits=10, decimal_places=4, null=True)
     total_cans_sold = models.IntegerField(null=True)
     total_packs_sold = models.IntegerField(null=True)
+    filling_for_ambassador = models.BooleanField(default=False)
+    late = models.BooleanField(default=False)
+    incomplete = models.BooleanField(default=False)
     account_spend_amount = models.DecimalField(
         max_digits=10, decimal_places=4, null=True
     )

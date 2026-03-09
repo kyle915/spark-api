@@ -7,8 +7,9 @@ This module tests Event Dashboard queries:
 """
 import pytest
 import strawberry_django  # noqa: F401
-from datetime import timedelta
+from datetime import timedelta, time
 from asgiref.sync import sync_to_async
+from django.db.models import Sum
 from django.utils import timezone
 from django.core.cache import cache
 from tenants.dashboard.tests.base import DashboardGraphQLTestCase
@@ -207,6 +208,71 @@ class TestEventDashboardQueries(DashboardGraphQLTestCase):
         assert data['metrics'] is not None
 
     @pytest.mark.asyncio
+    async def test_event_dashboard_with_multiple_distributors_filter(self):
+        """Test event_dashboard query with multiple distributors filter."""
+        today = timezone.now().date()
+        other_distributor = self.create_distributor(
+            name="Other Distributor",
+            email="other-distributor@example.com",
+            location=self.location,
+            tenant=self.tenant,
+        )
+        other_request = self.create_request(
+            name="Request Other Distributor",
+            date=today,
+            address="Address Other Distributor",
+            client=self.client,
+            distributor=other_distributor,
+            retailer=self.retailer,
+            request_type=self.request_type,
+            tenant=self.tenant,
+            start_time=time(11, 0),
+            end_time=time(19, 0),
+            status=self.approved_status,
+        )
+        self.create_event(
+            name="Event Other Distributor",
+            tenant=self.tenant,
+            address="Address Other Distributor",
+            request=other_request,
+            event_type=self.event_type,
+            status=self.event_status,
+            rmm_asigned=self.rmm_user,
+        )
+
+        query = """
+        query EventDashboard($distributorId: ID, $distributorIds: [ID!]) {
+            single: eventDashboard(filters: {
+                distributorId: $distributorId
+            }) {
+                metrics {
+                    totalEvents
+                }
+            }
+            multiple: eventDashboard(filters: {
+                distributorIds: $distributorIds
+            }) {
+                metrics {
+                    totalEvents
+                }
+            }
+        }
+        """
+
+        result = await self._execute_query_authenticated(
+            query,
+            {
+                'distributorId': str(self.distributor.id),
+                'distributorIds': [str(self.distributor.id), str(other_distributor.id)],
+            },
+            self.client_user
+        )
+
+        assert result.errors is None
+        assert result.data is not None
+        assert result.data['single']['metrics']['totalEvents'] < result.data['multiple']['metrics']['totalEvents']
+
+    @pytest.mark.asyncio
     async def test_event_dashboard_with_rmm_filter(self):
         """Test event_dashboard query with RMM assigned user filter."""
         rmm_asigned_id = str(self.rmm_user.id)
@@ -273,6 +339,60 @@ class TestEventDashboardQueries(DashboardGraphQLTestCase):
 
         # Purchase intent should be percentage
         assert 0 <= metrics['purchaseIntent'] <= 100
+
+    @pytest.mark.asyncio
+    async def test_event_dashboard_percentages_are_clamped_to_100(self):
+        """Percentages should be capped at 100 even with inconsistent data."""
+        from recaps import models as recap_models
+
+        # Create inconsistent consumer engagement data (brand aware > total)
+        await sync_to_async(recap_models.ConsumerEngagements.objects.create)(
+            recap=self.recap1,
+            total_consumer=10,
+            first_time_consumers=0,
+            brand_aware_consumers=200,
+            willing_to_purchase_consumers=0,
+            not_willing_consumers=0,
+            created_by=self.get_system_user(),
+        )
+
+        # Sanity check: raw aggregate ratio (without clamping) would exceed 100%
+        agg = await sync_to_async(
+            lambda: recap_models.ConsumerEngagements.objects.filter(
+                recap__event__in=[self.event1, self.event2, self.event3]
+            ).aggregate(
+                total_consumers=Sum("total_consumer"),
+                total_brand_aware=Sum("brand_aware_consumers"),
+            )
+        )()
+        raw_percentage = (
+            agg["total_brand_aware"] / agg["total_consumers"] * 100
+            if agg["total_consumers"] > 0
+            else 0.0
+        )
+        assert raw_percentage > 100.0
+
+        query = """
+        query {
+            eventDashboard {
+                metrics {
+                    brandAwareness
+                    purchaseIntent
+                }
+            }
+        }
+        """
+
+        result = await self._execute_query_authenticated(
+            query,
+            {},
+            self.client_user,
+        )
+
+        assert result.errors is None
+        metrics = result.data["eventDashboard"]["metrics"]
+        assert metrics["brandAwareness"] == pytest.approx(100.0)
+        assert 0.0 <= metrics["purchaseIntent"] <= 100.0
 
     @pytest.mark.asyncio
     async def test_event_dashboard_monthly_trends(self):

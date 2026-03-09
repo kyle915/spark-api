@@ -354,6 +354,7 @@ class Request(Node):
     request_type: RequestType | None = None
     status: RequestStatus | None = None
     tenant_id: strawberry.ID
+    tenant: TenantType | None = None
     rmm_asigned: SparkUserType | None = None
     created_by: SparkUserType | None = None
     updated_by: SparkUserType | None = None

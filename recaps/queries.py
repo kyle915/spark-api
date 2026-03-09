@@ -68,6 +68,7 @@ class BaseRecapQueriesService(SparkGraphQLMixin):
 
     def get_filtered_queryset(
         self,
+        tenant_id: int | None = None,
         event_id: int | None = None,
         event_type_id: int | None = None,
         rmm_asigned_id: int | None = None,
@@ -79,6 +80,8 @@ class BaseRecapQueriesService(SparkGraphQLMixin):
     ) -> QuerySet:
         """Get the filtered queryset for the service."""
         queryset = self.get_queryset()
+        if tenant_id:
+            queryset = queryset.filter(event__tenant_id=tenant_id)
         if event_id:
             queryset = queryset.filter(event_id=event_id)
         if event_type_id:
@@ -101,6 +104,7 @@ class BaseRecapQueriesService(SparkGraphQLMixin):
 
     def get_ordered_queryset(
         self,
+        tenant_id: int | None = None,
         event_id: int | None = None,
         event_type_id: int | None = None,
         rmm_asigned_id: int | None = None,
@@ -113,6 +117,7 @@ class BaseRecapQueriesService(SparkGraphQLMixin):
     ) -> QuerySet:
         """Return the filtered queryset with ordering applied."""
         queryset = self.get_filtered_queryset(
+            tenant_id=tenant_id,
             event_id=event_id,
             event_type_id=event_type_id,
             rmm_asigned_id=rmm_asigned_id,
@@ -130,6 +135,7 @@ class BaseRecapQueriesService(SparkGraphQLMixin):
     async def get_connection(
         self,
         *,
+        tenant_id: int | None = None,
         event_id: int | None = None,
         event_type_id: int | None = None,
         rmm_asigned_id: int | None = None,
@@ -150,6 +156,7 @@ class BaseRecapQueriesService(SparkGraphQLMixin):
         """Return a Relay compliant connection for the queryset."""
         if queryset is None:
             queryset = self.get_ordered_queryset(
+                tenant_id=tenant_id,
                 event_id=event_id,
                 event_type_id=event_type_id,
                 rmm_asigned_id=rmm_asigned_id,
@@ -199,6 +206,7 @@ class RecapQueriesService(BaseRecapQueriesService):
         self,
         *,
         user,
+        tenant_id: int | None = None,
         event_id: int | None = None,
         event_type_id: int | None = None,
         rmm_asigned_id: int | None = None,
@@ -211,6 +219,7 @@ class RecapQueriesService(BaseRecapQueriesService):
     ) -> QuerySet:
         """Return recaps linked to events assigned to the ambassador user."""
         queryset = self.get_ordered_queryset(
+            tenant_id=tenant_id,
             event_id=event_id,
             event_type_id=event_type_id,
             rmm_asigned_id=rmm_asigned_id,
@@ -423,6 +432,11 @@ class RecapQueries:
         service = RecapQueriesService()
         user = await service.get_user(info)
 
+        tenant_id: int | None = (
+            resolve_id_to_int(filters.tenant_id)
+            if filters and filters.tenant_id not in (None, "")
+            else None
+        )
         event_id: int | None = (
             resolve_id_to_int(filters.event_id)
             if filters and filters.event_id
@@ -451,6 +465,7 @@ class RecapQueries:
         event_date = filters.event_date if filters else None
         event_address = filters.event_address if filters else None
         queryset = service.get_ordered_queryset(
+            tenant_id=tenant_id,
             event_id=event_id,
             event_type_id=event_type_id,
             rmm_asigned_id=rmm_asigned_id,
@@ -464,6 +479,7 @@ class RecapQueries:
             queryset = queryset.filter(updated_by__isnull=not filters.edited)
 
         return await service.get_connection(
+            tenant_id=tenant_id,
             event_id=event_id,
             event_type_id=event_type_id,
             rmm_asigned_id=rmm_asigned_id,
@@ -612,6 +628,11 @@ class RecapMobileQueries:
         service = RecapQueriesService()
         user = await service.get_user(info)
 
+        tenant_id: int | None = (
+            resolve_id_to_int(filters.tenant_id)
+            if filters and filters.tenant_id not in (None, "")
+            else None
+        )
         event_id: int | None = (
             resolve_id_to_int(filters.event_id)
             if filters and filters.event_id
@@ -641,6 +662,7 @@ class RecapMobileQueries:
         event_address = filters.event_address if filters else None
         queryset = service.get_ambassador_queryset(
             user=user,
+            tenant_id=tenant_id,
             event_id=event_id,
             event_type_id=event_type_id,
             rmm_asigned_id=rmm_asigned_id,
@@ -654,6 +676,7 @@ class RecapMobileQueries:
             queryset = queryset.filter(updated_by__isnull=not filters.edited)
 
         return await service.get_connection(
+            tenant_id=tenant_id,
             event_id=event_id,
             event_type_id=event_type_id,
             rmm_asigned_id=rmm_asigned_id,

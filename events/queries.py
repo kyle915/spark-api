@@ -233,6 +233,65 @@ class EventQueriesService(BaseEventQueriesService):
 @strawberry.type
 class EventQueries:
     @staticmethod
+    async def _apply_rmm_asigned_filter(
+        queryset: QuerySet, rmm_asigned: strawberry.ID
+    ) -> QuerySet:
+        """Filter events by rmm assignment or notification-group reach for the given user."""
+        user_id = _resolve_filter_id(rmm_asigned, "rmm asigned")
+        user_group_ids = await sync_to_async(list)(
+            models.NotificationGroupUser.objects.filter(user_id=user_id)
+            .values_list("notification_group_id", flat=True)
+            .distinct()
+        )
+
+        queryset = queryset.filter(
+            tenant__tenanted_users__user_id=user_id,
+            tenant__tenanted_users__is_active=True,
+            tenant__tenanted_users__user__is_active=True,
+        )
+
+        rmm_filter = Q(rmm_asigned_id=user_id) | Q(request__rmm_asigned_id=user_id)
+        if not user_group_ids:
+            return queryset.filter(rmm_filter).distinct()
+
+        notification_group_filter = (
+            Q(
+                retailer__location__notification_group_location__notification_group_id__in=user_group_ids,
+                retailer__location__notification_group_location__notification_group__state=False,
+            )
+            | Q(
+                distributor__location__notification_group_location__notification_group_id__in=user_group_ids,
+                distributor__location__notification_group_location__notification_group__state=False,
+            )
+            | Q(
+                request__retailer__location__notification_group_location__notification_group_id__in=user_group_ids,
+                request__retailer__location__notification_group_location__notification_group__state=False,
+            )
+            | Q(
+                request__distributor__location__notification_group_location__notification_group_id__in=user_group_ids,
+                request__distributor__location__notification_group_location__notification_group__state=False,
+            )
+            | Q(
+                retailer__location__state__notification_group_location__notification_group_id__in=user_group_ids,
+                retailer__location__state__notification_group_location__notification_group__state=True,
+            )
+            | Q(
+                distributor__location__state__notification_group_location__notification_group_id__in=user_group_ids,
+                distributor__location__state__notification_group_location__notification_group__state=True,
+            )
+            | Q(
+                request__retailer__location__state__notification_group_location__notification_group_id__in=user_group_ids,
+                request__retailer__location__state__notification_group_location__notification_group__state=True,
+            )
+            | Q(
+                request__distributor__location__state__notification_group_location__notification_group_id__in=user_group_ids,
+                request__distributor__location__state__notification_group_location__notification_group__state=True,
+            )
+        )
+
+        return queryset.filter(rmm_filter | notification_group_filter).distinct()
+
+    @staticmethod
     def _filter_events_for_local_today(queryset: QuerySet) -> QuerySet:
         """Filter events whose local date (based on event/request timezone) matches 'today'."""
         offset_value = Coalesce(
@@ -319,6 +378,10 @@ class EventQueries:
         queryset = service.get_ordered_queryset(tenant_id=resolved_tenant_id, q=q)
 
         if filters:
+            if filters.rmm_asigned:
+                queryset = await EventQueries._apply_rmm_asigned_filter(
+                    queryset, filters.rmm_asigned
+                )
             if filters.event_type_id:
                 event_type_id = _resolve_filter_id(filters.event_type_id, "event type")
                 queryset = queryset.filter(event_type_id=event_type_id)
@@ -442,6 +505,10 @@ class EventQueries:
         queryset = service.get_filtered_queryset(resolved_tenant_id, q)
 
         if filters:
+            if filters.rmm_asigned:
+                queryset = await EventQueries._apply_rmm_asigned_filter(
+                    queryset, filters.rmm_asigned
+                )
             if filters.event_type_id:
                 event_type_id = _resolve_filter_id(filters.event_type_id, "event type")
                 queryset = queryset.filter(event_type_id=event_type_id)
@@ -533,6 +600,10 @@ class EventQueries:
         queryset = service.get_filtered_queryset(resolved_tenant_id, q)
 
         if filters:
+            if filters.rmm_asigned:
+                queryset = await EventQueries._apply_rmm_asigned_filter(
+                    queryset, filters.rmm_asigned
+                )
             if filters.event_type_id:
                 event_type_id = _resolve_filter_id(filters.event_type_id, "event type")
                 queryset = queryset.filter(event_type_id=event_type_id)
@@ -734,6 +805,7 @@ class RequestQueriesService(BaseEventQueriesService):
         return (
             self.get_model()
             .objects.select_related(
+                "tenant",
                 "timezone",
                 "distributor__location__state",
                 "retailer__location__state",
@@ -745,6 +817,7 @@ class RequestQueriesService(BaseEventQueriesService):
                 "requests_stores_manager",
                 "request_product__product",
                 "event_set",
+                "event_set__tenant",
             )
         )
 
@@ -783,6 +856,47 @@ class RequestQueries:
         queryset = service.get_ordered_queryset(tenant_id=resolved_tenant_id, q=q)
 
         if filters:
+            if filters.rmm_asigned:
+                user_id = _resolve_filter_id(filters.rmm_asigned, "rmm asigned")
+                user_group_ids = await sync_to_async(list)(
+                    models.NotificationGroupUser.objects.filter(
+                        user_id=user_id
+                    )
+                    .values_list("notification_group_id", flat=True)
+                    .distinct()
+                )
+                if not user_group_ids:
+                    queryset = queryset.filter(
+                        tenant__tenanted_users__user_id=user_id,
+                        tenant__tenanted_users__is_active=True,
+                        tenant__tenanted_users__user__is_active=True,
+                        rmm_asigned_id=user_id,
+                    )
+                else:
+                    queryset = queryset.filter(
+                        tenant__tenanted_users__user_id=user_id,
+                        tenant__tenanted_users__is_active=True,
+                        tenant__tenanted_users__user__is_active=True,
+                    ).filter(
+                        Q(rmm_asigned_id=user_id)
+                        |
+                        Q(
+                            retailer__location__notification_group_location__notification_group_id__in=user_group_ids,
+                            retailer__location__notification_group_location__notification_group__state=False,
+                        )
+                        | Q(
+                            distributor__location__notification_group_location__notification_group_id__in=user_group_ids,
+                            distributor__location__notification_group_location__notification_group__state=False,
+                        )
+                        | Q(
+                            retailer__location__state__notification_group_location__notification_group_id__in=user_group_ids,
+                            retailer__location__state__notification_group_location__notification_group__state=True,
+                        )
+                        | Q(
+                            distributor__location__state__notification_group_location__notification_group_id__in=user_group_ids,
+                            distributor__location__state__notification_group_location__notification_group__state=True,
+                        )
+                    )
             if filters.status_id:
                 status_id = _resolve_filter_id(filters.status_id, "status")
                 queryset = queryset.filter(status_id=status_id)
@@ -821,7 +935,7 @@ class RequestQueries:
             if filters.edited is not None:
                 queryset = queryset.filter(updated_by__isnull=not filters.edited)
 
-        queryset = queryset.order_by("-date")
+        queryset = queryset.order_by("-date").distinct()
 
         return await service.get_connection(
             tenant_id=resolved_tenant_id,

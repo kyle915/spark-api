@@ -3,6 +3,7 @@
 import asyncio
 import sys
 import secrets
+from decimal import Decimal
 from datetime import timedelta, datetime
 from typing import Any
 
@@ -40,6 +41,8 @@ from .models import (
     GroupType,
     AmbassadorGroup,
     UserGroup,
+    Attendance,
+    AttendanceType,
 )
 from jobs import models as job_models
 from .types import (
@@ -74,6 +77,40 @@ from . import inputs
 from .constants import INVITATION_EXPIRY_DAYS
 
 User = get_user_model()
+
+
+async def set_ambassador_job_real_amount_from_clock_out(attendance: Attendance) -> None:
+    """Set AmbassadorJob.real_amount to 25% of rate when attendance type is clock_out."""
+    if not attendance or not attendance.attendace_type_id:
+        return
+
+    attendance_type_slug = await sync_to_async(
+        lambda: AttendanceType.objects.filter(id=attendance.attendace_type_id)
+        .values_list("slug", flat=True)
+        .first()
+    )()
+    attendance_type_slug = (attendance_type_slug or "").strip().lower()
+    if attendance_type_slug != "clock_out":
+        return
+
+    if not attendance.ambassador_id or not attendance.job_id:
+        return
+
+    ambassador_job = await sync_to_async(
+        lambda: job_models.AmbassadorJob.objects.select_related("rate")
+        .filter(ambassador_id=attendance.ambassador_id, job_id=attendance.job_id)
+        .order_by("-created_at")
+        .first()
+    )()
+    if not ambassador_job or not ambassador_job.rate:
+        return
+
+    rate_amount = ambassador_job.rate.amount
+    if rate_amount is None:
+        return
+
+    ambassador_job.real_amount = rate_amount * Decimal("0.25")
+    await sync_to_async(ambassador_job.save)(update_fields=["real_amount", "updated_at"])
 
 
 def validate_passwords_match(

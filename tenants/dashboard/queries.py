@@ -12,6 +12,7 @@ All queries are optimized for performance using database-level aggregations.
 import strawberry
 import hashlib
 import json
+from datetime import date
 from asgiref.sync import sync_to_async
 from django.db.models import (
     Case, Count, Q, Sum, When, IntegerField
@@ -22,9 +23,13 @@ from django.db.models.functions import (
 from django.utils import timezone
 
 from utils.graphql.permissions import StrictIsAuthenticated
+from utils.graphql.validation import clamp_percentage
+from utils.graphql.mixins import resolve_id_to_int
 from . import types, inputs
 from .services import DashboardQueriesService
+from .goals_service import build_goals_progress, get_goals, get_current_values_for_user
 from events import models as event_models
+from tenants import models as tenant_models
 
 
 async def insights_model_to_graphql(insights_model) -> types.Insights:
@@ -63,6 +68,108 @@ async def insights_model_to_graphql(insights_model) -> types.Insights:
         totalFeedbackCount=insights_model.total_feedback_count,
         reports=reports_list,
         createdAt=insights_model.created_at.isoformat(),
+    )
+
+
+def _goal_progress_to_graphql(progress_items: list[dict]) -> list[types.GoalProgress]:
+    """Map service progress dicts to GraphQL GoalProgress types."""
+    return [
+        types.GoalProgress(
+            name=p["name"],
+            target=p["target"],
+            current=p["current"],
+            percentage_complete=p["percentage_complete"],
+        )
+        for p in progress_items
+    ]
+
+
+async def _resolve_goals_progress(
+    info, service, filters, start_date: date, end_date: date
+) -> list[types.GoalProgress] | None:
+    """
+    Resolve goals progress for a target user in the dashboard date range.
+
+    By default, the target user is the authenticated user. When an RMM filter
+    (rmm_asigned_id) is provided, and the requester has sufficient permissions
+    (client or spark-admin), the target user becomes the filtered RMM so that
+    the \"Goals Progress\" section matches the Event Dashboard RMM filter.
+
+    Returns list[GoalProgress] or None if tenant/year/goal cannot be determined
+    or if the requester is not allowed to view the target user's goals.
+    """
+    user = info.context.request.user
+    resolved_tenant_id = service._resolve_filter_tenant_id(filters)
+    if resolved_tenant_id is None:
+        resolved_tenant_id = await sync_to_async(
+            tenant_models.TenantedUser.objects.filter(
+                user=user, is_active=True
+            ).values_list("tenant_id", flat=True).first
+        )()
+    if resolved_tenant_id is None:
+        return None
+
+    # Determine which user's goals/current values to show.
+    # Default to the authenticated user; allow overriding via RMM filter for
+    # client/spark-admin users so that dashboard filters and goals progress
+    # stay aligned.
+    target_user_id = user.id
+    rmm_filter_id = getattr(filters, "rmm_asigned_id", None) if filters else None
+    if rmm_filter_id is not None:
+        try:
+            filtered_rmm_id = resolve_id_to_int(rmm_filter_id)
+        except (TypeError, ValueError):
+            filtered_rmm_id = None
+
+        if filtered_rmm_id is not None and filtered_rmm_id != user.id:
+            # Only allow clients or spark-admins to view other users' goals.
+            is_spark_admin = await user.role.is_spark_admin if getattr(user, "role", None) else False
+            is_client = await user.role.is_client if getattr(user, "role", None) else False
+            if is_spark_admin or is_client:
+                target_user_id = filtered_rmm_id
+
+    year = getattr(filters, "year", None) if filters else None
+    if year is None:
+        year = start_date.year
+
+    goal_model = await sync_to_async(get_goals)(resolved_tenant_id, target_user_id, year)
+    if goal_model is None:
+        return None
+
+    current_vals = await sync_to_async(get_current_values_for_user)(
+        resolved_tenant_id, target_user_id, start_date, end_date
+    )
+    progress_items = build_goals_progress(goal_model, current_vals)
+    return _goal_progress_to_graphql(progress_items) if progress_items else None
+
+
+def _goal_model_to_graphql(goal_model, current: dict | None = None) -> types.Goal:
+    """Build Goal GraphQL type from ORM Goal and optional current values dict."""
+    return types.Goal(
+        id=strawberry.ID(str(goal_model.id)),
+        uuid=str(goal_model.uuid),
+        tenant_id=strawberry.ID(str(goal_model.tenant_id)),
+        user=types.GoalUser(
+            id=strawberry.ID(str(goal_model.user.id)),
+            uuid=str(goal_model.user.uuid),
+            email=goal_model.user.email,
+            first_name=goal_model.user.first_name,
+            last_name=goal_model.user.last_name,
+        ),
+        user_id=strawberry.ID(str(goal_model.user_id)),
+        year=goal_model.year,
+        event_target_goal=goal_model.event_target_goal,
+        consumer_sampling_goal=goal_model.consumer_sampling_goal,
+        brand_awareness_goal=goal_model.brand_awareness_goal,
+        purchase_intent_goal=goal_model.purchase_intent_goal,
+        female_participation_goal=goal_model.female_participation_goal,
+        first_time_buyers_goal=goal_model.first_time_buyers_goal,
+        current_events_count=current.get("current_events_count") if current else None,
+        current_consumer_sampling=current.get("current_consumer_sampling") if current else None,
+        current_brand_awareness=current.get("current_brand_awareness") if current else None,
+        current_purchase_intent=current.get("current_purchase_intent") if current else None,
+        current_first_time_buyers=current.get("current_first_time_buyers") if current else None,
+        current_female_participation=current.get("current_female_participation") if current else None,
     )
 
 
@@ -241,12 +348,13 @@ class DashboardQueries:
             total_brand_aware = consumer_data['total_brand_aware'] or 0
             total_willing_to_purchase = consumer_data['total_willing_to_purchase'] or 0
 
-            # Calculate percentages
-            brand_awareness = (
+            # Calculate percentages (always clamp to 0-100)
+            brand_awareness = clamp_percentage(
                 (total_brand_aware / consumers_sampled * 100)
                 if consumers_sampled > 0 else 0.0
             )
-            purchase_intent = (
+
+            purchase_intent = clamp_percentage(
                 (total_willing_to_purchase / consumers_sampled * 100)
                 if consumers_sampled > 0 else 0.0
             )
@@ -301,11 +409,11 @@ class DashboardQueries:
                     prev_brand_aware = prev_consumer_data['total_brand_aware'] or 0
                     prev_willing = prev_consumer_data['total_willing_to_purchase'] or 0
 
-                    prev_brand_awareness = (
+                    prev_brand_awareness = clamp_percentage(
                         (prev_brand_aware / prev_consumers * 100)
                         if prev_consumers > 0 else 0.0
                     )
-                    prev_purchase_intent = (
+                    prev_purchase_intent = clamp_percentage(
                         (prev_willing / prev_consumers * 100)
                         if prev_consumers > 0 else 0.0
                     )
@@ -356,7 +464,7 @@ class DashboardQueries:
 
                 consumers = item['consumers_sampled'] or 0
                 willing = item['willing_to_purchase'] or 0
-                conversion_rate = (
+                conversion_rate = clamp_percentage(
                     (willing / consumers * 100) if consumers > 0 else 0.0
                 )
 
@@ -537,12 +645,17 @@ class DashboardQueries:
                 by_rmm=global_kpis_by_rmm
             )
 
+            goals_progress = await _resolve_goals_progress(
+                info, service, filters, start_date, end_date
+            )
+
             return types.EventDashboard(
                 metrics=metrics,
                 global_kpis=global_kpis,
                 monthly_trends=monthly_trends,
                 performance_insights=performance_insights,
-                recent_events=recent_events if recent_events else None
+                recent_events=recent_events if recent_events else None,
+                goals_progress=goals_progress,
             )
 
         # Generate cache key with Event Dashboard filter extraction
@@ -747,7 +860,7 @@ class DashboardQueries:
             total_purchases = total_purchases_data['total'] or 0
 
             # Conversion Rate
-            conversion_rate = (
+            conversion_rate = clamp_percentage(
                 (total_willing / total_consumers_sampled * 100)
                 if total_consumers_sampled > 0 else 0.0
             )
@@ -819,7 +932,7 @@ class DashboardQueries:
                     )()
                     prev_revenue = prev_revenue_data['total'] or 0.0
 
-                    prev_conversion_rate = (
+                    prev_conversion_rate = clamp_percentage(
                         (prev_total_willing / prev_total_consumers * 100)
                         if prev_total_consumers > 0 else 0.0
                     )
@@ -865,7 +978,7 @@ class DashboardQueries:
                     '%Y-%m') if item['month'] else ''
                 consumers_month = item['consumers'] or 0
                 willing_month = item['willing'] or 0
-                conversion_month = (
+                conversion_month = clamp_percentage(
                     (willing_month / consumers_month * 100)
                     if consumers_month > 0 else 0.0
                 )
@@ -885,34 +998,163 @@ class DashboardQueries:
                 data_points=monthly_points
             )
 
+            # Market Analysis (grouped by retailer) - run before performance_insights
+            # so we can derive top_converting_market, highest_willingness_to_buy, strongest_brand_awareness
+            market_data_recap = await sync_to_async(list)(
+                base_queryset.select_related('retailer')
+                .filter(retailer__isnull=False)
+                .values('retailer_id', 'retailer__name')
+                .annotate(
+                    consumers=Sum(
+                        'consumer_engagements__total_consumer', default=0),
+                    purchases=Sum('products_sold', default=0),
+                    demos=Sum('total_engagements', default=0),
+                    willing=Sum(
+                        'consumer_engagements__willing_to_purchase_consumers', default=0),
+                    brand_aware=Sum(
+                        'consumer_engagements__brand_aware_consumers', default=0)
+                )
+            )
+
+            market_data_event = await sync_to_async(list)(
+                base_queryset.select_related('event__request__retailer')
+                .filter(
+                    retailer__isnull=True,
+                    event__request__retailer__isnull=False
+                )
+                .values('event__request__retailer_id', 'event__request__retailer__name')
+                .annotate(
+                    consumers=Sum(
+                        'consumer_engagements__total_consumer', default=0),
+                    purchases=Sum('products_sold', default=0),
+                    demos=Sum('total_engagements', default=0),
+                    willing=Sum(
+                        'consumer_engagements__willing_to_purchase_consumers', default=0),
+                    brand_aware=Sum(
+                        'consumer_engagements__brand_aware_consumers', default=0)
+                )
+            )
+
+            market_dict = {}
+            for item in market_data_recap:
+                r_id = item['retailer_id']
+                if r_id not in market_dict:
+                    market_dict[r_id] = {
+                        'market_id': r_id,
+                        'market_name': item['retailer__name'],
+                        'consumers': 0,
+                        'purchases': 0,
+                        'demos': 0,
+                        'willing': 0,
+                        'brand_aware': 0
+                    }
+                market_dict[r_id]['consumers'] += item['consumers'] or 0
+                market_dict[r_id]['purchases'] += item['purchases'] or 0
+                market_dict[r_id]['demos'] += item['demos'] or 0
+                market_dict[r_id]['willing'] += item['willing'] or 0
+                market_dict[r_id]['brand_aware'] += item['brand_aware'] or 0
+
+            for item in market_data_event:
+                r_id = item['event__request__retailer_id']
+                if r_id not in market_dict:
+                    market_dict[r_id] = {
+                        'market_id': r_id,
+                        'market_name': item['event__request__retailer__name'],
+                        'consumers': 0,
+                        'purchases': 0,
+                        'demos': 0,
+                        'willing': 0,
+                        'brand_aware': 0
+                    }
+                market_dict[r_id]['consumers'] += item['consumers'] or 0
+                market_dict[r_id]['purchases'] += item['purchases'] or 0
+                market_dict[r_id]['demos'] += item['demos'] or 0
+                market_dict[r_id]['willing'] += item['willing'] or 0
+                market_dict[r_id]['brand_aware'] += item['brand_aware'] or 0
+
+            market_points = []
+            for market in market_dict.values():
+                market_consumers = market['consumers']
+                market_willing = market['willing']
+                market_conversion = clamp_percentage(
+                    (market_willing / market_consumers * 100)
+                    if market_consumers > 0 else 0.0
+                )
+                market_efficiency = clamp_percentage(
+                    (market['purchases'] / market_consumers * 100)
+                    if market_consumers > 0 else 0.0
+                )
+                market_points.append(
+                    types.MarketPerformanceData(
+                        market_id=str(market['market_id']),
+                        market_name=market['market_name'] or '',
+                        consumers=market_consumers,
+                        purchases=market['purchases'],
+                        conversion=round(market_conversion, 1),
+                        demos=market['demos'],
+                        efficiency=round(market_efficiency, 1)
+                    )
+                )
+
             # Performance Insights
             new_customers = consumers_data['total_first_time'] or 0
-            new_customers_percentage = (
+            new_customers_percentage = clamp_percentage(
                 (new_customers / total_consumers_sampled * 100)
                 if total_consumers_sampled > 0 else 0.0
             )
 
             brand_awareness = consumers_data['total_brand_aware'] or 0
-            brand_awareness_percentage = (
+            brand_awareness_percentage = clamp_percentage(
                 (brand_awareness / total_consumers_sampled * 100)
                 if total_consumers_sampled > 0 else 0.0
             )
 
-            willing_to_purchase_percentage = (
+            willing_to_purchase_percentage = clamp_percentage(
                 (total_willing / total_consumers_sampled * 100)
                 if total_consumers_sampled > 0 else 0.0
             )
 
-            # Best Month
+            # Best Month (most active = month with most recaps)
             best_month = None
             if monthly_points:
                 best_point = max(
-                    monthly_points, key=lambda x: x.consumers_sampled)
+                    monthly_points, key=lambda x: x.recaps_count)
                 best_month = types.BestRecapMonth(
                     month=best_point.month,
                     recaps_count=best_point.recaps_count,
                     consumers_count=best_point.consumers_sampled
                 )
+
+            # Derive performance insight cards from market data (no extra queries)
+            top_converting_market = None
+            if market_points:
+                top = max(market_points, key=lambda x: x.conversion)
+                top_converting_market = types.TopConvertingMarket(
+                    market_name=top.market_name,
+                    conversion_rate=top.conversion
+                )
+            highest_willingness_to_buy = None
+            if market_dict:
+                best_willing = max(
+                    market_dict.values(),
+                    key=lambda m: m['willing']
+                )
+                if best_willing['willing'] > 0:
+                    highest_willingness_to_buy = types.MarketWithWillingness(
+                        market_name=best_willing['market_name'] or '',
+                        willing_count=best_willing['willing']
+                    )
+            strongest_brand_awareness = None
+            if market_dict:
+                best_aware = max(
+                    market_dict.values(),
+                    key=lambda m: m['brand_aware']
+                )
+                if best_aware['brand_aware'] > 0:
+                    strongest_brand_awareness = types.MarketWithBrandAwareness(
+                        market_name=best_aware['market_name'] or '',
+                        brand_aware_count=best_aware['brand_aware']
+                    )
 
             # Growth Rate (recaps vs last year)
             growth_rate = 0.0
@@ -960,103 +1202,13 @@ class DashboardQueries:
                 willing_to_purchase_percentage=round(
                     willing_to_purchase_percentage, 1),
                 best_month=best_month,
-                growth_rate=round(growth_rate, 1)
+                growth_rate=round(growth_rate, 1),
+                top_converting_market=top_converting_market,
+                highest_willingness_to_buy=highest_willingness_to_buy,
+                strongest_brand_awareness=strongest_brand_awareness
             )
 
-            # Market Analysis (grouped by retailer)
-            # Get retailers from recap.retailer
-            market_data_recap = await sync_to_async(list)(
-                base_queryset.select_related('retailer')
-                .filter(retailer__isnull=False)
-                .values('retailer_id', 'retailer__name')
-                .annotate(
-                    consumers=Sum(
-                        'consumer_engagements__total_consumer', default=0),
-                    purchases=Sum('products_sold', default=0),
-                    demos=Sum('total_engagements', default=0),
-                    willing=Sum(
-                        'consumer_engagements__willing_to_purchase_consumers', default=0)
-                )
-            )
-
-            # Get retailers from event.request.retailer (where recap.retailer is null)
-            market_data_event = await sync_to_async(list)(
-                base_queryset.select_related('event__request__retailer')
-                .filter(
-                    retailer__isnull=True,
-                    event__request__retailer__isnull=False
-                )
-                .values('event__request__retailer_id', 'event__request__retailer__name')
-                .annotate(
-                    consumers=Sum(
-                        'consumer_engagements__total_consumer', default=0),
-                    purchases=Sum('products_sold', default=0),
-                    demos=Sum('total_engagements', default=0),
-                    willing=Sum(
-                        'consumer_engagements__willing_to_purchase_consumers', default=0)
-                )
-            )
-
-            # Combine and aggregate by retailer
-            market_dict = {}
-            for item in market_data_recap:
-                r_id = item['retailer_id']
-                if r_id not in market_dict:
-                    market_dict[r_id] = {
-                        'market_id': r_id,
-                        'market_name': item['retailer__name'],
-                        'consumers': 0,
-                        'purchases': 0,
-                        'demos': 0,
-                        'willing': 0
-                    }
-                market_dict[r_id]['consumers'] += item['consumers'] or 0
-                market_dict[r_id]['purchases'] += item['purchases'] or 0
-                market_dict[r_id]['demos'] += item['demos'] or 0
-                market_dict[r_id]['willing'] += item['willing'] or 0
-
-            for item in market_data_event:
-                r_id = item['event__request__retailer_id']
-                if r_id not in market_dict:
-                    market_dict[r_id] = {
-                        'market_id': r_id,
-                        'market_name': item['event__request__retailer__name'],
-                        'consumers': 0,
-                        'purchases': 0,
-                        'demos': 0,
-                        'willing': 0
-                    }
-                market_dict[r_id]['consumers'] += item['consumers'] or 0
-                market_dict[r_id]['purchases'] += item['purchases'] or 0
-                market_dict[r_id]['demos'] += item['demos'] or 0
-                market_dict[r_id]['willing'] += item['willing'] or 0
-
-            market_points = []
-            for market in market_dict.values():
-                market_consumers = market['consumers']
-                market_willing = market['willing']
-                market_conversion = (
-                    (market_willing / market_consumers * 100)
-                    if market_consumers > 0 else 0.0
-                )
-                # Efficiency: purchases / consumers * 100
-                market_efficiency = (
-                    (market['purchases'] / market_consumers * 100)
-                    if market_consumers > 0 else 0.0
-                )
-
-                market_points.append(
-                    types.MarketPerformanceData(
-                        market_id=str(market['market_id']),
-                        market_name=market['market_name'] or '',
-                        consumers=market_consumers,
-                        purchases=market['purchases'],
-                        conversion=round(market_conversion, 1),
-                        demos=market['demos'],
-                        efficiency=round(market_efficiency, 1)
-                    )
-                )
-
+            # Reuse market_points for market_analysis (already computed above)
             # Sort by consumers descending
             market_points.sort(key=lambda x: x.consumers, reverse=True)
 
@@ -1203,3 +1355,111 @@ class DashboardQueries:
             return await insights_model_to_graphql(latest_insights)
 
         return await _execute_query()
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def goals(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID,
+        year: int,
+        user_id: strawberry.ID | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        quarter: str | None = None,
+    ) -> types.Goal | None:
+        """Get goals for a user for the given tenant and year. Optionally include current values if start_date/end_date or quarter is provided."""
+        from tenants import models as tenant_models
+        from utils.graphql.validation import parse_iso_date_optional
+
+        user = info.context.request.user
+        target_user_id = user.id
+        if user_id is not None:
+            try:
+                target_user_id = resolve_id_to_int(user_id)
+            except (TypeError, ValueError):
+                return None
+
+        try:
+            resolved_tenant_id = resolve_id_to_int(tenant_id)
+        except (TypeError, ValueError):
+            return None
+
+        # Ensure user has access to the tenant
+        has_access = await sync_to_async(
+            tenant_models.TenantedUser.objects.filter(
+                user=user,
+                tenant_id=resolved_tenant_id,
+                is_active=True,
+            ).exists
+        )()
+        if not has_access:
+            return None
+
+        # Only allow fetching own goals unless same user
+        if target_user_id != user.id:
+            return None
+
+        goal_model = await sync_to_async(get_goals)(resolved_tenant_id, target_user_id, year)
+        if goal_model is None:
+            return None
+
+        start_d: date | None = None
+        end_d: date | None = None
+        if quarter:
+            service = DashboardQueriesService()
+            try:
+                start_d, end_d = service._parse_quarter(quarter)
+            except ValueError:
+                pass
+        if start_d is None and start_date is not None:
+            start_d = parse_iso_date_optional(start_date, "startDate")
+        if end_d is None and end_date is not None:
+            end_d = parse_iso_date_optional(end_date, "endDate")
+
+        current: dict | None = None
+        if start_d is not None and end_d is not None:
+            current = await sync_to_async(get_current_values_for_user)(
+                resolved_tenant_id, target_user_id, start_d, end_d
+            )
+
+        return _goal_model_to_graphql(goal_model, current)
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def goals_list(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID,
+        year: int | None = None,
+        user_id: strawberry.ID | None = None,
+    ) -> list[types.Goal]:
+        """
+        List goals for a tenant.
+
+        - if userId is provided, returns goals for that user
+        - if userId is not provided, returns all goals for the tenant
+        """
+        from tenants import models as tenant_models
+
+        try:
+            resolved_tenant_id = resolve_id_to_int(tenant_id)
+        except (TypeError, ValueError):
+            return []
+
+        target_user_id: int | None = None
+        if user_id is not None:
+            try:
+                target_user_id = resolve_id_to_int(user_id)
+            except (TypeError, ValueError):
+                return []
+
+        queryset = tenant_models.Goal.objects.filter(
+            tenant_id=resolved_tenant_id
+        ).select_related("user")
+        if year is not None:
+            queryset = queryset.filter(year=year)
+
+        if target_user_id is not None:
+            queryset = queryset.filter(user_id=target_user_id)
+
+        goal_models = await sync_to_async(list)(queryset.order_by("-year", "user_id"))
+        return [_goal_model_to_graphql(goal_model, current=None) for goal_model in goal_models]

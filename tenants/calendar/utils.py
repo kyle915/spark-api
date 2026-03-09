@@ -2,6 +2,7 @@
 Utility classes and helper functions for Google Calendar OAuth operations.
 """
 import secrets
+import logging
 from typing import Optional, Tuple
 from django.conf import settings
 from django.core.cache import cache
@@ -21,6 +22,7 @@ from .constants import (
 
 class GoogleCalendarOAuthHelper:
     """Helper class for Google Calendar OAuth operations."""
+    logger = logging.getLogger(__name__)
 
     @staticmethod
     def create_oauth_flow(client_origin: str) -> Flow:
@@ -31,7 +33,7 @@ class GoogleCalendarOAuthHelper:
             Configured OAuth Flow instance
         """
         redirect_uri = f"{client_origin}/auth/google-calendar/callback"
-        print(f"Redirect URI: {redirect_uri}")
+        GoogleCalendarOAuthHelper.logger.debug("Google OAuth redirect URI: %s", redirect_uri)
         flow = Flow.from_client_config(
             {
                 "web": {
