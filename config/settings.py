@@ -237,13 +237,15 @@ RQ = {
 
 MAIL_DRIVER = env("MAIL_DRIVER", default="mailpit")  # mailpit, resend
 RESEND_API_KEY = env("RESEND_API_KEY", default="")
-DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL",
-                         default="Spark <onboarding@resend.dev>")
+DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="Spark <onboarding@resend.dev>")
 REQUEST_REVIEW_COPY_EMAILS = env.list("REQUEST_REVIEW_COPY_EMAILS", default=[])
+REQUEST_REVIEW_COPY_DELAY_SECONDS = env.float(
+    "REQUEST_REVIEW_COPY_DELAY_SECONDS",
+    default=2.0,
+)
 
 
-CLIENT_FRONTEND_URL = env("CLIENT_FRONTEND_URL",
-                          default="http://localhost:3000")
+CLIENT_FRONTEND_URL = env("CLIENT_FRONTEND_URL", default="http://localhost:3000")
 AMBASSADOR_FRONTEND_URL = env(
     "AMBASSADOR_FRONTEND_URL", default="http://localhost:3000"
 )
@@ -262,48 +264,48 @@ EMAIL_LOGO_URL = env(
 GEMINI_API_KEY = env("GEMINI_API_KEY", default="")
 
 LOGGING = {
-    'version': 1,
-    'disable_existing_loggers': False,
-    'formatters': {
-        'verbose': {
-            'format': '{levelname} {asctime} {module} {process:d} {thread:d} {message}',
-            'style': '{',
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "verbose": {
+            "format": "{levelname} {asctime} {module} {process:d} {thread:d} {message}",
+            "style": "{",
         },
-        'simple': {
-            'format': '{levelname} {message}',
-            'style': '{',
-        },
-    },
-    'handlers': {
-        'console': {
-            'class': 'logging.StreamHandler',
-            'formatter': 'verbose',
+        "simple": {
+            "format": "{levelname} {message}",
+            "style": "{",
         },
     },
-    'root': {
-        'handlers': ['console'],
-        'level': 'INFO',
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "verbose",
+        },
     },
-    'loggers': {
-        'django': {
-            'handlers': ['console'],
-            'level': 'INFO',
-            'propagate': False,
+    "root": {
+        "handlers": ["console"],
+        "level": "INFO",
+    },
+    "loggers": {
+        "django": {
+            "handlers": ["console"],
+            "level": "INFO",
+            "propagate": False,
         },
-        'events': {
-            'handlers': ['console'],
-            'level': 'INFO',
-            'propagate': False,
+        "events": {
+            "handlers": ["console"],
+            "level": "INFO",
+            "propagate": False,
         },
-        'tenants': {
-            'handlers': ['console'],
-            'level': 'INFO',
-            'propagate': False,
+        "tenants": {
+            "handlers": ["console"],
+            "level": "INFO",
+            "propagate": False,
         },
-        'rq.worker': {
-            'handlers': ['console'],
-            'level': 'INFO',
-            'propagate': False,
+        "rq.worker": {
+            "handlers": ["console"],
+            "level": "INFO",
+            "propagate": False,
         },
     },
 }
