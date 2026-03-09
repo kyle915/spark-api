@@ -16,6 +16,7 @@ class RoleType(Node):
 class TenantType(Node):
     uuid: strawberry.auto
     name: strawberry.auto
+    slug: strawberry.auto
     request_url_name: strawberry.auto
 
     @strawberry.field

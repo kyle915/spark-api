@@ -244,6 +244,7 @@ class CreateRetailerInput(BaseNameableInput):
     address: str
     store_contact: str
     location_id: strawberry.ID
+    is_national: bool = False
 
 
 @strawberry.input
