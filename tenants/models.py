@@ -17,6 +17,7 @@ class Tenant(Asyncable, models.Model):
     name = models.CharField(max_length=100)
     image = models.ImageField(upload_to="tenants/images", null=True)
     request_url_name = models.CharField(max_length=100, unique=True, null=True)
+    slug = models.SlugField(max_length=50, null=True)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
@@ -470,9 +471,7 @@ class Goal(models.Model):
 
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
-    tenant = models.ForeignKey(
-        Tenant, on_delete=models.RESTRICT, related_name="goals"
-    )
+    tenant = models.ForeignKey(Tenant, on_delete=models.RESTRICT, related_name="goals")
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,

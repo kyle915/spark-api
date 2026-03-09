@@ -805,6 +805,7 @@ class RequestQueriesService(BaseEventQueriesService):
         return (
             self.get_model()
             .objects.select_related(
+                "tenant",
                 "timezone",
                 "distributor__location__state",
                 "retailer__location__state",
@@ -816,6 +817,7 @@ class RequestQueriesService(BaseEventQueriesService):
                 "requests_stores_manager",
                 "request_product__product",
                 "event_set",
+                "event_set__tenant",
             )
         )
 
