@@ -31,7 +31,6 @@ from .envelopes import (
     RequestorRequestDeclinedMailer,
     RequestCreatedNotificationMailer,
     RequestorRequestCreatedMailer,
-    RequestorRequestAutoApprovedMailer,
 )
 from utils.gcs import (
     delete_blob,
@@ -1762,6 +1761,8 @@ class RequestWithDependenciesMutationService(BaseMutationService):
                         "Approval status not found. Please ensure you have a status with slug 'approved'."
                     )
                 request.status = approval_status
+                if self.user:
+                    request.approved_by = self.user
             else:
                 pending_status = models.RequestStatus.objects.get_by_slug(
                     slug="pending", tenant=request.tenant_id
@@ -2080,12 +2081,14 @@ async def _notify_requestor_for_request_auto_approved(
     if not requestor_email:
         return
 
-    mailer = RequestorRequestAutoApprovedMailer(
+    request.requestor_email = requestor_email
+
+    # Auto-approved requests should notify with the same approval email flow.
+    await _notify_requestor_for_request_approved(
         request=request,
         location=location,
-        to_emails=[requestor_email],
+        delay_seconds=delay_seconds,
     )
-    await sync_to_async(mailer.send)(delay_seconds=delay_seconds)
 
 
 @strawberry.type
