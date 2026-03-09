@@ -47,6 +47,7 @@ class EventStatusFilterEnum(str, Enum):
 @strawberry.input
 class EventFiltersInput(BaseTenantInput):
     tenant_uuid: strawberry.ID | None = None
+    rmm_asigned: strawberry.ID | None = None
     event_type_id: strawberry.ID | None = None
     event_status: EventStatusFilterEnum | None = None
     request_id: strawberry.ID | None = None
@@ -70,6 +71,7 @@ class AmbassadorEventFiltersInput:
 @strawberry.input
 class RequestFiltersInput(BaseTenantInput):
     tenant_uuid: strawberry.ID | None = None
+    rmm_asigned: strawberry.ID | None = None
     status_id: strawberry.ID | None = None
     client_id: strawberry.ID | None = None
     retailer_id: strawberry.ID | None = None
@@ -242,6 +244,7 @@ class CreateRetailerInput(BaseNameableInput):
     address: str
     store_contact: str
     location_id: strawberry.ID
+    is_national: bool = False
 
 
 @strawberry.input

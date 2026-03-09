@@ -134,6 +134,7 @@ class Recap(Node):
     uuid: str
     name: str
     approved: bool
+    filling_for_ambassador: bool
     event: event_types.Event
     event_id: strawberry.ID
     job_id: strawberry.ID | None

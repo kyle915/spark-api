@@ -27,6 +27,10 @@ class EventDashboardFiltersInput(BaseTenantInput):
 
     # Distributor filter
     distributor_id: strawberry.ID | None = None
+    distributor_ids: list[strawberry.ID] | None = None
+
+    # Optional year for goals progress (e.g. 2025); when not set, year is derived from dashboard date range
+    year: int | None = None
 
 
 @strawberry.input
@@ -48,3 +52,18 @@ class RecapDashboardFiltersInput(BaseTenantInput):
 
     # Distributor filter
     distributor_id: strawberry.ID | None = None
+    distributor_ids: list[strawberry.ID] | None = None
+
+
+@strawberry.input
+class SetGoalsInput(BaseTenantInput):
+    """Input to create or update goals for a user for a given tenant and year."""
+
+    user_id: strawberry.ID | None = None
+    year: int
+    event_target_goal: int | None = None
+    consumer_sampling_goal: int | None = None
+    brand_awareness_goal: float | None = None
+    purchase_intent_goal: float | None = None
+    female_participation_goal: float | None = None
+    first_time_buyers_goal: int | None = None

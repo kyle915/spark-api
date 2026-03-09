@@ -32,7 +32,6 @@ The Event Dashboard API is available on the following GraphQL endpoints:
 
 ---
 
-
 ---
 
 ## Overview
@@ -61,14 +60,17 @@ Both dashboards share these features:
 - **Monthly Trends**: Shows monthly performance trends with conversion rates
 
 **Event Dashboard Specific:**
+
 - **Recent Events**: Displays upcoming events with consumer engagement data
 
 **Recap Dashboard Specific:**
+
 - **Sales Metrics**: Tracks purchases, revenue, and conversion rates
 - **Market Analysis**: Groups performance by retailer/market with efficiency metrics
 - **RMM Performance**: Shows retailer performance with consumers, demos, and conversion rates
 
 All queries:
+
 - Require authentication (`StrictIsAuthenticated`)
 - Show all data by default (admin dashboard)
 - Support optional filters for tenant, quarter, date range, distributor, and retailer/RMM
@@ -87,6 +89,7 @@ Get available filter options for the Event Dashboard. This query returns all ava
 **Available for**: Clients, Spark Admin
 
 **GraphQL Query:**
+
 ```graphql
 query {
   eventDashboardFilterOptions {
@@ -112,9 +115,11 @@ query {
 ```
 
 **Parameters:**
+
 - None (no parameters required)
 
 **Response Fields:**
+
 - `distributors` (List[DistributorOption], optional): Available distributors from events with recaps
   - `id` (ID): Distributor ID
   - `name` (str): Distributor name
@@ -140,6 +145,7 @@ Get comprehensive Event Dashboard data including key metrics, monthly trends, pe
 **Available for**: Clients, Spark Admin
 
 **GraphQL Query:**
+
 ```graphql
 query {
   eventDashboard(
@@ -198,11 +204,13 @@ query {
 ```
 
 **Parameters:**
+
 - `filters` (EventDashboardFiltersInput, optional): Filter options (see [Filtering](#filtering))
 
 **Response Fields:**
 
 #### Metrics (EventDashboardMetrics)
+
 - `totalEvents` (int): Total number of events in the selected period
 - `consumersSampled` (int): Total consumers sampled (sum of `total_consumer` from ConsumerEngagements)
 - `brandAwareness` (float): Brand awareness percentage (0-100) - percentage of consumers who knew about the brand
@@ -215,6 +223,7 @@ query {
   - `purchaseIntent` (float): Purchase intent in comparison period
 
 #### Monthly Trends (MonthlyPerformanceTrend)
+
 - `dataPoints` (List[MonthlyDataPoint]): Monthly performance data points
   - `month` (str): Month string (e.g., "2025-01")
   - `consumersSampled` (int): Total consumers sampled in this month
@@ -223,6 +232,7 @@ query {
   - `eventsCount` (int): Number of events in this month
 
 #### Performance Insights (PerformanceInsights)
+
 - `knewAboutBrand` (int): Total consumers who knew about the brand
 - `knewAboutBrandPercentage` (float): Percentage of consumers who knew about the brand (0-100)
 - `willingToPurchase` (int): Total consumers willing to purchase
@@ -234,6 +244,7 @@ query {
 - `growthRate` (float): Growth rate percentage - events growth vs same quarter last year (can be negative)
 
 #### Recent Events (List[RecentEvent], optional)
+
 - `id` (ID): Event ID
 - `name` (str): Event name
 - `date` (str): Event date (ISO date string)
@@ -243,6 +254,7 @@ query {
 - `status` (str): Event status (e.g., "Upcoming", "Completed")
 
 **Default Behavior:**
+
 - If no filters are provided, defaults to **current quarter** for all tenants
 - Shows **all data across all tenants** by default (admin dashboard)
 - Only filters by tenant if `tenantId` is explicitly provided in filters
@@ -258,6 +270,7 @@ Get available filter options for the Recap Dashboard. This query returns all ava
 **Available for**: Clients, Spark Admin
 
 **GraphQL Query:**
+
 ```graphql
 query {
   recapDashboardFilterOptions {
@@ -283,9 +296,11 @@ query {
 ```
 
 **Parameters:**
+
 - None (no parameters required)
 
 **Response Fields:**
+
 - `distributors` (List[DistributorOption], optional): Available distributors from recaps
   - `id` (ID): Distributor ID
   - `name` (str): Distributor name
@@ -311,6 +326,7 @@ Get comprehensive Recap Dashboard data including key metrics, monthly trends, pe
 **Available for**: Clients, Spark Admin
 
 **GraphQL Query:**
+
 ```graphql
 query {
   recapDashboard(
@@ -357,6 +373,18 @@ query {
         consumersCount
       }
       growthRate
+      topConvertingMarket {
+        marketName
+        conversionRate
+      }
+      highestWillingnessToBuy {
+        marketName
+        willingCount
+      }
+      strongestBrandAwareness {
+        marketName
+        brandAwareCount
+      }
     }
     marketAnalysis {
       dataPoints {
@@ -383,11 +411,13 @@ query {
 ```
 
 **Parameters:**
+
 - `filters` (RecapDashboardFiltersInput, optional): Filter options (see [Filtering](#filtering))
 
 **Response Fields:**
 
 #### Metrics (RecapDashboardMetrics)
+
 - `totalConsumersSampled` (int): Total consumers sampled (sum of `total_consumer` from ConsumerEngagements)
 - `totalPurchases` (int): Total purchases (sum of `products_sold` from Recap)
 - `conversionRate` (float): Conversion rate percentage (0-100) - willing to purchase / total consumers
@@ -400,6 +430,7 @@ query {
   - `revenueGenerated` (float): Revenue in comparison period
 
 #### Monthly Trends (RecapMonthlyTrends)
+
 - `dataPoints` (List[RecapMonthlyDataPoint]): Monthly performance data points
   - `month` (str): Month string (e.g., "2025-01")
   - `consumersSampled` (int): Total consumers sampled in this month
@@ -409,19 +440,30 @@ query {
   - `recapsCount` (int): Number of recaps in this month
 
 #### Performance Insights (RecapPerformanceInsights)
+
 - `newCustomersSampled` (int): Total first-time consumers sampled
 - `newCustomersPercentage` (float): Percentage of first-time consumers (0-100)
 - `brandAwareness` (int): Total consumers who knew about the brand
 - `brandAwarenessPercentage` (float): Percentage of consumers who knew about the brand (0-100)
 - `willingToPurchase` (int): Total consumers willing to purchase
 - `willingToPurchasePercentage` (float): Percentage of consumers willing to purchase (0-100)
-- `bestMonth` (BestRecapMonth, optional): Best performing month based on consumers sampled
+- `bestMonth` (BestRecapMonth, optional): Most active month (month with the highest number of recaps)
   - `month` (str): Month string (e.g., "2025-06")
-  - `recapsCount` (int): Number of recaps in best month
-  - `consumersCount` (int): Consumers sampled in best month
+  - `recapsCount` (int): Number of recaps in that month
+  - `consumersCount` (int): Consumers sampled in that month
 - `growthRate` (float): Growth rate percentage - recaps growth vs same quarter last year (can be negative)
+- `topConvertingMarket` (TopConvertingMarket, optional): Market/retailer with the highest conversion rate (first by conversion descending)
+  - `marketName` (str): Retailer name
+  - `conversionRate` (float): Conversion rate percentage (0-100+)
+- `highestWillingnessToBuy` (MarketWithWillingness, optional): Market/retailer with the highest count of willing-to-purchase consumers
+  - `marketName` (str): Retailer name
+  - `willingCount` (int): Number of consumers willing to purchase
+- `strongestBrandAwareness` (MarketWithBrandAwareness, optional): Market/retailer with the highest count of brand-aware consumers
+  - `marketName` (str): Retailer name
+  - `brandAwareCount` (int): Number of brand-aware consumers
 
 #### Market Analysis (MarketPerformanceAnalysis)
+
 - `dataPoints` (List[MarketPerformanceData]): Market performance data points grouped by retailer
   - `marketId` (ID): Retailer ID
   - `marketName` (str): Retailer name
@@ -429,9 +471,10 @@ query {
   - `purchases` (int): Total purchases in this market
   - `conversion` (float): Conversion rate percentage (0-100)
   - `demos` (int): Total demos/engagements in this market
-  - `efficiency` (float): Market efficiency percentage (0-100) - purchases / consumers * 100
+  - `efficiency` (float): Market efficiency percentage (0-100) - purchases / consumers \* 100
 
 #### RMM Performance (RMMPerformance)
+
 - `dataPoints` (List[RMMPerformanceData]): RMM performance data points grouped by retailer
   - `rmmId` (ID): Retailer ID
   - `rmmName` (str): Retailer name
@@ -440,6 +483,7 @@ query {
   - `conversionRate` (float): Conversion rate percentage (0-100)
 
 **Default Behavior:**
+
 - If no filters are provided, defaults to **current quarter** for all tenants
 - Shows **all data across all tenants** by default (admin dashboard)
 - Only filters by tenant if `tenantId` is explicitly provided in filters
@@ -456,23 +500,21 @@ The Event Dashboard query accepts an optional `filters` parameter of type `Event
 input EventDashboardFiltersInput {
   # Tenant filter (optional - admin dashboard shows all by default)
   tenantId: ID
-  
+
   # Date range filters
-  startDate: String  # ISO date string (YYYY-MM-DD)
-  endDate: String    # ISO date string (YYYY-MM-DD)
-  
+  startDate: String # ISO date string (YYYY-MM-DD)
+  endDate: String # ISO date string (YYYY-MM-DD)
   # Quarter filter (takes precedence over startDate/endDate if provided)
-  quarter: String    # Quarter string like "Q1 2025"
-  
+  quarter: String # Quarter string like "Q1 2025"
   # RMM filter (RMM = Retailer)
-  rmmId: ID          # Retailer ID
-  
+  rmmId: ID # Retailer ID
   # Distributor filter
   distributorId: ID
 }
 ```
 
 **Filter Priority:**
+
 1. If `quarter` is provided, it takes precedence over `startDate`/`endDate`
 2. If only `startDate`/`endDate` are provided, they are used
 3. If neither is provided, defaults to **current quarter**
@@ -487,23 +529,21 @@ The Recap Dashboard query accepts an optional `filters` parameter of type `Recap
 input RecapDashboardFiltersInput {
   # Tenant filter (optional - admin dashboard shows all by default)
   tenantId: ID
-  
+
   # Date range filters
-  startDate: String  # ISO date string (YYYY-MM-DD)
-  endDate: String    # ISO date string (YYYY-MM-DD)
-  
+  startDate: String # ISO date string (YYYY-MM-DD)
+  endDate: String # ISO date string (YYYY-MM-DD)
   # Quarter filter (takes precedence over startDate/endDate if provided)
-  quarter: String    # Quarter string like "Q1 2025"
-  
+  quarter: String # Quarter string like "Q1 2025"
   # RMM filter (RMM = Retailer)
-  rmmId: ID          # Retailer ID
-  
+  rmmId: ID # Retailer ID
   # Distributor filter
   distributorId: ID
 }
 ```
 
 **Filter Priority:**
+
 1. If `quarter` is provided, it takes precedence over `startDate`/`endDate`
 2. If only `startDate`/`endDate` are provided, they are used
 3. If neither is provided, defaults to **current quarter**
@@ -519,7 +559,7 @@ input RecapDashboardFiltersInput {
 ```graphql
 type EventDashboardFilterOptions {
   distributors: [DistributorOption!]
-  rmms: [RetailerOption!]  # RMM = Retailer
+  rmms: [RetailerOption!] # RMM = Retailer
   quarters: [QuarterOption!]
   tenants: [TenantOption!]
 }
@@ -536,7 +576,7 @@ type RetailerOption {
 }
 
 type QuarterOption {
-  value: String!  # e.g., "Q1 2025"
+  value: String! # e.g., "Q1 2025"
   label: String! # e.g., "Q1 2025"
 }
 
@@ -559,9 +599,9 @@ type EventDashboard {
 type EventDashboardMetrics {
   totalEvents: Int!
   consumersSampled: Int!
-  brandAwareness: Float!  # Percentage (0-100)
-  purchaseIntent: Float!  # Percentage (0-100)
-  comparisonPeriod: String  # e.g., "Q4 2024"
+  brandAwareness: Float! # Percentage (0-100)
+  purchaseIntent: Float! # Percentage (0-100)
+  comparisonPeriod: String # e.g., "Q4 2024"
   comparisonValues: ComparisonValues
 }
 
@@ -577,24 +617,24 @@ type MonthlyPerformanceTrend {
 }
 
 type MonthlyDataPoint {
-  month: String!  # e.g., "2025-01"
+  month: String! # e.g., "2025-01"
   consumersSampled: Int!
   willingToPurchase: Int!
-  conversionRate: Float!  # Percentage (0-100)
+  conversionRate: Float! # Percentage (0-100)
   eventsCount: Int!
 }
 
 type PerformanceInsights {
   knewAboutBrand: Int!
-  knewAboutBrandPercentage: Float!  # Percentage (0-100)
+  knewAboutBrandPercentage: Float! # Percentage (0-100)
   willingToPurchase: Int!
-  willingToPurchasePercentage: Float!  # Percentage (0-100)
+  willingToPurchasePercentage: Float! # Percentage (0-100)
   bestMonth: BestMonth
-  growthRate: Float!  # Percentage (can be negative)
+  growthRate: Float! # Percentage (can be negative)
 }
 
 type BestMonth {
-  month: String!  # e.g., "2025-06"
+  month: String! # e.g., "2025-06"
   eventsCount: Int!
   consumersCount: Int!
 }
@@ -602,11 +642,11 @@ type BestMonth {
 type RecentEvent {
   id: ID!
   name: String!
-  date: String!  # ISO date string
-  location: String!  # RMM/Retailer name
+  date: String! # ISO date string
+  location: String! # RMM/Retailer name
   consumers: Int!
-  intentRate: Float!  # Percentage (0-100)
-  status: String!  # "Upcoming", "Completed", etc.
+  intentRate: Float! # Percentage (0-100)
+  status: String! # "Upcoming", "Completed", etc.
 }
 ```
 
@@ -615,7 +655,7 @@ type RecentEvent {
 ```graphql
 type RecapDashboardFilterOptions {
   distributors: [DistributorOption!]
-  rmms: [RetailerOption!]  # RMM = Retailer
+  rmms: [RetailerOption!] # RMM = Retailer
   quarters: [QuarterOption!]
   tenants: [TenantOption!]
 }
@@ -637,9 +677,9 @@ type RecapDashboard {
 type RecapDashboardMetrics {
   totalConsumersSampled: Int!
   totalPurchases: Int!
-  conversionRate: Float!  # Percentage (0-100)
+  conversionRate: Float! # Percentage (0-100)
   revenueGenerated: Float!
-  comparisonPeriod: String  # e.g., "Q4 2024"
+  comparisonPeriod: String # e.g., "Q4 2024"
   comparisonValues: RecapComparisonValues
 }
 
@@ -655,29 +695,47 @@ type RecapMonthlyTrends {
 }
 
 type RecapMonthlyDataPoint {
-  month: String!  # e.g., "2025-01"
+  month: String! # e.g., "2025-01"
   consumersSampled: Int!
   purchases: Int!
-  conversionRate: Float!  # Percentage (0-100)
+  conversionRate: Float! # Percentage (0-100)
   revenue: Float!
   recapsCount: Int!
 }
 
 type RecapPerformanceInsights {
   newCustomersSampled: Int!
-  newCustomersPercentage: Float!  # Percentage (0-100)
+  newCustomersPercentage: Float! # Percentage (0-100)
   brandAwareness: Int!
-  brandAwarenessPercentage: Float!  # Percentage (0-100)
+  brandAwarenessPercentage: Float! # Percentage (0-100)
   willingToPurchase: Int!
-  willingToPurchasePercentage: Float!  # Percentage (0-100)
+  willingToPurchasePercentage: Float! # Percentage (0-100)
   bestMonth: BestRecapMonth
-  growthRate: Float!  # Percentage (can be negative)
+  growthRate: Float! # Percentage (can be negative)
+  topConvertingMarket: TopConvertingMarket
+  highestWillingnessToBuy: MarketWithWillingness
+  strongestBrandAwareness: MarketWithBrandAwareness
 }
 
 type BestRecapMonth {
-  month: String!  # e.g., "2025-06"
+  month: String! # e.g., "2025-06"
   recapsCount: Int!
   consumersCount: Int!
+}
+
+type TopConvertingMarket {
+  marketName: String!
+  conversionRate: Float! # Percentage (0-100+)
+}
+
+type MarketWithWillingness {
+  marketName: String!
+  willingCount: Int!
+}
+
+type MarketWithBrandAwareness {
+  marketName: String!
+  brandAwareCount: Int!
 }
 
 type MarketPerformanceAnalysis {
@@ -685,13 +743,13 @@ type MarketPerformanceAnalysis {
 }
 
 type MarketPerformanceData {
-  marketId: ID!  # Retailer ID
+  marketId: ID! # Retailer ID
   marketName: String!
   consumers: Int!
   purchases: Int!
-  conversion: Float!  # Percentage (0-100)
+  conversion: Float! # Percentage (0-100)
   demos: Int!
-  efficiency: Float!  # Percentage (0-100)
+  efficiency: Float! # Percentage (0-100)
 }
 
 type RMMPerformance {
@@ -699,11 +757,11 @@ type RMMPerformance {
 }
 
 type RMMPerformanceData {
-  rmmId: ID!  # Retailer ID
+  rmmId: ID! # Retailer ID
   rmmName: String!
   consumersSampled: Int!
   demos: Int!
-  conversionRate: Float!  # Percentage (0-100)
+  conversionRate: Float! # Percentage (0-100)
 }
 ```
 
@@ -899,11 +957,7 @@ Get Event Dashboard data for Q1 2025 with period-over-period comparison:
 
 ```graphql
 query Q1Dashboard {
-  eventDashboard(
-    filters: {
-      quarter: "Q1 2025"
-    }
-  ) {
+  eventDashboard(filters: { quarter: "Q1 2025" }) {
     metrics {
       totalEvents
       consumersSampled
@@ -943,12 +997,7 @@ Get Event Dashboard data for a specific tenant:
 
 ```graphql
 query TenantDashboard {
-  eventDashboard(
-    filters: {
-      tenantId: "123"
-      quarter: "Q1 2025"
-    }
-  ) {
+  eventDashboard(filters: { tenantId: "123", quarter: "Q1 2025" }) {
     metrics {
       totalEvents
       consumersSampled
@@ -978,11 +1027,7 @@ Get Event Dashboard data filtered by distributor and retailer:
 ```graphql
 query FilteredDashboard {
   eventDashboard(
-    filters: {
-      quarter: "Q1 2025"
-      distributorId: "456"
-      rmmId: "789"
-    }
+    filters: { quarter: "Q1 2025", distributorId: "456", rmmId: "789" }
   ) {
     metrics {
       totalEvents
@@ -1024,11 +1069,7 @@ Get Event Dashboard data for a custom date range:
 ```graphql
 query DateRangeDashboard {
   eventDashboard(
-    filters: {
-      startDate: "2024-01-01"
-      endDate: "2024-03-31"
-      tenantId: "123"
-    }
+    filters: { startDate: "2024-01-01", endDate: "2024-03-31", tenantId: "123" }
   ) {
     metrics {
       totalEvents
@@ -1138,12 +1179,7 @@ Get Recap Dashboard data with detailed market analysis:
 
 ```graphql
 query RecapMarketAnalysis {
-  recapDashboard(
-    filters: {
-      quarter: "Q1 2025"
-      distributorId: "456"
-    }
-  ) {
+  recapDashboard(filters: { quarter: "Q1 2025", distributorId: "456" }) {
     metrics {
       totalConsumersSampled
       totalPurchases
@@ -1180,11 +1216,7 @@ Get Recap Dashboard data for Q1 2025 with period-over-period comparison:
 
 ```graphql
 query RecapComparison {
-  recapDashboard(
-    filters: {
-      quarter: "Q1 2025"
-    }
-  ) {
+  recapDashboard(filters: { quarter: "Q1 2025" }) {
     metrics {
       totalConsumersSampled
       totalPurchases

@@ -77,6 +77,9 @@ class CreateRecapInput(SparkGraphQLInput):
     name: str
     event_id: strawberry.ID
     files: List[RecapFileInput]
+    filling_for_ambassador: bool | None = None
+    late: bool | None = None
+    incomplete: bool | None = None
     
     products_sold: int | None = None
     total_cans_sold: int | None = None

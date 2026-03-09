@@ -204,10 +204,10 @@ class DashboardQueriesService(SparkGraphQLMixin):
                 'recap_dashboard'
             ]
 
-        # Since we can't do wildcard deletion with default cache,
-        # we'll need to track keys or use Redis in production.
-        # For now, this is a placeholder that would need Redis or key tracking.
-        pass
+        for query_name in query_names:
+            version_key = f"dashboard:version:{query_name}:{tenant_id}"
+            current_version = cache.get(version_key, 0)
+            cache.set(version_key, current_version + 1, timeout=None)
 
     def _get_current_quarter(self) -> Tuple[str, date, date]:
         """
@@ -357,13 +357,10 @@ class DashboardQueriesService(SparkGraphQLMixin):
                 | Q(request__rmm_asigned_id=rmm_asigned_id)
             )
 
-        # Distributor filter
-        if filters.distributor_id:
-            distributor_id = self._resolve_filter_id(
-                filters.distributor_id, "distributor"
-            )
-            queryset = queryset.filter(
-                request__distributor_id=distributor_id)
+        # Distributor filter (supports single distributor_id and multiple distributor_ids)
+        distributor_ids = self._resolve_distributor_filter_ids(filters)
+        if distributor_ids:
+            queryset = queryset.filter(request__distributor_id__in=distributor_ids)
 
         return queryset
 
@@ -446,14 +443,16 @@ class DashboardQueriesService(SparkGraphQLMixin):
                 filters.rmm_asigned_id, "rmm_asigned"
             )
             filter_dict['rmm_asigned_id'] = str(rmm_asigned_id)
-        if filters.distributor_id:
-            distributor_id = self._resolve_filter_id(
-                filters.distributor_id, "distributor"
+        distributor_ids = self._resolve_distributor_filter_ids(filters)
+        if distributor_ids:
+            filter_dict['distributor_ids'] = ",".join(
+                str(distributor_id) for distributor_id in distributor_ids
             )
-            filter_dict['distributor_id'] = str(distributor_id)
         tenant_id = self._resolve_filter_tenant_id(filters)
         if tenant_id:
             filter_dict['tenant_id'] = str(tenant_id)
+        if getattr(filters, 'year', None) is not None:
+            filter_dict['year'] = str(filters.year)
 
         return filter_dict
 
@@ -535,13 +534,12 @@ class DashboardQueriesService(SparkGraphQLMixin):
                 | Q(event__request__rmm_asigned_id=rmm_asigned_id)
             )
 
-        # Distributor filter
-        if filters.distributor_id:
-            distributor_id = self._resolve_filter_id(
-                filters.distributor_id, "distributor"
-            )
+        # Distributor filter (supports single distributor_id and multiple distributor_ids)
+        distributor_ids = self._resolve_distributor_filter_ids(filters)
+        if distributor_ids:
             queryset = queryset.filter(
-                event__request__distributor_id=distributor_id)
+                event__request__distributor_id__in=distributor_ids
+            )
 
         return queryset
 
@@ -624,11 +622,11 @@ class DashboardQueriesService(SparkGraphQLMixin):
                 filters.rmm_asigned_id, "rmm_asigned"
             )
             filter_dict['rmm_asigned_id'] = str(rmm_asigned_id)
-        if filters.distributor_id:
-            distributor_id = self._resolve_filter_id(
-                filters.distributor_id, "distributor"
+        distributor_ids = self._resolve_distributor_filter_ids(filters)
+        if distributor_ids:
+            filter_dict['distributor_ids'] = ",".join(
+                str(distributor_id) for distributor_id in distributor_ids
             )
-            filter_dict['distributor_id'] = str(distributor_id)
         tenant_id = self._resolve_filter_tenant_id(filters)
         if tenant_id:
             filter_dict['tenant_id'] = str(tenant_id)
@@ -657,3 +655,28 @@ class DashboardQueriesService(SparkGraphQLMixin):
             return resolve_id_to_int(value)
         except (TypeError, ValueError, GraphQLError) as exc:
             raise GraphQLError(f"Invalid {label} ID.") from exc
+
+    def _resolve_distributor_filter_ids(
+        self,
+        filters: inputs.EventDashboardFiltersInput | inputs.RecapDashboardFiltersInput | None,
+    ) -> list[int]:
+        """Resolve distributor filter(s), accepting distributor_id and distributor_ids."""
+        if not filters:
+            return []
+
+        resolved_ids: list[int] = []
+        distributor_id = getattr(filters, "distributor_id", None)
+        distributor_ids = getattr(filters, "distributor_ids", None) or []
+
+        if distributor_id:
+            resolved_single_id = self._resolve_filter_id(distributor_id, "distributor")
+            if resolved_single_id is not None:
+                resolved_ids.append(resolved_single_id)
+
+        for distributor_value in distributor_ids:
+            resolved_id = self._resolve_filter_id(distributor_value, "distributor")
+            if resolved_id is not None:
+                resolved_ids.append(resolved_id)
+
+        # Deduplicate and normalize order for deterministic cache keys.
+        return sorted(set(resolved_ids))

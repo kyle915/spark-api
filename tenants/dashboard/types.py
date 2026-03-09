@@ -117,6 +117,16 @@ class RecentEvent:
 
 
 @strawberry.type
+class GoalProgress:
+    """Single goal progress item: name, target, current, percentage complete."""
+
+    name: str
+    target: float
+    current: float
+    percentage_complete: float  # 0-100, or 0 if target is 0
+
+
+@strawberry.type
 class EventDashboard:
     """Main Event Dashboard response."""
     metrics: EventDashboardMetrics
@@ -124,6 +134,7 @@ class EventDashboard:
     monthly_trends: MonthlyPerformanceTrend
     performance_insights: PerformanceInsights
     recent_events: List[RecentEvent] | None = None
+    goals_progress: List[GoalProgress] | None = None
 
 
 # Recap Dashboard Types
@@ -193,10 +204,31 @@ class RecapMonthlyTrends:
 
 @strawberry.type
 class BestRecapMonth:
-    """Best performing month for Recap Dashboard."""
+    """Best performing month for Recap Dashboard (month with most recaps)."""
     month: str  # e.g., "2025-06"
     recaps_count: int
     consumers_count: int
+
+
+@strawberry.type
+class TopConvertingMarket:
+    """Market/retailer with the highest conversion rate (first by conversion desc)."""
+    market_name: str
+    conversion_rate: float  # Percentage (0-100+)
+
+
+@strawberry.type
+class MarketWithWillingness:
+    """Market/retailer with the highest count of willing-to-purchase consumers."""
+    market_name: str
+    willing_count: int
+
+
+@strawberry.type
+class MarketWithBrandAwareness:
+    """Market/retailer with the highest count of brand-aware consumers."""
+    market_name: str
+    brand_aware_count: int
 
 
 @strawberry.type
@@ -210,6 +242,9 @@ class RecapPerformanceInsights:
     willing_to_purchase_percentage: float  # Percentage
     best_month: BestRecapMonth | None = None
     growth_rate: float  # Percentage (recaps growth vs last year)
+    top_converting_market: TopConvertingMarket | None = None
+    highest_willingness_to_buy: MarketWithWillingness | None = None
+    strongest_brand_awareness: MarketWithBrandAwareness | None = None
 
 
 @strawberry.type
@@ -280,3 +315,55 @@ class Insights:
     totalFeedbackCount: int
     reports: List[InsightReport]
     createdAt: str
+
+
+@strawberry.type
+class GoalUser:
+    """Minimal user object embedded in Goal responses."""
+
+    id: strawberry.ID
+    uuid: str
+    email: str
+    first_name: str
+    last_name: str
+
+
+@strawberry.type
+class Goal:
+    """Per-user, per-tenant, per-year goals (targets and optional current values for progress)."""
+
+    id: strawberry.ID
+    uuid: str
+    tenant_id: strawberry.ID
+    user: GoalUser
+    user_id: strawberry.ID
+    year: int
+    event_target_goal: int | None = None
+    consumer_sampling_goal: int | None = None
+    brand_awareness_goal: float | None = None
+    purchase_intent_goal: float | None = None
+    female_participation_goal: float | None = None
+    first_time_buyers_goal: int | None = None
+    # Current values (populated when date range provided; used for progress)
+    current_events_count: int | None = None
+    current_consumer_sampling: int | None = None
+    current_brand_awareness: float | None = None
+    current_purchase_intent: float | None = None
+    current_first_time_buyers: int | None = None
+    current_female_participation: float | None = None
+
+
+@strawberry.type
+class EnqueueCreateGoalsForTenantPayload:
+    """Result of enqueueCreateGoalsForTenant mutation."""
+
+    success: bool
+    enqueued: bool
+
+
+@strawberry.type
+class EnqueueCreateGoalsForAllTenantsPayload:
+    """Result of enqueueCreateGoalsForAllTenants mutation."""
+
+    success: bool
+    enqueued: bool

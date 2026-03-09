@@ -1109,7 +1109,7 @@ class SparkTenantMutations:
         random_chars = "".join(
             random.choices(string.ascii_letters + string.digits, k=4)
         )
-        slugified_name = slugify(input.name)
+        slugified_name = slugify(input.name).replace("_", "-").strip("-")
         request_url_name = f"{random_chars}-{slugified_name}".lower()
 
         try:
@@ -1119,6 +1119,7 @@ class SparkTenantMutations:
                 with transaction.atomic():
                     tenant = Tenant.objects.create(
                         name=input.name,
+                        slug=slugified_name,
                         request_url_name=request_url_name,
                         image=input.image,
                         created_by=user,

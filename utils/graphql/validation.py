@@ -36,3 +36,12 @@ def parse_iso_date_optional(
         raise GraphQLError(
             f"Invalid {field_name} format: {value}. {ISO_DATE_MESSAGE}"
         )
+
+
+def clamp_percentage(value: float) -> float:
+    """
+    Clamp a numeric value to the percentage range [0, 100].
+
+    The caller is responsible for rounding if needed.
+    """
+    return max(0.0, min(value, 100.0))
