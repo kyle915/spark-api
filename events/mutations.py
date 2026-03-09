@@ -1983,6 +1983,18 @@ def _get_request_review_copy_emails(exclude_email: str | None = None) -> list[st
     return unique_emails
 
 
+def _get_request_review_copy_delay(
+    delay_seconds: int | float | None = None,
+) -> int | float | None:
+    base_delay = delay_seconds if (delay_seconds and delay_seconds > 0) else 0
+    extra_delay = max(
+        float(getattr(settings, "REQUEST_REVIEW_COPY_DELAY_SECONDS", 1.0) or 0),
+        0.0,
+    )
+    total_delay = base_delay + extra_delay
+    return total_delay if total_delay > 0 else None
+
+
 async def _notify_requestor_for_request_approved(
     request: models.Request,
     location: models.Location | None,
@@ -2008,7 +2020,9 @@ async def _notify_requestor_for_request_approved(
         location=location,
         to_emails=copy_emails,
     )
-    await sync_to_async(copy_mailer.send)(delay_seconds=delay_seconds)
+    await sync_to_async(copy_mailer.send)(
+        delay_seconds=_get_request_review_copy_delay(delay_seconds)
+    )
 
 
 async def _notify_requestor_for_request_declined(
@@ -2042,7 +2056,9 @@ async def _notify_requestor_for_request_declined(
         reviewed_by_name=reviewed_by_name,
         reviewed_by_email=reviewed_by_email,
     )
-    await sync_to_async(copy_mailer.send)(delay_seconds=delay_seconds)
+    await sync_to_async(copy_mailer.send)(
+        delay_seconds=_get_request_review_copy_delay(delay_seconds)
+    )
 
 
 async def _notify_requestor_for_request_auto_approved(
