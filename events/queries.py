@@ -934,6 +934,8 @@ class RequestQueries:
                 queryset = queryset.filter(date__date=filters.date)
             if filters.edited is not None:
                 queryset = queryset.filter(updated_by__isnull=not filters.edited)
+            if filters.reviewed is not None:
+                queryset = queryset.filter(reviewed=filters.reviewed)
 
         queryset = queryset.order_by("-date").distinct()
 

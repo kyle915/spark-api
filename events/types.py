@@ -308,6 +308,7 @@ class Request(Node):
 
     address: str
     decline_reason: str | None = None
+    reviewed: bool
     notes: str | None = None
     coordinates: List[float]
     requestor_email: str | None = None
