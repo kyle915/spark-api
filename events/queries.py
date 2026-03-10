@@ -930,8 +930,19 @@ class RequestQueries:
                 queryset = queryset.filter(
                     distributor__location__state_id=distributor_state_id
                 )
+            if filters.store_number:
+                queryset = queryset.filter(store_number__icontains=filters.store_number)
             if filters.date:
                 queryset = queryset.filter(date__date=filters.date)
+            if filters.created_within_hours is not None:
+                if filters.created_within_hours <= 0:
+                    raise GraphQLError(
+                        "created_within_hours must be greater than 0."
+                    )
+                created_after = timezone.now() - datetime.timedelta(
+                    hours=filters.created_within_hours
+                )
+                queryset = queryset.filter(created_at__gte=created_after)
             if filters.edited is not None:
                 queryset = queryset.filter(updated_by__isnull=not filters.edited)
             if filters.reviewed is not None:
