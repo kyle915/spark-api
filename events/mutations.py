@@ -219,6 +219,8 @@ class BaseMutationService(SparkGraphQLMixin):
         for key, value in params.items():
             if not hasattr(model, key):
                 continue
+            if key == "store_number" and isinstance(value, str):
+                value = value.strip() or None
             setattr(model, key, value)
 
         # set the tenant id
@@ -2505,6 +2507,69 @@ class RequestMutations:
         except Exception as e:
             return build_mutation_response(
                 types.DeclineRequestResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def upsert_request_reviewed(
+        self,
+        info: strawberry.Info,
+        input: inputs.UpsertRequestReviewedInput,
+    ) -> types.RequestDetailResponse:
+        """Update request reviewed flag."""
+        try:
+            service: RequestMutationService = RequestMutationService()
+            user: User = await service.get_user(info)
+            if user.role_id == ROLE_ID.Ambassadors:
+                raise GraphQLError(
+                    "You are not authorized to update request review status."
+                )
+
+            try:
+                input.id = resolve_id_to_int(input.id)
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Invalid request ID.")
+
+            request: models.Request = await sync_to_async(
+                models.Request.objects.select_related("timezone").get
+            )(id=input.id)
+
+            tenant: Tenant = await sync_to_async(Tenant.objects.get)(
+                id=request.tenant_id
+            )
+
+            is_spark_admin = await user.role.is_spark_admin
+            if not is_spark_admin:
+                try:
+                    await sync_to_async(user.get_tenant)(tenant_id=tenant.id)
+                except Exception:
+                    raise GraphQLError(
+                        "You are not authorized to update requests for this tenant."
+                    )
+
+            request.reviewed = input.reviewed
+            request.updated_by = user
+            await sync_to_async(request.save)()
+
+            return build_mutation_response(
+                types.RequestDetailResponse,
+                success=True,
+                message="Request review status updated successfully.",
+                input_obj=input,
+                request=request,
+            )
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.RequestDetailResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+        except Exception as e:
+            return build_mutation_response(
+                types.RequestDetailResponse,
                 success=False,
                 message=str(e),
                 input_obj=input,
