@@ -278,18 +278,7 @@ class Request(Node):
 
     @strawberry.field
     def name(self) -> str:
-        request_name = _get_field(self, "name") or ""
-
-        retailer_name = _get_field(self, "retailer_name")
-        if not retailer_name:
-            fields_cache = getattr(self._state, "fields_cache", {})
-            retailer = fields_cache.get("retailer")
-            if retailer and getattr(retailer, "name", None):
-                retailer_name = retailer.name
-
-        if retailer_name:
-            return f"{request_name} - {retailer_name}".strip()
-        return request_name
+        return _get_field(self, "name") or ""
 
     # Date/time fields returned as stored, without server TZ conversion
     @strawberry.field
