@@ -30,6 +30,7 @@ class Envelope:
     context: dict = {}
     from_email: str = settings.DEFAULT_FROM_EMAIL
     to_emails: list[str] = []
+    cc_emails: list[str] = []
     headers: dict = {}
     html: str = ""
     attachments: list[dict[str, Any]] = []
@@ -43,6 +44,7 @@ class Envelope:
         self.context = kwargs.get("context", self.context)
         self.from_email = kwargs.get("from_email", self.from_email)
         self.to_emails = kwargs.get("to_emails", self.to_emails)
+        self.cc_emails = kwargs.get("cc_emails", self.cc_emails)
         self.headers = kwargs.get("headers", self.headers)
         self.html = kwargs.get("html", self.html)
         self.attachments = kwargs.get("attachments", self.attachments)
@@ -90,6 +92,8 @@ class Envelope:
             "template": self.template,
             "headers": self.headers,
         }
+        if self.cc_emails:
+            payload["cc"] = self.cc_emails
         if self.attachments:
             payload["attachments"] = self.attachments
         return payload
@@ -108,6 +112,7 @@ class Envelope:
         return Envelope(
             from_email=payload.get("from"),
             to_emails=payload.get("to"),
+            cc_emails=payload.get("cc", []),
             subject=payload.get("subject"),
             template=payload.get("template"),
             headers=payload.get("headers"),
@@ -138,6 +143,8 @@ class ResendMailDriver(MailDriver):
             "html": envelope.render_template(),
             "headers": envelope.headers,
         }
+        if envelope.cc_emails:
+            params["cc"] = envelope.cc_emails
         if envelope.attachments:
             params["attachments"] = envelope.attachments
         resend.Emails.send(params)
@@ -155,6 +162,7 @@ class MailpitMailDriver(MailDriver):
             body=html_content,
             from_email=envelope.from_email,
             to=envelope.to_emails,
+            cc=envelope.cc_emails,
             headers=envelope.headers,
         )
         email.attach_alternative(html_content, "text/html")
