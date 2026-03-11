@@ -325,6 +325,8 @@ class Request(models.Model):
     decline_reason = models.TextField(null=True)
     requestor_email = models.CharField(max_length=254, null=True)
     notes = models.TextField(null=True)
+    reviewed = models.BooleanField(default=False)
+    store_number = models.CharField(max_length=254, null=True)
     coordinates = ArrayField(
         models.FloatField(),
         size=2,

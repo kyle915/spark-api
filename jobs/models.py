@@ -332,7 +332,7 @@ class Rate(models.Model):
 class Job(models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
-    name = models.CharField(max_length=100, null=False)
+    name = models.TextField(null=True)
     description = models.TextField(null=True)
     code = models.CharField(max_length=100, null=True)
     address = models.CharField(max_length=255)
