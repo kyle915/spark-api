@@ -33,11 +33,11 @@ from events.models import (
 User = get_user_model()
 
 TEMPLATE_COLUMNS = [
-    "name",
     "date",
     "start_time",
     "end_time",
     "address",
+    "store_number",
     "latitude",
     "longitude",
     "notes",
@@ -56,11 +56,11 @@ TEMPLATE_COLUMNS = [
 ]
 
 REQUIRED_COLUMNS = [
-    "name",
     "date",
     "start_time",
     "end_time",
     "address",
+    "store_number",
 ]
 
 
@@ -92,11 +92,11 @@ def export_request_batch_template(output_path: str) -> Path:
 
 def build_request_batch_template_xlsx(tenant_id: int | None = None) -> bytes:
     sample = {
-        "name": "North Point Activation",
         "date": "02/20/2026",
         "start_time": "10:00",
         "end_time": "14:00",
         "address": "123 Main St",
+        "store_number": "102",
         "latitude": 40.7128,
         "longitude": -74.006,
         "notes": "Product demo and sampling",
@@ -385,6 +385,7 @@ def _import_requests_from_rows(
                     start_time=parsed["start_time"],
                     end_time=parsed["end_time"],
                     address=parsed["address"],
+                    store_number=parsed["store_number"],
                     notes=parsed["notes"],
                     coordinates=parsed["coordinates_request"],
                     requestor_email=parsed["requestor_email"],
@@ -518,11 +519,11 @@ def _parse_row(
             errors.append(str(exc))
             return None
 
-    name = _capture(_required_str, row, "name")
     event_date = _capture(_required_date, row, "date")
     start_clock = _capture(_required_time, row, "start_time")
     end_clock = _capture(_required_time, row, "end_time")
     address = _capture(_required_str, row, "address")
+    store_number = _capture(_required_str, row, "store_number")
     latitude = _capture(_optional_float, row.get("latitude"), "latitude")
     longitude = _capture(_optional_float, row.get("longitude"), "longitude")
 
@@ -693,6 +694,25 @@ def _parse_row(
             else:
                 retailer_id = matched_retailer.id
 
+    retailer_name_for_request = retailer_name
+    if not retailer_name_for_request and retailer_id:
+        retailer = Retailer.objects.filter(id=retailer_id).only("name").first()
+        retailer_name_for_request = retailer.name if retailer else None
+
+    if not retailer_name_for_request:
+        errors.append("retailer_name is required to build request name.")
+
+    request_name = None
+    if retailer_name_for_request and event_date and store_number:
+        request_name = (
+            f"{retailer_name_for_request} - {event_date.strftime('%m/%d/%Y')} - {store_number}"
+        )
+        if len(request_name) > 50:
+            errors.append(
+                "Generated request name exceeds 50 characters. "
+                "Use shorter retailer_name/store_number."
+            )
+
     if errors:
         raise ValueError(" | ".join(errors))
 
@@ -700,11 +720,12 @@ def _parse_row(
     coordinates_event = [latitude, longitude] if latitude is not None and longitude is not None else None
 
     return {
-        "name": name,
+        "name": request_name,
         "date": date,
         "start_time": start_time,
         "end_time": end_time,
         "address": address,
+        "store_number": store_number,
         "coordinates_request": coordinates_request,
         "coordinates_event": coordinates_event,
         "notes": _optional_str(row.get("notes")),
