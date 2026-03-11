@@ -119,10 +119,12 @@ class RequestorRequestApprovedMailer(Mailer):
         request: models.Request,
         location: models.Location | None,
         to_emails: list[str],
+        cc_emails: list[str] | None = None,
     ) -> None:
         self.request = request
         self.location = location
         self.to_emails = to_emails
+        self.cc_emails = cc_emails or []
 
     def envelope(self) -> Envelope:
         offset = _get_timezone_offset_minutes(self.request)
@@ -158,6 +160,7 @@ class RequestorRequestApprovedMailer(Mailer):
             subject="Great news - your activation request is approved",
             template="events.templates.emails.request_approved_requestor_notification",
             to_emails=self.to_emails,
+            cc_emails=self.cc_emails,
             headers={"Reply-To": "events@igniteproductions.co"},
             from_email=getattr(
                 settings,
@@ -192,12 +195,14 @@ class RequestorRequestDeclinedMailer(Mailer):
         request: models.Request,
         location: models.Location | None,
         to_emails: list[str],
+        cc_emails: list[str] | None = None,
         reviewed_by_name: str | None = None,
         reviewed_by_email: str | None = None,
     ) -> None:
         self.request = request
         self.location = location
         self.to_emails = to_emails
+        self.cc_emails = cc_emails or []
         self.reviewed_by_name = reviewed_by_name
         self.reviewed_by_email = reviewed_by_email
 
@@ -218,6 +223,7 @@ class RequestorRequestDeclinedMailer(Mailer):
             subject="Update on your activation request - revision needed",
             template="events.templates.emails.request_declined_requestor_notification",
             to_emails=self.to_emails,
+            cc_emails=self.cc_emails,
             headers={"Reply-To": "events@igniteproductions.co"},
             from_email=getattr(
                 settings,
