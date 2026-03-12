@@ -13,6 +13,8 @@ class RecapFiltersInput(SparkGraphQLInput):
     retailer_id: strawberry.ID | None = None
     state_id: strawberry.ID | None = None
     event_date: str | None = None
+    start_date: str | None = None
+    end_date: str | None = None
     event_address: str | None = None
     edited: bool | None = None
 
@@ -127,6 +129,8 @@ class GenerateRecapPdfInput(SparkGraphQLInput):
 @strawberry.input
 class ExportRecapsXlsxInput(SparkGraphQLInput):
     tenant_id: strawberry.ID | None = None
+    start_date: str | None = None
+    end_date: str | None = None
 
 
 @strawberry.input
