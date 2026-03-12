@@ -1049,6 +1049,8 @@ class RecapMutationService(SparkGraphQLMixin):
                 tenant_id=resolved_tenant_id,
                 user=self.user,
             )
+        start_date = self.input.start_date
+        end_date = self.input.end_date
 
         client_origin = (
             self.info.context.request.META.get("HTTP_ORIGIN")
@@ -1059,17 +1061,20 @@ class RecapMutationService(SparkGraphQLMixin):
 
         @sync_to_async
         def build_xlsx_for_tenant():
-            queryset = (
-                RecapQueriesService()
-                .get_queryset()
-                .select_related(
+            service = RecapQueriesService()
+            queryset = service.get_filtered_queryset(
+                tenant_id=tenant.id,
+                start_date=start_date,
+                end_date=end_date,
+            )
+            recaps = list(
+                queryset.select_related(
                     "event__request__retailer",
                     "event__request__distributor",
                     "ambassador",
                     "ambassador__user",
                 )
             )
-            recaps = list(queryset.filter(event__tenant_id=tenant.id))
             return build_recaps_xlsx(recaps, frontend_base_url=frontend_base_url)
 
         xlsx_bytes = await build_xlsx_for_tenant()
