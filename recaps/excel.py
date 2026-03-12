@@ -62,6 +62,17 @@ def _get_distributor_name(recap) -> str:
     return getattr(distributor, "name", "") or ""
 
 
+def _get_retailer_state_name(recap) -> str:
+    retailer = getattr(recap, "retailer", None)
+    if not retailer:
+        event = getattr(recap, "event", None)
+        request = getattr(event, "request", None) if event else None
+        retailer = getattr(request, "retailer", None) if request else None
+    location = getattr(retailer, "location", None) if retailer else None
+    state = getattr(location, "state", None) if location else None
+    return getattr(state, "name", "") or ""
+
+
 def build_recaps_xlsx(
     recaps: Iterable[object],
     frontend_base_url: str | None = None,
@@ -82,6 +93,7 @@ def build_recaps_xlsx(
             "event_date",
             "event_address",
             "retailer",
+            "state",
             "distributor",
             "ambassador",
             "job",
@@ -183,6 +195,7 @@ def build_recaps_xlsx(
                 _format_date_mdy(getattr(getattr(recap, "event", None), "date", None)),
                 _safe(getattr(getattr(recap, "event", None), "address", None)),
                 _get_retailer_name(recap),
+                _get_retailer_state_name(recap),
                 _get_distributor_name(recap),
                 _format_user_name(ambassador_user),
                 _safe(getattr(getattr(recap, "job", None), "name", None)),
