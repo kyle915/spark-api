@@ -75,6 +75,8 @@ class BaseRecapQueriesService(SparkGraphQLMixin):
         retailer_id: int | None = None,
         state_id: int | None = None,
         event_date: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
         event_address: str | None = None,
         q: str | None = None,
     ) -> QuerySet:
@@ -95,7 +97,11 @@ class BaseRecapQueriesService(SparkGraphQLMixin):
                 job__event__retailer__location__state_id=state_id
             )
         if event_date:
-            queryset = queryset.filter(job__event__date__date=event_date)
+            queryset = queryset.filter(event__date__date=event_date)
+        if start_date:
+            queryset = queryset.filter(event__date__date__gte=start_date)
+        if end_date:
+            queryset = queryset.filter(event__date__date__lte=end_date)
         if event_address:
             queryset = queryset.filter(event__address__icontains=event_address)
         if q:
@@ -111,6 +117,8 @@ class BaseRecapQueriesService(SparkGraphQLMixin):
         retailer_id: int | None = None,
         state_id: int | None = None,
         event_date: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
         event_address: str | None = None,
         q: str | None = None,
         ordering: tuple[str, ...] | None = None,
@@ -124,6 +132,8 @@ class BaseRecapQueriesService(SparkGraphQLMixin):
             retailer_id=retailer_id,
             state_id=state_id,
             event_date=event_date,
+            start_date=start_date,
+            end_date=end_date,
             event_address=event_address,
             q=q,
         )
@@ -142,6 +152,8 @@ class BaseRecapQueriesService(SparkGraphQLMixin):
         retailer_id: int | None = None,
         state_id: int | None = None,
         event_date: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
         event_address: str | None = None,
         q: str | None = None,
         first: int | None = None,
@@ -163,6 +175,8 @@ class BaseRecapQueriesService(SparkGraphQLMixin):
                 retailer_id=retailer_id,
                 state_id=state_id,
                 event_date=event_date,
+                start_date=start_date,
+                end_date=end_date,
                 event_address=event_address,
                 q=q,
                 ordering=ordering,
@@ -213,6 +227,8 @@ class RecapQueriesService(BaseRecapQueriesService):
         retailer_id: int | None = None,
         state_id: int | None = None,
         event_date: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
         event_address: str | None = None,
         q: str | None = None,
         ordering: tuple[str, ...] | None = None,
@@ -226,6 +242,8 @@ class RecapQueriesService(BaseRecapQueriesService):
             retailer_id=retailer_id,
             state_id=state_id,
             event_date=event_date,
+            start_date=start_date,
+            end_date=end_date,
             event_address=event_address,
             q=q,
             ordering=ordering,
@@ -463,6 +481,8 @@ class RecapQueries:
             else None
         )
         event_date = filters.event_date if filters else None
+        start_date = filters.start_date if filters else None
+        end_date = filters.end_date if filters else None
         event_address = filters.event_address if filters else None
         queryset = service.get_ordered_queryset(
             tenant_id=tenant_id,
@@ -472,6 +492,8 @@ class RecapQueries:
             retailer_id=retailer_id,
             state_id=state_id,
             event_date=event_date,
+            start_date=start_date,
+            end_date=end_date,
             event_address=event_address,
             q=q,
         )
@@ -486,6 +508,8 @@ class RecapQueries:
             retailer_id=retailer_id,
             state_id=state_id,
             event_date=event_date,
+            start_date=start_date,
+            end_date=end_date,
             event_address=event_address,
             q=q,
             first=first,
@@ -659,6 +683,8 @@ class RecapMobileQueries:
             else None
         )
         event_date = filters.event_date if filters else None
+        start_date = filters.start_date if filters else None
+        end_date = filters.end_date if filters else None
         event_address = filters.event_address if filters else None
         queryset = service.get_ambassador_queryset(
             user=user,
@@ -669,6 +695,8 @@ class RecapMobileQueries:
             retailer_id=retailer_id,
             state_id=state_id,
             event_date=event_date,
+            start_date=start_date,
+            end_date=end_date,
             event_address=event_address,
             q=q,
         )
@@ -683,6 +711,8 @@ class RecapMobileQueries:
             retailer_id=retailer_id,
             state_id=state_id,
             event_date=event_date,
+            start_date=start_date,
+            end_date=end_date,
             event_address=event_address,
             q=q,
             first=first,
