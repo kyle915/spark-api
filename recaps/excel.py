@@ -70,7 +70,21 @@ def _get_retailer_state_name(recap) -> str:
         retailer = getattr(request, "retailer", None) if request else None
     location = getattr(retailer, "location", None) if retailer else None
     state = getattr(location, "state", None) if location else None
-    return getattr(state, "name", "") or ""
+    if state and getattr(state, "name", None):
+        return state.name
+
+    event = getattr(recap, "event", None)
+    request = getattr(event, "request", None) if event else None
+    distributor = getattr(event, "distributor", None) if event else None
+    if not distributor:
+        distributor = getattr(request, "distributor", None) if request else None
+    distributor_location = getattr(distributor, "location", None) if distributor else None
+    distributor_state = (
+        getattr(distributor_location, "state", None)
+        if distributor_location
+        else getattr(distributor, "state", None)
+    )
+    return getattr(distributor_state, "name", "") or ""
 
 
 def build_recaps_xlsx(
