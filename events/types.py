@@ -451,26 +451,7 @@ class Event(Node):
 
     @strawberry.field
     def name(self) -> str:
-        event_name = _get_field(self, "name") or ""
-
-        retailer_name = None
-        fields_cache = getattr(self._state, "fields_cache", {})
-        retailer = fields_cache.get("retailer")
-        request = fields_cache.get("request")
-
-        if retailer and getattr(retailer, "name", None):
-            retailer_name = retailer.name
-        elif request and getattr(request, "retailer_name", None):
-            retailer_name = request.retailer_name
-        elif request:
-            request_fields_cache = getattr(request._state, "fields_cache", {})
-            request_retailer = request_fields_cache.get("retailer")
-            if request_retailer and getattr(request_retailer, "name", None):
-                retailer_name = request_retailer.name
-
-        if retailer_name:
-            return f"{event_name} - {retailer_name}".strip()
-        return event_name
+        return _get_field(self, "name") or ""
 
     @strawberry.field
     def date(self) -> str | None:

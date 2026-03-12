@@ -317,7 +317,7 @@ class RequestStatus(WithDefaultAttribute, models.Model):
 class Request(models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
-    name = models.CharField(max_length=50)
+    name = models.CharField(max_length=255)
     date = models.DateTimeField(null=True)
     start_time = models.DateTimeField(null=True, db_index=True)
     end_time = models.DateTimeField(null=True, blank=True)
