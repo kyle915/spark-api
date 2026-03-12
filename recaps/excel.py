@@ -30,6 +30,10 @@ def _safe(value) -> str:
     return str(value)
 
 
+def _format_recap_status(approved: bool) -> str:
+    return "Approved" if approved else "Pending"
+
+
 def _format_user_name(user) -> str:
     if not user:
         return ""
@@ -72,7 +76,7 @@ def build_recaps_xlsx(
         [
             "recap_uuid",
             "recap_name",
-            "approved",
+            "status",
             "event_uuid",
             "event_name",
             "event_date",
@@ -167,12 +171,13 @@ def build_recaps_xlsx(
         ambassador_user = None
         if getattr(recap, "ambassador", None) and getattr(recap.ambassador, "user", None):
             ambassador_user = recap.ambassador.user
+        recap_approved = bool(getattr(recap, "approved", False))
 
         recap_sheet.append(
             [
                 _safe(getattr(recap, "uuid", None)),
                 _safe(getattr(recap, "name", None)),
-                bool(getattr(recap, "approved", False)),
+                _format_recap_status(recap_approved),
                 _safe(getattr(getattr(recap, "event", None), "uuid", None)),
                 _safe(getattr(getattr(recap, "event", None), "name", None)),
                 _format_date_mdy(getattr(getattr(recap, "event", None), "date", None)),
