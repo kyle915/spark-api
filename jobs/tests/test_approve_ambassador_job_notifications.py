@@ -1,4 +1,4 @@
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from asgiref.sync import sync_to_async
@@ -100,7 +100,10 @@ class TestApproveAmbassadorJobNotifications(JobsGraphQLTestCase):
 
         with patch(
             "jobs.mutations.AmbassadorJobApprovedNotificationMailer.send"
-        ) as mock_send:
+        ) as mock_send, patch(
+            "jobs.mutations.one_signal_client.send_push",
+            new=AsyncMock(return_value={"id": "push-123"}),
+        ) as mock_push:
             result = await self._execute_mutation_authenticated(
                 mutation,
                 variables,
@@ -112,6 +115,10 @@ class TestApproveAmbassadorJobNotifications(JobsGraphQLTestCase):
         assert result.data["approveAmbassadorJob"]["success"] is True
         assert result.data["approveAmbassadorJob"]["ambassadorJob"]["status"]["name"].lower() == "approved"
         assert mock_send.called
+        mock_push.assert_awaited_once()
+        kwargs = mock_push.await_args.kwargs
+        assert kwargs["external_ids"] == [str(self.ambassador_user.uuid)]
+        assert kwargs["data"]["type"] == "job_application_accepted"
 
         updated_job = await sync_to_async(models.AmbassadorJob.objects.get)(pk=self.ambassador_job.id)
         assert updated_job.status_id == self.approved_status.id

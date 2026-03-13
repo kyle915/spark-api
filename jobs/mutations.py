@@ -3,11 +3,13 @@ from django.db.models import Model
 from strawberry import relay
 from graphql import GraphQLError
 from asgiref.sync import sync_to_async
+import logging
 
 from jobs import models, inputs, types
 from jobs.envelopes import AmbassadorJobApprovedNotificationMailer
 from ambassadors.models import AmbassadorEvent
 from tenants.models import Role, TenantedUser
+from utils.onesignal import OneSignalError, one_signal_client
 from utils.graphql.mixins import (
     BaseMutationService,
     SparkGraphQLMixin,
@@ -18,6 +20,8 @@ from utils.graphql.relay import ensure_relay_mutation
 from utils.utils import build_mutation_response
 
 ensure_relay_mutation()
+
+logger = logging.getLogger(__name__)
 
 
 async def _notify_approval_to_rmm_or_clients(
@@ -63,6 +67,71 @@ async def _notify_approval_to_rmm_or_clients(
             reply_to_email=reply_to_email,
         )
         await sync_to_async(mailer.send)()
+
+
+async def _notify_approved_ambassador_by_push(
+    ambassador_job: models.AmbassadorJob,
+) -> None:
+    ambassador = getattr(ambassador_job, "ambassador", None)
+    user = getattr(ambassador, "user", None)
+    if not user:
+        return
+
+    job = ambassador_job.job
+    title = "Job application accepted"
+    message = f"You were accepted for {job.name}."
+    deep_link = f"/(app)/(tabs)/(my-gigs)/{job.id}"
+
+    try:
+        await one_signal_client.send_push(
+            external_ids=[str(user.uuid)],
+            title=title,
+            message=message,
+            url=deep_link,
+            data={
+                "type": "job_application_accepted",
+                "job_id": str(job.id),
+                "ambassador_job_id": str(ambassador_job.id),
+                "deep_link": deep_link,
+            },
+        )
+    except OneSignalError as exc:
+        logger.warning(
+            "Failed to send OneSignal approval push for ambassador_job=%s: %s",
+            ambassador_job.id,
+            exc,
+        )
+
+
+async def _notify_assigned_ambassador_by_push(
+    ambassador_job: models.AmbassadorJob,
+) -> None:
+    ambassador = getattr(ambassador_job, "ambassador", None)
+    user = getattr(ambassador, "user", None)
+    if not user:
+        return
+
+    job = ambassador_job.job
+    title = "New job assigned"
+    message = f"You were assigned to {job.name}."
+
+    try:
+        await one_signal_client.send_push(
+            external_ids=[str(user.uuid)],
+            title=title,
+            message=message,
+            data={
+                "type": "job_assigned",
+                "job_id": str(job.id),
+                "ambassador_job_id": str(ambassador_job.id),
+            },
+        )
+    except OneSignalError as exc:
+        logger.warning(
+            "Failed to send OneSignal assignment push for ambassador_job=%s: %s",
+            ambassador_job.id,
+            exc,
+        )
 
 
 # Status Mutations
@@ -950,6 +1019,20 @@ class ApproveAmbassadorJobMutationService(SparkGraphQLMixin):
             return ambassador_jobs
 
         ambassador_jobs = await invite_ambassadors_to_job()
+        if ambassador_jobs:
+            ambassador_jobs = await sync_to_async(list)(
+                models.AmbassadorJob.objects.filter(
+                    id__in=[ambassador_job.id for ambassador_job in ambassador_jobs]
+                ).select_related(
+                    "ambassador",
+                    "ambassador__user",
+                    "job",
+                    "status",
+                    "rate",
+                )
+            )
+            for ambassador_job in ambassador_jobs:
+                await _notify_assigned_ambassador_by_push(ambassador_job)
         return build_mutation_response(
             types.InviteAmbassadorsToJobResponse,
             success=True,
@@ -1016,11 +1099,14 @@ class ApproveAmbassadorJobMutationService(SparkGraphQLMixin):
                 "job__event",
                 "job__event__timezone",
                 "job__event__rmm_asigned",
+                "ambassador",
+                "ambassador__user",
                 "tenant",
                 "status",
             ).get
         )(id=ambassador_job.id)
         await _notify_approval_to_rmm_or_clients(ambassador_job)
+        await _notify_approved_ambassador_by_push(ambassador_job)
 
         return build_mutation_response(
             types.AmbassadorJobDetailResponse,
