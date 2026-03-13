@@ -259,6 +259,11 @@ EMAIL_LOGO_URL = env(
     "EMAIL_LOGO_URL",
     default="",
 )
+ONESIGNAL_APP_ID = env("ONESIGNAL_APP_ID", default="")
+ONESIGNAL_REST_API_KEY = env("ONESIGNAL_REST_API_KEY", default="")
+ONESIGNAL_API_URL = env("ONESIGNAL_API_URL", default="https://api.onesignal.com")
+ONESIGNAL_TARGET_CHANNEL = env("ONESIGNAL_TARGET_CHANNEL", default="push")
+ONESIGNAL_TIMEOUT_SECONDS = env.float("ONESIGNAL_TIMEOUT_SECONDS", default=10.0)
 
 # Gemini AI Configuration
 GEMINI_API_KEY = env("GEMINI_API_KEY", default="")

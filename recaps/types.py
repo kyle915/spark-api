@@ -125,6 +125,7 @@ class AccountFeedback(Node):
     do_differently_feedback: str | None
     feedback: str | None
     corpo_card: str | None
+    was_corpo_card_used: bool
     created_at: str
     updated_at: str
 

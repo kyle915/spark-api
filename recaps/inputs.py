@@ -72,6 +72,7 @@ class AccountFeedbackInput(SparkGraphQLInput):
     do_differently_feedback: str | None = None
     feedback: str | None = None
     corpo_card: str | None = None
+    was_corpo_card_used: bool | None = None
 
 
 @strawberry.input

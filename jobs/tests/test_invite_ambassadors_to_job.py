@@ -12,6 +12,7 @@ This module tests:
 import pytest
 import strawberry_django  # noqa: F401
 import uuid
+from unittest.mock import AsyncMock, patch
 from asgiref.sync import sync_to_async
 from django.contrib.auth import get_user_model
 from graphql import GraphQLError
@@ -143,8 +144,12 @@ class TestClientInviteAmbassadorsToJob(JobsGraphQLTestCase):
             }
         }
 
-        result = await self._execute_mutation_authenticated(
-            self.mutation, variables, self.client_user, self.endpoint_path)
+        with patch(
+            "jobs.mutations.one_signal_client.send_push",
+            new=AsyncMock(return_value={"id": "push-123"}),
+        ) as mock_push:
+            result = await self._execute_mutation_authenticated(
+                self.mutation, variables, self.client_user, self.endpoint_path)
 
         assert result.errors is None
         assert result.data is not None
@@ -156,6 +161,7 @@ class TestClientInviteAmbassadorsToJob(JobsGraphQLTestCase):
         # Verify ambassador jobs were created
         ambassador_jobs = result.data["inviteAmbassadorsToJob"]["ambassadorJobs"]
         assert len(ambassador_jobs) == 2
+        assert mock_push.await_count == 2
 
         # GraphQL returns Relay global IDs
         ambassador_global_ids = {aj["ambassador"]["id"]
@@ -196,6 +202,14 @@ class TestClientInviteAmbassadorsToJob(JobsGraphQLTestCase):
             assert aj_data['appear_as_rfp'] is True
             assert aj_data['created_by'] == self.client_user
             assert aj_data['updated_by'] == self.client_user
+
+        pushed_external_ids = [
+            call.kwargs["external_ids"][0] for call in mock_push.await_args_list
+        ]
+        assert set(pushed_external_ids) == {
+            str(self.ambassador_user1.uuid),
+            str(self.ambassador_user2.uuid),
+        }
 
     @pytest.mark.asyncio
     async def test_invite_single_ambassador_to_job(self):
