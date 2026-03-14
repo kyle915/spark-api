@@ -22,6 +22,7 @@ from ambassadors.tests.base import AmbassadorsGraphQLTestCase
 from ambassadors.constants import INVITATION_EXPIRY_DAYS
 from tenants.models import Tenant, TenantedUser
 from utils.utils import ROLE_ID
+from jobs import models as job_models
 
 User = get_user_model()
 
@@ -480,6 +481,100 @@ class TestAcceptAmbassadorInvitation(AmbassadorsGraphQLTestCase):
         assert ambassador.is_active is True  # Active since invited
         assert ambassador.address == "456 Invited St"
         assert ambassador.coordinates == [34.0522, -118.2437]
+
+    @pytest.mark.asyncio
+    async def test_accept_invitation_with_job_marks_ambassador_job_accepted(self):
+        """Test invitation acceptance also accepts the invited job."""
+        unique_id = str(uuid.uuid4())[:8]
+        email = f"invited_job_{unique_id}@test.com"
+        token = f"valid-job-token-{unique_id}"
+
+        event = await sync_to_async(self.create_event)(
+            name="Job Invitation Event",
+            tenant=self.tenant,
+            address="123 Test St",
+        )
+        job_title = await sync_to_async(job_models.JobTitle.objects.create)(
+            name="Promoter",
+            tenant=self.tenant,
+            created_by=self.client_user,
+        )
+        rate_type = await sync_to_async(job_models.RateType.objects.create)(
+            name="Hourly",
+            tenant=self.tenant,
+            created_by=self.client_user,
+        )
+        rate = await sync_to_async(job_models.Rate.objects.create)(
+            amount=75.0,
+            rate_type=rate_type,
+            tenant=self.tenant,
+            created_by=self.client_user,
+        )
+        job = await sync_to_async(job_models.Job.objects.create)(
+            name="Accepted From Invitation Job",
+            code=f"JOB-ACCEPT-{unique_id}",
+            address="123 Test St",
+            event=event,
+            job_title=job_title,
+            tenant=self.tenant,
+            rate=rate,
+            created_by=self.client_user,
+        )
+
+        invited_status = await sync_to_async(job_models.Status.objects.get_invited)(
+            tenant_id=self.tenant.id,
+            user=self.client_user,
+        )
+
+        invitation = await sync_to_async(AmbassadorInvitation.objects.create)(
+            email=email,
+            token=token,
+            expires_at=timezone.now() + timedelta(days=7),
+            invited_by=self.client_user,
+            tenant=self.tenant,
+            job=job,
+            created_by=self.client_user,
+            updated_by=self.client_user,
+        )
+
+        variables = {
+            "input": {
+                "token": token,
+                "firstName": "Invited",
+                "password1": "testpass123",
+                "password2": "testpass123",
+                "address": "456 Invited St",
+                "coordinates": [34.0522, -118.2437],
+                "clientMutationId": "test-job-accept",
+            }
+        }
+
+        result = await self._execute_mutation(
+            self.mutation, variables, self.endpoint_path
+        )
+
+        assert result.errors is None
+        assert result.data is not None
+        assert result.data["acceptAmbassadorInvitation"]["success"] is True
+
+        @sync_to_async
+        def refresh_objects():
+            invitation.refresh_from_db()
+            ambassador_job = job_models.AmbassadorJob.objects.get(
+                ambassador_id=invitation.ambassador_id,
+                job=job,
+            )
+            return ambassador_job.status_id, invitation.is_used
+
+        status_id, is_used = await refresh_objects()
+        accepted_status = await sync_to_async(job_models.Status.objects.get_accepted)(
+            tenant_id=self.tenant.id,
+            user=self.client_user,
+        )
+
+        assert status_id == accepted_status.id
+        assert is_used is True
+        assert invited_status.id != accepted_status.id
 
     @pytest.mark.asyncio
     async def test_accept_invitation_password_mismatch(self):

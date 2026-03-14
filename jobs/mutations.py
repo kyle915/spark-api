@@ -978,16 +978,22 @@ class ApproveAmbassadorJobMutationService(SparkGraphQLMixin):
                 user=user
             )
 
+            try:
+                job_id = resolve_id_to_int(input.job_id)
+            except (TypeError, ValueError, GraphQLError) as exc:
+                raise GraphQLError(
+                    f"Invalid job ID: {input.job_id}"
+                ) from exc
+
             job = models.Job.objects.filter(
-                id=input.job_id, tenant_id=tenant.id, rate__isnull=False).first()
+                id=job_id, tenant_id=tenant.id, rate__isnull=False
+            ).first()
             if not job:
                 raise GraphQLError("Job not found or has no rate.")
             ambassador_ids = getattr(input, "ambassador_ids", None)
             if not ambassador_ids:
                 return []
 
-            # Resolve ambassador IDs from Relay IDs to integers
-            from utils.graphql.mixins import resolve_id_to_int
             resolved_ids = []
             for ambassador_id in ambassador_ids:
                 try:
@@ -1203,6 +1209,93 @@ class DeclineAmbassadorJobMutationService(SparkGraphQLMixin):
         )
 
 
+class AcceptAmbassadorJobInvitationMutationService(SparkGraphQLMixin):
+    """Service for ambassadors accepting invited jobs."""
+
+    @classmethod
+    async def accept(
+        cls,
+        input: inputs.AcceptAmbassadorJobInvitationInput,
+        info: strawberry.Info,
+    ) -> types.AmbassadorJobDetailResponse:
+        service = cls()
+        user = await service.get_user(info)
+
+        try:
+            ambassador_job_id = resolve_id_to_int(input.ambassador_job_id)
+        except (TypeError, ValueError, GraphQLError):
+            return build_mutation_response(
+                types.AmbassadorJobDetailResponse,
+                success=False,
+                message="Invalid ambassador job ID.",
+                input_obj=input,
+            )
+
+        try:
+            ambassador_job = await sync_to_async(models.AmbassadorJob.objects.select_related(
+                "ambassador",
+                "ambassador__user",
+                "job",
+                "status",
+            ).get)(
+                id=ambassador_job_id,
+            )
+        except models.AmbassadorJob.DoesNotExist:
+            return build_mutation_response(
+                types.AmbassadorJobDetailResponse,
+                success=False,
+                message="Ambassador job not found.",
+                input_obj=input,
+            )
+
+        if ambassador_job.ambassador.user_id != user.id:
+            return build_mutation_response(
+                types.AmbassadorJobDetailResponse,
+                success=False,
+                message="You can only accept your own job invitations.",
+                input_obj=input,
+            )
+
+        current_status_slug = (getattr(ambassador_job.status, "slug", None) or "").strip().lower()
+        if current_status_slug != inputs.AmbassadorJobStatusEnum.INVITED.value:
+            return build_mutation_response(
+                types.AmbassadorJobDetailResponse,
+                success=False,
+                message="Only invited ambassador jobs can be accepted.",
+                input_obj=input,
+            )
+
+        accepted_status = await sync_to_async(models.Status.objects.get_accepted)(
+            tenant_id=ambassador_job.tenant_id,
+            user=user,
+        )
+
+        ambassador_job.status = accepted_status
+        ambassador_job.updated_by = user
+        await sync_to_async(ambassador_job.save)()
+
+        if not await AmbassadorEvent.objects.filter(
+            ambassador_id=ambassador_job.ambassador_id,
+            event_id=ambassador_job.job.event_id,
+        ).aexists():
+            await AmbassadorEvent.objects.acreate(
+                ambassador_id=ambassador_job.ambassador_id,
+                event_id=ambassador_job.job.event_id,
+                tenant_id=ambassador_job.tenant_id,
+                is_approved=False,
+                created_by_id=ambassador_job.created_by_id,
+                updated_by_id=user.id,
+            )
+
+        return build_mutation_response(
+            types.AmbassadorJobDetailResponse,
+            success=True,
+            message="Ambassador job invitation accepted.",
+            input_obj=input,
+            ambassador_job=ambassador_job,
+        )
+
+
 @strawberry.type
 class DeclineAmbassadorJobMutations:
     @relay.mutation(permission_classes=[StrictIsAuthenticated])
@@ -1212,3 +1305,14 @@ class DeclineAmbassadorJobMutations:
         input: inputs.DeclineAmbassadorJobInput,
     ) -> types.AmbassadorJobDetailResponse:
         return await DeclineAmbassadorJobMutationService.decline(input, info)
+
+
+@strawberry.type
+class AcceptAmbassadorJobInvitationMutations:
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def accept_ambassador_job_invitation(
+        self,
+        info: strawberry.Info,
+        input: inputs.AcceptAmbassadorJobInvitationInput,
+    ) -> types.AmbassadorJobDetailResponse:
+        return await AcceptAmbassadorJobInvitationMutationService.accept(input, info)

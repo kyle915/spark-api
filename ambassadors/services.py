@@ -509,6 +509,12 @@ class AcceptInvitationService(BaseAmbassadorService):
                 updated_by=invitation.invited_by,
             )
 
+            if invitation.job:
+                await cls.accept_job_invitation(
+                    invitation=invitation,
+                    ambassador=ambassador,
+                )
+
             # Mark invitation as used
             await cls.mark_invitation_used(
                 invitation=invitation,
@@ -534,6 +540,53 @@ class AcceptInvitationService(BaseAmbassadorService):
                 message=f"Error accepting invitation: {str(e)}",
                 input_obj=input,
             )
+
+    @classmethod
+    async def accept_job_invitation(
+        cls,
+        invitation: AmbassadorInvitation,
+        ambassador: Ambassador,
+    ) -> None:
+        """Accept or create the AmbassadorJob linked to an invitation."""
+
+        @sync_to_async
+        def _accept_job_invitation():
+            accepted_status = job_models.Status.objects.get_accepted(
+                tenant_id=invitation.tenant_id,
+                user=invitation.invited_by,
+            )
+
+            ambassador_job = None
+            if invitation.ambassador_id:
+                ambassador_job = job_models.AmbassadorJob.objects.filter(
+                    ambassador_id=invitation.ambassador_id,
+                    job_id=invitation.job_id,
+                ).first()
+
+            if ambassador_job:
+                ambassador_job.ambassador = ambassador
+                ambassador_job.status = accepted_status
+                ambassador_job.updated_by = invitation.invited_by
+                ambassador_job.save(
+                    update_fields=["ambassador", "status", "updated_by", "updated_at"]
+                )
+                return
+
+            if not invitation.job or not invitation.job.rate_id:
+                raise ValueError("Job not found or has no rate.")
+
+            job_models.AmbassadorJob.objects.create(
+                ambassador=ambassador,
+                job=invitation.job,
+                tenant=invitation.tenant,
+                status=accepted_status,
+                rate=invitation.job.rate,
+                appear_as_rfp=True,
+                created_by=invitation.invited_by,
+                updated_by=invitation.invited_by,
+            )
+
+        await _accept_job_invitation()
 
     @classmethod
     async def accept_by_token(

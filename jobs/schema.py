@@ -44,6 +44,7 @@ class SparkJobQueries(ClientJobQueries):
 @strawberry.type
 class AmbassadorJobMutations(
     mutations.AmbassadorJobMutations,
+    mutations.AcceptAmbassadorJobInvitationMutations,
     mutations.AmbassadorToAmbassadorReviewMutations,
 ):
     pass
@@ -85,4 +86,9 @@ class SparkJobMutations(ClientJobMutations):
 
 @strawberry.type
 class MobileJobQueries(ClientJobQueries):
+    pass
+
+
+@strawberry.type
+class MobileJobMutations(AmbassadorJobMutations):
     pass
