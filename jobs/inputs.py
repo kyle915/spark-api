@@ -344,6 +344,11 @@ class DeclineAmbassadorJobInput(BaseTenantInput):
 
 
 @strawberry.input
+class AcceptAmbassadorJobInvitationInput(SparkGraphQLInput):
+    ambassador_job_id: strawberry.ID
+
+
+@strawberry.input
 class InviteAmbassadorsToJobInput(BaseTenantInput):
     ambassador_ids: List[strawberry.ID]
     job_id: strawberry.ID
