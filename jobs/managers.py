@@ -1,12 +1,18 @@
 from typing import TYPE_CHECKING
 
+from asgiref.sync import async_to_sync
 from django.db import models
+import logging
 from utils.models import BaseManager
+from utils.onesignal import OneSignalError, one_signal_client
 
 if TYPE_CHECKING:
     from jobs.models import Job, Status
     from ambassadors.models import Ambassador
     from tenants.models import User
+
+
+logger = logging.getLogger(__name__)
 
 
 class StatusManager(BaseManager, models.Manager):
@@ -95,8 +101,34 @@ class AmbassadorJobManager(BaseManager, models.Manager):
             invited_by=action_by,
             job=job,
         )
+        self._send_assignment_push(ambassador_job)
 
         return ambassador_job
+
+    def _send_assignment_push(self, ambassador_job):
+        ambassador = getattr(ambassador_job, "ambassador", None)
+        user = getattr(ambassador, "user", None)
+        if not user:
+            return
+
+        job = ambassador_job.job
+        try:
+            async_to_sync(one_signal_client.send_push)(
+                external_ids=[str(user.uuid)],
+                title="New job assigned",
+                message=f"You were assigned to {job.name}.",
+                data={
+                    "type": "job_assigned",
+                    "job_id": str(job.id),
+                    "ambassador_job_id": str(ambassador_job.id),
+                },
+            )
+        except OneSignalError as exc:
+            logger.warning(
+                "Failed to send OneSignal assignment push for ambassador_job=%s: %s",
+                ambassador_job.id,
+                exc,
+            )
 
     def accept_from_invitation(self, invitation):
         from jobs.models import Status
