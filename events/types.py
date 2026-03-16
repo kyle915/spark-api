@@ -278,18 +278,7 @@ class Request(Node):
 
     @strawberry.field
     def name(self) -> str:
-        request_name = _get_field(self, "name") or ""
-
-        retailer_name = _get_field(self, "retailer_name")
-        if not retailer_name:
-            fields_cache = getattr(self._state, "fields_cache", {})
-            retailer = fields_cache.get("retailer")
-            if retailer and getattr(retailer, "name", None):
-                retailer_name = retailer.name
-
-        if retailer_name:
-            return f"{request_name} - {retailer_name}".strip()
-        return request_name
+        return _get_field(self, "name") or ""
 
     # Date/time fields returned as stored, without server TZ conversion
     @strawberry.field
@@ -308,6 +297,8 @@ class Request(Node):
 
     address: str
     decline_reason: str | None = None
+    reviewed: bool
+    store_number: str | None = None
     notes: str | None = None
     coordinates: List[float]
     requestor_email: str | None = None
@@ -460,26 +451,7 @@ class Event(Node):
 
     @strawberry.field
     def name(self) -> str:
-        event_name = _get_field(self, "name") or ""
-
-        retailer_name = None
-        fields_cache = getattr(self._state, "fields_cache", {})
-        retailer = fields_cache.get("retailer")
-        request = fields_cache.get("request")
-
-        if retailer and getattr(retailer, "name", None):
-            retailer_name = retailer.name
-        elif request and getattr(request, "retailer_name", None):
-            retailer_name = request.retailer_name
-        elif request:
-            request_fields_cache = getattr(request._state, "fields_cache", {})
-            request_retailer = request_fields_cache.get("retailer")
-            if request_retailer and getattr(request_retailer, "name", None):
-                retailer_name = request_retailer.name
-
-        if retailer_name:
-            return f"{event_name} - {retailer_name}".strip()
-        return event_name
+        return _get_field(self, "name") or ""
 
     @strawberry.field
     def date(self) -> str | None:

@@ -30,6 +30,10 @@ def _safe(value) -> str:
     return str(value)
 
 
+def _format_recap_status(approved: bool) -> str:
+    return "Approved" if approved else "Pending"
+
+
 def _format_user_name(user) -> str:
     if not user:
         return ""
@@ -58,6 +62,31 @@ def _get_distributor_name(recap) -> str:
     return getattr(distributor, "name", "") or ""
 
 
+def _get_retailer_state_name(recap) -> str:
+    retailer = getattr(recap, "retailer", None)
+    if not retailer:
+        event = getattr(recap, "event", None)
+        request = getattr(event, "request", None) if event else None
+        retailer = getattr(request, "retailer", None) if request else None
+    location = getattr(retailer, "location", None) if retailer else None
+    state = getattr(location, "state", None) if location else None
+    if state and getattr(state, "name", None):
+        return state.name
+
+    event = getattr(recap, "event", None)
+    request = getattr(event, "request", None) if event else None
+    distributor = getattr(event, "distributor", None) if event else None
+    if not distributor:
+        distributor = getattr(request, "distributor", None) if request else None
+    distributor_location = getattr(distributor, "location", None) if distributor else None
+    distributor_state = (
+        getattr(distributor_location, "state", None)
+        if distributor_location
+        else getattr(distributor, "state", None)
+    )
+    return getattr(distributor_state, "name", "") or ""
+
+
 def build_recaps_xlsx(
     recaps: Iterable[object],
     frontend_base_url: str | None = None,
@@ -72,12 +101,13 @@ def build_recaps_xlsx(
         [
             "recap_uuid",
             "recap_name",
-            "approved",
+            "status",
             "event_uuid",
             "event_name",
             "event_date",
             "event_address",
             "retailer",
+            "state",
             "distributor",
             "ambassador",
             "job",
@@ -167,17 +197,19 @@ def build_recaps_xlsx(
         ambassador_user = None
         if getattr(recap, "ambassador", None) and getattr(recap.ambassador, "user", None):
             ambassador_user = recap.ambassador.user
+        recap_approved = bool(getattr(recap, "approved", False))
 
         recap_sheet.append(
             [
                 _safe(getattr(recap, "uuid", None)),
                 _safe(getattr(recap, "name", None)),
-                bool(getattr(recap, "approved", False)),
+                _format_recap_status(recap_approved),
                 _safe(getattr(getattr(recap, "event", None), "uuid", None)),
                 _safe(getattr(getattr(recap, "event", None), "name", None)),
                 _format_date_mdy(getattr(getattr(recap, "event", None), "date", None)),
                 _safe(getattr(getattr(recap, "event", None), "address", None)),
                 _get_retailer_name(recap),
+                _get_retailer_state_name(recap),
                 _get_distributor_name(recap),
                 _format_user_name(ambassador_user),
                 _safe(getattr(getattr(recap, "job", None), "name", None)),

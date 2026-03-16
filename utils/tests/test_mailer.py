@@ -36,6 +36,7 @@ class TestEnvelope:
         assert envelope.template == ""
         assert envelope.context == {}
         assert envelope.to_emails == []
+        assert envelope.cc_emails == []
         assert envelope.headers == {}
         assert envelope.html == ""
 
@@ -46,6 +47,7 @@ class TestEnvelope:
             template="tenants.templates.emails.email_verification",
             context={"user": "test"},
             to_emails=["test@example.com"],
+            cc_emails=["copy@example.com"],
             headers={"X-Custom": "value"},
             html="<html>Test</html>"
         )
@@ -53,6 +55,7 @@ class TestEnvelope:
         assert envelope.template == "tenants.templates.emails.email_verification"
         assert envelope.context == {"user": "test"}
         assert envelope.to_emails == ["test@example.com"]
+        assert envelope.cc_emails == ["copy@example.com"]
         assert envelope.headers == {"X-Custom": "value"}
         assert envelope.html == "<html>Test</html>"
 
@@ -120,6 +123,7 @@ class TestEnvelope:
             subject="Test Subject",
             from_email="from@example.com",
             to_emails=["to@example.com"],
+            cc_emails=["copy@example.com"],
             template="tenants.templates.emails.email_verification",
             headers={"X-Custom": "value"},
             html="<html>Test</html>"
@@ -129,6 +133,7 @@ class TestEnvelope:
             assert result == {
                 "from": "from@example.com",
                 "to": ["to@example.com"],
+                "cc": ["copy@example.com"],
                 "subject": "Test Subject",
                 "html": "<html>Rendered</html>",
                 "template": "tenants.templates.emails.email_verification",
@@ -140,6 +145,7 @@ class TestEnvelope:
         payload = {
             "from": "from@example.com",
             "to": ["to@example.com"],
+            "cc": ["copy@example.com"],
             "subject": "Test Subject",
             "html": "<html>Test</html>",
             "headers": {"X-Custom": "value"},
@@ -148,6 +154,7 @@ class TestEnvelope:
         envelope = Envelope.from_dict(payload)
         assert envelope.from_email == "from@example.com"
         assert envelope.to_emails == ["to@example.com"]
+        assert envelope.cc_emails == ["copy@example.com"]
         assert envelope.subject == "Test Subject"
         assert envelope.html == "<html>Test</html>"
         assert envelope.headers == {"X-Custom": "value"}
@@ -185,6 +192,7 @@ class TestMailDrivers:
             subject="Test Subject",
             from_email="from@example.com",
             to_emails=["to@example.com"],
+            cc_emails=["copy@example.com"],
             headers={"X-Custom": "value"},
             html="<html>Test</html>"
         )
@@ -193,6 +201,7 @@ class TestMailDrivers:
             mock_resend_send.assert_called_once_with({
                 "from": "from@example.com",
                 "to": ["to@example.com"],
+                "cc": ["copy@example.com"],
                 "subject": "Test Subject",
                 "html": "<html>Rendered</html>",
                 "headers": {"X-Custom": "value"},
@@ -206,6 +215,7 @@ class TestMailDrivers:
             subject="Test Subject",
             from_email="from@example.com",
             to_emails=["to@example.com"],
+            cc_emails=["copy@example.com"],
             headers={"X-Custom": "value"},
             html="<html>Test</html>"
         )
@@ -218,6 +228,7 @@ class TestMailDrivers:
                 body="<html>Rendered</html>",
                 from_email="from@example.com",
                 to=["to@example.com"],
+                cc=["copy@example.com"],
                 headers={"X-Custom": "value"},
             )
             mock_email_instance.attach_alternative.assert_called_once_with(

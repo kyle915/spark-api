@@ -19,6 +19,7 @@ import strawberry_django  # noqa: F401
 import uuid
 from asgiref.sync import sync_to_async
 from django.contrib.auth import get_user_model
+from unittest.mock import AsyncMock, patch
 
 from ambassadors.models import AmbassadorGroup, GroupType, UserGroup
 from ambassadors.tests.base import AmbassadorsGraphQLTestCase
@@ -213,12 +214,18 @@ class TestAddAmbassadorsToGroup(AmbassadorsGraphQLTestCase):
             }
         }
 
-        result = await self._execute_mutation_authenticated(
-            self.mutation, variables, self.client_user, self.endpoint_path)
+        with patch(
+            "jobs.managers.one_signal_client.send_push",
+            new=AsyncMock(return_value={"id": "push-123"}),
+        ) as mock_push:
+            result = await self._execute_mutation_authenticated(
+                self.mutation, variables, self.client_user, self.endpoint_path
+            )
 
         assert result.errors is None
         assert result.data is not None
         assert result.data["addAmbassadorsToGroup"]["success"] is True
+        assert mock_push.await_count == 1
 
         # Verify UserGroup was created
         @sync_to_async
@@ -251,6 +258,9 @@ class TestAddAmbassadorsToGroup(AmbassadorsGraphQLTestCase):
         assert ambassador_job_data['status_slug'] == "invited"
         assert ambassador_job_data['rate'] == self.rate
         assert ambassador_job_data['appear_as_rfp'] is True
+        assert mock_push.await_args.kwargs["external_ids"] == [
+            str(self.ambassador_user1.uuid)
+        ]
 
     @pytest.mark.asyncio
     async def test_add_ambassadors_to_group_success_by_spark_admin(self):

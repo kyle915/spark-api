@@ -79,8 +79,11 @@ class RequestFiltersInput(BaseTenantInput):
     request_type_id: strawberry.ID | None = None
     retailer_state_id: strawberry.ID | None = None
     distributor_state_id: strawberry.ID | None = None
+    store_number: str | None = None
     date: str | None = None
+    created_within_hours: int | None = None
     edited: bool | None = None
+    reviewed: bool | None = None
 
 
 @strawberry.input
@@ -311,6 +314,12 @@ class DeclineRequestInput(SparkGraphQLInput):
 
 
 @strawberry.input
+class UpsertRequestReviewedInput(SparkGraphQLInput):
+    id: strawberry.ID
+    reviewed: bool
+
+
+@strawberry.input
 class CreateRequestDetailInput(SparkGraphQLInput):
     is_table_needed: bool = False
     table_size: int | None = None
@@ -336,6 +345,8 @@ class CreateRequestInput(BaseNameableInput):
     store_manager_id: strawberry.ID | None = None
     rmm_asigned_id: strawberry.ID | None = None
     requestor_email: str | None = None
+    reviewed: bool | None = None
+    store_number: str | None = None
     client_name: str | None = None
     client_email: str | None = None
     distributor_name: str | None = None
@@ -364,6 +375,8 @@ class UpdateRequestInput(BaseNameableInput):
     retailer_id: strawberry.ID
     rmm_asigned_id: strawberry.ID | None = None
     requestor_email: str | None = None
+    reviewed: bool | None = None
+    store_number: str | None = None
     store_manager_name: str
     store_manager_phone: str
     details: List[CreateRequestDetailInput]
@@ -383,6 +396,7 @@ class CreateRequestWithDependenciesInput(BaseNameableInput):
     distributor_id: strawberry.ID | None = None
     retailer_id: strawberry.ID | None = None
     requestor_email: str | None = None
+    store_number: str | None = None
     client_name: str
     client_email: str
     distributor_name: str

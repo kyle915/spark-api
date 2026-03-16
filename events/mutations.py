@@ -26,12 +26,10 @@ from utils.graphql.mixins import SparkGraphQLMixin, resolve_id_to_int
 from utils.utils import ROLE_ID, build_mutation_response
 from .envelopes import (
     EventApprovedNotificationMailer,
-    RequestApprovedNotificationMailer,
     RequestorRequestApprovedMailer,
     RequestorRequestDeclinedMailer,
     RequestCreatedNotificationMailer,
     RequestorRequestCreatedMailer,
-    RequestorRequestAutoApprovedMailer,
 )
 from utils.gcs import (
     delete_blob,
@@ -220,6 +218,8 @@ class BaseMutationService(SparkGraphQLMixin):
         for key, value in params.items():
             if not hasattr(model, key):
                 continue
+            if key == "store_number" and isinstance(value, str):
+                value = value.strip() or None
             setattr(model, key, value)
 
         # set the tenant id
@@ -1762,6 +1762,8 @@ class RequestWithDependenciesMutationService(BaseMutationService):
                         "Approval status not found. Please ensure you have a status with slug 'approved'."
                     )
                 request.status = approval_status
+                if self.user:
+                    request.approved_by = self.user
             else:
                 pending_status = models.RequestStatus.objects.get_by_slug(
                     slug="pending", tenant=request.tenant_id
@@ -1882,7 +1884,7 @@ async def _notify_notification_group_users_for_request(
     if not to_emails:
         return
 
-    mailer = RequestApprovedNotificationMailer(
+    mailer = RequestorRequestApprovedMailer(
         request=request,
         location=location,
         to_emails=to_emails,
@@ -1952,10 +1954,11 @@ async def _notify_requestor_for_request_created(
     location: models.Location | None,
     delay_seconds: int | float | None = None,
 ) -> None:
-    requestor_email = (request.requestor_email or "").strip()
+    requestor_email = await _resolve_requestor_email(request)
     if not requestor_email:
         return
 
+    request.requestor_email = requestor_email
     mailer = RequestorRequestCreatedMailer(
         request=request,
         location=location,
@@ -1988,27 +1991,19 @@ async def _notify_requestor_for_request_approved(
     location: models.Location | None,
     delay_seconds: int | float | None = None,
 ) -> None:
-    requestor_email = (request.requestor_email or "").strip()
+    requestor_email = await _resolve_requestor_email(request)
     if not requestor_email:
         return
 
+    request.requestor_email = requestor_email
+    copy_emails = _get_request_review_copy_emails(exclude_email=requestor_email)
     mailer = RequestorRequestApprovedMailer(
         request=request,
         location=location,
         to_emails=[requestor_email],
+        cc_emails=copy_emails,
     )
     await sync_to_async(mailer.send)(delay_seconds=delay_seconds)
-
-    copy_emails = _get_request_review_copy_emails(exclude_email=requestor_email)
-    if not copy_emails:
-        return
-
-    copy_mailer = RequestorRequestApprovedMailer(
-        request=request,
-        location=location,
-        to_emails=copy_emails,
-    )
-    await sync_to_async(copy_mailer.send)(delay_seconds=delay_seconds)
 
 
 async def _notify_requestor_for_request_declined(
@@ -2018,31 +2013,21 @@ async def _notify_requestor_for_request_declined(
     reviewed_by_email: str | None = None,
     delay_seconds: int | float | None = None,
 ) -> None:
-    requestor_email = (request.requestor_email or "").strip()
+    requestor_email = await _resolve_requestor_email(request)
     if not requestor_email:
         return
 
+    request.requestor_email = requestor_email
+    copy_emails = _get_request_review_copy_emails(exclude_email=requestor_email)
     mailer = RequestorRequestDeclinedMailer(
         request=request,
         location=location,
         to_emails=[requestor_email],
+        cc_emails=copy_emails,
         reviewed_by_name=reviewed_by_name,
         reviewed_by_email=reviewed_by_email,
     )
     await sync_to_async(mailer.send)(delay_seconds=delay_seconds)
-
-    copy_emails = _get_request_review_copy_emails(exclude_email=requestor_email)
-    if not copy_emails:
-        return
-
-    copy_mailer = RequestorRequestDeclinedMailer(
-        request=request,
-        location=location,
-        to_emails=copy_emails,
-        reviewed_by_name=reviewed_by_name,
-        reviewed_by_email=reviewed_by_email,
-    )
-    await sync_to_async(copy_mailer.send)(delay_seconds=delay_seconds)
 
 
 async def _notify_requestor_for_request_auto_approved(
@@ -2050,26 +2035,37 @@ async def _notify_requestor_for_request_auto_approved(
     location: models.Location | None,
     delay_seconds: int | float | None = None,
 ) -> None:
-    requestor_email = (request.requestor_email or "").strip()
-    if not requestor_email and request.created_by_id:
-        requestor_email = await sync_to_async(
-            lambda: (
-                User.objects.filter(id=request.created_by_id)
-                .values_list("email", flat=True)
-                .first()
-                or ""
-            )
-        )()
-        requestor_email = requestor_email.strip()
+    requestor_email = await _resolve_requestor_email(request)
     if not requestor_email:
         return
 
-    mailer = RequestorRequestAutoApprovedMailer(
+    request.requestor_email = requestor_email
+
+    # Auto-approved requests should notify with the same approval email flow.
+    await _notify_requestor_for_request_approved(
         request=request,
         location=location,
-        to_emails=[requestor_email],
+        delay_seconds=delay_seconds,
     )
-    await sync_to_async(mailer.send)(delay_seconds=delay_seconds)
+
+
+async def _resolve_requestor_email(request: models.Request) -> str:
+    requestor_email = (request.requestor_email or "").strip()
+    if requestor_email:
+        return requestor_email
+
+    if not request.created_by_id:
+        return ""
+
+    requestor_email = await sync_to_async(
+        lambda: (
+            User.objects.filter(id=request.created_by_id)
+            .values_list("email", flat=True)
+            .first()
+            or ""
+        )
+    )()
+    return requestor_email.strip()
 
 
 @strawberry.type
@@ -2486,6 +2482,69 @@ class RequestMutations:
         except Exception as e:
             return build_mutation_response(
                 types.DeclineRequestResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def upsert_request_reviewed(
+        self,
+        info: strawberry.Info,
+        input: inputs.UpsertRequestReviewedInput,
+    ) -> types.RequestDetailResponse:
+        """Update request reviewed flag."""
+        try:
+            service: RequestMutationService = RequestMutationService()
+            user: User = await service.get_user(info)
+            if user.role_id == ROLE_ID.Ambassadors:
+                raise GraphQLError(
+                    "You are not authorized to update request review status."
+                )
+
+            try:
+                input.id = resolve_id_to_int(input.id)
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Invalid request ID.")
+
+            request: models.Request = await sync_to_async(
+                models.Request.objects.select_related("timezone").get
+            )(id=input.id)
+
+            tenant: Tenant = await sync_to_async(Tenant.objects.get)(
+                id=request.tenant_id
+            )
+
+            is_spark_admin = await user.role.is_spark_admin
+            if not is_spark_admin:
+                try:
+                    await sync_to_async(user.get_tenant)(tenant_id=tenant.id)
+                except Exception:
+                    raise GraphQLError(
+                        "You are not authorized to update requests for this tenant."
+                    )
+
+            request.reviewed = input.reviewed
+            request.updated_by = user
+            await sync_to_async(request.save)()
+
+            return build_mutation_response(
+                types.RequestDetailResponse,
+                success=True,
+                message="Request review status updated successfully.",
+                input_obj=input,
+                request=request,
+            )
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.RequestDetailResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+        except Exception as e:
+            return build_mutation_response(
+                types.RequestDetailResponse,
                 success=False,
                 message=str(e),
                 input_obj=input,

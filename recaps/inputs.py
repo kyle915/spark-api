@@ -13,6 +13,8 @@ class RecapFiltersInput(SparkGraphQLInput):
     retailer_id: strawberry.ID | None = None
     state_id: strawberry.ID | None = None
     event_date: str | None = None
+    start_date: str | None = None
+    end_date: str | None = None
     event_address: str | None = None
     edited: bool | None = None
 
@@ -70,6 +72,7 @@ class AccountFeedbackInput(SparkGraphQLInput):
     do_differently_feedback: str | None = None
     feedback: str | None = None
     corpo_card: str | None = None
+    was_corpo_card_used: bool | None = None
 
 
 @strawberry.input
@@ -127,6 +130,8 @@ class GenerateRecapPdfInput(SparkGraphQLInput):
 @strawberry.input
 class ExportRecapsXlsxInput(SparkGraphQLInput):
     tenant_id: strawberry.ID | None = None
+    start_date: str | None = None
+    end_date: str | None = None
 
 
 @strawberry.input
