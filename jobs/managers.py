@@ -112,15 +112,18 @@ class AmbassadorJobManager(BaseManager, models.Manager):
             return
 
         job = ambassador_job.job
+        deep_link = f"spark://(app)/(tabs)/(my-gigs)/{job.id}"
         try:
             async_to_sync(one_signal_client.send_push)(
                 external_ids=[str(user.uuid)],
-                title="New job assigned",
-                message=f"You were assigned to {job.name}.",
+                title="New job invitation",
+                message=f"You were invited to {job.name}.",
+                url=deep_link,
                 data={
-                    "type": "job_assigned",
+                    "type": "job_invited",
                     "job_id": str(job.id),
                     "ambassador_job_id": str(ambassador_job.id),
+                    "deep_link": deep_link,
                 },
             )
         except OneSignalError as exc:
