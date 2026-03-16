@@ -80,7 +80,7 @@ async def _notify_approved_ambassador_by_push(
     job = ambassador_job.job
     title = "Job application accepted"
     message = f"You were accepted for {job.name}."
-    deep_link = f"/(app)/(tabs)/(my-gigs)/{job.id}"
+    deep_link = f"spark://(app)/(tabs)/(my-gigs)/{job.id}"
 
     try:
         await one_signal_client.send_push(
@@ -103,7 +103,7 @@ async def _notify_approved_ambassador_by_push(
         )
 
 
-async def _notify_assigned_ambassador_by_push(
+async def _notify_invited_ambassador_by_push(
     ambassador_job: models.AmbassadorJob,
 ) -> None:
     ambassador = getattr(ambassador_job, "ambassador", None)
@@ -112,23 +112,26 @@ async def _notify_assigned_ambassador_by_push(
         return
 
     job = ambassador_job.job
-    title = "New job assigned"
-    message = f"You were assigned to {job.name}."
+    title = "New job invitation"
+    message = f"You were invited to {job.name}."
+    deep_link = f"spark://(app)/(tabs)/(my-gigs)/{job.id}"
 
     try:
         await one_signal_client.send_push(
             external_ids=[str(user.uuid)],
             title=title,
             message=message,
+            url=deep_link,
             data={
-                "type": "job_assigned",
+                "type": "job_invited",
                 "job_id": str(job.id),
                 "ambassador_job_id": str(ambassador_job.id),
+                "deep_link": deep_link,
             },
         )
     except OneSignalError as exc:
         logger.warning(
-            "Failed to send OneSignal assignment push for ambassador_job=%s: %s",
+            "Failed to send OneSignal invitation push for ambassador_job=%s: %s",
             ambassador_job.id,
             exc,
         )
@@ -1038,7 +1041,7 @@ class ApproveAmbassadorJobMutationService(SparkGraphQLMixin):
                 )
             )
             for ambassador_job in ambassador_jobs:
-                await _notify_assigned_ambassador_by_push(ambassador_job)
+                await _notify_invited_ambassador_by_push(ambassador_job)
         return build_mutation_response(
             types.InviteAmbassadorsToJobResponse,
             success=True,
