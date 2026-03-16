@@ -38,6 +38,8 @@ class BaseRecapQueriesService(SparkGraphQLMixin):
                 "event",
                 "event__event_type",
                 "event__timezone",
+                "ambassador",
+                "ambassador__user",
                 "job",
                 "retailer",
             )
