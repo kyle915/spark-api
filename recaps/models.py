@@ -303,6 +303,7 @@ class AccountFeedback(models.Model):
     do_differently_feedback = models.TextField(null=True)
     feedback = models.TextField(null=True)
     corpo_card = models.TextField(null=True)
+    was_corpo_card_used = models.BooleanField(default=False)
 
     recap = models.ForeignKey(
         Recap, on_delete=models.RESTRICT, null=False, related_name="account_feedback"

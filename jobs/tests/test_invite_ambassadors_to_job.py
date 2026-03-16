@@ -11,7 +11,9 @@ This module tests:
 """
 import pytest
 import strawberry_django  # noqa: F401
+from strawberry.relay import to_base64
 import uuid
+from unittest.mock import AsyncMock, patch
 from asgiref.sync import sync_to_async
 from django.contrib.auth import get_user_model
 from graphql import GraphQLError
@@ -92,6 +94,9 @@ class TestClientInviteAmbassadorsToJob(JobsGraphQLTestCase):
         self.create_tenanted_user(
             user=self.ambassador_user2, tenant=self.tenant)
         self.ambassador2 = self.create_ambassador(user=self.ambassador_user2)
+        self.job_relay_id = to_base64("Job", self.job.id)
+        self.ambassador1_relay_id = to_base64("Ambassador", self.ambassador1.id)
+        self.ambassador2_relay_id = to_base64("Ambassador", self.ambassador2.id)
 
         self.schema = schema_clients
         self.endpoint_path = "/api/v1/graphql/clients"
@@ -137,14 +142,18 @@ class TestClientInviteAmbassadorsToJob(JobsGraphQLTestCase):
         variables = {
             "input": {
                 "tenantId": str(self.tenant.id),
-                "jobId": str(self.job.id),
-                "ambassadorIds": [str(self.ambassador1.id), str(self.ambassador2.id)],
+                "jobId": self.job_relay_id,
+                "ambassadorIds": [self.ambassador1_relay_id, self.ambassador2_relay_id],
                 "clientMutationId": "invite-1"
             }
         }
 
-        result = await self._execute_mutation_authenticated(
-            self.mutation, variables, self.client_user, self.endpoint_path)
+        with patch(
+            "jobs.mutations.one_signal_client.send_push",
+            new=AsyncMock(return_value={"id": "push-123"}),
+        ) as mock_push:
+            result = await self._execute_mutation_authenticated(
+                self.mutation, variables, self.client_user, self.endpoint_path)
 
         assert result.errors is None
         assert result.data is not None
@@ -156,6 +165,7 @@ class TestClientInviteAmbassadorsToJob(JobsGraphQLTestCase):
         # Verify ambassador jobs were created
         ambassador_jobs = result.data["inviteAmbassadorsToJob"]["ambassadorJobs"]
         assert len(ambassador_jobs) == 2
+        assert mock_push.await_count == 2
 
         # GraphQL returns Relay global IDs
         ambassador_global_ids = {aj["ambassador"]["id"]
@@ -197,14 +207,22 @@ class TestClientInviteAmbassadorsToJob(JobsGraphQLTestCase):
             assert aj_data['created_by'] == self.client_user
             assert aj_data['updated_by'] == self.client_user
 
+        pushed_external_ids = [
+            call.kwargs["external_ids"][0] for call in mock_push.await_args_list
+        ]
+        assert set(pushed_external_ids) == {
+            str(self.ambassador_user1.uuid),
+            str(self.ambassador_user2.uuid),
+        }
+
     @pytest.mark.asyncio
     async def test_invite_single_ambassador_to_job(self):
         """Test inviting a single ambassador to job."""
         variables = {
             "input": {
                 "tenantId": str(self.tenant.id),
-                "jobId": str(self.job.id),
-                "ambassadorIds": [str(self.ambassador1.id)],
+                "jobId": self.job_relay_id,
+                "ambassadorIds": [self.ambassador1_relay_id],
             }
         }
 
@@ -223,8 +241,8 @@ class TestClientInviteAmbassadorsToJob(JobsGraphQLTestCase):
         variables = {
             "input": {
                 "tenantId": str(self.tenant.id),
-                "jobId": "999999",
-                "ambassadorIds": [str(self.ambassador1.id)],
+                "jobId": to_base64("Job", 999999),
+                "ambassadorIds": [self.ambassador1_relay_id],
             }
         }
 
@@ -256,8 +274,8 @@ class TestClientInviteAmbassadorsToJob(JobsGraphQLTestCase):
         variables = {
             "input": {
                 "tenantId": str(self.tenant.id),
-                "jobId": str(job_without_rate.id),
-                "ambassadorIds": [str(self.ambassador1.id)],
+                "jobId": to_base64("Job", job_without_rate.id),
+                "ambassadorIds": [self.ambassador1_relay_id],
             }
         }
 
@@ -274,7 +292,7 @@ class TestClientInviteAmbassadorsToJob(JobsGraphQLTestCase):
         variables = {
             "input": {
                 "tenantId": str(self.tenant.id),
-                "jobId": str(self.job.id),
+                "jobId": self.job_relay_id,
                 "ambassadorIds": [],
             }
         }
@@ -293,8 +311,11 @@ class TestClientInviteAmbassadorsToJob(JobsGraphQLTestCase):
         variables = {
             "input": {
                 "tenantId": str(self.tenant.id),
-                "jobId": str(self.job.id),
-                "ambassadorIds": ["999999", "999998"],
+                "jobId": self.job_relay_id,
+                "ambassadorIds": [
+                    to_base64("Ambassador", 999999),
+                    to_base64("Ambassador", 999998),
+                ],
             }
         }
 
@@ -321,8 +342,8 @@ class TestClientInviteAmbassadorsToJob(JobsGraphQLTestCase):
         variables = {
             "input": {
                 "tenantId": str(self.tenant.id),
-                "jobId": str(self.job.id),
-                "ambassadorIds": [str(self.ambassador1.id)],
+                "jobId": self.job_relay_id,
+                "ambassadorIds": [self.ambassador1_relay_id],
             }
         }
 
@@ -373,8 +394,8 @@ class TestClientInviteAmbassadorsToJob(JobsGraphQLTestCase):
         variables = {
             "input": {
                 "tenantId": str(self.tenant.id),
-                "jobId": str(self.job.id),
-                "ambassadorIds": [str(self.ambassador1.id)],
+                "jobId": self.job_relay_id,
+                "ambassadorIds": [self.ambassador1_relay_id],
             }
         }
 
@@ -393,8 +414,8 @@ class TestClientInviteAmbassadorsToJob(JobsGraphQLTestCase):
         variables = {
             "input": {
                 "tenantId": str(self.tenant.id),
-                "jobId": str(self.job.id),
-                "ambassadorIds": [str(self.ambassador1.id)],
+                "jobId": self.job_relay_id,
+                "ambassadorIds": [self.ambassador1_relay_id],
             }
         }
 
@@ -423,16 +444,17 @@ class TestClientInviteAmbassadorsToJob(JobsGraphQLTestCase):
             return ambassador3
 
         ambassador3 = await create_third_ambassador()
+        ambassador3_relay_id = to_base64("Ambassador", ambassador3.id)
 
         variables = {
             "input": {
                 "tenantId": str(self.tenant.id),
-                "jobId": str(self.job.id),
+                "jobId": self.job_relay_id,
                 "ambassadorIds": [
-                    str(self.ambassador1.id),
-                    "999999",  # Non-existent
-                    str(ambassador3.id),
-                    "999998",  # Non-existent
+                    self.ambassador1_relay_id,
+                    to_base64("Ambassador", 999999),  # Non-existent
+                    ambassador3_relay_id,
+                    to_base64("Ambassador", 999998),  # Non-existent
                 ],
             }
         }
@@ -515,6 +537,8 @@ class TestSparkInviteAmbassadorsToJob(JobsGraphQLTestCase):
         self.create_tenanted_user(
             user=self.ambassador_user1, tenant=self.tenant)
         self.ambassador1 = self.create_ambassador(user=self.ambassador_user1)
+        self.job_relay_id = to_base64("Job", self.job.id)
+        self.ambassador1_relay_id = to_base64("Ambassador", self.ambassador1.id)
 
         self.schema = schema_spark
         self.endpoint_path = "/api/v1/graphql/spark"
@@ -554,8 +578,8 @@ class TestSparkInviteAmbassadorsToJob(JobsGraphQLTestCase):
         variables = {
             "input": {
                 "tenantId": str(self.tenant.id),
-                "jobId": str(self.job.id),
-                "ambassadorIds": [str(self.ambassador1.id)],
+                "jobId": self.job_relay_id,
+                "ambassadorIds": [self.ambassador1_relay_id],
                 "clientMutationId": "spark-invite-1"
             }
         }

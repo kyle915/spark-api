@@ -4,6 +4,7 @@ from graphql import GraphQLError
 from asgiref.sync import sync_to_async
 from typing import Any
 from decimal import Decimal
+import logging
 
 from django.contrib.auth import get_user_model
 from django.db.models import Model, Prefetch, Q
@@ -34,12 +35,14 @@ from utils.gcs import (
     generate_download_url,
     get_gcs_client,
 )
+from utils.onesignal import OneSignalError, one_signal_client
 from recaps.pdf import build_recap_pdf, should_embed_recap_file, is_image_bytes
 from recaps.excel import build_recaps_xlsx
 
 ensure_relay_mutation()
 
 User = get_user_model()
+logger = logging.getLogger(__name__)
 
 
 async def _notify_recap_approved_to_rmm_or_clients(recap: models.Recap) -> None:
@@ -83,6 +86,36 @@ async def _notify_recap_approved_to_rmm_or_clients(recap: models.Recap) -> None:
             reply_to_email=reply_to_email,
         )
         await sync_to_async(mailer.send)()
+
+
+async def _notify_recap_approved_to_ambassador_by_push(
+    recap: models.Recap,
+) -> None:
+    ambassador = getattr(recap, "ambassador", None)
+    user = getattr(ambassador, "user", None)
+    if not user:
+        return
+
+    deep_link = f"spark://(app)/(tabs)/(recaps)/{recap.id}"
+
+    try:
+        await one_signal_client.send_push(
+            external_ids=[str(user.uuid)],
+            title="Recap approved",
+            message=f"Your recap for {recap.name} was approved.",
+            url=deep_link,
+            data={
+                "type": "recap_approved",
+                "recap_id": str(recap.id),
+                "deep_link": deep_link,
+            },
+        )
+    except OneSignalError as exc:
+        logger.warning(
+            "Failed to send OneSignal recap approval push for recap=%s: %s",
+            recap.id,
+            exc,
+        )
 
 
 class RecapMutationService(SparkGraphQLMixin):
@@ -450,6 +483,9 @@ class RecapMutationService(SparkGraphQLMixin):
                         do_differently_feedback=self.input.account_feedback.do_differently_feedback,
                         feedback=self.input.account_feedback.feedback,
                         corpo_card=self.input.account_feedback.corpo_card,
+                        was_corpo_card_used=bool(
+                            self.input.account_feedback.was_corpo_card_used
+                        ),
                     )
 
                 return recap
@@ -694,12 +730,16 @@ class RecapMutationService(SparkGraphQLMixin):
                         )
                         account_feedback.feedback = self.input.account_feedback.feedback
                         account_feedback.corpo_card = self.input.account_feedback.corpo_card
+                        account_feedback.was_corpo_card_used = bool(
+                            self.input.account_feedback.was_corpo_card_used
+                        )
                         account_feedback.updated_by = self.user
                         account_feedback.save(
                             update_fields=[
                                 "do_differently_feedback",
                                 "feedback",
                                 "corpo_card",
+                                "was_corpo_card_used",
                                 "updated_by",
                                 "updated_at",
                             ]
@@ -711,6 +751,9 @@ class RecapMutationService(SparkGraphQLMixin):
                             do_differently_feedback=self.input.account_feedback.do_differently_feedback,
                             feedback=self.input.account_feedback.feedback,
                             corpo_card=self.input.account_feedback.corpo_card,
+                            was_corpo_card_used=bool(
+                                self.input.account_feedback.was_corpo_card_used
+                            ),
                         )
 
                 if self.input.consumer_engagements is not None:
@@ -902,9 +945,11 @@ class RecapMutationService(SparkGraphQLMixin):
                     "retailer",
                     "timezone",
                     "ambassador",
+                    "ambassador__user",
                 ).get
             )(id=recap.id)
             await _notify_recap_approved_to_rmm_or_clients(recap)
+            await _notify_recap_approved_to_ambassador_by_push(recap)
 
         return recap
 
