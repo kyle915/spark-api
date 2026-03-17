@@ -6,7 +6,12 @@ from asgiref.sync import sync_to_async
 import logging
 
 from jobs import models, inputs, types
-from jobs.envelopes import AmbassadorJobApprovedNotificationMailer
+from jobs.envelopes import (
+    AmbassadorAssignedToJobMailer,
+    AmbassadorApprovedForJobMailer,
+    AmbassadorInvitedToJobMailer,
+    AmbassadorJobApprovedNotificationMailer,
+)
 from ambassadors.models import AmbassadorEvent
 from tenants.models import Role, TenantedUser
 from utils.onesignal import OneSignalError, one_signal_client
@@ -101,6 +106,57 @@ async def _notify_approved_ambassador_by_push(
             ambassador_job.id,
             exc,
         )
+
+
+async def _notify_approved_ambassador_by_email(
+    ambassador_job: models.AmbassadorJob,
+) -> None:
+    ambassador = getattr(ambassador_job, "ambassador", None)
+    user = getattr(ambassador, "user", None)
+    email = (getattr(user, "email", None) or "").strip()
+    if not email:
+        return
+
+    mailer = AmbassadorApprovedForJobMailer(
+        ambassador_job=ambassador_job,
+        to_emails=[email],
+        recipient_first_name=(getattr(user, "first_name", None) or "").strip() or None,
+    )
+    await sync_to_async(mailer.send)()
+
+
+async def _notify_assigned_ambassador_by_email(
+    ambassador_job: models.AmbassadorJob,
+) -> None:
+    ambassador = getattr(ambassador_job, "ambassador", None)
+    user = getattr(ambassador, "user", None)
+    email = (getattr(user, "email", None) or "").strip()
+    if not email:
+        return
+
+    mailer = AmbassadorAssignedToJobMailer(
+        ambassador_job=ambassador_job,
+        to_emails=[email],
+        recipient_first_name=(getattr(user, "first_name", None) or "").strip() or None,
+    )
+    await sync_to_async(mailer.send)()
+
+
+async def _notify_invited_ambassador_by_email(
+    ambassador_job: models.AmbassadorJob,
+) -> None:
+    ambassador = getattr(ambassador_job, "ambassador", None)
+    user = getattr(ambassador, "user", None)
+    email = (getattr(user, "email", None) or "").strip()
+    if not email:
+        return
+
+    mailer = AmbassadorInvitedToJobMailer(
+        ambassador_job=ambassador_job,
+        to_emails=[email],
+        recipient_first_name=(getattr(user, "first_name", None) or "").strip() or None,
+    )
+    await sync_to_async(mailer.send)()
 
 
 async def _notify_invited_ambassador_by_push(
@@ -592,6 +648,22 @@ class AmbassadorJobMutationService(BaseMutationService):
         if ambassador_job is None:
             return response
 
+        ambassador_job = await sync_to_async(
+            models.AmbassadorJob.objects.select_related(
+                "ambassador",
+                "ambassador__user",
+                "job",
+                "job__event",
+                "job__event__timezone",
+                "job__event__retailer",
+                "job__event__retailer__location",
+                "job__event__retailer__location__state",
+                "tenant",
+                "status",
+                "rate",
+            ).get
+        )(id=ambassador_job.id)
+
         job = await models.Job.objects.only("id", "event_id").aget(
             id=ambassador_job.job_id
         )
@@ -607,6 +679,8 @@ class AmbassadorJobMutationService(BaseMutationService):
                 created_by_id=ambassador_job.created_by_id,
                 updated_by_id=ambassador_job.updated_by_id,
             )
+
+        await _notify_assigned_ambassador_by_email(ambassador_job)
 
         return response
 
@@ -1036,11 +1110,18 @@ class ApproveAmbassadorJobMutationService(SparkGraphQLMixin):
                     "ambassador",
                     "ambassador__user",
                     "job",
+                    "job__event",
+                    "job__event__timezone",
+                    "job__event__retailer",
+                    "job__event__retailer__location",
+                    "job__event__retailer__location__state",
                     "status",
                     "rate",
+                    "tenant",
                 )
             )
             for ambassador_job in ambassador_jobs:
+                await _notify_invited_ambassador_by_email(ambassador_job)
                 await _notify_invited_ambassador_by_push(ambassador_job)
         return build_mutation_response(
             types.InviteAmbassadorsToJobResponse,
@@ -1107,6 +1188,9 @@ class ApproveAmbassadorJobMutationService(SparkGraphQLMixin):
                 "job",
                 "job__event",
                 "job__event__timezone",
+                "job__event__retailer",
+                "job__event__retailer__location",
+                "job__event__retailer__location__state",
                 "job__event__rmm_asigned",
                 "ambassador",
                 "ambassador__user",
@@ -1115,6 +1199,7 @@ class ApproveAmbassadorJobMutationService(SparkGraphQLMixin):
             ).get
         )(id=ambassador_job.id)
         await _notify_approval_to_rmm_or_clients(ambassador_job)
+        await _notify_approved_ambassador_by_email(ambassador_job)
         await _notify_approved_ambassador_by_push(ambassador_job)
 
         return build_mutation_response(
