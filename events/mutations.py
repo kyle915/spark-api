@@ -43,7 +43,7 @@ from events.batch_requests import (
     build_request_batch_template_xlsx,
     import_requests_from_excel_bytes,
 )
-from jobs.envelopes import AmbassadorJobUpdatedMailer
+from jobs.envelopes import AmbassadorEventSuspendedMailer, AmbassadorJobUpdatedMailer
 from jobs import models as job_models
 
 ensure_relay_mutation()
@@ -374,6 +374,39 @@ async def _notify_assigned_ambassadors_for_event_update(event_id: int) -> None:
         await sync_to_async(mailer.send)()
 
 
+async def _notify_assigned_ambassadors_for_suspended_event(event_id: int) -> None:
+    ambassador_jobs = await sync_to_async(list)(
+        job_models.AmbassadorJob.objects.filter(job__event_id=event_id)
+        .select_related(
+            "ambassador",
+            "ambassador__user",
+            "job",
+            "job__event",
+            "job__event__timezone",
+            "job__event__retailer",
+            "job__event__retailer__location",
+            "job__event__retailer__location__state",
+            "tenant",
+            "status",
+            "rate",
+        )
+        .distinct()
+    )
+
+    for ambassador_job in ambassador_jobs:
+        user = getattr(getattr(ambassador_job, "ambassador", None), "user", None)
+        email = (getattr(user, "email", None) or "").strip()
+        if not email:
+            continue
+
+        mailer = AmbassadorEventSuspendedMailer(
+            ambassador_job=ambassador_job,
+            to_emails=[email],
+            recipient_first_name=(getattr(user, "first_name", None) or "").strip() or None,
+        )
+        await sync_to_async(mailer.send)()
+
+
 @strawberry.type
 class EventMutations:
     @relay.mutation(permission_classes=[StrictIsAuthenticated])
@@ -552,6 +585,7 @@ class EventMutations:
             event.status = suspended_status
             event.updated_by = user
             await sync_to_async(event.save)()
+            await _notify_assigned_ambassadors_for_suspended_event(event.id)
 
             return build_mutation_response(
                 types.EventDetailResponse,
