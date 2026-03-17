@@ -299,7 +299,7 @@ uv run python manage.py export_schema config.schema_ambassador:schema_ambassador
 
 ## Contributing Guide (GitFlow)
 
-### Branch Model
+### Branch Model.
 
 | Branch | Description |
 |----------|-------------|
