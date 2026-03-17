@@ -1,5 +1,6 @@
 import strawberry
 from django.db.models import Model
+from django.db.models.deletion import ProtectedError
 from strawberry import relay
 from graphql import GraphQLError
 from asgiref.sync import sync_to_async
@@ -11,6 +12,7 @@ from jobs.envelopes import (
     AmbassadorApprovedForJobMailer,
     AmbassadorInvitedToJobMailer,
     AmbassadorJobApprovedNotificationMailer,
+    AmbassadorUnassignedFromJobMailer,
 )
 from ambassadors.models import AmbassadorEvent
 from tenants.models import Role, TenantedUser
@@ -191,6 +193,23 @@ async def _notify_invited_ambassador_by_push(
             ambassador_job.id,
             exc,
         )
+
+
+async def _notify_unassigned_ambassador_by_email(
+    ambassador_job: models.AmbassadorJob,
+) -> None:
+    ambassador = getattr(ambassador_job, "ambassador", None)
+    user = getattr(ambassador, "user", None)
+    email = (getattr(user, "email", None) or "").strip()
+    if not email:
+        return
+
+    mailer = AmbassadorUnassignedFromJobMailer(
+        ambassador_job=ambassador_job,
+        to_emails=[email],
+        recipient_first_name=(getattr(user, "first_name", None) or "").strip() or None,
+    )
+    await sync_to_async(mailer.send)()
 
 
 # Status Mutations
@@ -837,6 +856,70 @@ class ManageAmbassadorJobMutationService(SparkGraphQLMixin):
             ambassador_job=ambassador_job,
         )
 
+    @classmethod
+    async def unassign(
+        cls,
+        input: inputs.UnassignAmbassadorJobInput,
+        info: strawberry.Info,
+    ) -> types.DeleteAmbassadorJobResponse:
+        service = cls()
+        await service.get_user(info)
+
+        try:
+            ambassador_job_id = resolve_id_to_int(input.ambassador_job_id)
+        except (TypeError, ValueError, GraphQLError):
+            return build_mutation_response(
+                types.DeleteAmbassadorJobResponse,
+                success=False,
+                message="Invalid ambassador job ID.",
+                input_obj=input,
+            )
+
+        try:
+            ambassador_job = await sync_to_async(models.AmbassadorJob.objects.get)(
+                id=ambassador_job_id,
+            )
+        except models.AmbassadorJob.DoesNotExist:
+            return build_mutation_response(
+                types.DeleteAmbassadorJobResponse,
+                success=False,
+                message="Ambassador job not found.",
+                input_obj=input,
+            )
+
+        try:
+            ambassador_job = await sync_to_async(
+                models.AmbassadorJob.objects.select_related(
+                    "ambassador",
+                    "ambassador__user",
+                    "job",
+                    "job__event",
+                    "job__event__timezone",
+                    "job__event__retailer",
+                    "job__event__retailer__location",
+                    "job__event__retailer__location__state",
+                    "tenant",
+                    "status",
+                    "rate",
+                ).get
+            )(id=ambassador_job.id)
+            await _notify_unassigned_ambassador_by_email(ambassador_job)
+            await sync_to_async(ambassador_job.delete)()
+        except ProtectedError:
+            return build_mutation_response(
+                types.DeleteAmbassadorJobResponse,
+                success=False,
+                message="Ambassador job cannot be unassigned because it is referenced by other records.",
+                input_obj=input,
+            )
+
+        return build_mutation_response(
+            types.DeleteAmbassadorJobResponse,
+            success=True,
+            message="Ambassador unassigned from job.",
+            input_obj=input,
+        )
+
 
 @strawberry.type
 class ManageAmbassadorJobMutations:
@@ -848,6 +931,14 @@ class ManageAmbassadorJobMutations:
     ) -> types.AmbassadorJobDetailResponse:
         """Manage ambassador job assignment (accept, reject, blacklist, whitelist)."""
         return await ManageAmbassadorJobMutationService.manage_assignment(input, info)
+
+    @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
+    async def unassign_ambassador_job(
+        self,
+        info: strawberry.Info,
+        input: inputs.UnassignAmbassadorJobInput,
+    ) -> types.DeleteAmbassadorJobResponse:
+        return await ManageAmbassadorJobMutationService.unassign(input, info)
 
 
 # CompanyToAmbassadorReview Mutations

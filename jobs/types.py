@@ -333,6 +333,13 @@ class AmbassadorJobDetailResponse:
     ambassador_job: AmbassadorJob | None = None
 
 
+@strawberry.type
+class DeleteAmbassadorJobResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+
+
 @strawberry_django.type(models.CompanyToAmbassadorReview)
 class CompanyToAmbassadorReview(Node):
     uuid: str
