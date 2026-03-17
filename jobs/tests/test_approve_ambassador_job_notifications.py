@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -5,7 +6,10 @@ from asgiref.sync import sync_to_async
 
 from jobs.tests.base import JobsGraphQLTestCase
 from jobs import models
-from jobs.envelopes import AmbassadorJobApprovedNotificationMailer
+from jobs.envelopes import (
+    AmbassadorApprovedForJobMailer,
+    AmbassadorJobApprovedNotificationMailer,
+)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -39,6 +43,7 @@ class TestApproveAmbassadorJobNotifications(JobsGraphQLTestCase):
             tenant=self.tenant,
             address="123 Test St",
             rmm_asigned=self.rmm_user,
+            notes="Wear black pants and arrive 15 minutes early.",
         )
         self.job_title = self.create_job_title(name="Brand Ambassador", tenant=self.tenant)
         self.job = self.create_job(
@@ -48,6 +53,8 @@ class TestApproveAmbassadorJobNotifications(JobsGraphQLTestCase):
             event=self.event,
             job_title=self.job_title,
             tenant=self.tenant,
+            start_date=datetime(2026, 3, 20, 18, 0, tzinfo=timezone.utc),
+            end_date=datetime(2026, 3, 20, 22, 0, tzinfo=timezone.utc),
         )
 
         self.ambassador_user = self.create_user(
@@ -100,6 +107,8 @@ class TestApproveAmbassadorJobNotifications(JobsGraphQLTestCase):
 
         with patch(
             "jobs.mutations.AmbassadorJobApprovedNotificationMailer.send"
+        ) as mock_client_send, patch(
+            "jobs.mutations.AmbassadorApprovedForJobMailer.send"
         ) as mock_send, patch(
             "jobs.mutations.one_signal_client.send_push",
             new=AsyncMock(return_value={"id": "push-123"}),
@@ -114,6 +123,7 @@ class TestApproveAmbassadorJobNotifications(JobsGraphQLTestCase):
         assert result.data is not None
         assert result.data["approveAmbassadorJob"]["success"] is True
         assert result.data["approveAmbassadorJob"]["ambassadorJob"]["status"]["name"].lower() == "approved"
+        assert mock_client_send.called
         assert mock_send.called
         mock_push.assert_awaited_once()
         kwargs = mock_push.await_args.kwargs
@@ -148,3 +158,31 @@ class TestApproveAmbassadorJobNotifications(JobsGraphQLTestCase):
         assert envelope.template == "jobs.templates.emails.ambassador_job_approved_notification"
         assert envelope.to_emails == [self.rmm_user.email]
         assert "activation is fully staffed and confirmed" in rendered_html
+
+    @pytest.mark.asyncio
+    async def test_approved_ambassador_mailer_template_renders(self):
+        self.ambassador_job.status = self.approved_status
+        await sync_to_async(self.ambassador_job.save)()
+        ambassador_job = await sync_to_async(
+            models.AmbassadorJob.objects.select_related(
+                "job",
+                "job__event",
+                "job__event__timezone",
+                "ambassador",
+                "ambassador__user",
+                "tenant",
+            ).get
+        )(pk=self.ambassador_job.id)
+
+        mailer = AmbassadorApprovedForJobMailer(
+            ambassador_job=ambassador_job,
+            to_emails=[self.ambassador_user.email],
+            recipient_first_name=self.ambassador_user.first_name,
+        )
+        envelope = mailer.envelope()
+        rendered_html = envelope.render_template()
+
+        assert envelope.template == "jobs.templates.emails.ambassador_approved_for_job"
+        assert envelope.to_emails == [self.ambassador_user.email]
+        assert "You have been approved for this job" in rendered_html
+        assert "Wear black pants and arrive 15 minutes early." in rendered_html

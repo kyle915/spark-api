@@ -9,6 +9,7 @@ import pytest
 import strawberry_django  # noqa: F401
 from asgiref.sync import sync_to_async
 from django.contrib.auth import get_user_model
+from unittest.mock import patch
 from jobs.tests.base import JobsGraphQLTestCase
 from jobs import models
 from utils.utils import ROLE_ID
@@ -159,6 +160,87 @@ class TestClientJobMutations(JobsGraphQLTestCase):
         assert updated_job.name == "Updated Job"
         assert updated_job.code == "JOB-UPD"
         assert updated_job.coordinates == new_coordinates
+
+    @pytest.mark.asyncio
+    async def test_update_job_sends_email_when_relevant_fields_change(self):
+        rate_type = await sync_to_async(self.create_rate_type)(
+            name="Hourly",
+            tenant=self.tenant,
+        )
+        original_rate = await sync_to_async(self.create_rate)(
+            amount=50.0,
+            rate_type=rate_type,
+            tenant=self.tenant,
+        )
+        updated_rate = await sync_to_async(self.create_rate)(
+            amount=60.0,
+            rate_type=rate_type,
+            tenant=self.tenant,
+        )
+        ambassador_user = await sync_to_async(self.create_user)(
+            username="ambassador_update_job@test.com",
+            email="ambassador_update_job@test.com",
+            role=self.roles["ambassador"],
+            password="testpass123",
+        )
+        await sync_to_async(self.create_tenanted_user)(
+            user=ambassador_user,
+            tenant=self.tenant,
+        )
+        ambassador = await sync_to_async(self.create_ambassador)(user=ambassador_user)
+        status = await sync_to_async(self.create_status)(name="Assigned", tenant=self.tenant)
+        job = await sync_to_async(self.create_job)(
+            name="Original Job",
+            code="JOB-NOTIFY",
+            address="Original Address",
+            event=self.event,
+            job_title=self.job_title,
+            tenant=self.tenant,
+            rate=original_rate,
+        )
+        await sync_to_async(self.create_ambassador_job)(
+            ambassador=ambassador,
+            job=job,
+            status=status,
+            rate=original_rate,
+            tenant=self.tenant,
+        )
+
+        mutation = """
+        mutation UpdateJob($input: UpdateJobInput!) {
+            updateJob(input: $input) {
+                success
+                message
+                job {
+                    id
+                }
+            }
+        }
+        """
+
+        variables = {
+            "input": {
+                "id": str(job.id),
+                "name": "Original Job",
+                "description": "Updated description",
+                "code": "JOB-NOTIFY",
+                "address": "Updated Address",
+                "jobTitleId": str(self.job_title.id),
+                "eventId": str(self.event.id),
+                "rateId": str(updated_rate.id),
+                "coordinates": [10.0, 20.0],
+            }
+        }
+
+        with patch("jobs.mutations.AmbassadorJobUpdatedMailer.send") as mock_send:
+            result = await self._execute_mutation_authenticated(
+                mutation, variables, self.client_user, self.endpoint_path
+            )
+
+        assert result.errors is None
+        assert result.data is not None
+        assert result.data["updateJob"]["success"] is True
+        assert mock_send.called
 
 
 @pytest.mark.django_db(transaction=True)
