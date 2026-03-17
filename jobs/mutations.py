@@ -12,6 +12,7 @@ from jobs.envelopes import (
     AmbassadorApprovedForJobMailer,
     AmbassadorInvitedToJobMailer,
     AmbassadorJobApprovedNotificationMailer,
+    AmbassadorJobUpdatedMailer,
     AmbassadorUnassignedFromJobMailer,
 )
 from ambassadors.models import AmbassadorEvent
@@ -210,6 +211,46 @@ async def _notify_unassigned_ambassador_by_email(
         recipient_first_name=(getattr(user, "first_name", None) or "").strip() or None,
     )
     await sync_to_async(mailer.send)()
+
+
+async def _notify_updated_ambassador_by_email(
+    ambassador_job: models.AmbassadorJob,
+) -> None:
+    ambassador = getattr(ambassador_job, "ambassador", None)
+    user = getattr(ambassador, "user", None)
+    email = (getattr(user, "email", None) or "").strip()
+    if not email:
+        return
+
+    mailer = AmbassadorJobUpdatedMailer(
+        ambassador_job=ambassador_job,
+        to_emails=[email],
+        recipient_first_name=(getattr(user, "first_name", None) or "").strip() or None,
+    )
+    await sync_to_async(mailer.send)()
+
+
+async def _notify_updated_ambassadors_for_job(job_id: int) -> None:
+    ambassador_jobs = await sync_to_async(list)(
+        models.AmbassadorJob.objects.filter(job_id=job_id)
+        .select_related(
+            "ambassador",
+            "ambassador__user",
+            "job",
+            "job__event",
+            "job__event__timezone",
+            "job__event__retailer",
+            "job__event__retailer__location",
+            "job__event__retailer__location__state",
+            "tenant",
+            "status",
+            "rate",
+        )
+        .distinct()
+    )
+
+    for ambassador_job in ambassador_jobs:
+        await _notify_updated_ambassador_by_email(ambassador_job)
 
 
 # Status Mutations
@@ -491,6 +532,56 @@ class JobMutationService(BaseMutationService):
     def get_model(self) -> Model:
         """Get the model for the service."""
         return models.Job
+
+    @classmethod
+    async def update(
+        cls,
+        input: inputs.UpdateJobInput,
+        info: strawberry.Info,
+        *,
+        response_class: type | None = None,
+        model_field_name: str | None = None,
+        update_message: str | None = None,
+    ) -> types.JobDetailResponse:
+        job_id = resolve_id_to_int(input.id)
+        original_job = await sync_to_async(
+            models.Job.objects.select_related("event").get
+        )(id=job_id)
+
+        relevant_fields_before = {
+            "address": original_job.address,
+            "rate_id": original_job.rate_id,
+            "start_date": original_job.start_date,
+            "end_date": original_job.end_date,
+        }
+
+        response = await super().update(
+            input,
+            info,
+            response_class=response_class,
+            model_field_name=model_field_name,
+            update_message=update_message,
+        )
+
+        if not getattr(response, "success", False):
+            return response
+
+        updated_job = getattr(response, "job", None)
+        if updated_job is None:
+            return response
+
+        updated_job = await sync_to_async(models.Job.objects.get)(id=updated_job.id)
+        relevant_fields_after = {
+            "address": updated_job.address,
+            "rate_id": updated_job.rate_id,
+            "start_date": updated_job.start_date,
+            "end_date": updated_job.end_date,
+        }
+
+        if relevant_fields_before != relevant_fields_after:
+            await _notify_updated_ambassadors_for_job(updated_job.id)
+
+        return response
 
 
 @strawberry.type

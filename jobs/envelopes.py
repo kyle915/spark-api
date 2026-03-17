@@ -159,6 +159,39 @@ class AmbassadorInvitedToJobMailer(Mailer):
         )
 
 
+class AmbassadorJobUpdatedMailer(Mailer):
+    def __init__(
+        self,
+        ambassador_job: models.AmbassadorJob,
+        to_emails: list[str],
+        recipient_first_name: str | None = None,
+        reply_to_email: str | None = None,
+    ) -> None:
+        self.ambassador_job = ambassador_job
+        self.to_emails = to_emails
+        self.recipient_first_name = recipient_first_name
+        self.reply_to_email = reply_to_email or "events@igniteproductions.co"
+
+    def envelope(self) -> Envelope:
+        context = _build_ambassador_job_email_context(self.ambassador_job)
+
+        return Envelope(
+            subject="Your job details have been updated",
+            template="jobs.templates.emails.ambassador_job_updated",
+            to_emails=self.to_emails,
+            headers={"Reply-To": self.reply_to_email},
+            from_email=getattr(
+                settings,
+                "DEFAULT_FROM_EMAIL",
+                "Spark by Ignite <no-reply@igniteproductions.co>",
+            ),
+            context={
+                "recipient_first_name": self.recipient_first_name or "there",
+                **context,
+            },
+        )
+
+
 class AmbassadorUnassignedFromJobMailer(Mailer):
     def __init__(
         self,
