@@ -88,7 +88,7 @@ async def _notify_approved_ambassador_by_push(
     job = ambassador_job.job
     title = "Job application accepted"
     message = f"You were accepted for {job.name}."
-    deep_link = f"spark://(app)/(tabs)/(my-gigs)/{job.id}"
+    deep_link = f"spark://app/tabs/my-gigs/{job.id}"
 
     try:
         await one_signal_client.send_push(
@@ -173,7 +173,7 @@ async def _notify_invited_ambassador_by_push(
     job = ambassador_job.job
     title = "New job invitation"
     message = f"You were invited to {job.name}."
-    deep_link = f"spark://(app)/(tabs)/(my-gigs)/{job.id}"
+    deep_link = f"spark://app/tabs/my-gigs/{job.id}"
 
     try:
         await one_signal_client.send_push(
