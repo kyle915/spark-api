@@ -7,9 +7,10 @@ class Command(BaseCommand):
     help = "Register hourly rq-scheduler job for ambassador event reminders"
 
     def handle(self, *args, **options):
-        job_id = schedule_hourly_ambassador_event_reminders()
+        job_ids = schedule_hourly_ambassador_event_reminders()
         self.stdout.write(
             self.style.SUCCESS(
-                f"Hourly ambassador event reminder schedule registered (job id: {job_id})"
+                "Hourly ambassador event reminder schedules registered "
+                f"(24h job id: {job_ids['24h']}, 3h job id: {job_ids['3h']})"
             )
         )
