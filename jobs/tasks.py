@@ -68,6 +68,7 @@ def _is_within_hours_window(
     now_utc: datetime.datetime,
     timezone_offset: int | None,
     window_hours: int,
+    min_exclusive_hours: int = 0,
 ) -> bool:
     event_local = _to_event_timezone_offset(event_start_utc, timezone_offset)
     now_local = _to_event_timezone_offset(now_utc, timezone_offset)
@@ -75,7 +76,10 @@ def _is_within_hours_window(
         return False
 
     delta = event_local - now_local
-    return datetime.timedelta(0) <= delta <= datetime.timedelta(hours=window_hours)
+    return (
+        datetime.timedelta(hours=min_exclusive_hours) < delta
+        <= datetime.timedelta(hours=window_hours)
+    )
 
 
 def _event_start_datetime(ambassador_job: AmbassadorJob) -> datetime.datetime | None:
@@ -147,6 +151,7 @@ def schedule_hourly_ambassador_event_reminders() -> dict[str, str]:
 def _send_ambassador_event_reminders(
     *,
     window_hours: int,
+    min_exclusive_hours: int,
     reminder_field: str,
     mailer_class,
 ) -> int:
@@ -182,6 +187,7 @@ def _send_ambassador_event_reminders(
             now_utc=now_utc,
             timezone_offset=timezone_offset,
             window_hours=window_hours,
+            min_exclusive_hours=min_exclusive_hours,
         ):
             continue
 
@@ -215,6 +221,7 @@ def send_upcoming_ambassador_event_reminders() -> int:
     """
     sent_count = _send_ambassador_event_reminders(
         window_hours=24,
+        min_exclusive_hours=3,
         reminder_field="reminder_sent_at",
         mailer_class=AmbassadorEventReminderMailer,
     )
@@ -234,6 +241,7 @@ def send_upcoming_ambassador_event_3h_reminders() -> int:
     """
     sent_count = _send_ambassador_event_reminders(
         window_hours=3,
+        min_exclusive_hours=0,
         reminder_field="reminder_3h_sent_at",
         mailer_class=AmbassadorEventReminder3HoursMailer,
     )
