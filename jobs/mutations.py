@@ -743,6 +743,43 @@ class AmbassadorJobMutationService(BaseMutationService):
         model_field_name: str | None = None,
         create_message: str | None = None,
     ) -> types.AmbassadorJobDetailResponse:
+        try:
+            job_id = resolve_id_to_int(input.job_id)
+        except (TypeError, ValueError, GraphQLError):
+            return build_mutation_response(
+                types.AmbassadorJobDetailResponse,
+                success=False,
+                message="Invalid job ID.",
+                input_obj=input,
+            )
+
+        try:
+            job = await sync_to_async(models.Job.objects.only("id", "tenant_id").get)(
+                id=job_id
+            )
+        except models.Job.DoesNotExist:
+            return build_mutation_response(
+                types.AmbassadorJobDetailResponse,
+                success=False,
+                message="Job not found.",
+                input_obj=input,
+            )
+
+        try:
+            approved_status = await sync_to_async(models.Status.objects.get)(
+                slug="approved",
+                tenant_id=job.tenant_id,
+            )
+        except models.Status.DoesNotExist:
+            return build_mutation_response(
+                types.AmbassadorJobDetailResponse,
+                success=False,
+                message="Approved status not found for this job tenant.",
+                input_obj=input,
+            )
+
+        input.status_id = approved_status.id
+
         response = await super().create(
             input,
             info,
