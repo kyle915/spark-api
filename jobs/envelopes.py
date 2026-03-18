@@ -285,6 +285,8 @@ class AmbassadorEventSuspendedMailer(Mailer):
 
 
 class AmbassadorEventReminderMailer(Mailer):
+    LIQUID_DEATH_TENANT_SLUG = "liquid-death"
+
     def __init__(
         self,
         ambassador_job: models.AmbassadorJob,
@@ -299,10 +301,16 @@ class AmbassadorEventReminderMailer(Mailer):
 
     def envelope(self) -> Envelope:
         context = _build_ambassador_job_email_context(self.ambassador_job)
+        tenant_slug = (getattr(self.ambassador_job.tenant, "slug", None) or "").strip().lower()
+        template = (
+            "jobs.templates.emails.ambassador_job_event_reminder_liquid_death"
+            if tenant_slug == self.LIQUID_DEATH_TENANT_SLUG
+            else "jobs.templates.emails.ambassador_job_event_reminder"
+        )
 
         return Envelope(
             subject="Reminder: your event starts within 24 hours",
-            template="jobs.templates.emails.ambassador_job_event_reminder",
+            template=template,
             to_emails=self.to_emails,
             headers={"Reply-To": self.reply_to_email},
             from_email=getattr(
@@ -318,6 +326,8 @@ class AmbassadorEventReminderMailer(Mailer):
 
 
 class AmbassadorEventReminder3HoursMailer(Mailer):
+    LIQUID_DEATH_TENANT_SLUG = "liquid-death"
+
     def __init__(
         self,
         ambassador_job: models.AmbassadorJob,
@@ -332,10 +342,16 @@ class AmbassadorEventReminder3HoursMailer(Mailer):
 
     def envelope(self) -> Envelope:
         context = _build_ambassador_job_email_context(self.ambassador_job)
+        tenant_slug = (getattr(self.ambassador_job.tenant, "slug", None) or "").strip().lower()
+        template = (
+            "jobs.templates.emails.ambassador_job_event_reminder_3h_liquid_death"
+            if tenant_slug == self.LIQUID_DEATH_TENANT_SLUG
+            else "jobs.templates.emails.ambassador_job_event_reminder_3h"
+        )
 
         return Envelope(
             subject="Reminder: your event starts within 3 hours",
-            template="jobs.templates.emails.ambassador_job_event_reminder_3h",
+            template=template,
             to_emails=self.to_emails,
             headers={"Reply-To": self.reply_to_email},
             from_email=getattr(
