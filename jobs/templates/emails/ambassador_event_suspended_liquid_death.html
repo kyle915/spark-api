@@ -1,0 +1,46 @@
+{% extends "emails/base.html" %} {% block content %}
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+  <tr>
+    <td style="font-size: 16px; color: #444444; line-height: 1.6;">
+      <p style="margin: 0 0 8px 0; color: #666666; font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase;">
+        Liquid Death • Retail Sampling
+      </p>
+      <h1 style="margin: 0 0 18px 0; color: #202036; font-size: 22px; line-height: 1.3;">
+        Hi {{ recipient_first_name|default:"there" }}
+      </h1>
+
+      <div style="border: 1px solid #eeeeee; border-radius: 10px; padding: 16px; background: #fafafa;">
+        <p style="margin: 0 0 14px 0;">
+          We wanted to let you know that your scheduled <strong>Liquid Death retail
+          sampling</strong> has been
+          <strong>cancelled</strong>.
+        </p>
+        <p style="margin: 0;">
+          <strong>Original Sampling Details:</strong><br>
+          Date: {{ activation_date|default:"-" }}<br>
+          Location: {{ event_address|default:"-" }}<br>
+          Time: {{ start_time|default:"-" }}-{{ end_time|default:"-" }}
+        </p>
+      </div>
+
+      <p style="margin: 18px 0 0 0;">
+        We’ll notify you as soon as new Liquid Death sampling opportunities become available
+        in your area.
+        Your commitment and professionalism are always appreciated.
+      </p>
+
+      <hr style="border: 0; border-top: 1px solid #eeeeee; margin: 24px 0;">
+
+      <p style="margin: 0; color: #666666;">
+        If you have any questions or concerns, please reply to this email or text your
+        project contact directly.
+        Thank you for your flexibility and support!
+      </p>
+
+      <p style="margin: 24px 0 0 0; font-size: 12px; font-weight: 700; color: #555555;">The Ignite Team</p>
+      <p style="margin: 2px 0 0 0; font-size: 12px; color: #555555;">Ignite Productions LLC</p>
+      <p style="margin: 2px 0 0 0; font-size: 12px; color: #555555;">events@igniteproductions.co | 775.406.0435</p>
+    </td>
+  </tr>
+</table>
+{% endblock %}
