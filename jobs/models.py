@@ -551,6 +551,7 @@ class AmbassadorJob(models.Model):
     appear_as_rfp = models.BooleanField(
         default=True
     )  # This bool is for record purposes that it was an invitation.
+    reminder_sent_at = models.DateTimeField(null=True)
 
     tenant = models.ForeignKey(
         Tenant,
