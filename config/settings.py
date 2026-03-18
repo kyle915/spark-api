@@ -204,6 +204,19 @@ GOOGLE_OAUTH_REDIRECT_URI = env(
     default="http://localhost:8000/api/v1/google-calendar/callback",
 )
 
+# Google Calendar Service Account Credentials
+GOOGLE_CALENDAR_ID = env("GOOGLE_CALENDAR_ID", default="primary")
+GOOGLE_CALENDAR_CREDENTIALS_JSON = env("GOOGLE_CALENDAR_CREDENTIALS", default=None)
+if GOOGLE_CALENDAR_CREDENTIALS_JSON:
+    import json
+    try:
+        GOOGLE_CALENDAR_CREDENTIALS = json.loads(GOOGLE_CALENDAR_CREDENTIALS_JSON)
+    except json.JSONDecodeError as e:
+        print(f"Warning: Invalid GOOGLE_CALENDAR_CREDENTIALS JSON: {e}")
+        GOOGLE_CALENDAR_CREDENTIALS = None
+else:
+    GOOGLE_CALENDAR_CREDENTIALS = None
+
 # Django-RQ Configuration
 RQ_QUEUES = {
     "default": {
