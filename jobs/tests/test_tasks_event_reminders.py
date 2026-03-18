@@ -220,6 +220,22 @@ class TestSendUpcomingAmbassadorEvent3HoursReminders(JobsGraphQLTestCase):
 
     @patch("jobs.tasks.AmbassadorEventReminderMailer.send")
     @patch("jobs.tasks.timezone.now")
+    def test_does_not_send_24h_when_event_is_within_3_hours(self, mock_now, mock_send):
+        now_utc = datetime(2026, 3, 18, 12, 0, tzinfo=dt_timezone.utc)
+        mock_now.return_value = now_utc
+        ambassador_job = self._build_ambassador_job(
+            event_start_time=now_utc + timedelta(hours=2, minutes=30)
+        )
+
+        sent = send_upcoming_ambassador_event_reminders()
+
+        assert sent == 0
+        mock_send.assert_not_called()
+        ambassador_job.refresh_from_db()
+        assert ambassador_job.reminder_sent_at is None
+
+    @patch("jobs.tasks.AmbassadorEventReminderMailer.send")
+    @patch("jobs.tasks.timezone.now")
     def test_does_not_send_twice_if_reminder_was_already_sent(self, mock_now, mock_send):
         now_utc = datetime(2026, 3, 18, 12, 0, tzinfo=dt_timezone.utc)
         mock_now.return_value = now_utc
