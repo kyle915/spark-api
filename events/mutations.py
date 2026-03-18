@@ -43,6 +43,8 @@ from events.batch_requests import (
     build_request_batch_template_xlsx,
     import_requests_from_excel_bytes,
 )
+from jobs.envelopes import AmbassadorEventSuspendedMailer, AmbassadorJobUpdatedMailer
+from jobs import models as job_models
 
 ensure_relay_mutation()
 
@@ -339,6 +341,72 @@ async def _notify_notification_group_users_for_event(
     await sync_to_async(mailer.send)()
 
 
+async def _notify_assigned_ambassadors_for_event_update(event_id: int) -> None:
+    ambassador_jobs = await sync_to_async(list)(
+        job_models.AmbassadorJob.objects.filter(job__event_id=event_id)
+        .select_related(
+            "ambassador",
+            "ambassador__user",
+            "job",
+            "job__event",
+            "job__event__timezone",
+            "job__event__retailer",
+            "job__event__retailer__location",
+            "job__event__retailer__location__state",
+            "tenant",
+            "status",
+            "rate",
+        )
+        .distinct()
+    )
+
+    for ambassador_job in ambassador_jobs:
+        user = getattr(getattr(ambassador_job, "ambassador", None), "user", None)
+        email = (getattr(user, "email", None) or "").strip()
+        if not email:
+            continue
+
+        mailer = AmbassadorJobUpdatedMailer(
+            ambassador_job=ambassador_job,
+            to_emails=[email],
+            recipient_first_name=(getattr(user, "first_name", None) or "").strip() or None,
+        )
+        await sync_to_async(mailer.send)()
+
+
+async def _notify_assigned_ambassadors_for_suspended_event(event_id: int) -> None:
+    ambassador_jobs = await sync_to_async(list)(
+        job_models.AmbassadorJob.objects.filter(job__event_id=event_id)
+        .select_related(
+            "ambassador",
+            "ambassador__user",
+            "job",
+            "job__event",
+            "job__event__timezone",
+            "job__event__retailer",
+            "job__event__retailer__location",
+            "job__event__retailer__location__state",
+            "tenant",
+            "status",
+            "rate",
+        )
+        .distinct()
+    )
+
+    for ambassador_job in ambassador_jobs:
+        user = getattr(getattr(ambassador_job, "ambassador", None), "user", None)
+        email = (getattr(user, "email", None) or "").strip()
+        if not email:
+            continue
+
+        mailer = AmbassadorEventSuspendedMailer(
+            ambassador_job=ambassador_job,
+            to_emails=[email],
+            recipient_first_name=(getattr(user, "first_name", None) or "").strip() or None,
+        )
+        await sync_to_async(mailer.send)()
+
+
 @strawberry.type
 class EventMutations:
     @relay.mutation(permission_classes=[StrictIsAuthenticated])
@@ -443,12 +511,30 @@ class EventMutations:
         input: inputs.UpdateEventInput,
     ) -> types.EventDetailResponse:
         try:
+            event_id = resolve_id_to_int(input.id)
+            original_event = await sync_to_async(models.Event.objects.get)(id=event_id)
+            relevant_fields_before = {
+                "date": original_event.date,
+                "start_time": original_event.start_time,
+                "end_time": original_event.end_time,
+                "address": original_event.address,
+                "retailer_id": original_event.retailer_id,
+            }
             event: models.Event = await EventMutationService.process_create_or_update(
                 input=input, info=info
             )
             event = await sync_to_async(
                 models.Event.objects.select_related("rmm_asigned").get
             )(id=event.id)
+            relevant_fields_after = {
+                "date": event.date,
+                "start_time": event.start_time,
+                "end_time": event.end_time,
+                "address": event.address,
+                "retailer_id": event.retailer_id,
+            }
+            if relevant_fields_before != relevant_fields_after:
+                await _notify_assigned_ambassadors_for_event_update(event.id)
             return build_mutation_response(
                 types.EventDetailResponse,
                 success=True,
@@ -499,6 +585,7 @@ class EventMutations:
             event.status = suspended_status
             event.updated_by = user
             await sync_to_async(event.save)()
+            await _notify_assigned_ambassadors_for_suspended_event(event.id)
 
             return build_mutation_response(
                 types.EventDetailResponse,

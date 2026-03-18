@@ -138,6 +138,7 @@ class Recap(Node):
     filling_for_ambassador: bool
     event: event_types.Event
     event_id: strawberry.ID
+    ambassador: ambassador_types.Ambassador | None
     job_id: strawberry.ID | None
     job: job_types.Job | None
     retailer_id: strawberry.ID | None
@@ -176,10 +177,10 @@ class Recap(Node):
         """Return all recap files linked to this recap."""
         return list(self.recap_files.all())
 
-    @strawberry.field
+    @strawberry.field(deprecation_reason="Use ambassador instead.")
     def ambassadors(self) -> List[ambassador_types.Ambassador]:
-        """Return ambassadors linked to the recap's event."""
-        return [ae.ambassador for ae in self.event.ambassadors_events.all()]
+        """Backward-compatible ambassador list wrapper."""
+        return [self.ambassador] if self.ambassador else []
 
     @strawberry.field
     def request_store_managers(self) -> List[event_types.RequestStoreManager]:

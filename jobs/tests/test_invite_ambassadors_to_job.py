@@ -149,6 +149,8 @@ class TestClientInviteAmbassadorsToJob(JobsGraphQLTestCase):
         }
 
         with patch(
+            "jobs.mutations.AmbassadorInvitedToJobMailer.send"
+        ) as mock_send, patch(
             "jobs.mutations.one_signal_client.send_push",
             new=AsyncMock(return_value={"id": "push-123"}),
         ) as mock_push:
@@ -165,6 +167,7 @@ class TestClientInviteAmbassadorsToJob(JobsGraphQLTestCase):
         # Verify ambassador jobs were created
         ambassador_jobs = result.data["inviteAmbassadorsToJob"]["ambassadorJobs"]
         assert len(ambassador_jobs) == 2
+        assert mock_send.call_count == 2
         assert mock_push.await_count == 2
 
         # GraphQL returns Relay global IDs

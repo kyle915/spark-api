@@ -1,0 +1,185 @@
+{% extends "emails/base.html" %} {% block content %}
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+  <tr>
+    <td style="font-size: 16px; color: #444444; line-height: 1.6;">
+      <p style="margin: 0 0 8px 0; color: #666666; font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase;">
+        {{ brand_name|default:"-" }} • Retail Sampling
+      </p>
+      <h1 style="margin: 0 0 18px 0; color: #202036; font-size: 22px; line-height: 1.3;">
+        Hi {{ recipient_first_name|default:"there" }}
+      </h1>
+      <p style="margin: 0 0 20px 0; color: #666666;">
+        We’re excited to have you on board for our Liquid Death off-premise demo!
+        Below is the essential information you’ll need for this demo.
+        I’ve also <a href="https://drive.google.com/drive/folders/1WaQVBxhdAbHksYZ0tkT7vw45kGLF2WcD?usp=sharing" target="_blank" rel="noopener">hyperlinked an image of how to set up the
+        table</a>.
+        After the event - please hold onto the kit as we'll reach out about future LD
+        events.
+      </p>
+
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin: 14px 0 6px 0;">
+        <tr>
+          <td align="left" style="padding-bottom: 8px;">
+            <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="display: inline-table; margin-right: 8px; margin-bottom: 8px;">
+              <tr>
+                <td align="center" style="background-color: #111111; border-radius: 6px;">
+                  <a href="https://drive.google.com/drive/folders/1WaQVBxhdAbHksYZ0tkT7vw45kGLF2WcD?usp=sharing" target="_blank" rel="noopener" style="display: inline-block; padding: 12px 18px; border-radius: 6px; background: #111111; color: #ffffff !important; text-decoration: none; font-weight: 700;">View Table Setup Examples</a>
+                </td>
+              </tr>
+            </table>
+            <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="display: inline-table; margin-bottom: 8px;">
+              <tr>
+                <td align="center" style="border: 2px solid #111111; border-radius: 6px;">
+                  <a href="{{ deep_link }}" style="display: inline-block; padding: 10px 16px; border-radius: 6px; color: #111111 !important; text-decoration: none; font-weight: 700;">Open Spark App</a>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+      </table>
+
+      <hr style="border: 0; border-top: 1px solid #eeeeee; margin: 24px 0;">
+
+      <h2 style="font-size: 18px; margin: 0 0 6px 0; color: #202036;">1. Sampling Overview <span style="display: inline-block; padding: 2px 8px; border-radius: 999px; background: #111111; color: #ffffff; font-size: 12px; font-weight: 700;">Required</span></h2>
+      <div style="border: 1px solid #eeeeee; border-radius: 10px; padding: 16px; margin-bottom: 8px;">
+        <p style="margin: 0 0 10px 0;"><strong>Date:</strong> {{ activation_date|default:"-" }}</p>
+        <p style="margin: 0 0 10px 0;"><strong>Address:</strong> {{ event_address|default:"-" }}</p>
+        <p style="margin: 0 0 10px 0;"><strong>Time:</strong> {{ start_time|default:"-" }}-{{ end_time|default:"-" }}</p>
+        <p style="margin: 0 0 10px 0;"><strong>Parking:</strong> Reimbursed if needed (receipt required).</p>
+        <p style="margin: 0 0 10px 0;"><strong>Goal:</strong> Sell 15 cans per demo or 5 multipacks </p>
+        <p style="margin: 0 0 10px 0;">We prioritize high-performing Brand Ambassadors for future demos.</p>
+        <p style="margin: 0 0 10px 0;"><strong>SKUs:</strong> {{ skus|default:"-" }}</p>
+        <p style="margin: 0;"><strong>Where to set up:</strong> Set up by LD Display</p>
+      </div>
+
+      <hr style="border: 0; border-top: 1px solid #eeeeee; margin: 24px 0;">
+
+      <h2 style="font-size: 18px; margin: 0 0 6px 0; color: #202036;">2. Brand Ambassador Product Guide</h2>
+      <ul style="padding-left: 18px; margin: 0 0 8px 0;">
+        <li><a href="https://drive.google.com/file/d/1jDR2Ie7OZWfQUOQ21f9UWdqn_387YlE_/view?usp=sharing" target="_blank" rel="noopener">Product Guide</a></li>
+        <li><a href="https://drive.google.com/file/d/1R3PylVXkfoy_VSRi8Va1N5bYaGbOMUMD/view?usp=sharing" target="_blank" rel="noopener">BA Training Deck</a></li>
+        <li><a href="https://drive.google.com/drive/folders/1R157US_nqbzI_loORvXq9gMEynsWoGwP?usp=drive_link" target="_blank" rel="noopener">How to set up your table</a></li>
+      </ul>
+      <p style="margin: 0; color: #666666;">Please review these before your demo.</p>
+
+      <hr style="border: 0; border-top: 1px solid #eeeeee; margin: 24px 0;">
+
+      <h2 style="font-size: 18px; margin: 0 0 6px 0; color: #202036;">3. Payment &amp; Receipts</h2>
+      <ul style="padding-left: 18px; margin: 0;">
+        <li>You’ll use our company credit card (activated on the day of your demo) to buy product.</li>
+        <li>Keep all receipts and upload them in your recap.</li>
+        <li><strong>Note:</strong> If recaps are not completed, we cannot process your payment.</li>
+      </ul>
+
+      <hr style="border: 0; border-top: 1px solid #eeeeee; margin: 24px 0;">
+
+      <h2 style="font-size: 18px; margin: 0 0 6px 0; color: #202036;">4. Market Max Spend Per Event</h2>
+      <div style="border: 1px solid #eeeeee; border-radius: 10px; padding: 16px;">
+        <ul style="margin: 0; padding-left: 18px;">
+          <li><strong>What to buy:</strong> Liquid Death SKUs listed above</li>
+          <li>1x bag of ice</li>
+          <li><strong>MAX Spend = $45</strong></li>
+          <li>Please start by buying 1x (multipack) each. If you need to, you can buy 1x more of each.</li>
+          <li>NOTE: If you are sampling Energy Drink SKUs. They may only be available in single cans. If so.. please purchase 4x of each</li>
+        </ul>
+      </div>
+
+      <hr style="border: 0; border-top: 1px solid #eeeeee; margin: 24px 0;">
+
+      <h2 style="font-size: 18px; margin: 0 0 6px 0; color: #202036;">5. Items Provided in Your Kit</h2>
+      <ul style="padding-left: 18px; margin: 0;">
+        <li>Liquid Death Black Shirt</li>
+        <li>1× Branded Ice Buckets</li>
+        <li>Tablecloth</li>
+        <li>Paper Sampling Cups</li>
+        <li><strong>Note:</strong> Please bring your own table.</li>
+        <li>Pricing Display</li>
+        <li>POS SIgn</li>
+      </ul>
+
+      <hr style="border: 0; border-top: 1px solid #eeeeee; margin: 24px 0;">
+
+      <h2 style="font-size: 18px; margin: 0 0 6px 0; color: #202036;">6. Demo Steps</h2>
+      <ol style="padding-left: 18px; margin: 0;">
+        <li style="margin-bottom: 12px;"><strong>1.Check-In</strong>
+          <ul style="padding-left: 18px; margin: 8px 0 0 0;">
+            <li>Upon arrival, ask for a manager or store staff.</li>
+            <li>Let them know you’re with Liquid Death and scheduled to do a sampling.</li>
+            <li>Confirm they have product in stock and decide where to set up</li>
+          </ul>
+        </li>
+        <li style="margin-bottom: 12px;"><strong>2. Purchase Products</strong>
+          <ul style="padding-left: 18px; margin: 8px 0 0 0;">
+            <li>Use the company card to purchase product for sampling (save receipts).</li>
+            <li>Buy 1 bag of ice and 1 (6-pack) of each flavor.</li>
+            <li>If SKUs are out of stock, note this in your recap.</li>
+          </ul>
+        </li>
+        <li style="margin-bottom: 12px;"><strong>3. Set Up</strong>
+          <ul style="padding-left: 18px; margin: 8px 0 0 0;">
+            <li>Display at least 2 cans (or cases) of each variety on your table.</li>
+            <li>Use ice buckets to keep cans cold.</li>
+            <li>Engage with consumers, share key talking points, and take photos.</li>
+            <li>Please look for what the cost of a LD Multi-pack is &amp; write that with the expo marker on the sign.</li>
+            <li>If you are doing multiple demos, we've included multiple signs in your kit. Only use one per demo.</li>
+          </ul>
+        </li>
+        <li style="margin-bottom: 12px;"><strong>4. Photos to Capture</strong>
+          <ul style="padding-left: 18px; margin: 8px 0 0 0;">
+            <li>Store exterior (front entrance)</li>
+            <li>Any Liquid Death signage (inside/outside)</li>
+            <li>Product on-shelf</li>
+            <li>Any floor displays/pallets of the product</li>
+            <li>Your demo setup (with you in uniform)</li>
+            <li>6-8 photos of consumers posing</li>
+            <li>Photo of your itemized receipt(s)</li>
+          </ul>
+        </li>
+        <li><strong>5. Recap &amp; Wrap-Up</strong>
+          <ul style="padding-left: 18px; margin: 8px 0 0 0;">
+            <li>Open the <a href="{{ deep_link }}">Spark App</a> to complete your recap.</li>
+            <li>Check the recap form when you arrive so you know what photos/details are required.</li>
+            <li>Submit your recap before leaving (use the last 10 minutes of your shift to finalize)</li>
+            <li>Payment is only processed upon completion of the recap.</li>
+            <li>Leftover products should not be used for other demos. You may take them home or dispose of them.</li>
+          </ul>
+        </li>
+      </ol>
+
+      <hr style="border: 0; border-top: 1px solid #eeeeee; margin: 24px 0;">
+
+      <h2 style="font-size: 18px; margin: 0 0 6px 0; color: #202036;">7. Dress Code</h2>
+      <ul style="padding-left: 18px; margin: 0;">
+        <li>Jeans (black or dark blue) with no rips</li>
+        <li>Sneakers</li>
+        <li>Liquid Death shirt (provided in your kit)</li>
+      </ul>
+
+      <hr style="border: 0; border-top: 1px solid #eeeeee; margin: 24px 0;">
+
+      <h2 style="font-size: 18px; margin: 0 0 6px 0; color: #202036;">Table Set Up:</h2>
+      <p style="margin: 0 0 12px 0;">Please set-up your table like the below examples - ideally with the pallet below/next to you.</p>
+      <ul style="padding-left: 18px; margin: 0;">
+        <li><a href="https://drive.google.com/drive/folders/1WaQVBxhdAbHksYZ0tkT7vw45kGLF2WcD?usp=drive_link" target="_blank" rel="noopener">Gallery of table setups</a></li>
+        <li><a href="https://drive.google.com/file/d/139bt8H-JCxM68uhVytP75Jhtg20nUcFC/view?usp=drive_link" target="_blank" rel="noopener">Example 1</a></li>
+        <li><a href="https://drive.google.com/file/d/1kRPSq2LoH9k3f9HBCFuzxKD8oYIgCPtf/view?usp=sharing" target="_blank" rel="noopener">Example 2</a></li>
+      </ul>
+
+      <h2 style="font-size: 18px; margin: 24px 0 6px 0; color: #202036;">Consumer Sampling Pictures:</h2>
+      <p style="margin: 0 0 12px 0;">Try to grab sampling pictures w/ consumers of product in-hand, cases, or putting in their cart. Here are some examples.</p>
+      <ul style="padding-left: 18px; margin: 0;">
+        <li><a href="https://drive.google.com/file/d/1bWj3p1r30toRC_uK2faI2ukY9u5zOEoH/view?usp=drive_link" target="_blank" rel="noopener">Example A</a></li>
+        <li><a href="https://drive.google.com/file/d/1Pu_qzejHqqb0NfpaUwFXIYGDzrhkRWSh/view?usp=drive_link" target="_blank" rel="noopener">Example B</a></li>
+      </ul>
+
+      <div style="border: 1px solid #eeeeee; border-radius: 10px; padding: 16px; margin-top: 16px;">
+        <strong>Friendly Reminder:</strong> Please minimize phone use during the demo. Your focus should be on engaging customers and showcasing Liquid Death.
+      </div>
+
+      <p style="margin: 24px 0 0 0; font-size: 12px; font-weight: 700; color: #555555;">The Ignite Team</p>
+      <p style="margin: 2px 0 0 0; font-size: 12px; color: #555555;">Ignite Productions LLC</p>
+      <p style="margin: 2px 0 0 0; font-size: 12px; color: #555555;">events@igniteproductions.co | 775.406.0435</p>
+    </td>
+  </tr>
+</table>
+{% endblock %}

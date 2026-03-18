@@ -4,6 +4,7 @@ import pytest
 from asgiref.sync import sync_to_async
 import strawberry_django  # noqa: F401
 
+from ambassadors.models import AmbassadorEvent
 from jobs.tests.base import JobsGraphQLTestCase
 from recaps import models as recap_models
 from recaps.envelopes import RecapApprovedNotificationMailer
@@ -59,6 +60,29 @@ class TestApproveRecapNotifications(JobsGraphQLTestCase):
         )
         self.ambassador = self.create_ambassador(user=self.ambassador_user)
         self.create_tenanted_user(user=self.ambassador_user, tenant=self.tenant)
+
+        self.other_ambassador_user = self.create_user(
+            username="other_recap_amb@test.com",
+            email="other_recap_amb@test.com",
+            role=self.roles["ambassador"],
+            password="testpass123",
+        )
+        self.other_ambassador = self.create_ambassador(user=self.other_ambassador_user)
+        self.create_tenanted_user(user=self.other_ambassador_user, tenant=self.tenant)
+
+        system_user = self.get_system_user()
+        AmbassadorEvent.objects.create(
+            ambassador=self.ambassador,
+            event=self.event,
+            tenant=self.tenant,
+            created_by=system_user,
+        )
+        AmbassadorEvent.objects.create(
+            ambassador=self.other_ambassador,
+            event=self.event,
+            tenant=self.tenant,
+            created_by=system_user,
+        )
 
         self.recap = recap_models.Recap.objects.create(
             name="Post activation recap",
@@ -134,3 +158,29 @@ class TestApproveRecapNotifications(JobsGraphQLTestCase):
         assert envelope.template == "recaps.templates.emails.recap_approved_notification"
         assert envelope.to_emails == [self.rmm_user.email]
         assert "Activation Summary" in rendered_html
+
+    @pytest.mark.asyncio
+    async def test_recap_query_returns_only_assigned_ambassador(self):
+        query = """
+        query Recap($uuid: ID!) {
+            recap(uuid: $uuid) {
+                id
+                ambassador {
+                    id
+                }
+            }
+        }
+        """
+        variables = {"uuid": str(self.recap.uuid)}
+
+        result = await self._execute_query_authenticated(
+            query,
+            variables,
+            self.spark_user,
+            self.endpoint_path,
+        )
+
+        assert result.errors is None
+        assert result.data is not None
+        assert result.data["recap"]["id"] == str(self.recap.id)
+        assert result.data["recap"]["ambassador"] == {"id": str(self.ambassador.id)}
