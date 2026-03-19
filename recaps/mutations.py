@@ -96,7 +96,7 @@ async def _notify_recap_approved_to_ambassador_by_push(
     if not user:
         return
 
-    deep_link = f"spark://(app)/(tabs)/(recaps)/{recap.id}"
+    deep_link = f"spark://app/tabs/recaps/{recap.id}"
 
     try:
         await one_signal_client.send_push(
@@ -406,6 +406,8 @@ class RecapMutationService(SparkGraphQLMixin):
                     total_packs_sold=self.input.total_packs_sold,
                     total_earnings=self.input.total_earnings,
                     account_spend_amount=self.input.account_spend_amount,
+                    traffic_description=self.input.traffic_description,
+                    competitive_presence=self.input.competitive_presence,
                     job=job,
                     retailer=retailer,
                     ambassador=ambassador,
@@ -658,6 +660,8 @@ class RecapMutationService(SparkGraphQLMixin):
                 recap.total_packs_sold = self.input.total_packs_sold
                 recap.total_earnings = self.input.total_earnings
                 recap.account_spend_amount = self.input.account_spend_amount
+                recap.traffic_description = self.input.traffic_description
+                recap.competitive_presence = self.input.competitive_presence
                 if self.input.consumer_engagements is not None:
                     recap.total_engagements = (
                         self.input.consumer_engagements.total_consumer

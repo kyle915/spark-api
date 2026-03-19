@@ -50,6 +50,8 @@ class Recap(models.Model):
         max_digits=10, decimal_places=4, null=True
     )
     approved = models.BooleanField(default=False)
+    traffic_description = models.CharField(max_length=255, null=True)
+    competitive_presence = models.CharField(max_length=255, null=True)
 
     timezone = models.ForeignKey(
         TimeZone,

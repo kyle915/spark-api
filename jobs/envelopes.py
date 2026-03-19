@@ -284,6 +284,88 @@ class AmbassadorEventSuspendedMailer(Mailer):
         )
 
 
+class AmbassadorEventReminderMailer(Mailer):
+    LIQUID_DEATH_TENANT_SLUG = "liquid-death"
+
+    def __init__(
+        self,
+        ambassador_job: models.AmbassadorJob,
+        to_emails: list[str],
+        recipient_first_name: str | None = None,
+        reply_to_email: str | None = None,
+    ) -> None:
+        self.ambassador_job = ambassador_job
+        self.to_emails = to_emails
+        self.recipient_first_name = recipient_first_name
+        self.reply_to_email = reply_to_email or "events@igniteproductions.co"
+
+    def envelope(self) -> Envelope:
+        context = _build_ambassador_job_email_context(self.ambassador_job)
+        tenant_slug = (getattr(self.ambassador_job.tenant, "slug", None) or "").strip().lower()
+        template = (
+            "jobs.templates.emails.ambassador_job_event_reminder_liquid_death"
+            if tenant_slug == self.LIQUID_DEATH_TENANT_SLUG
+            else "jobs.templates.emails.ambassador_job_event_reminder"
+        )
+
+        return Envelope(
+            subject="Reminder: your event starts within 24 hours",
+            template=template,
+            to_emails=self.to_emails,
+            headers={"Reply-To": self.reply_to_email},
+            from_email=getattr(
+                settings,
+                "DEFAULT_FROM_EMAIL",
+                "Spark by Ignite <no-reply@igniteproductions.co>",
+            ),
+            context={
+                "recipient_first_name": self.recipient_first_name or "there",
+                **context,
+            },
+        )
+
+
+class AmbassadorEventReminder3HoursMailer(Mailer):
+    LIQUID_DEATH_TENANT_SLUG = "liquid-death"
+
+    def __init__(
+        self,
+        ambassador_job: models.AmbassadorJob,
+        to_emails: list[str],
+        recipient_first_name: str | None = None,
+        reply_to_email: str | None = None,
+    ) -> None:
+        self.ambassador_job = ambassador_job
+        self.to_emails = to_emails
+        self.recipient_first_name = recipient_first_name
+        self.reply_to_email = reply_to_email or "events@igniteproductions.co"
+
+    def envelope(self) -> Envelope:
+        context = _build_ambassador_job_email_context(self.ambassador_job)
+        tenant_slug = (getattr(self.ambassador_job.tenant, "slug", None) or "").strip().lower()
+        template = (
+            "jobs.templates.emails.ambassador_job_event_reminder_3h_liquid_death"
+            if tenant_slug == self.LIQUID_DEATH_TENANT_SLUG
+            else "jobs.templates.emails.ambassador_job_event_reminder_3h"
+        )
+
+        return Envelope(
+            subject="Reminder: your event starts within 3 hours",
+            template=template,
+            to_emails=self.to_emails,
+            headers={"Reply-To": self.reply_to_email},
+            from_email=getattr(
+                settings,
+                "DEFAULT_FROM_EMAIL",
+                "Spark by Ignite <no-reply@igniteproductions.co>",
+            ),
+            context={
+                "recipient_first_name": self.recipient_first_name or "there",
+                **context,
+            },
+        )
+
+
 def _build_ambassador_job_email_context(
     ambassador_job: models.AmbassadorJob,
 ) -> dict[str, str | int]:
@@ -327,7 +409,7 @@ def _build_ambassador_job_email_context(
     activation_date = _format_dt_no_tz(start_dt, "%m/%d/%Y", offset_minutes)
     start_time = _format_dt_no_tz(start_dt, "%I:%M %p", offset_minutes)
     end_time = _format_dt_no_tz(end_dt, "%I:%M %p", offset_minutes)
-    deep_link = f"spark://(app)/(tabs)/(my-gigs)/{job.id}"
+    deep_link = f"spark://app/tabs/my-gigs/{job.id}"
 
     return {
         "request_id": request_id,

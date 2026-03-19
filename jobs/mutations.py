@@ -26,10 +26,56 @@ from utils.graphql.mixins import (
 from utils.graphql.permissions import StrictIsAuthenticated, IsClientOrSparkAdmin
 from utils.graphql.relay import ensure_relay_mutation
 from utils.utils import build_mutation_response
+from utils.calendar import GoogleCalendarService
 
 ensure_relay_mutation()
 
 logger = logging.getLogger(__name__)
+
+
+async def _create_calendar_event_for_approved_job(
+    ambassador_job: models.AmbassadorJob,
+) -> None:
+    job = ambassador_job.job
+    event = job.event
+    tenant = ambassador_job.tenant
+
+    if not job.start_date or not job.end_date:
+        logger.warning(f"Cannot create calendar event for job {job.id}: missing start or end date.")
+        return
+
+    ambassador = getattr(ambassador_job, "ambassador", None)
+    user = getattr(ambassador, "user", None)
+    ambassador_name = user.get_full_name() if user else "Unknown Ambassador"
+
+    summary = f"[{tenant.name}] {job.name} - {ambassador_name}"
+    description = (
+        f"Campaign: {event.name or '-'}\n"
+        f"Job Title: {job.job_title.name if job.job_title else '-'}\n"
+        f"Ambassador: {ambassador_name}\n"
+        f"Location: {job.address or event.address or '-'}\n"
+    )
+    
+    # Try to grab timezone from event, else default to UTC
+    event_timezone = getattr(event, "timezone", None)
+    timezone_str = getattr(event_timezone, "name", "UTC") if event_timezone else "UTC"
+
+    calendar_service = GoogleCalendarService()
+    
+    attendees = []
+    if user and user.email:
+        attendees.append(user.email)
+    
+    # Execute synchronous API call in a thread pool
+    await sync_to_async(calendar_service.create_event)(
+        summary=summary,
+        description=description,
+        location=job.address or event.address or "",
+        start_time=job.start_date,
+        end_time=job.end_date,
+        timezone=timezone_str,
+        attendees=attendees if attendees else None,
+    )
 
 
 async def _notify_approval_to_rmm_or_clients(
@@ -88,7 +134,7 @@ async def _notify_approved_ambassador_by_push(
     job = ambassador_job.job
     title = "Job application accepted"
     message = f"You were accepted for {job.name}."
-    deep_link = f"spark://(app)/(tabs)/(my-gigs)/{job.id}"
+    deep_link = f"spark://app/tabs/my-gigs/{job.id}"
 
     try:
         await one_signal_client.send_push(
@@ -173,7 +219,7 @@ async def _notify_invited_ambassador_by_push(
     job = ambassador_job.job
     title = "New job invitation"
     message = f"You were invited to {job.name}."
-    deep_link = f"spark://(app)/(tabs)/(my-gigs)/{job.id}"
+    deep_link = f"spark://app/tabs/my-gigs/{job.id}"
 
     try:
         await one_signal_client.send_push(
@@ -743,6 +789,43 @@ class AmbassadorJobMutationService(BaseMutationService):
         model_field_name: str | None = None,
         create_message: str | None = None,
     ) -> types.AmbassadorJobDetailResponse:
+        try:
+            job_id = resolve_id_to_int(input.job_id)
+        except (TypeError, ValueError, GraphQLError):
+            return build_mutation_response(
+                types.AmbassadorJobDetailResponse,
+                success=False,
+                message="Invalid job ID.",
+                input_obj=input,
+            )
+
+        try:
+            job = await sync_to_async(models.Job.objects.only("id", "tenant_id").get)(
+                id=job_id
+            )
+        except models.Job.DoesNotExist:
+            return build_mutation_response(
+                types.AmbassadorJobDetailResponse,
+                success=False,
+                message="Job not found.",
+                input_obj=input,
+            )
+
+        try:
+            approved_status = await sync_to_async(models.Status.objects.get)(
+                slug="approved",
+                tenant_id=job.tenant_id,
+            )
+        except models.Status.DoesNotExist:
+            return build_mutation_response(
+                types.AmbassadorJobDetailResponse,
+                success=False,
+                message="Approved status not found for this job tenant.",
+                input_obj=input,
+            )
+
+        input.status_id = approved_status.id
+
         response = await super().create(
             input,
             info,
@@ -1368,6 +1451,7 @@ class ApproveAmbassadorJobMutationService(SparkGraphQLMixin):
         ambassador_job = await sync_to_async(
             models.AmbassadorJob.objects.select_related(
                 "job",
+                "job__job_title",
                 "job__event",
                 "job__event__timezone",
                 "job__event__retailer",
@@ -1383,6 +1467,7 @@ class ApproveAmbassadorJobMutationService(SparkGraphQLMixin):
         await _notify_approval_to_rmm_or_clients(ambassador_job)
         await _notify_approved_ambassador_by_email(ambassador_job)
         await _notify_approved_ambassador_by_push(ambassador_job)
+        await _create_calendar_event_for_approved_job(ambassador_job)
 
         return build_mutation_response(
             types.AmbassadorJobDetailResponse,

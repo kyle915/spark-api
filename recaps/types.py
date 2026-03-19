@@ -152,6 +152,8 @@ class Recap(Node):
     total_packs_sold: int | None
     total_earnings: float | None
     account_spend_amount: float | None
+    traffic_description: str | None
+    competitive_presence: str | None
 
     # Relationships
     consumer_engagements: List[ConsumerEngagements]

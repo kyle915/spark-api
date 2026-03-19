@@ -89,6 +89,8 @@ class CreateRecapInput(SparkGraphQLInput):
     total_packs_sold: int | None = None
     total_earnings: float | None = None
     account_spend_amount: float | None = None
+    traffic_description: str | None = None
+    competitive_presence: str | None = None
     
     job_id: strawberry.ID | None = None
     retailer_id: strawberry.ID | None = None
