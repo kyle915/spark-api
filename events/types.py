@@ -315,6 +315,8 @@ class Request(Node):
     client: Client | None = None
     distributor: Distributor | None = None
     retailer: Retailer | None = None
+    location: Location | None = None
+    state: State | None = None
 
     @strawberry.field
     def store_managers(self) -> List[RequestStoreManager]:
@@ -428,6 +430,8 @@ class Event(Node):
     request: Request | None = None
     retailer: Retailer | None = None
     distributor: Distributor | None = None
+    location: Location | None = None
+    state: State | None = None
     created_at: str
     updated_at: str
     tenant_id: strawberry.ID
