@@ -19,7 +19,7 @@ from recaps import inputs
 from recaps.envelopes import RecapApprovedNotificationMailer
 from recaps.queries import RecapQueriesService
 from ambassadors.models import FileType, Ambassador, Attendance
-from events.models import Event, Retailer
+from events.models import Event, Retailer, Location, State
 from jobs.models import Job, AmbassadorJob
 from tenants.models import Role, TenantedUser
 from utils.graphql.inputs import SparkGraphQLInput
@@ -331,6 +331,22 @@ class RecapMutationService(SparkGraphQLMixin):
             except (Ambassador.DoesNotExist, TypeError, ValueError, GraphQLError):
                 raise GraphQLError("Ambassador not found.")
 
+        location = None
+        if self.input.location_id:
+            try:
+                location_id = resolve_id_to_int(self.input.location_id)
+                location = await sync_to_async(Location.objects.get)(id=location_id)
+            except (Location.DoesNotExist, TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Location not found.")
+
+        state = None
+        if self.input.state_id:
+            try:
+                state_id = resolve_id_to_int(self.input.state_id)
+                state = await sync_to_async(State.objects.get)(id=state_id)
+            except (State.DoesNotExist, TypeError, ValueError, GraphQLError):
+                raise GraphQLError("State not found.")
+
         if not self.input.files or len(self.input.files) == 0:
             raise GraphQLError("At least one file is required.")
 
@@ -411,6 +427,8 @@ class RecapMutationService(SparkGraphQLMixin):
                     job=job,
                     retailer=retailer,
                     ambassador=ambassador,
+                    location=location,
+                    state=state,
                 )
                 if self.input.filling_for_ambassador is not None:
                     recap.filling_for_ambassador = self.input.filling_for_ambassador
@@ -544,6 +562,22 @@ class RecapMutationService(SparkGraphQLMixin):
             except (Ambassador.DoesNotExist, TypeError, ValueError, GraphQLError):
                 raise GraphQLError("Ambassador not found.")
 
+        location = None
+        if self.input.location_id:
+            try:
+                location_id = resolve_id_to_int(self.input.location_id)
+                location = await sync_to_async(Location.objects.get)(id=location_id)
+            except (Location.DoesNotExist, TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Location not found.")
+
+        state = None
+        if self.input.state_id:
+            try:
+                state_id = resolve_id_to_int(self.input.state_id)
+                state = await sync_to_async(State.objects.get)(id=state_id)
+            except (State.DoesNotExist, TypeError, ValueError, GraphQLError):
+                raise GraphQLError("State not found.")
+
         if not self.input.files or len(self.input.files) == 0:
             raise GraphQLError("At least one file is required.")
 
@@ -672,6 +706,10 @@ class RecapMutationService(SparkGraphQLMixin):
                     recap.retailer = retailer
                 if self.input.ambassador_id is not None:
                     recap.ambassador = ambassador
+                if self.input.location_id is not None:
+                    recap.location = location
+                if self.input.state_id is not None:
+                    recap.state = state
                 if self.input.filling_for_ambassador is not None:
                     recap.filling_for_ambassador = self.input.filling_for_ambassador
                 if self.input.late is not None:

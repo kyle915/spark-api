@@ -403,6 +403,8 @@ def _import_requests_from_rows(
                     client_id=parsed["client_id"],
                     distributor_id=parsed["distributor_id"],
                     retailer_id=parsed["retailer_id"],
+                    location_id=parsed["location_id"],
+                    state_id=parsed["state_id"],
                 )
 
                 if not dry_run:
@@ -450,6 +452,8 @@ def _import_requests_from_rows(
                         coordinates=parsed["coordinates_event"],
                         retailer_id=parsed["retailer_id"],
                         distributor_id=parsed["distributor_id"],
+                        location_id=parsed["location_id"],
+                        state_id=parsed["state_id"],
                         created_by=created_by,
                     )
 
@@ -738,6 +742,7 @@ def _parse_row(
         "retailer_address": _optional_str(row.get("retailer_address")),
         "retailer_store_contact": _optional_str(row.get("retailer_store_contact")),
         "location_id": location_id,
+        "state_id": state_id,
         "store_manager_name": _optional_str(row.get("store_manager_name")),
         "store_manager_phone": _optional_str(row.get("store_manager_phone")),
         "timezone_id": timezone_id,

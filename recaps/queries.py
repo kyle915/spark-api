@@ -3,7 +3,7 @@ from typing import List
 from asgiref.sync import sync_to_async
 from graphql import GraphQLError
 
-from django.db.models import QuerySet, Model, Prefetch
+from django.db.models import QuerySet, Model, Prefetch, Q
 
 from recaps import types
 from recaps import models
@@ -42,6 +42,8 @@ class BaseRecapQueriesService(SparkGraphQLMixin):
                 "ambassador__user",
                 "job",
                 "retailer",
+                "location",
+                "state",
             )
             .prefetch_related(
                 Prefetch(
@@ -75,6 +77,7 @@ class BaseRecapQueriesService(SparkGraphQLMixin):
         event_type_id: int | None = None,
         rmm_asigned_id: int | None = None,
         retailer_id: int | None = None,
+        location_id: int | None = None,
         state_id: int | None = None,
         event_date: str | None = None,
         start_date: str | None = None,
@@ -94,9 +97,12 @@ class BaseRecapQueriesService(SparkGraphQLMixin):
             queryset = queryset.filter(event__rmm_asigned_id=rmm_asigned_id)
         if retailer_id:
             queryset = queryset.filter(retailer_id=retailer_id)
+        if location_id:
+            queryset = queryset.filter(location_id=location_id)
         if state_id:
             queryset = queryset.filter(
-                job__event__retailer__location__state_id=state_id
+                Q(state_id=state_id)
+                | Q(job__event__retailer__location__state_id=state_id)
             )
         if event_date:
             queryset = queryset.filter(event__date__date=event_date)
@@ -117,6 +123,7 @@ class BaseRecapQueriesService(SparkGraphQLMixin):
         event_type_id: int | None = None,
         rmm_asigned_id: int | None = None,
         retailer_id: int | None = None,
+        location_id: int | None = None,
         state_id: int | None = None,
         event_date: str | None = None,
         start_date: str | None = None,
@@ -132,6 +139,7 @@ class BaseRecapQueriesService(SparkGraphQLMixin):
             event_type_id=event_type_id,
             rmm_asigned_id=rmm_asigned_id,
             retailer_id=retailer_id,
+            location_id=location_id,
             state_id=state_id,
             event_date=event_date,
             start_date=start_date,
@@ -152,6 +160,7 @@ class BaseRecapQueriesService(SparkGraphQLMixin):
         event_type_id: int | None = None,
         rmm_asigned_id: int | None = None,
         retailer_id: int | None = None,
+        location_id: int | None = None,
         state_id: int | None = None,
         event_date: str | None = None,
         start_date: str | None = None,
@@ -175,6 +184,7 @@ class BaseRecapQueriesService(SparkGraphQLMixin):
                 event_type_id=event_type_id,
                 rmm_asigned_id=rmm_asigned_id,
                 retailer_id=retailer_id,
+                location_id=location_id,
                 state_id=state_id,
                 event_date=event_date,
                 start_date=start_date,
@@ -227,6 +237,7 @@ class RecapQueriesService(BaseRecapQueriesService):
         event_type_id: int | None = None,
         rmm_asigned_id: int | None = None,
         retailer_id: int | None = None,
+        location_id: int | None = None,
         state_id: int | None = None,
         event_date: str | None = None,
         start_date: str | None = None,
@@ -242,6 +253,7 @@ class RecapQueriesService(BaseRecapQueriesService):
             event_type_id=event_type_id,
             rmm_asigned_id=rmm_asigned_id,
             retailer_id=retailer_id,
+            location_id=location_id,
             state_id=state_id,
             event_date=event_date,
             start_date=start_date,
@@ -477,6 +489,11 @@ class RecapQueries:
             if filters and filters.retailer_id
             else None
         )
+        location_id: int | None = (
+            resolve_id_to_int(filters.location_id)
+            if filters and filters.location_id
+            else None
+        )
         state_id: int | None = (
             resolve_id_to_int(filters.state_id)
             if filters and filters.state_id
@@ -492,6 +509,7 @@ class RecapQueries:
             event_type_id=event_type_id,
             rmm_asigned_id=rmm_asigned_id,
             retailer_id=retailer_id,
+            location_id=location_id,
             state_id=state_id,
             event_date=event_date,
             start_date=start_date,
@@ -508,6 +526,7 @@ class RecapQueries:
             event_type_id=event_type_id,
             rmm_asigned_id=rmm_asigned_id,
             retailer_id=retailer_id,
+            location_id=location_id,
             state_id=state_id,
             event_date=event_date,
             start_date=start_date,
@@ -679,6 +698,11 @@ class RecapMobileQueries:
             if filters and filters.retailer_id
             else None
         )
+        location_id: int | None = (
+            resolve_id_to_int(filters.location_id)
+            if filters and filters.location_id
+            else None
+        )
         state_id: int | None = (
             resolve_id_to_int(filters.state_id)
             if filters and filters.state_id
@@ -695,6 +719,7 @@ class RecapMobileQueries:
             event_type_id=event_type_id,
             rmm_asigned_id=rmm_asigned_id,
             retailer_id=retailer_id,
+            location_id=location_id,
             state_id=state_id,
             event_date=event_date,
             start_date=start_date,
@@ -711,6 +736,7 @@ class RecapMobileQueries:
             event_type_id=event_type_id,
             rmm_asigned_id=rmm_asigned_id,
             retailer_id=retailer_id,
+            location_id=location_id,
             state_id=state_id,
             event_date=event_date,
             start_date=start_date,

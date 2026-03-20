@@ -225,7 +225,11 @@ class EventQueriesService(BaseEventQueriesService):
             "tenant",
             "timezone",
             "request",
+            "request__location",
+            "request__state",
             "retailer",
+            "location",
+            "state",
             "rmm_asigned",
         )
 
@@ -403,6 +407,16 @@ class EventQueries:
                     Q(distributor_id=distributor_id)
                     | Q(request__distributor_id=distributor_id)
                 )
+            if filters.location_id:
+                location_id = _resolve_filter_id(filters.location_id, "location")
+                queryset = queryset.filter(
+                    Q(location_id=location_id) | Q(request__location_id=location_id)
+                )
+            if filters.state_id:
+                state_id = _resolve_filter_id(filters.state_id, "state")
+                queryset = queryset.filter(
+                    Q(state_id=state_id) | Q(request__state_id=state_id)
+                )
             if filters.retailer_state_id:
                 retailer_state_id = _resolve_filter_id(
                     filters.retailer_state_id, "retailer state"
@@ -530,6 +544,16 @@ class EventQueries:
                     Q(distributor_id=distributor_id)
                     | Q(request__distributor_id=distributor_id)
                 )
+            if filters.location_id:
+                location_id = _resolve_filter_id(filters.location_id, "location")
+                queryset = queryset.filter(
+                    Q(location_id=location_id) | Q(request__location_id=location_id)
+                )
+            if filters.state_id:
+                state_id = _resolve_filter_id(filters.state_id, "state")
+                queryset = queryset.filter(
+                    Q(state_id=state_id) | Q(request__state_id=state_id)
+                )
             if filters.retailer_state_id:
                 retailer_state_id = _resolve_filter_id(
                     filters.retailer_state_id, "retailer state"
@@ -624,6 +648,16 @@ class EventQueries:
                 queryset = queryset.filter(
                     Q(distributor_id=distributor_id)
                     | Q(request__distributor_id=distributor_id)
+                )
+            if filters.location_id:
+                location_id = _resolve_filter_id(filters.location_id, "location")
+                queryset = queryset.filter(
+                    Q(location_id=location_id) | Q(request__location_id=location_id)
+                )
+            if filters.state_id:
+                state_id = _resolve_filter_id(filters.state_id, "state")
+                queryset = queryset.filter(
+                    Q(state_id=state_id) | Q(request__state_id=state_id)
                 )
             if filters.retailer_state_id:
                 retailer_state_id = _resolve_filter_id(
@@ -809,6 +843,8 @@ class RequestQueriesService(BaseEventQueriesService):
                 "timezone",
                 "distributor__location__state",
                 "retailer__location__state",
+                "location",
+                "state",
                 "rmm_asigned",
                 "created_by",
                 "updated_by",
@@ -911,6 +947,12 @@ class RequestQueries:
                     filters.distributor_id, "distributor"
                 )
                 queryset = queryset.filter(distributor_id=distributor_id)
+            if filters.location_id:
+                location_id = _resolve_filter_id(filters.location_id, "location")
+                queryset = queryset.filter(location_id=location_id)
+            if filters.state_id:
+                state_id = _resolve_filter_id(filters.state_id, "state")
+                queryset = queryset.filter(state_id=state_id)
             if filters.request_type_id:
                 request_type_id = _resolve_filter_id(
                     filters.request_type_id, "request type"
