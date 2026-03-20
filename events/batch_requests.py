@@ -9,6 +9,7 @@ import datetime
 
 from django.contrib.auth import get_user_model
 from django.db import transaction
+from django.db.models import Q
 from openpyxl import Workbook, load_workbook
 
 from events.models import (
@@ -26,6 +27,7 @@ from events.models import (
     RequestStoreManager,
     RequestType,
     Retailer,
+    State,
     Tenant,
     TimeZone,
 )
@@ -45,6 +47,7 @@ TEMPLATE_COLUMNS = [
     "distributor_name",
     "retailer_name",
     "city",
+    "state",
     "store_manager_name",
     "store_manager_phone",
     "timezone_code",
@@ -104,6 +107,7 @@ def build_request_batch_template_xlsx(tenant_id: int | None = None) -> bytes:
         "distributor_name": "North Distribution",
         "retailer_name": "Central Retail",
         "city": "New York",
+        "state": "NY",
         "store_manager_name": "John Store Manager",
         "store_manager_phone": "+1-555-0101",
         "timezone_code": "EST",
@@ -143,10 +147,12 @@ def build_request_batch_template_xlsx(tenant_id: int | None = None) -> bytes:
         ws_event_types.append(list(row))
 
     ws_cities = wb.create_sheet("Cities")
-    ws_cities.append(["id", "name", "code", "zip", "state_id", "state_name"])
+    ws_cities.append(
+        ["id", "name", "code", "zip", "state_id", "state_name", "state_code"]
+    )
     location_qs = Location.objects.select_related("state").all()
     for row in location_qs.order_by("id").values(
-        "id", "name", "code", "zip", "state_id", "state__name"
+        "id", "name", "code", "zip", "state_id", "state__name", "state__code"
     ):
         ws_cities.append(
             [
@@ -156,6 +162,7 @@ def build_request_batch_template_xlsx(tenant_id: int | None = None) -> bytes:
                 row["zip"],
                 row["state_id"],
                 row["state__name"],
+                row["state__code"],
             ]
         )
 
@@ -626,14 +633,46 @@ def _parse_row(
     if city_name is None:
         city_name = _optional_str(row.get("city_code"))
 
+    state_value = _optional_str(row.get("state"))
+    if state_value is None:
+        state_value = _optional_str(row.get("state_code"))
+    state_id_from_text: int | None = None
+    if state_value:
+        state_qs = State.objects.filter(
+            Q(name__iexact=state_value) | Q(code__iexact=state_value)
+        ).order_by("id")
+        state_count = state_qs.count()
+        if state_count == 0:
+            errors.append(f"state does not exist: {state_value}")
+        elif state_count > 1:
+            errors.append(
+                "Multiple states found for that value. Use a unique state code."
+            )
+        else:
+            state_id_from_text = state_qs.first().id
+
+    state_id_filter = state_id_from_text
+
     location_id: int | None = None
     if city_name:
-        location_qs = Location.objects.filter(name__iexact=city_name).order_by("id")
+        location_qs = Location.objects.filter(name__iexact=city_name)
+        if state_id_filter:
+            location_qs = location_qs.filter(state_id=state_id_filter)
+        location_qs = location_qs.order_by("id")
         location_count = location_qs.count()
         if location_count == 0:
-            errors.append(f"city does not exist for tenant '{tenant_name}': {city_name}")
+            if state_id_filter:
+                errors.append(
+                    f"city/state combination does not exist for tenant '{tenant_name}': {city_name}"
+                )
+            else:
+                errors.append(
+                    f"city does not exist for tenant '{tenant_name}': {city_name}"
+                )
         elif location_count > 1:
-            errors.append("Multiple cities found with that name. Please use a unique city name.")
+            errors.append(
+                "Multiple cities found with that name. Add state (or location_id) to disambiguate."
+            )
         else:
             location_id = location_qs.first().id
     else:
@@ -643,11 +682,13 @@ def _parse_row(
         location = Location.objects.filter(id=location_id).first()
         if not location:
             errors.append(f"location_id does not exist: {location_id}")
-            state_id = None
+            state_id = state_id_filter
         else:
             state_id = location.state_id
+            if state_id_filter and state_id and state_id != state_id_filter:
+                errors.append("location_id does not belong to the provided state.")
     else:
-        state_id = None
+        state_id = state_id_filter
 
     distributor_name = _optional_str(row.get("distributor_name"))
     retailer_name = _optional_str(row.get("retailer_name"))
@@ -703,18 +744,21 @@ def _parse_row(
         retailer = Retailer.objects.filter(id=retailer_id).only("name").first()
         retailer_name_for_request = retailer.name if retailer else None
 
-    if not retailer_name_for_request:
-        errors.append("retailer_name is required to build request name.")
+    distributor_name_for_request = distributor_name
+    if not distributor_name_for_request and distributor_id:
+        distributor = Distributor.objects.filter(id=distributor_id).only("name").first()
+        distributor_name_for_request = distributor.name if distributor else None
 
     request_name = None
-    if retailer_name_for_request and event_date and store_number:
+    name_prefix = retailer_name_for_request or distributor_name_for_request or "Request"
+    if event_date and store_number:
         request_name = (
-            f"{retailer_name_for_request} - {event_date.strftime('%m/%d/%Y')} - {store_number}"
+            f"{name_prefix} - {event_date.strftime('%m/%d/%Y')} - {store_number}"
         )
         if len(request_name) > 50:
             errors.append(
                 "Generated request name exceeds 50 characters. "
-                "Use shorter retailer_name/store_number."
+                "Use shorter retailer/distributor name or store_number."
             )
 
     if errors:
