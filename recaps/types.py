@@ -143,6 +143,10 @@ class Recap(Node):
     job: job_types.Job | None
     retailer_id: strawberry.ID | None
     retailer: event_types.Retailer | None
+    location_id: strawberry.ID | None
+    location: event_types.Location | None
+    state_id: strawberry.ID | None
+    state: event_types.State | None
     created_at: str
     updated_at: str
 

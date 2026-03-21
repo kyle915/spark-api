@@ -11,6 +11,7 @@ class RecapFiltersInput(SparkGraphQLInput):
     event_type: strawberry.ID | None = None
     rmm_asigned_id: strawberry.ID | None = None
     retailer_id: strawberry.ID | None = None
+    location_id: strawberry.ID | None = None
     state_id: strawberry.ID | None = None
     event_date: str | None = None
     start_date: str | None = None
@@ -94,6 +95,8 @@ class CreateRecapInput(SparkGraphQLInput):
     
     job_id: strawberry.ID | None = None
     retailer_id: strawberry.ID | None = None
+    location_id: strawberry.ID | None = None
+    state_id: strawberry.ID | None = None
     ambassador_id: strawberry.ID | None = None
     
     consumer_engagements: ConsumerEngagementsInput | None = None

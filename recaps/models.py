@@ -2,7 +2,7 @@ from uuid6 import uuid7
 from django.db import models
 from django.conf import settings
 from ambassadors.models import FileType, Ambassador
-from events.models import Event, TimeZone, Retailer, Product
+from events.models import Event, TimeZone, Retailer, Product, Location, State
 from tenants.models import Tenant
 from jobs.models import Job
 
@@ -80,6 +80,20 @@ class Recap(models.Model):
 
     retailer = models.ForeignKey(
         Retailer,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="recaps",
+    )
+
+    location = models.ForeignKey(
+        Location,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="recaps",
+    )
+
+    state = models.ForeignKey(
+        State,
         on_delete=models.RESTRICT,
         null=True,
         related_name="recaps",

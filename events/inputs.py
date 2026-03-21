@@ -53,6 +53,8 @@ class EventFiltersInput(BaseTenantInput):
     request_id: strawberry.ID | None = None
     retailer_id: strawberry.ID | None = None
     distributor_id: strawberry.ID | None = None
+    location_id: strawberry.ID | None = None
+    state_id: strawberry.ID | None = None
     retailer_state_id: strawberry.ID | None = None
     distributor_state_id: strawberry.ID | None = None
     date: str | None = None
@@ -76,6 +78,8 @@ class RequestFiltersInput(BaseTenantInput):
     client_id: strawberry.ID | None = None
     retailer_id: strawberry.ID | None = None
     distributor_id: strawberry.ID | None = None
+    location_id: strawberry.ID | None = None
+    state_id: strawberry.ID | None = None
     request_type_id: strawberry.ID | None = None
     retailer_state_id: strawberry.ID | None = None
     distributor_state_id: strawberry.ID | None = None
@@ -153,6 +157,8 @@ class CreateEventInput(BaseNameableInput):
     request_id: strawberry.ID | None = None
     retailer_id: strawberry.ID | None = None
     distributor_id: strawberry.ID | None = None
+    location_id: strawberry.ID | None = None
+    state_id: strawberry.ID | None = None
     rmm_asigned_id: strawberry.ID | None = None
     timezone_id: strawberry.ID | None = None
     date: str
@@ -342,6 +348,8 @@ class CreateRequestInput(BaseNameableInput):
     request_type_id: strawberry.ID
     distributor_id: strawberry.ID | None = None
     retailer_id: strawberry.ID | None = None
+    location_id: strawberry.ID | None = None
+    state_id: strawberry.ID | None = None
     store_manager_id: strawberry.ID | None = None
     rmm_asigned_id: strawberry.ID | None = None
     requestor_email: str | None = None
@@ -371,8 +379,10 @@ class UpdateRequestInput(BaseNameableInput):
     coordinates: List[float]
     timezone_id: strawberry.ID
     request_type_id: strawberry.ID
-    distributor_id: strawberry.ID
-    retailer_id: strawberry.ID
+    distributor_id: strawberry.ID | None = None
+    retailer_id: strawberry.ID | None = None
+    location_id: strawberry.ID | None = None
+    state_id: strawberry.ID | None = None
     rmm_asigned_id: strawberry.ID | None = None
     requestor_email: str | None = None
     reviewed: bool | None = None
@@ -395,6 +405,8 @@ class CreateRequestWithDependenciesInput(BaseNameableInput):
     request_type_id: strawberry.ID
     distributor_id: strawberry.ID | None = None
     retailer_id: strawberry.ID | None = None
+    location_id: strawberry.ID | None = None
+    state_id: strawberry.ID | None = None
     requestor_email: str | None = None
     store_number: str | None = None
     client_name: str
