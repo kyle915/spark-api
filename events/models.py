@@ -391,6 +391,20 @@ class Request(models.Model):
         related_name="requests",
     )
 
+    location = models.ForeignKey(
+        Location,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="request",
+    )
+
+    state = models.ForeignKey(
+        State,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="request",
+    )
+
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
@@ -670,6 +684,20 @@ class Event(models.Model):
 
     rmm_asigned = models.ForeignKey(
         settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="events",
+    )
+
+    location = models.ForeignKey(
+        Location,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="events",
+    )
+
+    state = models.ForeignKey(
+        State,
         on_delete=models.RESTRICT,
         null=True,
         related_name="events",
