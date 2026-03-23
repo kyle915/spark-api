@@ -1033,6 +1033,17 @@ class UpsertAmbassadorProfileService(BaseAmbassadorService):
                 )
 
             user_fields_to_update: list[str] = []
+            if input.email is not None:
+                normalized_email = input.email.strip().lower()
+                if (
+                    normalized_email
+                    and User.objects.exclude(pk=ambassador.user_id)
+                    .filter(email=normalized_email)
+                    .exists()
+                ):
+                    raise GraphQLError("Email already exists.")
+                ambassador.user.email = normalized_email
+                user_fields_to_update.append("email")
             if input.first_name is not None:
                 ambassador.user.first_name = input.first_name
                 user_fields_to_update.append("first_name")
@@ -1167,7 +1178,14 @@ class UpsertAmbassadorProfileService(BaseAmbassadorService):
 
         try:
             ambassador = await _persist()
-        except (ValueError, TypeError, GraphQLError):
+        except GraphQLError as exc:
+            return build_mutation_response(
+                UpsertAmbassadorProfileResponse,
+                success=False,
+                message=str(exc),
+                input_obj=input,
+            )
+        except (ValueError, TypeError):
             return build_mutation_response(
                 UpsertAmbassadorProfileResponse,
                 success=False,
