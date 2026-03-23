@@ -662,13 +662,25 @@ class SkillQueries:
     async def skill(
         self,
         info: strawberry.Info,
-        skill_id: strawberry.ID,
+        skill_id: strawberry.ID | None = None,
+        skill_uuid: strawberry.ID | None = None,
     ) -> types.SkillType | None:
-        """Get a single skill by ID (authenticated users only)."""
+        """Get a single skill by ID or UUID (authenticated users only)."""
         from .models import Skill
 
+        if skill_id is None and skill_uuid is None:
+            return None
+
         try:
-            skill = await Skill.objects._by_id(skill_id)
+            if skill_uuid is not None:
+
+                @sync_to_async
+                def get_by_uuid():
+                    return Skill.objects.get(uuid=str(skill_uuid))
+
+                skill = await get_by_uuid()
+            else:
+                skill = await Skill.objects._by_id(skill_id)
             return skill
         except (Skill.DoesNotExist, ValueError, TypeError):
             return None

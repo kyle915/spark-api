@@ -45,6 +45,7 @@ from events.batch_requests import (
 )
 from jobs.envelopes import AmbassadorEventSuspendedMailer, AmbassadorJobUpdatedMailer
 from jobs import models as job_models
+from jobs.notification_rules import should_send_ambassador_event_email
 
 ensure_relay_mutation()
 
@@ -361,6 +362,9 @@ async def _notify_assigned_ambassadors_for_event_update(event_id: int) -> None:
     )
 
     for ambassador_job in ambassador_jobs:
+        if not should_send_ambassador_event_email(ambassador_job):
+            continue
+
         user = getattr(getattr(ambassador_job, "ambassador", None), "user", None)
         email = (getattr(user, "email", None) or "").strip()
         if not email:
@@ -394,6 +398,9 @@ async def _notify_assigned_ambassadors_for_suspended_event(event_id: int) -> Non
     )
 
     for ambassador_job in ambassador_jobs:
+        if not should_send_ambassador_event_email(ambassador_job):
+            continue
+
         user = getattr(getattr(ambassador_job, "ambassador", None), "user", None)
         email = (getattr(user, "email", None) or "").strip()
         if not email:

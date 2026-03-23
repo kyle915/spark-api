@@ -9,6 +9,7 @@ This module tests:
   - Automatic "invited" status creation
   - AmbassadorJob creation with correct fields
 """
+from datetime import datetime, timezone
 import pytest
 import strawberry_django  # noqa: F401
 from strawberry.relay import to_base64
@@ -217,6 +218,35 @@ class TestClientInviteAmbassadorsToJob(JobsGraphQLTestCase):
             str(self.ambassador_user1.uuid),
             str(self.ambassador_user2.uuid),
         }
+
+    @pytest.mark.asyncio
+    async def test_invite_ambassadors_to_job_does_not_send_email_for_past_event(self):
+        variables = {
+            "input": {
+                "tenantId": str(self.tenant.id),
+                "jobId": self.job_relay_id,
+                "ambassadorIds": [self.ambassador1_relay_id, self.ambassador2_relay_id],
+                "clientMutationId": "invite-1"
+            }
+        }
+
+        with patch(
+            "jobs.notification_rules.timezone.now",
+            return_value=datetime(2026, 3, 21, 12, 0, tzinfo=timezone.utc),
+        ), patch(
+            "jobs.mutations.AmbassadorInvitedToJobMailer.send"
+        ) as mock_send, patch(
+            "jobs.mutations.one_signal_client.send_push",
+            new=AsyncMock(return_value={"id": "push-123"}),
+        ) as mock_push:
+            result = await self._execute_mutation_authenticated(
+                self.mutation, variables, self.client_user, self.endpoint_path)
+
+        assert result.errors is None
+        assert result.data is not None
+        assert result.data["inviteAmbassadorsToJob"]["success"] is True
+        mock_send.assert_not_called()
+        assert mock_push.await_count == 2
 
     @pytest.mark.asyncio
     async def test_invite_single_ambassador_to_job(self):
