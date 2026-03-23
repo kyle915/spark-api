@@ -94,3 +94,43 @@ class TestCreateAmbassadorJobNotifications(JobsGraphQLTestCase):
         assert result.data is not None
         assert result.data["createAmbassadorJob"]["success"] is True
         assert mock_send.called
+
+    @pytest.mark.asyncio
+    async def test_create_ambassador_job_does_not_send_email_for_past_event(self):
+        mutation = """
+        mutation CreateAmbassadorJob($input: CreateAmbassadorJobInput!) {
+            createAmbassadorJob(input: $input) {
+                success
+                message
+                ambassadorJob {
+                    id
+                }
+            }
+        }
+        """
+        variables = {
+            "input": {
+                "tenantId": str(self.tenant.id),
+                "ambassadorId": str(self.ambassador.id),
+                "jobId": str(self.job.id),
+                "statusId": str(self.pending_status.id),
+                "rateId": str(self.rate.id),
+                "appearAsRfp": True,
+            }
+        }
+
+        with patch(
+            "jobs.notification_rules.timezone.now",
+            return_value=datetime(2026, 3, 21, 12, 0, tzinfo=timezone.utc),
+        ), patch("jobs.mutations.AmbassadorAssignedToJobMailer.send") as mock_send:
+            result = await self._execute_mutation_authenticated(
+                mutation,
+                variables,
+                self.spark_user,
+                self.endpoint_path,
+            )
+
+        assert result.errors is None
+        assert result.data is not None
+        assert result.data["createAmbassadorJob"]["success"] is True
+        mock_send.assert_not_called()
