@@ -122,6 +122,7 @@ WSGI_APPLICATION = "config.wsgi.application"
 DATABASES = {
     "default": env.db(),
 }
+DATABASES["default"]["CONN_MAX_AGE"] = 60
 
 
 # Password validation
@@ -209,6 +210,7 @@ GOOGLE_CALENDAR_ID = env("GOOGLE_CALENDAR_ID", default="primary")
 GOOGLE_CALENDAR_CREDENTIALS_JSON = env("GOOGLE_CALENDAR_CREDENTIALS", default=None)
 if GOOGLE_CALENDAR_CREDENTIALS_JSON:
     import json
+
     try:
         GOOGLE_CALENDAR_CREDENTIALS = json.loads(GOOGLE_CALENDAR_CREDENTIALS_JSON)
     except json.JSONDecodeError as e:
