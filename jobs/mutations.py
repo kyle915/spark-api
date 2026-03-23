@@ -15,6 +15,7 @@ from jobs.envelopes import (
     AmbassadorJobUpdatedMailer,
     AmbassadorUnassignedFromJobMailer,
 )
+from jobs.notification_rules import should_send_ambassador_event_email
 from ambassadors.models import AmbassadorEvent
 from tenants.models import Role, TenantedUser
 from utils.onesignal import OneSignalError, one_signal_client
@@ -160,6 +161,9 @@ async def _notify_approved_ambassador_by_push(
 async def _notify_approved_ambassador_by_email(
     ambassador_job: models.AmbassadorJob,
 ) -> None:
+    if not should_send_ambassador_event_email(ambassador_job):
+        return
+
     ambassador = getattr(ambassador_job, "ambassador", None)
     user = getattr(ambassador, "user", None)
     email = (getattr(user, "email", None) or "").strip()
@@ -177,6 +181,9 @@ async def _notify_approved_ambassador_by_email(
 async def _notify_assigned_ambassador_by_email(
     ambassador_job: models.AmbassadorJob,
 ) -> None:
+    if not should_send_ambassador_event_email(ambassador_job):
+        return
+
     ambassador = getattr(ambassador_job, "ambassador", None)
     user = getattr(ambassador, "user", None)
     email = (getattr(user, "email", None) or "").strip()
@@ -194,6 +201,9 @@ async def _notify_assigned_ambassador_by_email(
 async def _notify_invited_ambassador_by_email(
     ambassador_job: models.AmbassadorJob,
 ) -> None:
+    if not should_send_ambassador_event_email(ambassador_job):
+        return
+
     ambassador = getattr(ambassador_job, "ambassador", None)
     user = getattr(ambassador, "user", None)
     email = (getattr(user, "email", None) or "").strip()
@@ -245,6 +255,9 @@ async def _notify_invited_ambassador_by_push(
 async def _notify_unassigned_ambassador_by_email(
     ambassador_job: models.AmbassadorJob,
 ) -> None:
+    if not should_send_ambassador_event_email(ambassador_job):
+        return
+
     ambassador = getattr(ambassador_job, "ambassador", None)
     user = getattr(ambassador, "user", None)
     email = (getattr(user, "email", None) or "").strip()
@@ -262,6 +275,9 @@ async def _notify_unassigned_ambassador_by_email(
 async def _notify_updated_ambassador_by_email(
     ambassador_job: models.AmbassadorJob,
 ) -> None:
+    if not should_send_ambassador_event_email(ambassador_job):
+        return
+
     ambassador = getattr(ambassador_job, "ambassador", None)
     user = getattr(ambassador, "user", None)
     email = (getattr(user, "email", None) or "").strip()

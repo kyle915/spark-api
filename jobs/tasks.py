@@ -15,6 +15,12 @@ from jobs.envelopes import (
     AmbassadorEventReminderMailer,
 )
 from jobs.models import AmbassadorJob
+from jobs.notification_rules import (
+    _event_start_datetime,
+    _normalize_offset_minutes,
+    _to_event_timezone_offset,
+    _to_utc_aware,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -22,32 +28,6 @@ REMINDER_24H_SCHEDULE_DESCRIPTION = "jobs.hourly.ambassador_event_reminders.24h"
 REMINDER_3H_SCHEDULE_DESCRIPTION = "jobs.hourly.ambassador_event_reminders.3h"
 REMINDER_INTERVAL_SECONDS = 60 * 60
 REMINDER_ALLOWED_STATUS_SLUGS = {"approved", "accepted"}
-
-
-def _normalize_offset_minutes(offset_value: int | None) -> int:
-    if offset_value is None:
-        return 0
-    value = int(offset_value)
-    if abs(value) > 24:
-        return value
-    return value * 60
-
-
-def _to_utc_aware(value: datetime.datetime | None) -> datetime.datetime | None:
-    if value is None:
-        return None
-    if timezone.is_aware(value):
-        return value.astimezone(datetime.timezone.utc)
-    return value.replace(tzinfo=datetime.timezone.utc)
-
-
-def _to_event_timezone_offset(
-    value: datetime.datetime | None, timezone_offset: int | None
-) -> datetime.datetime | None:
-    if value is None:
-        return None
-    offset_minutes = _normalize_offset_minutes(timezone_offset)
-    return value + datetime.timedelta(minutes=offset_minutes)
 
 
 def _next_top_of_hour_utc_naive() -> datetime.datetime:
@@ -80,11 +60,6 @@ def _is_within_hours_window(
         datetime.timedelta(hours=min_exclusive_hours) < delta
         <= datetime.timedelta(hours=window_hours)
     )
-
-
-def _event_start_datetime(ambassador_job: AmbassadorJob) -> datetime.datetime | None:
-    event = ambassador_job.job.event
-    return event.start_time or event.date or ambassador_job.job.start_date
 
 
 def _register_hourly_schedule(
