@@ -369,6 +369,12 @@ class CreateRequestInput(BaseNameableInput):
 
 
 @strawberry.input
+class CreateEventWithRequestInput(SparkGraphQLInput):
+    event: CreateEventInput
+    request: CreateRequestInput
+
+
+@strawberry.input
 class UpdateRequestInput(BaseNameableInput):
     id: strawberry.ID
     date: str
@@ -383,6 +389,7 @@ class UpdateRequestInput(BaseNameableInput):
     retailer_id: strawberry.ID | None = None
     location_id: strawberry.ID | None = None
     state_id: strawberry.ID | None = None
+    store_manager_id: strawberry.ID | None = None
     rmm_asigned_id: strawberry.ID | None = None
     requestor_email: str | None = None
     reviewed: bool | None = None
@@ -391,6 +398,12 @@ class UpdateRequestInput(BaseNameableInput):
     store_manager_phone: str
     details: List[CreateRequestDetailInput]
     products: List[CreateRequestProductInput]
+
+
+@strawberry.input
+class UpdateEventWithRequestInput(SparkGraphQLInput):
+    event: UpdateEventInput
+    request: UpdateRequestInput
 
 
 @strawberry.input
