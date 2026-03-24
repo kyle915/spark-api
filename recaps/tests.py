@@ -184,3 +184,54 @@ class TestApproveRecapNotifications(JobsGraphQLTestCase):
         assert result.data is not None
         assert result.data["recap"]["id"] == str(self.recap.id)
         assert result.data["recap"]["ambassador"] == {"id": str(self.ambassador.id)}
+
+    @pytest.mark.asyncio
+    async def test_recaps_query_filters_by_ambassador(self):
+        other_recap = recap_models.Recap.objects.create(
+            name="Other ambassador recap",
+            approved=False,
+            event=self.event,
+            job=self.job,
+            ambassador=self.other_ambassador,
+            created_by=self.spark_user,
+            updated_by=self.spark_user,
+        )
+
+        query = """
+        query Recaps($filters: RecapFiltersInput) {
+            recaps(filters: $filters) {
+                totalCount
+                edges {
+                    node {
+                        id
+                        ambassador {
+                            id
+                        }
+                    }
+                }
+            }
+        }
+        """
+        variables = {"filters": {"ambassadorId": str(self.ambassador.id)}}
+
+        result = await self._execute_query_authenticated(
+            query,
+            variables,
+            self.spark_user,
+            self.endpoint_path,
+        )
+
+        assert result.errors is None
+        assert result.data is not None
+        assert result.data["recaps"]["totalCount"] == 1
+        assert result.data["recaps"]["edges"] == [
+            {
+                "node": {
+                    "id": str(self.recap.id),
+                    "ambassador": {"id": str(self.ambassador.id)},
+                }
+            }
+        ]
+        assert str(other_recap.id) not in {
+            edge["node"]["id"] for edge in result.data["recaps"]["edges"]
+        }

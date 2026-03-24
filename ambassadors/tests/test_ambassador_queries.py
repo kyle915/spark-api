@@ -679,3 +679,93 @@ class TestAvailableAmbassadorsQuery(AmbassadorsGraphQLTestCase):
         assert result.data is None
         assert result.errors is not None
         assert len(result.errors) > 0
+
+
+@pytest.mark.django_db(transaction=True)
+class TestAmbassadorsQuery(AmbassadorsGraphQLTestCase):
+    @pytest.fixture(autouse=True)
+    def setup(self, db):
+        from config.schema_client import schema_clients
+
+        self.roles = self.setup_default_roles()
+        self.tenant = self.create_tenant(name="Ambassadors Query Tenant")
+
+        self.client_user = self.create_user(
+            username=f"client_amb_list_{str(uuid.uuid4())[:8]}@test.com",
+            email=f"client_amb_list_{str(uuid.uuid4())[:8]}@test.com",
+            role=self.roles["client"],
+        )
+        self.create_tenanted_user(self.client_user, self.tenant)
+
+        self.spark_admin_user = self.create_user(
+            username=f"spark_amb_list_{str(uuid.uuid4())[:8]}@test.com",
+            email=f"spark_amb_list_{str(uuid.uuid4())[:8]}@test.com",
+            role=self.roles["spark_admin"],
+        )
+
+        self.match_user = self.create_user(
+            username=f"maria_amb_{str(uuid.uuid4())[:8]}@test.com",
+            email=f"maria.garcia.{str(uuid.uuid4())[:8]}@test.com",
+            first_name="Maria",
+            last_name="Garcia",
+            role=self.roles["ambassador"],
+        )
+        self.match_ambassador = self.create_ambassador(
+            user=self.match_user,
+            address="123 Match Street",
+            about_me="Experienced tequila ambassador",
+            is_active=True,
+        )
+        self.create_tenanted_user(self.match_user, self.tenant)
+
+        self.other_user = self.create_user(
+            username=f"pedro_amb_{str(uuid.uuid4())[:8]}@test.com",
+            email=f"pedro.lopez.{str(uuid.uuid4())[:8]}@test.com",
+            first_name="Pedro",
+            last_name="Lopez",
+            role=self.roles["ambassador"],
+        )
+        self.other_ambassador = self.create_ambassador(
+            user=self.other_user,
+            address="456 Different Avenue",
+            about_me="Street team ambassador",
+            is_active=True,
+        )
+        self.create_tenanted_user(self.other_user, self.tenant)
+
+        self.schema = schema_clients
+        self.endpoint_path = "/api/v1/graphql/clients"
+        self.query = """
+            query Ambassadors($first: Int, $q: String) {
+                ambassadors(first: $first, q: $q) {
+                    totalCount
+                    edges {
+                        node {
+                            id
+                            address
+                        }
+                    }
+                }
+            }
+        """
+
+    @pytest.mark.asyncio
+    async def test_ambassadors_filter_by_q(self):
+        result = await self._execute_query_authenticated(
+            self.query,
+            {"first": 10, "q": "Maria"},
+            self.client_user,
+            self.endpoint_path,
+        )
+
+        assert result.errors is None
+        assert result.data is not None
+        assert result.data["ambassadors"]["totalCount"] == 1
+        assert result.data["ambassadors"]["edges"] == [
+            {
+                "node": {
+                    "id": str(self.match_ambassador.id),
+                    "address": "123 Match Street",
+                }
+            }
+        ]

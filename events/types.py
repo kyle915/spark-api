@@ -319,13 +319,13 @@ class Request(Node):
     state: State | None = None
 
     @strawberry.field
-    def store_managers(self) -> List[RequestStoreManager]:
+    async def store_managers(self) -> List[RequestStoreManager]:
         cached = getattr(self, "_prefetched_objects_cache", {}).get(
             "requests_stores_manager"
         )
         if cached is not None:
             return list(cached)
-        return list(self.requests_stores_manager.all())
+        return await sync_to_async(list)(self.requests_stores_manager.all())
 
     @strawberry.field
     async def products(self) -> List[Product]:
@@ -484,6 +484,15 @@ class EventDetailResponse:
     message: str
     client_mutation_id: strawberry.ID | None = None
     event: Event | None = None
+
+
+@strawberry.type
+class EventWithRequestDetailResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    event: Event | None = None
+    request: Request | None = None
 
 
 @strawberry.type
