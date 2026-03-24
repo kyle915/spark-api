@@ -386,6 +386,7 @@ class AmbassadorManagementQueries:
         after: str | None = None,
         last: int | None = None,
         before: str | None = None,
+        q: str | None = None,
         filters: inputs.AmbassadorFiltersInput | None = None,
     ) -> CountableConnection[types.Ambassador]:
         """List ambassadors with filters for status, rating, name, email, address and about_me."""
@@ -398,6 +399,7 @@ class AmbassadorManagementQueries:
             after=after,
             last=last,
             before=before,
+            q=q,
             filters=filters,
         )
 
