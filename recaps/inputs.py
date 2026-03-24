@@ -10,6 +10,7 @@ class RecapFiltersInput(SparkGraphQLInput):
     event_id: strawberry.ID | None = None
     event_type: strawberry.ID | None = None
     rmm_asigned_id: strawberry.ID | None = None
+    ambassador_id: strawberry.ID | None = None
     retailer_id: strawberry.ID | None = None
     location_id: strawberry.ID | None = None
     state_id: strawberry.ID | None = None
