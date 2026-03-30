@@ -134,6 +134,53 @@ class TestApproveAmbassadorJobNotifications(JobsGraphQLTestCase):
         assert updated_job.status_id == self.approved_status.id
 
     @pytest.mark.asyncio
+    async def test_approve_ambassador_job_does_not_send_ambassador_email_for_past_event(self):
+        mutation = """
+        mutation ApproveAmbassadorJob($input: ApproveAmbassadorJobInput!) {
+            approveAmbassadorJob(input: $input) {
+                success
+                message
+                ambassadorJob {
+                    id
+                    status {
+                        name
+                    }
+                }
+            }
+        }
+        """
+        variables = {
+            "input": {
+                "tenantId": str(self.tenant.id),
+                "ambassadorJobId": str(self.ambassador_job.id),
+            }
+        }
+
+        with patch(
+            "jobs.notification_rules.timezone.now",
+            return_value=datetime(2026, 3, 21, 12, 0, tzinfo=timezone.utc),
+        ), patch(
+            "jobs.mutations.AmbassadorJobApprovedNotificationMailer.send"
+        ) as mock_client_send, patch(
+            "jobs.mutations.AmbassadorApprovedForJobMailer.send"
+        ) as mock_send, patch(
+            "jobs.mutations.one_signal_client.send_push",
+            new=AsyncMock(return_value={"id": "push-123"}),
+        ) as mock_push:
+            result = await self._execute_mutation_authenticated(
+                mutation,
+                variables,
+                self.spark_user,
+                self.endpoint_path,
+            )
+
+        assert result.data is not None
+        assert result.data["approveAmbassadorJob"]["success"] is True
+        assert mock_client_send.called
+        mock_send.assert_not_called()
+        mock_push.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_approved_mailer_template_renders(self):
         self.ambassador_job.status = self.approved_status
         await sync_to_async(self.ambassador_job.save)()

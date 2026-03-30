@@ -1033,6 +1033,17 @@ class UpsertAmbassadorProfileService(BaseAmbassadorService):
                 )
 
             user_fields_to_update: list[str] = []
+            if input.email is not None:
+                normalized_email = input.email.strip().lower()
+                if (
+                    normalized_email
+                    and User.objects.exclude(pk=ambassador.user_id)
+                    .filter(email=normalized_email)
+                    .exists()
+                ):
+                    raise GraphQLError("Email already exists.")
+                ambassador.user.email = normalized_email
+                user_fields_to_update.append("email")
             if input.first_name is not None:
                 ambassador.user.first_name = input.first_name
                 user_fields_to_update.append("first_name")
@@ -1167,7 +1178,14 @@ class UpsertAmbassadorProfileService(BaseAmbassadorService):
 
         try:
             ambassador = await _persist()
-        except (ValueError, TypeError, GraphQLError):
+        except GraphQLError as exc:
+            return build_mutation_response(
+                UpsertAmbassadorProfileResponse,
+                success=False,
+                message=str(exc),
+                input_obj=input,
+            )
+        except (ValueError, TypeError):
             return build_mutation_response(
                 UpsertAmbassadorProfileResponse,
                 success=False,
@@ -1439,23 +1457,54 @@ class AmbassadorQueriesService(SparkGraphQLMixin):
         after: str | None = None,
         last: int | None = None,
         before: str | None = None,
+        q: str | None = None,
         filters: inputs.AmbassadorFiltersInput | None = None,
     ) -> CountableConnection[AmbassadorType]:
         """General ambassador list with filters for active status, rating, name, and email."""
-        # Reuse available_ambassadors logic for tenant resolution and filtering.
-        return await self.get_available_ambassadors(
-            info=info,
+        user = await self.get_user(info)
+        is_spark_request = self.is_spark_schema_request(info, user=user)
+
+        tenant_id: int | None = None
+        tenant_id_input = filters.tenant_id if filters else None
+        tenant_uuid_input = filters.tenant_uuid if filters else None
+
+        should_filter_by_tenant = (
+            not is_spark_request
+            or tenant_id_input is not None
+            or tenant_uuid_input is not None
+        )
+        if should_filter_by_tenant:
+            tenant = await self.get_user_tenant(
+                info,
+                tenant_id=tenant_id_input,
+                tenant_uuid=tenant_uuid_input,
+                user=user,
+            )
+            tenant_id = tenant.id
+
+        queryset = await self._get_filtered_ambassadors_queryset(
+            tenant_id=tenant_id,
+            filters=filters,
+            q=q,
+        )
+
+        from utils.graphql.relay import connection_from_queryset_async
+
+        return await connection_from_queryset_async(
+            queryset,
             first=first,
             after=after,
             last=last,
             before=before,
-            filters=filters,
+            default_limit=10,
+            max_limit=50,
         )
 
     async def _get_filtered_ambassadors_queryset(
         self,
         tenant_id: int | None = None,
         filters: inputs.AmbassadorFiltersInput | None = None,
+        q: str | None = None,
     ):
         """Get filtered queryset for ambassadors."""
 
@@ -1506,6 +1555,15 @@ class AmbassadorQueriesService(SparkGraphQLMixin):
                         | Q(address__icontains=filters.search)
                         | Q(about_me__icontains=filters.search)
                     )
+
+            if q:
+                queryset = queryset.filter(
+                    Q(user__email__icontains=q)
+                    | Q(user__first_name__icontains=q)
+                    | Q(user__last_name__icontains=q)
+                    | Q(address__icontains=q)
+                    | Q(about_me__icontains=q)
+                )
 
             return queryset.order_by("-created_at")
 

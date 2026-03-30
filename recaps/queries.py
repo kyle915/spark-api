@@ -76,6 +76,7 @@ class BaseRecapQueriesService(SparkGraphQLMixin):
         event_id: int | None = None,
         event_type_id: int | None = None,
         rmm_asigned_id: int | None = None,
+        ambassador_id: int | None = None,
         retailer_id: int | None = None,
         location_id: int | None = None,
         state_id: int | None = None,
@@ -95,6 +96,8 @@ class BaseRecapQueriesService(SparkGraphQLMixin):
             queryset = queryset.filter(event__event_type_id=event_type_id)
         if rmm_asigned_id:
             queryset = queryset.filter(event__rmm_asigned_id=rmm_asigned_id)
+        if ambassador_id:
+            queryset = queryset.filter(ambassador_id=ambassador_id)
         if retailer_id:
             queryset = queryset.filter(retailer_id=retailer_id)
         if location_id:
@@ -122,6 +125,7 @@ class BaseRecapQueriesService(SparkGraphQLMixin):
         event_id: int | None = None,
         event_type_id: int | None = None,
         rmm_asigned_id: int | None = None,
+        ambassador_id: int | None = None,
         retailer_id: int | None = None,
         location_id: int | None = None,
         state_id: int | None = None,
@@ -138,6 +142,7 @@ class BaseRecapQueriesService(SparkGraphQLMixin):
             event_id=event_id,
             event_type_id=event_type_id,
             rmm_asigned_id=rmm_asigned_id,
+            ambassador_id=ambassador_id,
             retailer_id=retailer_id,
             location_id=location_id,
             state_id=state_id,
@@ -159,6 +164,7 @@ class BaseRecapQueriesService(SparkGraphQLMixin):
         event_id: int | None = None,
         event_type_id: int | None = None,
         rmm_asigned_id: int | None = None,
+        ambassador_id: int | None = None,
         retailer_id: int | None = None,
         location_id: int | None = None,
         state_id: int | None = None,
@@ -183,6 +189,7 @@ class BaseRecapQueriesService(SparkGraphQLMixin):
                 event_id=event_id,
                 event_type_id=event_type_id,
                 rmm_asigned_id=rmm_asigned_id,
+                ambassador_id=ambassador_id,
                 retailer_id=retailer_id,
                 location_id=location_id,
                 state_id=state_id,
@@ -236,6 +243,7 @@ class RecapQueriesService(BaseRecapQueriesService):
         event_id: int | None = None,
         event_type_id: int | None = None,
         rmm_asigned_id: int | None = None,
+        ambassador_id: int | None = None,
         retailer_id: int | None = None,
         location_id: int | None = None,
         state_id: int | None = None,
@@ -252,6 +260,7 @@ class RecapQueriesService(BaseRecapQueriesService):
             event_id=event_id,
             event_type_id=event_type_id,
             rmm_asigned_id=rmm_asigned_id,
+            ambassador_id=ambassador_id,
             retailer_id=retailer_id,
             location_id=location_id,
             state_id=state_id,
@@ -484,6 +493,11 @@ class RecapQueries:
             if filters and filters.rmm_asigned_id
             else None
         )
+        ambassador_id: int | None = (
+            resolve_id_to_int(filters.ambassador_id)
+            if filters and filters.ambassador_id
+            else None
+        )
         retailer_id: int | None = (
             resolve_id_to_int(filters.retailer_id)
             if filters and filters.retailer_id
@@ -508,6 +522,7 @@ class RecapQueries:
             event_id=event_id,
             event_type_id=event_type_id,
             rmm_asigned_id=rmm_asigned_id,
+            ambassador_id=ambassador_id,
             retailer_id=retailer_id,
             location_id=location_id,
             state_id=state_id,
@@ -525,6 +540,7 @@ class RecapQueries:
             event_id=event_id,
             event_type_id=event_type_id,
             rmm_asigned_id=rmm_asigned_id,
+            ambassador_id=ambassador_id,
             retailer_id=retailer_id,
             location_id=location_id,
             state_id=state_id,
@@ -693,6 +709,11 @@ class RecapMobileQueries:
             if filters and filters.rmm_asigned_id
             else None
         )
+        ambassador_id: int | None = (
+            resolve_id_to_int(filters.ambassador_id)
+            if filters and filters.ambassador_id
+            else None
+        )
         retailer_id: int | None = (
             resolve_id_to_int(filters.retailer_id)
             if filters and filters.retailer_id
@@ -718,6 +739,7 @@ class RecapMobileQueries:
             event_id=event_id,
             event_type_id=event_type_id,
             rmm_asigned_id=rmm_asigned_id,
+            ambassador_id=ambassador_id,
             retailer_id=retailer_id,
             location_id=location_id,
             state_id=state_id,
@@ -735,6 +757,7 @@ class RecapMobileQueries:
             event_id=event_id,
             event_type_id=event_type_id,
             rmm_asigned_id=rmm_asigned_id,
+            ambassador_id=ambassador_id,
             retailer_id=retailer_id,
             location_id=location_id,
             state_id=state_id,

@@ -5,6 +5,7 @@ This module tests:
 - create_job (Client and Spark schemas)
 - update_job (Client and Spark schemas)
 """
+from datetime import datetime, timezone
 import pytest
 import strawberry_django  # noqa: F401
 from asgiref.sync import sync_to_async
@@ -241,6 +242,93 @@ class TestClientJobMutations(JobsGraphQLTestCase):
         assert result.data is not None
         assert result.data["updateJob"]["success"] is True
         assert mock_send.called
+
+    @pytest.mark.asyncio
+    async def test_update_job_does_not_send_email_for_past_event(self):
+        self.event.start_time = datetime(2026, 3, 20, 18, 0, tzinfo=timezone.utc)
+        await sync_to_async(self.event.save)(update_fields=["start_time"])
+
+        rate_type = await sync_to_async(self.create_rate_type)(
+            name="Hourly Past",
+            tenant=self.tenant,
+        )
+        original_rate = await sync_to_async(self.create_rate)(
+            amount=50.0,
+            rate_type=rate_type,
+            tenant=self.tenant,
+        )
+        updated_rate = await sync_to_async(self.create_rate)(
+            amount=60.0,
+            rate_type=rate_type,
+            tenant=self.tenant,
+        )
+        ambassador_user = await sync_to_async(self.create_user)(
+            username="ambassador_update_job_past@test.com",
+            email="ambassador_update_job_past@test.com",
+            role=self.roles["ambassador"],
+            password="testpass123",
+        )
+        await sync_to_async(self.create_tenanted_user)(
+            user=ambassador_user,
+            tenant=self.tenant,
+        )
+        ambassador = await sync_to_async(self.create_ambassador)(user=ambassador_user)
+        status = await sync_to_async(self.create_status)(name="Assigned", tenant=self.tenant)
+        job = await sync_to_async(self.create_job)(
+            name="Original Job",
+            code="JOB-NOTIFY-PAST",
+            address="Original Address",
+            event=self.event,
+            job_title=self.job_title,
+            tenant=self.tenant,
+            rate=original_rate,
+        )
+        await sync_to_async(self.create_ambassador_job)(
+            ambassador=ambassador,
+            job=job,
+            status=status,
+            rate=original_rate,
+            tenant=self.tenant,
+        )
+
+        mutation = """
+        mutation UpdateJob($input: UpdateJobInput!) {
+            updateJob(input: $input) {
+                success
+                message
+                job {
+                    id
+                }
+            }
+        }
+        """
+
+        variables = {
+            "input": {
+                "id": str(job.id),
+                "name": "Original Job",
+                "description": "Updated description",
+                "code": "JOB-NOTIFY-PAST",
+                "address": "Updated Address",
+                "jobTitleId": str(self.job_title.id),
+                "eventId": str(self.event.id),
+                "rateId": str(updated_rate.id),
+                "coordinates": [10.0, 20.0],
+            }
+        }
+
+        with patch(
+            "jobs.notification_rules.timezone.now",
+            return_value=datetime(2026, 3, 21, 12, 0, tzinfo=timezone.utc),
+        ), patch("jobs.mutations.AmbassadorJobUpdatedMailer.send") as mock_send:
+            result = await self._execute_mutation_authenticated(
+                mutation, variables, self.client_user, self.endpoint_path
+            )
+
+        assert result.errors is None
+        assert result.data is not None
+        assert result.data["updateJob"]["success"] is True
+        mock_send.assert_not_called()
 
 
 @pytest.mark.django_db(transaction=True)

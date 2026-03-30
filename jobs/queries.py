@@ -626,6 +626,7 @@ class JobQueriesService(JobsBaseQueriesService):
                 "job_title",
                 "other_title",
                 "event",
+                "event__timezone",
                 "rate",
             )
             .prefetch_related(
@@ -939,6 +940,47 @@ class AmbassadorJobQueriesService(JobsBaseQueriesService):
         """Get the model for the service."""
         return models.AmbassadorJob
 
+    def get_queryset(self) -> QuerySet:
+        """Get ambassador jobs with related event timezone loaded."""
+        return self.get_model().objects.select_related(
+            "ambassador",
+            "ambassador__user",
+            "job",
+            "job__event",
+            "job__event__timezone",
+            "status",
+            "rate",
+            "tenant",
+        )
+
+    async def get_record(
+        self,
+        id: strawberry.ID | None = None,
+        tenant_id: strawberry.ID | None = None,
+        uuid: str | None = None,
+    ) -> Model | None:
+        """Get a single ambassador job with related event timezone loaded."""
+        if id is None and uuid is None:
+            raise GraphQLError("Record identifier is required.")
+
+        filters: dict[str, object] = {}
+        if id is not None:
+            try:
+                filters["id"] = resolve_id_to_int(id)
+            except (TypeError, ValueError, GraphQLError) as exc:
+                raise GraphQLError("Invalid ID.") from exc
+        if uuid is not None:
+            filters["uuid"] = uuid
+        if tenant_id is not None:
+            filters["tenant_id"] = tenant_id
+
+        try:
+            return await sync_to_async(self.get_queryset().get)(**filters)
+        except self.get_model().DoesNotExist:
+            raise GraphQLError("Record not found.")
+        except self.get_model().MultipleObjectsReturned:
+            raise GraphQLError("Multiple records found for the given identifier.")
+
 
 @strawberry.enum
 class AmbassadorJobStatusFilter(str, Enum):
@@ -1202,7 +1244,13 @@ class AmbassadorJobQueries:
 
         try:
             queryset = models.AmbassadorJob.objects.select_related(
-                "ambassador__user", "job", "job__event", "status", "rate", "tenant"
+                "ambassador__user",
+                "job",
+                "job__event",
+                "job__event__timezone",
+                "status",
+                "rate",
+                "tenant",
             ).filter(
                 ambassador__user=user,
                 **lookup_filters,

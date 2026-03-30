@@ -45,6 +45,7 @@ from events.batch_requests import (
 )
 from jobs.envelopes import AmbassadorEventSuspendedMailer, AmbassadorJobUpdatedMailer
 from jobs import models as job_models
+from jobs.notification_rules import should_send_ambassador_event_email
 
 ensure_relay_mutation()
 
@@ -253,6 +254,103 @@ class EventMutationService(BaseMutationService):
         """Get the model for the service."""
         return models.Event
 
+    async def prepare_create(self, info: strawberry.Info) -> "EventMutationService":
+        """Resolve tenant and default approved status for event creation."""
+        user: User = await self.get_user(info)
+        self.info = info
+        self.user = user
+        self.is_spark_schema = self.is_spark_schema_request(info, user=user)
+
+        request_id = getattr(self.input, "request_id", None)
+        tenant_id: int | None = None
+
+        if request_id:
+            try:
+                request_id = resolve_id_to_int(request_id)
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Invalid request ID.")
+
+            self.input.request_id = request_id
+            request: models.Request = await sync_to_async(models.Request.objects.get)(
+                id=request_id
+            )
+            tenant_id = request.tenant_id
+
+            is_spark_admin = await user.role.is_spark_admin
+            if not self.is_spark_schema and not is_spark_admin:
+                try:
+                    await sync_to_async(user.get_tenant)(tenant_id=tenant_id)
+                except Exception:
+                    raise GraphQLError(
+                        "You are not authorized to create events for this tenant."
+                    )
+        else:
+            input_tenant_id = getattr(self.input, "tenant_id", None)
+            if self.is_spark_schema and input_tenant_id:
+                tenant_id = await self._resolve_tenant_without_membership(input_tenant_id)
+                setattr(self.input, "tenant_id", tenant_id)
+            else:
+                resolved_tenant_id = input_tenant_id
+                if input_tenant_id is not None:
+                    try:
+                        resolved_tenant_id = resolve_id_to_int(input_tenant_id)
+                    except (TypeError, ValueError, GraphQLError):
+                        raise GraphQLError("Invalid tenant ID.")
+                tenant = await self.get_tenant(user, resolved_tenant_id)
+                tenant_id = tenant.id
+
+        if tenant_id is None:
+            raise GraphQLError(
+                "Tenant ID is required when creating an event without a request."
+            )
+
+        try:
+            approved_status = await sync_to_async(models.EventStatus.objects.get)(
+                slug="approved", tenant_id=tenant_id
+            )
+        except models.EventStatus.DoesNotExist:
+            raise GraphQLError(
+                "Approved event status not found. Please ensure you have a status with slug 'approved' for this tenant."
+            )
+
+        self.input.status_id = approved_status.id
+        self.tenant_id = tenant_id
+        return self
+
+    def save_sync(self) -> models.Event:
+        """Save an event synchronously so it can be composed inside transactions."""
+        model_class = self.get_model()
+        is_update: bool = hasattr(self.input, "id") and self.input.id is not None
+
+        if is_update:
+            model = model_class.objects.get(id=self.input.id)
+            if self.user:
+                setattr(model, "updated_by", self.user)
+        else:
+            model = model_class()
+            if self.user:
+                setattr(model, "created_by", self.user)
+            if self.is_public and self.input.tenant_id:
+                self.tenant_id = self.input.tenant_id
+
+        params: dict[str, Any] = self.input.to_dict(["tenant_id", "id"])
+        params = self._normalize_id_fields(params)
+        for key, value in params.items():
+            if not hasattr(model, key):
+                continue
+            setattr(model, key, value)
+
+        if hasattr(model, "tenant_id"):
+            setattr(model, "tenant_id", self.tenant_id)
+
+        model.save()
+        return model
+
+    async def save(self) -> models.Event:
+        """Save event using the synchronous helper."""
+        await self.validations()
+        return await sync_to_async(self.save_sync)()
+
 
 async def _resolve_event_location(
     event: models.Event,
@@ -361,6 +459,9 @@ async def _notify_assigned_ambassadors_for_event_update(event_id: int) -> None:
     )
 
     for ambassador_job in ambassador_jobs:
+        if not should_send_ambassador_event_email(ambassador_job):
+            continue
+
         user = getattr(getattr(ambassador_job, "ambassador", None), "user", None)
         email = (getattr(user, "email", None) or "").strip()
         if not email:
@@ -394,6 +495,9 @@ async def _notify_assigned_ambassadors_for_suspended_event(event_id: int) -> Non
     )
 
     for ambassador_job in ambassador_jobs:
+        if not should_send_ambassador_event_email(ambassador_job):
+            continue
+
         user = getattr(getattr(ambassador_job, "ambassador", None), "user", None)
         email = (getattr(user, "email", None) or "").strip()
         if not email:
@@ -417,63 +521,7 @@ class EventMutations:
     ) -> types.EventDetailResponse:
         try:
             service = EventMutationService.with_input(input)
-            user: User = await service.get_user(info)
-            service.info = info
-            service.user = user
-            service.is_spark_schema = service.is_spark_schema_request(info, user=user)
-
-            request_id = getattr(input, "request_id", None)
-            tenant_id: int | None = None
-
-            if request_id:
-                try:
-                    request_id = resolve_id_to_int(request_id)
-                except (TypeError, ValueError, GraphQLError):
-                    raise GraphQLError("Invalid request ID.")
-                input.request_id = request_id
-                request: models.Request = await sync_to_async(
-                    models.Request.objects.get
-                )(id=request_id)
-                tenant_id = request.tenant_id
-
-                is_spark_admin = await user.role.is_spark_admin
-                if not service.is_spark_schema and not is_spark_admin:
-                    try:
-                        await sync_to_async(user.get_tenant)(tenant_id=tenant_id)
-                    except Exception:
-                        raise GraphQLError(
-                            "You are not authorized to create events for this tenant."
-                        )
-            else:
-                input_tenant_id = getattr(input, "tenant_id", None)
-                if service.is_spark_schema and input_tenant_id:
-                    tenant_id = await service._resolve_tenant_without_membership(
-                        input_tenant_id
-                    )
-                    setattr(input, "tenant_id", tenant_id)
-                else:
-                    resolved_tenant_id = input_tenant_id
-                    if input_tenant_id is not None:
-                        try:
-                            resolved_tenant_id = resolve_id_to_int(input_tenant_id)
-                        except (TypeError, ValueError, GraphQLError):
-                            raise GraphQLError("Invalid tenant ID.")
-                    tenant = await service.get_tenant(user, resolved_tenant_id)
-                    tenant_id = tenant.id
-
-            if tenant_id is None:
-                raise GraphQLError(
-                    "Tenant ID is required when creating an event without a request."
-                )
-
-            approved_status = await sync_to_async(models.EventStatus.objects.get)(
-                slug="approved", tenant_id=tenant_id
-            )
-
-            # Force the event to use the approved status for the tenant
-            input.status_id = approved_status.id
-            service.tenant_id = tenant_id
-
+            await service.prepare_create(info)
             event: models.Event = await service.save()
             return build_mutation_response(
                 types.EventDetailResponse,
@@ -496,11 +544,214 @@ class EventMutations:
                 message="Request not found.",
                 input_obj=input,
             )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def create_event_with_request(
+        self,
+        info: strawberry.Info,
+        input: inputs.CreateEventWithRequestInput,
+    ) -> types.EventWithRequestDetailResponse:
+        try:
+            request_input = input.request
+            event_input = input.event
+
+            if getattr(event_input, "request_id", None):
+                raise GraphQLError(
+                    "request_id should not be provided when creating an event with a nested request."
+                )
+
+            request_service = RequestWithDependenciesMutationService.with_input(
+                request_input
+            )
+            await request_service.set_user_and_tenant(info)
+            await request_service.validations()
+            request_service.auto_approve = True
+
+            request_params: dict[str, Any] = request_input.to_dict(
+                ["tenant_id", "id", "details", "products"]
+            )
+            request_params = request_service._normalize_id_fields(request_params)
+
+            event_service = EventMutationService.with_input(event_input)
+            event_service.info = info
+            event_service.user = request_service.user
+            event_service.is_spark_schema = request_service.is_spark_schema
+
+            event_tenant_id = getattr(event_input, "tenant_id", None)
+            if event_tenant_id is not None:
+                try:
+                    event_tenant_id = resolve_id_to_int(event_tenant_id)
+                except (TypeError, ValueError, GraphQLError):
+                    raise GraphQLError("Invalid tenant ID.")
+
+                if event_tenant_id != request_service.tenant_id:
+                    raise GraphQLError(
+                        "Event tenant must match the tenant resolved for the nested request."
+                    )
+
+                event_input.tenant_id = None
+
+            approved_status = await sync_to_async(models.EventStatus.objects.get)(
+                slug="approved", tenant_id=request_service.tenant_id
+            )
+
+            event_input.status_id = approved_status.id
+
+            await event_service.validations()
+
+            def _create_request_and_event() -> tuple[models.Request, models.Event]:
+                with transaction.atomic():
+                    request = request_service._save_sync(request_params)
+                    event_service.tenant_id = request.tenant_id
+                    event_service.input.request_id = request.id
+                    event = event_service.save_sync()
+                    return request, event
+
+            request, event = await sync_to_async(_create_request_and_event)()
+
+            request = await sync_to_async(
+                models.Request.objects.select_related(
+                    "tenant",
+                    "timezone",
+                    "request_type",
+                    "retailer__location__state",
+                    "distributor__location__state",
+                ).get
+            )(id=request.id)
+            event = await sync_to_async(
+                models.Event.objects.select_related(
+                    "request",
+                    "tenant",
+                    "event_type",
+                    "status",
+                    "timezone",
+                    "retailer",
+                    "distributor",
+                    "location",
+                    "state",
+                    "rmm_asigned",
+                ).get
+            )(id=event.id)
+
+            return build_mutation_response(
+                types.EventWithRequestDetailResponse,
+                success=True,
+                message="Event and request created successfully.",
+                input_obj=input,
+                request=request,
+                event=event,
+            )
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.EventWithRequestDetailResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
         except models.EventStatus.DoesNotExist:
             return build_mutation_response(
-                types.EventDetailResponse,
+                types.EventWithRequestDetailResponse,
                 success=False,
                 message="Approved event status not found. Please ensure you have a status with slug 'approved' for this tenant.",
+                input_obj=input,
+            )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def update_event_with_request(
+        self,
+        info: strawberry.Info,
+        input: inputs.UpdateEventWithRequestInput,
+    ) -> types.EventWithRequestDetailResponse:
+        try:
+            request_input = input.request
+            event_input = input.event
+
+            request_service = RequestMutationService.with_input(request_input)
+            await request_service.set_user_and_tenant(info)
+            await request_service.validations()
+
+            event_tenant_id = getattr(event_input, "tenant_id", None)
+            if event_tenant_id is not None:
+                try:
+                    event_tenant_id = resolve_id_to_int(event_tenant_id)
+                except (TypeError, ValueError, GraphQLError):
+                    raise GraphQLError("Invalid tenant ID.")
+
+                if event_tenant_id != request_service.tenant_id:
+                    raise GraphQLError(
+                        "Event tenant must match the tenant resolved for the nested request."
+                    )
+
+                event_input.tenant_id = None
+
+            event_service = EventMutationService.with_input(event_input)
+            await event_service.set_user_and_tenant(info)
+            await event_service.validations()
+
+            if request_service.tenant_id != event_service.tenant_id:
+                raise GraphQLError("Event and request must belong to the same tenant.")
+
+            event_request_id = getattr(event_input, "request_id", None)
+            if event_request_id is not None:
+                try:
+                    event_request_id = resolve_id_to_int(event_request_id)
+                except (TypeError, ValueError, GraphQLError):
+                    raise GraphQLError("Invalid request ID.")
+
+                if event_request_id != request_input.id:
+                    raise GraphQLError(
+                        "Event request_id must match the nested request being updated."
+                    )
+
+            event_input.request_id = request_input.id
+
+            def _update_request_and_event() -> tuple[models.Request, models.Event]:
+                with transaction.atomic():
+                    request = request_service.save_sync()
+                    event_service.tenant_id = request.tenant_id
+                    event_service.input.request_id = request.id
+                    event = event_service.save_sync()
+                    return request, event
+
+            request, event = await sync_to_async(_update_request_and_event)()
+
+            request = await sync_to_async(
+                models.Request.objects.select_related(
+                    "tenant",
+                    "timezone",
+                    "request_type",
+                    "retailer__location__state",
+                    "distributor__location__state",
+                ).get
+            )(id=request.id)
+            event = await sync_to_async(
+                models.Event.objects.select_related(
+                    "request",
+                    "tenant",
+                    "event_type",
+                    "status",
+                    "timezone",
+                    "retailer",
+                    "distributor",
+                    "location",
+                    "state",
+                    "rmm_asigned",
+                ).get
+            )(id=event.id)
+
+            return build_mutation_response(
+                types.EventWithRequestDetailResponse,
+                success=True,
+                message="Event and request updated successfully.",
+                input_obj=input,
+                request=request,
+                event=event,
+            )
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.EventWithRequestDetailResponse,
+                success=False,
+                message=str(e),
                 input_obj=input,
             )
 
@@ -1598,8 +1849,8 @@ class RequestMutationService(BaseMutationService):
         """Get the model for the service."""
         return models.Request
 
-    async def _replace_request_products(self, request: models.Request) -> None:
-        """Replace request products when input provides a list."""
+    def _replace_request_products_sync(self, request: models.Request) -> None:
+        """Replace request products synchronously when input provides a list."""
         products = getattr(self.input, "products", None)
         if products is None:
             return
@@ -1611,27 +1862,93 @@ class RequestMutationService(BaseMutationService):
             if product_id:
                 product_ids.append(product_id)
 
-        def _sync_replace() -> None:
-            with transaction.atomic():
-                models.RequestProduct.objects.filter(request_id=request.id).delete()
-                for product_id in product_ids:
-                    request_product = models.RequestProduct(
-                        request_id=request.id,
-                        product_id=product_id,
-                        tenant_id=request.tenant_id,
-                    )
-                    if self.user:
-                        request_product.created_by = self.user
-                        request_product.updated_by = self.user
-                    request_product.save()
+        with transaction.atomic():
+            models.RequestProduct.objects.filter(request_id=request.id).delete()
+            for product_id in product_ids:
+                request_product = models.RequestProduct(
+                    request_id=request.id,
+                    product_id=product_id,
+                    tenant_id=request.tenant_id,
+                )
+                if self.user:
+                    request_product.created_by = self.user
+                    request_product.updated_by = self.user
+                request_product.save()
 
-        await sync_to_async(_sync_replace)()
+    def _sync_request_store_manager(self, request: models.Request) -> None:
+        """Reassign the selected store manager to the request when provided."""
+        store_manager_id = getattr(self.input, "store_manager_id", None)
+        if store_manager_id is None:
+            return
+
+        try:
+            manager_id = resolve_id_to_int(store_manager_id)
+        except (TypeError, ValueError, GraphQLError):
+            raise GraphQLError("Invalid request store manager ID.")
+
+        try:
+            manager = models.RequestStoreManager.objects.get(id=manager_id)
+        except models.RequestStoreManager.DoesNotExist:
+            raise GraphQLError("Request store manager not found.")
+
+        if manager.tenant_id and manager.tenant_id != request.tenant_id:
+            raise GraphQLError("Request store manager belongs to a different tenant.")
+
+        other_managers = models.RequestStoreManager.objects.filter(request_id=request.id)
+        other_managers = other_managers.exclude(id=manager.id)
+        if self.user:
+            other_managers.update(request=None, updated_by=self.user)
+        else:
+            other_managers.update(request=None)
+
+        manager.request = request
+        if not manager.tenant_id:
+            manager.tenant_id = request.tenant_id
+        if self.user:
+            manager.updated_by = self.user
+        manager.save()
+
+    async def _replace_request_products(self, request: models.Request) -> None:
+        """Replace request products when input provides a list."""
+        await sync_to_async(self._replace_request_products_sync)(request)
+
+    def save_sync(self) -> models.Request:
+        """Save a request synchronously so it can be composed inside transactions."""
+        model_class = self.get_model()
+        is_update: bool = hasattr(self.input, "id") and self.input.id is not None
+
+        if is_update:
+            model = model_class.objects.get(id=self.input.id)
+            if self.user:
+                setattr(model, "updated_by", self.user)
+        else:
+            model = model_class()
+            if self.user:
+                setattr(model, "created_by", self.user)
+            if self.is_public and self.input.tenant_id:
+                self.tenant_id = self.input.tenant_id
+
+        params: dict[str, Any] = self.input.to_dict(["tenant_id", "id", "store_manager_id"])
+        params = self._normalize_id_fields(params)
+        for key, value in params.items():
+            if not hasattr(model, key):
+                continue
+            if key == "store_number" and isinstance(value, str):
+                value = value.strip() or None
+            setattr(model, key, value)
+
+        if hasattr(model, "tenant_id"):
+            setattr(model, "tenant_id", self.tenant_id)
+
+        model.save()
+        self._replace_request_products_sync(model)
+        self._sync_request_store_manager(model)
+        return model
 
     async def save(self) -> Model:
         """Save request and update related products if provided."""
-        request = await super().save()
-        await self._replace_request_products(request)
-        return request
+        await self.validations()
+        return await sync_to_async(self.save_sync)()
 
 
 class RequestStoreManagerMutationService(BaseMutationService):

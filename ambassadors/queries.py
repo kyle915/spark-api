@@ -196,7 +196,11 @@ class AmbassadorEventQueriesService(BaseAmbassadorQueriesService):
     def get_ambassador_queryset(self, user, filter_by_user: bool = True) -> QuerySet:
         """Return ambassador events, optionally filtered by user."""
         queryset = self.get_model().objects.select_related(
-            "ambassador__user", "event__request", "event__status", "event__event_type"
+            "ambassador__user",
+            "event__request",
+            "event__status",
+            "event__event_type",
+            "event__timezone",
         )
 
         if filter_by_user:
@@ -386,6 +390,7 @@ class AmbassadorManagementQueries:
         after: str | None = None,
         last: int | None = None,
         before: str | None = None,
+        q: str | None = None,
         filters: inputs.AmbassadorFiltersInput | None = None,
     ) -> CountableConnection[types.Ambassador]:
         """List ambassadors with filters for status, rating, name, email, address and about_me."""
@@ -398,6 +403,7 @@ class AmbassadorManagementQueries:
             after=after,
             last=last,
             before=before,
+            q=q,
             filters=filters,
         )
 
@@ -662,13 +668,25 @@ class SkillQueries:
     async def skill(
         self,
         info: strawberry.Info,
-        skill_id: strawberry.ID,
+        skill_id: strawberry.ID | None = None,
+        skill_uuid: strawberry.ID | None = None,
     ) -> types.SkillType | None:
-        """Get a single skill by ID (authenticated users only)."""
+        """Get a single skill by ID or UUID (authenticated users only)."""
         from .models import Skill
 
+        if skill_id is None and skill_uuid is None:
+            return None
+
         try:
-            skill = await Skill.objects._by_id(skill_id)
+            if skill_uuid is not None:
+
+                @sync_to_async
+                def get_by_uuid():
+                    return Skill.objects.get(uuid=str(skill_uuid))
+
+                skill = await get_by_uuid()
+            else:
+                skill = await Skill.objects._by_id(skill_id)
             return skill
         except (Skill.DoesNotExist, ValueError, TypeError):
             return None
