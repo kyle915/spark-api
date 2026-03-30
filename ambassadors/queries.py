@@ -196,7 +196,11 @@ class AmbassadorEventQueriesService(BaseAmbassadorQueriesService):
     def get_ambassador_queryset(self, user, filter_by_user: bool = True) -> QuerySet:
         """Return ambassador events, optionally filtered by user."""
         queryset = self.get_model().objects.select_related(
-            "ambassador__user", "event__request", "event__status", "event__event_type"
+            "ambassador__user",
+            "event__request",
+            "event__status",
+            "event__event_type",
+            "event__timezone",
         )
 
         if filter_by_user:
