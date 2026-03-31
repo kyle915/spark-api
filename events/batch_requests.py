@@ -35,6 +35,7 @@ from events.models import (
 User = get_user_model()
 
 TEMPLATE_COLUMNS = [
+    "name",
     "date",
     "start_time",
     "end_time",
@@ -95,6 +96,7 @@ def export_request_batch_template(output_path: str) -> Path:
 
 def build_request_batch_template_xlsx(tenant_id: int | None = None) -> bytes:
     sample = {
+        "name": "Sampling-Central Retail-02/20/2026-102",
         "date": "02/20/2026",
         "start_time": "10:00",
         "end_time": "14:00",
@@ -750,15 +752,18 @@ def _parse_row(
         distributor_name_for_request = distributor.name if distributor else None
 
     request_name = None
-    name_prefix = retailer_name_for_request or distributor_name_for_request or "Request"
+    request_name_prefix = _optional_str(row.get("name")) or "Request"
+    name_retailer = retailer_name_for_request or distributor_name_for_request
     if event_date and store_number:
-        request_name = (
-            f"{name_prefix} - {event_date.strftime('%m/%d/%Y')} - {store_number}"
-        )
-        if len(request_name) > 50:
+        name_parts = [request_name_prefix]
+        if name_retailer:
+            name_parts.append(name_retailer)
+        name_parts.extend([event_date.strftime('%m/%d/%Y'), store_number])
+        request_name = "-".join(name_parts)
+        if len(request_name) > Request._meta.get_field("name").max_length:
             errors.append(
-                "Generated request name exceeds 50 characters. "
-                "Use shorter retailer/distributor name or store_number."
+                "Generated request name exceeds the maximum allowed length. "
+                "Use shorter name, retailer/distributor name, or store number."
             )
 
     if errors:
