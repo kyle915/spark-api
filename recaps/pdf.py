@@ -1,13 +1,27 @@
 from __future__ import annotations
 
 import base64
+from io import BytesIO
 from typing import Iterable
+
+from PIL import Image, ImageOps
+from pillow_heif import register_heif_opener
 
 # We import WeasyPrint lazily inside build_recap_pdf to avoid startup crashes
 # when the native dependencies are missing.
 
 
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif"}
+HEIF_BRANDS = {
+    b"heic",
+    b"heix",
+    b"hevc",
+    b"hevx",
+    b"heim",
+    b"heis",
+    b"mif1",
+    b"msf1",
+}
 
 
 def should_embed_recap_file(recap_file) -> bool:
@@ -27,7 +41,16 @@ def should_embed_recap_file(recap_file) -> bool:
             name = recap_file.file_type.name.lower()
             if any(
                 token in name
-                for token in ("image", "photo", "picture", "jpeg", "jpg", "png")
+                for token in (
+                    "image",
+                    "photo",
+                    "picture",
+                    "jpeg",
+                    "jpg",
+                    "png",
+                    "heic",
+                    "heif",
+                )
             ):
                 return True
         return False
@@ -49,6 +72,8 @@ def detect_image_type(data: bytes) -> str | None:
         return "gif"
     if data.startswith(b"RIFF") and data[8:12] == b"WEBP":
         return "webp"
+    if len(data) >= 12 and data[4:8] == b"ftyp" and data[8:12] in HEIF_BRANDS:
+        return "heic"
     return None
 
 
@@ -56,10 +81,30 @@ def is_image_bytes(data: bytes) -> bool:
     return detect_image_type(data) is not None
 
 
+def _convert_heic_to_jpeg_bytes(image_bytes: bytes) -> bytes | None:
+    try:
+        register_heif_opener()
+        with Image.open(BytesIO(image_bytes)) as image:
+            normalized_image = ImageOps.exif_transpose(image)
+            if normalized_image.mode != "RGB":
+                normalized_image = normalized_image.convert("RGB")
+            output = BytesIO()
+            normalized_image.save(output, format="JPEG", quality=90)
+            return output.getvalue()
+    except Exception:
+        return None
+
+
 def bytes_to_data_uri(image_bytes: bytes) -> str | None:
     image_type = detect_image_type(image_bytes)
     if not image_type:
         return None
+    if image_type == "heic":
+        converted_bytes = _convert_heic_to_jpeg_bytes(image_bytes)
+        if not converted_bytes:
+            return None
+        image_bytes = converted_bytes
+        image_type = "jpeg"
     base64_data = base64.b64encode(image_bytes).decode("ascii")
     return f"data:image/{image_type};base64,{base64_data}"
 
