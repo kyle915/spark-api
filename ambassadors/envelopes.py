@@ -1,5 +1,6 @@
 from utils.mailer import Envelope, Mailer
 from ambassadors.models import AmbassadorEvent, AmbassadorInvitation
+from tenants.models import User
 
 
 class AmbassadorEventApplicationMailer(Mailer):
@@ -55,4 +56,21 @@ class SendInvitationMailToAmbassadorMailer(Mailer):
             context={
                 "invitation": self.invitation
             }
+        )
+
+
+class AmbassadorGeneratedPasswordMailer(Mailer):
+    def __init__(self, user: User, password: str):
+        self.user = user
+        self.password = password
+
+    def envelope(self) -> Envelope:
+        return Envelope(
+            subject="Your Spark account password",
+            template="ambassadors.templates.emails.generated_password",
+            to_emails=[self.user.email],
+            context={
+                "user": self.user,
+                "password": self.password,
+            },
         )
