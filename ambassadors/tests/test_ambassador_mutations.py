@@ -289,6 +289,91 @@ class TestCreateAmbassadorWithUser(AmbassadorsGraphQLTestCase):
 
 
 @pytest.mark.django_db(transaction=True)
+class TestRegenerateAmbassadorPasswords(AmbassadorsGraphQLTestCase):
+    @pytest.fixture(autouse=True)
+    def setup(self, db):
+        from config.schema_spark import schema_spark
+
+        self.roles = self.setup_default_roles()
+        self.schema = schema_spark
+        self.endpoint_path = "/api/v1/graphql/spark"
+        self.tenant = self.create_tenant(name="Password Reset Tenant")
+        unique_id = str(uuid.uuid4())[:8]
+        self.spark_admin_user = self.create_user(
+            username=f"spark_admin_batch_{unique_id}@test.com",
+            email=f"spark_admin_batch_{unique_id}@test.com",
+            role=self.roles["spark_admin"],
+        )
+
+        self.ambassador_user_1 = self.create_user(
+            username=f"regen_1_{unique_id}@test.com",
+            email=f"regen_1_{unique_id}@test.com",
+            role=self.roles["ambassador"],
+            password="oldpassword1",
+        )
+        self.ambassador_user_2 = self.create_user(
+            username=f"regen_2_{unique_id}@test.com",
+            email=f"regen_2_{unique_id}@test.com",
+            role=self.roles["ambassador"],
+            password="oldpassword2",
+        )
+        self.create_tenanted_user(self.ambassador_user_1, self.tenant)
+        self.create_tenanted_user(self.ambassador_user_2, self.tenant)
+        self.ambassador_1 = self.create_ambassador(user=self.ambassador_user_1)
+        self.ambassador_2 = self.create_ambassador(user=self.ambassador_user_2)
+
+        self.mutation = """
+            mutation RegenerateAmbassadorPasswords($input: RegenerateAmbassadorPasswordsInput!) {
+                regenerateAmbassadorPasswords(input: $input) {
+                    success
+                    message
+                    clientMutationId
+                    results {
+                        ambassadorId
+                        email
+                        success
+                        message
+                    }
+                }
+            }
+        """
+
+    @pytest.mark.asyncio
+    async def test_regenerate_ambassador_passwords_success(self):
+        variables = {
+            "input": {
+                "ambassadorIds": [str(self.ambassador_1.id), str(self.ambassador_2.id)],
+                "clientMutationId": "regen-passwords-1",
+            }
+        }
+
+        with patch(
+            "ambassadors.services.generate_random_password",
+            side_effect=["BatchPass001", "BatchPass002"],
+        ), patch(
+            "ambassadors.services.AmbassadorGeneratedPasswordMailer.send_async",
+            new_callable=AsyncMock,
+        ) as mocked_send:
+            result = await self._execute_mutation(
+                self.mutation,
+                variables,
+                self.endpoint_path,
+                user=self.spark_admin_user,
+            )
+
+        assert result.errors is None, f"Errors: {result.errors}"
+        assert result.data["regenerateAmbassadorPasswords"]["success"] is True
+        assert result.data["regenerateAmbassadorPasswords"]["clientMutationId"] == "regen-passwords-1"
+        assert len(result.data["regenerateAmbassadorPasswords"]["results"]) == 2
+        assert mocked_send.await_count == 2
+
+        await sync_to_async(self.ambassador_user_1.refresh_from_db)()
+        await sync_to_async(self.ambassador_user_2.refresh_from_db)()
+        assert await sync_to_async(self.ambassador_user_1.check_password)("BatchPass001")
+        assert await sync_to_async(self.ambassador_user_2.check_password)("BatchPass002")
+
+
+@pytest.mark.django_db(transaction=True)
 class TestAmbassadorInvitationCreation(AmbassadorsGraphQLTestCase):
     """Tests for create_ambassador_invitation mutation."""
 
