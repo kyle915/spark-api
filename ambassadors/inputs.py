@@ -22,6 +22,10 @@ class CreatePublicAmbassadorInput(SparkGraphQLInput):
 class CreateAmbassadorWithUserInput(CreatePublicAmbassadorInput):
     """Input for authenticated ambassador creation with active option."""
 
+    last_name: str | None = None
+    location_id: strawberry.ID | None = None
+    password1: str | None = None
+    password2: str | None = None
     is_active: bool | None = None
 
 
