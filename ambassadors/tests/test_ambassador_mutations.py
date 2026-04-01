@@ -12,10 +12,13 @@ This module tests:
 import pytest
 import strawberry_django  # noqa: F401
 import uuid
+from unittest.mock import AsyncMock, patch
 from asgiref.sync import sync_to_async
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 from datetime import timedelta
+from gqlauth.models import UserStatus
+from events.models import Location, State
 
 from ambassadors.models import Ambassador, AmbassadorInvitation
 from ambassadors.tests.base import AmbassadorsGraphQLTestCase
@@ -187,6 +190,102 @@ class TestPublicAmbassadorCreation(AmbassadorsGraphQLTestCase):
         user = await sync_to_async(User.objects.get)(email=email)
         ambassador = await sync_to_async(Ambassador.objects.get)(user=user)
         assert ambassador.coordinates == [40.7128, -74.0060]
+
+
+@pytest.mark.django_db(transaction=True)
+class TestCreateAmbassadorWithUser(AmbassadorsGraphQLTestCase):
+    @pytest.fixture(autouse=True)
+    def setup(self, db):
+        from config.schema_spark import schema_spark
+
+        self.roles = self.setup_default_roles()
+        self.schema = schema_spark
+        self.endpoint_path = "/api/v1/graphql/spark"
+        unique_id = str(uuid.uuid4())[:8]
+        self.spark_admin_user = self.create_user(
+            username=f"spark_admin_{unique_id}@test.com",
+            email=f"spark_admin_{unique_id}@test.com",
+            role=self.roles["spark_admin"],
+        )
+        self.state = State.objects.create(
+            name="Texas",
+            code="TX",
+            created_by=self.spark_admin_user,
+            updated_by=self.spark_admin_user,
+        )
+        self.location = Location.objects.create(
+            name="Austin",
+            code="AUS",
+            zip="78701",
+            state=self.state,
+            created_by=self.spark_admin_user,
+            updated_by=self.spark_admin_user,
+        )
+
+        self.mutation = """
+            mutation CreateAmbassadorWithUser($input: CreateAmbassadorWithUserInput!) {
+                createAmbassadorWithUser(input: $input) {
+                    success
+                    message
+                    clientMutationId
+                    ambassador {
+                        id
+                        isActive
+                    }
+                }
+            }
+        """
+
+    @pytest.mark.asyncio
+    async def test_create_ambassador_with_user_generates_password_when_missing(self):
+        unique_id = str(uuid.uuid4())[:8]
+        email = f"generated_{unique_id}@test.com"
+
+        variables = {
+            "input": {
+                "firstName": "Jane",
+                "lastName": "Doe",
+                "email": email,
+                "locationId": str(self.location.id),
+                "isActive": True,
+                "clientMutationId": "test-generated-password",
+            }
+        }
+
+        with patch(
+            "ambassadors.services.EmailVerificationMailer.send_async",
+            new_callable=AsyncMock,
+        ) as mocked_verification_send, patch(
+            "ambassadors.services.AmbassadorGeneratedPasswordMailer.send_async",
+            new_callable=AsyncMock,
+        ) as mocked_password_send:
+            result = await self._execute_mutation(
+                self.mutation,
+                variables,
+                self.endpoint_path,
+                user=self.spark_admin_user,
+            )
+
+        assert result.errors is None, f"Errors: {result.errors}"
+        assert result.data["createAmbassadorWithUser"]["success"] is True
+        assert (
+            result.data["createAmbassadorWithUser"]["clientMutationId"]
+            == "test-generated-password"
+        )
+        mocked_verification_send.assert_not_awaited()
+        mocked_password_send.assert_awaited_once()
+
+        user = await sync_to_async(User.objects.get)(email=email)
+        assert user.first_name == "Jane"
+        assert user.last_name == "Doe"
+        assert user.has_usable_password()
+        user_status = await sync_to_async(UserStatus.objects.get)(user=user)
+        assert user_status.verified is True
+        ambassador = await sync_to_async(Ambassador.objects.select_related("location", "location__state").get)(user=user)
+        assert ambassador.location is not None
+        assert ambassador.location.name == "Austin"
+        assert ambassador.location.state is not None
+        assert ambassador.location.state.name == "Texas"
 
 
 @pytest.mark.django_db(transaction=True)
