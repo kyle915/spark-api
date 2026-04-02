@@ -70,6 +70,13 @@ class DisableAmbassadorInput(SparkGraphQLInput):
 
 
 @strawberry.input
+class RegenerateAmbassadorPasswordsInput(SparkGraphQLInput):
+    """Input for regenerating passwords for multiple ambassadors."""
+
+    ambassador_ids: list[strawberry.ID]
+
+
+@strawberry.input
 class AmbassadorInvitationFiltersInput:
     """Filters for ambassador invitation queries."""
 

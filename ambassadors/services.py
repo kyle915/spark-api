@@ -54,6 +54,8 @@ from .types import (
     AcceptInvitationResponse,
     ApproveAmbassadorResponse,
     DisableAmbassadorResponse,
+    RegenerateAmbassadorPasswordResult,
+    RegenerateAmbassadorPasswordsResponse,
     CreateAmbassadorResponse,
     UpdateAmbassadorResponse,
     DeleteInvitationResponse,
@@ -81,6 +83,8 @@ from .constants import INVITATION_EXPIRY_DAYS
 from .envelopes import AmbassadorGeneratedPasswordMailer
 
 User = get_user_model()
+RESEND_EMAILS_PER_SECOND = 2
+RESEND_EMAIL_DELAY_SECONDS = 1 / RESEND_EMAILS_PER_SECOND
 
 
 async def set_ambassador_job_real_amount_from_clock_out(attendance: Attendance) -> None:
@@ -424,6 +428,111 @@ class PublicAmbassadorCreationService(BaseAmbassadorService):
                 message=f"Error creating ambassador: {str(e)}",
                 input_obj=input,
             )
+
+
+class RegenerateAmbassadorPasswordsService(BaseAmbassadorService):
+    """Service for regenerating ambassador passwords in batch."""
+
+    @classmethod
+    async def regenerate(
+        cls,
+        input: inputs.RegenerateAmbassadorPasswordsInput,
+        info: strawberry.Info,
+    ) -> RegenerateAmbassadorPasswordsResponse:
+        service = cls()
+        user = await service.get_user(info)
+
+        results: list[RegenerateAmbassadorPasswordResult] = []
+
+        for index, ambassador_id in enumerate(input.ambassador_ids):
+            try:
+                resolved_ambassador_id = resolve_id_to_int(ambassador_id)
+            except (TypeError, ValueError, GraphQLError):
+                results.append(
+                    RegenerateAmbassadorPasswordResult(
+                        ambassador_id=None,
+                        email=None,
+                        success=False,
+                        message=f"Invalid ambassador ID: {ambassador_id}",
+                    )
+                )
+                continue
+
+            try:
+                ambassador = await sync_to_async(
+                    Ambassador.objects.select_related("user").get
+                )(id=resolved_ambassador_id)
+            except Ambassador.DoesNotExist:
+                results.append(
+                    RegenerateAmbassadorPasswordResult(
+                        ambassador_id=resolved_ambassador_id,
+                        email=None,
+                        success=False,
+                        message="Ambassador not found.",
+                    )
+                )
+                continue
+
+            email = (getattr(ambassador.user, "email", None) or "").strip() or None
+            if not email:
+                results.append(
+                    RegenerateAmbassadorPasswordResult(
+                        ambassador_id=ambassador.id,
+                        email=None,
+                        success=False,
+                        message="Ambassador has no email.",
+                    )
+                )
+                continue
+
+            try:
+                password = generate_random_password()
+
+                @sync_to_async
+                def _persist_password():
+                    ambassador.user.set_password(password)
+                    ambassador.user.updated_by = user
+                    ambassador.user.save(update_fields=["password", "updated_by", "updated_at"])
+
+                await _persist_password()
+                await sync_to_async(
+                    AmbassadorGeneratedPasswordMailer(
+                        ambassador.user,
+                        password,
+                    ).send
+                )(delay_seconds=index * RESEND_EMAIL_DELAY_SECONDS)
+
+                results.append(
+                    RegenerateAmbassadorPasswordResult(
+                        ambassador_id=ambassador.id,
+                        email=email,
+                        success=True,
+                        message="Password regenerated and emailed successfully.",
+                    )
+                )
+            except Exception as exc:
+                results.append(
+                    RegenerateAmbassadorPasswordResult(
+                        ambassador_id=ambassador.id,
+                        email=email,
+                        success=False,
+                        message=f"Error regenerating password: {exc}",
+                    )
+                )
+
+        success_count = sum(1 for result in results if result.success)
+        failure_count = len(results) - success_count
+        message = (
+            f"Processed {len(results)} ambassadors. "
+            f"{success_count} succeeded, {failure_count} failed."
+        )
+        return build_mutation_response(
+            RegenerateAmbassadorPasswordsResponse,
+            success=failure_count == 0,
+            message=message,
+            input_obj=input,
+            results=results,
+        )
 
 
 class AmbassadorInvitationService(BaseAmbassadorService):

@@ -111,6 +111,22 @@ class DisableAmbassadorResponse:
 
 
 @strawberry.type
+class RegenerateAmbassadorPasswordResult:
+    ambassador_id: strawberry.ID | None = None
+    email: str | None = None
+    success: bool
+    message: str
+
+
+@strawberry.type
+class RegenerateAmbassadorPasswordsResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    results: list[RegenerateAmbassadorPasswordResult] | None = None
+
+
+@strawberry.type
 class CreateAmbassadorResponse:
     success: bool
     message: str
