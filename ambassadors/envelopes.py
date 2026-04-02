@@ -110,7 +110,7 @@ class AmbassadorGeneratedPasswordMailer(Mailer):
         ]
 
         return Envelope(
-            subject="Welcome to Spark",
+            subject="Welcome to Spark by Ignite",
             template="ambassadors.templates.emails.generated_password",
             to_emails=[self.user.email],
             context={
