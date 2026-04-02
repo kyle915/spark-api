@@ -110,7 +110,7 @@ class AmbassadorGeneratedPasswordMailer(Mailer):
         ]
 
         return Envelope(
-            subject="Your Spark account password",
+            subject="Welcome to Spark",
             template="ambassadors.templates.emails.generated_password",
             to_emails=[self.user.email],
             context={
