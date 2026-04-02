@@ -83,6 +83,8 @@ from .constants import INVITATION_EXPIRY_DAYS
 from .envelopes import AmbassadorGeneratedPasswordMailer
 
 User = get_user_model()
+RESEND_EMAILS_PER_SECOND = 2
+RESEND_EMAIL_DELAY_SECONDS = 1 / RESEND_EMAILS_PER_SECOND
 
 
 async def set_ambassador_job_real_amount_from_clock_out(attendance: Attendance) -> None:
@@ -442,7 +444,7 @@ class RegenerateAmbassadorPasswordsService(BaseAmbassadorService):
 
         results: list[RegenerateAmbassadorPasswordResult] = []
 
-        for ambassador_id in input.ambassador_ids:
+        for index, ambassador_id in enumerate(input.ambassador_ids):
             try:
                 resolved_ambassador_id = resolve_id_to_int(ambassador_id)
             except (TypeError, ValueError, GraphQLError):
@@ -493,10 +495,12 @@ class RegenerateAmbassadorPasswordsService(BaseAmbassadorService):
                     ambassador.user.save(update_fields=["password", "updated_by", "updated_at"])
 
                 await _persist_password()
-                await AmbassadorGeneratedPasswordMailer(
-                    ambassador.user,
-                    password,
-                ).send_async()
+                await sync_to_async(
+                    AmbassadorGeneratedPasswordMailer(
+                        ambassador.user,
+                        password,
+                    ).send
+                )(delay_seconds=index * RESEND_EMAIL_DELAY_SECONDS)
 
                 results.append(
                     RegenerateAmbassadorPasswordResult(
