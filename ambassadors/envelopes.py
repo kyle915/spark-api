@@ -1,3 +1,8 @@
+import mimetypes
+from pathlib import Path
+
+from django.conf import settings
+
 from utils.mailer import Envelope, Mailer
 from ambassadors.models import AmbassadorEvent, AmbassadorInvitation
 from tenants.models import User
@@ -60,11 +65,50 @@ class SendInvitationMailToAmbassadorMailer(Mailer):
 
 
 class AmbassadorGeneratedPasswordMailer(Mailer):
+    PLAY_STORE_BUTTON_CID = "spark-play-store-button"
+    APP_STORE_BUTTON_CID = "spark-app-store-button"
+
     def __init__(self, user: User, password: str):
         self.user = user
         self.password = password
 
+    def _build_inline_attachment(
+        self,
+        path: Path,
+        content_id: str,
+    ) -> dict | None:
+        if not path.exists():
+            return None
+
+        try:
+            raw = path.read_bytes()
+        except OSError:
+            return None
+
+        return {
+            "filename": path.name,
+            "content": list(raw),
+            "content_type": mimetypes.guess_type(path.name)[0] or "image/png",
+            "content_id": content_id,
+        }
+
     def envelope(self) -> Envelope:
+        static_root = Path(settings.BASE_DIR) / "ambassadors" / "static"
+        attachments = [
+            attachment
+            for attachment in [
+                self._build_inline_attachment(
+                    static_root / "play-store-button.png",
+                    self.PLAY_STORE_BUTTON_CID,
+                ),
+                self._build_inline_attachment(
+                    static_root / "app-store-button.png",
+                    self.APP_STORE_BUTTON_CID,
+                ),
+            ]
+            if attachment
+        ]
+
         return Envelope(
             subject="Your Spark account password",
             template="ambassadors.templates.emails.generated_password",
@@ -72,5 +116,8 @@ class AmbassadorGeneratedPasswordMailer(Mailer):
             context={
                 "user": self.user,
                 "password": self.password,
+                "PLAY_STORE_BUTTON_CID": self.PLAY_STORE_BUTTON_CID,
+                "APP_STORE_BUTTON_CID": self.APP_STORE_BUTTON_CID,
             },
+            attachments=attachments,
         )
