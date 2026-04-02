@@ -673,6 +673,7 @@ class Customer:
 @strawberry.type
 class MutationMobile(
     AmbassadorsCustomRegister,
+    SparkUserMutations,
     AmbassadorUserMutations,
 ):
     verify_token = mutations.VerifyToken.field
