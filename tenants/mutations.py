@@ -937,7 +937,7 @@ class AmbassadorUserMutations:
     async def change_user_password(
         self,
         info: strawberry.Info,
-        input: ChangeOwnPasswordInput,
+        input: ChangeUserPasswordInput,
     ) -> UpdateUserResponse:
         requester = info.context.request.user
 
