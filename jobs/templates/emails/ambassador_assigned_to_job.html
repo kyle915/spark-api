@@ -3,7 +3,7 @@
   <tr>
     <td style="font-size: 16px; color: #444444; line-height: 1.6;">
       <p style="margin: 0 0 8px 0; color: #666666; font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase;">
-        {{ brand_name|default:"-" }} • Retail Sampling
+        {{ brand_name|default:"-" }}{% if event_type %} • {{ event_type }}{% endif %}
       </p>
       <h1 style="margin: 0 0 18px 0; color: #202036; font-size: 22px; line-height: 1.3;">
         Hi {{ recipient_first_name|default:"there" }}
@@ -40,7 +40,7 @@
 
       <hr style="border: 0; border-top: 1px solid #eeeeee; margin: 24px 0;">
 
-      <h2 style="font-size: 18px; margin: 0 0 6px 0; color: #202036;">1. Sampling Overview <span style="display: inline-block; padding: 2px 8px; border-radius: 999px; background: #111111; color: #ffffff; font-size: 12px; font-weight: 700;">Required</span></h2>
+      <h2 style="font-size: 18px; margin: 0 0 6px 0; color: #202036;">1.Overview <span style="display: inline-block; padding: 2px 8px; border-radius: 999px; background: #111111; color: #ffffff; font-size: 12px; font-weight: 700;">Required</span></h2>
       <div style="border: 1px solid #eeeeee; border-radius: 10px; padding: 16px; margin-bottom: 8px;">
         <p style="margin: 0 0 10px 0;"><strong>Date:</strong> {{ activation_date|default:"-" }}</p>
         <p style="margin: 0 0 10px 0;"><strong>Address:</strong> {{ event_address|default:"-" }}</p>

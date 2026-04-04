@@ -5,8 +5,9 @@
       <p style="margin: 0 0 18px 0;">Hi {{ recipient_first_name|default:"there" }},</p>
 
       <p style="margin: 0 0 20px 0;">
-        Just a friendly reminder that you're scheduled for a <strong>Liquid Death retail
-        sampling</strong> tomorrow. We're looking forward to seeing you in action!
+        Just a friendly reminder that you're scheduled for
+        <strong>Liquid Death{% if event_type %} {{ event_type }}{% endif %}</strong>
+        tomorrow. We're looking forward to seeing you in action!
       </p>
 
       <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="border: 1px solid #d8d8d8; border-collapse: collapse; margin: 0 0 28px 0;">
