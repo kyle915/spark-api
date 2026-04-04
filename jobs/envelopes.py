@@ -388,6 +388,7 @@ def _build_ambassador_job_email_context(
     )
     brand_name = tenant.name or "-"
     campaign_name = event.name or job.name or "-"
+    event_type = getattr(getattr(event, "event_type", None), "name", None) or ""
     event_address = job.address or event.address or "-"
     start_dt = event.start_time or event.date or job.start_date
     end_dt = event.end_time or event.date or job.end_date
@@ -415,6 +416,7 @@ def _build_ambassador_job_email_context(
         "request_id": request_id,
         "brand_name": brand_name,
         "campaign_name": campaign_name,
+        "event_type": event_type,
         "location_name": location_name,
         "show_location": not retailer_is_national,
         "market_name": market_name,
