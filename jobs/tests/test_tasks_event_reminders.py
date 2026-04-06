@@ -1,18 +1,20 @@
-from datetime import datetime, timedelta, timezone as dt_timezone
+from datetime import datetime, timezone as dt_timezone
 from unittest.mock import patch
 
 import pytest
 
 from events.models import TimeZone
 from jobs.tasks import (
-    send_upcoming_ambassador_event_3h_reminders,
-    send_upcoming_ambassador_event_reminders,
+    schedule_ambassador_job_24h_reminder,
+    schedule_ambassador_job_3h_reminder,
+    send_ambassador_job_24h_reminder,
+    send_ambassador_job_3h_reminder,
 )
 from jobs.tests.base import JobsGraphQLTestCase
 
 
 @pytest.mark.django_db(transaction=True)
-class TestSendUpcomingAmbassadorEventReminders(JobsGraphQLTestCase):
+class BaseReminderTestCase(JobsGraphQLTestCase):
     @pytest.fixture(autouse=True)
     def setup(self):
         self.roles = self.setup_default_roles()
@@ -66,207 +68,225 @@ class TestSendUpcomingAmbassadorEventReminders(JobsGraphQLTestCase):
             tenant=self.tenant,
         )
 
-    @patch("jobs.tasks.AmbassadorEventReminderMailer.send")
-    @patch("jobs.tasks.timezone.now")
-    def test_sends_email_when_event_is_within_24_hours(self, mock_now, mock_send):
-        now_utc = datetime(2026, 3, 18, 12, 0, tzinfo=dt_timezone.utc)
-        mock_now.return_value = now_utc
-        ambassador_job = self._build_ambassador_job(
-            event_start_time=now_utc + timedelta(hours=23, minutes=30)
-        )
-
-        sent = send_upcoming_ambassador_event_reminders()
-
-        assert sent == 1
-        mock_send.assert_called_once()
-        ambassador_job.refresh_from_db()
-        assert ambassador_job.reminder_sent_at is not None
-
-    @patch("jobs.tasks.AmbassadorEventReminderMailer.send")
-    @patch("jobs.tasks.timezone.now")
-    def test_does_not_send_when_event_is_outside_24_hours(self, mock_now, mock_send):
-        now_utc = datetime(2026, 3, 18, 12, 0, tzinfo=dt_timezone.utc)
-        mock_now.return_value = now_utc
-        ambassador_job = self._build_ambassador_job(
-            event_start_time=now_utc + timedelta(hours=25)
-        )
-
-        sent = send_upcoming_ambassador_event_reminders()
-
-        assert sent == 0
-        mock_send.assert_not_called()
+    def _build_ambassador_job_with_event_date(
+        self,
+        *,
+        event_start_time: datetime,
+        event_date: datetime,
+    ):
+        ambassador_job = self._build_ambassador_job(event_start_time=event_start_time)
+        event = ambassador_job.job.event
+        event.date = event_date
+        event.save(update_fields=["date"])
+        return ambassador_job
 
 
 @pytest.mark.django_db(transaction=True)
-class TestSendUpcomingAmbassadorEvent3HoursReminders(JobsGraphQLTestCase):
-    @pytest.fixture(autouse=True)
-    def setup(self):
-        self.roles = self.setup_default_roles()
-        self.tenant = self.create_tenant(name="Reminder 3h Tenant")
-        self.system_user = self.get_system_user()
-
-        self.job_title = self.create_job_title(name="Brand Ambassador", tenant=self.tenant)
-        self.rate_type = self.create_rate_type(name="Hourly", tenant=self.tenant)
-        self.rate = self.create_rate(amount=35.0, rate_type=self.rate_type, tenant=self.tenant)
-        self.status = self.create_status(name="Approved", slug="approved", tenant=self.tenant)
-
-        self.ambassador_user = self.create_user(
-            username="reminder_3h_ambassador@test.com",
-            email="reminder_3h_ambassador@test.com",
-            role=self.roles["ambassador"],
-            password="testpass123",
-        )
-        self.ambassador = self.create_ambassador(user=self.ambassador_user)
-        self.create_tenanted_user(user=self.ambassador_user, tenant=self.tenant)
-
-        self.tz_minus_five = TimeZone.objects.create(
-            name="EST",
-            code="EST",
-            offset=-5,
-            created_by=self.system_user,
-        )
-
-    def _build_ambassador_job(self, *, event_start_time: datetime):
-        event = self.create_event(
-            name="Reminder 3h Event",
-            tenant=self.tenant,
-            address="123 Main St",
-            start_time=event_start_time,
-            timezone=self.tz_minus_five,
-        )
-        job = self.create_job(
-            name="Reminder 3h Job",
-            code="REM-3H-001",
-            address="123 Main St",
-            event=event,
-            job_title=self.job_title,
-            tenant=self.tenant,
-            rate=self.rate,
-            start_date=event_start_time,
-        )
-        return self.create_ambassador_job(
-            ambassador=self.ambassador,
-            job=job,
-            status=self.status,
-            rate=self.rate,
-            tenant=self.tenant,
-        )
-
-    @patch("jobs.tasks.AmbassadorEventReminder3HoursMailer.send")
+class TestSendUpcomingAmbassadorEventReminders(BaseReminderTestCase):
+    @patch("jobs.tasks.django_rq.get_scheduler")
     @patch("jobs.tasks.timezone.now")
-    def test_sends_email_when_event_is_within_3_hours(self, mock_now, mock_send):
+    def test_schedules_exact_24h_reminder_at_event_start_minus_24_hours(
+        self,
+        mock_now,
+        mock_get_scheduler,
+    ):
         now_utc = datetime(2026, 3, 18, 12, 0, tzinfo=dt_timezone.utc)
         mock_now.return_value = now_utc
         ambassador_job = self._build_ambassador_job(
-            event_start_time=now_utc + timedelta(hours=2, minutes=45)
+            event_start_time=datetime(2026, 3, 19, 19, 30, tzinfo=dt_timezone.utc)
         )
 
-        sent = send_upcoming_ambassador_event_3h_reminders()
+        scheduler = mock_get_scheduler.return_value
+        scheduler.get_jobs.return_value = []
+        scheduler.schedule.return_value = type("ScheduledJob", (), {"id": "scheduled-24h"})()
+
+        job_id = schedule_ambassador_job_24h_reminder(ambassador_job.id)
+
+        assert job_id == "scheduled-24h"
+        kwargs = scheduler.schedule.call_args.kwargs
+        assert kwargs["scheduled_time"] == datetime(2026, 3, 18, 19, 30)
+        assert kwargs["args"] == [ambassador_job.id, "2026-03-18T19:30:00+00:00"]
+
+    @patch("jobs.tasks.AmbassadorEventReminderMailer.send")
+    @patch("jobs.tasks.timezone.now")
+    def test_sends_24h_reminder_when_trigger_matches(self, mock_now, mock_send):
+        trigger_at = datetime(2026, 3, 18, 19, 0, tzinfo=dt_timezone.utc)
+        mock_now.return_value = trigger_at
+        ambassador_job = self._build_ambassador_job(
+            event_start_time=datetime(2026, 3, 19, 19, 0, tzinfo=dt_timezone.utc)
+        )
+
+        sent = send_ambassador_job_24h_reminder(ambassador_job.id, trigger_at.isoformat())
 
         assert sent == 1
         mock_send.assert_called_once()
         ambassador_job.refresh_from_db()
-        assert ambassador_job.reminder_3h_sent_at is not None
+        assert ambassador_job.reminder_sent_at == trigger_at
 
-    @patch("jobs.tasks.AmbassadorEventReminder3HoursMailer.send")
+    @patch("jobs.tasks.AmbassadorEventReminderMailer.send")
+    def test_skips_stale_24h_reminder_after_event_time_changes(self, mock_send):
+        ambassador_job = self._build_ambassador_job(
+            event_start_time=datetime(2026, 3, 19, 19, 0, tzinfo=dt_timezone.utc)
+        )
+        expected_trigger = datetime(2026, 3, 18, 19, 0, tzinfo=dt_timezone.utc)
+
+        ambassador_job.job.event.start_time = datetime(
+            2026, 3, 19, 21, 0, tzinfo=dt_timezone.utc
+        )
+        ambassador_job.job.event.save(update_fields=["start_time"])
+
+        sent = send_ambassador_job_24h_reminder(
+            ambassador_job.id,
+            expected_trigger.isoformat(),
+        )
+
+        assert sent == 0
+        mock_send.assert_not_called()
+        ambassador_job.refresh_from_db()
+        assert ambassador_job.reminder_sent_at is None
+
+    @patch("jobs.tasks.django_rq.get_scheduler")
     @patch("jobs.tasks.timezone.now")
-    def test_does_not_send_when_event_is_outside_3_hours(self, mock_now, mock_send):
+    def test_event_schedule_change_resets_24h_sent_marker_and_reschedules(
+        self,
+        mock_now,
+        mock_get_scheduler,
+    ):
+        mock_now.return_value = datetime(2026, 3, 18, 12, 0, tzinfo=dt_timezone.utc)
+        ambassador_job = self._build_ambassador_job(
+            event_start_time=datetime(2026, 3, 19, 19, 0, tzinfo=dt_timezone.utc)
+        )
+        ambassador_job.reminder_sent_at = datetime(
+            2026, 3, 18, 19, 0, tzinfo=dt_timezone.utc
+        )
+        ambassador_job.save(update_fields=["reminder_sent_at"])
+
+        scheduler = mock_get_scheduler.return_value
+        scheduler.get_jobs.return_value = []
+        scheduler.schedule.return_value = type("ScheduledJob", (), {"id": "rescheduled-24h"})()
+
+        event = ambassador_job.job.event
+        event.start_time = datetime(2026, 3, 19, 21, 0, tzinfo=dt_timezone.utc)
+        event.save(update_fields=["start_time"])
+
+        ambassador_job.refresh_from_db()
+        assert ambassador_job.reminder_sent_at is None
+        scheduler.schedule.assert_called()
+
+
+@pytest.mark.django_db(transaction=True)
+class TestSendUpcomingAmbassadorEvent3HoursReminders(BaseReminderTestCase):
+    @patch("jobs.tasks.django_rq.get_scheduler")
+    @patch("jobs.tasks.timezone.now")
+    def test_schedules_exact_3h_reminder_at_event_start_minus_3_hours(
+        self,
+        mock_now,
+        mock_get_scheduler,
+    ):
         now_utc = datetime(2026, 3, 18, 12, 0, tzinfo=dt_timezone.utc)
         mock_now.return_value = now_utc
         ambassador_job = self._build_ambassador_job(
-            event_start_time=now_utc + timedelta(hours=4)
+            event_start_time=datetime(2026, 3, 18, 19, 30, tzinfo=dt_timezone.utc)
         )
 
-        sent = send_upcoming_ambassador_event_3h_reminders()
+        scheduler = mock_get_scheduler.return_value
+        scheduler.get_jobs.return_value = []
+        scheduler.schedule.return_value = type("ScheduledJob", (), {"id": "scheduled-3h"})()
+
+        job_id = schedule_ambassador_job_3h_reminder(ambassador_job.id)
+
+        assert job_id == "scheduled-3h"
+        kwargs = scheduler.schedule.call_args.kwargs
+        assert kwargs["scheduled_time"] == datetime(2026, 3, 18, 16, 30)
+        assert kwargs["args"] == [ambassador_job.id, "2026-03-18T16:30:00+00:00"]
+
+    @patch("jobs.tasks.django_rq.get_scheduler")
+    @patch("jobs.tasks.timezone.now")
+    def test_ignores_event_date_time_for_3h_trigger(
+        self,
+        mock_now,
+        mock_get_scheduler,
+    ):
+        now_utc = datetime(2026, 3, 18, 12, 0, tzinfo=dt_timezone.utc)
+        mock_now.return_value = now_utc
+        ambassador_job = self._build_ambassador_job_with_event_date(
+            event_start_time=datetime(2026, 4, 6, 19, 10, tzinfo=dt_timezone.utc),
+            event_date=datetime(2026, 4, 6, 6, 0, tzinfo=dt_timezone.utc),
+        )
+
+        scheduler = mock_get_scheduler.return_value
+        scheduler.get_jobs.return_value = []
+        scheduler.schedule.return_value = type("ScheduledJob", (), {"id": "scheduled-3h"})()
+
+        job_id = schedule_ambassador_job_3h_reminder(ambassador_job.id)
+
+        assert job_id == "scheduled-3h"
+        kwargs = scheduler.schedule.call_args.kwargs
+        assert kwargs["scheduled_time"] == datetime(2026, 4, 6, 16, 10)
+        assert kwargs["args"] == [ambassador_job.id, "2026-04-06T16:10:00+00:00"]
+
+    @patch("jobs.tasks.AmbassadorEventReminder3HoursMailer.send")
+    @patch("jobs.tasks.timezone.now")
+    def test_sends_3h_reminder_when_trigger_matches(self, mock_now, mock_send):
+        trigger_at = datetime(2026, 3, 18, 16, 0, tzinfo=dt_timezone.utc)
+        mock_now.return_value = trigger_at
+        ambassador_job = self._build_ambassador_job(
+            event_start_time=datetime(2026, 3, 18, 19, 0, tzinfo=dt_timezone.utc)
+        )
+
+        sent = send_ambassador_job_3h_reminder(ambassador_job.id, trigger_at.isoformat())
+
+        assert sent == 1
+        mock_send.assert_called_once()
+        ambassador_job.refresh_from_db()
+        assert ambassador_job.reminder_3h_sent_at == trigger_at
+
+    @patch("jobs.tasks.AmbassadorEventReminder3HoursMailer.send")
+    def test_skips_stale_3h_reminder_after_event_time_changes(self, mock_send):
+        ambassador_job = self._build_ambassador_job(
+            event_start_time=datetime(2026, 3, 18, 19, 0, tzinfo=dt_timezone.utc)
+        )
+        expected_trigger = datetime(2026, 3, 18, 16, 0, tzinfo=dt_timezone.utc)
+
+        ambassador_job.job.event.start_time = datetime(
+            2026, 3, 18, 21, 0, tzinfo=dt_timezone.utc
+        )
+        ambassador_job.job.event.save(update_fields=["start_time"])
+
+        sent = send_ambassador_job_3h_reminder(
+            ambassador_job.id,
+            expected_trigger.isoformat(),
+        )
 
         assert sent == 0
         mock_send.assert_not_called()
         ambassador_job.refresh_from_db()
         assert ambassador_job.reminder_3h_sent_at is None
 
-    @patch("jobs.tasks.AmbassadorEventReminder3HoursMailer.send")
+    @patch("jobs.tasks.django_rq.get_scheduler")
     @patch("jobs.tasks.timezone.now")
-    def test_does_not_send_twice_if_3h_reminder_was_already_sent(self, mock_now, mock_send):
-        now_utc = datetime(2026, 3, 18, 12, 0, tzinfo=dt_timezone.utc)
-        mock_now.return_value = now_utc
+    def test_event_schedule_change_resets_sent_marker_and_reschedules(
+        self,
+        mock_now,
+        mock_get_scheduler,
+    ):
+        mock_now.return_value = datetime(2026, 3, 18, 12, 0, tzinfo=dt_timezone.utc)
         ambassador_job = self._build_ambassador_job(
-            event_start_time=now_utc + timedelta(hours=1)
+            event_start_time=datetime(2026, 3, 18, 19, 0, tzinfo=dt_timezone.utc)
         )
-        ambassador_job.reminder_3h_sent_at = now_utc - timedelta(minutes=10)
+        ambassador_job.reminder_3h_sent_at = datetime(
+            2026, 3, 18, 16, 0, tzinfo=dt_timezone.utc
+        )
         ambassador_job.save(update_fields=["reminder_3h_sent_at"])
 
-        sent = send_upcoming_ambassador_event_3h_reminders()
+        scheduler = mock_get_scheduler.return_value
+        scheduler.get_jobs.return_value = []
+        scheduler.schedule.return_value = type("ScheduledJob", (), {"id": "rescheduled"})()
 
-        assert sent == 0
-        mock_send.assert_not_called()
+        event = ambassador_job.job.event
+        event.start_time = datetime(2026, 3, 18, 21, 0, tzinfo=dt_timezone.utc)
+        event.save(update_fields=["start_time"])
 
-    @patch("jobs.tasks.AmbassadorEventReminder3HoursMailer.send")
-    @patch("jobs.tasks.timezone.now")
-    def test_sends_3h_even_when_24h_was_already_sent(self, mock_now, mock_send):
-        now_utc = datetime(2026, 3, 18, 12, 0, tzinfo=dt_timezone.utc)
-        mock_now.return_value = now_utc
-        ambassador_job = self._build_ambassador_job(
-            event_start_time=now_utc + timedelta(hours=2)
-        )
-        ambassador_job.reminder_sent_at = now_utc - timedelta(hours=1)
-        ambassador_job.save(update_fields=["reminder_sent_at"])
-
-        sent = send_upcoming_ambassador_event_3h_reminders()
-
-        assert sent == 1
-        mock_send.assert_called_once()
         ambassador_job.refresh_from_db()
-        assert ambassador_job.reminder_sent_at is None
-
-    @patch("jobs.tasks.AmbassadorEventReminderMailer.send")
-    @patch("jobs.tasks.timezone.now")
-    def test_does_not_send_24h_when_event_is_within_3_hours(self, mock_now, mock_send):
-        now_utc = datetime(2026, 3, 18, 12, 0, tzinfo=dt_timezone.utc)
-        mock_now.return_value = now_utc
-        ambassador_job = self._build_ambassador_job(
-            event_start_time=now_utc + timedelta(hours=2, minutes=30)
-        )
-
-        sent = send_upcoming_ambassador_event_reminders()
-
-        assert sent == 0
-        mock_send.assert_not_called()
-        ambassador_job.refresh_from_db()
-        assert ambassador_job.reminder_sent_at is None
-
-    @patch("jobs.tasks.AmbassadorEventReminderMailer.send")
-    @patch("jobs.tasks.timezone.now")
-    def test_does_not_send_twice_if_reminder_was_already_sent(self, mock_now, mock_send):
-        now_utc = datetime(2026, 3, 18, 12, 0, tzinfo=dt_timezone.utc)
-        mock_now.return_value = now_utc
-        ambassador_job = self._build_ambassador_job(
-            event_start_time=now_utc + timedelta(hours=4)
-        )
-        ambassador_job.reminder_sent_at = now_utc - timedelta(minutes=10)
-        ambassador_job.save(update_fields=["reminder_sent_at"])
-
-        sent = send_upcoming_ambassador_event_reminders()
-
-        assert sent == 0
-        mock_send.assert_not_called()
-
-    @patch("jobs.tasks.AmbassadorEventReminderMailer.send")
-    @patch("jobs.tasks.timezone.now")
-    def test_does_not_send_when_status_is_not_approved(self, mock_now, mock_send):
-        now_utc = datetime(2026, 3, 18, 12, 0, tzinfo=dt_timezone.utc)
-        mock_now.return_value = now_utc
-        ambassador_job = self._build_ambassador_job(
-            event_start_time=now_utc + timedelta(hours=4)
-        )
-        pending_status = self.create_status(
-            name="Pending",
-            slug="pending",
-            tenant=self.tenant,
-        )
-        ambassador_job.status = pending_status
-        ambassador_job.save(update_fields=["status"])
-
-        sent = send_upcoming_ambassador_event_reminders()
-
-        assert sent == 0
-        mock_send.assert_not_called()
+        assert ambassador_job.reminder_3h_sent_at is None
+        scheduler.schedule.assert_called()
