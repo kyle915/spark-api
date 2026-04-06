@@ -168,10 +168,14 @@ This starts a worker that processes jobs from the `high`, `default`, and `low` q
 
 **For production deployment**, you can create a systemd service or use a process manager like supervisor. See the [django-rq documentation](https://github.com/rq/django-rq) for deployment examples.
 
-To register the hourly ambassador event reminder schedule:
+Ambassador event reminders are scheduled automatically when an `AmbassadorJob`
+is created or when the linked event's schedule changes.
+
+For `AmbassadorJob` records that already existed before this reminder system was
+deployed, run this one-time backfill command:
 
 ```bash
-uv run python manage.py schedule_ambassador_event_reminders
+uv run python manage.py backfill_ambassador_event_reminders
 ```
 
 ---
@@ -212,7 +216,7 @@ uv run pytest tenants/tests/test_google_calendar_mutations.py -v
 | `uv run python manage.py migrate` | Apply migrations |
 | `uv run python manage.py runserver` | Start development server |
 | `uv run python manage.py rqworker high default low` | Start RQ worker for background tasks |
-| `uv run python manage.py schedule_ambassador_event_reminders` | Register hourly ambassador event reminder schedule |
+| `uv run python manage.py backfill_ambassador_event_reminders` | One-time backfill for exact ambassador reminder jobs |
 | `redis-cli ping` | Check if Redis is running |
 | `uv run python manage.py sync_events_to_google_calendar` | Sync existing events to Google Calendar for all connected users |
 | `uv run python manage.py import_requests_batch --template-out /tmp/requests_template.xlsx` | Generate batch import template for requests |

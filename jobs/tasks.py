@@ -3,6 +3,7 @@ RQ jobs for ambassador event reminders.
 """
 import datetime
 import logging
+from typing import Any
 
 import django_rq
 from django.db.models import Q
@@ -17,209 +18,442 @@ from jobs.envelopes import (
 from jobs.models import AmbassadorJob
 from jobs.notification_rules import (
     _event_start_datetime,
-    _normalize_offset_minutes,
-    _to_event_timezone_offset,
     _to_utc_aware,
 )
 
 logger = logging.getLogger(__name__)
 
-REMINDER_24H_SCHEDULE_DESCRIPTION = "jobs.hourly.ambassador_event_reminders.24h"
-REMINDER_3H_SCHEDULE_DESCRIPTION = "jobs.hourly.ambassador_event_reminders.3h"
-REMINDER_INTERVAL_SECONDS = 60 * 60
+LEGACY_REMINDER_24H_SCHEDULE_DESCRIPTION = "jobs.hourly.ambassador_event_reminders.24h"
+LEGACY_REMINDER_3H_SCHEDULE_DESCRIPTION = "jobs.hourly.ambassador_event_reminders.3h"
+REMINDER_24H_EXACT_SCHEDULE_PREFIX = "jobs.ambassador_event_reminders.24h"
+REMINDER_3H_EXACT_SCHEDULE_PREFIX = "jobs.ambassador_event_reminders.3h"
 REMINDER_ALLOWED_STATUS_SLUGS = {"approved", "accepted"}
 
 
-def _next_top_of_hour_utc_naive() -> datetime.datetime:
-    """
-    Return the next HH:00 execution time in UTC (naive datetime for rq-scheduler).
-    """
-    now_local = timezone.localtime(timezone.now())
-    next_hour_local = (now_local + datetime.timedelta(hours=1)).replace(
-        minute=0, second=0, microsecond=0
-    )
-    next_hour_utc = next_hour_local.astimezone(datetime.timezone.utc)
-    return next_hour_utc.replace(tzinfo=None)
-
-
-def _is_within_hours_window(
-    *,
-    event_start_utc: datetime.datetime,
-    now_utc: datetime.datetime,
-    timezone_offset: int | None,
-    window_hours: int,
-    min_exclusive_hours: int = 0,
-) -> bool:
-    event_local = _to_event_timezone_offset(event_start_utc, timezone_offset)
-    now_local = _to_event_timezone_offset(now_utc, timezone_offset)
-    if event_local is None or now_local is None:
-        return False
-
-    delta = event_local - now_local
-    return (
-        datetime.timedelta(hours=min_exclusive_hours) < delta
-        <= datetime.timedelta(hours=window_hours)
-    )
-
-
-def _register_hourly_schedule(
-    *,
-    scheduler,
-    description: str,
-    func,
-    func_name_suffix: str,
+def _ambassador_job_schedule_description(
+    reminder_prefix: str,
+    ambassador_job_id: int,
 ) -> str:
-    get_jobs = getattr(scheduler, "get_jobs", None)
-    if callable(get_jobs):
-        for scheduled_job in get_jobs():
-            scheduled_func_name = getattr(scheduled_job, "func_name", "") or ""
-            scheduled_description = getattr(scheduled_job, "description", "") or ""
-            if (
-                scheduled_description == description
-                or scheduled_func_name.endswith(func_name_suffix)
-            ):
-                scheduler.cancel(scheduled_job)
-
-    scheduled_job = scheduler.schedule(
-        scheduled_time=_next_top_of_hour_utc_naive(),
-        func=func,
-        interval=REMINDER_INTERVAL_SECONDS,
-        repeat=None,
-        description=description,
-    )
-    return scheduled_job.id
+    return f"{reminder_prefix}.{ambassador_job_id}"
 
 
-def schedule_hourly_ambassador_event_reminders() -> dict[str, str]:
-    """
-    Register a recurring rq-scheduler job that runs every hour.
-
-    Returns:
-        Scheduler job IDs for 24h and 3h reminder jobs.
-    """
-    scheduler = django_rq.get_scheduler("default")
-
-    reminder_24h_job_id = _register_hourly_schedule(
-        scheduler=scheduler,
-        description=REMINDER_24H_SCHEDULE_DESCRIPTION,
-        func=send_upcoming_ambassador_event_reminders,
-        func_name_suffix=".send_upcoming_ambassador_event_reminders",
-    )
-    reminder_3h_job_id = _register_hourly_schedule(
-        scheduler=scheduler,
-        description=REMINDER_3H_SCHEDULE_DESCRIPTION,
-        func=send_upcoming_ambassador_event_3h_reminders,
-        func_name_suffix=".send_upcoming_ambassador_event_3h_reminders",
-    )
-
-    logger.info(
-        "Registered hourly ambassador event reminder scheduler jobs: 24h=%s, 3h=%s",
-        reminder_24h_job_id,
-        reminder_3h_job_id,
-    )
-    return {
-        "24h": reminder_24h_job_id,
-        "3h": reminder_3h_job_id,
-    }
-
-
-def _send_ambassador_event_reminders(
+def _matches_ambassador_job_schedule(
+    scheduled_job: Any,
     *,
-    window_hours: int,
-    min_exclusive_hours: int,
-    reminder_field: str,
-    mailer_class,
-) -> int:
-    now_utc = _to_utc_aware(timezone.now())
-    if now_utc is None:
-        return 0
+    reminder_prefix: str,
+    func_name_suffix: str,
+    ambassador_job_id: int,
+) -> bool:
+    description = getattr(scheduled_job, "description", "") or ""
+    if description == _ambassador_job_schedule_description(
+        reminder_prefix,
+        ambassador_job_id,
+    ):
+        return True
 
-    candidates = (
-        AmbassadorJob.objects.filter(
-            status__slug__in=REMINDER_ALLOWED_STATUS_SLUGS,
-            **{f"{reminder_field}__isnull": True},
-        )
+    args = list(getattr(scheduled_job, "args", []) or [])
+    kwargs = dict(getattr(scheduled_job, "kwargs", {}) or {})
+    return (
+        getattr(scheduled_job, "func_name", "") or ""
+    ).endswith(func_name_suffix) and (
+        (args and args[0] == ambassador_job_id)
+        or kwargs.get("ambassador_job_id") == ambassador_job_id
+    )
+
+
+def _get_ambassador_job_for_reminder(ambassador_job_id: int) -> AmbassadorJob | None:
+    return (
+        AmbassadorJob.objects.filter(id=ambassador_job_id)
         .exclude(
             Q(ambassador__user__email__isnull=True)
             | Q(ambassador__user__email="")
         )
         .select_related("status", "ambassador__user", "job__event", "job__event__timezone")
+        .first()
     )
 
-    sent_count = 0
-    for ambassador_job in candidates.iterator():
-        event_start_utc = _to_utc_aware(_event_start_datetime(ambassador_job))
-        if event_start_utc is None:
-            continue
 
-        timezone_offset = getattr(
-            getattr(ambassador_job.job.event, "timezone", None),
-            "offset",
-            None,
+def _event_trigger_at_hours_before_utc(
+    ambassador_job: AmbassadorJob,
+    *,
+    hours_before: int,
+) -> datetime.datetime | None:
+    event_start_utc = _to_utc_aware(_event_start_datetime(ambassador_job))
+    if event_start_utc is None:
+        return None
+    return event_start_utc - datetime.timedelta(hours=hours_before)
+
+
+def _cancel_ambassador_job_reminder_schedule(
+    ambassador_job_id: int,
+    *,
+    reminder_prefix: str,
+    func_name_suffix: str,
+    reminder_label: str,
+) -> int:
+    try:
+        scheduler = django_rq.get_scheduler("default")
+        get_jobs = getattr(scheduler, "get_jobs", None)
+    except Exception:
+        logger.exception(
+            "Failed to access scheduler while canceling %s reminder for ambassador_job=%s",
+            reminder_label,
+            ambassador_job_id,
         )
-        if not _is_within_hours_window(
-            event_start_utc=event_start_utc,
-            now_utc=now_utc,
-            timezone_offset=timezone_offset,
-            window_hours=window_hours,
-            min_exclusive_hours=min_exclusive_hours,
+        return 0
+
+    if not callable(get_jobs):
+        return 0
+
+    canceled = 0
+    try:
+        scheduled_jobs = list(get_jobs())
+    except Exception:
+        logger.exception(
+            "Failed to list scheduled jobs while canceling %s reminder for ambassador_job=%s",
+            reminder_label,
+            ambassador_job_id,
+        )
+        return 0
+
+    for scheduled_job in scheduled_jobs:
+        if not _matches_ambassador_job_schedule(
+            scheduled_job,
+            reminder_prefix=reminder_prefix,
+            func_name_suffix=func_name_suffix,
+            ambassador_job_id=ambassador_job_id,
         ):
             continue
+        try:
+            scheduler.cancel(scheduled_job)
+            canceled += 1
+        except Exception:
+            logger.exception(
+                "Failed to cancel %s reminder for ambassador_job=%s",
+                reminder_label,
+                ambassador_job_id,
+            )
+    return canceled
 
-        ambassador_user = ambassador_job.ambassador.user
-        recipient_email = (ambassador_user.email or "").strip()
-        if not recipient_email:
+
+def cancel_legacy_ambassador_event_reminder_schedules() -> int:
+    try:
+        scheduler = django_rq.get_scheduler("default")
+        get_jobs = getattr(scheduler, "get_jobs", None)
+    except Exception:
+        logger.exception("Failed to access scheduler while canceling legacy reminder schedules")
+        return 0
+
+    if not callable(get_jobs):
+        return 0
+
+    canceled = 0
+    try:
+        scheduled_jobs = list(get_jobs())
+    except Exception:
+        logger.exception("Failed to list scheduled jobs while canceling legacy reminder schedules")
+        return 0
+
+    for scheduled_job in scheduled_jobs:
+        description = getattr(scheduled_job, "description", "") or ""
+        func_name = getattr(scheduled_job, "func_name", "") or ""
+        if description not in {
+            LEGACY_REMINDER_24H_SCHEDULE_DESCRIPTION,
+            LEGACY_REMINDER_3H_SCHEDULE_DESCRIPTION,
+        } and not func_name.endswith(
+            (
+                ".send_upcoming_ambassador_event_reminders",
+                ".send_upcoming_ambassador_event_3h_reminders",
+            )
+        ):
             continue
+        try:
+            scheduler.cancel(scheduled_job)
+            canceled += 1
+        except Exception:
+            logger.exception(
+                "Failed to cancel legacy reminder schedule job=%s",
+                getattr(scheduled_job, "id", None),
+            )
+    return canceled
 
-        mailer = mailer_class(
-            ambassador_job=ambassador_job,
-            to_emails=[recipient_email],
-            recipient_first_name=(ambassador_user.first_name or "").strip() or None,
+
+def cancel_ambassador_job_24h_reminder_schedule(ambassador_job_id: int) -> int:
+    return _cancel_ambassador_job_reminder_schedule(
+        ambassador_job_id,
+        reminder_prefix=REMINDER_24H_EXACT_SCHEDULE_PREFIX,
+        func_name_suffix=".send_ambassador_job_24h_reminder",
+        reminder_label="24h",
+    )
+
+
+def cancel_ambassador_job_3h_reminder_schedule(ambassador_job_id: int) -> int:
+    return _cancel_ambassador_job_reminder_schedule(
+        ambassador_job_id,
+        reminder_prefix=REMINDER_3H_EXACT_SCHEDULE_PREFIX,
+        func_name_suffix=".send_ambassador_job_3h_reminder",
+        reminder_label="3h",
+    )
+
+
+def _schedule_ambassador_job_exact_reminder(
+    ambassador_job_id: int,
+    *,
+    reminder_prefix: str,
+    hours_before: int,
+    reminder_field: str,
+    job_func,
+    cancel_func,
+    reminder_label: str,
+) -> str | None:
+    ambassador_job = _get_ambassador_job_for_reminder(ambassador_job_id)
+    cancel_func(ambassador_job_id)
+
+    if ambassador_job is None:
+        return None
+
+    status_slug = (getattr(ambassador_job.status, "slug", None) or "").strip().lower()
+    if status_slug not in REMINDER_ALLOWED_STATUS_SLUGS:
+        return None
+    if getattr(ambassador_job, reminder_field) is not None:
+        return None
+
+    trigger_at_utc = _event_trigger_at_hours_before_utc(
+        ambassador_job,
+        hours_before=hours_before,
+    )
+    now_utc = _to_utc_aware(timezone.now())
+    if trigger_at_utc is None or trigger_at_utc <= now_utc:
+        return None
+
+    try:
+        scheduler = django_rq.get_scheduler("default")
+        scheduled_job = scheduler.schedule(
+            scheduled_time=trigger_at_utc.astimezone(datetime.timezone.utc).replace(
+                tzinfo=None
+            ),
+            func=job_func,
+            args=[ambassador_job_id, trigger_at_utc.isoformat()],
+            interval=None,
+            repeat=None,
+            description=_ambassador_job_schedule_description(
+                reminder_prefix,
+                ambassador_job_id,
+            ),
         )
-        mailer.send()
+    except Exception:
+        logger.exception(
+            "Failed to schedule exact %s reminder for ambassador_job=%s",
+            reminder_label,
+            ambassador_job_id,
+        )
+        return None
+    return scheduled_job.id
 
-        setattr(ambassador_job, reminder_field, now_utc)
-        ambassador_job.save(update_fields=[reminder_field])
-        sent_count += 1
 
-    return sent_count
+def schedule_ambassador_job_24h_reminder(ambassador_job_id: int) -> str | None:
+    return _schedule_ambassador_job_exact_reminder(
+        ambassador_job_id,
+        reminder_prefix=REMINDER_24H_EXACT_SCHEDULE_PREFIX,
+        hours_before=24,
+        reminder_field="reminder_sent_at",
+        job_func=send_ambassador_job_24h_reminder,
+        cancel_func=cancel_ambassador_job_24h_reminder_schedule,
+        reminder_label="24h",
+    )
+
+
+def schedule_ambassador_job_3h_reminder(ambassador_job_id: int) -> str | None:
+    return _schedule_ambassador_job_exact_reminder(
+        ambassador_job_id,
+        reminder_prefix=REMINDER_3H_EXACT_SCHEDULE_PREFIX,
+        hours_before=3,
+        reminder_field="reminder_3h_sent_at",
+        job_func=send_ambassador_job_3h_reminder,
+        cancel_func=cancel_ambassador_job_3h_reminder_schedule,
+        reminder_label="3h",
+    )
+
+
+def _reschedule_event_exact_reminders(
+    event_id: int,
+    *,
+    reminder_field: str,
+    schedule_func,
+    reset_sent_at: bool = False,
+) -> int:
+    ambassador_jobs = list(
+        AmbassadorJob.objects.filter(job__event_id=event_id).only("id", reminder_field)
+    )
+    if reset_sent_at:
+        AmbassadorJob.objects.filter(
+            id__in=[ambassador_job.id for ambassador_job in ambassador_jobs],
+            **{f"{reminder_field}__isnull": False},
+        ).update(**{reminder_field: None})
+
+    scheduled_count = 0
+    for ambassador_job in ambassador_jobs:
+        if schedule_func(ambassador_job.id):
+            scheduled_count += 1
+    return scheduled_count
+
+
+def reschedule_event_24h_reminders(
+    event_id: int,
+    *,
+    reset_sent_at: bool = False,
+) -> int:
+    return _reschedule_event_exact_reminders(
+        event_id,
+        reminder_field="reminder_sent_at",
+        schedule_func=schedule_ambassador_job_24h_reminder,
+        reset_sent_at=reset_sent_at,
+    )
+
+
+def reschedule_event_3h_reminders(
+    event_id: int,
+    *,
+    reset_sent_at: bool = False,
+) -> int:
+    return _reschedule_event_exact_reminders(
+        event_id,
+        reminder_field="reminder_3h_sent_at",
+        schedule_func=schedule_ambassador_job_3h_reminder,
+        reset_sent_at=reset_sent_at,
+    )
+
+
+def backfill_ambassador_job_reminders() -> dict[str, int]:
+    now_utc = _to_utc_aware(timezone.now())
+    if now_utc is None:
+        return {"eligible": 0, "scheduled_24h": 0, "scheduled_3h": 0}
+
+    candidate_ids = list(
+        AmbassadorJob.objects.filter(
+            status__slug__in=REMINDER_ALLOWED_STATUS_SLUGS,
+            job__event__start_time__gt=now_utc,
+        )
+        .exclude(
+            Q(ambassador__user__email__isnull=True)
+            | Q(ambassador__user__email="")
+        )
+        .values_list("id", flat=True)
+    )
+
+    scheduled_24h = 0
+    scheduled_3h = 0
+    for ambassador_job_id in candidate_ids:
+        if schedule_ambassador_job_24h_reminder(ambassador_job_id):
+            scheduled_24h += 1
+        if schedule_ambassador_job_3h_reminder(ambassador_job_id):
+            scheduled_3h += 1
+
+    return {
+        "eligible": len(candidate_ids),
+        "scheduled_24h": scheduled_24h,
+        "scheduled_3h": scheduled_3h,
+    }
+
+
+def _send_ambassador_job_exact_reminder(
+    ambassador_job_id: int,
+    *,
+    expected_trigger_at_iso: str | None,
+    hours_before: int,
+    reminder_field: str,
+    mailer_class,
+    reminder_label: str,
+) -> int:
+    ambassador_job = _get_ambassador_job_for_reminder(ambassador_job_id)
+    if ambassador_job is None or getattr(ambassador_job, reminder_field) is not None:
+        return 0
+
+    status_slug = (getattr(ambassador_job.status, "slug", None) or "").strip().lower()
+    if status_slug not in REMINDER_ALLOWED_STATUS_SLUGS:
+        return 0
+
+    current_trigger_at_utc = _event_trigger_at_hours_before_utc(
+        ambassador_job,
+        hours_before=hours_before,
+    )
+    if current_trigger_at_utc is None:
+        return 0
+
+    if expected_trigger_at_iso:
+        expected_trigger_at_utc = datetime.datetime.fromisoformat(expected_trigger_at_iso)
+        if current_trigger_at_utc != expected_trigger_at_utc:
+            logger.info(
+                "Skipping stale %s reminder for ambassador_job=%s: expected=%s current=%s",
+                reminder_label,
+                ambassador_job_id,
+                expected_trigger_at_utc.isoformat(),
+                current_trigger_at_utc.isoformat(),
+            )
+            return 0
+
+    ambassador_user = ambassador_job.ambassador.user
+    recipient_email = (ambassador_user.email or "").strip()
+    if not recipient_email:
+        return 0
+
+    mailer = mailer_class(
+        ambassador_job=ambassador_job,
+        to_emails=[recipient_email],
+        recipient_first_name=(ambassador_user.first_name or "").strip() or None,
+    )
+    mailer.send()
+
+    setattr(ambassador_job, reminder_field, _to_utc_aware(timezone.now()))
+    ambassador_job.save(update_fields=[reminder_field])
+    return 1
 
 
 @job("default", retry=Retry(max=3, interval=[60, 120, 240]))
-def send_upcoming_ambassador_event_reminders() -> int:
-    """
-    Send one reminder email to each assigned ambassador when their event starts
-    within the next 24 hours in the event's timezone offset.
-
-    Returns:
-        Number of reminder emails sent.
-    """
-    sent_count = _send_ambassador_event_reminders(
-        window_hours=24,
-        min_exclusive_hours=3,
+def send_ambassador_job_24h_reminder(
+    ambassador_job_id: int,
+    expected_trigger_at_iso: str | None = None,
+) -> int:
+    return _send_ambassador_job_exact_reminder(
+        ambassador_job_id,
+        expected_trigger_at_iso=expected_trigger_at_iso,
+        hours_before=24,
         reminder_field="reminder_sent_at",
         mailer_class=AmbassadorEventReminderMailer,
+        reminder_label="24h",
     )
-
-    logger.info("Sent %s ambassador 24h reminder email(s)", sent_count)
-    return sent_count
 
 
 @job("default", retry=Retry(max=3, interval=[60, 120, 240]))
-def send_upcoming_ambassador_event_3h_reminders() -> int:
-    """
-    Send one reminder email to each assigned ambassador when their event starts
-    within the next 3 hours in the event's timezone offset.
-
-    Returns:
-        Number of reminder emails sent.
-    """
-    sent_count = _send_ambassador_event_reminders(
-        window_hours=3,
-        min_exclusive_hours=0,
+def send_ambassador_job_3h_reminder(
+    ambassador_job_id: int,
+    expected_trigger_at_iso: str | None = None,
+) -> int:
+    return _send_ambassador_job_exact_reminder(
+        ambassador_job_id,
+        expected_trigger_at_iso=expected_trigger_at_iso,
+        hours_before=3,
         reminder_field="reminder_3h_sent_at",
         mailer_class=AmbassadorEventReminder3HoursMailer,
+        reminder_label="3h",
     )
 
-    logger.info("Sent %s ambassador 3h reminder email(s)", sent_count)
-    return sent_count
+
+@job("default", retry=Retry(max=1, interval=[60]))
+def send_upcoming_ambassador_event_reminders() -> int:
+    logger.warning(
+        "Legacy hourly 24h reminder job executed after exact reminder migration. "
+        "Canceling legacy schedules and skipping execution."
+    )
+    cancel_legacy_ambassador_event_reminder_schedules()
+    return 0
+
+
+@job("default", retry=Retry(max=1, interval=[60]))
+def send_upcoming_ambassador_event_3h_reminders() -> int:
+    logger.warning(
+        "Legacy hourly 3h reminder job executed after exact reminder migration. "
+        "Canceling legacy schedules and skipping execution."
+    )
+    cancel_legacy_ambassador_event_reminder_schedules()
+    return 0
