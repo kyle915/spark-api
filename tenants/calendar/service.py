@@ -520,8 +520,14 @@ class GoogleCalendarService:
             description_parts.append(f"Note: {event.notes}")
         description = "\n".join(description_parts)
 
+        summary_suffix = (
+            f" | {start_local_with_offset.strftime('%I:%M %p')}"
+            f" | {end_local_with_offset.strftime('%I:%M %p')}"
+            f" | {getattr(event_timezone, 'code', None) or '-'}"
+        )
+
         event_data = {
-            "summary": event.name,
+            "summary": f"{event.name}{summary_suffix}",
             "description": description,
             "location": event.address or None,
             "start": {
