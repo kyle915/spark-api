@@ -18,6 +18,7 @@ class RecapFiltersInput(SparkGraphQLInput):
     start_date: str | None = None
     end_date: str | None = None
     event_address: str | None = None
+    approved: bool | None = None
     edited: bool | None = None
 
 
