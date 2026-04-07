@@ -1,8 +1,8 @@
 """
-Django management command to sync existing events to Google Calendar.
+Django management command to sync existing approved upcoming events to Google Calendar.
 
 Usage:
-    # Sync all events (default behavior - no parameters required)
+    # Sync approved upcoming events (default behavior - no parameters required)
     python manage.py sync_events_to_google_calendar
 
     # Sync all events for a specific tenant
@@ -125,8 +125,18 @@ class Command(BaseCommand):
         if from_date and to_date and from_date > to_date:
             raise CommandError('--from-date must be before or equal to --to-date.')
 
+        today = timezone.localdate()
+        today_start = timezone.make_aware(datetime.combine(today, datetime.min.time()))
+
         # Build queryset
         queryset = Event.objects.all()
+
+        # Default behavior: only approved upcoming events
+        queryset = queryset.filter(
+            status__slug="approved",
+        ).filter(
+            date__gte=today_start,
+        )
 
         # Filter by tenant
         if tenant_id:
@@ -154,11 +164,11 @@ class Command(BaseCommand):
             if from_date:
                 # Convert date to datetime for comparison
                 from_datetime = timezone.make_aware(datetime.combine(from_date, datetime.min.time()))
-                queryset = queryset.filter(request__date__gte=from_datetime)
+                queryset = queryset.filter(date__gte=from_datetime)
             if to_date:
                 # Convert date to datetime for comparison (end of day)
                 to_datetime = timezone.make_aware(datetime.combine(to_date, datetime.max.time()))
-                queryset = queryset.filter(request__date__lte=to_datetime)
+                queryset = queryset.filter(date__lte=to_datetime)
 
         # Get events
         events = queryset.select_related('request', 'tenant').all()
