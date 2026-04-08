@@ -41,24 +41,24 @@ class RecapFileInput(SparkGraphQLInput):
 
 @strawberry.input
 class ConsumerEngagementsInput(SparkGraphQLInput):
-    total_consumer: int
-    first_time_consumers: int
-    brand_aware_consumers: int
-    willing_to_purchase_consumers: int
-    not_willing_consumers: int
+    total_consumer: int | None = None
+    first_time_consumers: int | None = None
+    brand_aware_consumers: int | None = None
+    willing_to_purchase_consumers: int | None = None
+    not_willing_consumers: int | None = None
 
 
 @strawberry.input
 class ProductSampleInput(SparkGraphQLInput):
-    product_id: strawberry.ID
-    quantity: int
+    product_id: strawberry.ID | None = None
+    quantity: int | None = None
 
 
 @strawberry.input
 class SalesPerformanceInput(SparkGraphQLInput):
-    product_id: strawberry.ID
-    type_of_good_id: strawberry.ID
-    price: float
+    product_id: strawberry.ID | None = None
+    type_of_good_id: strawberry.ID | None = None
+    price: float | None = None
 
 
 @strawberry.input
