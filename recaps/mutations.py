@@ -1096,6 +1096,8 @@ class RecapMutationService(SparkGraphQLMixin):
             return (
                 models.Recap.objects.select_related(
                     "event",
+                    "event__tenant",
+                    "event__event_type",
                     "job",
                     "retailer",
                     "ambassador",
