@@ -63,11 +63,11 @@ class RecapFileUrlResponse:
 @strawberry_django.type(models.ConsumerEngagements)
 class ConsumerEngagements(Node):
     uuid: str
-    total_consumer: int
-    first_time_consumers: int
-    brand_aware_consumers: int
-    willing_to_purchase_consumers: int
-    not_willing_consumers: int
+    total_consumer: int | None
+    first_time_consumers: int | None
+    brand_aware_consumers: int | None
+    willing_to_purchase_consumers: int | None
+    not_willing_consumers: int | None
     created_at: str
     updated_at: str
 
