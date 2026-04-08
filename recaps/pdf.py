@@ -109,35 +109,60 @@ def bytes_to_data_uri(image_bytes: bytes) -> str | None:
     return f"data:image/{image_type};base64,{base64_data}"
 
 
-def build_recap_pdf(recap, images: Iterable[dict[str, bytes]]) -> bytes:
-    from weasyprint import HTML, CSS
+def format_date_only(value) -> str:
+    if not value:
+        return "N/A"
+    try:
+        return value.strftime("%m/%d/%Y")
+    except Exception:
+        return str(value)
 
-    def format_dt(value) -> str:
-        if not value:
-            return "N/A"
-        try:
-            return value.strftime("%Y-%m-%d %H:%M")
-        except Exception:
-            return str(value)
 
-    def safe(value) -> str:
-        return "N/A" if value in (None, "") else str(value)
+def safe(value) -> str:
+    return "N/A" if value in (None, "") else str(value)
 
-    def format_user_name(user) -> str:
-        if not user:
-            return "N/A"
-        first_name = getattr(user, "first_name", "") or ""
-        last_name = getattr(user, "last_name", "") or ""
-        full_name = f"{first_name} {last_name}".strip()
-        if full_name:
-            return full_name
-        return getattr(user, "username", None) or str(user)
 
-    def format_user_email(user) -> str:
-        if not user:
-            return "N/A"
-        return getattr(user, "email", None) or "N/A"
+def format_user_name(user) -> str:
+    if not user:
+        return "N/A"
+    first_name = getattr(user, "first_name", "") or ""
+    last_name = getattr(user, "last_name", "") or ""
+    full_name = f"{first_name} {last_name}".strip()
+    if full_name:
+        return full_name
+    return getattr(user, "username", None) or str(user)
 
+
+def format_user_email(user) -> str:
+    if not user:
+        return "N/A"
+    return getattr(user, "email", None) or "N/A"
+
+
+def format_bool(value) -> str:
+    if value is None:
+        return "N/A"
+    return "Yes" if bool(value) else "No"
+
+
+def _build_images_html(image_groups: dict[str, list[dict[str, str]]]) -> str:
+    return (
+        "".join(
+            f'''
+          <div class="image-group">
+            <h3>{safe(category)}</h3>
+            <div class="gallery">
+              {"".join(f'<figure><img src="{item["data_uri"]}" /><figcaption>{safe(item["name"])}</figcaption></figure>' for item in items)}
+            </div>
+          </div>
+          '''
+            for category, items in image_groups.items()
+        )
+        or '<p class="empty">N/A</p>'
+    )
+
+
+def build_recap_pdf_html(recap, images: Iterable[dict[str, bytes]]) -> str:
     ambassador_user = None
     if getattr(recap, "ambassador", None) and getattr(recap.ambassador, "user", None):
         ambassador_user = recap.ambassador.user
@@ -164,13 +189,6 @@ def build_recap_pdf(recap, images: Iterable[dict[str, bytes]]) -> bytes:
     account_feedback = list(getattr(recap, "account_feedback", []).all())
     account_entry = account_feedback[0] if account_feedback else None
 
-    file_lines = []
-    for recap_file in getattr(recap, "recap_files", []).all():
-        extension = ""
-        if recap_file.file_type and recap_file.file_type.extension:
-            extension = recap_file.file_type.extension
-        file_lines.append(f"{recap_file.name} {extension}".strip())
-
     image_groups: dict[str, list[dict[str, str]]] = {}
     for image in images:
         image_bytes = image.get("bytes") or b""
@@ -185,24 +203,44 @@ def build_recap_pdf(recap, images: Iterable[dict[str, bytes]]) -> bytes:
             }
         )
 
-    html = f"""
-<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <title>Recap - {safe(recap.name)}</title>
-  </head>
-  <body>
-    <header class="header">
-      <div>
-        <h1>Recap Report</h1>
-        <p class="subtitle">{safe(recap.name)}</p>
-      </div>
-      <div class="badge">
-        <span>{"Approved" if recap.approved else "Pending"}</span>
-      </div>
-    </header>
+    tenant_slug = (
+        getattr(getattr(recap, "event", None), "tenant", None)
+        and getattr(recap.event.tenant, "slug", None)
+    ) or ""
+    tenant_slug = tenant_slug.strip().lower()
 
+    if tenant_slug == "total-wireless":
+        summary_html = f"""
+    <section class="card">
+      <h2>Summary</h2>
+      <div class="grid">
+        <div><span>Name</span><strong>{safe(recap.name)}</strong></div>
+        <div><span>Event</span><strong>{safe(getattr(recap.event, "name", None))}</strong></div>
+        <div><span>Event Date</span><strong>{format_date_only(getattr(recap.event, "date", None))}</strong></div>
+        <div><span>Address</span><strong>{safe(getattr(recap.event, "address", None))}</strong></div>
+        <div><span>Event Type</span><strong>{safe(getattr(getattr(recap.event, "event_type", None), "name", None))}</strong></div>
+        <div><span>Total Consumers</span><strong>{safe(getattr(engagement, "total_consumer", None))}</strong></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Consumer Feedback</h2>
+      <div class="stack">
+        <div><span>Feedback</span><p>{safe(getattr(feedback_entry, "feedback", None))}</p></div>
+        <div><span>Quotes</span><p>{safe(getattr(feedback_entry, "quotes", None))}</p></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Account Feedback</h2>
+      <div class="stack">
+        <div><span>Do Differently</span><p>{safe(getattr(account_entry, "do_differently_feedback", None))}</p></div>
+        <div><span>Was Corporate Card Used?</span><p>{format_bool(getattr(account_entry, "was_corpo_card_used", None) if account_entry else None)}</p></div>
+      </div>
+    </section>
+"""
+    else:
+        summary_html = f"""
     <section class="card">
       <h2>Summary</h2>
       <div class="grid">
@@ -210,10 +248,10 @@ def build_recap_pdf(recap, images: Iterable[dict[str, bytes]]) -> bytes:
         safe(getattr(recap.event, "name", None))
     }</strong></div>
         <div><span>Event Date</span><strong>{
-        format_dt(getattr(recap.event, "date", None))
+        format_date_only(getattr(recap.event, "date", None))
     }</strong></div>
         <div><span>Submitted At</span><strong>{
-        format_dt(getattr(recap, "submited_at", None))
+        format_date_only(getattr(recap, "submited_at", None))
     }</strong></div>
         <div><span>Ambassador</span><strong>{safe(ambassador_name)}</strong></div>
         <div><span>Ambassador Email</span><strong>{safe(ambassador_email)}</strong></div>
@@ -311,26 +349,40 @@ def build_recap_pdf(recap, images: Iterable[dict[str, bytes]]) -> bytes:
     }</p></div>
       </div>
     </section>
+"""
+
+    return f"""
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Recap - {safe(recap.name)}</title>
+  </head>
+  <body>
+    <header class="header">
+      <div>
+        <h1>Recap Report</h1>
+        <p class="subtitle">{safe(recap.name)}</p>
+      </div>
+      <div class="badge">
+        <span>{"Approved" if recap.approved else "Pending"}</span>
+      </div>
+    </header>
+
+    {summary_html}
     <section class="card">
       <h2>Images</h2>
-      {
-        "".join(
-            f'''
-          <div class="image-group">
-            <h3>{safe(category)}</h3>
-            <div class="gallery">
-              {"".join(f'<figure><img src="{item["data_uri"]}" /><figcaption>{safe(item["name"])}</figcaption></figure>' for item in items)}
-            </div>
-          </div>
-          '''
-            for category, items in image_groups.items()
-        )
-        or '<p class="empty">N/A</p>'
-    }
+      {_build_images_html(image_groups)}
     </section>
   </body>
 </html>
 """
+
+
+def build_recap_pdf(recap, images: Iterable[dict[str, bytes]]) -> bytes:
+    from weasyprint import HTML, CSS
+
+    html = build_recap_pdf_html(recap, images)
 
     css = CSS(
         string="""
