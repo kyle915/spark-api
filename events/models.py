@@ -314,6 +314,39 @@ class RequestStatus(WithDefaultAttribute, models.Model):
                 )
 
 
+class BillingEntity(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    name = models.CharField(max_length=255)
+
+    state = models.ForeignKey(
+        State,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="billing_entity",
+    )
+
+    tenant = models.ForeignKey(
+        Tenant, on_delete=models.RESTRICT, related_name="billing_entity"
+    )
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="billing_entity_created_by",
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="billing_entity_updated_by",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
 class Request(models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
@@ -381,6 +414,13 @@ class Request(models.Model):
         Tenant,
         on_delete=models.RESTRICT,
         null=False,
+        related_name="requests",
+    )
+
+    billing_entity = models.ForeignKey(
+        BillingEntity,
+        on_delete=models.RESTRICT,
+        null=True,
         related_name="requests",
     )
 
