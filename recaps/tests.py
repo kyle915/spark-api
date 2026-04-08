@@ -235,3 +235,49 @@ class TestApproveRecapNotifications(JobsGraphQLTestCase):
         assert str(other_recap.id) not in {
             edge["node"]["id"] for edge in result.data["recaps"]["edges"]
         }
+
+    @pytest.mark.asyncio
+    async def test_recaps_query_filters_by_approved(self):
+        approved_recap = recap_models.Recap.objects.create(
+            name="Approved recap",
+            approved=True,
+            event=self.event,
+            job=self.job,
+            ambassador=self.other_ambassador,
+            created_by=self.spark_user,
+            updated_by=self.spark_user,
+        )
+
+        query = """
+        query Recaps($filters: RecapFiltersInput) {
+            recaps(filters: $filters) {
+                totalCount
+                edges {
+                    node {
+                        id
+                        approved
+                    }
+                }
+            }
+        }
+        """
+        variables = {"filters": {"approved": True}}
+
+        result = await self._execute_query_authenticated(
+            query,
+            variables,
+            self.spark_user,
+            self.endpoint_path,
+        )
+
+        assert result.errors is None
+        assert result.data is not None
+        assert result.data["recaps"]["totalCount"] == 1
+        assert result.data["recaps"]["edges"] == [
+            {
+                "node": {
+                    "id": str(approved_recap.id),
+                    "approved": True,
+                }
+            }
+        ]

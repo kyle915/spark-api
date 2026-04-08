@@ -33,7 +33,7 @@ def _to_event_timezone_offset(
 
 def _event_start_datetime(ambassador_job: AmbassadorJob) -> datetime.datetime | None:
     event = ambassador_job.job.event
-    return event.date or event.start_time or ambassador_job.job.start_date
+    return event.start_time or ambassador_job.job.start_date
 
 
 def should_send_ambassador_event_email(

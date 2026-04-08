@@ -84,6 +84,7 @@ class BaseRecapQueriesService(SparkGraphQLMixin):
         start_date: str | None = None,
         end_date: str | None = None,
         event_address: str | None = None,
+        approved: bool | None = None,
         q: str | None = None,
     ) -> QuerySet:
         """Get the filtered queryset for the service."""
@@ -115,6 +116,8 @@ class BaseRecapQueriesService(SparkGraphQLMixin):
             queryset = queryset.filter(event__date__date__lte=end_date)
         if event_address:
             queryset = queryset.filter(event__address__icontains=event_address)
+        if approved is not None:
+            queryset = queryset.filter(approved=approved)
         if q:
             queryset = queryset.filter(name__icontains=q)
         return queryset
@@ -133,6 +136,7 @@ class BaseRecapQueriesService(SparkGraphQLMixin):
         start_date: str | None = None,
         end_date: str | None = None,
         event_address: str | None = None,
+        approved: bool | None = None,
         q: str | None = None,
         ordering: tuple[str, ...] | None = None,
     ) -> QuerySet:
@@ -150,6 +154,7 @@ class BaseRecapQueriesService(SparkGraphQLMixin):
             start_date=start_date,
             end_date=end_date,
             event_address=event_address,
+            approved=approved,
             q=q,
         )
         ordering = ordering or self.ordering
@@ -172,6 +177,7 @@ class BaseRecapQueriesService(SparkGraphQLMixin):
         start_date: str | None = None,
         end_date: str | None = None,
         event_address: str | None = None,
+        approved: bool | None = None,
         q: str | None = None,
         first: int | None = None,
         after: str | None = None,
@@ -197,6 +203,7 @@ class BaseRecapQueriesService(SparkGraphQLMixin):
                 start_date=start_date,
                 end_date=end_date,
                 event_address=event_address,
+                approved=approved,
                 q=q,
                 ordering=ordering,
             )
@@ -251,6 +258,7 @@ class RecapQueriesService(BaseRecapQueriesService):
         start_date: str | None = None,
         end_date: str | None = None,
         event_address: str | None = None,
+        approved: bool | None = None,
         q: str | None = None,
         ordering: tuple[str, ...] | None = None,
     ) -> QuerySet:
@@ -268,6 +276,7 @@ class RecapQueriesService(BaseRecapQueriesService):
             start_date=start_date,
             end_date=end_date,
             event_address=event_address,
+            approved=approved,
             q=q,
             ordering=ordering,
         )
@@ -517,6 +526,7 @@ class RecapQueries:
         start_date = filters.start_date if filters else None
         end_date = filters.end_date if filters else None
         event_address = filters.event_address if filters else None
+        approved = filters.approved if filters else None
         queryset = service.get_ordered_queryset(
             tenant_id=tenant_id,
             event_id=event_id,
@@ -530,6 +540,7 @@ class RecapQueries:
             start_date=start_date,
             end_date=end_date,
             event_address=event_address,
+            approved=approved,
             q=q,
         )
         if filters and filters.edited is not None:
@@ -548,6 +559,7 @@ class RecapQueries:
             start_date=start_date,
             end_date=end_date,
             event_address=event_address,
+            approved=approved,
             q=q,
             first=first,
             after=after,
@@ -733,6 +745,7 @@ class RecapMobileQueries:
         start_date = filters.start_date if filters else None
         end_date = filters.end_date if filters else None
         event_address = filters.event_address if filters else None
+        approved = filters.approved if filters else None
         queryset = service.get_ambassador_queryset(
             user=user,
             tenant_id=tenant_id,
@@ -747,6 +760,7 @@ class RecapMobileQueries:
             start_date=start_date,
             end_date=end_date,
             event_address=event_address,
+            approved=approved,
             q=q,
         )
         if filters and filters.edited is not None:
@@ -765,6 +779,7 @@ class RecapMobileQueries:
             start_date=start_date,
             end_date=end_date,
             event_address=event_address,
+            approved=approved,
             q=q,
             first=first,
             after=after,
