@@ -568,8 +568,8 @@ class DashboardQueries:
                 event_willing = 0
                 for recap in event.recaps.all():
                     for ce in recap.consumer_engagements.all():
-                        event_consumers += ce.total_consumer
-                        event_willing += ce.willing_to_purchase_consumers
+                        event_consumers += ce.total_consumer or 0
+                        event_willing += ce.willing_to_purchase_consumers or 0
 
                 intent_rate = (
                     (event_willing / event_consumers * 100)

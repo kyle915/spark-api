@@ -164,11 +164,11 @@ class RecapFile(models.Model):
 class ConsumerEngagements(models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
-    total_consumer = models.IntegerField(null=False)
-    first_time_consumers = models.IntegerField(null=False)
-    brand_aware_consumers = models.IntegerField(null=False)
-    willing_to_purchase_consumers = models.IntegerField(null=False)
-    not_willing_consumers = models.IntegerField(null=False)
+    total_consumer = models.IntegerField(null=True)
+    first_time_consumers = models.IntegerField(null=True)
+    brand_aware_consumers = models.IntegerField(null=True)
+    willing_to_purchase_consumers = models.IntegerField(null=True)
+    not_willing_consumers = models.IntegerField(null=True)
 
     recap = models.ForeignKey(
         Recap,
