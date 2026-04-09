@@ -13,6 +13,7 @@ from django.db.models import Q
 from openpyxl import Workbook, load_workbook
 
 from events.models import (
+    BillingEntity,
     Client,
     Distributor,
     Event,
@@ -54,6 +55,7 @@ TEMPLATE_COLUMNS = [
     "timezone_code",
     "request_type_id",
     "event_type_id",
+    "billing_entity_id",
     "store_manager_id",
     "table_size",
     "product_ids",
@@ -115,6 +117,7 @@ def build_request_batch_template_xlsx(tenant_id: int | None = None) -> bytes:
         "timezone_code": "EST",
         "request_type_id": 1,
         "event_type_id": 1,
+        "billing_entity_id": "",
         "store_manager_id": "",
         "table_size": 1,
         "product_ids": "3,7,10",
@@ -147,6 +150,14 @@ def build_request_batch_template_xlsx(tenant_id: int | None = None) -> bytes:
         event_type_qs = event_type_qs.filter(tenant_id=tenant_id)
     for row in event_type_qs.order_by("id").values_list("id", "name"):
         ws_event_types.append(list(row))
+
+    ws_billing_entities = wb.create_sheet("BillingEntities")
+    ws_billing_entities.append(["id", "name", "state"])
+    billing_entity_qs = BillingEntity.objects.select_related("state").all()
+    if tenant_id:
+        billing_entity_qs = billing_entity_qs.filter(tenant_id=tenant_id)
+    for row in billing_entity_qs.order_by("id").values("id", "name", "state__name"):
+        ws_billing_entities.append([row["id"], row["name"], row["state__name"]])
 
     ws_cities = wb.create_sheet("Cities")
     ws_cities.append(
@@ -410,6 +421,7 @@ def _import_requests_from_rows(
                     timezone_id=parsed["timezone_id"],
                     request_type_id=parsed["request_type_id"],
                     client_id=parsed["client_id"],
+                    billing_entity_id=parsed["billing_entity_id"],
                     distributor_id=parsed["distributor_id"],
                     retailer_id=parsed["retailer_id"],
                     location_id=parsed["location_id"],
@@ -599,6 +611,16 @@ def _parse_row(
     client_id = _capture(_optional_int, row.get("client_id"), "client_id")
     if client_id and not Client.objects.filter(id=client_id, tenant_id=tenant_id).exists():
         errors.append(f"client_id does not exist for tenant '{tenant_name}': {client_id}")
+
+    billing_entity_id = _capture(
+        _optional_int, row.get("billing_entity_id"), "billing_entity_id"
+    )
+    if billing_entity_id and not BillingEntity.objects.filter(
+        id=billing_entity_id, tenant_id=tenant_id
+    ).exists():
+        errors.append(
+            f"billing_entity_id does not exist for tenant '{tenant_name}': {billing_entity_id}"
+        )
 
     distributor_id = _capture(_optional_int, row.get("distributor_id"), "distributor_id")
     if distributor_id and not Distributor.objects.filter(id=distributor_id, tenant_id=tenant_id).exists():
@@ -798,6 +820,7 @@ def _parse_row(
         "request_type_id": request_type_id,
         "event_type_id": event_type_id,
         "client_id": client_id,
+        "billing_entity_id": billing_entity_id,
         "distributor_id": distributor_id,
         "retailer_id": retailer_id,
         "store_manager_id": store_manager_id,
