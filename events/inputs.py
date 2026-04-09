@@ -76,6 +76,7 @@ class RequestFiltersInput(BaseTenantInput):
     rmm_asigned: strawberry.ID | None = None
     status_id: strawberry.ID | None = None
     client_id: strawberry.ID | None = None
+    billing_entity_id: strawberry.ID | None = None
     retailer_id: strawberry.ID | None = None
     distributor_id: strawberry.ID | None = None
     location_id: strawberry.ID | None = None
@@ -122,6 +123,11 @@ class RetailerFiltersInput(BaseTenantInput):
 
 @strawberry.input
 class RequestTypeFiltersInput(BaseTenantInput):
+    tenant_uuid: strawberry.ID | None = None
+
+
+@strawberry.input
+class BillingEntityFiltersInput(BaseTenantInput):
     tenant_uuid: strawberry.ID | None = None
 
 
@@ -309,6 +315,16 @@ class UpdateRequestTypeInput(CreateRequestTypeInput):
 
 
 @strawberry.input
+class CreateBillingEntityInput(BaseNameableInput):
+    state_id: strawberry.ID | None = None
+
+
+@strawberry.input
+class UpdateBillingEntityInput(CreateBillingEntityInput):
+    id: strawberry.ID
+
+
+@strawberry.input
 class ApproveRequestInput(SparkGraphQLInput):
     id: strawberry.ID
 
@@ -348,6 +364,7 @@ class CreateRequestInput(BaseNameableInput):
     request_type_id: strawberry.ID
     distributor_id: strawberry.ID | None = None
     retailer_id: strawberry.ID | None = None
+    billing_entity_id: strawberry.ID | None = None
     location_id: strawberry.ID | None = None
     state_id: strawberry.ID | None = None
     store_manager_id: strawberry.ID | None = None
@@ -387,6 +404,7 @@ class UpdateRequestInput(BaseNameableInput):
     request_type_id: strawberry.ID
     distributor_id: strawberry.ID | None = None
     retailer_id: strawberry.ID | None = None
+    billing_entity_id: strawberry.ID | None = None
     location_id: strawberry.ID | None = None
     state_id: strawberry.ID | None = None
     store_manager_id: strawberry.ID | None = None
@@ -418,6 +436,7 @@ class CreateRequestWithDependenciesInput(BaseNameableInput):
     request_type_id: strawberry.ID
     distributor_id: strawberry.ID | None = None
     retailer_id: strawberry.ID | None = None
+    billing_entity_id: strawberry.ID | None = None
     location_id: strawberry.ID | None = None
     state_id: strawberry.ID | None = None
     requestor_email: str | None = None
