@@ -1,7 +1,7 @@
 import pytest
 
 from events.batch_requests import _parse_row
-from events.models import EventType, Location, State, TimeZone
+from events.models import BillingEntity, EventType, Location, State, TimeZone
 from events.tests.base import EventsGraphQLTestCase
 
 
@@ -44,6 +44,12 @@ class TestBatchRequestNames(EventsGraphQLTestCase):
             store_contact="Manager",
             location=self.location,
             tenant=self.tenant,
+        )
+        self.billing_entity = BillingEntity.objects.create(
+            name="Acme Billing",
+            state=self.state,
+            tenant=self.tenant,
+            created_by=self.system_user,
         )
 
     def test_parse_row_builds_name_with_excel_name_retailer_date_and_store_number(self):
@@ -92,3 +98,64 @@ class TestBatchRequestNames(EventsGraphQLTestCase):
         )
 
         assert parsed["name"] == "PromoRequest-03/15/2026-102"
+
+    def test_parse_row_accepts_optional_billing_entity_id(self):
+        parsed = _parse_row(
+            row={
+                "name": "PromoRequest",
+                "date": "03/15/2026",
+                "start_time": "10:00",
+                "end_time": "14:00",
+                "address": "123 Main St",
+                "store_number": "102",
+                "city": self.location.name,
+                "state": self.state.code,
+                "timezone_code": self.timezone.code,
+                "request_type_id": self.request_type.id,
+                "event_type_id": self.event_type.id,
+                "billing_entity_id": self.billing_entity.id,
+            },
+            tenant_id=self.tenant.id,
+            tenant_name=self.tenant.name,
+            default_timezone_id=None,
+            default_request_type_id=None,
+        )
+
+        assert parsed["billing_entity_id"] == self.billing_entity.id
+
+    def test_parse_row_rejects_billing_entity_from_another_tenant(self):
+        other_tenant = self.create_tenant(name="Other tenant")
+        other_billing_entity = BillingEntity.objects.create(
+            name="Other Billing",
+            state=self.state,
+            tenant=other_tenant,
+            created_by=self.system_user,
+        )
+
+        with pytest.raises(
+            ValueError,
+            match=(
+                f"billing_entity_id does not exist for tenant '{self.tenant.name}': "
+                f"{other_billing_entity.id}"
+            ),
+        ):
+            _parse_row(
+                row={
+                    "name": "PromoRequest",
+                    "date": "03/15/2026",
+                    "start_time": "10:00",
+                    "end_time": "14:00",
+                    "address": "123 Main St",
+                    "store_number": "102",
+                    "city": self.location.name,
+                    "state": self.state.code,
+                    "timezone_code": self.timezone.code,
+                    "request_type_id": self.request_type.id,
+                    "event_type_id": self.event_type.id,
+                    "billing_entity_id": other_billing_entity.id,
+                },
+                tenant_id=self.tenant.id,
+                tenant_name=self.tenant.name,
+                default_timezone_id=None,
+                default_request_type_id=None,
+            )

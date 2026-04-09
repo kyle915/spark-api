@@ -253,6 +253,24 @@ class RequestTypeDetailResponse:
     request_type: RequestType | None = None
 
 
+@strawberry_django.type(models.BillingEntity)
+class BillingEntity(Node):
+    uuid: str
+    name: str
+    state: State | None = None
+    tenant_id: strawberry.ID
+    created_at: str
+    updated_at: str
+
+
+@strawberry.type
+class BillingEntityDetailResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    billing_entity: BillingEntity | None = None
+
+
 @strawberry_django.type(models.RequestStatus)
 class RequestStatus(Node):
     uuid: str
@@ -313,6 +331,7 @@ class Request(Node):
     store_manager_phone: str | None = None
     timezone: TimeZone | None = None
     client: Client | None = None
+    billing_entity: BillingEntity | None = None
     distributor: Distributor | None = None
     retailer: Retailer | None = None
     location: Location | None = None

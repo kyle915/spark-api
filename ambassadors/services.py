@@ -3,6 +3,7 @@
 import asyncio
 import sys
 import secrets
+import string
 from decimal import Decimal
 from datetime import timedelta, datetime
 from typing import Any
@@ -19,6 +20,8 @@ from graphql import GraphQLError
 from tenants.models import Role, Tenant, TenantedUser
 from tenants.envelopes import EmailVerificationMailer
 from gqlauth.core.utils import get_token
+from gqlauth.models import UserStatus
+from events.models import Location
 from utils.utils import build_mutation_response
 from utils.graphql.inputs import SparkGraphQLInput
 from utils.graphql.mixins import (
@@ -51,6 +54,8 @@ from .types import (
     AcceptInvitationResponse,
     ApproveAmbassadorResponse,
     DisableAmbassadorResponse,
+    RegenerateAmbassadorPasswordResult,
+    RegenerateAmbassadorPasswordsResponse,
     CreateAmbassadorResponse,
     UpdateAmbassadorResponse,
     DeleteInvitationResponse,
@@ -75,8 +80,11 @@ from .types import (
 from events.models import Client
 from . import inputs
 from .constants import INVITATION_EXPIRY_DAYS
+from .envelopes import AmbassadorGeneratedPasswordMailer
 
 User = get_user_model()
+RESEND_EMAILS_PER_SECOND = 2
+RESEND_EMAIL_DELAY_SECONDS = 1 / RESEND_EMAILS_PER_SECOND
 
 
 async def set_ambassador_job_real_amount_from_clock_out(attendance: Attendance) -> None:
@@ -130,6 +138,12 @@ def validate_passwords_match(
             input_obj=input,
         )
     return None
+
+
+def generate_random_password(length: int = 12) -> str:
+    """Generate a readable random password for ambassador onboarding."""
+    alphabet = string.ascii_letters + string.digits
+    return "".join(secrets.choice(alphabet) for _ in range(length))
 
 
 class BaseAmbassadorService(SparkGraphQLMixin):
@@ -188,6 +202,7 @@ class BaseAmbassadorService(SparkGraphQLMixin):
     @staticmethod
     async def create_ambassador_user(
         first_name: str,
+        last_name: str | None,
         email: str,
         role: Any,
         password: str,
@@ -211,6 +226,7 @@ class BaseAmbassadorService(SparkGraphQLMixin):
         def _create_ambassador_user():
             user = User.objects.create(
                 first_name=first_name,
+                last_name=last_name or "",
                 username=email,
                 email=email,
                 role=role,
@@ -221,6 +237,19 @@ class BaseAmbassadorService(SparkGraphQLMixin):
             return user
 
         return await _create_ambassador_user()
+
+    @staticmethod
+    async def resolve_location(
+        location_id: strawberry.ID | None,
+    ) -> Location | None:
+        """Resolve a Location by ID."""
+        if location_id is None:
+            return None
+
+        resolved_location_id = resolve_id_to_int(location_id)
+        return await sync_to_async(Location.objects.select_related("state").get)(
+            id=resolved_location_id
+        )
 
     @staticmethod
     async def assign_user_to_tenant(
@@ -261,6 +290,39 @@ class PublicAmbassadorCreationService(BaseAmbassadorService):
     """Service for public ambassador creation."""
 
     @classmethod
+    def resolve_password(
+        cls,
+        input: inputs.CreatePublicAmbassadorInput,
+        response_class: type,
+        allow_generated_password: bool = False,
+    ) -> tuple[str | None, Any | None, bool]:
+        """
+        Resolve the password to use for account creation.
+
+        Returns:
+            tuple: (password, error_response, password_was_generated)
+        """
+        password1 = getattr(input, "password1", None)
+        password2 = getattr(input, "password2", None)
+
+        if allow_generated_password and not password1 and not password2:
+            return generate_random_password(), None, True
+
+        if not password1 or not password2:
+            return None, build_mutation_response(
+                response_class,
+                success=False,
+                message="Both password fields are required when setting a password manually.",
+                input_obj=input,
+            ), False
+
+        password_error = validate_passwords_match(input, response_class)
+        if password_error:
+            return None, password_error, False
+
+        return password1, None, False
+
+    @classmethod
     async def create(
         cls,
         input: inputs.CreatePublicAmbassadorInput,
@@ -271,9 +333,11 @@ class PublicAmbassadorCreationService(BaseAmbassadorService):
         ambassador_is_active = (
             ambassador_is_active if ambassador_is_active is not None else False
         )
-        # Validate passwords match
-        password_error = validate_passwords_match(
-            input, PublicAmbassadorCreationResponse
+        is_admin_created = isinstance(input, inputs.CreateAmbassadorWithUserInput)
+        password, password_error, password_was_generated = cls.resolve_password(
+            input=input,
+            response_class=PublicAmbassadorCreationResponse,
+            allow_generated_password=is_admin_created,
         )
         if password_error:
             return password_error
@@ -294,10 +358,15 @@ class PublicAmbassadorCreationService(BaseAmbassadorService):
             # Create user
             user = await cls.create_ambassador_user(
                 first_name=input.first_name,
+                last_name=getattr(input, "last_name", None),
                 email=input.email,
                 role=role,
-                password=input.password1,
+                password=password,
                 is_active=True,
+            )
+
+            location = await cls.resolve_location(
+                location_id=getattr(input, "location_id", None),
             )
 
             # Create ambassador (inactive by default)
@@ -307,29 +376,47 @@ class PublicAmbassadorCreationService(BaseAmbassadorService):
                 phone=input.phone,
                 about_me=input.about_me,
                 coordinates=input.coordinates or [],
+                location=location,
                 is_active=ambassador_is_active,  # Requires manual approval by default
                 created_by=user,
                 updated_by=user,
             )
 
             # Generate activation token
-            activation_token = await sync_to_async(get_token)(user, "activation")
-            frontend_urls = {
-                "client": settings.CLIENT_FRONTEND_URL,
-                "ambassador": settings.AMBASSADOR_FRONTEND_URL,
-                "spark-admin": settings.ADMIN_FRONTEND_URL,
-            }
-            activation_url = (
-                f"{frontend_urls.get(role.slug, settings.AMBASSADOR_FRONTEND_URL)}/"
-                f"verify-account?token={activation_token}"
-            )
-            verification_email = EmailVerificationMailer(user, activation_url)
-            await verification_email.send_async()
+            activation_token: str | None = None
+            if is_admin_created:
+                await sync_to_async(UserStatus.objects.update_or_create)(
+                    user=user,
+                    defaults={"verified": True, "archived": False},
+                )
+            else:
+                activation_token = await sync_to_async(get_token)(user, "activation")
+                frontend_urls = {
+                    "client": settings.CLIENT_FRONTEND_URL,
+                    "ambassador": settings.AMBASSADOR_FRONTEND_URL,
+                    "spark-admin": settings.ADMIN_FRONTEND_URL,
+                }
+                activation_url = (
+                    f"{frontend_urls.get(role.slug, settings.AMBASSADOR_FRONTEND_URL)}/"
+                    f"verify-account?token={activation_token}"
+                )
+                verification_email = EmailVerificationMailer(user, activation_url)
+                await verification_email.send_async()
+
+            if password_was_generated:
+                generated_password_email = AmbassadorGeneratedPasswordMailer(
+                    user, password
+                )
+                await generated_password_email.send_async()
 
             return build_mutation_response(
                 PublicAmbassadorCreationResponse,
                 success=True,
-                message="Ambassador account created successfully. Please verify your email and wait for approval.",
+                message=(
+                    "Ambassador account created successfully."
+                    if is_admin_created
+                    else "Ambassador account created successfully. Please verify your email and wait for approval."
+                ),
                 input_obj=input,
                 ambassador=ambassador,
                 activation_token=activation_token,
@@ -341,6 +428,111 @@ class PublicAmbassadorCreationService(BaseAmbassadorService):
                 message=f"Error creating ambassador: {str(e)}",
                 input_obj=input,
             )
+
+
+class RegenerateAmbassadorPasswordsService(BaseAmbassadorService):
+    """Service for regenerating ambassador passwords in batch."""
+
+    @classmethod
+    async def regenerate(
+        cls,
+        input: inputs.RegenerateAmbassadorPasswordsInput,
+        info: strawberry.Info,
+    ) -> RegenerateAmbassadorPasswordsResponse:
+        service = cls()
+        user = await service.get_user(info)
+
+        results: list[RegenerateAmbassadorPasswordResult] = []
+
+        for index, ambassador_id in enumerate(input.ambassador_ids):
+            try:
+                resolved_ambassador_id = resolve_id_to_int(ambassador_id)
+            except (TypeError, ValueError, GraphQLError):
+                results.append(
+                    RegenerateAmbassadorPasswordResult(
+                        ambassador_id=None,
+                        email=None,
+                        success=False,
+                        message=f"Invalid ambassador ID: {ambassador_id}",
+                    )
+                )
+                continue
+
+            try:
+                ambassador = await sync_to_async(
+                    Ambassador.objects.select_related("user").get
+                )(id=resolved_ambassador_id)
+            except Ambassador.DoesNotExist:
+                results.append(
+                    RegenerateAmbassadorPasswordResult(
+                        ambassador_id=resolved_ambassador_id,
+                        email=None,
+                        success=False,
+                        message="Ambassador not found.",
+                    )
+                )
+                continue
+
+            email = (getattr(ambassador.user, "email", None) or "").strip() or None
+            if not email:
+                results.append(
+                    RegenerateAmbassadorPasswordResult(
+                        ambassador_id=ambassador.id,
+                        email=None,
+                        success=False,
+                        message="Ambassador has no email.",
+                    )
+                )
+                continue
+
+            try:
+                password = generate_random_password()
+
+                @sync_to_async
+                def _persist_password():
+                    ambassador.user.set_password(password)
+                    ambassador.user.updated_by = user
+                    ambassador.user.save(update_fields=["password", "updated_by", "updated_at"])
+
+                await _persist_password()
+                await sync_to_async(
+                    AmbassadorGeneratedPasswordMailer(
+                        ambassador.user,
+                        password,
+                    ).send
+                )(delay_seconds=index * RESEND_EMAIL_DELAY_SECONDS)
+
+                results.append(
+                    RegenerateAmbassadorPasswordResult(
+                        ambassador_id=ambassador.id,
+                        email=email,
+                        success=True,
+                        message="Password regenerated and emailed successfully.",
+                    )
+                )
+            except Exception as exc:
+                results.append(
+                    RegenerateAmbassadorPasswordResult(
+                        ambassador_id=ambassador.id,
+                        email=email,
+                        success=False,
+                        message=f"Error regenerating password: {exc}",
+                    )
+                )
+
+        success_count = sum(1 for result in results if result.success)
+        failure_count = len(results) - success_count
+        message = (
+            f"Processed {len(results)} ambassadors. "
+            f"{success_count} succeeded, {failure_count} failed."
+        )
+        return build_mutation_response(
+            RegenerateAmbassadorPasswordsResponse,
+            success=failure_count == 0,
+            message=message,
+            input_obj=input,
+            results=results,
+        )
 
 
 class AmbassadorInvitationService(BaseAmbassadorService):

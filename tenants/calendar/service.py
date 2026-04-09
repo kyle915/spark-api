@@ -169,6 +169,77 @@ class GoogleCalendarService:
         return service, connection
 
     @staticmethod
+    def _format_google_datetime(dt: datetime) -> str:
+        """
+        Format a datetime for Google Calendar as RFC3339 preserving its offset.
+        """
+        return dt.replace(microsecond=0).isoformat()
+
+    @staticmethod
+    def _resolve_offset_timezone(_timezone: TimeZone | None) -> dt_timezone:
+        """
+        Resolve a fixed-offset timezone from event.timezone.offset.
+        """
+        if _timezone and _timezone.offset is not None:
+            offset_minutes = int(_timezone.offset)
+            return dt_timezone(timedelta(minutes=offset_minutes))
+        return dt_timezone.utc
+
+    @staticmethod
+    def _build_datetime_with_offset(
+        date_value, time_value, _timezone: TimeZone | None = None
+    ) -> Optional[datetime]:
+        """
+        Build a datetime that preserves the event's wall time and applies event.timezone.offset.
+        """
+        if not time_value:
+            return None
+
+        offset_tzinfo = GoogleCalendarService._resolve_offset_timezone(_timezone)
+
+        if isinstance(date_value, datetime):
+            date_obj = date_value.date()
+        elif isinstance(date_value, date_type):
+            date_obj = date_value
+        else:
+            date_obj = None
+
+        if isinstance(time_value, datetime):
+            time_part = time_value.time().replace(tzinfo=None)
+            if not date_obj:
+                date_obj = time_value.date()
+        else:
+            time_part = time_value
+
+        if not date_obj:
+            raise ValueError(
+                f"date parameter must be date or datetime, got {type(date_value)}"
+            )
+
+        return datetime.combine(date_obj, time_part).replace(tzinfo=offset_tzinfo)
+
+    @staticmethod
+    def _format_event_timezone_label(_timezone: TimeZone | None, fallback_tz_name: Optional[str] = None) -> str:
+        """
+        Format timezone label like `Pacific-PDT (UTC-07:00)`.
+        """
+        if not _timezone:
+            return fallback_tz_name or "-"
+
+        name = (_timezone.name or "").strip()
+        code = (_timezone.code or "").strip()
+        offset_minutes = int(_timezone.offset) if _timezone.offset is not None else 0
+        sign = "+" if offset_minutes >= 0 else "-"
+        abs_minutes = abs(offset_minutes)
+        hours, minutes = divmod(abs_minutes, 60)
+        utc_label = f"UTC{sign}{hours:02d}:{minutes:02d}"
+
+        label = "-".join(part for part in [name, code] if part)
+        if not label:
+            label = fallback_tz_name or "-"
+        return f"{label} ({utc_label})"
+
+    @staticmethod
     def _resolve_timezone(
         _timezone: TimeZone | None,
     ) -> tuple[dt_timezone, Optional[str]]:
@@ -219,12 +290,7 @@ class GoogleCalendarService:
                         continue
 
             if _timezone.offset is not None:
-                offset_value = int(_timezone.offset)
-                # Some rows store minutes (e.g., -300) instead of hours. Normalize.
-                if abs(offset_value) > 24:
-                    offset_minutes = offset_value
-                else:
-                    offset_minutes = offset_value * 60
+                offset_minutes = int(_timezone.offset)
                 tzinfo = dt_timezone(timedelta(minutes=offset_minutes))
                 tz_name = None
                 if offset_minutes % 60 == 0:
@@ -289,7 +355,6 @@ class GoogleCalendarService:
         else:
             dt = dt.replace(tzinfo=tzinfo)
 
-        logger.info(f"Datetime: {dt}")
         return dt
 
     def _handle_http_error(
@@ -323,6 +388,10 @@ class GoogleCalendarService:
                 f"Failed to {operation} Google Calendar event{event_id_context} for user {self.user.id}: {error}"
             )
             return False
+
+    @staticmethod
+    def _is_not_found_error(error: HttpError) -> bool:
+        return getattr(getattr(error, "resp", None), "status", None) == 404
 
     def test_connection(self) -> bool:
         """
@@ -381,16 +450,6 @@ class GoogleCalendarService:
         Raises:
             ValueError: If event is missing required time data
         """
-        # Build description with event details
-        description_parts = []
-        if event.notes:
-            description_parts.append(event.notes)
-        if event_type_name:
-            description_parts.append(f"Type: {event_type_name}")
-        if status_name:
-            description_parts.append(f"Status: {status_name}")
-        description = "\n".join(description_parts) if description_parts else None
-
         # Get timezone: event.timezone or event.request.timezone, default None (UTC)
         event_timezone = event.timezone
         if not event_timezone and event.request:
@@ -410,14 +469,9 @@ class GoogleCalendarService:
                 f"Event {event.id} must have start_time (or request.start_time) to sync to Google Calendar"
             )
 
-        start_datetime = self._build_datetime(
-            event_date, event_start_time, event_timezone
-        )
-
+        start_datetime = self._build_datetime(event_date, event_start_time, event_timezone)
         end_datetime = self._build_datetime(event_date, event_end_time, event_timezone)
-        if not end_datetime:
-            end_datetime = start_datetime + timedelta(hours=1)
-        elif end_datetime <= start_datetime:
+        if end_datetime and end_datetime <= start_datetime:
             logger.warning(
                 "Event %s has invalid time range (start=%s, end=%s). Adjusting end time to +1 hour.",
                 event.id,
@@ -428,18 +482,52 @@ class GoogleCalendarService:
 
         tzinfo, tz_name = self._resolve_timezone(event_timezone)
 
-        if tz_name:
-            # Send explicit offset to avoid ambiguous timezone normalization.
-            start_local = start_datetime.astimezone(tzinfo)
-            end_local = end_datetime.astimezone(tzinfo)
-            start_iso = start_local.replace(microsecond=0).isoformat()
-            end_iso = end_local.replace(microsecond=0).isoformat()
-        else:
-            start_iso = start_datetime.replace(microsecond=0).isoformat()
-            end_iso = end_datetime.replace(microsecond=0).isoformat()
+        offset_tzinfo = self._resolve_offset_timezone(event_timezone)
+        start_local_with_offset = start_datetime.astimezone(offset_tzinfo)
+
+        effective_end_datetime = end_datetime
+        if not effective_end_datetime:
+            effective_end_datetime = start_datetime + timedelta(hours=1)
+        elif end_datetime <= start_datetime:
+            effective_end_datetime = start_datetime + timedelta(hours=1)
+
+        end_local_with_offset = effective_end_datetime.astimezone(offset_tzinfo)
+        start_iso = self._format_google_datetime(start_local_with_offset)
+        end_iso = self._format_google_datetime(end_local_with_offset)
+
+        request_product_names: list[str] = []
+        if event.request_id:
+            request_product_names = list(
+                event.request.request_product.select_related("product")
+                .values_list("product__name", flat=True)
+            )
+
+        description_parts = []
+        description_parts.extend(
+            [
+                f"Date: {start_local_with_offset.strftime('%m/%d/%Y')}",
+                f"Retail: {getattr(getattr(event, 'retailer', None), 'name', None) or '-'}",
+                f"Address: {event.address or '-'}",
+                f"Start Time: {start_local_with_offset.strftime('%I:%M %p')}",
+                f"End Time: {end_local_with_offset.strftime('%I:%M %p')}",
+                f"Timezone: {self._format_event_timezone_label(event_timezone, tz_name)}",
+                f"Products: {', '.join(filter(None, request_product_names)) or '-'}",
+            ]
+        )
+        if event_type_name:
+            description_parts.append(f"Type: {event_type_name}")
+        if event.notes:
+            description_parts.append(f"Note: {event.notes}")
+        description = "\n".join(description_parts)
+
+        summary_suffix = (
+            f" | {start_local_with_offset.strftime('%I:%M %p')}"
+            f" | {end_local_with_offset.strftime('%I:%M %p')}"
+            f" | {getattr(event_timezone, 'code', None) or '-'}"
+        )
 
         event_data = {
-            "summary": event.name,
+            "summary": f"{event.name}{summary_suffix}",
             "description": description,
             "location": event.address or None,
             "start": {
@@ -452,6 +540,7 @@ class GoogleCalendarService:
         if tz_name:
             event_data["start"]["timeZone"] = tz_name
             event_data["end"]["timeZone"] = tz_name
+
         return event_data
 
     def sync_event(
@@ -491,20 +580,28 @@ class GoogleCalendarService:
             logger.info(
                 f"Found existing Google Calendar event {google_event_id} for event {event.id} and user {self.user.id}, updating..."
             )
-            success = self.update_event(
+            update_result = self.update_event(
                 google_event_id, event, event_type_name, status_name
             )
 
-            if success:
+            if update_result is True:
                 return google_event_id
-            else:
-                # Update failed, might be deleted in Google Calendar
+            elif update_result is None:
+                # Update failed because event no longer exists in Google Calendar.
                 # Delete the mapping and create a new event
                 logger.warning(
-                    f"Update failed for Google Calendar event {google_event_id}, deleting mapping and creating new event"
+                    f"Google Calendar event {google_event_id} was not found for event {event.id} and user {self.user.id}, deleting mapping and creating new event"
                 )
                 mapping.delete()
                 return self.create_event(event, event_type_name, status_name)
+            else:
+                logger.warning(
+                    "Update failed for Google Calendar event %s for event %s and user %s; preserving mapping and not creating a duplicate event",
+                    google_event_id,
+                    event.id,
+                    self.user.id,
+                )
+                return None
         except GoogleCalendarEvent.DoesNotExist:
             # No existing mapping, create new event
             logger.info(
@@ -592,7 +689,7 @@ class GoogleCalendarService:
         event: Event,
         event_type_name: Optional[str] = None,
         status_name: Optional[str] = None,
-    ) -> bool:
+    ) -> bool | None:
         """
         Update an existing calendar event in Google Calendar.
 
@@ -603,7 +700,7 @@ class GoogleCalendarService:
             status_name: Optional status name
 
         Returns:
-            True if update successful, False otherwise
+            True if update successful, None if Google returned 404, False otherwise
         """
         service, connection = self._ensure_service_and_connection()
         if not service or not connection:
@@ -657,12 +754,26 @@ class GoogleCalendarService:
                 )
                 return True
             except HttpError as verify_error:
+                if self._is_not_found_error(verify_error):
+                    logger.warning(
+                        "Google Calendar event %s was not found during post-update verification for user %s",
+                        google_event_id,
+                        self.user.id,
+                    )
+                    return None
                 logger.error(
                     f"Failed to verify event {google_event_id} exists after update: {verify_error}"
                 )
                 return False
 
         except HttpError as e:
+            if self._is_not_found_error(e):
+                logger.warning(
+                    "Google Calendar event %s was not found during update for user %s",
+                    google_event_id,
+                    self.user.id,
+                )
+                return None
             return self._handle_http_error(
                 e, "update", google_event_id, treat_404_as_success=False
             )

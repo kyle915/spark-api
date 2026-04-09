@@ -1775,6 +1775,73 @@ class RequestTypeMutations:
             )
 
 
+class BillingEntityMutationService(BaseMutationService):
+    """Service for billing entity mutations."""
+
+    def get_model(self) -> Model:
+        """Get the model for the service."""
+        return models.BillingEntity
+
+
+@strawberry.type
+class BillingEntityMutations:
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def create_billing_entity(
+        self,
+        info: strawberry.Info,
+        input: inputs.CreateBillingEntityInput,
+    ) -> types.BillingEntityDetailResponse:
+        """Create a new billing entity."""
+        try:
+            billing_entity: models.BillingEntity = (
+                await BillingEntityMutationService.process_create_or_update(
+                    input=input, info=info
+                )
+            )
+            return build_mutation_response(
+                types.BillingEntityDetailResponse,
+                success=True,
+                message="Billing entity created successfully.",
+                input_obj=input,
+                billing_entity=billing_entity,
+            )
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.BillingEntityDetailResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def update_billing_entity(
+        self,
+        info: strawberry.Info,
+        input: inputs.UpdateBillingEntityInput,
+    ) -> types.BillingEntityDetailResponse:
+        """Update an existing billing entity."""
+        try:
+            billing_entity: models.BillingEntity = (
+                await BillingEntityMutationService.process_create_or_update(
+                    input=input, info=info
+                )
+            )
+            return build_mutation_response(
+                types.BillingEntityDetailResponse,
+                success=True,
+                message="Billing entity updated successfully.",
+                input_obj=input,
+                billing_entity=billing_entity,
+            )
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.BillingEntityDetailResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
+
 @strawberry.type
 class RequestStatusMutations:
     @relay.mutation(permission_classes=[StrictIsAuthenticated])

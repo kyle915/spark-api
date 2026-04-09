@@ -674,6 +674,7 @@ class Customer:
 class MutationMobile(
     AmbassadorsCustomRegister,
     AmbassadorUserMutations,
+    SparkUserMutations,
 ):
     verify_token = mutations.VerifyToken.field
     token_auth = mutations.ObtainJSONWebToken.field

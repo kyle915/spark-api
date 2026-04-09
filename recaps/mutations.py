@@ -143,6 +143,80 @@ class RecapMutationService(SparkGraphQLMixin):
         self.user = await self.get_user(info)
         return self
 
+    @staticmethod
+    def _has_complete_consumer_engagements(
+        consumer_engagements: inputs.ConsumerEngagementsInput | None,
+    ) -> bool:
+        if consumer_engagements is None:
+            return False
+        return all(
+            value is not None
+            for value in (
+                consumer_engagements.total_consumer,
+                consumer_engagements.first_time_consumers,
+                consumer_engagements.brand_aware_consumers,
+                consumer_engagements.willing_to_purchase_consumers,
+                consumer_engagements.not_willing_consumers,
+            )
+        )
+
+    @staticmethod
+    def _has_any_consumer_engagements(
+        consumer_engagements: inputs.ConsumerEngagementsInput | None,
+    ) -> bool:
+        if consumer_engagements is None:
+            return False
+        return any(
+            value is not None
+            for value in (
+                consumer_engagements.total_consumer,
+                consumer_engagements.first_time_consumers,
+                consumer_engagements.brand_aware_consumers,
+                consumer_engagements.willing_to_purchase_consumers,
+                consumer_engagements.not_willing_consumers,
+            )
+        )
+
+    @staticmethod
+    def _has_complete_product_sample(
+        product_sample: inputs.ProductSampleInput | None,
+    ) -> bool:
+        if product_sample is None:
+            return False
+        return product_sample.product_id not in (None, "") and product_sample.quantity is not None
+
+    @classmethod
+    def _has_complete_product_samples(
+        cls,
+        product_samples: list[inputs.ProductSampleInput] | None,
+    ) -> bool:
+        return bool(
+            product_samples
+            and any(cls._has_complete_product_sample(sample) for sample in product_samples)
+        )
+
+    @staticmethod
+    def _has_complete_sales_performance(
+        sale: inputs.SalesPerformanceInput | None,
+    ) -> bool:
+        if sale is None:
+            return False
+        return (
+            sale.product_id not in (None, "")
+            and sale.type_of_good_id not in (None, "")
+            and sale.price is not None
+        )
+
+    @classmethod
+    def _has_complete_sales_performance_items(
+        cls,
+        sales_performance: list[inputs.SalesPerformanceInput] | None,
+    ) -> bool:
+        return bool(
+            sales_performance
+            and any(cls._has_complete_sales_performance(sale) for sale in sales_performance)
+        )
+
     def _is_recap_fully_completed(self) -> bool:
         """Validate that recap input includes all optional sections and files."""
         if not isinstance(self.input, inputs.CreateRecapInput):
@@ -161,10 +235,14 @@ class RecapMutationService(SparkGraphQLMixin):
                 self.input.account_spend_amount,
             )
         )
-        has_consumer_engagements = self.input.consumer_engagements is not None
-        has_product_samples = bool(self.input.product_samples and len(self.input.product_samples) > 0)
-        has_sales_performance = bool(
-            self.input.sales_performance and len(self.input.sales_performance) > 0
+        has_consumer_engagements = self._has_complete_consumer_engagements(
+            self.input.consumer_engagements
+        )
+        has_product_samples = self._has_complete_product_samples(
+            self.input.product_samples
+        )
+        has_sales_performance = self._has_complete_sales_performance_items(
+            self.input.sales_performance
         )
         has_consumer_feedback = self.input.consumer_feedback is not None and all(
             bool((value or "").strip())
@@ -408,8 +486,8 @@ class RecapMutationService(SparkGraphQLMixin):
                     recap_files.append(recap_file)
 
                 # Create the Recap instance
-                total_engagements = 0
-                if self.input.consumer_engagements:
+                total_engagements = None
+                if self.input.consumer_engagements is not None:
                     total_engagements = self.input.consumer_engagements.total_consumer
 
                 recap = models.Recap(
@@ -444,7 +522,7 @@ class RecapMutationService(SparkGraphQLMixin):
                 ).update(recap=recap)
 
                 # Create related objects
-                if self.input.consumer_engagements:
+                if self._has_any_consumer_engagements(self.input.consumer_engagements):
                     models.ConsumerEngagements.objects.create(
                         recap=recap,
                         created_by=self.user,
@@ -457,6 +535,8 @@ class RecapMutationService(SparkGraphQLMixin):
 
                 if self.input.product_samples:
                     for sample in self.input.product_samples:
+                        if not self._has_complete_product_sample(sample):
+                            continue
                         try:
                             product_id = resolve_id_to_int(sample.product_id)
                             models.ProductSamples.objects.create(
@@ -472,6 +552,8 @@ class RecapMutationService(SparkGraphQLMixin):
 
                 if self.input.sales_performance:
                     for sale in self.input.sales_performance:
+                        if not self._has_complete_sales_performance(sale):
+                            continue
                         try:
                             product_id = resolve_id_to_int(sale.product_id)
                             type_of_good_id = resolve_id_to_int(sale.type_of_good_id)
@@ -798,7 +880,7 @@ class RecapMutationService(SparkGraphQLMixin):
                             ),
                         )
 
-                if self.input.consumer_engagements is not None:
+                if self._has_any_consumer_engagements(self.input.consumer_engagements):
                     consumer_engagement = (
                         models.ConsumerEngagements.objects.filter(recap=recap)
                         .order_by("-created_at")
@@ -846,6 +928,8 @@ class RecapMutationService(SparkGraphQLMixin):
                 if self.input.product_samples is not None:
                     models.ProductSamples.objects.filter(recap=recap).delete()
                     for sample in self.input.product_samples:
+                        if not self._has_complete_product_sample(sample):
+                            continue
                         try:
                             product_id = resolve_id_to_int(sample.product_id)
                             models.ProductSamples.objects.create(
@@ -860,6 +944,8 @@ class RecapMutationService(SparkGraphQLMixin):
                 if self.input.sales_performance is not None:
                     models.SalesPerformance.objects.filter(recap=recap).delete()
                     for sale in self.input.sales_performance:
+                        if not self._has_complete_sales_performance(sale):
+                            continue
                         try:
                             product_id = resolve_id_to_int(sale.product_id)
                             type_of_good_id = resolve_id_to_int(sale.type_of_good_id)
@@ -1010,6 +1096,8 @@ class RecapMutationService(SparkGraphQLMixin):
             return (
                 models.Recap.objects.select_related(
                     "event",
+                    "event__tenant",
+                    "event__event_type",
                     "job",
                     "retailer",
                     "ambassador",

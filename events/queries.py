@@ -39,6 +39,7 @@ from events.inputs import (
     DistributorFiltersInput,
     RetailerFiltersInput,
     RequestTypeFiltersInput,
+    BillingEntityFiltersInput,
     RequestStatusFiltersInput,
     ProductTypeFiltersInput,
     ProductFiltersInput,
@@ -841,6 +842,7 @@ class RequestQueriesService(BaseEventQueriesService):
             .objects.select_related(
                 "tenant",
                 "timezone",
+                "billing_entity__state",
                 "distributor__location__state",
                 "retailer__location__state",
                 "location",
@@ -939,6 +941,11 @@ class RequestQueries:
             if filters.client_id:
                 client_id = _resolve_filter_id(filters.client_id, "client")
                 queryset = queryset.filter(client_id=client_id)
+            if filters.billing_entity_id:
+                billing_entity_id = _resolve_filter_id(
+                    filters.billing_entity_id, "billing entity"
+                )
+                queryset = queryset.filter(billing_entity_id=billing_entity_id)
             if filters.retailer_id:
                 retailer_id = _resolve_filter_id(filters.retailer_id, "retailer")
                 queryset = queryset.filter(retailer_id=retailer_id)
@@ -1740,6 +1747,103 @@ class RequestTypeQueries:
                 id=id, uuid=str(uuid) if uuid else None, tenant_id=tenant_id
             )
             return request_type
+        except GraphQLError:
+            return None
+
+
+class BillingEntityQueriesService(BaseEventQueriesService):
+    """Service for billing entity queries."""
+
+    def get_model(self) -> Model:
+        """Get the model for the service."""
+        return models.BillingEntity
+
+    def get_queryset(self) -> QuerySet:
+        """Get the queryset for the service."""
+        return self.get_model().objects.select_related("state")
+
+
+@strawberry.type
+class BillingEntityQueries:
+    @strawberry.field
+    async def public_billing_entities(
+        self,
+        info: strawberry.Info,
+        request_url_name: str,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        q: str | None = None,
+    ) -> CountableConnection[types.BillingEntity]:
+        """Get public billing entities filtered by tenant request_url_name."""
+        service = BillingEntityQueriesService()
+        try:
+            tenant = await sync_to_async(Tenant.objects.get)(
+                request_url_name=request_url_name
+            )
+        except Tenant.DoesNotExist:
+            return await service.get_connection(
+                queryset=service.get_model().objects.none(),
+                first=first,
+                after=after,
+                last=last,
+                before=before,
+            )
+
+        return await service.get_connection(
+            tenant_id=tenant.id,
+            q=q,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+        )
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def billing_entities(
+        self,
+        info: strawberry.Info,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        q: str | None = None,
+        filters: BillingEntityFiltersInput | None = None,
+    ) -> CountableConnection[types.BillingEntity]:
+        """Get all billing entities."""
+        service = BillingEntityQueriesService()
+        tenant_id: strawberry.ID | None = filters.tenant_id if filters else None
+        tenant_uuid: strawberry.ID | None = filters.tenant_uuid if filters else None
+        resolved_tenant_id = await service.resolve_tenant_id(
+            info,
+            tenant_id=tenant_id,
+            tenant_uuid=tenant_uuid,
+        )
+
+        return await service.get_connection(
+            tenant_id=resolved_tenant_id,
+            q=q,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+        )
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def billing_entity(
+        self,
+        info: strawberry.Info,
+        id: strawberry.ID | None = None,
+        uuid: strawberry.ID | None = None,
+    ) -> types.BillingEntity | None:
+        """Get a single billing entity."""
+        try:
+            service = BillingEntityQueriesService()
+            tenant_id = await service.resolve_tenant_id(info)
+            return await service.get_record(
+                id=id, uuid=str(uuid) if uuid else None, tenant_id=tenant_id
+            )
         except GraphQLError:
             return None
 

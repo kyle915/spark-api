@@ -168,10 +168,21 @@ This starts a worker that processes jobs from the `high`, `default`, and `low` q
 
 **For production deployment**, you can create a systemd service or use a process manager like supervisor. See the [django-rq documentation](https://github.com/rq/django-rq) for deployment examples.
 
-To register the hourly ambassador event reminder schedule:
+Ambassador event reminders are scheduled automatically when an `AmbassadorJob`
+is created or when the linked event's schedule changes.
+
+For `AmbassadorJob` records that already existed before this reminder system was
+deployed, run this one-time backfill command:
 
 ```bash
-uv run python manage.py schedule_ambassador_event_reminders
+uv run python manage.py backfill_ambassador_event_reminders
+```
+
+If there are old hourly reminder schedules left in Redis from the previous
+implementation, clean them up with:
+
+```bash
+uv run python manage.py cleanup_legacy_ambassador_event_reminders
 ```
 
 ---
@@ -212,9 +223,10 @@ uv run pytest tenants/tests/test_google_calendar_mutations.py -v
 | `uv run python manage.py migrate` | Apply migrations |
 | `uv run python manage.py runserver` | Start development server |
 | `uv run python manage.py rqworker high default low` | Start RQ worker for background tasks |
-| `uv run python manage.py schedule_ambassador_event_reminders` | Register hourly ambassador event reminder schedule |
+| `uv run python manage.py backfill_ambassador_event_reminders` | One-time backfill for exact ambassador reminder jobs |
+| `uv run python manage.py cleanup_legacy_ambassador_event_reminders` | Remove legacy hourly ambassador reminder schedules from rq-scheduler |
 | `redis-cli ping` | Check if Redis is running |
-| `uv run python manage.py sync_events_to_google_calendar` | Sync existing events to Google Calendar for all connected users |
+| `uv run python manage.py sync_events_to_google_calendar` | Sync approved upcoming events to Google Calendar for all connected users |
 | `uv run python manage.py import_requests_batch --template-out /tmp/requests_template.xlsx` | Generate batch import template for requests |
 | `uv run python manage.py import_requests_batch --file /tmp/requests.xlsx --tenant-id 1 --user-id 2` | Import requests in batch from Excel |
 
@@ -247,11 +259,11 @@ Optional defaults:
 
 ### Sync Events to Google Calendar
 
-The `sync_events_to_google_calendar` management command allows you to sync existing events to Google Calendar. By default, it syncs all events that have a request (required for Google Calendar sync).
+The `sync_events_to_google_calendar` management command allows you to sync existing events to Google Calendar. By default, it syncs only approved events with an event date from today onward.
 
 **Basic Usage:**
 ```bash
-# Sync all events (default behavior)
+# Sync approved upcoming events (default behavior)
 uv run python manage.py sync_events_to_google_calendar
 
 # Sync events for a specific tenant
@@ -263,7 +275,7 @@ uv run python manage.py sync_events_to_google_calendar --event-id 16
 # Sync multiple events
 uv run python manage.py sync_events_to_google_calendar --event-ids 16,17,18
 
-# Sync events in a date range
+# Sync approved upcoming events in a date range
 uv run python manage.py sync_events_to_google_calendar --tenant-id 1 --from-date 2025-01-01 --to-date 2025-01-31
 
 # Enqueue to RQ instead of running synchronously (recommended for large batches)
@@ -277,13 +289,13 @@ uv run python manage.py sync_events_to_google_calendar --dry-run
 - `--tenant-id`: Filter events by tenant ID
 - `--event-id`: Sync a specific event by ID
 - `--event-ids`: Sync multiple events (comma-separated IDs)
-- `--from-date`: Filter events from a date (YYYY-MM-DD)
-- `--to-date`: Filter events up to a date (YYYY-MM-DD)
+- `--from-date`: Filter events from a date using `event.date` (YYYY-MM-DD)
+- `--to-date`: Filter events up to a date using `event.date` (YYYY-MM-DD)
 - `--no-request`: Include events without requests (not recommended)
 - `--enqueue`: Enqueue sync jobs to RQ instead of running synchronously
 - `--dry-run`: Preview what would be synced without actually syncing
 
-**Note:** Events must have a request with a `start_time` to be synced to Google Calendar. The command will skip events that don't meet these requirements and show a summary at the end.
+**Note:** By default, only approved events with `event.date` on or after today are selected. Events must also have a request with a `start_time` to be synced to Google Calendar. The command will skip events that don't meet these requirements and show a summary at the end.
 
 ---
 
