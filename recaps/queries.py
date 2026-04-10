@@ -9,6 +9,7 @@ from recaps import types
 from recaps import models
 from ambassadors import models as ambassador_models
 from recaps.inputs import (
+    CustomRecapFiltersInput,
     FileRecapCategoryFiltersInput,
     RecapFiltersInput,
     TypeOfGoodFiltersInput,
@@ -493,14 +494,22 @@ class CustomRecapTemplateQueriesService(SparkGraphQLMixin):
         )
 
     async def get_record(
-        self, id: strawberry.ID | None = None, uuid: str | None = None
+        self,
+        id: strawberry.ID | None = None,
+        uuid: str | None = None,
+        tenant_id: int | None = None,
+        event_type_id: int | None = None,
     ) -> Model:
-        """Return a single CustomRecapTemplate by id or uuid."""
+        """Return a single CustomRecapTemplate by id, uuid, tenant, or event type."""
         filters: dict[str, object] = {}
         if id not in (None, ""):
             filters["id"] = id
         if uuid not in (None, ""):
             filters["uuid"] = uuid
+        if tenant_id:
+            filters["tenant_id"] = tenant_id
+        if event_type_id:
+            filters["event_type_id"] = event_type_id
         if not filters:
             raise GraphQLError("Custom recap template not found.")
 
@@ -748,9 +757,19 @@ class CustomRecapQueriesService(SparkGraphQLMixin):
         self,
         tenant_id: int | None = None,
         event_id: int | None = None,
+        event_type_id: int | None = None,
+        rmm_asigned_id: int | None = None,
         custom_recap_template_id: int | None = None,
         ambassador_id: int | None = None,
+        retailer_id: int | None = None,
+        location_id: int | None = None,
+        state_id: int | None = None,
+        event_date: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        event_address: str | None = None,
         approved: bool | None = None,
+        edited: bool | None = None,
         q: str | None = None,
     ) -> QuerySet:
         """Get filtered custom recaps queryset."""
@@ -759,12 +778,35 @@ class CustomRecapQueriesService(SparkGraphQLMixin):
             queryset = queryset.filter(tenant_id=tenant_id)
         if event_id:
             queryset = queryset.filter(event_id=event_id)
+        if event_type_id:
+            queryset = queryset.filter(event__event_type_id=event_type_id)
+        if rmm_asigned_id:
+            queryset = queryset.filter(event__rmm_asigned_id=rmm_asigned_id)
         if custom_recap_template_id:
             queryset = queryset.filter(custom_recap_template_id=custom_recap_template_id)
         if ambassador_id:
             queryset = queryset.filter(ambassador_id=ambassador_id)
+        if retailer_id:
+            queryset = queryset.filter(retailer_id=retailer_id)
+        if location_id:
+            queryset = queryset.filter(location_id=location_id)
+        if state_id:
+            queryset = queryset.filter(
+                Q(state_id=state_id)
+                | Q(job__event__retailer__location__state_id=state_id)
+            )
+        if event_date:
+            queryset = queryset.filter(event__date__date=event_date)
+        if start_date:
+            queryset = queryset.filter(event__date__date__gte=start_date)
+        if end_date:
+            queryset = queryset.filter(event__date__date__lte=end_date)
+        if event_address:
+            queryset = queryset.filter(event__address__icontains=event_address)
         if approved is not None:
             queryset = queryset.filter(approved=approved)
+        if edited is not None:
+            queryset = queryset.filter(updated_by__isnull=not edited)
         if q:
             queryset = queryset.filter(name__icontains=q)
         return queryset
@@ -773,9 +815,19 @@ class CustomRecapQueriesService(SparkGraphQLMixin):
         self,
         tenant_id: int | None = None,
         event_id: int | None = None,
+        event_type_id: int | None = None,
+        rmm_asigned_id: int | None = None,
         custom_recap_template_id: int | None = None,
         ambassador_id: int | None = None,
+        retailer_id: int | None = None,
+        location_id: int | None = None,
+        state_id: int | None = None,
+        event_date: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        event_address: str | None = None,
         approved: bool | None = None,
+        edited: bool | None = None,
         q: str | None = None,
         ordering: tuple[str, ...] | None = None,
     ) -> QuerySet:
@@ -783,9 +835,19 @@ class CustomRecapQueriesService(SparkGraphQLMixin):
         queryset = self.get_filtered_queryset(
             tenant_id=tenant_id,
             event_id=event_id,
+            event_type_id=event_type_id,
+            rmm_asigned_id=rmm_asigned_id,
             custom_recap_template_id=custom_recap_template_id,
             ambassador_id=ambassador_id,
+            retailer_id=retailer_id,
+            location_id=location_id,
+            state_id=state_id,
+            event_date=event_date,
+            start_date=start_date,
+            end_date=end_date,
+            event_address=event_address,
             approved=approved,
+            edited=edited,
             q=q,
         )
         ordering = ordering or self.ordering
@@ -798,9 +860,19 @@ class CustomRecapQueriesService(SparkGraphQLMixin):
         *,
         tenant_id: int | None = None,
         event_id: int | None = None,
+        event_type_id: int | None = None,
+        rmm_asigned_id: int | None = None,
         custom_recap_template_id: int | None = None,
         ambassador_id: int | None = None,
+        retailer_id: int | None = None,
+        location_id: int | None = None,
+        state_id: int | None = None,
+        event_date: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        event_address: str | None = None,
         approved: bool | None = None,
+        edited: bool | None = None,
         q: str | None = None,
         first: int | None = None,
         after: str | None = None,
@@ -816,9 +888,19 @@ class CustomRecapQueriesService(SparkGraphQLMixin):
             queryset = self.get_ordered_queryset(
                 tenant_id=tenant_id,
                 event_id=event_id,
+                event_type_id=event_type_id,
+                rmm_asigned_id=rmm_asigned_id,
                 custom_recap_template_id=custom_recap_template_id,
                 ambassador_id=ambassador_id,
+                retailer_id=retailer_id,
+                location_id=location_id,
+                state_id=state_id,
+                event_date=event_date,
+                start_date=start_date,
+                end_date=end_date,
+                event_address=event_address,
                 approved=approved,
+                edited=edited,
                 q=q,
                 ordering=ordering,
             )
@@ -858,9 +940,19 @@ class CustomRecapQueriesService(SparkGraphQLMixin):
         user,
         tenant_id: int | None = None,
         event_id: int | None = None,
+        event_type_id: int | None = None,
+        rmm_asigned_id: int | None = None,
         custom_recap_template_id: int | None = None,
         ambassador_id: int | None = None,
+        retailer_id: int | None = None,
+        location_id: int | None = None,
+        state_id: int | None = None,
+        event_date: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        event_address: str | None = None,
         approved: bool | None = None,
+        edited: bool | None = None,
         q: str | None = None,
         ordering: tuple[str, ...] | None = None,
     ) -> QuerySet:
@@ -868,9 +960,19 @@ class CustomRecapQueriesService(SparkGraphQLMixin):
         queryset = self.get_ordered_queryset(
             tenant_id=tenant_id,
             event_id=event_id,
+            event_type_id=event_type_id,
+            rmm_asigned_id=rmm_asigned_id,
             custom_recap_template_id=custom_recap_template_id,
             ambassador_id=ambassador_id,
+            retailer_id=retailer_id,
+            location_id=location_id,
+            state_id=state_id,
+            event_date=event_date,
+            start_date=start_date,
+            end_date=end_date,
+            event_address=event_address,
             approved=approved,
+            edited=edited,
             q=q,
             ordering=ordering,
         )
@@ -1013,48 +1115,99 @@ class RecapQueries:
         last: int | None = None,
         before: str | None = None,
         q: str | None = None,
-        tenant_id: strawberry.ID | None = None,
-        event_id: strawberry.ID | None = None,
-        custom_recap_template_id: strawberry.ID | None = None,
-        ambassador_id: strawberry.ID | None = None,
-        approved: bool | None = None,
+        filters: CustomRecapFiltersInput | None = None,
     ) -> CountableConnection[types.CustomRecap]:
         """Get custom recaps using Relay pagination."""
         service = CustomRecapQueriesService()
         await service.get_user(info)
 
         resolved_tenant_id = (
-            resolve_id_to_int(tenant_id) if tenant_id not in (None, "") else None
+            resolve_id_to_int(filters.tenant_id)
+            if filters and filters.tenant_id not in (None, "")
+            else None
         )
         resolved_event_id = (
-            resolve_id_to_int(event_id) if event_id not in (None, "") else None
+            resolve_id_to_int(filters.event_id)
+            if filters and filters.event_id not in (None, "")
+            else None
+        )
+        resolved_event_type_id = (
+            resolve_id_to_int(filters.event_type)
+            if filters and filters.event_type not in (None, "")
+            else None
+        )
+        resolved_rmm_asigned_id = (
+            resolve_id_to_int(filters.rmm_asigned_id)
+            if filters and filters.rmm_asigned_id not in (None, "")
+            else None
         )
         resolved_custom_recap_template_id = (
-            resolve_id_to_int(custom_recap_template_id)
-            if custom_recap_template_id not in (None, "")
+            resolve_id_to_int(filters.custom_recap_template_id)
+            if filters and filters.custom_recap_template_id not in (None, "")
             else None
         )
         resolved_ambassador_id = (
-            resolve_id_to_int(ambassador_id)
-            if ambassador_id not in (None, "")
+            resolve_id_to_int(filters.ambassador_id)
+            if filters and filters.ambassador_id not in (None, "")
             else None
         )
+        resolved_retailer_id = (
+            resolve_id_to_int(filters.retailer_id)
+            if filters and filters.retailer_id not in (None, "")
+            else None
+        )
+        resolved_location_id = (
+            resolve_id_to_int(filters.location_id)
+            if filters and filters.location_id not in (None, "")
+            else None
+        )
+        resolved_state_id = (
+            resolve_id_to_int(filters.state_id)
+            if filters and filters.state_id not in (None, "")
+            else None
+        )
+        event_date = filters.event_date if filters else None
+        start_date = filters.start_date if filters else None
+        end_date = filters.end_date if filters else None
+        event_address = filters.event_address if filters else None
+        approved = filters.approved if filters else None
+        edited = filters.edited if filters else None
 
         queryset = service.get_ordered_queryset(
             tenant_id=resolved_tenant_id,
             event_id=resolved_event_id,
+            event_type_id=resolved_event_type_id,
+            rmm_asigned_id=resolved_rmm_asigned_id,
             custom_recap_template_id=resolved_custom_recap_template_id,
             ambassador_id=resolved_ambassador_id,
+            retailer_id=resolved_retailer_id,
+            location_id=resolved_location_id,
+            state_id=resolved_state_id,
+            event_date=event_date,
+            start_date=start_date,
+            end_date=end_date,
+            event_address=event_address,
             approved=approved,
+            edited=edited,
             q=q,
         )
 
         return await service.get_connection(
             tenant_id=resolved_tenant_id,
             event_id=resolved_event_id,
+            event_type_id=resolved_event_type_id,
+            rmm_asigned_id=resolved_rmm_asigned_id,
             custom_recap_template_id=resolved_custom_recap_template_id,
             ambassador_id=resolved_ambassador_id,
+            retailer_id=resolved_retailer_id,
+            location_id=resolved_location_id,
+            state_id=resolved_state_id,
+            event_date=event_date,
+            start_date=start_date,
+            end_date=end_date,
+            event_address=event_address,
             approved=approved,
+            edited=edited,
             q=q,
             first=first,
             after=after,
@@ -1187,14 +1340,26 @@ class RecapQueries:
         info: strawberry.Info,
         id: strawberry.ID | None = None,
         uuid: strawberry.ID | None = None,
+        tenant_id: strawberry.ID | None = None,
+        event_type_id: strawberry.ID | None = None,
     ) -> types.CustomRecapTemplate | None:
         """Return a single CustomRecapTemplate including custom fields."""
         try:
             service = CustomRecapTemplateQueriesService()
             await service.get_user(info)
+            resolved_tenant_id = (
+                resolve_id_to_int(tenant_id) if tenant_id not in (None, "") else None
+            )
+            resolved_event_type_id = (
+                resolve_id_to_int(event_type_id)
+                if event_type_id not in (None, "")
+                else None
+            )
             record = await service.get_record(
                 id=int(id) if id not in (None, "") else None,
                 uuid=str(uuid) if uuid not in (None, "") else None,
+                tenant_id=resolved_tenant_id,
+                event_type_id=resolved_event_type_id,
             )
             return record
         except GraphQLError:
@@ -1431,49 +1596,100 @@ class RecapMobileQueries:
         last: int | None = None,
         before: str | None = None,
         q: str | None = None,
-        tenant_id: strawberry.ID | None = None,
-        event_id: strawberry.ID | None = None,
-        custom_recap_template_id: strawberry.ID | None = None,
-        ambassador_id: strawberry.ID | None = None,
-        approved: bool | None = None,
+        filters: CustomRecapFiltersInput | None = None,
     ) -> CountableConnection[types.CustomRecap]:
         """Get custom recaps for logged ambassador using Relay pagination."""
         service = CustomRecapQueriesService()
         user = await service.get_user(info)
 
         resolved_tenant_id = (
-            resolve_id_to_int(tenant_id) if tenant_id not in (None, "") else None
+            resolve_id_to_int(filters.tenant_id)
+            if filters and filters.tenant_id not in (None, "")
+            else None
         )
         resolved_event_id = (
-            resolve_id_to_int(event_id) if event_id not in (None, "") else None
+            resolve_id_to_int(filters.event_id)
+            if filters and filters.event_id not in (None, "")
+            else None
+        )
+        resolved_event_type_id = (
+            resolve_id_to_int(filters.event_type)
+            if filters and filters.event_type not in (None, "")
+            else None
+        )
+        resolved_rmm_asigned_id = (
+            resolve_id_to_int(filters.rmm_asigned_id)
+            if filters and filters.rmm_asigned_id not in (None, "")
+            else None
         )
         resolved_custom_recap_template_id = (
-            resolve_id_to_int(custom_recap_template_id)
-            if custom_recap_template_id not in (None, "")
+            resolve_id_to_int(filters.custom_recap_template_id)
+            if filters and filters.custom_recap_template_id not in (None, "")
             else None
         )
         resolved_ambassador_id = (
-            resolve_id_to_int(ambassador_id)
-            if ambassador_id not in (None, "")
+            resolve_id_to_int(filters.ambassador_id)
+            if filters and filters.ambassador_id not in (None, "")
             else None
         )
+        resolved_retailer_id = (
+            resolve_id_to_int(filters.retailer_id)
+            if filters and filters.retailer_id not in (None, "")
+            else None
+        )
+        resolved_location_id = (
+            resolve_id_to_int(filters.location_id)
+            if filters and filters.location_id not in (None, "")
+            else None
+        )
+        resolved_state_id = (
+            resolve_id_to_int(filters.state_id)
+            if filters and filters.state_id not in (None, "")
+            else None
+        )
+        event_date = filters.event_date if filters else None
+        start_date = filters.start_date if filters else None
+        end_date = filters.end_date if filters else None
+        event_address = filters.event_address if filters else None
+        approved = filters.approved if filters else None
+        edited = filters.edited if filters else None
 
         queryset = service.get_ambassador_queryset(
             user=user,
             tenant_id=resolved_tenant_id,
             event_id=resolved_event_id,
+            event_type_id=resolved_event_type_id,
+            rmm_asigned_id=resolved_rmm_asigned_id,
             custom_recap_template_id=resolved_custom_recap_template_id,
             ambassador_id=resolved_ambassador_id,
+            retailer_id=resolved_retailer_id,
+            location_id=resolved_location_id,
+            state_id=resolved_state_id,
+            event_date=event_date,
+            start_date=start_date,
+            end_date=end_date,
+            event_address=event_address,
             approved=approved,
+            edited=edited,
             q=q,
         )
 
         return await service.get_connection(
             tenant_id=resolved_tenant_id,
             event_id=resolved_event_id,
+            event_type_id=resolved_event_type_id,
+            rmm_asigned_id=resolved_rmm_asigned_id,
             custom_recap_template_id=resolved_custom_recap_template_id,
             ambassador_id=resolved_ambassador_id,
+            retailer_id=resolved_retailer_id,
+            location_id=resolved_location_id,
+            state_id=resolved_state_id,
+            event_date=event_date,
+            start_date=start_date,
+            end_date=end_date,
+            event_address=event_address,
             approved=approved,
+            edited=edited,
             q=q,
             first=first,
             after=after,

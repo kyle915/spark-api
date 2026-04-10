@@ -24,6 +24,11 @@ class RecapFiltersInput(SparkGraphQLInput):
 
 
 @strawberry.input
+class CustomRecapFiltersInput(RecapFiltersInput):
+    custom_recap_template_id: strawberry.ID | None = None
+
+
+@strawberry.input
 class FileRecapCategoryFiltersInput(SparkGraphQLInput):
     tenant_id: strawberry.ID | None = None
 
