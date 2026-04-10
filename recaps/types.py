@@ -26,7 +26,7 @@ class RecapFile(Node):
     file_type: ambassador_types.FileType
     file_recap_category: FileRecapCategory | None
 
-    @strawberry.field
+    @strawberry_django.field(only=["file"])
     def file(self) -> str | None:
         """Return a signed URL for the product image if it exists."""
         if not self.file:
@@ -300,7 +300,7 @@ class CustomRecapFile(Node):
     file_type: ambassador_types.FileType
     file_recap_category: FileRecapCategory | None
 
-    @strawberry.field
+    @strawberry_django.field(only=["url"])
     def url(self) -> str | None:
         """Return a signed URL for the custom recap file if it exists."""
         if not self.url:
@@ -326,7 +326,9 @@ class CustomField(Node):
     required: bool
     custom_recap_template_id: strawberry.ID
     custom_field_type_id: strawberry.ID
+    custom_field_type: "CustomRecapFieldType"
     recap_section_id: strawberry.ID
+    recap_section: "RecapSection"
     created_at: str
     updated_at: str
 
