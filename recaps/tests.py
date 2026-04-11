@@ -632,3 +632,384 @@ class TestApproveRecapNotifications(JobsGraphQLTestCase):
             for item in values
         )
         assert ids["removed_value_id"] not in {item["id"] for item in values}
+
+    @pytest.mark.asyncio
+    async def test_create_custom_recap_template_creates_custom_fields(self):
+        @sync_to_async
+        def create_template_dependencies():
+            system_user = self.get_system_user()
+            event_type = EventType.objects.create(
+                name="Field Template Sampling",
+                slug="field-template-sampling",
+                tenant=self.tenant,
+                created_by=system_user,
+            )
+            section = recap_models.RecapSection.objects.create(
+                name="Main",
+                tenant=self.tenant,
+                created_by=system_user,
+            )
+            field_type = recap_models.CustomRecapFieldType.objects.create(
+                name="Text",
+                created_by=system_user,
+            )
+
+            return {
+                "event_type_id": event_type.id,
+                "section_id": section.id,
+                "field_type_id": field_type.id,
+            }
+
+        ids = await create_template_dependencies()
+
+        mutation = """
+        mutation CreateCustomRecapTemplate($input: CreateCustomRecapTemplateInput!) {
+            createCustomRecapTemplate(input: $input) {
+                success
+                message
+                customRecapTemplate {
+                    id
+                }
+            }
+        }
+        """
+        variables = {
+            "input": {
+                "name": "Template with fields",
+                "eventTypeId": str(ids["event_type_id"]),
+                "customFields": [
+                    {
+                        "name": "Display notes",
+                        "customFieldTypeId": str(ids["field_type_id"]),
+                        "recapSectionId": str(ids["section_id"]),
+                        "required": True,
+                    }
+                ],
+            }
+        }
+
+        result = await self._execute_mutation_authenticated(
+            mutation,
+            variables,
+            self.spark_user,
+            self.endpoint_path,
+        )
+
+        assert result.errors is None
+        assert result.data is not None
+        assert result.data["createCustomRecapTemplate"]["success"] is True
+
+        template_id = int(
+            result.data["createCustomRecapTemplate"]["customRecapTemplate"]["id"]
+        )
+
+        @sync_to_async
+        def get_custom_fields():
+            return list(
+                recap_models.CustomField.objects.filter(
+                    custom_recap_template_id=template_id,
+                ).values(
+                    "name",
+                    "custom_field_type_id",
+                    "recap_section_id",
+                    "required",
+                    "created_by_id",
+                )
+            )
+
+        custom_fields = await get_custom_fields()
+
+        assert custom_fields == [
+            {
+                "name": "Display notes",
+                "custom_field_type_id": ids["field_type_id"],
+                "recap_section_id": ids["section_id"],
+                "required": True,
+                "created_by_id": self.spark_user.id,
+            }
+        ]
+
+    @pytest.mark.asyncio
+    async def test_update_custom_recap_template_syncs_custom_fields(self):
+        @sync_to_async
+        def create_template_with_fields():
+            system_user = self.get_system_user()
+            event_type = EventType.objects.create(
+                name="Update Field Template Sampling",
+                slug="update-field-template-sampling",
+                tenant=self.tenant,
+                created_by=system_user,
+            )
+            template = recap_models.CustomRecapTemplate.objects.create(
+                name="Original template",
+                event_type=event_type,
+                tenant=self.tenant,
+                created_by=system_user,
+            )
+            section = recap_models.RecapSection.objects.create(
+                name="Main update",
+                tenant=self.tenant,
+                created_by=system_user,
+            )
+            field_type = recap_models.CustomRecapFieldType.objects.create(
+                name="Text update",
+                created_by=system_user,
+            )
+            existing_field = recap_models.CustomField.objects.create(
+                name="Existing field",
+                custom_recap_template=template,
+                custom_field_type=field_type,
+                recap_section=section,
+                required=False,
+                created_by=system_user,
+            )
+            removed_field = recap_models.CustomField.objects.create(
+                name="Removed field",
+                custom_recap_template=template,
+                custom_field_type=field_type,
+                recap_section=section,
+                created_by=system_user,
+            )
+
+            return {
+                "event_type_id": event_type.id,
+                "template_id": template.id,
+                "section_id": section.id,
+                "field_type_id": field_type.id,
+                "existing_field_id": existing_field.id,
+                "removed_field_id": removed_field.id,
+            }
+
+        ids = await create_template_with_fields()
+
+        mutation = """
+        mutation UpdateCustomRecapTemplate($input: UpdateCustomRecapTemplateInput!) {
+            updateCustomRecapTemplate(input: $input) {
+                success
+                message
+                customRecapTemplate {
+                    id
+                }
+            }
+        }
+        """
+        variables = {
+            "input": {
+                "id": str(ids["template_id"]),
+                "name": "Updated template",
+                "eventTypeId": str(ids["event_type_id"]),
+                "customFields": [
+                    {
+                        "id": str(ids["existing_field_id"]),
+                        "name": "Updated existing field",
+                        "customFieldTypeId": str(ids["field_type_id"]),
+                        "recapSectionId": str(ids["section_id"]),
+                        "required": True,
+                    },
+                    {
+                        "name": "Created field",
+                        "customFieldTypeId": str(ids["field_type_id"]),
+                        "recapSectionId": str(ids["section_id"]),
+                        "required": False,
+                    },
+                ],
+            }
+        }
+
+        result = await self._execute_mutation_authenticated(
+            mutation,
+            variables,
+            self.spark_user,
+            self.endpoint_path,
+        )
+
+        assert result.errors is None
+        assert result.data is not None
+        assert result.data["updateCustomRecapTemplate"]["success"] is True
+
+        @sync_to_async
+        def get_custom_fields():
+            return list(
+                recap_models.CustomField.objects.filter(
+                    custom_recap_template_id=ids["template_id"],
+                )
+                .order_by("name")
+                .values("id", "name", "required", "updated_by_id", "created_by_id")
+            )
+
+        custom_fields = await get_custom_fields()
+
+        assert {field["name"] for field in custom_fields} == {
+            "Created field",
+            "Updated existing field",
+        }
+        assert ids["removed_field_id"] not in {field["id"] for field in custom_fields}
+        assert any(
+            field["id"] == ids["existing_field_id"]
+            and field["required"] is True
+            and field["updated_by_id"] == self.spark_user.id
+            for field in custom_fields
+        )
+        assert any(
+            field["name"] == "Created field"
+            and field["created_by_id"] == self.spark_user.id
+            for field in custom_fields
+        )
+
+    @pytest.mark.asyncio
+    async def test_custom_recap_templates_filters_by_tenant_and_event_type(self):
+        @sync_to_async
+        def create_template_filter_data():
+            system_user = self.get_system_user()
+            event_type = EventType.objects.create(
+                name="Template Filter Sampling",
+                slug="template-filter-sampling",
+                tenant=self.tenant,
+                created_by=system_user,
+            )
+            other_event_type = EventType.objects.create(
+                name="Other Template Filter Sampling",
+                slug="other-template-filter-sampling",
+                tenant=self.tenant,
+                created_by=system_user,
+            )
+            matching_template = recap_models.CustomRecapTemplate.objects.create(
+                name="Matching template",
+                event_type=event_type,
+                tenant=self.tenant,
+                created_by=system_user,
+            )
+            recap_models.CustomRecapTemplate.objects.create(
+                name="Other template",
+                event_type=other_event_type,
+                tenant=self.tenant,
+                created_by=system_user,
+            )
+
+            return {
+                "event_type_id": event_type.id,
+                "matching_template_id": matching_template.id,
+            }
+
+        ids = await create_template_filter_data()
+
+        query = """
+        query CustomRecapTemplates($filters: CustomRecapTemplateFiltersInput) {
+            customRecapTemplates(filters: $filters) {
+                totalCount
+                edges {
+                    node {
+                        id
+                        name
+                        tenant {
+                            id
+                            name
+                        }
+                        eventType {
+                            id
+                            name
+                        }
+                    }
+                }
+            }
+        }
+        """
+        variables = {
+            "filters": {
+                "tenantId": str(self.tenant.id),
+                "eventTypeId": str(ids["event_type_id"]),
+            }
+        }
+
+        result = await self._execute_query_authenticated(
+            query,
+            variables,
+            self.spark_user,
+            self.endpoint_path,
+        )
+
+        assert result.errors is None
+        assert result.data is not None
+        assert result.data["customRecapTemplates"] == {
+            "totalCount": 1,
+            "edges": [
+                {
+                    "node": {
+                        "id": str(ids["matching_template_id"]),
+                        "name": "Matching template",
+                        "tenant": {
+                            "id": str(self.tenant.id),
+                            "name": self.tenant.name,
+                        },
+                        "eventType": {
+                            "id": str(ids["event_type_id"]),
+                            "name": "Template Filter Sampling",
+                        },
+                    }
+                },
+            ],
+        }
+
+    @pytest.mark.asyncio
+    async def test_custom_recap_template_returns_tenant_and_event_type(self):
+        @sync_to_async
+        def create_template():
+            system_user = self.get_system_user()
+            event_type = EventType.objects.create(
+                name="Single Template Sampling",
+                slug="single-template-sampling",
+                tenant=self.tenant,
+                created_by=system_user,
+            )
+            template = recap_models.CustomRecapTemplate.objects.create(
+                name="Single template",
+                event_type=event_type,
+                tenant=self.tenant,
+                created_by=system_user,
+            )
+            return {
+                "template_id": template.id,
+                "event_type_id": event_type.id,
+            }
+
+        ids = await create_template()
+
+        query = """
+        query CustomRecapTemplate($id: ID!) {
+            customRecapTemplate(id: $id) {
+                id
+                name
+                tenant {
+                    id
+                    name
+                }
+                eventType {
+                    id
+                    name
+                }
+            }
+        }
+        """
+        variables = {"id": str(ids["template_id"])}
+
+        result = await self._execute_query_authenticated(
+            query,
+            variables,
+            self.spark_user,
+            self.endpoint_path,
+        )
+
+        assert result.errors is None
+        assert result.data is not None
+        assert result.data["customRecapTemplate"] == {
+            "id": str(ids["template_id"]),
+            "name": "Single template",
+            "tenant": {
+                "id": str(self.tenant.id),
+                "name": self.tenant.name,
+            },
+            "eventType": {
+                "id": str(ids["event_type_id"]),
+                "name": "Single Template Sampling",
+            },
+        }

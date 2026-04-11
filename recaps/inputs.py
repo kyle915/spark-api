@@ -29,6 +29,12 @@ class CustomRecapFiltersInput(RecapFiltersInput):
 
 
 @strawberry.input
+class CustomRecapTemplateFiltersInput(SparkGraphQLInput):
+    tenant_id: strawberry.ID | None = None
+    event_type_id: strawberry.ID | None = None
+
+
+@strawberry.input
 class FileRecapCategoryFiltersInput(SparkGraphQLInput):
     tenant_id: strawberry.ID | None = None
 
@@ -226,12 +232,22 @@ class UpdateCustomFieldInput(CreateCustomFieldInput):
 
 
 @strawberry.input
+class CustomRecapTemplateFieldInput(SparkGraphQLInput):
+    name: str
+    custom_field_type_id: strawberry.ID
+    recap_section_id: strawberry.ID
+    id: strawberry.ID | None = None
+    required: bool | None = None
+
+
+@strawberry.input
 class CreateCustomRecapTemplateInput(SparkGraphQLInput):
     name: str
     event_type_id: strawberry.ID
     product_samples: bool | None = None
     sales_performance: bool | None = None
     layout: JSON | None = None
+    custom_fields: List[CustomRecapTemplateFieldInput] | None = None
 
 
 @strawberry.input
