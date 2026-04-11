@@ -159,7 +159,8 @@ class RecapFileDownloadUrlInput(SparkGraphQLInput):
 
 @strawberry.input
 class CustomFieldValueInput(SparkGraphQLInput):
-    custom_field_id: strawberry.ID
+    custom_field_id: strawberry.ID | None = None
+    custom_field_value_id: strawberry.ID | None = None
     value: str
 
 
