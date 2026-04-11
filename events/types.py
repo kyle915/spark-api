@@ -217,15 +217,17 @@ class Product(Node):
     created_at: str
     updated_at: str
 
-    @strawberry.field
+    @strawberry_django.field(only=["image"])
     def image(self) -> str | None:
         """Return a signed URL for the product image if it exists."""
         if not self.image:
             return None
-        from utils.gcs import generate_download_url
 
-        # The image field contains the path in GCS (e.g., "products/image.jpg")
-        return generate_download_url(self.image.name)
+        blob_name = extract_blob_name_from_url(self.image.name)
+        if not blob_name:
+            return None
+
+        return generate_download_url(blob_name)
 
 
 @strawberry.type
