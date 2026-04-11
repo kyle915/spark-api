@@ -45,7 +45,9 @@ User = get_user_model()
 logger = logging.getLogger(__name__)
 
 
-async def _notify_recap_approved_to_rmm_or_clients(recap: models.Recap) -> None:
+async def _notify_recap_approved_to_rmm_or_clients(
+    recap: models.Recap | models.CustomRecap,
+) -> None:
     event = recap.event
     rmm_user = getattr(event, "rmm_asigned", None)
     fallback_reply_to = "events@igniteproductions.co"
@@ -2023,6 +2025,69 @@ class RecapMutationService(SparkGraphQLMixin):
 
         return recap
 
+    async def approve_custom_recap(self) -> models.CustomRecap:
+        """Approve or decline a custom recap."""
+        if not isinstance(self.input, inputs.ApproveCustomRecapInput):
+            raise GraphQLError("Invalid input type.")
+
+        try:
+            custom_recap_id = resolve_id_to_int(self.input.id)
+            custom_recap = await sync_to_async(models.CustomRecap.objects.get)(
+                id=custom_recap_id
+            )
+        except (models.CustomRecap.DoesNotExist, TypeError, ValueError, GraphQLError):
+            raise GraphQLError("Custom recap not found.")
+
+        @sync_to_async
+        def approve_custom_recap_transaction():
+            with transaction.atomic():
+                custom_recap.approved = self.input.approved
+                custom_recap.updated_by = self.user
+                custom_recap.save()
+                return custom_recap
+
+        custom_recap = await approve_custom_recap_transaction()
+        if self.input.approved:
+            custom_recap = await sync_to_async(
+                models.CustomRecap.objects.select_related(
+                    "event",
+                    "event__tenant",
+                    "event__rmm_asigned",
+                    "event__timezone",
+                    "job",
+                    "retailer",
+                    "timezone",
+                    "ambassador",
+                    "ambassador__user",
+                ).get
+            )(id=custom_recap.id)
+            await _notify_recap_approved_to_rmm_or_clients(custom_recap)
+
+        return custom_recap
+
+    async def decline_custom_recap(self) -> models.CustomRecap:
+        """Decline a custom recap."""
+        if not isinstance(self.input, inputs.DeclineCustomRecapInput):
+            raise GraphQLError("Invalid input type.")
+
+        try:
+            custom_recap_id = resolve_id_to_int(self.input.id)
+            custom_recap = await sync_to_async(models.CustomRecap.objects.get)(
+                id=custom_recap_id
+            )
+        except (models.CustomRecap.DoesNotExist, TypeError, ValueError, GraphQLError):
+            raise GraphQLError("Custom recap not found.")
+
+        @sync_to_async
+        def decline_custom_recap_transaction():
+            with transaction.atomic():
+                custom_recap.approved = False
+                custom_recap.updated_by = self.user
+                custom_recap.save()
+                return custom_recap
+
+        return await decline_custom_recap_transaction()
+
     async def generate_recap_pdf(self) -> models.RecapFile:
         """Generate a PDF with recap details and images, upload it, and return the file."""
         if not isinstance(self.input, inputs.GenerateRecapPdfInput):
@@ -2141,6 +2206,147 @@ class RecapMutationService(SparkGraphQLMixin):
             if existing_blob_name:
                 delete_blob(existing_blob_name)
         return recap_file
+
+    async def generate_custom_recap_pdf(self) -> models.CustomRecapFile:
+        """Generate a PDF with custom recap details and images."""
+        if not isinstance(self.input, inputs.GenerateCustomRecapPdfInput):
+            raise GraphQLError("Invalid input type.")
+
+        try:
+            custom_recap_id = resolve_id_to_int(self.input.id)
+        except (TypeError, ValueError, GraphQLError):
+            raise GraphQLError("Custom recap not found.")
+
+        @sync_to_async
+        def fetch_custom_recap():
+            return (
+                models.CustomRecap.objects.select_related(
+                    "event",
+                    "event__tenant",
+                    "event__event_type",
+                    "job",
+                    "retailer",
+                    "location",
+                    "state",
+                    "tenant",
+                    "timezone",
+                    "ambassador",
+                    "ambassador__user",
+                    "custom_recap_template",
+                    "created_by",
+                    "updated_by",
+                )
+                .prefetch_related(
+                    Prefetch(
+                        "custom_recap_files",
+                        queryset=models.CustomRecapFile.objects.select_related(
+                            "file_type",
+                            "file_recap_category",
+                        ),
+                    ),
+                    Prefetch(
+                        "custom_recap_product_sample",
+                        queryset=models.CustomRecapProductSample.objects.select_related(
+                            "product"
+                        ),
+                    ),
+                    Prefetch(
+                        "custom_recap_sale_performance",
+                        queryset=models.CustomRecapSalePerformance.objects.select_related(
+                            "product",
+                            "type_of_good",
+                        ),
+                    ),
+                    Prefetch(
+                        "custom_field_value",
+                        queryset=models.CustomFieldValue.objects.select_related(
+                            "custom_field",
+                            "custom_field__recap_section",
+                        ),
+                    ),
+                )
+                .get(id=custom_recap_id)
+            )
+
+        try:
+            custom_recap = await fetch_custom_recap()
+        except models.CustomRecap.DoesNotExist:
+            raise GraphQLError("Custom recap not found.")
+
+        @sync_to_async
+        def build_custom_recap_pdf_bytes():
+            image_entries = []
+            for custom_recap_file in custom_recap.custom_recap_files.all():
+                blob_name = extract_blob_name_from_url(str(custom_recap_file.url))
+                if not blob_name:
+                    continue
+                image_bytes = download_blob_bytes(blob_name)
+                if not image_bytes:
+                    continue
+                if (
+                    not should_embed_recap_file(custom_recap_file)
+                    and not is_image_bytes(image_bytes)
+                ):
+                    continue
+                image_entries.append(
+                    {
+                        "name": custom_recap_file.name,
+                        "bytes": image_bytes,
+                        "category": (
+                            custom_recap_file.file_recap_category.name
+                            if custom_recap_file.file_recap_category
+                            else "Uncategorized"
+                        ),
+                    }
+                )
+            return build_recap_pdf(custom_recap, image_entries)
+
+        pdf_bytes = await build_custom_recap_pdf_bytes()
+        timestamp = timezone.now().strftime("%Y%m%d%H%M%S")
+        blob_name = f"recaps/pdfs/custom-{custom_recap.uuid}-{timestamp}.pdf"
+        upload_bytes(blob_name, pdf_bytes, content_type="application/pdf")
+
+        @sync_to_async
+        def create_custom_recap_pdf_file():
+            file_type = FileType.objects.filter(
+                Q(extension__iexact=".pdf") | Q(extension__iexact="pdf")
+            ).first()
+            if not file_type:
+                raise GraphQLError("No PDF file type available.")
+            existing_files = list(
+                models.CustomRecapFile.objects.filter(
+                    custom_recap=custom_recap,
+                    file_type=file_type,
+                )
+            )
+            existing_blob_names = [
+                extract_blob_name_from_url(str(item.url)) for item in existing_files
+            ]
+            if existing_files:
+                models.CustomRecapFile.objects.filter(
+                    id__in=[item.id for item in existing_files]
+                ).delete()
+            custom_recap_file = models.CustomRecapFile.objects.create(
+                name=f"Custom Recap PDF - {custom_recap.name}",
+                url=blob_name,
+                file_type=file_type,
+                custom_recap=custom_recap,
+                approved=False,
+                created_by=self.user,
+            )
+            return custom_recap_file, existing_blob_names
+
+        try:
+            custom_recap_file, existing_blob_names = (
+                await create_custom_recap_pdf_file()
+            )
+        except Exception:
+            delete_blob(blob_name)
+            raise
+        for existing_blob_name in existing_blob_names:
+            if existing_blob_name:
+                delete_blob(existing_blob_name)
+        return custom_recap_file
 
     async def export_recaps_xlsx(self) -> str:
         """Generate an Excel report with all recaps for a tenant and return a signed URL."""
@@ -2723,6 +2929,63 @@ class RecapMutations:
             )
 
     @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def approve_custom_recap(
+        self,
+        info: strawberry.Info,
+        input: inputs.ApproveCustomRecapInput,
+    ) -> types.CustomRecapDetailResponse:
+        """Approve or decline a custom recap."""
+        try:
+            service = RecapMutationService.with_input(input)
+            await service.set_user(info)
+            custom_recap = await service.approve_custom_recap()
+            message = (
+                "Custom recap approved successfully."
+                if input.approved
+                else "Custom recap declined successfully."
+            )
+            return build_mutation_response(
+                types.CustomRecapDetailResponse,
+                success=True,
+                message=message,
+                input_obj=input,
+                custom_recap=custom_recap,
+            )
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.CustomRecapDetailResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def decline_custom_recap(
+        self,
+        info: strawberry.Info,
+        input: inputs.DeclineCustomRecapInput,
+    ) -> types.CustomRecapDetailResponse:
+        """Decline a custom recap."""
+        try:
+            service = RecapMutationService.with_input(input)
+            await service.set_user(info)
+            custom_recap = await service.decline_custom_recap()
+            return build_mutation_response(
+                types.CustomRecapDetailResponse,
+                success=True,
+                message="Custom recap declined successfully.",
+                input_obj=input,
+                custom_recap=custom_recap,
+            )
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.CustomRecapDetailResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
     async def generate_recap_pdf(
         self,
         info: strawberry.Info,
@@ -2743,6 +3006,32 @@ class RecapMutations:
         except GraphQLError as e:
             return build_mutation_response(
                 types.RecapFileDetailResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def generate_custom_recap_pdf(
+        self,
+        info: strawberry.Info,
+        input: inputs.GenerateCustomRecapPdfInput,
+    ) -> types.CustomRecapFileDetailResponse:
+        """Generate a custom recap PDF and return the resulting file."""
+        try:
+            service = RecapMutationService.with_input(input)
+            await service.set_user(info)
+            custom_recap_file = await service.generate_custom_recap_pdf()
+            return build_mutation_response(
+                types.CustomRecapFileDetailResponse,
+                success=True,
+                message="Custom recap PDF generated successfully.",
+                input_obj=input,
+                custom_recap_file=custom_recap_file,
+            )
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.CustomRecapFileDetailResponse,
                 success=False,
                 message=str(e),
                 input_obj=input,

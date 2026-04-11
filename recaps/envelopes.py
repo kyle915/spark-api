@@ -35,7 +35,7 @@ def _normalize_slug(slug: str | None) -> str:
 class RecapApprovedNotificationMailer(Mailer):
     def __init__(
         self,
-        recap: models.Recap,
+        recap: models.Recap | models.CustomRecap,
         to_emails: list[str],
         recipient_first_name: str | None = None,
         reply_to_email: str | None = None,
@@ -109,6 +109,17 @@ class RecapApprovedNotificationMailer(Mailer):
             .count()
         )
 
+    def _photos_count(self) -> int:
+        recap_files = getattr(self.recap, "recap_files", None)
+        if recap_files is not None:
+            return recap_files.count()
+
+        custom_recap_files = getattr(self.recap, "custom_recap_files", None)
+        if custom_recap_files is not None:
+            return custom_recap_files.count()
+
+        return 0
+
     def envelope(self) -> Envelope:
         event = self.recap.event
         tenant = event.tenant
@@ -124,16 +135,19 @@ class RecapApprovedNotificationMailer(Mailer):
         location_name = self._location_name()
         actual_check_in, actual_check_out = self._attendance_window(offset_minutes)
         ba_on_site = self._ba_on_site_count()
-        photos_count = self.recap.recap_files.count()
+        photos_count = self._photos_count()
         client_metrics = []
-        if self.recap.products_sold is not None:
-            client_metrics.append(f"products sold: {self.recap.products_sold}")
+        products_sold = getattr(self.recap, "products_sold", None)
+        if products_sold is not None:
+            client_metrics.append(f"products sold: {products_sold}")
         if self.recap.total_engagements is not None:
             client_metrics.append(f"engagements: {self.recap.total_engagements}")
-        if self.recap.total_cans_sold is not None:
-            client_metrics.append(f"cans sold: {self.recap.total_cans_sold}")
-        if self.recap.total_packs_sold is not None:
-            client_metrics.append(f"packs sold: {self.recap.total_packs_sold}")
+        total_cans_sold = getattr(self.recap, "total_cans_sold", None)
+        if total_cans_sold is not None:
+            client_metrics.append(f"cans sold: {total_cans_sold}")
+        total_packs_sold = getattr(self.recap, "total_packs_sold", None)
+        if total_packs_sold is not None:
+            client_metrics.append(f"packs sold: {total_packs_sold}")
         client_specific_metrics = ", ".join(client_metrics) if client_metrics else "Samples distributed, leads captured, survey responses"
 
         return Envelope(

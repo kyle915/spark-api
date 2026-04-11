@@ -31,10 +31,12 @@ def should_embed_recap_file(recap_file) -> bool:
     extension = None
     if getattr(recap_file, "file_type", None) and recap_file.file_type.extension:
         extension = recap_file.file_type.extension
-    elif getattr(recap_file, "file", None):
-        file_name = str(recap_file.file)
-        if "." in file_name:
-            extension = file_name.rsplit(".", 1)[-1]
+    else:
+        file_value = getattr(recap_file, "file", None) or getattr(recap_file, "url", None)
+        if file_value:
+            file_name = str(file_value)
+            if "." in file_name:
+                extension = file_name.rsplit(".", 1)[-1]
 
     if not extension:
         if getattr(recap_file, "file_type", None) and recap_file.file_type.name:
@@ -59,6 +61,32 @@ def should_embed_recap_file(recap_file) -> bool:
     if not normalized.startswith("."):
         normalized = f".{normalized}"
     return normalized in IMAGE_EXTENSIONS
+
+
+def _related_items(obj, attr: str) -> list:
+    relation = getattr(obj, attr, None)
+    if relation is None:
+        return []
+    if hasattr(relation, "all"):
+        return list(relation.all())
+    return list(relation)
+
+
+def _submitted_at(recap):
+    return getattr(recap, "submited_at", None) or getattr(recap, "submitted_at", None)
+
+
+def _custom_field_sections(recap) -> dict[str, list[tuple[str, str]]]:
+    sections: dict[str, list[tuple[str, str]]] = {}
+    for custom_field_value in _related_items(recap, "custom_field_value"):
+        custom_field = getattr(custom_field_value, "custom_field", None)
+        recap_section = getattr(custom_field, "recap_section", None)
+        section_name = getattr(recap_section, "name", None) or "Custom Fields"
+        field_name = getattr(custom_field, "name", None) or "Custom field"
+        sections.setdefault(section_name, []).append(
+            (field_name, custom_field_value.value)
+        )
+    return sections
 
 
 def detect_image_type(data: bytes) -> str | None:
@@ -145,6 +173,12 @@ def format_bool(value) -> str:
     return "Yes" if bool(value) else "No"
 
 
+def format_object_name(obj) -> str:
+    if not obj:
+        return "N/A"
+    return safe(getattr(obj, "name", None) or str(obj))
+
+
 def _build_images_html(image_groups: dict[str, list[dict[str, str]]]) -> str:
     return (
         "".join(
@@ -169,25 +203,45 @@ def build_recap_pdf_html(recap, images: Iterable[dict[str, bytes]]) -> str:
     ambassador_name = format_user_name(ambassador_user)
     ambassador_email = format_user_email(ambassador_user)
 
-    engagements = list(getattr(recap, "consumer_engagements", []).all())
+    engagements = _related_items(recap, "consumer_engagements")
     engagement = engagements[0] if engagements else None
 
     samples = []
-    for sample in getattr(recap, "product_samples", []).all():
+    product_samples = _related_items(recap, "product_samples") or _related_items(
+        recap, "custom_recap_product_sample"
+    )
+    for sample in product_samples:
         product_name = getattr(sample.product, "name", "Unknown product")
         samples.append(f"{product_name} - Qty: {sample.quantity}")
 
     sales = []
-    for sale in getattr(recap, "sales_performance", []).all():
+    sales_performance = _related_items(recap, "sales_performance") or _related_items(
+        recap, "custom_recap_sale_performance"
+    )
+    for sale in sales_performance:
         product_name = getattr(sale.product, "name", "Unknown product")
         type_name = getattr(sale.type_of_good, "name", "Unknown type")
         sales.append(f"{product_name} ({type_name}) - ${sale.price}")
 
-    feedback = list(getattr(recap, "consumer_feedback", []).all())
+    feedback = _related_items(recap, "consumer_feedback")
     feedback_entry = feedback[0] if feedback else None
 
-    account_feedback = list(getattr(recap, "account_feedback", []).all())
+    account_feedback = _related_items(recap, "account_feedback")
     account_entry = account_feedback[0] if account_feedback else None
+    custom_field_sections = _custom_field_sections(recap)
+    custom_fields_html = ""
+    if custom_field_sections:
+        custom_fields_html = "".join(
+            f"""
+    <section class="card">
+      <h2>{safe(section_name)}</h2>
+      <div class="stack">
+        {"".join(f"<div><span>{safe(field_name)}</span><p>{safe(value)}</p></div>" for field_name, value in fields)}
+      </div>
+    </section>
+"""
+            for section_name, fields in custom_field_sections.items()
+        )
 
     image_groups: dict[str, list[dict[str, str]]] = {}
     for image in images:
@@ -208,8 +262,30 @@ def build_recap_pdf_html(recap, images: Iterable[dict[str, bytes]]) -> str:
         and getattr(recap.event.tenant, "slug", None)
     ) or ""
     tenant_slug = tenant_slug.strip().lower()
+    is_custom_recap = hasattr(recap, "custom_recap_template") or bool(
+        _related_items(recap, "custom_field_value")
+    )
 
-    if tenant_slug == "total-wireless":
+    if is_custom_recap:
+        summary_html = f"""
+    <section class="card">
+      <h2>Summary</h2>
+      <div class="grid">
+        <div><span>Name</span><strong>{safe(getattr(recap, "name", None))}</strong></div>
+        <div><span>Event</span><strong>{format_object_name(getattr(recap, "event", None))}</strong></div>
+        <div><span>Event Date</span><strong>{format_date_only(getattr(getattr(recap, "event", None), "date", None))}</strong></div>
+        <div><span>Total Engagements</span><strong>{safe(getattr(recap, "total_engagements", None))}</strong></div>
+        <div><span>Used Corpo Card</span><strong>{format_bool(getattr(recap, "used_corpo_card", None))}</strong></div>
+        <div><span>Timezone</span><strong>{format_object_name(getattr(recap, "timezone", None))}</strong></div>
+        <div><span>Ambassador</span><strong>{safe(ambassador_name)}</strong></div>
+        <div><span>Ambassador Email</span><strong>{safe(ambassador_email)}</strong></div>
+        <div><span>State</span><strong>{format_object_name(getattr(recap, "state", None))}</strong></div>
+        <div><span>City</span><strong>{format_object_name(getattr(recap, "location", None))}</strong></div>
+        <div><span>Retailer</span><strong>{format_object_name(getattr(recap, "retailer", None))}</strong></div>
+      </div>
+    </section>
+"""
+    elif tenant_slug == "total-wireless":
         summary_html = f"""
     <section class="card">
       <h2>Summary</h2>
@@ -251,7 +327,7 @@ def build_recap_pdf_html(recap, images: Iterable[dict[str, bytes]]) -> str:
         format_date_only(getattr(recap.event, "date", None))
     }</strong></div>
         <div><span>Submitted At</span><strong>{
-        format_date_only(getattr(recap, "submited_at", None))
+        format_date_only(_submitted_at(recap))
     }</strong></div>
         <div><span>Ambassador</span><strong>{safe(ambassador_name)}</strong></div>
         <div><span>Ambassador Email</span><strong>{safe(ambassador_email)}</strong></div>
@@ -262,10 +338,10 @@ def build_recap_pdf_html(recap, images: Iterable[dict[str, bytes]]) -> str:
         safe(getattr(recap.retailer, "name", None))
     }</strong></div>
         <div><span>Total Engagements</span><strong>{
-        safe(recap.total_engagements)
+        safe(getattr(recap, "total_engagements", None))
     }</strong></div>
         <div><span>Products Sold</span><strong>{
-        safe(recap.products_sold)
+        safe(getattr(recap, "products_sold", None))
     }</strong></div>
         <div><span>Total Cans Sold</span><strong>{
         safe(getattr(recap, "total_cans_sold", None))
@@ -274,7 +350,7 @@ def build_recap_pdf_html(recap, images: Iterable[dict[str, bytes]]) -> str:
         safe(getattr(recap, "total_packs_sold", None))
     }</strong></div>
         <div><span>Total Earnings</span><strong>{
-        safe(recap.total_earnings)
+        safe(getattr(recap, "total_earnings", None))
     }</strong></div>
       </div>
     </section>
@@ -370,6 +446,7 @@ def build_recap_pdf_html(recap, images: Iterable[dict[str, bytes]]) -> str:
     </header>
 
     {summary_html}
+    {custom_fields_html}
     <section class="card">
       <h2>Images</h2>
       {_build_images_html(image_groups)}
