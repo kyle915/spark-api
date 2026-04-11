@@ -278,6 +278,173 @@ class RecapMutationService(SparkGraphQLMixin):
         )
 
     @staticmethod
+    def _resolve_custom_recap_template_field_input(
+        field_input: inputs.CustomRecapTemplateFieldInput,
+        *,
+        allow_id: bool,
+    ) -> tuple[int | None, int, int]:
+        custom_field_id = None
+        if field_input.id not in (None, ""):
+            if not allow_id:
+                raise GraphQLError(
+                    "Custom field ID cannot be provided when creating a template."
+                )
+            try:
+                custom_field_id = resolve_id_to_int(field_input.id)
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError(f"Invalid custom field ID: {field_input.id}")
+
+        try:
+            custom_field_type_id = resolve_id_to_int(field_input.custom_field_type_id)
+        except (TypeError, ValueError, GraphQLError):
+            raise GraphQLError(
+                f"Invalid custom field type ID: {field_input.custom_field_type_id}"
+            )
+
+        try:
+            recap_section_id = resolve_id_to_int(field_input.recap_section_id)
+        except (TypeError, ValueError, GraphQLError):
+            raise GraphQLError(
+                f"Invalid recap section ID: {field_input.recap_section_id}"
+            )
+
+        return custom_field_id, custom_field_type_id, recap_section_id
+
+    def _create_custom_recap_template_fields(
+        self,
+        custom_recap_template: models.CustomRecapTemplate,
+        field_inputs: list[inputs.CustomRecapTemplateFieldInput] | None,
+    ) -> None:
+        if not field_inputs:
+            return
+
+        for field_input in field_inputs:
+            (
+                custom_field_id,
+                custom_field_type_id,
+                recap_section_id,
+            ) = self._resolve_custom_recap_template_field_input(
+                field_input,
+                allow_id=False,
+            )
+            if custom_field_id is not None:
+                raise GraphQLError(
+                    "Custom field ID cannot be provided when creating a template."
+                )
+
+            custom_field_type = models.CustomRecapFieldType.objects.filter(
+                id=custom_field_type_id
+            ).first()
+            if not custom_field_type:
+                raise GraphQLError("Custom field type not found.")
+
+            recap_section = models.RecapSection.objects.filter(
+                id=recap_section_id
+            ).first()
+            if not recap_section:
+                raise GraphQLError("Recap section not found.")
+
+            if recap_section.tenant_id != custom_recap_template.tenant_id:
+                raise GraphQLError(
+                    "Recap section does not belong to the template tenant."
+                )
+
+            models.CustomField.objects.create(
+                name=field_input.name,
+                custom_recap_template=custom_recap_template,
+                custom_field_type=custom_field_type,
+                recap_section=recap_section,
+                created_by=self.user,
+                required=bool(field_input.required),
+            )
+
+    def _sync_custom_recap_template_fields(
+        self,
+        custom_recap_template: models.CustomRecapTemplate,
+        field_inputs: list[inputs.CustomRecapTemplateFieldInput] | None,
+    ) -> None:
+        if field_inputs is None:
+            return
+
+        existing_fields = {
+            field.id: field
+            for field in models.CustomField.objects.filter(
+                custom_recap_template=custom_recap_template
+            )
+        }
+        final_field_ids: set[int] = set()
+
+        for field_input in field_inputs:
+            (
+                custom_field_id,
+                custom_field_type_id,
+                recap_section_id,
+            ) = self._resolve_custom_recap_template_field_input(
+                field_input,
+                allow_id=True,
+            )
+
+            custom_field_type = models.CustomRecapFieldType.objects.filter(
+                id=custom_field_type_id
+            ).first()
+            if not custom_field_type:
+                raise GraphQLError("Custom field type not found.")
+
+            recap_section = models.RecapSection.objects.filter(
+                id=recap_section_id
+            ).first()
+            if not recap_section:
+                raise GraphQLError("Recap section not found.")
+
+            if recap_section.tenant_id != custom_recap_template.tenant_id:
+                raise GraphQLError(
+                    "Recap section does not belong to the template tenant."
+                )
+
+            if custom_field_id is None:
+                custom_field = models.CustomField.objects.create(
+                    name=field_input.name,
+                    custom_recap_template=custom_recap_template,
+                    custom_field_type=custom_field_type,
+                    recap_section=recap_section,
+                    created_by=self.user,
+                    required=bool(field_input.required),
+                )
+                final_field_ids.add(custom_field.id)
+                continue
+
+            if custom_field_id in final_field_ids:
+                raise GraphQLError("Duplicate custom field ID in input.")
+
+            custom_field = existing_fields.get(custom_field_id)
+            if not custom_field:
+                raise GraphQLError("Custom field not found for this template.")
+
+            custom_field.name = field_input.name
+            custom_field.custom_field_type = custom_field_type
+            custom_field.recap_section = recap_section
+            custom_field.updated_by = self.user
+            if field_input.required is not None:
+                custom_field.required = field_input.required
+            custom_field.save()
+            final_field_ids.add(custom_field.id)
+
+        custom_field_ids_to_delete = [
+            field_id for field_id in existing_fields if field_id not in final_field_ids
+        ]
+        if not custom_field_ids_to_delete:
+            return
+
+        if models.CustomFieldValue.objects.filter(
+            custom_field_id__in=custom_field_ids_to_delete
+        ).exists():
+            raise GraphQLError(
+                "Cannot remove custom fields that already have submitted values."
+            )
+
+        models.CustomField.objects.filter(id__in=custom_field_ids_to_delete).delete()
+
+    @staticmethod
     def _normalize_attendance_slug(slug: str | None) -> str:
         return (slug or "").strip().lower().replace("-", "_")
 
@@ -1789,6 +1956,10 @@ class RecapMutationService(SparkGraphQLMixin):
                     layout=self.input.layout or {},
                     created_by=self.user,
                 )
+                self._create_custom_recap_template_fields(
+                    custom_recap_template,
+                    self.input.custom_fields,
+                )
                 return custom_recap_template
 
         return await create_custom_recap_template_transaction()
@@ -1833,6 +2004,10 @@ class RecapMutationService(SparkGraphQLMixin):
                 if self.input.layout is not None:
                     custom_recap_template.layout = self.input.layout
                 custom_recap_template.save()
+                self._sync_custom_recap_template_fields(
+                    custom_recap_template,
+                    self.input.custom_fields,
+                )
                 return custom_recap_template
 
         return await update_custom_recap_template_transaction()

@@ -9,6 +9,7 @@ from strawberry.scalars import JSON
 from events import types as event_types
 from jobs import types as job_types
 from ambassadors import types as ambassador_types
+from tenants import types as tenant_types
 from . import models
 from utils.gcs import generate_download_url, extract_blob_name_from_url
 
@@ -373,7 +374,9 @@ class CustomRecapTemplate(Node):
     sales_performance: bool
     layout: JSON
     event_type_id: strawberry.ID
+    event_type: event_types.EventType
     tenant_id: strawberry.ID
+    tenant: tenant_types.TenantType
     created_at: str
     updated_at: str
     custom_field: List[CustomField]

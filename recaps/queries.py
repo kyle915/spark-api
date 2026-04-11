@@ -1,5 +1,4 @@
 import strawberry
-from typing import List
 from asgiref.sync import sync_to_async
 from graphql import GraphQLError
 
@@ -10,6 +9,7 @@ from recaps import models
 from ambassadors import models as ambassador_models
 from recaps.inputs import (
     CustomRecapFiltersInput,
+    CustomRecapTemplateFiltersInput,
     FileRecapCategoryFiltersInput,
     RecapFiltersInput,
     TypeOfGoodFiltersInput,
@@ -469,6 +469,8 @@ class FileRecapCategoryQueriesService(SparkGraphQLMixin):
 class CustomRecapTemplateQueriesService(SparkGraphQLMixin):
     """Service for CustomRecapTemplate queries."""
 
+    ordering: tuple[str, ...] = ("name", "id")
+
     def get_model(self) -> type[models.CustomRecapTemplate]:
         """Return the model for the service."""
         return models.CustomRecapTemplate
@@ -492,6 +494,69 @@ class CustomRecapTemplateQueriesService(SparkGraphQLMixin):
             )
             .all()
         )
+
+    def get_filtered_queryset(
+        self,
+        tenant_id: int | None = None,
+        event_type_id: int | None = None,
+    ) -> QuerySet:
+        """Return CustomRecapTemplate queryset filtered by tenant or event type."""
+        queryset = self.get_queryset()
+        if tenant_id:
+            queryset = queryset.filter(tenant_id=tenant_id)
+        if event_type_id:
+            queryset = queryset.filter(event_type_id=event_type_id)
+        return queryset.distinct()
+
+    def get_ordered_queryset(
+        self,
+        tenant_id: int | None = None,
+        event_type_id: int | None = None,
+        ordering: tuple[str, ...] | None = None,
+    ) -> QuerySet:
+        """Apply ordering to filtered CustomRecapTemplate queryset."""
+        queryset = self.get_filtered_queryset(
+            tenant_id=tenant_id,
+            event_type_id=event_type_id,
+        )
+        ordering = ordering or self.ordering
+        if ordering:
+            queryset = queryset.order_by(*ordering)
+        return queryset
+
+    async def get_connection(
+        self,
+        *,
+        tenant_id: int | None = None,
+        event_type_id: int | None = None,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        default_limit: int = 10,
+        max_limit: int = 50,
+        ordering: tuple[str, ...] | None = None,
+        queryset: QuerySet | None = None,
+    ) -> CountableConnection[Model]:
+        """Return a Relay compliant connection for CustomRecapTemplate."""
+        if queryset is None:
+            queryset = self.get_ordered_queryset(
+                tenant_id=tenant_id,
+                event_type_id=event_type_id,
+                ordering=ordering,
+            )
+        try:
+            return await connection_from_queryset_async(
+                queryset,
+                first=first,
+                after=after,
+                last=last,
+                before=before,
+                default_limit=default_limit,
+                max_limit=max_limit,
+            )
+        except ValueError as exc:
+            raise GraphQLError(str(exc)) from exc
 
     async def get_record(
         self,
@@ -1364,6 +1429,43 @@ class RecapQueries:
             return record
         except GraphQLError:
             return None
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def custom_recap_templates(
+        self,
+        info: strawberry.Info,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        filters: CustomRecapTemplateFiltersInput | None = None,
+    ) -> CountableConnection[types.CustomRecapTemplate]:
+        """Return CustomRecapTemplate records filtered by tenant or event type."""
+        service = CustomRecapTemplateQueriesService()
+        await service.get_user(info)
+        resolved_tenant_id = (
+            resolve_id_to_int(filters.tenant_id)
+            if filters and filters.tenant_id not in (None, "")
+            else None
+        )
+        resolved_event_type_id = (
+            resolve_id_to_int(filters.event_type_id)
+            if filters and filters.event_type_id not in (None, "")
+            else None
+        )
+        queryset = service.get_ordered_queryset(
+            tenant_id=resolved_tenant_id,
+            event_type_id=resolved_event_type_id,
+        )
+        return await service.get_connection(
+            tenant_id=resolved_tenant_id,
+            event_type_id=resolved_event_type_id,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+            queryset=queryset,
+        )
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def custom_recap_field_types(
