@@ -325,6 +325,14 @@ class CustomRecapDetailResponse:
     custom_recap: CustomRecap | None = None
 
 
+@strawberry.type
+class CustomRecapFileDetailResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    custom_recap_file: CustomRecapFile | None = None
+
+
 @strawberry_django.type(models.CustomField)
 class CustomField(Node):
     uuid: str

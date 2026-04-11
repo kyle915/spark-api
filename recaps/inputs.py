@@ -136,7 +136,23 @@ class ApproveRecapInput(SparkGraphQLInput):
 
 
 @strawberry.input
+class ApproveCustomRecapInput(SparkGraphQLInput):
+    id: strawberry.ID
+    approved: bool
+
+
+@strawberry.input
+class DeclineCustomRecapInput(SparkGraphQLInput):
+    id: strawberry.ID
+
+
+@strawberry.input
 class GenerateRecapPdfInput(SparkGraphQLInput):
+    id: strawberry.ID
+
+
+@strawberry.input
+class GenerateCustomRecapPdfInput(SparkGraphQLInput):
     id: strawberry.ID
 
 

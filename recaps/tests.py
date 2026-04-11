@@ -133,6 +133,212 @@ class TestApproveRecapNotifications(JobsGraphQLTestCase):
         assert mock_send.called
 
     @pytest.mark.asyncio
+    async def test_approve_custom_recap_updates_approved_status(self):
+        @sync_to_async
+        def create_custom_recap():
+            system_user = self.get_system_user()
+            event_type = EventType.objects.create(
+                name="Custom Sampling",
+                slug="custom-sampling",
+                tenant=self.tenant,
+                created_by=system_user,
+            )
+            template = recap_models.CustomRecapTemplate.objects.create(
+                name="Custom sampling recap",
+                event_type=event_type,
+                tenant=self.tenant,
+                created_by=system_user,
+            )
+            return recap_models.CustomRecap.objects.create(
+                name="Custom recap",
+                approved=False,
+                event=self.event,
+                tenant=self.tenant,
+                custom_recap_template=template,
+                created_by=self.spark_user,
+            )
+
+        custom_recap = await create_custom_recap()
+
+        mutation = """
+        mutation ApproveCustomRecap($input: ApproveCustomRecapInput!) {
+            approveCustomRecap(input: $input) {
+                success
+                message
+                customRecap {
+                    id
+                    approved
+                }
+            }
+        }
+        """
+        variables = {
+            "input": {
+                "id": str(custom_recap.id),
+                "approved": True,
+            }
+        }
+
+        with patch("recaps.mutations.RecapApprovedNotificationMailer.send") as mock_send:
+            result = await self._execute_mutation_authenticated(
+                mutation,
+                variables,
+                self.spark_user,
+                self.endpoint_path,
+            )
+
+        assert result.errors is None
+        assert result.data is not None
+        assert result.data["approveCustomRecap"]["success"] is True
+        assert result.data["approveCustomRecap"]["customRecap"]["approved"] is True
+        assert mock_send.called
+
+        await sync_to_async(custom_recap.refresh_from_db)()
+        assert custom_recap.approved is True
+        assert custom_recap.updated_by_id == self.spark_user.id
+
+    @pytest.mark.asyncio
+    async def test_decline_custom_recap_updates_approved_status(self):
+        @sync_to_async
+        def create_custom_recap():
+            system_user = self.get_system_user()
+            event_type = EventType.objects.create(
+                name="Decline Custom Sampling",
+                slug="decline-custom-sampling",
+                tenant=self.tenant,
+                created_by=system_user,
+            )
+            template = recap_models.CustomRecapTemplate.objects.create(
+                name="Decline custom sampling recap",
+                event_type=event_type,
+                tenant=self.tenant,
+                created_by=system_user,
+            )
+            return recap_models.CustomRecap.objects.create(
+                name="Custom recap to decline",
+                approved=True,
+                event=self.event,
+                tenant=self.tenant,
+                custom_recap_template=template,
+                created_by=self.spark_user,
+            )
+
+        custom_recap = await create_custom_recap()
+
+        mutation = """
+        mutation DeclineCustomRecap($input: DeclineCustomRecapInput!) {
+            declineCustomRecap(input: $input) {
+                success
+                message
+                customRecap {
+                    id
+                    approved
+                }
+            }
+        }
+        """
+        variables = {
+            "input": {
+                "id": str(custom_recap.id),
+            }
+        }
+
+        with patch("recaps.mutations.RecapApprovedNotificationMailer.send") as mock_send:
+            result = await self._execute_mutation_authenticated(
+                mutation,
+                variables,
+                self.spark_user,
+                self.endpoint_path,
+            )
+
+        assert result.errors is None
+        assert result.data is not None
+        assert result.data["declineCustomRecap"]["success"] is True
+        assert result.data["declineCustomRecap"]["customRecap"]["approved"] is False
+        assert not mock_send.called
+
+        await sync_to_async(custom_recap.refresh_from_db)()
+        assert custom_recap.approved is False
+        assert custom_recap.updated_by_id == self.spark_user.id
+
+    @pytest.mark.asyncio
+    async def test_generate_custom_recap_pdf_creates_custom_recap_file(self):
+        @sync_to_async
+        def create_custom_recap():
+            system_user = self.get_system_user()
+            file_type = self.create_file_type(name="PDF", extension=".pdf")
+            event_type = EventType.objects.create(
+                name="PDF Custom Sampling",
+                slug="pdf-custom-sampling",
+                tenant=self.tenant,
+                created_by=system_user,
+            )
+            template = recap_models.CustomRecapTemplate.objects.create(
+                name="PDF custom sampling recap",
+                event_type=event_type,
+                tenant=self.tenant,
+                created_by=system_user,
+            )
+            custom_recap = recap_models.CustomRecap.objects.create(
+                name="Custom recap PDF",
+                approved=True,
+                event=self.event,
+                tenant=self.tenant,
+                custom_recap_template=template,
+                created_by=self.spark_user,
+            )
+            return custom_recap, file_type
+
+        custom_recap, file_type = await create_custom_recap()
+
+        mutation = """
+        mutation GenerateCustomRecapPdf($input: GenerateCustomRecapPdfInput!) {
+            generateCustomRecapPdf(input: $input) {
+                success
+                message
+                customRecapFile {
+                    id
+                    name
+                    approved
+                }
+            }
+        }
+        """
+        variables = {"input": {"id": str(custom_recap.id)}}
+
+        with (
+            patch("recaps.mutations.build_recap_pdf", return_value=b"pdf-bytes") as mock_build_pdf,
+            patch("recaps.mutations.upload_bytes") as mock_upload_bytes,
+        ):
+            result = await self._execute_mutation_authenticated(
+                mutation,
+                variables,
+                self.spark_user,
+                self.endpoint_path,
+            )
+
+        assert result.errors is None
+        assert result.data is not None
+        assert result.data["generateCustomRecapPdf"]["success"] is True
+        assert result.data["generateCustomRecapPdf"]["customRecapFile"]["approved"] is False
+        assert result.data["generateCustomRecapPdf"]["customRecapFile"]["name"] == (
+            "Custom Recap PDF - Custom recap PDF"
+        )
+        assert mock_build_pdf.called
+        assert mock_upload_bytes.called
+
+        @sync_to_async
+        def get_custom_recap_file():
+            return recap_models.CustomRecapFile.objects.get(
+                custom_recap=custom_recap,
+                file_type=file_type,
+            )
+
+        custom_recap_file = await get_custom_recap_file()
+        assert str(custom_recap_file.url).startswith("recaps/pdfs/custom-")
+        assert custom_recap_file.created_by_id == self.spark_user.id
+
+    @pytest.mark.asyncio
     async def test_recap_approved_mailer_template_renders(self):
         self.recap.approved = True
         await sync_to_async(self.recap.save)()
