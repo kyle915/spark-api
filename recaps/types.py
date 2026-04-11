@@ -245,14 +245,20 @@ class CustomRecap(Node):
         Value source: CustomFieldValue table.
         """
         value_by_field_id = {
-            item.custom_field_id: item.value for item in self.custom_field_value.all()
+            item.custom_field_id: item for item in self.custom_field_value.all()
         }
         fields: list[CustomField] = []
         for custom_field in self.custom_recap_template.custom_field.all():
+            custom_field_value = value_by_field_id.get(custom_field.id)
             setattr(
                 custom_field,
                 "_custom_recap_value",
-                value_by_field_id.get(custom_field.id),
+                custom_field_value.value if custom_field_value else None,
+            )
+            setattr(
+                custom_field,
+                "_custom_field_value_id",
+                custom_field_value.id if custom_field_value else None,
             )
             fields.append(custom_field)
         return fields
@@ -336,6 +342,11 @@ class CustomField(Node):
     def value(self) -> str | None:
         """Value for this field in a specific custom recap context, if present."""
         return getattr(self, "_custom_recap_value", None)
+
+    @strawberry.field
+    def custom_field_value_id(self) -> strawberry.ID | None:
+        """Custom field value ID for this recap context, if present."""
+        return getattr(self, "_custom_field_value_id", None)
 
 
 @strawberry.type

@@ -1336,35 +1336,144 @@ class RecapMutationService(SparkGraphQLMixin):
                 custom_recap.save()
 
                 if self.input.custom_field_values is not None:
-                    models.CustomFieldValue.objects.filter(
-                        custom_recap=custom_recap
-                    ).delete()
+                    final_custom_field_value_ids: list[int] = []
+                    seen_custom_field_value_ids: set[int] = set()
+                    seen_custom_field_ids: set[int] = set()
 
                     for custom_field_value_input in self.input.custom_field_values:
-                        try:
-                            custom_field_id = resolve_id_to_int(
-                                custom_field_value_input.custom_field_id
-                            )
-                        except (TypeError, ValueError, GraphQLError):
-                            raise GraphQLError(
-                                f"Invalid custom field ID: {custom_field_value_input.custom_field_id}"
-                            )
+                        custom_field = None
+                        custom_field_value = None
 
-                        custom_field = models.CustomField.objects.filter(
-                            id=custom_field_id,
-                            custom_recap_template_id=custom_recap_template.id,
-                        ).first()
-                        if not custom_field:
-                            raise GraphQLError(
-                                "Custom field not found for the selected template."
-                            )
+                        if custom_field_value_input.custom_field_value_id not in (
+                            None,
+                            "",
+                        ):
+                            try:
+                                custom_field_value_id = resolve_id_to_int(
+                                    custom_field_value_input.custom_field_value_id
+                                )
+                            except (TypeError, ValueError, GraphQLError):
+                                raise GraphQLError(
+                                    "Invalid custom field value ID: "
+                                    f"{custom_field_value_input.custom_field_value_id}"
+                                )
 
-                        models.CustomFieldValue.objects.create(
-                            custom_recap=custom_recap,
-                            custom_field=custom_field,
-                            value=custom_field_value_input.value,
-                            created_by=self.user,
+                            if custom_field_value_id in seen_custom_field_value_ids:
+                                raise GraphQLError(
+                                    "Duplicate custom field value in the input."
+                                )
+                            seen_custom_field_value_ids.add(custom_field_value_id)
+
+                            custom_field_value = (
+                                models.CustomFieldValue.objects.select_related(
+                                    "custom_field"
+                                )
+                                .filter(
+                                    id=custom_field_value_id,
+                                    custom_recap=custom_recap,
+                                )
+                                .first()
+                            )
+                            if (
+                                not custom_field_value
+                                or custom_field_value.custom_field.custom_recap_template_id
+                                != custom_recap_template.id
+                            ):
+                                raise GraphQLError(
+                                    "Custom field value not found for the selected custom recap."
+                                )
+
+                            custom_field = custom_field_value.custom_field
+                            if custom_field_value_input.custom_field_id not in (
+                                None,
+                                "",
+                            ):
+                                try:
+                                    custom_field_id = resolve_id_to_int(
+                                        custom_field_value_input.custom_field_id
+                                    )
+                                except (TypeError, ValueError, GraphQLError):
+                                    raise GraphQLError(
+                                        "Invalid custom field ID: "
+                                        f"{custom_field_value_input.custom_field_id}"
+                                    )
+                                if custom_field_id != custom_field.id:
+                                    raise GraphQLError(
+                                        "Custom field ID does not match the custom field value."
+                                    )
+                        else:
+                            if custom_field_value_input.custom_field_id in (None, ""):
+                                raise GraphQLError(
+                                    "customFieldId is required when "
+                                    "customFieldValueId is not provided."
+                                )
+
+                            try:
+                                custom_field_id = resolve_id_to_int(
+                                    custom_field_value_input.custom_field_id
+                                )
+                            except (TypeError, ValueError, GraphQLError):
+                                raise GraphQLError(
+                                    "Invalid custom field ID: "
+                                    f"{custom_field_value_input.custom_field_id}"
+                                )
+
+                            custom_field = models.CustomField.objects.filter(
+                                id=custom_field_id,
+                                custom_recap_template_id=custom_recap_template.id,
+                            ).first()
+                            if not custom_field:
+                                raise GraphQLError(
+                                    "Custom field not found for the selected template."
+                                )
+
+                            existing_values = list(
+                                models.CustomFieldValue.objects.filter(
+                                    custom_recap=custom_recap,
+                                    custom_field=custom_field,
+                                )[:2]
+                            )
+                            if len(existing_values) > 1:
+                                raise GraphQLError(
+                                    "Multiple custom field values found for the "
+                                    "selected custom field."
+                                )
+                            if existing_values:
+                                custom_field_value = existing_values[0]
+
+                        if custom_field.id in seen_custom_field_ids:
+                            raise GraphQLError(
+                                "Duplicate custom field in the input."
+                            )
+                        seen_custom_field_ids.add(custom_field.id)
+
+                        if custom_field_value:
+                            custom_field_value.value = custom_field_value_input.value
+                            custom_field_value.updated_by = self.user
+                            custom_field_value.save(
+                                update_fields=["value", "updated_by", "updated_at"]
+                            )
+                        else:
+                            custom_field_value = models.CustomFieldValue.objects.create(
+                                custom_recap=custom_recap,
+                                custom_field=custom_field,
+                                value=custom_field_value_input.value,
+                                created_by=self.user,
+                            )
+                        final_custom_field_value_ids.append(custom_field_value.id)
+
+                    custom_field_values_to_delete = (
+                        models.CustomFieldValue.objects.filter(
+                            custom_recap=custom_recap
                         )
+                    )
+                    if final_custom_field_value_ids:
+                        custom_field_values_to_delete = (
+                            custom_field_values_to_delete.exclude(
+                                id__in=final_custom_field_value_ids
+                            )
+                        )
+                    custom_field_values_to_delete.delete()
 
                 if self.input.product_samples is not None:
                     models.CustomRecapProductSample.objects.filter(
