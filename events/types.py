@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List
+from typing import List, TYPE_CHECKING, Annotated
 
 import strawberry
 import strawberry_django
@@ -13,6 +13,9 @@ from tenants.types import SparkUserType, TenantType
 from utils.gcs import extract_blob_name_from_url, generate_download_url
 
 from . import models
+
+if TYPE_CHECKING:
+    from recaps.types import CustomRecapTemplate
 
 
 def _serialize_dt(value, offset_minutes: int = 0):
@@ -461,6 +464,10 @@ class Event(Node):
     status: EventStatus | None = None
     timezone: TimeZone | None = None
     rmm_asigned: SparkUserType | None = None
+    custom_recap_template_id: strawberry.ID
+    custom_recap_template: (
+        Annotated["CustomRecapTemplate", strawberry.lazy("recaps.types")] | None
+    ) = None
 
     @strawberry.field
     def tenant_image(self) -> str | None:

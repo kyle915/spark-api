@@ -1421,7 +1421,7 @@ class RecapQueries:
                 else None
             )
             record = await service.get_record(
-                id=int(id) if id not in (None, "") else None,
+                id=resolve_id_to_int(id) if id not in (None, "") else None,
                 uuid=str(uuid) if uuid not in (None, "") else None,
                 tenant_id=resolved_tenant_id,
                 event_type_id=resolved_event_type_id,

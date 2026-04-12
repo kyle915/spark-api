@@ -743,6 +743,13 @@ class Event(models.Model):
         related_name="events",
     )
 
+    custom_recap_template = models.ForeignKey(
+        "recaps.CustomRecapTemplate",
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="events",
+    )
+
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,

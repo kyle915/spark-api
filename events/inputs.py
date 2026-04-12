@@ -51,6 +51,7 @@ class EventFiltersInput(BaseTenantInput):
     event_type_id: strawberry.ID | None = None
     event_status: EventStatusFilterEnum | None = None
     request_id: strawberry.ID | None = None
+    custom_recap_template_id: strawberry.ID | None = None
     retailer_id: strawberry.ID | None = None
     distributor_id: strawberry.ID | None = None
     location_id: strawberry.ID | None = None
@@ -160,6 +161,7 @@ class BaseNameOnlyInput(SparkGraphQLInput):
 @strawberry.input
 class CreateEventInput(BaseNameableInput):
     event_type_id: strawberry.ID
+    custom_recap_template_id: strawberry.ID | None = None
     request_id: strawberry.ID | None = None
     retailer_id: strawberry.ID | None = None
     distributor_id: strawberry.ID | None = None
