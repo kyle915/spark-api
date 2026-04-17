@@ -202,6 +202,7 @@ class Job(Node):
     national: bool
     ongoing: bool
     coordinates: List[float] | None
+    extension_rate: float | None
     job_title: JobTitle
     other_title: JobTitle | None
     event: Event
@@ -315,6 +316,8 @@ class AmbassadorJob(Node):
     uuid: str
     accepted_terms: bool
     appear_as_rfp: bool
+    time_blocks_15m: int
+    real_amount: float | None
     tenant_id: strawberry.ID
     ambassador_id: strawberry.ID
     ambassador: Ambassador

@@ -176,11 +176,29 @@ class CreateEventInput(BaseNameableInput):
     coordinates: List[float] | None = None
     start_time: str
     end_time: str
+    new_end_time: str | None = None
 
 
 @strawberry.input
-class UpdateEventInput(CreateEventInput):
+class UpdateEventInput(BaseTenantInput):
     id: strawberry.ID
+    name: str | None = None
+    event_type_id: strawberry.ID | None = None
+    request_id: strawberry.ID | None = None
+    retailer_id: strawberry.ID | None = None
+    distributor_id: strawberry.ID | None = None
+    location_id: strawberry.ID | None = None
+    state_id: strawberry.ID | None = None
+    rmm_asigned_id: strawberry.ID | None = None
+    timezone_id: strawberry.ID | None = None
+    date: str | None = None
+    address: str | None = None
+    notes: str | None = None
+    is_national: bool | None = None
+    coordinates: List[float] | None = None
+    start_time: str | None = None
+    end_time: str | None = None
+    new_end_time: str | None = None
 
 
 @strawberry.input

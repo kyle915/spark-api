@@ -499,6 +499,11 @@ class Event(Node):
         offset = _get_offset_minutes_from_instance(self)
         return _serialize_dt(_get_field(self, "end_time"), offset_minutes=offset)
 
+    @strawberry.field
+    def new_end_time(self) -> str | None:
+        offset = _get_offset_minutes_from_instance(self)
+        return _serialize_dt(_get_field(self, "new_end_time"), offset_minutes=offset)
+
 
 @strawberry.type
 class EventListResponse:

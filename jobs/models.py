@@ -16,6 +16,10 @@ UNIT: list[tuple[str, str]] = [
 ]
 
 
+def get_job_extension_rate_default():
+    return settings.JOB_EXTENSION_RATE_DEFAULT
+
+
 class Status(models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
@@ -343,6 +347,12 @@ class Job(models.Model):
     national = models.BooleanField(default=False)
     ongoing = models.BooleanField(default=False)
     coordinates = ArrayField(models.FloatField(), size=2, null=True)
+    extension_rate = models.DecimalField(
+        max_digits=14,
+        decimal_places=4,
+        null=True,
+        default=get_job_extension_rate_default,
+    )
 
     job_title = models.ForeignKey(
         JobTitle,
@@ -548,6 +558,7 @@ class AmbassadorJob(models.Model):
     recap_uploaded = models.BooleanField(default=False)
     accepted_terms = models.BooleanField(default=False)
     real_amount = models.DecimalField(max_digits=14, decimal_places=4, null=True)
+    time_blocks_15m = models.PositiveIntegerField(default=0)
     appear_as_rfp = models.BooleanField(
         default=True
     )  # This bool is for record purposes that it was an invitation.

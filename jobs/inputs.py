@@ -135,6 +135,7 @@ class CreateJobInput(BaseNameableInput):
     national: bool = False
     ongoing: bool = False
     coordinates: List[float] | None = None
+    extension_rate: float | None = None
     job_title_id: strawberry.ID
     other_title_id: strawberry.ID | None = None
     event_id: strawberry.ID
@@ -219,6 +220,7 @@ class UpdateJobRequirementFileInput(CreateJobRequirementFileInput):
 @strawberry.input
 class CreateAmbassadorJobInput(BaseTenantInput):
     appear_as_rfp: bool = True
+    time_blocks_15m: int = 0
     ambassador_id: strawberry.ID
     job_id: strawberry.ID
     status_id: strawberry.ID
@@ -228,6 +230,7 @@ class CreateAmbassadorJobInput(BaseTenantInput):
 @strawberry.input
 class UpdateAmbassadorJobInput(CreateAmbassadorJobInput):
     id: strawberry.ID
+    real_amount: float | None = None
 
 
 @strawberry.input
