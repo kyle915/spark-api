@@ -354,7 +354,7 @@ class Request(models.Model):
     date = models.DateTimeField(null=True)
     start_time = models.DateTimeField(null=True, db_index=True)
     end_time = models.DateTimeField(null=True, blank=True)
-    address = models.CharField(max_length=100)
+    address = models.TextField(null=False)
     decline_reason = models.TextField(null=True)
     requestor_email = models.CharField(max_length=254, null=True)
     notes = models.TextField(null=True)
@@ -373,7 +373,7 @@ class Request(models.Model):
     distributor_email = models.CharField(max_length=254, null=True)
 
     retailer_name = models.CharField(max_length=50, null=True)
-    retailer_address = models.CharField(max_length=100, null=True)
+    retailer_address = models.TextField(null=True)
     retailer_store_contact = models.CharField(max_length=50, null=True)
 
     store_manager_name = models.CharField(max_length=50, null=True)
@@ -718,7 +718,7 @@ class Event(models.Model):
 
     start_time = models.DateTimeField(null=True, db_index=True)
     end_time = models.DateTimeField(null=True)
-    address = models.CharField(max_length=100, null=False, default="")
+    address = models.TextField(null=False)
     notes = models.TextField(null=True, blank=True)
     is_national = models.BooleanField(default=False)
 
