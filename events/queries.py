@@ -228,6 +228,7 @@ class EventQueriesService(BaseEventQueriesService):
             "request",
             "request__location",
             "request__state",
+            "custom_recap_template",
             "retailer",
             "location",
             "state",
@@ -395,6 +396,13 @@ class EventQueries:
             if filters.request_id:
                 request_id = _resolve_filter_id(filters.request_id, "request")
                 queryset = queryset.filter(request_id=request_id)
+            if filters.custom_recap_template_id:
+                custom_recap_template_id = _resolve_filter_id(
+                    filters.custom_recap_template_id, "custom recap template"
+                )
+                queryset = queryset.filter(
+                    custom_recap_template_id=custom_recap_template_id
+                )
             if filters.retailer_id:
                 retailer_id = _resolve_filter_id(filters.retailer_id, "retailer")
                 queryset = queryset.filter(
@@ -532,6 +540,13 @@ class EventQueries:
             if filters.request_id:
                 request_id = _resolve_filter_id(filters.request_id, "request")
                 queryset = queryset.filter(request_id=request_id)
+            if filters.custom_recap_template_id:
+                custom_recap_template_id = _resolve_filter_id(
+                    filters.custom_recap_template_id, "custom recap template"
+                )
+                queryset = queryset.filter(
+                    custom_recap_template_id=custom_recap_template_id
+                )
             if filters.retailer_id:
                 retailer_id = _resolve_filter_id(filters.retailer_id, "retailer")
                 queryset = queryset.filter(
@@ -637,6 +652,13 @@ class EventQueries:
             if filters.request_id:
                 request_id = _resolve_filter_id(filters.request_id, "request")
                 queryset = queryset.filter(request_id=request_id)
+            if filters.custom_recap_template_id:
+                custom_recap_template_id = _resolve_filter_id(
+                    filters.custom_recap_template_id, "custom recap template"
+                )
+                queryset = queryset.filter(
+                    custom_recap_template_id=custom_recap_template_id
+                )
             if filters.retailer_id:
                 retailer_id = _resolve_filter_id(filters.retailer_id, "retailer")
                 queryset = queryset.filter(

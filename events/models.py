@@ -718,7 +718,8 @@ class Event(models.Model):
 
     start_time = models.DateTimeField(null=True, db_index=True)
     end_time = models.DateTimeField(null=True)
-    address = models.TextField(null=False)
+    new_end_time = models.DateTimeField(null=True)
+    address = models.CharField(max_length=100, null=False, default="")
     notes = models.TextField(null=True, blank=True)
     is_national = models.BooleanField(default=False)
 
@@ -738,6 +739,13 @@ class Event(models.Model):
 
     state = models.ForeignKey(
         State,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="events",
+    )
+
+    custom_recap_template = models.ForeignKey(
+        "recaps.CustomRecapTemplate",
         on_delete=models.RESTRICT,
         null=True,
         related_name="events",

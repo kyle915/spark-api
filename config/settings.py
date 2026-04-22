@@ -13,6 +13,8 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 import environ
 from pathlib import Path
 from datetime import timedelta
+from decimal import Decimal, InvalidOperation
+from django.core.exceptions import ImproperlyConfigured
 from gqlauth.settings_type import GqlAuthSettings
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -282,6 +284,17 @@ ONESIGNAL_TIMEOUT_SECONDS = env.float("ONESIGNAL_TIMEOUT_SECONDS", default=10.0)
 
 # Gemini AI Configuration
 GEMINI_API_KEY = env("GEMINI_API_KEY", default="")
+
+_job_extension_rate_default = env("JOB_EXTENSION_RATE_DEFAULT", default=8)
+if _job_extension_rate_default in (None, ""):
+    JOB_EXTENSION_RATE_DEFAULT = None
+else:
+    try:
+        JOB_EXTENSION_RATE_DEFAULT = Decimal(_job_extension_rate_default)
+    except InvalidOperation as exc:
+        raise ImproperlyConfigured(
+            "JOB_EXTENSION_RATE_DEFAULT must be a valid decimal value."
+        ) from exc
 
 LOGGING = {
     "version": 1,

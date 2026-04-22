@@ -997,6 +997,7 @@ class AmbassadorJobFiltersInput(BaseTenantInput):
     status_id: strawberry.ID | None = None
     status_slug: str | None = None
     accepted_terms: bool | None = None
+    time_blocks_15m: int | None = None
     job_id: strawberry.ID | None = None
     start_date: str | None = None
     end_date: str | None = None
@@ -1014,6 +1015,8 @@ class AmbassadorJobQueries:
         """Apply ambassador-job filters for mobile and web queries."""
         if filters.accepted_terms is not None:
             queryset = queryset.filter(accepted_terms=filters.accepted_terms)
+        if filters.time_blocks_15m is not None:
+            queryset = queryset.filter(time_blocks_15m=filters.time_blocks_15m)
         if filters.job_id:
             try:
                 job_id = resolve_id_to_int(filters.job_id)

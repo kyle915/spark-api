@@ -1,5 +1,6 @@
 import strawberry
 from typing import List
+from strawberry.scalars import JSON
 
 from utils.graphql.inputs import SparkGraphQLInput
 
@@ -20,6 +21,17 @@ class RecapFiltersInput(SparkGraphQLInput):
     event_address: str | None = None
     approved: bool | None = None
     edited: bool | None = None
+
+
+@strawberry.input
+class CustomRecapFiltersInput(RecapFiltersInput):
+    custom_recap_template_id: strawberry.ID | None = None
+
+
+@strawberry.input
+class CustomRecapTemplateFiltersInput(SparkGraphQLInput):
+    tenant_id: strawberry.ID | None = None
+    event_type_id: strawberry.ID | None = None
 
 
 @strawberry.input
@@ -130,7 +142,23 @@ class ApproveRecapInput(SparkGraphQLInput):
 
 
 @strawberry.input
+class ApproveCustomRecapInput(SparkGraphQLInput):
+    id: strawberry.ID
+    approved: bool
+
+
+@strawberry.input
+class DeclineCustomRecapInput(SparkGraphQLInput):
+    id: strawberry.ID
+
+
+@strawberry.input
 class GenerateRecapPdfInput(SparkGraphQLInput):
+    id: strawberry.ID
+
+
+@strawberry.input
+class GenerateCustomRecapPdfInput(SparkGraphQLInput):
     id: strawberry.ID
 
 
@@ -149,3 +177,100 @@ class ExportRecapXlsxInput(SparkGraphQLInput):
 @strawberry.input
 class RecapFileDownloadUrlInput(SparkGraphQLInput):
     uuid: strawberry.ID
+
+
+@strawberry.input
+class CustomFieldValueInput(SparkGraphQLInput):
+    custom_field_id: strawberry.ID | None = None
+    custom_field_value_id: strawberry.ID | None = None
+    value: str
+
+
+@strawberry.input
+class CreateCustomRecapInput(SparkGraphQLInput):
+    name: str
+    event_id: strawberry.ID
+    custom_recap_template_id: strawberry.ID
+
+    files: List[RecapFileInput] | None = None
+    product_samples: List[ProductSampleInput] | None = None
+    sales_performance: List[SalesPerformanceInput] | None = None
+
+    timezone_id: strawberry.ID | None = None
+    total_engagements: int | None = None
+    filling_for_ambassador: bool | None = None
+    late: bool | None = None
+    incomplete: bool | None = None
+    approved: bool | None = None
+    used_corpo_card: bool | None = None
+
+    job_id: strawberry.ID | None = None
+    retailer_id: strawberry.ID | None = None
+    location_id: strawberry.ID | None = None
+    state_id: strawberry.ID | None = None
+    ambassador_id: strawberry.ID | None = None
+    custom_field_values: List[CustomFieldValueInput] | None = None
+
+
+@strawberry.input
+class UpdateCustomRecapInput(CreateCustomRecapInput):
+    id: strawberry.ID
+
+
+@strawberry.input
+class CreateCustomFieldInput(SparkGraphQLInput):
+    name: str
+    custom_recap_template_id: strawberry.ID
+    custom_field_type_id: strawberry.ID
+    recap_section_id: strawberry.ID
+    required: bool | None = None
+
+
+@strawberry.input
+class UpdateCustomFieldInput(CreateCustomFieldInput):
+    id: strawberry.ID
+
+
+@strawberry.input
+class CustomRecapTemplateFieldInput(SparkGraphQLInput):
+    name: str
+    custom_field_type_id: strawberry.ID
+    recap_section_id: strawberry.ID
+    id: strawberry.ID | None = None
+    required: bool | None = None
+
+
+@strawberry.input
+class CreateCustomRecapTemplateInput(SparkGraphQLInput):
+    name: str
+    event_type_id: strawberry.ID
+    product_samples: bool | None = None
+    sales_performance: bool | None = None
+    layout: JSON | None = None
+    custom_fields: List[CustomRecapTemplateFieldInput] | None = None
+
+
+@strawberry.input
+class UpdateCustomRecapTemplateInput(CreateCustomRecapTemplateInput):
+    id: strawberry.ID
+
+
+@strawberry.input
+class CreateCustomRecapFieldTypeInput(SparkGraphQLInput):
+    name: str
+
+
+@strawberry.input
+class UpdateCustomRecapFieldTypeInput(CreateCustomRecapFieldTypeInput):
+    id: strawberry.ID
+
+
+@strawberry.input
+class CreateRecapSectionInput(SparkGraphQLInput):
+    name: str
+    tenant_id: strawberry.ID
+
+
+@strawberry.input
+class UpdateRecapSectionInput(CreateRecapSectionInput):
+    id: strawberry.ID

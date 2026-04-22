@@ -768,6 +768,7 @@ class EventMutations:
                 "date": original_event.date,
                 "start_time": original_event.start_time,
                 "end_time": original_event.end_time,
+                "new_end_time": original_event.new_end_time,
                 "address": original_event.address,
                 "retailer_id": original_event.retailer_id,
             }
@@ -781,6 +782,7 @@ class EventMutations:
                 "date": event.date,
                 "start_time": event.start_time,
                 "end_time": event.end_time,
+                "new_end_time": event.new_end_time,
                 "address": event.address,
                 "retailer_id": event.retailer_id,
             }
