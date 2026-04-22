@@ -613,6 +613,7 @@ class JobMutationService(BaseMutationService):
         relevant_fields_before = {
             "address": original_job.address,
             "rate_id": original_job.rate_id,
+            "extension_rate": original_job.extension_rate,
             "start_date": original_job.start_date,
             "end_date": original_job.end_date,
         }
@@ -636,6 +637,7 @@ class JobMutationService(BaseMutationService):
         relevant_fields_after = {
             "address": updated_job.address,
             "rate_id": updated_job.rate_id,
+            "extension_rate": updated_job.extension_rate,
             "start_date": updated_job.start_date,
             "end_date": updated_job.end_date,
         }
@@ -841,6 +843,8 @@ class AmbassadorJobMutationService(BaseMutationService):
             )
 
         input.status_id = approved_status.id
+        if getattr(input, "time_blocks_15m", None) is None:
+            input.time_blocks_15m = 0
 
         response = await super().create(
             input,
@@ -1375,6 +1379,7 @@ class ApproveAmbassadorJobMutationService(SparkGraphQLMixin):
                     tenant=tenant,
                     status=invite_status,
                     rate=job.rate,
+                    time_blocks_15m=getattr(input, "time_blocks_15m", 0),
                     appear_as_rfp=True,
                     created_by=user,
                     updated_by=user,

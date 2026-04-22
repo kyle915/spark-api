@@ -169,3 +169,84 @@ def test_build_recap_pdf_html_keeps_default_fields_for_other_tenants():
     assert "Sales Performance" in html
     assert "Corpo Card" in html
     assert "Was Corporate Card Used?" not in html
+
+
+def test_build_recap_pdf_html_groups_custom_fields_by_recap_section():
+    account_section = SimpleNamespace(name="Account Feedback")
+    consumer_section = SimpleNamespace(name="Consumer Feedback")
+    recap = SimpleNamespace(
+        name="Custom Recap Name",
+        approved=True,
+        ambassador=None,
+        job=SimpleNamespace(name="Job Name"),
+        retailer=SimpleNamespace(name="Retailer Name"),
+        location=SimpleNamespace(name="Miami"),
+        state=SimpleNamespace(name="State Name"),
+        tenant=SimpleNamespace(name="Tenant Name"),
+        timezone=SimpleNamespace(name="Central"),
+        custom_recap_template=SimpleNamespace(name="Template Name"),
+        total_engagements=10,
+        filling_for_ambassador=True,
+        late=False,
+        incomplete=False,
+        used_corpo_card=True,
+        submitted_at=datetime(2026, 4, 8, 18, 0),
+        created_at=datetime(2026, 4, 8, 19, 0),
+        updated_at=datetime(2026, 4, 8, 20, 0),
+        event=SimpleNamespace(
+            name="Store Event",
+            date=datetime(2026, 4, 8, 9, 0),
+            start_time="2026-04-08 10:00",
+            end_time="2026-04-08 14:00",
+            address="123 Main St",
+            event_type=SimpleNamespace(name="Sampling"),
+            tenant=SimpleNamespace(slug="another-tenant"),
+        ),
+        custom_recap_product_sample=RelatedList([]),
+        custom_recap_sale_performance=RelatedList([]),
+        custom_field_value=RelatedList(
+            [
+                SimpleNamespace(
+                    value="Bring more signage",
+                    custom_field=SimpleNamespace(
+                        name="Do Differently",
+                        recap_section=account_section,
+                    ),
+                ),
+                SimpleNamespace(
+                    value="Great comments",
+                    custom_field=SimpleNamespace(
+                        name="Feedback",
+                        recap_section=consumer_section,
+                    ),
+                ),
+            ]
+        ),
+    )
+
+    html = build_recap_pdf_html(recap, [])
+
+    assert "Account Feedback" in html
+    assert "Do Differently" in html
+    assert "Bring more signage" in html
+    assert "Consumer Feedback" in html
+    assert "Great comments" in html
+    assert "<h2>Custom Fields</h2>" not in html
+    assert "Used Corpo Card" in html
+    assert "City" in html
+    assert "Miami" in html
+    assert html.index("State") < html.index("City") < html.index("Retailer")
+    assert "Submitted At" not in html
+    assert "Filling For Ambassador" not in html
+    assert "Late" not in html
+    assert "Incomplete" not in html
+    assert "Approved" in html
+    assert "Job" not in html
+    assert "Location" not in html
+    assert "Tenant" not in html
+    assert "Template Name" not in html
+    assert "Custom Recap Template" not in html
+    assert "Created At" not in html
+    assert "Updated At" not in html
+    assert "Product Samples" not in html
+    assert "Sales Performance" not in html

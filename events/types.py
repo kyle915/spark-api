@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List
+from typing import List, TYPE_CHECKING, Annotated
 
 import strawberry
 import strawberry_django
@@ -13,6 +13,9 @@ from tenants.types import SparkUserType, TenantType
 from utils.gcs import extract_blob_name_from_url, generate_download_url
 
 from . import models
+
+if TYPE_CHECKING:
+    from recaps.types import CustomRecapTemplate
 
 
 def _serialize_dt(value, offset_minutes: int = 0):
@@ -217,15 +220,17 @@ class Product(Node):
     created_at: str
     updated_at: str
 
-    @strawberry.field
+    @strawberry_django.field(only=["image"])
     def image(self) -> str | None:
         """Return a signed URL for the product image if it exists."""
         if not self.image:
             return None
-        from utils.gcs import generate_download_url
 
-        # The image field contains the path in GCS (e.g., "products/image.jpg")
-        return generate_download_url(self.image.name)
+        blob_name = extract_blob_name_from_url(self.image.name)
+        if not blob_name:
+            return None
+
+        return generate_download_url(blob_name)
 
 
 @strawberry.type
@@ -459,6 +464,10 @@ class Event(Node):
     status: EventStatus | None = None
     timezone: TimeZone | None = None
     rmm_asigned: SparkUserType | None = None
+    custom_recap_template_id: strawberry.ID
+    custom_recap_template: (
+        Annotated["CustomRecapTemplate", strawberry.lazy("recaps.types")] | None
+    ) = None
 
     @strawberry.field
     def tenant_image(self) -> str | None:
@@ -489,6 +498,11 @@ class Event(Node):
     def end_time(self) -> str | None:
         offset = _get_offset_minutes_from_instance(self)
         return _serialize_dt(_get_field(self, "end_time"), offset_minutes=offset)
+
+    @strawberry.field
+    def new_end_time(self) -> str | None:
+        offset = _get_offset_minutes_from_instance(self)
+        return _serialize_dt(_get_field(self, "new_end_time"), offset_minutes=offset)
 
 
 @strawberry.type

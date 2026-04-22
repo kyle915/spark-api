@@ -261,6 +261,9 @@ class RequestCreatedNotificationMailer(Mailer):
 
     def envelope(self) -> Envelope:
         offset = _get_timezone_offset_minutes(self.request)
+        request_url = (
+            f"{settings.CLIENT_FRONTEND_URL.rstrip('/')}/request/view/{self.request.uuid}"
+        )
         return Envelope(
             subject="New request created",
             template="events.templates.emails.request_created_notification",
@@ -269,6 +272,7 @@ class RequestCreatedNotificationMailer(Mailer):
                 "request": self.request,
                 "location": self.location,
                 "recipient_name": self.recipient_name or "",
+                "request_url": request_url,
                 "request_date": _format_dt_no_tz(
                     self.request.date, "%B %d, %Y", offset
                 ),
