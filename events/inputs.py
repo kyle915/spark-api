@@ -184,6 +184,7 @@ class UpdateEventInput(BaseTenantInput):
     id: strawberry.ID
     name: str | None = None
     event_type_id: strawberry.ID | None = None
+    custom_recap_template_id: strawberry.ID | None = None
     request_id: strawberry.ID | None = None
     retailer_id: strawberry.ID | None = None
     distributor_id: strawberry.ID | None = None
