@@ -77,7 +77,9 @@ class AmbassadorApprovedForJobMailer(Mailer):
 
     def envelope(self) -> Envelope:
         context = _build_ambassador_job_email_context(self.ambassador_job)
-        tenant_slug = (getattr(self.ambassador_job.tenant, "slug", None) or "").strip().lower()
+        tenant_slug = (
+            (getattr(self.ambassador_job.tenant, "slug", None) or "").strip().lower()
+        )
         template = (
             "jobs.templates.emails.ambassador_assigned_to_job"
             if tenant_slug == self.LIQUID_DEATH_TENANT_SLUG
@@ -210,6 +212,72 @@ class AmbassadorJobUpdatedMailer(Mailer):
         )
 
 
+class AmbassadorAppliedJobUpdatedMailer(Mailer):
+    def __init__(
+        self,
+        ambassador_job: models.AmbassadorJob,
+        to_emails: list[str],
+        recipient_first_name: str | None = None,
+        reply_to_email: str | None = None,
+    ) -> None:
+        self.ambassador_job = ambassador_job
+        self.to_emails = to_emails
+        self.recipient_first_name = recipient_first_name
+        self.reply_to_email = reply_to_email or "events@igniteproductions.co"
+
+    def envelope(self) -> Envelope:
+        context = _build_ambassador_job_email_context(self.ambassador_job)
+
+        return Envelope(
+            subject="Your applied job details have been updated",
+            template="jobs.templates.emails.ambassador_applied_job_updated",
+            to_emails=self.to_emails,
+            headers={"Reply-To": self.reply_to_email},
+            from_email=getattr(
+                settings,
+                "DEFAULT_FROM_EMAIL",
+                "Spark by Ignite <no-reply@igniteproductions.co>",
+            ),
+            context={
+                "recipient_first_name": self.recipient_first_name or "there",
+                **context,
+            },
+        )
+
+
+class AmbassadorInvitedJobUpdatedMailer(Mailer):
+    def __init__(
+        self,
+        ambassador_job: models.AmbassadorJob,
+        to_emails: list[str],
+        recipient_first_name: str | None = None,
+        reply_to_email: str | None = None,
+    ) -> None:
+        self.ambassador_job = ambassador_job
+        self.to_emails = to_emails
+        self.recipient_first_name = recipient_first_name
+        self.reply_to_email = reply_to_email or "events@igniteproductions.co"
+
+    def envelope(self) -> Envelope:
+        context = _build_ambassador_job_email_context(self.ambassador_job)
+
+        return Envelope(
+            subject="Your invited job details have been updated",
+            template="jobs.templates.emails.ambassador_invited_job_updated",
+            to_emails=self.to_emails,
+            headers={"Reply-To": self.reply_to_email},
+            from_email=getattr(
+                settings,
+                "DEFAULT_FROM_EMAIL",
+                "Spark by Ignite <no-reply@igniteproductions.co>",
+            ),
+            context={
+                "recipient_first_name": self.recipient_first_name or "there",
+                **context,
+            },
+        )
+
+
 class AmbassadorUnassignedFromJobMailer(Mailer):
     def __init__(
         self,
@@ -260,7 +328,9 @@ class AmbassadorEventSuspendedMailer(Mailer):
 
     def envelope(self) -> Envelope:
         context = _build_ambassador_job_email_context(self.ambassador_job)
-        tenant_slug = (getattr(self.ambassador_job.tenant, "slug", None) or "").strip().lower()
+        tenant_slug = (
+            (getattr(self.ambassador_job.tenant, "slug", None) or "").strip().lower()
+        )
         template = (
             "jobs.templates.emails.ambassador_event_suspended_liquid_death"
             if tenant_slug == self.LIQUID_DEATH_TENANT_SLUG
@@ -301,7 +371,9 @@ class AmbassadorEventReminderMailer(Mailer):
 
     def envelope(self) -> Envelope:
         context = _build_ambassador_job_email_context(self.ambassador_job)
-        tenant_slug = (getattr(self.ambassador_job.tenant, "slug", None) or "").strip().lower()
+        tenant_slug = (
+            (getattr(self.ambassador_job.tenant, "slug", None) or "").strip().lower()
+        )
         template = (
             "jobs.templates.emails.ambassador_job_event_reminder_liquid_death"
             if tenant_slug == self.LIQUID_DEATH_TENANT_SLUG
@@ -342,7 +414,9 @@ class AmbassadorEventReminder3HoursMailer(Mailer):
 
     def envelope(self) -> Envelope:
         context = _build_ambassador_job_email_context(self.ambassador_job)
-        tenant_slug = (getattr(self.ambassador_job.tenant, "slug", None) or "").strip().lower()
+        tenant_slug = (
+            (getattr(self.ambassador_job.tenant, "slug", None) or "").strip().lower()
+        )
         template = (
             "jobs.templates.emails.ambassador_job_event_reminder_3h_liquid_death"
             if tenant_slug == self.LIQUID_DEATH_TENANT_SLUG
@@ -399,13 +473,17 @@ def _build_ambassador_job_email_context(
     else:
         location_name = retailer_location_name or event_address
     market_name = getattr(retailer, "name", None) or "-"
-    sku_names = list(
-        RequestProduct.objects.filter(request_id=event.request_id)
-        .select_related("product")
-        .exclude(product__name__isnull=True)
-        .exclude(product__name="")
-        .values_list("product__name", flat=True)
-    ) if event.request_id else []
+    sku_names = (
+        list(
+            RequestProduct.objects.filter(request_id=event.request_id)
+            .select_related("product")
+            .exclude(product__name__isnull=True)
+            .exclude(product__name="")
+            .values_list("product__name", flat=True)
+        )
+        if event.request_id
+        else []
+    )
     skus = ", ".join(dict.fromkeys(sku_names)) if sku_names else "-"
     activation_date = _format_dt_no_tz(start_dt, "%m/%d/%Y", offset_minutes)
     start_time = _format_dt_no_tz(start_dt, "%I:%M %p", offset_minutes)

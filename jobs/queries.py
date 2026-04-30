@@ -953,6 +953,22 @@ class AmbassadorJobQueriesService(JobsBaseQueriesService):
             "tenant",
         )
 
+    def get_filtered_queryset(
+        self, tenant_id: int | None = None, q: str | None = None
+    ) -> QuerySet:
+        """Filter ambassador jobs by tenant and related searchable fields."""
+        queryset = self.get_queryset()
+        if tenant_id:
+            queryset = queryset.filter(tenant_id=tenant_id)
+        if q:
+            queryset = queryset.filter(
+                Q(job__name__icontains=q)
+                | Q(job__code__icontains=q)
+                | Q(ambassador__user__first_name__icontains=q)
+                | Q(ambassador__user__last_name__icontains=q)
+            )
+        return queryset
+
     async def get_record(
         self,
         id: strawberry.ID | None = None,

@@ -8,8 +8,10 @@ import logging
 
 from jobs import models, inputs, types
 from jobs.envelopes import (
+    AmbassadorAppliedJobUpdatedMailer,
     AmbassadorAssignedToJobMailer,
     AmbassadorApprovedForJobMailer,
+    AmbassadorInvitedJobUpdatedMailer,
     AmbassadorInvitedToJobMailer,
     AmbassadorJobApprovedNotificationMailer,
     AmbassadorJobUpdatedMailer,
@@ -42,7 +44,9 @@ async def _create_calendar_event_for_approved_job(
     tenant = ambassador_job.tenant
 
     if not job.start_date or not job.end_date:
-        logger.warning(f"Cannot create calendar event for job {job.id}: missing start or end date.")
+        logger.warning(
+            f"Cannot create calendar event for job {job.id}: missing start or end date."
+        )
         return
 
     ambassador = getattr(ambassador_job, "ambassador", None)
@@ -56,17 +60,17 @@ async def _create_calendar_event_for_approved_job(
         f"Ambassador: {ambassador_name}\n"
         f"Location: {job.address or event.address or '-'}\n"
     )
-    
+
     # Try to grab timezone from event, else default to UTC
     event_timezone = getattr(event, "timezone", None)
     timezone_str = getattr(event_timezone, "name", "UTC") if event_timezone else "UTC"
 
     calendar_service = GoogleCalendarService()
-    
+
     attendees = []
     if user and user.email:
         attendees.append(user.email)
-    
+
     # Execute synchronous API call in a thread pool
     await sync_to_async(calendar_service.create_event)(
         summary=summary,
@@ -86,8 +90,8 @@ async def _notify_approval_to_rmm_or_clients(
     rmm_user = getattr(event, "rmm_asigned", None)
     fallback_reply_to = "events@igniteproductions.co"
     reply_to_email = (
-        (getattr(rmm_user, "email", None) or "").strip() or fallback_reply_to
-    )
+        getattr(rmm_user, "email", None) or ""
+    ).strip() or fallback_reply_to
 
     recipients: list[tuple[str, str]] = []
     if rmm_user and rmm_user.email:
@@ -284,7 +288,19 @@ async def _notify_updated_ambassador_by_email(
     if not email:
         return
 
-    mailer = AmbassadorJobUpdatedMailer(
+    status_slug = (
+        (getattr(getattr(ambassador_job, "status", None), "slug", None) or "")
+        .strip()
+        .lower()
+    )
+    if status_slug == "pending":
+        mailer_class = AmbassadorAppliedJobUpdatedMailer
+    elif status_slug == "invited":
+        mailer_class = AmbassadorInvitedJobUpdatedMailer
+    else:
+        mailer_class = AmbassadorJobUpdatedMailer
+
+    mailer = mailer_class(
         ambassador_job=ambassador_job,
         to_emails=[email],
         recipient_first_name=(getattr(user, "first_name", None) or "").strip() or None,
@@ -318,6 +334,7 @@ async def _notify_updated_ambassadors_for_job(job_id: int) -> None:
 # Status Mutations
 class StatusMutationService(BaseMutationService):
     """Service for status mutations."""
+
     response_class = types.StatusDetailResponse
     model_field_name = "status"
 
@@ -348,6 +365,7 @@ class StatusMutations:
 # CompanyFile Mutations
 class CompanyFileMutationService(BaseMutationService):
     """Service for company file mutations."""
+
     response_class = types.CompanyFileDetailResponse
     model_field_name = "company_file"
 
@@ -378,6 +396,7 @@ class CompanyFileMutations:
 # Company Mutations
 class CompanyMutationService(BaseMutationService):
     """Service for company mutations."""
+
     response_class = types.CompanyDetailResponse
     model_field_name = "company"
 
@@ -408,6 +427,7 @@ class CompanyMutations:
 # CompanyReview Mutations
 class CompanyReviewMutationService(BaseMutationService):
     """Service for company review mutations."""
+
     response_class = types.CompanyReviewDetailResponse
     model_field_name = "company_review"
 
@@ -438,6 +458,7 @@ class CompanyReviewMutations:
 # PayTiming Mutations
 class PayTimingMutationService(BaseMutationService):
     """Service for pay timing mutations."""
+
     response_class = types.PayTimingDetailResponse
     model_field_name = "pay_timing"
 
@@ -468,6 +489,7 @@ class PayTimingMutations:
 # ReviewScore Mutations
 class ReviewScoreMutationService(BaseMutationService):
     """Service for review score mutations."""
+
     response_class = types.ReviewScoreDetailResponse
     model_field_name = "review_score"
 
@@ -498,6 +520,7 @@ class ReviewScoreMutations:
 # JobTitle Mutations
 class JobTitleMutationService(BaseMutationService):
     """Service for job title mutations."""
+
     response_class = types.JobTitleDetailResponse
     model_field_name = "job_title"
 
@@ -528,6 +551,7 @@ class JobTitleMutations:
 # RateType Mutations
 class RateTypeMutationService(BaseMutationService):
     """Service for rate type mutations."""
+
     response_class = types.RateTypeDetailResponse
     model_field_name = "rate_type"
 
@@ -558,6 +582,7 @@ class RateTypeMutations:
 # Rate Mutations
 class RateMutationService(BaseMutationService):
     """Service for rate mutations."""
+
     response_class = types.RateDetailResponse
     model_field_name = "rate"
 
@@ -588,6 +613,7 @@ class RateMutations:
 # Job Mutations
 class JobMutationService(BaseMutationService):
     """Service for job mutations."""
+
     response_class = types.JobDetailResponse
     model_field_name = "job"
 
@@ -670,6 +696,7 @@ class JobMutations:
 # JobFile Mutations
 class JobFileMutationService(BaseMutationService):
     """Service for job file mutations."""
+
     response_class = types.JobFileDetailResponse
     model_field_name = "job_file"
 
@@ -700,6 +727,7 @@ class JobFileMutations:
 # JobRequirementType Mutations
 class JobRequirementTypeMutationService(BaseMutationService):
     """Service for job requirement type mutations."""
+
     response_class = types.JobRequirementTypeDetailResponse
     model_field_name = "job_requirement_type"
 
@@ -730,6 +758,7 @@ class JobRequirementTypeMutations:
 # JobRequirement Mutations
 class JobRequirementMutationService(BaseMutationService):
     """Service for job requirement mutations."""
+
     response_class = types.JobRequirementDetailResponse
     model_field_name = "job_requirement"
 
@@ -760,6 +789,7 @@ class JobRequirementMutations:
 # JobRequirementFile Mutations
 class JobRequirementFileMutationService(BaseMutationService):
     """Service for job requirement file mutations."""
+
     response_class = types.JobRequirementFileDetailResponse
     model_field_name = "job_requirement_file"
 
@@ -790,6 +820,7 @@ class JobRequirementFileMutations:
 # AmbassadorJob Mutations
 class AmbassadorJobMutationService(BaseMutationService):
     """Service for ambassador job mutations."""
+
     response_class = types.AmbassadorJobDetailResponse
     model_field_name = "ambassador_job"
 
@@ -1138,6 +1169,7 @@ class ManageAmbassadorJobMutations:
 # CompanyToAmbassadorReview Mutations
 class CompanyToAmbassadorReviewMutationService(BaseMutationService):
     """Service for company to ambassador review mutations."""
+
     response_class = types.CompanyToAmbassadorReviewDetailResponse
     model_field_name = "company_to_ambassador_review"
 
@@ -1168,6 +1200,7 @@ class CompanyToAmbassadorReviewMutations:
 # AmbassadorToAmbassadorReview Mutations
 class AmbassadorToAmbassadorReviewMutationService(BaseMutationService):
     """Service for ambassador to ambassador review mutations."""
+
     response_class = types.AmbassadorToAmbassadorReviewDetailResponse
     model_field_name = "ambassador_to_ambassador_review"
 
@@ -1198,6 +1231,7 @@ class AmbassadorToAmbassadorReviewMutations:
 # QuestionType Mutations
 class QuestionTypeMutationService(BaseMutationService):
     """Service for question type mutations."""
+
     response_class = types.QuestionTypeDetailResponse
     model_field_name = "question_type"
 
@@ -1228,6 +1262,7 @@ class QuestionTypeMutations:
 # JobRequirementQuestion Mutations
 class JobRequirementQuestionMutationService(BaseMutationService):
     """Service for job requirement question mutations."""
+
     response_class = types.JobRequirementQuestionDetailResponse
     model_field_name = "job_requirement_question"
 
@@ -1258,6 +1293,7 @@ class JobRequirementQuestionMutations:
 # QuestionOption Mutations
 class QuestionOptionMutationService(BaseMutationService):
     """Service for question option mutations."""
+
     response_class = types.QuestionOptionDetailResponse
     model_field_name = "question_option"
 
@@ -1288,6 +1324,7 @@ class QuestionOptionMutations:
 # JobRequirementAnswer Mutations
 class JobRequirementAnswerMutationService(BaseMutationService):
     """Service for job requirement answer mutations."""
+
     response_class = types.JobRequirementAnswerDetailResponse
     model_field_name = "job_requirement_answer"
 
@@ -1336,16 +1373,13 @@ class ApproveAmbassadorJobMutationService(SparkGraphQLMixin):
         @sync_to_async
         def invite_ambassadors_to_job():
             invite_status = models.Status.objects.get_invited(
-                tenant_id=tenant.id,
-                user=user
+                tenant_id=tenant.id, user=user
             )
 
             try:
                 job_id = resolve_id_to_int(input.job_id)
             except (TypeError, ValueError, GraphQLError) as exc:
-                raise GraphQLError(
-                    f"Invalid job ID: {input.job_id}"
-                ) from exc
+                raise GraphQLError(f"Invalid job ID: {input.job_id}") from exc
 
             job = models.Job.objects.filter(
                 id=job_id, tenant_id=tenant.id, rate__isnull=False
@@ -1363,7 +1397,8 @@ class ApproveAmbassadorJobMutationService(SparkGraphQLMixin):
                     resolved_ids.append(resolved_id)
                 except (TypeError, ValueError, GraphQLError) as exc:
                     raise GraphQLError(
-                        f"Invalid ambassador ID: {ambassador_id}") from exc
+                        f"Invalid ambassador ID: {ambassador_id}"
+                    ) from exc
 
             # Filter ambassadors by tenant via TenantedUser relationship
             ambassadors = models.Ambassador.objects.filter(
@@ -1455,8 +1490,7 @@ class ApproveAmbassadorJobMutationService(SparkGraphQLMixin):
         # Find status with slug 'approved'
         try:
             status = await sync_to_async(models.Status.objects.get)(
-                slug=inputs.AmbassadorJobStatusEnum.APPROVED.value,
-                tenant_id=tenant.id
+                slug=inputs.AmbassadorJobStatusEnum.APPROVED.value, tenant_id=tenant.id
             )
         except models.Status.DoesNotExist:
             return build_mutation_response(
@@ -1515,7 +1549,10 @@ class ApproveAmbassadorJobMutations:
         info: strawberry.Info,
         input: inputs.InviteAmbassadorsToJobInput,
     ) -> types.InviteAmbassadorsToJobResponse:
-        return await ApproveAmbassadorJobMutationService.invite_ambassadors_to_job(input, info)
+        return await ApproveAmbassadorJobMutationService.invite_ambassadors_to_job(
+            input, info
+        )
+
 
 # Decline Ambassador Job Mutation
 
@@ -1561,8 +1598,7 @@ class DeclineAmbassadorJobMutationService(SparkGraphQLMixin):
         # Find status with slug 'declined'
         try:
             status = await sync_to_async(models.Status.objects.get)(
-                slug=inputs.AmbassadorJobStatusEnum.DECLINED.value,
-                tenant_id=tenant.id
+                slug=inputs.AmbassadorJobStatusEnum.DECLINED.value, tenant_id=tenant.id
             )
         except models.Status.DoesNotExist:
             return build_mutation_response(
@@ -1608,12 +1644,14 @@ class AcceptAmbassadorJobInvitationMutationService(SparkGraphQLMixin):
             )
 
         try:
-            ambassador_job = await sync_to_async(models.AmbassadorJob.objects.select_related(
-                "ambassador",
-                "ambassador__user",
-                "job",
-                "status",
-            ).get)(
+            ambassador_job = await sync_to_async(
+                models.AmbassadorJob.objects.select_related(
+                    "ambassador",
+                    "ambassador__user",
+                    "job",
+                    "status",
+                ).get
+            )(
                 id=ambassador_job_id,
             )
         except models.AmbassadorJob.DoesNotExist:
@@ -1632,7 +1670,9 @@ class AcceptAmbassadorJobInvitationMutationService(SparkGraphQLMixin):
                 input_obj=input,
             )
 
-        current_status_slug = (getattr(ambassador_job.status, "slug", None) or "").strip().lower()
+        current_status_slug = (
+            (getattr(ambassador_job.status, "slug", None) or "").strip().lower()
+        )
         if current_status_slug != inputs.AmbassadorJobStatusEnum.INVITED.value:
             return build_mutation_response(
                 types.AmbassadorJobDetailResponse,
