@@ -1,0 +1,74 @@
+{% extends "emails/base.html" %} {% block content %}
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+  <tr>
+    <td style="font-size: 16px; color: #444444; line-height: 1.6;">
+      <p style="margin: 0 0 18px 0;">Hi {{ recipient_first_name|default:"there" }},</p>
+
+      <p style="margin: 0 0 20px 0;">
+        The job you applied for has updated details. Please review the latest information below:
+      </p>
+
+      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="border: 1px solid #d8d8d8; border-collapse: collapse; margin: 0 0 28px 0;">
+        <tr>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Job ID</td>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ request_id|default:"-" }}</td>
+        </tr>
+        <tr>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Brand</td>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ brand_name|default:"-" }}</td>
+        </tr>
+        <tr>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Event</td>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ campaign_name|default:"-" }}</td>
+        </tr>
+        <tr>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Market</td>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ market_name|default:"-" }}</td>
+        </tr>
+        {% if show_location %}
+        <tr>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Location</td>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ location_name|default:"-" }}</td>
+        </tr>
+        {% endif %}
+        <tr>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Address</td>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ event_address|default:"-" }}</td>
+        </tr>
+        <tr>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Date</td>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ activation_date|default:"-" }}</td>
+        </tr>
+        <tr>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Time</td>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ start_time|default:"-" }} - {{ end_time|default:"-" }}</td>
+        </tr>
+        <tr>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Event Notes</td>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ event_notes|default:"-" }}</td>
+        </tr>
+      </table>
+
+      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="margin: 24px 0;">
+        <tr>
+          <td align="center">
+            <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin: 0 auto;">
+              <tr>
+                <td align="center" style="background-color: #4a90e2; border-radius: 5px;">
+                  <a href="{{ deep_link }}" style="display: inline-block; padding: 12px 30px; color: #ffffff; text-decoration: none; font-weight: 600; border-radius: 5px;">
+                    Open In Spark
+                  </a>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+      </table>
+
+      <p style="margin: 0; font-size: 12px; font-weight: 700; color: #555555;">The Ignite Team</p>
+      <p style="margin: 2px 0 0 0; font-size: 12px; color: #555555;">Ignite Productions LLC</p>
+      <p style="margin: 2px 0 0 0; font-size: 12px; color: #555555;">events@igniteproductions.co | 775.406.0435</p>
+    </td>
+  </tr>
+</table>
+{% endblock %}

@@ -244,6 +244,94 @@ class TestClientJobMutations(JobsGraphQLTestCase):
         assert mock_send.called
 
     @pytest.mark.asyncio
+    async def test_update_job_sends_applied_email_for_pending_status(self):
+        rate_type = await sync_to_async(self.create_rate_type)(
+            name="Hourly Pending",
+            tenant=self.tenant,
+        )
+        original_rate = await sync_to_async(self.create_rate)(
+            amount=50.0,
+            rate_type=rate_type,
+            tenant=self.tenant,
+        )
+        updated_rate = await sync_to_async(self.create_rate)(
+            amount=60.0,
+            rate_type=rate_type,
+            tenant=self.tenant,
+        )
+        ambassador_user = await sync_to_async(self.create_user)(
+            username="ambassador_update_job_pending@test.com",
+            email="ambassador_update_job_pending@test.com",
+            role=self.roles["ambassador"],
+            password="testpass123",
+        )
+        await sync_to_async(self.create_tenanted_user)(
+            user=ambassador_user,
+            tenant=self.tenant,
+        )
+        ambassador = await sync_to_async(self.create_ambassador)(user=ambassador_user)
+        status = await sync_to_async(self.create_status)(
+            name="Pending",
+            slug="pending",
+            tenant=self.tenant,
+        )
+        job = await sync_to_async(self.create_job)(
+            name="Original Job Pending",
+            code="JOB-NOTIFY-PENDING",
+            address="Original Address",
+            event=self.event,
+            job_title=self.job_title,
+            tenant=self.tenant,
+            rate=original_rate,
+        )
+        await sync_to_async(self.create_ambassador_job)(
+            ambassador=ambassador,
+            job=job,
+            status=status,
+            rate=original_rate,
+            tenant=self.tenant,
+        )
+
+        mutation = """
+        mutation UpdateJob($input: UpdateJobInput!) {
+            updateJob(input: $input) {
+                success
+                message
+                job {
+                    id
+                }
+            }
+        }
+        """
+
+        variables = {
+            "input": {
+                "id": str(job.id),
+                "name": "Original Job Pending",
+                "description": "Updated description",
+                "code": "JOB-NOTIFY-PENDING",
+                "address": "Updated Address",
+                "jobTitleId": str(self.job_title.id),
+                "eventId": str(self.event.id),
+                "rateId": str(updated_rate.id),
+                "coordinates": [10.0, 20.0],
+            }
+        }
+
+        with patch("jobs.mutations.AmbassadorAppliedJobUpdatedMailer.send") as mock_pending_send, patch(
+            "jobs.mutations.AmbassadorJobUpdatedMailer.send"
+        ) as mock_default_send:
+            result = await self._execute_mutation_authenticated(
+                mutation, variables, self.client_user, self.endpoint_path
+            )
+
+        assert result.errors is None
+        assert result.data is not None
+        assert result.data["updateJob"]["success"] is True
+        assert mock_pending_send.called
+        mock_default_send.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_update_job_does_not_send_email_for_past_event(self):
         self.event.start_time = datetime(2026, 3, 20, 18, 0, tzinfo=timezone.utc)
         await sync_to_async(self.event.save)(update_fields=["start_time"])

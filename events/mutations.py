@@ -43,7 +43,12 @@ from events.batch_requests import (
     build_request_batch_template_xlsx,
     import_requests_from_excel_bytes,
 )
-from jobs.envelopes import AmbassadorEventSuspendedMailer, AmbassadorJobUpdatedMailer
+from jobs.envelopes import (
+    AmbassadorAppliedJobUpdatedMailer,
+    AmbassadorEventSuspendedMailer,
+    AmbassadorInvitedJobUpdatedMailer,
+    AmbassadorJobUpdatedMailer,
+)
 from jobs import models as job_models
 from jobs.notification_rules import should_send_ambassador_event_email
 
@@ -467,7 +472,19 @@ async def _notify_assigned_ambassadors_for_event_update(event_id: int) -> None:
         if not email:
             continue
 
-        mailer = AmbassadorJobUpdatedMailer(
+        status_slug = (
+            (getattr(getattr(ambassador_job, "status", None), "slug", None) or "")
+            .strip()
+            .lower()
+        )
+        if status_slug in {"pending", "apply"}:
+            mailer_class = AmbassadorAppliedJobUpdatedMailer
+        elif status_slug == "invited":
+            mailer_class = AmbassadorInvitedJobUpdatedMailer
+        else:
+            mailer_class = AmbassadorJobUpdatedMailer
+
+        mailer = mailer_class(
             ambassador_job=ambassador_job,
             to_emails=[email],
             recipient_first_name=(getattr(user, "first_name", None) or "").strip() or None,
