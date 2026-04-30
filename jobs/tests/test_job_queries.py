@@ -290,6 +290,55 @@ class TestSparkJobQueries(JobsGraphQLTestCase):
         assert result.data["ambassadorJobs"] is not None
         assert result.data["ambassadorJobs"]["totalCount"] >= 1
 
+    @pytest.mark.asyncio
+    async def test_ambassador_jobs_query_with_search_q(self):
+        """Test ambassadorJobs query supports q filtering without FieldError."""
+        ambassador_user = self.create_user(
+            username="spark_query_ambassador_q@test.com",
+            email="spark_query_ambassador_q@test.com",
+            role=self.roles["ambassador"],
+            password="testpass123",
+        )
+        ambassador = self.create_ambassador(
+            user=ambassador_user,
+            first_name="Alex",
+            last_name="Morgan",
+        )
+        self.create_tenanted_user(user=ambassador_user, tenant=self.tenant)
+        status = self.create_status(name="Pending", tenant=self.tenant, slug="pending")
+        rate_type = self.create_rate_type(name="Hour", tenant=self.tenant)
+        rate = self.create_rate(amount=25.0, rate_type=rate_type, tenant=self.tenant)
+        self.create_ambassador_job(
+            ambassador=ambassador,
+            job=self.job,
+            status=status,
+            rate=rate,
+            tenant=self.tenant,
+        )
+
+        query = """
+        query AmbassadorJobsSearchQuery($first: Int, $q: String) {
+            ambassadorJobs(first: $first, q: $q) {
+                totalCount
+                edges {
+                    node {
+                        id
+                    }
+                }
+            }
+        }
+        """
+        variables = {"first": 10, "q": "Spark Job"}
+
+        result = await self._execute_query_authenticated(
+            query, variables, self.spark_user, self.endpoint_path
+        )
+
+        assert result.errors is None
+        assert result.data is not None
+        assert result.data["ambassadorJobs"] is not None
+        assert result.data["ambassadorJobs"]["totalCount"] >= 1
+
 
 @pytest.mark.django_db(transaction=True)
 class TestAmbassadorJobQueries(JobsGraphQLTestCase):
