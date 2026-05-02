@@ -358,6 +358,29 @@ class AmbassadorManagementQueries:
         )
 
     @strawberry.field(permission_classes=[IsClientOrSparkAdmin])
+    async def invited_groups_by_job(
+        self,
+        info: strawberry.Info,
+        filters: inputs.AmbassadorGroupFiltersInput | None = None,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+    ) -> CountableConnection[types.AmbassadorGroup]:
+        """Get groups that include ambassadors invited to a given job."""
+        from .services import AmbassadorInvitationQueriesService
+
+        service = AmbassadorInvitationQueriesService()
+        return await service.get_invited_groups_by_job(
+            info=info,
+            filters=filters,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+        )
+
+    @strawberry.field(permission_classes=[IsClientOrSparkAdmin])
     async def active_ambassadors(
         self,
         info: strawberry.Info,
@@ -787,16 +810,12 @@ class AmbassadorGroupQueriesService(BaseQueriesService):
         if job_id:
             try:
                 job_id = resolve_id_to_int(job_id)
-                queryset = queryset.filter(
-                    members__ambassador__ambassador_jobs__job_id=job_id
-                ).distinct()
+                queryset = queryset.filter(job_links__job_id=job_id).distinct()
             except (TypeError, ValueError, GraphQLError):
                 raise GraphQLError("Invalid job ID.")
         job_uuid = getattr(filters, "job_uuid", None)
         if job_uuid:
-            queryset = queryset.filter(
-                members__ambassador__ambassador_jobs__job__uuid=job_uuid
-            ).distinct()
+            queryset = queryset.filter(job_links__job__uuid=job_uuid).distinct()
 
         return queryset
 

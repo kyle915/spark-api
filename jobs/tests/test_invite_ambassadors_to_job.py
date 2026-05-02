@@ -320,6 +320,32 @@ class TestClientInviteAmbassadorsToJob(JobsGraphQLTestCase):
                    for error in result.errors)
 
     @pytest.mark.asyncio
+    async def test_invite_ambassador_twice_same_job_fails(self):
+        """Test duplicate invitation for the same ambassador and job is rejected."""
+        variables = {
+            "input": {
+                "tenantId": str(self.tenant.id),
+                "jobId": self.job_relay_id,
+                "ambassadorIds": [self.ambassador1_relay_id],
+            }
+        }
+
+        first_result = await self._execute_mutation_authenticated(
+            self.mutation, variables, self.client_user, self.endpoint_path
+        )
+        assert first_result.errors is None
+        assert first_result.data["inviteAmbassadorsToJob"]["success"] is True
+
+        second_result = await self._execute_mutation_authenticated(
+            self.mutation, variables, self.client_user, self.endpoint_path
+        )
+        assert second_result.errors is not None
+        assert any(
+            "already have an invitation for this job" in str(error).lower()
+            for error in second_result.errors
+        )
+
+    @pytest.mark.asyncio
     async def test_invite_ambassadors_empty_list(self):
         """Test invitation with empty ambassador list returns empty result."""
         variables = {

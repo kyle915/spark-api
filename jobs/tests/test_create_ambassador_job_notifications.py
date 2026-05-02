@@ -134,3 +134,48 @@ class TestCreateAmbassadorJobNotifications(JobsGraphQLTestCase):
         assert result.data is not None
         assert result.data["createAmbassadorJob"]["success"] is True
         mock_send.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_create_ambassador_job_duplicate_assignment_fails(self):
+        mutation = """
+        mutation CreateAmbassadorJob($input: CreateAmbassadorJobInput!) {
+            createAmbassadorJob(input: $input) {
+                success
+                message
+                ambassadorJob {
+                    id
+                }
+            }
+        }
+        """
+        variables = {
+            "input": {
+                "tenantId": str(self.tenant.id),
+                "ambassadorId": str(self.ambassador.id),
+                "jobId": str(self.job.id),
+                "statusId": str(self.pending_status.id),
+                "rateId": str(self.rate.id),
+                "appearAsRfp": True,
+            }
+        }
+
+        first_result = await self._execute_mutation_authenticated(
+            mutation,
+            variables,
+            self.spark_user,
+            self.endpoint_path,
+        )
+        assert first_result.errors is None
+        assert first_result.data["createAmbassadorJob"]["success"] is True
+
+        second_result = await self._execute_mutation_authenticated(
+            mutation,
+            variables,
+            self.spark_user,
+            self.endpoint_path,
+        )
+        assert second_result.errors is None
+        assert second_result.data["createAmbassadorJob"]["success"] is False
+        assert "already assigned to this job" in second_result.data["createAmbassadorJob"][
+            "message"
+        ].lower()

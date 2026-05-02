@@ -13,7 +13,14 @@ from django.contrib.auth import get_user_model
 from django.utils import timezone
 from datetime import timedelta
 
-from ambassadors.models import Ambassador, AmbassadorInvitation
+from ambassadors.models import (
+    Ambassador,
+    AmbassadorInvitation,
+    AmbassadorGroup,
+    AmbassadorGroupJob,
+    GroupType,
+    UserGroup,
+)
 from ambassadors.tests.base import AmbassadorsGraphQLTestCase
 from ambassadors.constants import INVITATION_EXPIRY_DAYS
 from tenants.models import Tenant, TenantedUser
@@ -679,6 +686,219 @@ class TestAvailableAmbassadorsQuery(AmbassadorsGraphQLTestCase):
         assert result.data is None
         assert result.errors is not None
         assert len(result.errors) > 0
+
+
+@pytest.mark.django_db(transaction=True)
+class TestInvitedGroupsByJobQuery(AmbassadorsGraphQLTestCase):
+    """Tests for invited_groups_by_job query."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self, db):
+        from config.schema_client import schema_clients
+
+        self.roles = self.setup_default_roles()
+        self.tenant = self.create_tenant(name="Invited Groups Tenant")
+        self.other_tenant = self.create_tenant(name="Other Invited Groups Tenant")
+
+        unique_id = str(uuid.uuid4())[:8]
+        self.client_user = self.create_user(
+            username=f"client_groups_{unique_id}@test.com",
+            email=f"client_groups_{unique_id}@test.com",
+            role=self.roles["client"],
+        )
+        self.create_tenanted_user(self.client_user, self.tenant)
+
+        self.spark_admin_user = self.create_user(
+            username=f"spark_groups_{str(uuid.uuid4())[:8]}@test.com",
+            email=f"spark_groups_{str(uuid.uuid4())[:8]}@test.com",
+            role=self.roles["spark_admin"],
+        )
+
+        system_user = self.get_system_user()
+
+        self.group_type = GroupType.objects.create(
+            name="Ambassador",
+            created_by=system_user,
+            updated_by=system_user,
+        )
+
+        self.event = self.create_event(
+            name="Group Invite Event",
+            tenant=self.tenant,
+            address="123 Main St",
+        )
+        self.job_title = job_models.JobTitle.objects.create(
+            name="Promoter",
+            tenant=self.tenant,
+            created_by=system_user,
+        )
+        self.rate_type = job_models.RateType.objects.create(
+            name="Hourly",
+            tenant=self.tenant,
+            created_by=system_user,
+        )
+        self.rate = job_models.Rate.objects.create(
+            amount=25.0,
+            rate_type=self.rate_type,
+            tenant=self.tenant,
+            created_by=system_user,
+        )
+        self.job = job_models.Job.objects.create(
+            name="Event Front",
+            code=f"JOB-{str(uuid.uuid4())[:6]}",
+            address="123 Main St",
+            event=self.event,
+            job_title=self.job_title,
+            tenant=self.tenant,
+            rate=self.rate,
+            created_by=system_user,
+        )
+
+        self.invited_user = self.create_user(
+            username=f"amb_invited_{str(uuid.uuid4())[:8]}@test.com",
+            email=f"amb_invited_{str(uuid.uuid4())[:8]}@test.com",
+            role=self.roles["ambassador"],
+        )
+        self.invited_ambassador = self.create_ambassador(user=self.invited_user, is_active=True)
+        self.create_tenanted_user(self.invited_user, self.tenant)
+
+        self.not_invited_user = self.create_user(
+            username=f"amb_not_inv_{str(uuid.uuid4())[:8]}@test.com",
+            email=f"amb_not_inv_{str(uuid.uuid4())[:8]}@test.com",
+            role=self.roles["ambassador"],
+        )
+        self.not_invited_ambassador = self.create_ambassador(
+            user=self.not_invited_user, is_active=True
+        )
+        self.create_tenanted_user(self.not_invited_user, self.tenant)
+
+        self.match_group = AmbassadorGroup.objects.create(
+            name="Group 01",
+            description="Matching group",
+            private=False,
+            group_type=self.group_type,
+            tenant=self.tenant,
+            created_by=system_user,
+            updated_by=system_user,
+        )
+        self.non_match_group = AmbassadorGroup.objects.create(
+            name="Group 02",
+            description="Non matching group",
+            private=False,
+            group_type=self.group_type,
+            tenant=self.tenant,
+            created_by=system_user,
+            updated_by=system_user,
+        )
+
+        UserGroup.objects.create(
+            user=self.invited_user,
+            ambassador=self.invited_ambassador,
+            group=self.match_group,
+        )
+        UserGroup.objects.create(
+            user=self.not_invited_user,
+            ambassador=self.not_invited_ambassador,
+            group=self.non_match_group,
+        )
+
+        AmbassadorGroupJob.objects.create(
+            group=self.match_group,
+            job=self.job,
+            tenant=self.tenant,
+            created_by=system_user,
+            updated_by=system_user,
+        )
+
+        AmbassadorInvitation.objects.create(
+            email=self.invited_user.email,
+            token=f"token-invited-{str(uuid.uuid4())[:8]}",
+            expires_at=timezone.now() + timedelta(days=INVITATION_EXPIRY_DAYS),
+            invited_by=self.client_user,
+            tenant=self.tenant,
+            ambassador=self.invited_ambassador,
+            job=self.job,
+            created_by=self.client_user,
+            updated_by=self.client_user,
+        )
+
+        self.schema = schema_clients
+        self.endpoint_path = "/api/v1/graphql/clients"
+        self.query = """
+            query InvitedGroupsByJob($filters: AmbassadorGroupFiltersInput, $first: Int) {
+                invitedGroupsByJob(filters: $filters, first: $first) {
+                    totalCount
+                    edges {
+                        node {
+                            id
+                            name
+                            private
+                            members {
+                                id
+                            }
+                        }
+                    }
+                }
+            }
+        """
+
+    @pytest.mark.asyncio
+    async def test_invited_groups_by_job_returns_matching_groups(self):
+        result = await self._execute_query_authenticated(
+            self.query,
+            {"filters": {"jobId": str(self.job.id)}, "first": 10},
+            self.client_user,
+            self.endpoint_path,
+        )
+
+        assert result.errors is None
+        assert result.data is not None
+        assert result.data["invitedGroupsByJob"]["totalCount"] == 1
+        edges = result.data["invitedGroupsByJob"]["edges"]
+        assert len(edges) == 1
+        assert edges[0]["node"]["name"] == "Group 01"
+
+    @pytest.mark.asyncio
+    async def test_invited_groups_by_job_without_matches_returns_empty(self):
+        other_event = self.create_event(
+            name="No Match Event",
+            tenant=self.tenant,
+            address="No Match St",
+        )
+        other_job = job_models.Job.objects.create(
+            name="No Match Job",
+            code=f"JOB-{str(uuid.uuid4())[:6]}",
+            address="No Match St",
+            event=other_event,
+            job_title=self.job_title,
+            tenant=self.tenant,
+            rate=self.rate,
+            created_by=self.get_system_user(),
+        )
+
+        result = await self._execute_query_authenticated(
+            self.query,
+            {"filters": {"jobId": str(other_job.id)}, "first": 10},
+            self.client_user,
+            self.endpoint_path,
+        )
+
+        assert result.errors is None
+        assert result.data is not None
+        assert result.data["invitedGroupsByJob"]["totalCount"] == 0
+
+    @pytest.mark.asyncio
+    async def test_invited_groups_by_job_invalid_job_id(self):
+        result = await self._execute_query_authenticated(
+            self.query,
+            {"filters": {"jobId": "invalid-id"}, "first": 10},
+            self.spark_admin_user,
+            self.endpoint_path,
+        )
+
+        assert result.data is None or result.data["invitedGroupsByJob"] is None
+        assert result.errors is not None
+        assert any("Invalid job ID." in str(error) for error in result.errors)
 
 
 @pytest.mark.django_db(transaction=True)
