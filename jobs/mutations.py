@@ -844,7 +844,16 @@ class AmbassadorJobMutationService(BaseMutationService):
             return build_mutation_response(
                 types.AmbassadorJobDetailResponse,
                 success=False,
-                message="Invalid job ID.",
+                message="Please select a valid job.",
+                input_obj=input,
+            )
+        try:
+            ambassador_id = resolve_id_to_int(input.ambassador_id)
+        except (TypeError, ValueError, GraphQLError):
+            return build_mutation_response(
+                types.AmbassadorJobDetailResponse,
+                success=False,
+                message="Please select a valid ambassador.",
                 input_obj=input,
             )
 
@@ -857,6 +866,20 @@ class AmbassadorJobMutationService(BaseMutationService):
                 types.AmbassadorJobDetailResponse,
                 success=False,
                 message="Job not found.",
+                input_obj=input,
+            )
+
+        already_assigned = await sync_to_async(
+            models.AmbassadorJob.objects.filter(
+                job_id=job_id,
+                ambassador_id=ambassador_id,
+            ).exists
+        )()
+        if already_assigned:
+            return build_mutation_response(
+                types.AmbassadorJobDetailResponse,
+                success=False,
+                message="This ambassador is already assigned to this job. You can update the existing assignment instead.",
                 input_obj=input,
             )
 
@@ -1379,7 +1402,7 @@ class ApproveAmbassadorJobMutationService(SparkGraphQLMixin):
             try:
                 job_id = resolve_id_to_int(input.job_id)
             except (TypeError, ValueError, GraphQLError) as exc:
-                raise GraphQLError(f"Invalid job ID: {input.job_id}") from exc
+                raise GraphQLError("Please select a valid job.") from exc
 
             job = models.Job.objects.filter(
                 id=job_id, tenant_id=tenant.id, rate__isnull=False
@@ -1396,9 +1419,7 @@ class ApproveAmbassadorJobMutationService(SparkGraphQLMixin):
                     resolved_id = resolve_id_to_int(ambassador_id)
                     resolved_ids.append(resolved_id)
                 except (TypeError, ValueError, GraphQLError) as exc:
-                    raise GraphQLError(
-                        f"Invalid ambassador ID: {ambassador_id}"
-                    ) from exc
+                    raise GraphQLError("One of the selected ambassadors is not valid.") from exc
 
             # Filter ambassadors by tenant via TenantedUser relationship
             ambassadors = models.Ambassador.objects.filter(
@@ -1406,6 +1427,18 @@ class ApproveAmbassadorJobMutationService(SparkGraphQLMixin):
             ).distinct()
             if not ambassadors:
                 return []
+
+            existing_ambassador_ids = set(
+                models.AmbassadorJob.objects.filter(
+                    job=job,
+                    ambassador_id__in=[ambassador.id for ambassador in ambassadors],
+                ).values_list("ambassador_id", flat=True)
+            )
+            if existing_ambassador_ids:
+                raise GraphQLError(
+                    "Some selected ambassadors already have an invitation for this job."
+                )
+
             ambassador_jobs = []
             for ambassador in ambassadors:
                 ambassador_job = models.AmbassadorJob.objects.create(
@@ -1422,7 +1455,17 @@ class ApproveAmbassadorJobMutationService(SparkGraphQLMixin):
                 ambassador_jobs.append(ambassador_job)
             return ambassador_jobs
 
-        ambassador_jobs = await invite_ambassadors_to_job()
+        try:
+            ambassador_jobs = await invite_ambassadors_to_job()
+        except GraphQLError as exc:
+            return build_mutation_response(
+                types.InviteAmbassadorsToJobResponse,
+                success=False,
+                message=str(exc),
+                input_obj=input,
+                ambassador_jobs=[],
+            )
+
         if ambassador_jobs:
             ambassador_jobs = await sync_to_async(list)(
                 models.AmbassadorJob.objects.filter(

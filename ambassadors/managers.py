@@ -47,20 +47,28 @@ class AmbassadorInvitationManager(BaseManager, models.Manager):
         """Return ambassador invitation by token but in async way."""
         return await sync_to_async(self.by_token)(token)
 
-    def check_by_email(self, email: str):
+    def check_by_email(self, email: str, job=None):
         from .models import AmbassadorInvitation
         now = timezone.now()
-        return AmbassadorInvitation.objects.filter(
+        queryset = AmbassadorInvitation.objects.filter(
             email=email,
             is_used=False,
             expires_at__gt=now,
-        ).exists()
+        )
 
-    async def _check_by_email(self, email: str):
-        return await sync_to_async(self.check_by_email)(email)
+        if job is None:
+            queryset = queryset.filter(job__isnull=True)
+        else:
+            queryset = queryset.filter(job=job)
+
+        return queryset.exists()
+
+    async def _check_by_email(self, email: str, job=None):
+        return await sync_to_async(self.check_by_email)(email, job)
 
     def create_token(self, email: str, **kwargs):
-        if self.check_by_email(email):
+        job = kwargs.get("job", None)
+        if self.check_by_email(email, job):
             raise ValueError(
                 "An active invitation already exists for this email.")
 
@@ -81,7 +89,7 @@ class AmbassadorInvitationManager(BaseManager, models.Manager):
             expires_at=expires_at,
             invited_by=invited_by,
             tenant=tenant,
-            job=kwargs.get("job", None),
+            job=job,
             ambassador=kwargs.get("ambassador", None),
             created_by=invited_by,
             updated_by=invited_by,

@@ -82,6 +82,8 @@ class AmbassadorInvitationFiltersInput:
 
     tenant_id: strawberry.ID | None = None
     tenant_uuid: strawberry.ID | None = None
+    job_id: strawberry.ID | None = None
+    job_uuid: strawberry.ID | None = None
     is_expired: bool | None = None  # True for expired, False for active, None for all
     is_used: bool | None = None  # True for used, False for unused, None for all
     email: str | None = None  # Search by email (partial match)
@@ -463,6 +465,8 @@ class AmbassadorGroupFiltersInput:
     """Filters for ambassador group queries."""
 
     search: str | None = None
+    job_id: strawberry.ID | None = None
+    job_uuid: strawberry.ID | None = None
 
 
 @strawberry.input
