@@ -561,7 +561,9 @@ class RecapMutationService(SparkGraphQLMixin):
                 raise GraphQLError("Job not found.")
 
         retailer = None
-        if self.input.retailer_id:
+        if is_mobile_input:
+            retailer = getattr(event, "retailer", None)
+        elif self.input.retailer_id:
             try:
                 retailer_id = resolve_id_to_int(self.input.retailer_id)
                 retailer = await sync_to_async(Retailer.objects.get)(id=retailer_id)
@@ -579,7 +581,11 @@ class RecapMutationService(SparkGraphQLMixin):
                 raise GraphQLError("Ambassador not found.")
 
         location = None
-        if self.input.location_id:
+        if is_mobile_input:
+            location = getattr(event, "location", None)
+            if location is None:
+                location = getattr(retailer, "location", None) if retailer else None
+        elif self.input.location_id:
             try:
                 location_id = resolve_id_to_int(self.input.location_id)
                 location = await sync_to_async(Location.objects.get)(id=location_id)
@@ -587,7 +593,11 @@ class RecapMutationService(SparkGraphQLMixin):
                 raise GraphQLError("Location not found.")
 
         state = None
-        if self.input.state_id:
+        if is_mobile_input:
+            state = getattr(event, "state", None)
+            if state is None:
+                state = getattr(location, "state", None) if location else None
+        elif self.input.state_id:
             try:
                 state_id = resolve_id_to_int(self.input.state_id)
                 state = await sync_to_async(State.objects.get)(id=state_id)
@@ -1161,14 +1171,33 @@ class RecapMutationService(SparkGraphQLMixin):
 
     async def create_custom_recap(self) -> models.CustomRecap:
         """Create a custom recap."""
-        if not isinstance(self.input, inputs.CreateCustomRecapInput):
+        if not isinstance(
+            self.input,
+            (inputs.CreateCustomRecapInput, inputs.CreateCustomRecapMobileInput),
+        ):
             raise GraphQLError("Invalid input type.")
 
-        try:
-            event_id = resolve_id_to_int(self.input.event_id)
-            event = await sync_to_async(Event.objects.get)(id=event_id)
-        except (Event.DoesNotExist, TypeError, ValueError, GraphQLError):
-            raise GraphQLError("Event not found.")
+        is_mobile_input = isinstance(self.input, inputs.CreateCustomRecapMobileInput)
+
+        job = None
+        if is_mobile_input:
+            try:
+                job_id = resolve_id_to_int(self.input.job_id)
+                job = await sync_to_async(Job.objects.select_related("event").get)(
+                    id=job_id
+                )
+            except (Job.DoesNotExist, TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Job not found.")
+
+            event = job.event
+            if event is None:
+                raise GraphQLError("Event not found.")
+        else:
+            try:
+                event_id = resolve_id_to_int(self.input.event_id)
+                event = await sync_to_async(Event.objects.get)(id=event_id)
+            except (Event.DoesNotExist, TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Event not found.")
 
         try:
             template_id = resolve_id_to_int(self.input.custom_recap_template_id)
@@ -1189,15 +1218,16 @@ class RecapMutationService(SparkGraphQLMixin):
             )
 
         timezone = None
-        if self.input.timezone_id:
+        if is_mobile_input:
+            timezone = getattr(event, "timezone", None)
+        elif self.input.timezone_id:
             try:
                 timezone_id = resolve_id_to_int(self.input.timezone_id)
                 timezone = await sync_to_async(TimeZone.objects.get)(id=timezone_id)
             except (TimeZone.DoesNotExist, TypeError, ValueError, GraphQLError):
                 raise GraphQLError("Time zone not found.")
 
-        job = None
-        if self.input.job_id:
+        if self.input.job_id and not is_mobile_input:
             try:
                 job_id = resolve_id_to_int(self.input.job_id)
                 job = await sync_to_async(Job.objects.get)(id=job_id)
@@ -1213,7 +1243,13 @@ class RecapMutationService(SparkGraphQLMixin):
                 raise GraphQLError("Retailer not found.")
 
         ambassador = None
-        if self.input.ambassador_id:
+        if is_mobile_input:
+            ambassador = await sync_to_async(
+                Ambassador.objects.filter(user=self.user).first
+            )()
+            if not ambassador:
+                raise GraphQLError("Ambassador not found.")
+        elif self.input.ambassador_id:
             try:
                 ambassador_id = resolve_id_to_int(self.input.ambassador_id)
                 ambassador = await sync_to_async(Ambassador.objects.get)(
@@ -2769,6 +2805,32 @@ class RecapMutations:
         input: inputs.CreateCustomRecapInput,
     ) -> types.CustomRecapDetailResponse:
         """Create a new custom recap."""
+        try:
+            service = RecapMutationService.with_input(input)
+            await service.set_user(info)
+            custom_recap = await service.create_custom_recap()
+            return build_mutation_response(
+                types.CustomRecapDetailResponse,
+                success=True,
+                message="Custom recap created successfully.",
+                input_obj=input,
+                custom_recap=custom_recap,
+            )
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.CustomRecapDetailResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def create_custom_recap_mobile(
+        self,
+        info: strawberry.Info,
+        input: inputs.CreateCustomRecapMobileInput,
+    ) -> types.CustomRecapDetailResponse:
+        """Create a new custom recap scoped to the logged ambassador (mobile)."""
         try:
             service = RecapMutationService.with_input(input)
             await service.set_user(info)
