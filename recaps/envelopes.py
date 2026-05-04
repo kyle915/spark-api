@@ -54,9 +54,7 @@ class RecapApprovedNotificationMailer(Mailer):
             return self.recap.event.address
         return "-"
 
-    def _attendance_window(
-        self, offset_minutes: int
-    ) -> tuple[str, str]:
+    def _attendance_window(self, offset_minutes: int) -> tuple[str, str]:
         if not self.recap.ambassador_id:
             return "-", "-"
 
@@ -127,11 +125,17 @@ class RecapApprovedNotificationMailer(Mailer):
         timezone_obj = self.recap.timezone or event.timezone
         offset_minutes = int(getattr(timezone_obj, "offset", 0) or 0)
 
-        start_dt = (job.start_date if job and job.start_date else None) or event.start_time
+        start_dt = (
+            job.start_date if job and job.start_date else None
+        ) or event.start_time
         end_dt = (job.end_date if job and job.end_date else None) or event.end_time
         recap_date_source = start_dt or event.date
 
-        request_id = f"REQ-{event.request_id}" if getattr(event, "request_id", None) else f"RECAP-{self.recap.id}"
+        request_id = (
+            f"REQ-{event.request_id}"
+            if getattr(event, "request_id", None)
+            else f"RECAP-{self.recap.id}"
+        )
         location_name = self._location_name()
         actual_check_in, actual_check_out = self._attendance_window(offset_minutes)
         ba_on_site = self._ba_on_site_count()
@@ -148,7 +152,11 @@ class RecapApprovedNotificationMailer(Mailer):
         total_packs_sold = getattr(self.recap, "total_packs_sold", None)
         if total_packs_sold is not None:
             client_metrics.append(f"packs sold: {total_packs_sold}")
-        client_specific_metrics = ", ".join(client_metrics) if client_metrics else "Samples distributed, leads captured, survey responses"
+        client_specific_metrics = (
+            ", ".join(client_metrics)
+            if client_metrics
+            else "Samples distributed, leads captured, survey responses"
+        )
 
         return Envelope(
             subject="Your activation recap is ready 📊",
@@ -166,9 +174,15 @@ class RecapApprovedNotificationMailer(Mailer):
                 "brand_name": tenant.name or "-",
                 "campaign_name": event.name or "-",
                 "location_name": location_name,
-                "date_text": _format_dt_no_tz(recap_date_source, "%m/%d/%Y", offset_minutes),
-                "scheduled_start_time": _format_dt_no_tz(start_dt, "%I:%M %p", offset_minutes),
-                "scheduled_end_time": _format_dt_no_tz(end_dt, "%I:%M %p", offset_minutes),
+                "date_text": _format_dt_no_tz(
+                    recap_date_source, "%m/%d/%Y", offset_minutes
+                ),
+                "scheduled_start_time": _format_dt_no_tz(
+                    start_dt, "%I:%M %p", offset_minutes
+                ),
+                "scheduled_end_time": _format_dt_no_tz(
+                    end_dt, "%I:%M %p", offset_minutes
+                ),
                 "actual_check_in": actual_check_in,
                 "actual_check_out": actual_check_out,
                 "ba_on_site": ba_on_site,
@@ -176,5 +190,92 @@ class RecapApprovedNotificationMailer(Mailer):
                 "photos_count": photos_count,
                 "client_specific_metrics": client_specific_metrics,
                 "recap_link": "https://spark.igniteproductions.co/",
+            },
+        )
+
+
+class RecapReadyForReviewAdminMailer(Mailer):
+    def __init__(
+        self,
+        recap: models.Recap | models.CustomRecap,
+        to_emails: list[str],
+        ambassador_name: str | None = None,
+    ) -> None:
+        self.recap = recap
+        self.to_emails = to_emails
+        self.ambassador_name = ambassador_name
+
+    def envelope(self) -> Envelope:
+        event = self.recap.event
+        tenant = event.tenant
+        timezone_obj = self.recap.timezone or event.timezone
+        offset_minutes = int(getattr(timezone_obj, "offset", 0) or 0)
+        recap_type = "Recap" if isinstance(self.recap, models.CustomRecap) else "Recap"
+        ambassador_label = self.ambassador_name or "Ambassador"
+        request_id = (
+            f"REQ-{event.request_id}"
+            if getattr(event, "request_id", None)
+            else f"RECAP-{self.recap.id}"
+        )
+        frontend_base_url = str(
+            getattr(
+                settings,
+                "ADMIN_FRONTEND_URL",
+                "https://spark-admin.igniteproductions.co",
+            )
+        ).rstrip("/")
+        review_link = f"{frontend_base_url}/recap/view-custom/{self.recap.uuid}"
+        job_title = (
+            getattr(getattr(self.recap, "job", None), "name", None)
+            or getattr(getattr(event, "job", None), "name", None)
+            or "-"
+        )
+        location_name = (
+            getattr(getattr(self.recap, "location", None), "name", None)
+            or getattr(getattr(event, "location", None), "name", None)
+            or "-"
+        )
+        state_name = (
+            getattr(getattr(self.recap, "state", None), "name", None)
+            or getattr(getattr(event, "state", None), "name", None)
+            or "-"
+        )
+        event_date_value = getattr(event, "date", None)
+        event_date = (
+            event_date_value.strftime("%m/%d/%Y")
+            if hasattr(event_date_value, "strftime")
+            else "-"
+        )
+        event_end_time_value = getattr(event, "end_time", None)
+        event_end_time = _format_dt_no_tz(
+            event_end_time_value, "%I:%M %p", offset_minutes
+        )
+        event_start_time_value = getattr(event, "start_time", None)
+        event_start_time = _format_dt_no_tz(
+            event_start_time_value, "%I:%M %p", offset_minutes
+        )
+
+        return Envelope(
+            subject=f"{recap_type} ready for review",
+            template="recaps.templates.emails.recap_ready_for_review_admin_notification",
+            to_emails=self.to_emails,
+            from_email=getattr(
+                settings,
+                "DEFAULT_FROM_EMAIL",
+                "Spark by Ignite <no-reply@igniteproductions.co>",
+            ),
+            context={
+                "recap_type": recap_type,
+                "ambassador_name": ambassador_label,
+                "request_id": request_id,
+                "brand_name": tenant.name or "-",
+                "campaign_name": event.name or "-",
+                "job_title": job_title,
+                "location": location_name,
+                "state": state_name,
+                "event_date": event_date,
+                "event_start_time": event_start_time,
+                "event_end_time": event_end_time,
+                "review_link": review_link,
             },
         )

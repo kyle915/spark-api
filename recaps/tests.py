@@ -3,12 +3,14 @@ from unittest.mock import patch
 import pytest
 from asgiref.sync import sync_to_async
 import strawberry_django  # noqa: F401
+from django.test import override_settings
 
 from ambassadors.models import AmbassadorEvent
 from events.models import EventType
 from jobs.tests.base import JobsGraphQLTestCase
 from recaps import models as recap_models
 from recaps.envelopes import RecapApprovedNotificationMailer
+from recaps.mutations import _notify_recap_ready_for_review_to_admins
 
 
 @pytest.mark.django_db(transaction=True)
@@ -365,6 +367,30 @@ class TestApproveRecapNotifications(JobsGraphQLTestCase):
         assert envelope.template == "recaps.templates.emails.recap_approved_notification"
         assert envelope.to_emails == [self.rmm_user.email]
         assert "Activation Summary" in rendered_html
+
+    @pytest.mark.asyncio
+    async def test_notify_recap_ready_for_review_sends_email_for_ambassador(self):
+        with (
+            override_settings(RECAP_REVIEW_COPY_EMAILS=["admin1@test.com", "admin2@test.com"]),
+            patch("recaps.mutations.RecapReadyForReviewAdminMailer.send") as mock_send,
+        ):
+            await _notify_recap_ready_for_review_to_admins(
+                recap=self.recap,
+                created_by=self.ambassador_user,
+            )
+        assert mock_send.called
+
+    @pytest.mark.asyncio
+    async def test_notify_recap_ready_for_review_skips_non_ambassador(self):
+        with (
+            override_settings(RECAP_REVIEW_COPY_EMAILS=["admin1@test.com"]),
+            patch("recaps.mutations.RecapReadyForReviewAdminMailer.send") as mock_send,
+        ):
+            await _notify_recap_ready_for_review_to_admins(
+                recap=self.recap,
+                created_by=self.spark_user,
+            )
+        assert not mock_send.called
 
     @pytest.mark.asyncio
     async def test_recap_query_returns_only_assigned_ambassador(self):

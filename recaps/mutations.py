@@ -16,7 +16,10 @@ from django.utils.text import slugify
 from recaps import types
 from recaps import models
 from recaps import inputs
-from recaps.envelopes import RecapApprovedNotificationMailer
+from recaps.envelopes import (
+    RecapApprovedNotificationMailer,
+    RecapReadyForReviewAdminMailer,
+)
 from recaps.queries import RecapQueriesService
 from ambassadors.models import FileType, Ambassador, Attendance
 from events.models import Event, Retailer, Location, State, TimeZone, EventType
@@ -118,6 +121,42 @@ async def _notify_recap_approved_to_ambassador_by_push(
             recap.id,
             exc,
         )
+
+
+async def _notify_recap_ready_for_review_to_admins(
+    recap: models.Recap | models.CustomRecap,
+    created_by: User | None,
+) -> None:
+    if not created_by:
+        return
+
+    role_slug = await sync_to_async(
+        lambda: User.objects.filter(id=created_by.id).values_list("role__slug", flat=True).first()
+    )()
+    role_slug = (role_slug or "").strip()
+    if role_slug != Role.AMBASSADOR_SLUG:
+        return
+
+    recipients = [
+        email.strip()
+        for email in getattr(settings, "RECAP_REVIEW_COPY_EMAILS", [])
+        if (email or "").strip()
+    ]
+    if not recipients:
+        return
+
+    ambassador_name = (
+        created_by.get_full_name().strip()
+        if hasattr(created_by, "get_full_name")
+        else ""
+    ) or created_by.email
+
+    mailer = RecapReadyForReviewAdminMailer(
+        recap=recap,
+        to_emails=recipients,
+        ambassador_name=ambassador_name,
+    )
+    await sync_to_async(mailer.send)()
 
 
 class RecapMutationService(SparkGraphQLMixin):
@@ -777,6 +816,7 @@ class RecapMutationService(SparkGraphQLMixin):
             job=job,
             ambassador=ambassador,
         )
+        await _notify_recap_ready_for_review_to_admins(recap, self.user)
         return recap
 
     async def update_recap(self) -> models.Recap:
@@ -806,7 +846,9 @@ class RecapMutationService(SparkGraphQLMixin):
                 raise GraphQLError("Job not found.")
 
         retailer = None
-        if self.input.retailer_id:
+        if is_mobile_input:
+            retailer = getattr(event, "retailer", None)
+        elif self.input.retailer_id:
             try:
                 retailer_id = resolve_id_to_int(self.input.retailer_id)
                 retailer = await sync_to_async(Retailer.objects.get)(id=retailer_id)
@@ -824,7 +866,11 @@ class RecapMutationService(SparkGraphQLMixin):
                 raise GraphQLError("Ambassador not found.")
 
         location = None
-        if self.input.location_id:
+        if is_mobile_input:
+            location = getattr(event, "location", None)
+            if location is None:
+                location = getattr(retailer, "location", None) if retailer else None
+        elif self.input.location_id:
             try:
                 location_id = resolve_id_to_int(self.input.location_id)
                 location = await sync_to_async(Location.objects.get)(id=location_id)
@@ -832,7 +878,11 @@ class RecapMutationService(SparkGraphQLMixin):
                 raise GraphQLError("Location not found.")
 
         state = None
-        if self.input.state_id:
+        if is_mobile_input:
+            state = getattr(event, "state", None)
+            if state is None:
+                state = getattr(location, "state", None) if location else None
+        elif self.input.state_id:
             try:
                 state_id = resolve_id_to_int(self.input.state_id)
                 state = await sync_to_async(State.objects.get)(id=state_id)
@@ -1183,9 +1233,17 @@ class RecapMutationService(SparkGraphQLMixin):
         if is_mobile_input:
             try:
                 job_id = resolve_id_to_int(self.input.job_id)
-                job = await sync_to_async(Job.objects.select_related("event").get)(
-                    id=job_id
-                )
+                job = await sync_to_async(
+                    Job.objects.select_related(
+                        "event",
+                        "event__timezone",
+                        "event__location",
+                        "event__state",
+                        "event__retailer",
+                        "event__retailer__location",
+                        "event__retailer__location__state",
+                    ).get
+                )(id=job_id)
             except (Job.DoesNotExist, TypeError, ValueError, GraphQLError):
                 raise GraphQLError("Job not found.")
 
@@ -1235,7 +1293,9 @@ class RecapMutationService(SparkGraphQLMixin):
                 raise GraphQLError("Job not found.")
 
         retailer = None
-        if self.input.retailer_id:
+        if is_mobile_input:
+            retailer = getattr(event, "retailer", None)
+        elif self.input.retailer_id:
             try:
                 retailer_id = resolve_id_to_int(self.input.retailer_id)
                 retailer = await sync_to_async(Retailer.objects.get)(id=retailer_id)
@@ -1259,7 +1319,11 @@ class RecapMutationService(SparkGraphQLMixin):
                 raise GraphQLError("Ambassador not found.")
 
         location = None
-        if self.input.location_id:
+        if is_mobile_input:
+            location = getattr(event, "location", None)
+            if location is None:
+                location = getattr(retailer, "location", None) if retailer else None
+        elif self.input.location_id:
             try:
                 location_id = resolve_id_to_int(self.input.location_id)
                 location = await sync_to_async(Location.objects.get)(id=location_id)
@@ -1267,7 +1331,11 @@ class RecapMutationService(SparkGraphQLMixin):
                 raise GraphQLError("Location not found.")
 
         state = None
-        if self.input.state_id:
+        if is_mobile_input:
+            state = getattr(event, "state", None)
+            if state is None:
+                state = getattr(location, "state", None) if location else None
+        elif self.input.state_id:
             try:
                 state_id = resolve_id_to_int(self.input.state_id)
                 state = await sync_to_async(State.objects.get)(id=state_id)
@@ -1414,7 +1482,9 @@ class RecapMutationService(SparkGraphQLMixin):
                         )
                 return custom_recap
 
-        return await create_custom_recap_transaction()
+        custom_recap = await create_custom_recap_transaction()
+        await _notify_recap_ready_for_review_to_admins(custom_recap, self.user)
+        return custom_recap
 
     async def update_custom_recap(self) -> models.CustomRecap:
         """Update a custom recap."""
@@ -1430,7 +1500,19 @@ class RecapMutationService(SparkGraphQLMixin):
             custom_recap = await sync_to_async(
                 models.CustomRecap.objects.select_related(
                     "job__event",
+                    "job__event__timezone",
+                    "job__event__location",
+                    "job__event__state",
+                    "job__event__retailer",
+                    "job__event__retailer__location",
+                    "job__event__retailer__location__state",
                     "event",
+                    "event__timezone",
+                    "event__location",
+                    "event__state",
+                    "event__retailer",
+                    "event__retailer__location",
+                    "event__retailer__location__state",
                     "custom_recap_template",
                 ).get
             )(id=custom_recap_id)
