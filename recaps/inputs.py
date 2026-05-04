@@ -196,7 +196,6 @@ class CreateCustomRecapInput(SparkGraphQLInput):
     product_samples: List[ProductSampleInput] | None = None
     sales_performance: List[SalesPerformanceInput] | None = None
 
-    timezone_id: strawberry.ID | None = None
     total_engagements: int | None = None
     filling_for_ambassador: bool | None = None
     late: bool | None = None
@@ -209,6 +208,26 @@ class CreateCustomRecapInput(SparkGraphQLInput):
     location_id: strawberry.ID | None = None
     state_id: strawberry.ID | None = None
     ambassador_id: strawberry.ID | None = None
+    custom_field_values: List[CustomFieldValueInput] | None = None
+
+
+@strawberry.input
+class CreateCustomRecapMobileInput(SparkGraphQLInput):
+    name: str
+    job_id: strawberry.ID
+    custom_recap_template_id: strawberry.ID
+
+    files: List[RecapFileInput] | None = None
+    product_samples: List[ProductSampleInput] | None = None
+    sales_performance: List[SalesPerformanceInput] | None = None
+
+    total_engagements: int | None = None
+    filling_for_ambassador: bool | None = None
+    late: bool | None = None
+    incomplete: bool | None = None
+    approved: bool | None = None
+    used_corpo_card: bool | None = None
+
     custom_field_values: List[CustomFieldValueInput] | None = None
 
 
