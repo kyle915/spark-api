@@ -1729,11 +1729,8 @@ class RecapMobileQueries:
             if filters and filters.custom_recap_template_id not in (None, "")
             else None
         )
-        resolved_ambassador_id = (
-            resolve_id_to_int(filters.ambassador_id)
-            if filters and filters.ambassador_id not in (None, "")
-            else None
-        )
+        # Mobile endpoint is always scoped to authenticated ambassador user.
+        resolved_ambassador_id = None
         resolved_retailer_id = (
             resolve_id_to_int(filters.retailer_id)
             if filters and filters.retailer_id not in (None, "")
