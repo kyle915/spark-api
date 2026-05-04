@@ -237,6 +237,25 @@ class UpdateCustomRecapInput(CreateCustomRecapInput):
 
 
 @strawberry.input
+class UpdateCustomRecapMobileInput(SparkGraphQLInput):
+    id: strawberry.ID
+    name: str
+
+    files: List[RecapFileInput] | None = None
+    product_samples: List[ProductSampleInput] | None = None
+    sales_performance: List[SalesPerformanceInput] | None = None
+
+    total_engagements: int | None = None
+    filling_for_ambassador: bool | None = None
+    late: bool | None = None
+    incomplete: bool | None = None
+    approved: bool | None = None
+    used_corpo_card: bool | None = None
+
+    custom_field_values: List[CustomFieldValueInput] | None = None
+
+
+@strawberry.input
 class CreateCustomFieldInput(SparkGraphQLInput):
     name: str
     custom_recap_template_id: strawberry.ID
