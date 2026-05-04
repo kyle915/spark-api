@@ -212,11 +212,6 @@ class RecapReadyForReviewAdminMailer(Mailer):
         offset_minutes = int(getattr(timezone_obj, "offset", 0) or 0)
         recap_type = "Recap" if isinstance(self.recap, models.CustomRecap) else "Recap"
         ambassador_label = self.ambassador_name or "Ambassador"
-        request_id = (
-            f"REQ-{event.request_id}"
-            if getattr(event, "request_id", None)
-            else f"RECAP-{self.recap.id}"
-        )
         frontend_base_url = str(
             getattr(
                 settings,
@@ -267,7 +262,6 @@ class RecapReadyForReviewAdminMailer(Mailer):
             context={
                 "recap_type": recap_type,
                 "ambassador_name": ambassador_label,
-                "request_id": request_id,
                 "brand_name": tenant.name or "-",
                 "campaign_name": event.name or "-",
                 "job_title": job_title,
