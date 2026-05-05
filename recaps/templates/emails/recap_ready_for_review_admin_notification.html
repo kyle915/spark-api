@@ -5,36 +5,8 @@
       <p style="margin: 0 0 18px 0;">Hi Team,</p>
 
       <p style="margin: 0 0 20px 0;">
-        <strong>{{ ambassador_name|default:"Ambassador" }}</strong> submitted a <strong>{{ recap_type|default:"Recap" }}</strong> and it is ready for review.
+        <strong>{{ ambassador_name|default:"Ambassador" }}</strong> submitted a <strong>{{ recap_type|default:"Recap" }}</strong> for <strong>{{ brand_name|default:"-" }}</strong>, and it is ready for review.
       </p>
-
-      <h3 style="margin: 0 0 12px 0; color: #202036; font-size: 32px;">Recap Summary</h3>
-      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="border: 1px solid #d8d8d8; border-collapse: collapse; margin: 0 0 28px 0;">
-        <tr>
-          <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Brand / Campaign</td>
-          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ brand_name|default:"-" }} - {{ campaign_name|default:"-" }}</td>
-        </tr>
-        <tr>
-          <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Job Title</td>
-          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ job_title|default:"-" }}</td>
-        </tr>
-        <tr>
-          <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">State</td>
-          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ state|default:"-" }}</td>
-        </tr>
-        <tr>
-          <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">City</td>
-          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ location|default:"-" }}</td>
-        </tr>
-        <tr>
-          <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Event Date</td>
-          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ event_date|default:"-" }}</td>
-        </tr>
-        <tr>
-          <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Event Time</td>
-          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ event_start_time|default:"-" }} - {{ event_end_time|default:"-" }}</td>
-        </tr>
-      </table>
 
       <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="margin: 24px 0; border: 2px solid #28a745; background-color: #eaf6ec;">
         <tr>
