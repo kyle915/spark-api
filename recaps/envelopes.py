@@ -206,11 +206,7 @@ class RecapReadyForReviewAdminMailer(Mailer):
         self.ambassador_name = ambassador_name
 
     def envelope(self) -> Envelope:
-        event = self.recap.event
-        tenant = event.tenant
-        timezone_obj = self.recap.timezone or event.timezone
-        offset_minutes = int(getattr(timezone_obj, "offset", 0) or 0)
-        recap_type = "Recap" if isinstance(self.recap, models.CustomRecap) else "Recap"
+        tenant = self.recap.event.tenant
         ambassador_label = self.ambassador_name or "Ambassador"
         frontend_base_url = str(
             getattr(
@@ -220,38 +216,9 @@ class RecapReadyForReviewAdminMailer(Mailer):
             )
         ).rstrip("/")
         review_link = f"{frontend_base_url}/recap/view-custom/{self.recap.uuid}"
-        job_title = (
-            getattr(getattr(self.recap, "job", None), "name", None)
-            or getattr(getattr(event, "job", None), "name", None)
-            or "-"
-        )
-        location_name = (
-            getattr(getattr(self.recap, "location", None), "name", None)
-            or getattr(getattr(event, "location", None), "name", None)
-            or "-"
-        )
-        state_name = (
-            getattr(getattr(self.recap, "state", None), "name", None)
-            or getattr(getattr(event, "state", None), "name", None)
-            or "-"
-        )
-        event_date_value = getattr(event, "date", None)
-        event_date = (
-            event_date_value.strftime("%m/%d/%Y")
-            if hasattr(event_date_value, "strftime")
-            else "-"
-        )
-        event_end_time_value = getattr(event, "end_time", None)
-        event_end_time = _format_dt_no_tz(
-            event_end_time_value, "%I:%M %p", offset_minutes
-        )
-        event_start_time_value = getattr(event, "start_time", None)
-        event_start_time = _format_dt_no_tz(
-            event_start_time_value, "%I:%M %p", offset_minutes
-        )
 
         return Envelope(
-            subject=f"{recap_type} ready for review",
+            subject="Recap ready for review",
             template="recaps.templates.emails.recap_ready_for_review_admin_notification",
             to_emails=self.to_emails,
             from_email=getattr(
@@ -260,16 +227,8 @@ class RecapReadyForReviewAdminMailer(Mailer):
                 "Spark by Ignite <no-reply@igniteproductions.co>",
             ),
             context={
-                "recap_type": recap_type,
                 "ambassador_name": ambassador_label,
                 "brand_name": tenant.name or "-",
-                "campaign_name": event.name or "-",
-                "job_title": job_title,
-                "location": location_name,
-                "state": state_name,
-                "event_date": event_date,
-                "event_start_time": event_start_time,
-                "event_end_time": event_end_time,
                 "review_link": review_link,
             },
         )
