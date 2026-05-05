@@ -1860,23 +1860,42 @@ class RecapMutationService(SparkGraphQLMixin):
                     existing_files = list(
                         models.CustomRecapFile.objects.filter(custom_recap=custom_recap)
                     )
-                    blob_to_file = {
-                        extract_blob_name_from_url(str(file.url)): file
-                        for file in existing_files
-                        if extract_blob_name_from_url(str(file.url))
-                    }
+                    if is_mobile_input:
+                        files_to_add = self.input.files.add or []
+                        file_ids_to_remove = self.input.files.remove or []
 
-                    final_files: list[models.CustomRecapFile] = []
-                    for file_input in self.input.files:
-                        file_url = file_input.file
-                        blob_name = extract_blob_name_from_url(file_url)
-                        if not blob_name:
-                            raise GraphQLError("Invalid custom recap file path.")
+                        files_to_delete: list[models.CustomRecapFile] = []
+                        for file_id in file_ids_to_remove:
+                            try:
+                                file_int_id = resolve_id_to_int(file_id)
+                            except (TypeError, ValueError, GraphQLError):
+                                raise GraphQLError(f"Invalid file ID: {file_id}")
+                            file_to_delete = next(
+                                (file for file in existing_files if file.id == file_int_id),
+                                None,
+                            )
+                            if not file_to_delete:
+                                raise GraphQLError(
+                                    f"Custom recap file not found for ID: {file_id}"
+                                )
+                            files_to_delete.append(file_to_delete)
 
-                        if blob_name in blob_to_file:
-                            existing_file = blob_to_file.pop(blob_name)
-                            updated_fields = []
+                        if files_to_delete:
+                            removed_blob_names = [
+                                extract_blob_name_from_url(str(file.url))
+                                for file in files_to_delete
+                            ]
+                            models.CustomRecapFile.objects.filter(
+                                id__in=[file.id for file in files_to_delete]
+                            ).delete()
 
+                        for file_input in files_to_add:
+                            file_url = file_input.file
+                            blob_name = extract_blob_name_from_url(file_url)
+                            if not blob_name:
+                                raise GraphQLError("Invalid custom recap file path.")
+
+                            file_type = None
                             if file_input.file_type_id not in (None, ""):
                                 try:
                                     file_type_id = resolve_id_to_int(file_input.file_type_id)
@@ -1888,10 +1907,12 @@ class RecapMutationService(SparkGraphQLMixin):
                                     GraphQLError,
                                 ):
                                     raise GraphQLError("File type not found.")
-                                if existing_file.file_type_id != file_type.id:
-                                    existing_file.file_type = file_type
-                                    updated_fields.append("file_type")
+                            if not file_type:
+                                file_type = FileType.objects.first()
+                            if not file_type:
+                                raise GraphQLError("No file type available.")
 
+                            file_recap_category = None
                             if file_input.file_recap_category_id not in (None, ""):
                                 try:
                                     category_id = resolve_id_to_int(
@@ -1907,64 +1928,132 @@ class RecapMutationService(SparkGraphQLMixin):
                                     GraphQLError,
                                 ):
                                     raise GraphQLError("File recap category not found.")
-                                if existing_file.file_recap_category_id != file_recap_category.id:
-                                    existing_file.file_recap_category = file_recap_category
-                                    updated_fields.append("file_recap_category")
 
-                            if updated_fields:
-                                existing_file.save(update_fields=updated_fields)
-                            final_files.append(existing_file)
-                            continue
+                            models.CustomRecapFile.objects.create(
+                                name=f"Custom recap file for {self.input.name}",
+                                url=blob_name,
+                                file_type=file_type,
+                                file_recap_category=file_recap_category,
+                                custom_recap=custom_recap,
+                                approved=False,
+                                created_by=self.user,
+                            )
+                    else:
+                        blob_to_file = {
+                            extract_blob_name_from_url(str(file.url)): file
+                            for file in existing_files
+                            if extract_blob_name_from_url(str(file.url))
+                        }
 
-                        file_type = None
-                        if file_input.file_type_id not in (None, ""):
-                            try:
-                                file_type_id = resolve_id_to_int(file_input.file_type_id)
-                                file_type = FileType.objects.get(id=file_type_id)
-                            except (FileType.DoesNotExist, TypeError, ValueError, GraphQLError):
-                                raise GraphQLError("File type not found.")
-                        if not file_type:
-                            file_type = FileType.objects.first()
-                        if not file_type:
-                            raise GraphQLError("No file type available.")
+                        final_files: list[models.CustomRecapFile] = []
+                        for file_input in self.input.files:
+                            file_url = file_input.file
+                            blob_name = extract_blob_name_from_url(file_url)
+                            if not blob_name:
+                                raise GraphQLError("Invalid custom recap file path.")
 
-                        file_recap_category = None
-                        if file_input.file_recap_category_id not in (None, ""):
-                            try:
-                                category_id = resolve_id_to_int(
-                                    file_input.file_recap_category_id
-                                )
-                                file_recap_category = models.FileRecapCategory.objects.get(
-                                    id=category_id
-                                )
-                            except (
-                                models.FileRecapCategory.DoesNotExist,
-                                TypeError,
-                                ValueError,
-                                GraphQLError,
-                            ):
-                                raise GraphQLError("File recap category not found.")
+                            if blob_name in blob_to_file:
+                                existing_file = blob_to_file.pop(blob_name)
+                                updated_fields = []
 
-                        custom_recap_file = models.CustomRecapFile.objects.create(
-                            name=f"Custom recap file for {self.input.name}",
-                            url=blob_name,
-                            file_type=file_type,
-                            file_recap_category=file_recap_category,
-                            custom_recap=custom_recap,
-                            approved=False,
-                            created_by=self.user,
-                        )
-                        final_files.append(custom_recap_file)
+                                if file_input.file_type_id not in (None, ""):
+                                    try:
+                                        file_type_id = resolve_id_to_int(file_input.file_type_id)
+                                        file_type = FileType.objects.get(id=file_type_id)
+                                    except (
+                                        FileType.DoesNotExist,
+                                        TypeError,
+                                        ValueError,
+                                        GraphQLError,
+                                    ):
+                                        raise GraphQLError("File type not found.")
+                                    if existing_file.file_type_id != file_type.id:
+                                        existing_file.file_type = file_type
+                                        updated_fields.append("file_type")
 
-                    removed_files = list(blob_to_file.values())
-                    if removed_files:
-                        removed_blob_names = [
-                            extract_blob_name_from_url(str(file.url))
-                            for file in removed_files
-                        ]
-                        models.CustomRecapFile.objects.filter(
-                            id__in=[file.id for file in removed_files]
-                        ).delete()
+                                if file_input.file_recap_category_id not in (None, ""):
+                                    try:
+                                        category_id = resolve_id_to_int(
+                                            file_input.file_recap_category_id
+                                        )
+                                        file_recap_category = (
+                                            models.FileRecapCategory.objects.get(id=category_id)
+                                        )
+                                    except (
+                                        models.FileRecapCategory.DoesNotExist,
+                                        TypeError,
+                                        ValueError,
+                                        GraphQLError,
+                                    ):
+                                        raise GraphQLError("File recap category not found.")
+                                    if (
+                                        existing_file.file_recap_category_id
+                                        != file_recap_category.id
+                                    ):
+                                        existing_file.file_recap_category = (
+                                            file_recap_category
+                                        )
+                                        updated_fields.append("file_recap_category")
+
+                                if updated_fields:
+                                    existing_file.save(update_fields=updated_fields)
+                                final_files.append(existing_file)
+                                continue
+
+                            file_type = None
+                            if file_input.file_type_id not in (None, ""):
+                                try:
+                                    file_type_id = resolve_id_to_int(file_input.file_type_id)
+                                    file_type = FileType.objects.get(id=file_type_id)
+                                except (
+                                    FileType.DoesNotExist,
+                                    TypeError,
+                                    ValueError,
+                                    GraphQLError,
+                                ):
+                                    raise GraphQLError("File type not found.")
+                            if not file_type:
+                                file_type = FileType.objects.first()
+                            if not file_type:
+                                raise GraphQLError("No file type available.")
+
+                            file_recap_category = None
+                            if file_input.file_recap_category_id not in (None, ""):
+                                try:
+                                    category_id = resolve_id_to_int(
+                                        file_input.file_recap_category_id
+                                    )
+                                    file_recap_category = (
+                                        models.FileRecapCategory.objects.get(id=category_id)
+                                    )
+                                except (
+                                    models.FileRecapCategory.DoesNotExist,
+                                    TypeError,
+                                    ValueError,
+                                    GraphQLError,
+                                ):
+                                    raise GraphQLError("File recap category not found.")
+
+                            custom_recap_file = models.CustomRecapFile.objects.create(
+                                name=f"Custom recap file for {self.input.name}",
+                                url=blob_name,
+                                file_type=file_type,
+                                file_recap_category=file_recap_category,
+                                custom_recap=custom_recap,
+                                approved=False,
+                                created_by=self.user,
+                            )
+                            final_files.append(custom_recap_file)
+
+                        removed_files = list(blob_to_file.values())
+                        if removed_files:
+                            removed_blob_names = [
+                                extract_blob_name_from_url(str(file.url))
+                                for file in removed_files
+                            ]
+                            models.CustomRecapFile.objects.filter(
+                                id__in=[file.id for file in removed_files]
+                            ).delete()
 
                 return custom_recap, removed_blob_names
 

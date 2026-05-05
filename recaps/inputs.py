@@ -237,11 +237,17 @@ class UpdateCustomRecapInput(CreateCustomRecapInput):
 
 
 @strawberry.input
+class UpdateCustomRecapMobileFilesInput(SparkGraphQLInput):
+    add: List[RecapFileInput] | None = None
+    remove: List[strawberry.ID] | None = None
+
+
+@strawberry.input
 class UpdateCustomRecapMobileInput(SparkGraphQLInput):
     id: strawberry.ID
     name: str
 
-    files: List[RecapFileInput] | None = None
+    files: UpdateCustomRecapMobileFilesInput | None = None
     product_samples: List[ProductSampleInput] | None = None
     sales_performance: List[SalesPerformanceInput] | None = None
 
