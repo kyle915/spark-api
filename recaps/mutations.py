@@ -1285,9 +1285,16 @@ class RecapMutationService(SparkGraphQLMixin):
             except (TimeZone.DoesNotExist, TypeError, ValueError, GraphQLError):
                 raise GraphQLError("Time zone not found.")
 
-        if self.input.job_id and not is_mobile_input:
+        input_job_id = getattr(self.input, "job_id", None)
+        input_retailer_id = getattr(self.input, "retailer_id", None)
+        input_ambassador_id = getattr(self.input, "ambassador_id", None)
+        input_location_id = getattr(self.input, "location_id", None)
+        input_state_id = getattr(self.input, "state_id", None)
+        input_timezone_id = getattr(self.input, "timezone_id", None)
+
+        if input_job_id and not is_mobile_input:
             try:
-                job_id = resolve_id_to_int(self.input.job_id)
+                job_id = resolve_id_to_int(input_job_id)
                 job = await sync_to_async(Job.objects.get)(id=job_id)
             except (Job.DoesNotExist, TypeError, ValueError, GraphQLError):
                 raise GraphQLError("Job not found.")
@@ -1295,9 +1302,9 @@ class RecapMutationService(SparkGraphQLMixin):
         retailer = None
         if is_mobile_input:
             retailer = getattr(event, "retailer", None)
-        elif self.input.retailer_id:
+        elif input_retailer_id:
             try:
-                retailer_id = resolve_id_to_int(self.input.retailer_id)
+                retailer_id = resolve_id_to_int(input_retailer_id)
                 retailer = await sync_to_async(Retailer.objects.get)(id=retailer_id)
             except (Retailer.DoesNotExist, TypeError, ValueError, GraphQLError):
                 raise GraphQLError("Retailer not found.")
@@ -1309,9 +1316,9 @@ class RecapMutationService(SparkGraphQLMixin):
             )()
             if not ambassador:
                 raise GraphQLError("Ambassador not found.")
-        elif self.input.ambassador_id:
+        elif input_ambassador_id:
             try:
-                ambassador_id = resolve_id_to_int(self.input.ambassador_id)
+                ambassador_id = resolve_id_to_int(input_ambassador_id)
                 ambassador = await sync_to_async(Ambassador.objects.get)(
                     id=ambassador_id
                 )
@@ -1323,9 +1330,9 @@ class RecapMutationService(SparkGraphQLMixin):
             location = getattr(event, "location", None)
             if location is None:
                 location = getattr(retailer, "location", None) if retailer else None
-        elif self.input.location_id:
+        elif input_location_id:
             try:
-                location_id = resolve_id_to_int(self.input.location_id)
+                location_id = resolve_id_to_int(input_location_id)
                 location = await sync_to_async(Location.objects.get)(id=location_id)
             except (Location.DoesNotExist, TypeError, ValueError, GraphQLError):
                 raise GraphQLError("Location not found.")
@@ -1335,9 +1342,9 @@ class RecapMutationService(SparkGraphQLMixin):
             state = getattr(event, "state", None)
             if state is None:
                 state = getattr(location, "state", None) if location else None
-        elif self.input.state_id:
+        elif input_state_id:
             try:
-                state_id = resolve_id_to_int(self.input.state_id)
+                state_id = resolve_id_to_int(input_state_id)
                 state = await sync_to_async(State.objects.get)(id=state_id)
             except (State.DoesNotExist, TypeError, ValueError, GraphQLError):
                 raise GraphQLError("State not found.")
@@ -1558,16 +1565,25 @@ class RecapMutationService(SparkGraphQLMixin):
         timezone = None
         if is_mobile_input:
             timezone = getattr(event, "timezone", None)
-        elif self.input.timezone_id:
+        else:
+            input_timezone_id = getattr(self.input, "timezone_id", None)
+        if not is_mobile_input and input_timezone_id:
             try:
-                timezone_id = resolve_id_to_int(self.input.timezone_id)
+                timezone_id = resolve_id_to_int(input_timezone_id)
                 timezone = await sync_to_async(TimeZone.objects.get)(id=timezone_id)
             except (TimeZone.DoesNotExist, TypeError, ValueError, GraphQLError):
                 raise GraphQLError("Time zone not found.")
 
-        if self.input.job_id and not is_mobile_input:
+        input_job_id = getattr(self.input, "job_id", None)
+        input_retailer_id = getattr(self.input, "retailer_id", None)
+        input_ambassador_id = getattr(self.input, "ambassador_id", None)
+        input_location_id = getattr(self.input, "location_id", None)
+        input_state_id = getattr(self.input, "state_id", None)
+        input_timezone_id = getattr(self.input, "timezone_id", None)
+
+        if input_job_id and not is_mobile_input:
             try:
-                job_id = resolve_id_to_int(self.input.job_id)
+                job_id = resolve_id_to_int(input_job_id)
                 job = await sync_to_async(Job.objects.get)(id=job_id)
             except (Job.DoesNotExist, TypeError, ValueError, GraphQLError):
                 raise GraphQLError("Job not found.")
@@ -1575,9 +1591,9 @@ class RecapMutationService(SparkGraphQLMixin):
         retailer = None
         if is_mobile_input:
             retailer = getattr(event, "retailer", None)
-        elif self.input.retailer_id:
+        elif input_retailer_id:
             try:
-                retailer_id = resolve_id_to_int(self.input.retailer_id)
+                retailer_id = resolve_id_to_int(input_retailer_id)
                 retailer = await sync_to_async(Retailer.objects.get)(id=retailer_id)
             except (Retailer.DoesNotExist, TypeError, ValueError, GraphQLError):
                 raise GraphQLError("Retailer not found.")
@@ -1589,9 +1605,9 @@ class RecapMutationService(SparkGraphQLMixin):
             )()
             if not ambassador:
                 raise GraphQLError("Ambassador not found.")
-        elif self.input.ambassador_id:
+        elif input_ambassador_id:
             try:
-                ambassador_id = resolve_id_to_int(self.input.ambassador_id)
+                ambassador_id = resolve_id_to_int(input_ambassador_id)
                 ambassador = await sync_to_async(Ambassador.objects.get)(
                     id=ambassador_id
                 )
@@ -1603,9 +1619,9 @@ class RecapMutationService(SparkGraphQLMixin):
             location = getattr(event, "location", None)
             if location is None:
                 location = getattr(retailer, "location", None) if retailer else None
-        elif self.input.location_id:
+        elif input_location_id:
             try:
-                location_id = resolve_id_to_int(self.input.location_id)
+                location_id = resolve_id_to_int(input_location_id)
                 location = await sync_to_async(Location.objects.get)(id=location_id)
             except (Location.DoesNotExist, TypeError, ValueError, GraphQLError):
                 raise GraphQLError("Location not found.")
@@ -1615,9 +1631,9 @@ class RecapMutationService(SparkGraphQLMixin):
             state = getattr(event, "state", None)
             if state is None:
                 state = getattr(location, "state", None) if location else None
-        elif self.input.state_id:
+        elif input_state_id:
             try:
-                state_id = resolve_id_to_int(self.input.state_id)
+                state_id = resolve_id_to_int(input_state_id)
                 state = await sync_to_async(State.objects.get)(id=state_id)
             except (State.DoesNotExist, TypeError, ValueError, GraphQLError):
                 raise GraphQLError("State not found.")
@@ -1632,17 +1648,17 @@ class RecapMutationService(SparkGraphQLMixin):
                 custom_recap.updated_by = self.user
                 custom_recap.tenant_id = event.tenant_id
 
-                if is_mobile_input or self.input.timezone_id is not None:
+                if is_mobile_input or input_timezone_id is not None:
                     custom_recap.timezone = timezone
-                if is_mobile_input or self.input.job_id is not None:
+                if is_mobile_input or input_job_id is not None:
                     custom_recap.job = job
-                if is_mobile_input or self.input.retailer_id is not None:
+                if is_mobile_input or input_retailer_id is not None:
                     custom_recap.retailer = retailer
-                if is_mobile_input or self.input.ambassador_id is not None:
+                if is_mobile_input or input_ambassador_id is not None:
                     custom_recap.ambassador = ambassador
-                if is_mobile_input or self.input.location_id is not None:
+                if is_mobile_input or input_location_id is not None:
                     custom_recap.location = location
-                if is_mobile_input or self.input.state_id is not None:
+                if is_mobile_input or input_state_id is not None:
                     custom_recap.state = state
                 if self.input.filling_for_ambassador is not None:
                     custom_recap.filling_for_ambassador = (
