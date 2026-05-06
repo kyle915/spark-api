@@ -9,7 +9,6 @@ This module tests:
   - Automatic "invited" status creation
   - AmbassadorJob creation with correct fields
 """
-from datetime import datetime, timezone
 import pytest
 import strawberry_django  # noqa: F401
 from strawberry.relay import to_base64
@@ -150,9 +149,9 @@ class TestClientInviteAmbassadorsToJob(JobsGraphQLTestCase):
         }
 
         with patch(
-            "jobs.mutations.AmbassadorInvitedToJobMailer.send"
+            "ambassadors.envelopes.SendInvitationMailToAmbassadorMailer.send"
         ) as mock_send, patch(
-            "jobs.mutations.one_signal_client.send_push",
+            "jobs.managers.one_signal_client.send_push",
             new=AsyncMock(return_value={"id": "push-123"}),
         ) as mock_push:
             result = await self._execute_mutation_authenticated(
@@ -231,12 +230,9 @@ class TestClientInviteAmbassadorsToJob(JobsGraphQLTestCase):
         }
 
         with patch(
-            "jobs.notification_rules.timezone.now",
-            return_value=datetime(2026, 3, 21, 12, 0, tzinfo=timezone.utc),
-        ), patch(
-            "jobs.mutations.AmbassadorInvitedToJobMailer.send"
+            "ambassadors.envelopes.SendInvitationMailToAmbassadorMailer.send"
         ) as mock_send, patch(
-            "jobs.mutations.one_signal_client.send_push",
+            "jobs.managers.one_signal_client.send_push",
             new=AsyncMock(return_value={"id": "push-123"}),
         ) as mock_push:
             result = await self._execute_mutation_authenticated(
@@ -245,7 +241,7 @@ class TestClientInviteAmbassadorsToJob(JobsGraphQLTestCase):
         assert result.errors is None
         assert result.data is not None
         assert result.data["inviteAmbassadorsToJob"]["success"] is True
-        mock_send.assert_not_called()
+        assert mock_send.call_count == 2
         assert mock_push.await_count == 2
 
     @pytest.mark.asyncio
@@ -318,6 +314,32 @@ class TestClientInviteAmbassadorsToJob(JobsGraphQLTestCase):
         assert result.errors is not None
         assert any("Job not found or has no rate" in str(error)
                    for error in result.errors)
+
+    @pytest.mark.asyncio
+    async def test_invite_ambassador_twice_same_job_fails(self):
+        """Test duplicate invitation for the same ambassador and job is rejected."""
+        variables = {
+            "input": {
+                "tenantId": str(self.tenant.id),
+                "jobId": self.job_relay_id,
+                "ambassadorIds": [self.ambassador1_relay_id],
+            }
+        }
+
+        first_result = await self._execute_mutation_authenticated(
+            self.mutation, variables, self.client_user, self.endpoint_path
+        )
+        assert first_result.errors is None
+        assert first_result.data["inviteAmbassadorsToJob"]["success"] is True
+
+        second_result = await self._execute_mutation_authenticated(
+            self.mutation, variables, self.client_user, self.endpoint_path
+        )
+        assert second_result.errors is not None
+        assert any(
+            "already have an invitation for this job" in str(error).lower()
+            for error in second_result.errors
+        )
 
     @pytest.mark.asyncio
     async def test_invite_ambassadors_empty_list(self):

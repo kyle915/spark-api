@@ -1,0 +1,25 @@
+{% extends "emails/base.html" %} {% block content %}
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+  <tr>
+    <td style="font-size: 16px; color: #444444; line-height: 1.6;">
+      <p style="margin: 0 0 20px 0;">
+        <strong>{{ ambassador_name|default:"Ambassador" }}</strong> submitted a <strong>Recap</strong> for <strong>{{ brand_name|default:"-" }}</strong>, and it’s ready for review.
+      </p>
+
+      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="margin: 24px 0; border: 2px solid #28a745; background-color: #eaf6ec;">
+        <tr>
+          <td align="center" style="padding: 24px 16px;">
+            <a href="{{ review_link }}" style="text-decoration: none; color: #202036; font-size: 22px; font-weight: 800; display: inline-block;">
+              Open in Spark to Review
+            </a>
+          </td>
+        </tr>
+      </table>
+
+      <p style="margin: 0; font-size: 12px; font-weight: 700; color: #555555;">The Ignite Team</p>
+      <p style="margin: 2px 0 0 0; font-size: 12px; color: #555555;">Ignite Productions LLC</p>
+      <p style="margin: 2px 0 0 0; font-size: 12px; color: #555555;">events@igniteproductions.co | 775.406.0435</p>
+    </td>
+  </tr>
+</table>
+{% endblock %}

@@ -54,9 +54,7 @@ class RecapApprovedNotificationMailer(Mailer):
             return self.recap.event.address
         return "-"
 
-    def _attendance_window(
-        self, offset_minutes: int
-    ) -> tuple[str, str]:
+    def _attendance_window(self, offset_minutes: int) -> tuple[str, str]:
         if not self.recap.ambassador_id:
             return "-", "-"
 
@@ -127,11 +125,17 @@ class RecapApprovedNotificationMailer(Mailer):
         timezone_obj = self.recap.timezone or event.timezone
         offset_minutes = int(getattr(timezone_obj, "offset", 0) or 0)
 
-        start_dt = (job.start_date if job and job.start_date else None) or event.start_time
+        start_dt = (
+            job.start_date if job and job.start_date else None
+        ) or event.start_time
         end_dt = (job.end_date if job and job.end_date else None) or event.end_time
         recap_date_source = start_dt or event.date
 
-        request_id = f"REQ-{event.request_id}" if getattr(event, "request_id", None) else f"RECAP-{self.recap.id}"
+        request_id = (
+            f"REQ-{event.request_id}"
+            if getattr(event, "request_id", None)
+            else f"RECAP-{self.recap.id}"
+        )
         location_name = self._location_name()
         actual_check_in, actual_check_out = self._attendance_window(offset_minutes)
         ba_on_site = self._ba_on_site_count()
@@ -148,7 +152,11 @@ class RecapApprovedNotificationMailer(Mailer):
         total_packs_sold = getattr(self.recap, "total_packs_sold", None)
         if total_packs_sold is not None:
             client_metrics.append(f"packs sold: {total_packs_sold}")
-        client_specific_metrics = ", ".join(client_metrics) if client_metrics else "Samples distributed, leads captured, survey responses"
+        client_specific_metrics = (
+            ", ".join(client_metrics)
+            if client_metrics
+            else "Samples distributed, leads captured, survey responses"
+        )
 
         return Envelope(
             subject="Your activation recap is ready 📊",
@@ -166,9 +174,15 @@ class RecapApprovedNotificationMailer(Mailer):
                 "brand_name": tenant.name or "-",
                 "campaign_name": event.name or "-",
                 "location_name": location_name,
-                "date_text": _format_dt_no_tz(recap_date_source, "%m/%d/%Y", offset_minutes),
-                "scheduled_start_time": _format_dt_no_tz(start_dt, "%I:%M %p", offset_minutes),
-                "scheduled_end_time": _format_dt_no_tz(end_dt, "%I:%M %p", offset_minutes),
+                "date_text": _format_dt_no_tz(
+                    recap_date_source, "%m/%d/%Y", offset_minutes
+                ),
+                "scheduled_start_time": _format_dt_no_tz(
+                    start_dt, "%I:%M %p", offset_minutes
+                ),
+                "scheduled_end_time": _format_dt_no_tz(
+                    end_dt, "%I:%M %p", offset_minutes
+                ),
                 "actual_check_in": actual_check_in,
                 "actual_check_out": actual_check_out,
                 "ba_on_site": ba_on_site,
@@ -176,5 +190,45 @@ class RecapApprovedNotificationMailer(Mailer):
                 "photos_count": photos_count,
                 "client_specific_metrics": client_specific_metrics,
                 "recap_link": "https://spark.igniteproductions.co/",
+            },
+        )
+
+
+class RecapReadyForReviewAdminMailer(Mailer):
+    def __init__(
+        self,
+        recap: models.Recap | models.CustomRecap,
+        to_emails: list[str],
+        ambassador_name: str | None = None,
+    ) -> None:
+        self.recap = recap
+        self.to_emails = to_emails
+        self.ambassador_name = ambassador_name
+
+    def envelope(self) -> Envelope:
+        tenant = self.recap.event.tenant
+        ambassador_label = self.ambassador_name or "Ambassador"
+        frontend_base_url = str(
+            getattr(
+                settings,
+                "ADMIN_FRONTEND_URL",
+                "https://spark-admin.igniteproductions.co",
+            )
+        ).rstrip("/")
+        review_link = f"{frontend_base_url}/recap/view-custom/{self.recap.uuid}"
+
+        return Envelope(
+            subject="Recap ready for review",
+            template="recaps.templates.emails.recap_ready_for_review_admin_notification",
+            to_emails=self.to_emails,
+            from_email=getattr(
+                settings,
+                "DEFAULT_FROM_EMAIL",
+                "Spark by Ignite <no-reply@igniteproductions.co>",
+            ),
+            context={
+                "ambassador_name": ambassador_label,
+                "brand_name": tenant.name or "-",
+                "review_link": review_link,
             },
         )

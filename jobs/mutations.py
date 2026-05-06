@@ -12,7 +12,6 @@ from jobs.envelopes import (
     AmbassadorAssignedToJobMailer,
     AmbassadorApprovedForJobMailer,
     AmbassadorInvitedJobUpdatedMailer,
-    AmbassadorInvitedToJobMailer,
     AmbassadorJobApprovedNotificationMailer,
     AmbassadorJobUpdatedMailer,
     AmbassadorUnassignedFromJobMailer,
@@ -200,60 +199,6 @@ async def _notify_assigned_ambassador_by_email(
         recipient_first_name=(getattr(user, "first_name", None) or "").strip() or None,
     )
     await sync_to_async(mailer.send)()
-
-
-async def _notify_invited_ambassador_by_email(
-    ambassador_job: models.AmbassadorJob,
-) -> None:
-    if not should_send_ambassador_event_email(ambassador_job):
-        return
-
-    ambassador = getattr(ambassador_job, "ambassador", None)
-    user = getattr(ambassador, "user", None)
-    email = (getattr(user, "email", None) or "").strip()
-    if not email:
-        return
-
-    mailer = AmbassadorInvitedToJobMailer(
-        ambassador_job=ambassador_job,
-        to_emails=[email],
-        recipient_first_name=(getattr(user, "first_name", None) or "").strip() or None,
-    )
-    await sync_to_async(mailer.send)()
-
-
-async def _notify_invited_ambassador_by_push(
-    ambassador_job: models.AmbassadorJob,
-) -> None:
-    ambassador = getattr(ambassador_job, "ambassador", None)
-    user = getattr(ambassador, "user", None)
-    if not user:
-        return
-
-    job = ambassador_job.job
-    title = "New job invitation"
-    message = f"You were invited to {job.name}."
-    deep_link = f"spark://app/tabs/my-gigs/{job.id}"
-
-    try:
-        await one_signal_client.send_push(
-            external_ids=[str(user.uuid)],
-            title=title,
-            message=message,
-            url=deep_link,
-            data={
-                "type": "job_invited",
-                "job_id": str(job.id),
-                "ambassador_job_id": str(ambassador_job.id),
-                "deep_link": deep_link,
-            },
-        )
-    except OneSignalError as exc:
-        logger.warning(
-            "Failed to send OneSignal invitation push for ambassador_job=%s: %s",
-            ambassador_job.id,
-            exc,
-        )
 
 
 async def _notify_unassigned_ambassador_by_email(
@@ -844,7 +789,16 @@ class AmbassadorJobMutationService(BaseMutationService):
             return build_mutation_response(
                 types.AmbassadorJobDetailResponse,
                 success=False,
-                message="Invalid job ID.",
+                message="Please select a valid job.",
+                input_obj=input,
+            )
+        try:
+            ambassador_id = resolve_id_to_int(input.ambassador_id)
+        except (TypeError, ValueError, GraphQLError):
+            return build_mutation_response(
+                types.AmbassadorJobDetailResponse,
+                success=False,
+                message="Please select a valid ambassador.",
                 input_obj=input,
             )
 
@@ -857,6 +811,20 @@ class AmbassadorJobMutationService(BaseMutationService):
                 types.AmbassadorJobDetailResponse,
                 success=False,
                 message="Job not found.",
+                input_obj=input,
+            )
+
+        already_assigned = await sync_to_async(
+            models.AmbassadorJob.objects.filter(
+                job_id=job_id,
+                ambassador_id=ambassador_id,
+            ).exists
+        )()
+        if already_assigned:
+            return build_mutation_response(
+                types.AmbassadorJobDetailResponse,
+                success=False,
+                message="This ambassador is already assigned to this job. You can update the existing assignment instead.",
                 input_obj=input,
             )
 
@@ -1372,14 +1340,10 @@ class ApproveAmbassadorJobMutationService(SparkGraphQLMixin):
 
         @sync_to_async
         def invite_ambassadors_to_job():
-            invite_status = models.Status.objects.get_invited(
-                tenant_id=tenant.id, user=user
-            )
-
             try:
                 job_id = resolve_id_to_int(input.job_id)
             except (TypeError, ValueError, GraphQLError) as exc:
-                raise GraphQLError(f"Invalid job ID: {input.job_id}") from exc
+                raise GraphQLError("Please select a valid job.") from exc
 
             job = models.Job.objects.filter(
                 id=job_id, tenant_id=tenant.id, rate__isnull=False
@@ -1396,9 +1360,7 @@ class ApproveAmbassadorJobMutationService(SparkGraphQLMixin):
                     resolved_id = resolve_id_to_int(ambassador_id)
                     resolved_ids.append(resolved_id)
                 except (TypeError, ValueError, GraphQLError) as exc:
-                    raise GraphQLError(
-                        f"Invalid ambassador ID: {ambassador_id}"
-                    ) from exc
+                    raise GraphQLError("One of the selected ambassadors is not valid.") from exc
 
             # Filter ambassadors by tenant via TenantedUser relationship
             ambassadors = models.Ambassador.objects.filter(
@@ -1406,23 +1368,39 @@ class ApproveAmbassadorJobMutationService(SparkGraphQLMixin):
             ).distinct()
             if not ambassadors:
                 return []
+
+            existing_ambassador_ids = set(
+                models.AmbassadorJob.objects.filter(
+                    job=job,
+                    ambassador_id__in=[ambassador.id for ambassador in ambassadors],
+                ).values_list("ambassador_id", flat=True)
+            )
+            if existing_ambassador_ids:
+                raise GraphQLError(
+                    "Some selected ambassadors already have an invitation for this job."
+                )
+
             ambassador_jobs = []
             for ambassador in ambassadors:
-                ambassador_job = models.AmbassadorJob.objects.create(
-                    ambassador=ambassador,
+                ambassador_job = models.AmbassadorJob.objects.create_and_invite(
                     job=job,
-                    tenant=tenant,
-                    status=invite_status,
-                    rate=job.rate,
-                    time_blocks_15m=getattr(input, "time_blocks_15m", 0),
-                    appear_as_rfp=True,
-                    created_by=user,
-                    updated_by=user,
+                    ambassador=ambassador,
+                    action_by=user,
                 )
                 ambassador_jobs.append(ambassador_job)
             return ambassador_jobs
 
-        ambassador_jobs = await invite_ambassadors_to_job()
+        try:
+            ambassador_jobs = await invite_ambassadors_to_job()
+        except GraphQLError as exc:
+            return build_mutation_response(
+                types.InviteAmbassadorsToJobResponse,
+                success=False,
+                message=str(exc),
+                input_obj=input,
+                ambassador_jobs=[],
+            )
+
         if ambassador_jobs:
             ambassador_jobs = await sync_to_async(list)(
                 models.AmbassadorJob.objects.filter(
@@ -1441,9 +1419,6 @@ class ApproveAmbassadorJobMutationService(SparkGraphQLMixin):
                     "tenant",
                 )
             )
-            for ambassador_job in ambassador_jobs:
-                await _notify_invited_ambassador_by_email(ambassador_job)
-                await _notify_invited_ambassador_by_push(ambassador_job)
         return build_mutation_response(
             types.InviteAmbassadorsToJobResponse,
             success=True,

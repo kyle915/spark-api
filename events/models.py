@@ -719,7 +719,7 @@ class Event(models.Model):
     start_time = models.DateTimeField(null=True, db_index=True)
     end_time = models.DateTimeField(null=True)
     new_end_time = models.DateTimeField(null=True)
-    address = models.CharField(max_length=100, null=False, default="")
+    address = models.TextField()
     notes = models.TextField(null=True, blank=True)
     is_national = models.BooleanField(default=False)
 

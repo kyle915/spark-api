@@ -76,6 +76,9 @@ class AmbassadorJobManager(BaseManager, models.Manager):
         from ambassadors.models import AmbassadorInvitation
         from jobs.models import Status
 
+        if self.filter(job=job, ambassador=ambassador).exists():
+            raise ValueError("This ambassador already has an invitation for this job.")
+
         invited_status = None
         if job:
             # prepare the invited status

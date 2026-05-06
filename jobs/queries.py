@@ -1001,6 +1001,7 @@ class AmbassadorJobQueriesService(JobsBaseQueriesService):
 @strawberry.enum
 class AmbassadorJobStatusFilter(str, Enum):
     APPROVED = "approved"
+    ACCEPTED = "accepted"
     DECLINED = "declined"
     PENDING = "pending"
     INVITED = "invited"

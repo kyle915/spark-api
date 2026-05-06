@@ -866,6 +866,53 @@ class AmbassadorGroup(models.Model):
         return self.name
 
 
+class AmbassadorGroupJob(models.Model):
+    """Pivot table to store explicit group-job assignment."""
+
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    group = models.ForeignKey(
+        AmbassadorGroup,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="job_links",
+    )
+    job = models.ForeignKey(
+        "jobs.Job",
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="ambassador_group_links",
+    )
+    tenant = models.ForeignKey(
+        Tenant,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="ambassador_group_links",
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="ambassador_group_jobs_created_by",
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="ambassador_group_jobs_updated_by",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["group", "job"],
+                name="unique_ambassador_group_job",
+            )
+        ]
+
+
 class UserGroup(models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
