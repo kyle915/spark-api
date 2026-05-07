@@ -488,7 +488,7 @@ def _build_ambassador_job_email_context(
     activation_date = _format_dt_no_tz(start_dt, "%m/%d/%Y", offset_minutes)
     start_time = _format_dt_no_tz(start_dt, "%I:%M %p", offset_minutes)
     end_time = _format_dt_no_tz(end_dt, "%I:%M %p", offset_minutes)
-    deep_link = f"spark://app/tabs/my-gigs/{job.id}"
+    deep_link = f"spark://my-gigs/{ambassador_job.id}"
 
     return {
         "request_id": request_id,
