@@ -564,6 +564,8 @@ class AmbassadorJob(models.Model):
     )  # This bool is for record purposes that it was an invitation.
     reminder_sent_at = models.DateTimeField(null=True)
     reminder_3h_sent_at = models.DateTimeField(null=True)
+    reminder_15m_sent_at = models.DateTimeField(null=True)
+    reminder_end_15m_sent_at = models.DateTimeField(null=True)
 
     tenant = models.ForeignKey(
         Tenant,

@@ -36,6 +36,11 @@ def _event_start_datetime(ambassador_job: AmbassadorJob) -> datetime.datetime | 
     return event.start_time or ambassador_job.job.start_date
 
 
+def _event_end_datetime(ambassador_job: AmbassadorJob) -> datetime.datetime | None:
+    event = ambassador_job.job.event
+    return event.end_time or ambassador_job.job.end_date
+
+
 def should_send_ambassador_event_email(
     ambassador_job: AmbassadorJob,
     *,

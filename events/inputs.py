@@ -433,8 +433,8 @@ class UpdateRequestInput(BaseNameableInput):
     requestor_email: str | None = None
     reviewed: bool | None = None
     store_number: str | None = None
-    store_manager_name: str
-    store_manager_phone: str
+    store_manager_name: str | None = None
+    store_manager_phone: str | None = None
     details: List[CreateRequestDetailInput]
     products: List[CreateRequestProductInput]
 
