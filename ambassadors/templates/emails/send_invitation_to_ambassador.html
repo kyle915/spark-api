@@ -22,7 +22,7 @@
           <td style="padding: 20px;">
             <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
               <tr>
-                <td style="padding: 5px 0;"><strong>Event:</strong> {{ invitation.event.name }}</td>
+                <td style="padding: 5px 0;"><strong>Event:</strong> {{ invitation.job.event.name|default:"-" }}</td>
               </tr>
               
               {% if invitation.job %}
@@ -74,7 +74,7 @@
                  </tr>
                  <tr>
                   <td style="padding: 5px 0;">
-                    <strong>Event Date:</strong> {{ invitation.job.event.start_date|date:"F d, Y" }}
+                    <strong>Event Date:</strong> {{ invitation.job.event.date|date:"F d, Y"|default:"-" }}
                   </td>
                  </tr>
                  {% endif %}
@@ -106,4 +106,3 @@
   </tr>
 </table>
 {% endblock %}
-

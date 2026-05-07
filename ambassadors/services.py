@@ -2964,7 +2964,7 @@ class AmbassadorGroupMutationService(BaseMutationService):
             except job_models.Job.DoesNotExist:
                 raise GraphQLError("Job not found.")
 
-            if job.rate is None:
+            if job.rate_id is None:
                 raise GraphQLError("Job must have a rate assigned.")
 
             # Step 2-4: Create Group, UserGroups, and AmbassadorJobs (within transaction)
@@ -3220,6 +3220,148 @@ class AmbassadorGroupMutationService(BaseMutationService):
             )
         except (
             AmbassadorGroup.DoesNotExist,
+            ValueError,
+            TypeError,
+            GraphQLError,
+        ) as exc:
+            return cls._build_mutation_response(
+                response_class=response_class,
+                success=False,
+                message=str(exc),
+                input_obj=input,
+            )
+
+    @classmethod
+    async def assign_group_to_job(
+        cls,
+        input: inputs.AssignGroupToJobInput,
+        info: strawberry.Info,
+        *,
+        response_class: type | None = None,
+    ) -> Any:
+        """Assign an existing ambassador group to a job."""
+        try:
+            from graphql import GraphQLError
+
+            service = cls.with_input(input)
+            await service.set_user_and_tenant(info)
+
+            resolved_group_id = resolve_id_to_int(input.group_id)
+            resolved_job_id = resolve_id_to_int(input.job_id)
+
+            group = await sync_to_async(
+                AmbassadorGroup.objects.select_related("tenant").get
+            )(id=resolved_group_id)
+            job = await sync_to_async(
+                job_models.Job.objects.select_related("tenant").get
+            )(id=resolved_job_id)
+
+            if group.tenant_id != job.tenant_id:
+                raise GraphQLError("Group and job must belong to the same tenant.")
+            if job.rate_id is None:
+                raise GraphQLError("Job must have a rate assigned.")
+
+            if service.tenant_id is not None and group.tenant_id != service.tenant_id:
+                raise GraphQLError("Group not found.")
+
+            def assign_and_invite():
+                with transaction.atomic():
+                    service._upsert_group_job_link(
+                        group=group,
+                        job=job,
+                        user=service.user,
+                    )
+
+                    members = list(
+                        group.members.select_related("ambassador__user")
+                        .exclude(ambassador__isnull=True)
+                    )
+                    ambassadors = [member.ambassador for member in members if member.ambassador]
+                    if not ambassadors:
+                        return
+
+                    ambassador_label_by_id = {}
+                    for ambassador in ambassadors:
+                        ambassador_label_by_id[ambassador.id] = (
+                            f"{(ambassador.user.first_name or '').strip()} {(ambassador.user.last_name or '').strip()}".strip()
+                            or ambassador.user.email
+                            or f"ID {ambassador.id}"
+                        )
+
+                    existing_ids = set(
+                        job_models.AmbassadorJob.objects.filter(
+                            job=job,
+                            ambassador_id__in=[amb.id for amb in ambassadors],
+                        ).values_list("ambassador_id", flat=True)
+                    )
+                    if existing_ids:
+                        duplicates = ", ".join(
+                            ambassador_label_by_id[amb_id]
+                            for amb_id in sorted(existing_ids)
+                        )
+                        raise GraphQLError(
+                            "Cannot invite these ambassadors because they already have an invitation for this job: "
+                            f"{duplicates}."
+                        )
+
+                    for ambassador in ambassadors:
+                        ambassador_display_name = ambassador_label_by_id[ambassador.id]
+                        try:
+                            job_models.AmbassadorJob.objects.create_and_invite(
+                                job=job, ambassador=ambassador, action_by=service.user
+                            )
+                        except ValueError as exc:
+                            error_message = str(exc)
+                            if "already has an invitation for this job" in error_message.lower():
+                                raise GraphQLError(
+                                    f"Cannot invite {ambassador_display_name}: this ambassador already has an invitation for this job."
+                                ) from exc
+
+                            if "An active invitation already exists for this email." not in error_message:
+                                raise
+
+                            invited_status = job_models.Status.objects.get_invited(
+                                tenant_id=job.tenant_id, user=service.user
+                            )
+                            ambassador_job = (
+                                job_models.AmbassadorJob.objects.filter(
+                                    ambassador=ambassador,
+                                    job=job,
+                                )
+                                .order_by("-created_at")
+                                .first()
+                            )
+                            if ambassador_job:
+                                ambassador_job.status = invited_status
+                                ambassador_job.rate = job.rate
+                                ambassador_job.updated_by = service.user
+                                ambassador_job.save(
+                                    update_fields=["status", "rate", "updated_by", "updated_at"]
+                                )
+                            else:
+                                job_models.AmbassadorJob.objects.create(
+                                    ambassador=ambassador,
+                                    job=job,
+                                    tenant=job.tenant,
+                                    status=invited_status,
+                                    rate=job.rate,
+                                    appear_as_rfp=True,
+                                    created_by=service.user,
+                                    updated_by=service.user,
+                                )
+
+            await sync_to_async(assign_and_invite)()
+
+            return cls._build_mutation_response(
+                response_class=response_class,
+                success=True,
+                message="Group assigned to job and invitations sent successfully.",
+                input_obj=input,
+                ambassador_group=group,
+            )
+        except (
+            AmbassadorGroup.DoesNotExist,
+            job_models.Job.DoesNotExist,
             ValueError,
             TypeError,
             GraphQLError,

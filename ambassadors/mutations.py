@@ -253,7 +253,7 @@ class AmbassadorMutations:
                 success=False, message="Already applied to this job"
             )
 
-        if job.rate is None:
+        if job.rate_id is None:
             return ApplyAmbassadorJobResponse(
                 success=False,
                 message="Job has no rate configured; please contact the client.",
@@ -562,6 +562,16 @@ class AmbassadorGroupMutations:
         input: inputs.RemoveAmbassadorsFromGroupInput,
     ) -> AmbassadorGroupResponse:
         return await AmbassadorGroupMutationService.remove_ambassadors_from_group(
+            input, info, response_class=AmbassadorGroupResponse
+        )
+
+    @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
+    async def assign_group_to_job(
+        self,
+        info: strawberry.Info,
+        input: inputs.AssignGroupToJobInput,
+    ) -> AmbassadorGroupResponse:
+        return await AmbassadorGroupMutationService.assign_group_to_job(
             input, info, response_class=AmbassadorGroupResponse
         )
 
