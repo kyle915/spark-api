@@ -583,6 +583,8 @@ class RecapMutationService(SparkGraphQLMixin):
         """Create a recap with multiple files."""
         if not isinstance(self.input, inputs.CreateRecapInput):
             raise GraphQLError("Invalid input type.")
+        # This mutation currently only accepts CreateRecapInput.
+        is_mobile_input = False
 
         # Validate event exists
         try:
@@ -823,6 +825,8 @@ class RecapMutationService(SparkGraphQLMixin):
         """Update a recap."""
         if not isinstance(self.input, inputs.UpdateRecapInput):
             raise GraphQLError("Invalid input type.")
+        # This mutation currently only accepts UpdateRecapInput.
+        is_mobile_input = False
 
         try:
             recap_id = resolve_id_to_int(self.input.id)
