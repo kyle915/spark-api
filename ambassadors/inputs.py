@@ -434,7 +434,7 @@ class GroupTypeFiltersInput:
 class CreateAmbassadorGroupInput(BaseNameableInput):
     """Input for creating an ambassador group."""
 
-    job_id: strawberry.ID
+    job_id: strawberry.ID | None = None
     group_type_id: strawberry.ID
     description: str | None = None
     private: bool | None = None

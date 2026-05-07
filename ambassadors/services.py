@@ -2923,10 +2923,10 @@ class AmbassadorGroupMutationService(BaseMutationService):
         create_message: str | None = None,
     ) -> Any:
         """
-        Create ambassador group with job validation and ambassador invitations.
+        Create ambassador group with optional job linkage and invitations.
 
-        Validates job exists and has rate, creates group, optionally creates UserGroup
-        records and AmbassadorJob invitations for each ambassador.
+        If job_id is provided, validates job exists/has rate and creates invitations.
+        Without job_id, only group and UserGroup membership records are created.
         """
         from graphql import GraphQLError
 
@@ -2944,28 +2944,27 @@ class AmbassadorGroupMutationService(BaseMutationService):
             service = cls.with_input(input)
             await service.set_user_and_tenant(info)
 
-            # Step 1: Validate Job
+            # Step 1: Validate job when provided
             job_id = getattr(input, "job_id", None)
-            if not job_id:
-                raise GraphQLError("Job ID is required.")
+            job = None
+            if job_id:
+                try:
+                    resolved_job_id = resolve_id_to_int(job_id)
+                except (TypeError, ValueError, GraphQLError) as exc:
+                    raise GraphQLError(f"Invalid job ID: {job_id}") from exc
 
-            try:
-                resolved_job_id = resolve_id_to_int(job_id)
-            except (TypeError, ValueError, GraphQLError) as exc:
-                raise GraphQLError(f"Invalid job ID: {job_id}") from exc
+                try:
+                    # Fetch job with select_related for rate and tenant
+                    job = await sync_to_async(
+                        lambda: job_models.Job.objects.select_related("rate", "tenant").get(
+                            id=resolved_job_id
+                        )
+                    )()
+                except job_models.Job.DoesNotExist:
+                    raise GraphQLError("Job not found.")
 
-            try:
-                # Fetch job with select_related for rate and tenant
-                job = await sync_to_async(
-                    lambda: job_models.Job.objects.select_related("rate", "tenant").get(
-                        id=resolved_job_id
-                    )
-                )()
-            except job_models.Job.DoesNotExist:
-                raise GraphQLError("Job not found.")
-
-            if job.rate_id is None:
-                raise GraphQLError("Job must have a rate assigned.")
+                if job.rate_id is None:
+                    raise GraphQLError("Job must have a rate assigned.")
 
             # Step 2-4: Create Group, UserGroups, and AmbassadorJobs (within transaction)
             def create_group_with_extras():
@@ -2992,7 +2991,12 @@ class AmbassadorGroupMutationService(BaseMutationService):
                     # Set tenant_id from service
                     setattr(model, "tenant_id", service.tenant_id)
                     model.save()
-                    service._upsert_group_job_link(group=model, job=job, user=service.user)
+                    if job:
+                        service._upsert_group_job_link(
+                            group=model,
+                            job=job,
+                            user=service.user,
+                        )
 
                     # Step 3 and 4: Create UserGroup and AmbassadorJob  records if ambassador_ids provided
                     service.create_user_groups(model, job)
@@ -3280,32 +3284,16 @@ class AmbassadorGroupMutationService(BaseMutationService):
                     if not ambassadors:
                         return
 
-                    ambassador_label_by_id = {}
-                    for ambassador in ambassadors:
-                        ambassador_label_by_id[ambassador.id] = (
-                            f"{(ambassador.user.first_name or '').strip()} {(ambassador.user.last_name or '').strip()}".strip()
-                            or ambassador.user.email
-                            or f"ID {ambassador.id}"
-                        )
-
                     existing_ids = set(
                         job_models.AmbassadorJob.objects.filter(
                             job=job,
                             ambassador_id__in=[amb.id for amb in ambassadors],
                         ).values_list("ambassador_id", flat=True)
                     )
-                    if existing_ids:
-                        duplicates = ", ".join(
-                            ambassador_label_by_id[amb_id]
-                            for amb_id in sorted(existing_ids)
-                        )
-                        raise GraphQLError(
-                            "Cannot invite these ambassadors because they already have an invitation for this job: "
-                            f"{duplicates}."
-                        )
 
                     for ambassador in ambassadors:
-                        ambassador_display_name = ambassador_label_by_id[ambassador.id]
+                        if ambassador.id in existing_ids:
+                            continue
                         try:
                             job_models.AmbassadorJob.objects.create_and_invite(
                                 job=job, ambassador=ambassador, action_by=service.user
@@ -3313,9 +3301,7 @@ class AmbassadorGroupMutationService(BaseMutationService):
                         except ValueError as exc:
                             error_message = str(exc)
                             if "already has an invitation for this job" in error_message.lower():
-                                raise GraphQLError(
-                                    f"Cannot invite {ambassador_display_name}: this ambassador already has an invitation for this job."
-                                ) from exc
+                                continue
 
                             if "An active invitation already exists for this email." not in error_message:
                                 raise
