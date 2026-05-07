@@ -66,6 +66,8 @@ class SendInvitationMailToAmbassadorMailer(Mailer):
         return formatted
 
     def _build_job_invite_context(self) -> dict[str, str | bool]:
+        from jobs.models import AmbassadorJob
+
         invitation = self.invitation
         job = invitation.job
         event = getattr(job, "event", None)
@@ -101,6 +103,12 @@ class SendInvitationMailToAmbassadorMailer(Mailer):
         else:
             location_name = retailer_location_name or event_address
 
+        ambassador_job_id = (
+            AmbassadorJob.objects.filter(ambassador=ambassador, job=job)
+            .values_list("id", flat=True)
+            .first()
+        )
+
         return {
             "recipient_first_name": (
                 (getattr(ambassador_user, "first_name", None) or "").strip() or "there"
@@ -116,7 +124,7 @@ class SendInvitationMailToAmbassadorMailer(Mailer):
             "start_time": self._format_dt_no_tz(start_dt, "%I:%M %p", offset_minutes),
             "end_time": self._format_dt_no_tz(end_dt, "%I:%M %p", offset_minutes),
             "event_notes": getattr(event, "notes", None) or job.description or "-",
-            "deep_link": f"spark://app/tabs/my-gigs/{job.id}",
+            "deep_link": f"spark://my-gigs/{ambassador_job_id or ''}",
         }
 
     def envelope(self) -> Envelope:

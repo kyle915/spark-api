@@ -115,7 +115,7 @@ class AmbassadorJobManager(BaseManager, models.Manager):
             return
 
         job = ambassador_job.job
-        deep_link = f"spark://app/tabs/my-gigs/{job.id}"
+        deep_link = f"spark://my-gigs/{ambassador_job.id}"
         try:
             async_to_sync(one_signal_client.send_push)(
                 external_ids=[str(user.uuid)],

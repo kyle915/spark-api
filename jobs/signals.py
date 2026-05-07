@@ -4,8 +4,12 @@ from django.dispatch import receiver
 from events.models import Event
 from jobs.models import AmbassadorJob
 from jobs.tasks import (
+    reschedule_event_end_15m_reminders,
+    reschedule_event_15m_reminders,
     reschedule_event_24h_reminders,
     reschedule_event_3h_reminders,
+    schedule_ambassador_job_end_15m_reminder,
+    schedule_ambassador_job_15m_reminder,
     schedule_ambassador_job_24h_reminder,
     schedule_ambassador_job_3h_reminder,
 )
@@ -13,8 +17,8 @@ from jobs.tasks import (
 
 def _event_schedule_signature(event: Event | None) -> tuple:
     if event is None:
-        return (None, None, None)
-    return (event.date, event.start_time, event.timezone_id)
+        return (None, None, None, None)
+    return (event.date, event.start_time, event.end_time, event.timezone_id)
 
 
 @receiver(pre_save, sender=Event)
@@ -41,13 +45,21 @@ def reschedule_event_reminders_on_save(
     previous_signature = getattr(
         instance,
         "_previous_schedule_signature",
-        (None, None, None),
+        (None, None, None, None),
     )
     current_signature = _event_schedule_signature(instance)
     if not created and previous_signature == current_signature:
         return
 
     reschedule_event_3h_reminders(
+        instance.id,
+        reset_sent_at=not created and previous_signature != current_signature,
+    )
+    reschedule_event_15m_reminders(
+        instance.id,
+        reset_sent_at=not created and previous_signature != current_signature,
+    )
+    reschedule_event_end_15m_reminders(
         instance.id,
         reset_sent_at=not created and previous_signature != current_signature,
     )
@@ -65,3 +77,5 @@ def reschedule_ambassador_job_reminder_on_save(
 ):
     schedule_ambassador_job_24h_reminder(instance.id)
     schedule_ambassador_job_3h_reminder(instance.id)
+    schedule_ambassador_job_15m_reminder(instance.id)
+    schedule_ambassador_job_end_15m_reminder(instance.id)
