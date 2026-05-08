@@ -84,7 +84,7 @@ MIDDLEWARE = [
 ]
 
 AUTHENTICATION_BACKENDS = [
-    "django.contrib.auth.backends.ModelBackend",
+    "tenants.auth_backends.CustomAuthenticationBackend",
 ]
 
 GQL_AUTH = GqlAuthSettings(
