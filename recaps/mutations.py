@@ -1253,7 +1253,16 @@ class RecapMutationService(SparkGraphQLMixin):
         else:
             try:
                 event_id = resolve_id_to_int(self.input.event_id)
-                event = await sync_to_async(Event.objects.get)(id=event_id)
+                event = await sync_to_async(
+                    Event.objects.select_related(
+                        "timezone",
+                        "location",
+                        "state",
+                        "retailer",
+                        "retailer__location",
+                        "retailer__location__state",
+                    ).get
+                )(id=event_id)
             except (Event.DoesNotExist, TypeError, ValueError, GraphQLError):
                 raise GraphQLError("Event not found.")
 
@@ -1275,23 +1284,24 @@ class RecapMutationService(SparkGraphQLMixin):
                 "Custom recap template does not belong to the event tenant."
             )
 
+        input_timezone_id = getattr(self.input, "timezone_id", None)
         timezone = None
         if is_mobile_input:
             timezone = getattr(event, "timezone", None)
-        elif self.input.timezone_id:
+        elif input_timezone_id:
             try:
-                timezone_id = resolve_id_to_int(self.input.timezone_id)
+                timezone_id = resolve_id_to_int(input_timezone_id)
                 timezone = await sync_to_async(TimeZone.objects.get)(id=timezone_id)
             except (TimeZone.DoesNotExist, TypeError, ValueError, GraphQLError):
                 raise GraphQLError("Time zone not found.")
+        else:
+            timezone = getattr(event, "timezone", None)
 
         input_job_id = getattr(self.input, "job_id", None)
         input_retailer_id = getattr(self.input, "retailer_id", None)
         input_ambassador_id = getattr(self.input, "ambassador_id", None)
         input_location_id = getattr(self.input, "location_id", None)
         input_state_id = getattr(self.input, "state_id", None)
-        input_timezone_id = getattr(self.input, "timezone_id", None)
-
         if input_job_id and not is_mobile_input:
             try:
                 job_id = resolve_id_to_int(input_job_id)
