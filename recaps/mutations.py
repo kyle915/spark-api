@@ -101,7 +101,7 @@ async def _notify_recap_approved_to_ambassador_by_push(
     if not user:
         return
 
-    deep_link = f"spark://app/tabs/recaps/{recap.id}"
+    deep_link = f"spark://recaps/{recap.id}"
 
     try:
         await one_signal_client.send_push(

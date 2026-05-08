@@ -1089,7 +1089,7 @@ class AmbassadorGroupQueries:
     ) -> CountableConnection[types.AmbassadorGroup]:
         """Get ambassador groups with filters (client/spark-admin only)."""
         service = AmbassadorGroupQueriesService()
-        tenant_id = await service.resolve_query_tenant_id(info)
+        tenant_id = await service.resolve_query_tenant_id(info, filters=filters)
         await service.get_user(info)
 
         q = filters.search if filters else None
