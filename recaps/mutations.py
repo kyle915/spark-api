@@ -55,8 +55,8 @@ async def _notify_recap_approved_to_rmm_or_clients(
     rmm_user = getattr(event, "rmm_asigned", None)
     fallback_reply_to = "events@igniteproductions.co"
     reply_to_email = (
-        (getattr(rmm_user, "email", None) or "").strip() or fallback_reply_to
-    )
+        getattr(rmm_user, "email", None) or ""
+    ).strip() or fallback_reply_to
 
     recipients: list[tuple[str, str]] = []
     if rmm_user and rmm_user.email:
@@ -131,7 +131,9 @@ async def _notify_recap_ready_for_review_to_admins(
         return
 
     role_slug = await sync_to_async(
-        lambda: User.objects.filter(id=created_by.id).values_list("role__slug", flat=True).first()
+        lambda: User.objects.filter(id=created_by.id)
+        .values_list("role__slug", flat=True)
+        .first()
     )()
     role_slug = (role_slug or "").strip()
     if role_slug != Role.AMBASSADOR_SLUG:
@@ -224,7 +226,10 @@ class RecapMutationService(SparkGraphQLMixin):
     ) -> bool:
         if product_sample is None:
             return False
-        return product_sample.product_id not in (None, "") and product_sample.quantity is not None
+        return (
+            product_sample.product_id not in (None, "")
+            and product_sample.quantity is not None
+        )
 
     @classmethod
     def _has_complete_product_samples(
@@ -233,7 +238,9 @@ class RecapMutationService(SparkGraphQLMixin):
     ) -> bool:
         return bool(
             product_samples
-            and any(cls._has_complete_product_sample(sample) for sample in product_samples)
+            and any(
+                cls._has_complete_product_sample(sample) for sample in product_samples
+            )
         )
 
     @staticmethod
@@ -255,7 +262,9 @@ class RecapMutationService(SparkGraphQLMixin):
     ) -> bool:
         return bool(
             sales_performance
-            and any(cls._has_complete_sales_performance(sale) for sale in sales_performance)
+            and any(
+                cls._has_complete_sales_performance(sale) for sale in sales_performance
+            )
         )
 
     def _is_recap_fully_completed(self) -> bool:
@@ -507,7 +516,11 @@ class RecapMutationService(SparkGraphQLMixin):
 
         is_full_recap = self._is_recap_fully_completed()
 
-        if not event.start_time or not event.end_time or event.end_time <= event.start_time:
+        if (
+            not event.start_time
+            or not event.end_time
+            or event.end_time <= event.start_time
+        ):
             return
 
         attendance_filters = Q(ambassador=ambassador, event=event)
@@ -525,13 +538,17 @@ class RecapMutationService(SparkGraphQLMixin):
         clock_in_times = [
             record.clock_time
             for record in attendances
-            if self._normalize_attendance_slug(getattr(record.attendace_type, "slug", None))
+            if self._normalize_attendance_slug(
+                getattr(record.attendace_type, "slug", None)
+            )
             == "clock_in"
         ]
         clock_out_times = [
             record.clock_time
             for record in attendances
-            if self._normalize_attendance_slug(getattr(record.attendace_type, "slug", None))
+            if self._normalize_attendance_slug(
+                getattr(record.attendace_type, "slug", None)
+            )
             == "clock_out"
         ]
 
@@ -560,16 +577,24 @@ class RecapMutationService(SparkGraphQLMixin):
             .order_by("-created_at")
             .first()
         )()
-        if not ambassador_job or not ambassador_job.rate or ambassador_job.rate.amount is None:
+        if (
+            not ambassador_job
+            or not ambassador_job.rate
+            or ambassador_job.rate.amount is None
+        ):
             return
 
         if is_full_recap:
             if worked_percentage >= 100:
                 ambassador_job.real_amount = ambassador_job.rate.amount
             elif worked_percentage <= 49:
-                ambassador_job.real_amount = ambassador_job.rate.amount * Decimal("0.40")
+                ambassador_job.real_amount = ambassador_job.rate.amount * Decimal(
+                    "0.40"
+                )
             elif worked_percentage >= 50:
-                ambassador_job.real_amount = ambassador_job.rate.amount * Decimal("0.65")
+                ambassador_job.real_amount = ambassador_job.rate.amount * Decimal(
+                    "0.65"
+                )
             else:
                 return
         elif worked_percentage >= 100:
@@ -577,7 +602,9 @@ class RecapMutationService(SparkGraphQLMixin):
         else:
             return
 
-        await sync_to_async(ambassador_job.save)(update_fields=["real_amount", "updated_at"])
+        await sync_to_async(ambassador_job.save)(
+            update_fields=["real_amount", "updated_at"]
+        )
 
     async def create_recap(self) -> models.Recap:
         """Create a recap with multiple files."""
@@ -666,7 +693,12 @@ class RecapMutationService(SparkGraphQLMixin):
                         try:
                             file_type_id = resolve_id_to_int(file_input.file_type_id)
                             file_type = FileType.objects.get(id=file_type_id)
-                        except (FileType.DoesNotExist, TypeError, ValueError, GraphQLError):
+                        except (
+                            FileType.DoesNotExist,
+                            TypeError,
+                            ValueError,
+                            GraphQLError,
+                        ):
                             raise GraphQLError("File type not found.")
 
                     # Get default file type (you may want to make this configurable)
@@ -921,7 +953,9 @@ class RecapMutationService(SparkGraphQLMixin):
                         updated_fields = []
                         if file_input.file_type_id not in (None, ""):
                             try:
-                                file_type_id = resolve_id_to_int(file_input.file_type_id)
+                                file_type_id = resolve_id_to_int(
+                                    file_input.file_type_id
+                                )
                                 file_type = FileType.objects.get(id=file_type_id)
                             except (
                                 FileType.DoesNotExist,
@@ -949,7 +983,10 @@ class RecapMutationService(SparkGraphQLMixin):
                                 GraphQLError,
                             ):
                                 raise GraphQLError("File recap category not found.")
-                            if existing_file.file_recap_category_id != file_recap_category.id:
+                            if (
+                                existing_file.file_recap_category_id
+                                != file_recap_category.id
+                            ):
                                 existing_file.file_recap_category = file_recap_category
                                 updated_fields.append("file_recap_category")
 
@@ -963,7 +1000,12 @@ class RecapMutationService(SparkGraphQLMixin):
                         try:
                             file_type_id = resolve_id_to_int(file_input.file_type_id)
                             file_type = FileType.objects.get(id=file_type_id)
-                        except (FileType.DoesNotExist, TypeError, ValueError, GraphQLError):
+                        except (
+                            FileType.DoesNotExist,
+                            TypeError,
+                            ValueError,
+                            GraphQLError,
+                        ):
                             raise GraphQLError("File type not found.")
                     if not file_type:
                         file_type = FileType.objects.first()
@@ -1044,7 +1086,9 @@ class RecapMutationService(SparkGraphQLMixin):
                         consumer_feedback.demographics = (
                             self.input.consumer_feedback.demographics
                         )
-                        consumer_feedback.feedback = self.input.consumer_feedback.feedback
+                        consumer_feedback.feedback = (
+                            self.input.consumer_feedback.feedback
+                        )
                         consumer_feedback.quotes = self.input.consumer_feedback.quotes
                         consumer_feedback.positive_stories = (
                             self.input.consumer_feedback.positive_stories
@@ -1086,7 +1130,9 @@ class RecapMutationService(SparkGraphQLMixin):
                             self.input.account_feedback.do_differently_feedback
                         )
                         account_feedback.feedback = self.input.account_feedback.feedback
-                        account_feedback.corpo_card = self.input.account_feedback.corpo_card
+                        account_feedback.corpo_card = (
+                            self.input.account_feedback.corpo_card
+                        )
                         account_feedback.was_corpo_card_used = bool(
                             self.input.account_feedback.was_corpo_card_used
                         )
@@ -1129,9 +1175,7 @@ class RecapMutationService(SparkGraphQLMixin):
                         consumer_engagement.brand_aware_consumers = (
                             self.input.consumer_engagements.brand_aware_consumers
                         )
-                        consumer_engagement.willing_to_purchase_consumers = (
-                            self.input.consumer_engagements.willing_to_purchase_consumers
-                        )
+                        consumer_engagement.willing_to_purchase_consumers = self.input.consumer_engagements.willing_to_purchase_consumers
                         consumer_engagement.not_willing_consumers = (
                             self.input.consumer_engagements.not_willing_consumers
                         )
@@ -1172,7 +1216,9 @@ class RecapMutationService(SparkGraphQLMixin):
                                 quantity=sample.quantity,
                             )
                         except (TypeError, ValueError, GraphQLError):
-                            raise GraphQLError(f"Invalid product ID: {sample.product_id}")
+                            raise GraphQLError(
+                                f"Invalid product ID: {sample.product_id}"
+                            )
 
                 if self.input.sales_performance is not None:
                     models.SalesPerformance.objects.filter(recap=recap).delete()
@@ -1465,9 +1511,16 @@ class RecapMutationService(SparkGraphQLMixin):
                         file_type = None
                         if file_input.file_type_id not in (None, ""):
                             try:
-                                file_type_id = resolve_id_to_int(file_input.file_type_id)
+                                file_type_id = resolve_id_to_int(
+                                    file_input.file_type_id
+                                )
                                 file_type = FileType.objects.get(id=file_type_id)
-                            except (FileType.DoesNotExist, TypeError, ValueError, GraphQLError):
+                            except (
+                                FileType.DoesNotExist,
+                                TypeError,
+                                ValueError,
+                                GraphQLError,
+                            ):
                                 raise GraphQLError("File type not found.")
 
                         if not file_type:
@@ -1796,9 +1849,7 @@ class RecapMutationService(SparkGraphQLMixin):
                                 custom_field_value = existing_values[0]
 
                         if custom_field.id in seen_custom_field_ids:
-                            raise GraphQLError(
-                                "Duplicate custom field in the input."
-                            )
+                            raise GraphQLError("Duplicate custom field in the input.")
                         seen_custom_field_ids.add(custom_field.id)
 
                         if custom_field_value:
@@ -1885,7 +1936,11 @@ class RecapMutationService(SparkGraphQLMixin):
                             except (TypeError, ValueError, GraphQLError):
                                 raise GraphQLError(f"Invalid file ID: {file_id}")
                             file_to_delete = next(
-                                (file for file in existing_files if file.id == file_int_id),
+                                (
+                                    file
+                                    for file in existing_files
+                                    if file.id == file_int_id
+                                ),
                                 None,
                             )
                             if not file_to_delete:
@@ -1912,7 +1967,9 @@ class RecapMutationService(SparkGraphQLMixin):
                             file_type = None
                             if file_input.file_type_id not in (None, ""):
                                 try:
-                                    file_type_id = resolve_id_to_int(file_input.file_type_id)
+                                    file_type_id = resolve_id_to_int(
+                                        file_input.file_type_id
+                                    )
                                     file_type = FileType.objects.get(id=file_type_id)
                                 except (
                                     FileType.DoesNotExist,
@@ -1933,7 +1990,9 @@ class RecapMutationService(SparkGraphQLMixin):
                                         file_input.file_recap_category_id
                                     )
                                     file_recap_category = (
-                                        models.FileRecapCategory.objects.get(id=category_id)
+                                        models.FileRecapCategory.objects.get(
+                                            id=category_id
+                                        )
                                     )
                                 except (
                                     models.FileRecapCategory.DoesNotExist,
@@ -1972,8 +2031,12 @@ class RecapMutationService(SparkGraphQLMixin):
 
                                 if file_input.file_type_id not in (None, ""):
                                     try:
-                                        file_type_id = resolve_id_to_int(file_input.file_type_id)
-                                        file_type = FileType.objects.get(id=file_type_id)
+                                        file_type_id = resolve_id_to_int(
+                                            file_input.file_type_id
+                                        )
+                                        file_type = FileType.objects.get(
+                                            id=file_type_id
+                                        )
                                     except (
                                         FileType.DoesNotExist,
                                         TypeError,
@@ -1991,7 +2054,9 @@ class RecapMutationService(SparkGraphQLMixin):
                                             file_input.file_recap_category_id
                                         )
                                         file_recap_category = (
-                                            models.FileRecapCategory.objects.get(id=category_id)
+                                            models.FileRecapCategory.objects.get(
+                                                id=category_id
+                                            )
                                         )
                                     except (
                                         models.FileRecapCategory.DoesNotExist,
@@ -1999,7 +2064,9 @@ class RecapMutationService(SparkGraphQLMixin):
                                         ValueError,
                                         GraphQLError,
                                     ):
-                                        raise GraphQLError("File recap category not found.")
+                                        raise GraphQLError(
+                                            "File recap category not found."
+                                        )
                                     if (
                                         existing_file.file_recap_category_id
                                         != file_recap_category.id
@@ -2017,7 +2084,9 @@ class RecapMutationService(SparkGraphQLMixin):
                             file_type = None
                             if file_input.file_type_id not in (None, ""):
                                 try:
-                                    file_type_id = resolve_id_to_int(file_input.file_type_id)
+                                    file_type_id = resolve_id_to_int(
+                                        file_input.file_type_id
+                                    )
                                     file_type = FileType.objects.get(id=file_type_id)
                                 except (
                                     FileType.DoesNotExist,
@@ -2038,7 +2107,9 @@ class RecapMutationService(SparkGraphQLMixin):
                                         file_input.file_recap_category_id
                                     )
                                     file_recap_category = (
-                                        models.FileRecapCategory.objects.get(id=category_id)
+                                        models.FileRecapCategory.objects.get(
+                                            id=category_id
+                                        )
                                     )
                                 except (
                                     models.FileRecapCategory.DoesNotExist,
@@ -2119,9 +2190,7 @@ class RecapMutationService(SparkGraphQLMixin):
             raise GraphQLError("Recap section not found.")
 
         if recap_section.tenant_id != custom_recap_template.tenant_id:
-            raise GraphQLError(
-                "Recap section does not belong to the template tenant."
-            )
+            raise GraphQLError("Recap section does not belong to the template tenant.")
 
         @sync_to_async
         def create_custom_field_transaction():
@@ -2188,9 +2257,7 @@ class RecapMutationService(SparkGraphQLMixin):
             raise GraphQLError("Recap section not found.")
 
         if recap_section.tenant_id != custom_recap_template.tenant_id:
-            raise GraphQLError(
-                "Recap section does not belong to the template tenant."
-            )
+            raise GraphQLError("Recap section does not belong to the template tenant.")
 
         @sync_to_async
         def update_custom_field_transaction():
@@ -2600,7 +2667,9 @@ class RecapMutationService(SparkGraphQLMixin):
             image_bytes = download_blob_bytes(blob_name)
             if not image_bytes:
                 continue
-            if not should_embed_recap_file(recap_file) and not is_image_bytes(image_bytes):
+            if not should_embed_recap_file(recap_file) and not is_image_bytes(
+                image_bytes
+            ):
                 continue
             image_entries.append(
                 {
@@ -2732,10 +2801,9 @@ class RecapMutationService(SparkGraphQLMixin):
                 image_bytes = download_blob_bytes(blob_name)
                 if not image_bytes:
                     continue
-                if (
-                    not should_embed_recap_file(custom_recap_file)
-                    and not is_image_bytes(image_bytes)
-                ):
+                if not should_embed_recap_file(
+                    custom_recap_file
+                ) and not is_image_bytes(image_bytes):
                     continue
                 image_entries.append(
                     {
@@ -2786,9 +2854,10 @@ class RecapMutationService(SparkGraphQLMixin):
             return custom_recap_file, existing_blob_names
 
         try:
-            custom_recap_file, existing_blob_names = (
-                await create_custom_recap_pdf_file()
-            )
+            (
+                custom_recap_file,
+                existing_blob_names,
+            ) = await create_custom_recap_pdf_file()
         except Exception:
             delete_blob(blob_name)
             raise
@@ -2950,6 +3019,7 @@ class RecapMutationService(SparkGraphQLMixin):
         recap_file_uuid = str(self.input.uuid)
 
         if self.is_spark_schema_request(self.info, user=self.user):
+
             @sync_to_async
             def fetch_recap_file():
                 return models.RecapFile.objects.select_related(
