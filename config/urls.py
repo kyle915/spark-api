@@ -45,6 +45,15 @@ urlpatterns = [
             )
         ),
     ),
+    path(
+        "api/v348263/graphql/mobile",
+        csrf_exempt(
+            AsyncGraphQLView.as_view(
+                schema=schema_mobile,
+                graphiql=settings.DEBUG,
+            )
+        ),
+    ),
 ]
 
 # Add RQ dashboard in DEBUG mode
