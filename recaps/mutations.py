@@ -9,7 +9,7 @@ import logging
 from django.contrib.auth import get_user_model
 from django.db.models import Model, Prefetch, Q
 from django.db import transaction
-from django.utils import timezone
+from django.utils import timezone as django_timezone
 from django.conf import settings
 from django.utils.text import slugify
 
@@ -1414,6 +1414,7 @@ class RecapMutationService(SparkGraphQLMixin):
             with transaction.atomic():
                 custom_recap = models.CustomRecap.objects.create(
                     name=self.input.name,
+                    submitted_at=django_timezone.now(),
                     event=event,
                     timezone=timezone,
                     total_engagements=self.input.total_engagements,
@@ -2684,7 +2685,7 @@ class RecapMutationService(SparkGraphQLMixin):
             )
 
         pdf_bytes = build_recap_pdf(recap, image_entries)
-        timestamp = timezone.now().strftime("%Y%m%d%H%M%S")
+        timestamp = django_timezone.now().strftime("%Y%m%d%H%M%S")
         blob_name = f"recaps/pdfs/{recap.uuid}-{timestamp}.pdf"
         upload_bytes(blob_name, pdf_bytes, content_type="application/pdf")
 
@@ -2819,7 +2820,7 @@ class RecapMutationService(SparkGraphQLMixin):
             return build_recap_pdf(custom_recap, image_entries)
 
         pdf_bytes = await build_custom_recap_pdf_bytes()
-        timestamp = timezone.now().strftime("%Y%m%d%H%M%S")
+        timestamp = django_timezone.now().strftime("%Y%m%d%H%M%S")
         blob_name = f"recaps/pdfs/custom-{custom_recap.uuid}-{timestamp}.pdf"
         upload_bytes(blob_name, pdf_bytes, content_type="application/pdf")
 
@@ -2920,7 +2921,7 @@ class RecapMutationService(SparkGraphQLMixin):
 
         xlsx_bytes = await build_xlsx_for_tenant()
 
-        timestamp = timezone.now().strftime("%Y%m%d%H%M%S")
+        timestamp = django_timezone.now().strftime("%Y%m%d%H%M%S")
         tenant_slug = slugify(getattr(tenant, "name", "") or "tenant")
         export_prefix = f"recaps/exports/{tenant_slug}-"
         blob_name = f"{export_prefix}{timestamp}.xlsx"
@@ -2988,7 +2989,7 @@ class RecapMutationService(SparkGraphQLMixin):
         if xlsx_bytes is None or recap_uuid is None:
             raise GraphQLError("Recap not found.")
 
-        timestamp = timezone.now().strftime("%Y%m%d%H%M%S")
+        timestamp = django_timezone.now().strftime("%Y%m%d%H%M%S")
         tenant_slug = slugify(tenant_name or "tenant")
         export_prefix = f"recaps/exports/{tenant_slug}-{recap_uuid}-"
         blob_name = f"{export_prefix}{timestamp}.xlsx"
