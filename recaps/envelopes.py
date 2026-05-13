@@ -157,10 +157,28 @@ class RecapApprovedNotificationMailer(Mailer):
             if client_metrics
             else "Samples distributed, leads captured, survey responses"
         )
+        frontend_base_url = str(
+            getattr(
+                settings,
+                "CLIENT_FRONTEND_URL",
+                "https://spark.igniteproductions.co",
+            )
+        ).rstrip("/")
+        is_custom_recap = isinstance(self.recap, models.CustomRecap)
+        recap_link = (
+            f"{frontend_base_url}/recap/view-custom/{self.recap.uuid}"
+            if is_custom_recap
+            else "https://spark.igniteproductions.co/"
+        )
+        template = (
+            "recaps.templates.emails.custom_recap_approved_notification"
+            if is_custom_recap
+            else "recaps.templates.emails.recap_approved_notification"
+        )
 
         return Envelope(
-            subject="Your activation recap is ready 📊",
-            template="recaps.templates.emails.recap_approved_notification",
+            subject="Your activation recap is ready",
+            template=template,
             to_emails=self.to_emails,
             headers={"Reply-To": self.reply_to_email},
             from_email=getattr(
@@ -189,7 +207,7 @@ class RecapApprovedNotificationMailer(Mailer):
                 "extensions_text": "None",
                 "photos_count": photos_count,
                 "client_specific_metrics": client_specific_metrics,
-                "recap_link": "https://spark.igniteproductions.co/",
+                "recap_link": recap_link,
             },
         )
 
