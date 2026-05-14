@@ -369,6 +369,64 @@ class TestApproveRecapNotifications(JobsGraphQLTestCase):
         assert "Activation Summary" in rendered_html
 
     @pytest.mark.asyncio
+    @override_settings(CLIENT_FRONTEND_URL="http://client.app")
+    async def test_custom_recap_approved_mailer_template_renders(self):
+        @sync_to_async
+        def create_custom_recap():
+            system_user = self.get_system_user()
+            event_type = EventType.objects.create(
+                name="Custom Approval",
+                slug="custom-approval",
+                tenant=self.tenant,
+                created_by=system_user,
+            )
+            template = recap_models.CustomRecapTemplate.objects.create(
+                name="Custom approval recap",
+                event_type=event_type,
+                tenant=self.tenant,
+                created_by=system_user,
+            )
+            return recap_models.CustomRecap.objects.create(
+                name="Custom recap",
+                approved=True,
+                event=self.event,
+                tenant=self.tenant,
+                custom_recap_template=template,
+                created_by=self.spark_user,
+            )
+
+        custom_recap = await create_custom_recap()
+        custom_recap = await sync_to_async(
+            recap_models.CustomRecap.objects.select_related(
+                "event",
+                "event__tenant",
+                "job",
+                "retailer",
+                "timezone",
+                "ambassador",
+            ).get
+        )(id=custom_recap.id)
+
+        mailer = RecapApprovedNotificationMailer(
+            recap=custom_recap,
+            to_emails=[self.rmm_user.email],
+            recipient_first_name=self.rmm_user.first_name,
+            reply_to_email=self.rmm_user.email,
+        )
+        envelope = mailer.envelope()
+        rendered_html = envelope.render_template()
+
+        assert (
+            envelope.template
+            == "recaps.templates.emails.custom_recap_approved_notification"
+        )
+        assert (
+            envelope.context["recap_link"]
+            == f"http://client.app/recap/view-custom/{custom_recap.uuid}"
+        )
+        assert "Activation Summary" in rendered_html
+
+    @pytest.mark.asyncio
     async def test_notify_recap_ready_for_review_sends_email_for_ambassador(self):
         with (
             override_settings(RECAP_REVIEW_COPY_EMAILS=["admin1@test.com", "admin2@test.com"]),
