@@ -20,7 +20,7 @@ from recaps.envelopes import (
     RecapApprovedNotificationMailer,
     RecapReadyForReviewAdminMailer,
 )
-from recaps.queries import RecapQueriesService
+from recaps.queries import RecapQueriesService, CustomRecapQueriesService
 from ambassadors.models import FileType, Ambassador, Attendance
 from events.models import Event, Retailer, Location, State, TimeZone, EventType
 from jobs.models import Job, AmbassadorJob
@@ -2894,12 +2894,7 @@ class RecapMutationService(SparkGraphQLMixin):
         start_date = self.input.start_date
         end_date = self.input.end_date
 
-        client_origin = (
-            self.info.context.request.META.get("HTTP_ORIGIN")
-            if self.info and self.info.context and self.info.context.request
-            else None
-        )
-        frontend_base_url = client_origin or settings.ADMIN_FRONTEND_URL
+        frontend_base_url = settings.ADMIN_FRONTEND_URL
 
         @sync_to_async
         def build_xlsx_for_tenant():
@@ -2954,12 +2949,7 @@ class RecapMutationService(SparkGraphQLMixin):
         except (TypeError, ValueError, GraphQLError):
             raise GraphQLError("Invalid recap ID.")
 
-        client_origin = (
-            self.info.context.request.META.get("HTTP_ORIGIN")
-            if self.info and self.info.context and self.info.context.request
-            else None
-        )
-        frontend_base_url = client_origin or settings.ADMIN_FRONTEND_URL
+        frontend_base_url = settings.ADMIN_FRONTEND_URL
 
         @sync_to_async
         def build_xlsx_for_recap():
@@ -3012,8 +3002,145 @@ class RecapMutationService(SparkGraphQLMixin):
         )
         return generate_download_url(blob_name)
 
+    async def export_custom_recaps_xlsx(self) -> str:
+        """Generate an Excel report with all custom recaps for a tenant."""
+        if not isinstance(self.input, inputs.ExportCustomRecapsXlsxInput):
+            raise GraphQLError("Invalid input type.")
+
+        resolved_tenant_id: int | None = None
+        if self.input.tenant_id not in (None, ""):
+            try:
+                resolved_tenant_id = resolve_id_to_int(self.input.tenant_id)
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Invalid tenant ID.")
+
+        resolved_template_id: int | None = None
+        if self.input.custom_recap_template_id not in (None, ""):
+            try:
+                resolved_template_id = resolve_id_to_int(
+                    self.input.custom_recap_template_id
+                )
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Invalid custom recap template ID.")
+
+        if self.is_spark_schema_request(self.info, user=self.user):
+            if resolved_tenant_id is None:
+                raise GraphQLError("Tenant ID is required.")
+            tenant = await self._get_tenant_without_membership(
+                tenant_id=resolved_tenant_id
+            )
+        else:
+            tenant = await self.get_user_tenant(
+                self.info,
+                tenant_id=resolved_tenant_id,
+                user=self.user,
+            )
+
+        start_date = self.input.start_date
+        end_date = self.input.end_date
+        frontend_base_url = settings.ADMIN_FRONTEND_URL
+
+        @sync_to_async
+        def build_xlsx_for_tenant():
+            service = CustomRecapQueriesService()
+            queryset = service.get_filtered_queryset(
+                tenant_id=tenant.id,
+                custom_recap_template_id=resolved_template_id,
+                start_date=start_date,
+                end_date=end_date,
+            )
+            custom_recaps = list(queryset)
+            return build_recaps_xlsx(
+                custom_recaps,
+                frontend_base_url=frontend_base_url,
+            )
+
+        xlsx_bytes = await build_xlsx_for_tenant()
+
+        timestamp = django_timezone.now().strftime("%Y%m%d%H%M%S")
+        tenant_slug = slugify(getattr(tenant, "name", "") or "tenant")
+        export_prefix = f"custom-recaps/exports/{tenant_slug}-"
+        blob_name = f"{export_prefix}{timestamp}.xlsx"
+
+        @sync_to_async
+        def delete_previous_exports():
+            client = get_gcs_client()
+            bucket = client.bucket(settings.GS_BUCKET_NAME)
+            for blob in bucket.list_blobs(prefix=export_prefix):
+                if blob.name != blob_name:
+                    blob.delete()
+
+        await delete_previous_exports()
+        upload_bytes(
+            blob_name,
+            xlsx_bytes,
+            content_type=(
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            ),
+        )
+        return generate_download_url(blob_name)
+
+    async def export_custom_recap_xlsx(self) -> str:
+        """Generate an Excel report for a single custom recap."""
+        if not isinstance(self.input, inputs.ExportCustomRecapXlsxInput):
+            raise GraphQLError("Invalid input type.")
+
+        try:
+            custom_recap_id = resolve_id_to_int(self.input.id)
+        except (TypeError, ValueError, GraphQLError):
+            raise GraphQLError("Invalid custom recap ID.")
+
+        frontend_base_url = settings.ADMIN_FRONTEND_URL
+
+        @sync_to_async
+        def build_xlsx_for_custom_recap():
+            try:
+                custom_recap = CustomRecapQueriesService().get_queryset().get(
+                    id=custom_recap_id
+                )
+            except models.CustomRecap.DoesNotExist:
+                return None, None, None
+
+            tenant_name = getattr(custom_recap.tenant, "name", None) or getattr(
+                getattr(custom_recap, "event", None), "tenant", None
+            )
+            return (
+                build_recaps_xlsx([custom_recap], frontend_base_url=frontend_base_url),
+                custom_recap.uuid,
+                getattr(tenant_name, "name", None)
+                if not isinstance(tenant_name, str)
+                else tenant_name,
+            )
+
+        xlsx_bytes, custom_recap_uuid, tenant_name = await build_xlsx_for_custom_recap()
+        if xlsx_bytes is None or custom_recap_uuid is None:
+            raise GraphQLError("Custom recap not found.")
+
+        timestamp = django_timezone.now().strftime("%Y%m%d%H%M%S")
+        tenant_slug = slugify(tenant_name or "tenant")
+        export_prefix = f"custom-recaps/exports/{tenant_slug}-{custom_recap_uuid}-"
+        blob_name = f"{export_prefix}{timestamp}.xlsx"
+
+        @sync_to_async
+        def delete_previous_exports():
+            client = get_gcs_client()
+            bucket = client.bucket(settings.GS_BUCKET_NAME)
+            for blob in bucket.list_blobs(prefix=export_prefix):
+                if blob.name != blob_name:
+                    blob.delete()
+
+        await delete_previous_exports()
+        upload_bytes(
+            blob_name,
+            xlsx_bytes,
+            content_type=(
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            ),
+        )
+        return generate_download_url(blob_name)
+
     async def get_recap_file_download_url(self) -> str:
-        """Return a signed download URL for a recap file."""
+        """Return a signed download URL for a recap or custom recap file."""
         if not isinstance(self.input, inputs.RecapFileDownloadUrlInput):
             raise GraphQLError("Invalid input type.")
 
@@ -3023,26 +3150,57 @@ class RecapMutationService(SparkGraphQLMixin):
 
             @sync_to_async
             def fetch_recap_file():
-                return models.RecapFile.objects.select_related(
-                    "recap",
-                    "recap__event",
-                ).get(uuid=recap_file_uuid)
+                recap_file = (
+                    models.RecapFile.objects.select_related(
+                        "recap",
+                        "recap__event",
+                    )
+                    .filter(uuid=recap_file_uuid)
+                    .first()
+                )
+                if recap_file is not None:
+                    return recap_file
+                return (
+                    models.CustomRecapFile.objects.select_related(
+                        "custom_recap",
+                        "custom_recap__event",
+                    )
+                    .filter(uuid=recap_file_uuid)
+                    .first()
+                )
         else:
             tenant = await self.get_user_tenant(self.info, user=self.user)
 
             @sync_to_async
             def fetch_recap_file():
-                return models.RecapFile.objects.select_related(
-                    "recap",
-                    "recap__event",
-                ).get(uuid=recap_file_uuid, recap__event__tenant_id=tenant.id)
+                recap_file = (
+                    models.RecapFile.objects.select_related(
+                        "recap",
+                        "recap__event",
+                    )
+                    .filter(uuid=recap_file_uuid, recap__event__tenant_id=tenant.id)
+                    .first()
+                )
+                if recap_file is not None:
+                    return recap_file
+                return (
+                    models.CustomRecapFile.objects.select_related(
+                        "custom_recap",
+                        "custom_recap__event",
+                    )
+                    .filter(
+                        uuid=recap_file_uuid,
+                        custom_recap__tenant_id=tenant.id,
+                    )
+                    .first()
+                )
 
-        try:
-            recap_file = await fetch_recap_file()
-        except models.RecapFile.DoesNotExist:
+        recap_file = await fetch_recap_file()
+        if recap_file is None:
             raise GraphQLError("Recap file not found.")
 
-        blob_name = extract_blob_name_from_url(str(recap_file.file))
+        file_field = getattr(recap_file, "file", None) or getattr(recap_file, "url", None)
+        blob_name = extract_blob_name_from_url(str(file_field))
         if not blob_name:
             raise GraphQLError("Recap file not found.")
         return generate_download_url(blob_name)
@@ -3650,6 +3808,58 @@ class RecapMutations:
                 types.RecapExportResponse,
                 success=True,
                 message="Recap exported successfully.",
+                input_obj=input,
+                file_url=file_url,
+            )
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.RecapExportResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def export_custom_recaps_xlsx(
+        self,
+        info: strawberry.Info,
+        input: inputs.ExportCustomRecapsXlsxInput,
+    ) -> types.RecapExportResponse:
+        """Export all custom recaps for a tenant to an Excel file."""
+        try:
+            service = RecapMutationService.with_input(input)
+            await service.set_user(info)
+            file_url = await service.export_custom_recaps_xlsx()
+            return build_mutation_response(
+                types.RecapExportResponse,
+                success=True,
+                message="Custom recaps exported successfully.",
+                input_obj=input,
+                file_url=file_url,
+            )
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.RecapExportResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def export_custom_recap_xlsx(
+        self,
+        info: strawberry.Info,
+        input: inputs.ExportCustomRecapXlsxInput,
+    ) -> types.RecapExportResponse:
+        """Export a single custom recap to an Excel file."""
+        try:
+            service = RecapMutationService.with_input(input)
+            await service.set_user(info)
+            file_url = await service.export_custom_recap_xlsx()
+            return build_mutation_response(
+                types.RecapExportResponse,
+                success=True,
+                message="Custom recap exported successfully.",
                 input_obj=input,
                 file_url=file_url,
             )

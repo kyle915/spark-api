@@ -6,6 +6,8 @@ from openpyxl import Workbook
 
 from utils.gcs import extract_blob_name_from_url
 
+INVALID_SHEET_CHARS = set(r'[]:*?/\\')
+
 def _format_dt(value) -> str:
     if not value:
         return ""
@@ -87,6 +89,43 @@ def _get_retailer_state_name(recap) -> str:
     return getattr(distributor_state, "name", "") or ""
 
 
+def _related_items(instance, primary_attr: str, fallback_attr: str | None = None) -> list:
+    relation = getattr(instance, primary_attr, None)
+    if relation is None and fallback_attr:
+        relation = getattr(instance, fallback_attr, None)
+    if relation is None:
+        return []
+    try:
+        return list(relation.all())
+    except Exception:
+        return []
+
+
+def _file_field_value(recap_file):
+    file_value = getattr(recap_file, "file", None)
+    if file_value:
+        return file_value
+    return getattr(recap_file, "url", None)
+
+
+def _sanitize_sheet_title(title: str, used_titles: set[str]) -> str:
+    cleaned = "".join("_" if char in INVALID_SHEET_CHARS else char for char in title)
+    cleaned = (cleaned or "Section").strip() or "Section"
+    cleaned = cleaned[:31]
+    if cleaned not in used_titles:
+        used_titles.add(cleaned)
+        return cleaned
+
+    base = cleaned[:28] or "Sec"
+    counter = 2
+    candidate = f"{base}_{counter}"
+    while candidate in used_titles:
+        counter += 1
+        candidate = f"{base}_{counter}"
+    used_titles.add(candidate)
+    return candidate
+
+
 def build_recaps_xlsx(
     recaps: Iterable[object],
     frontend_base_url: str | None = None,
@@ -94,6 +133,9 @@ def build_recaps_xlsx(
     """Build an Excel report containing recap data and related tables."""
     recaps_list = list(recaps)
     wb = Workbook()
+    has_standard_recaps = any(
+        hasattr(recap, "consumer_engagements") for recap in recaps_list
+    )
 
     recap_sheet = wb.active
     recap_sheet.title = "Recaps"
@@ -122,18 +164,20 @@ def build_recaps_xlsx(
         ]
     )
 
-    engagements_sheet = wb.create_sheet(title="ConsumerEngagements")
-    engagements_sheet.append(
-        [
-            "recap_uuid",
-            "recap_name",
-            "total_consumer",
-            "first_time_consumers",
-            "brand_aware_consumers",
-            "willing_to_purchase_consumers",
-            "not_willing_consumers",
-        ]
-    )
+    engagements_sheet = None
+    if has_standard_recaps:
+        engagements_sheet = wb.create_sheet(title="ConsumerEngagements")
+        engagements_sheet.append(
+            [
+                "recap_uuid",
+                "recap_name",
+                "total_consumer",
+                "first_time_consumers",
+                "brand_aware_consumers",
+                "willing_to_purchase_consumers",
+                "not_willing_consumers",
+            ]
+        )
 
     samples_sheet = wb.create_sheet(title="ProductSamples")
     samples_sheet.append(
@@ -156,29 +200,33 @@ def build_recaps_xlsx(
         ]
     )
 
-    consumer_feedback_sheet = wb.create_sheet(title="ConsumerFeedback")
-    consumer_feedback_sheet.append(
-        [
-            "recap_uuid",
-            "recap_name",
-            "demographics",
-            "feedback",
-            "quotes",
-            "positive_stories",
-            "reasons_to_decline",
-        ]
-    )
+    consumer_feedback_sheet = None
+    if has_standard_recaps:
+        consumer_feedback_sheet = wb.create_sheet(title="ConsumerFeedback")
+        consumer_feedback_sheet.append(
+            [
+                "recap_uuid",
+                "recap_name",
+                "demographics",
+                "feedback",
+                "quotes",
+                "positive_stories",
+                "reasons_to_decline",
+            ]
+        )
 
-    account_feedback_sheet = wb.create_sheet(title="AccountFeedback")
-    account_feedback_sheet.append(
-        [
-            "recap_uuid",
-            "recap_name",
-            "do_differently_feedback",
-            "feedback",
-            "corpo_card",
-        ]
-    )
+    account_feedback_sheet = None
+    if has_standard_recaps:
+        account_feedback_sheet = wb.create_sheet(title="AccountFeedback")
+        account_feedback_sheet.append(
+            [
+                "recap_uuid",
+                "recap_name",
+                "do_differently_feedback",
+                "feedback",
+                "corpo_card",
+            ]
+        )
 
     files_sheet = wb.create_sheet(title="RecapFiles")
     files_sheet.append(
@@ -192,6 +240,64 @@ def build_recaps_xlsx(
             "file_path",
         ]
     )
+
+    section_definitions: dict[object, dict[str, object]] = {}
+    used_sheet_titles = {
+        "Recaps",
+        "ProductSamples",
+        "SalesPerformance",
+        "RecapFiles",
+    }
+    if has_standard_recaps:
+        used_sheet_titles.update(
+            {"ConsumerEngagements", "ConsumerFeedback", "AccountFeedback"}
+        )
+    for recap in recaps_list:
+        template_fields = _related_items(
+            getattr(recap, "custom_recap_template", None),
+            "custom_field",
+        )
+        value_fields = [
+            getattr(item, "custom_field", None)
+            for item in _related_items(recap, "custom_field_value")
+            if getattr(item, "custom_field", None) is not None
+        ]
+        for custom_field in [*template_fields, *value_fields]:
+            section = getattr(custom_field, "recap_section", None)
+            section_id = getattr(section, "id", None)
+            if section_id is None:
+                continue
+            section_entry = section_definitions.setdefault(
+                section_id,
+                {
+                    "section_name": getattr(section, "name", None) or "Section",
+                    "fields": {},
+                },
+            )
+            section_entry["fields"][getattr(custom_field, "id", None)] = custom_field
+
+    section_sheets: dict[object, tuple[object, list[object]]] = {}
+    for section_id, section_entry in section_definitions.items():
+        sheet_title = _sanitize_sheet_title(
+            str(section_entry["section_name"]),
+            used_sheet_titles,
+        )
+        section_sheet = wb.create_sheet(title=sheet_title)
+        section_fields = sorted(
+            section_entry["fields"].values(),
+            key=lambda field: (
+                getattr(field, "id", 0) is None,
+                getattr(field, "id", 0) or 0,
+            ),
+        )
+        section_sheet.append(
+            [
+                "recap_uuid",
+                "recap_name",
+                *[_safe(getattr(field, "name", None)) for field in section_fields],
+            ]
+        )
+        section_sheets[section_id] = (section_sheet, section_fields)
 
     for recap in recaps_list:
         ambassador_user = None
@@ -224,20 +330,23 @@ def build_recaps_xlsx(
             ]
         )
 
-        for engagement in getattr(recap, "consumer_engagements", []).all():
-            engagements_sheet.append(
-                [
-                    _safe(getattr(recap, "uuid", None)),
-                    _safe(getattr(recap, "name", None)),
-                    _safe(getattr(engagement, "total_consumer", None)),
-                    _safe(getattr(engagement, "first_time_consumers", None)),
-                    _safe(getattr(engagement, "brand_aware_consumers", None)),
-                    _safe(getattr(engagement, "willing_to_purchase_consumers", None)),
-                    _safe(getattr(engagement, "not_willing_consumers", None)),
-                ]
-            )
+        if engagements_sheet is not None:
+            for engagement in _related_items(recap, "consumer_engagements"):
+                engagements_sheet.append(
+                    [
+                        _safe(getattr(recap, "uuid", None)),
+                        _safe(getattr(recap, "name", None)),
+                        _safe(getattr(engagement, "total_consumer", None)),
+                        _safe(getattr(engagement, "first_time_consumers", None)),
+                        _safe(getattr(engagement, "brand_aware_consumers", None)),
+                        _safe(getattr(engagement, "willing_to_purchase_consumers", None)),
+                        _safe(getattr(engagement, "not_willing_consumers", None)),
+                    ]
+                )
 
-        for sample in getattr(recap, "product_samples", []).all():
+        for sample in _related_items(
+            recap, "product_samples", "custom_recap_product_sample"
+        ):
             samples_sheet.append(
                 [
                     _safe(getattr(recap, "uuid", None)),
@@ -247,7 +356,9 @@ def build_recaps_xlsx(
                 ]
             )
 
-        for sale in getattr(recap, "sales_performance", []).all():
+        for sale in _related_items(
+            recap, "sales_performance", "custom_recap_sale_performance"
+        ):
             sales_sheet.append(
                 [
                     _safe(getattr(recap, "uuid", None)),
@@ -258,32 +369,34 @@ def build_recaps_xlsx(
                 ]
             )
 
-        for feedback in getattr(recap, "consumer_feedback", []).all():
-            consumer_feedback_sheet.append(
-                [
-                    _safe(getattr(recap, "uuid", None)),
-                    _safe(getattr(recap, "name", None)),
-                    _safe(getattr(feedback, "demographics", None)),
-                    _safe(getattr(feedback, "feedback", None)),
-                    _safe(getattr(feedback, "quotes", None)),
-                    _safe(getattr(feedback, "positive_stories", None)),
-                    _safe(getattr(feedback, "reasons_to_decline", None)),
-                ]
-            )
+        if consumer_feedback_sheet is not None:
+            for feedback in _related_items(recap, "consumer_feedback"):
+                consumer_feedback_sheet.append(
+                    [
+                        _safe(getattr(recap, "uuid", None)),
+                        _safe(getattr(recap, "name", None)),
+                        _safe(getattr(feedback, "demographics", None)),
+                        _safe(getattr(feedback, "feedback", None)),
+                        _safe(getattr(feedback, "quotes", None)),
+                        _safe(getattr(feedback, "positive_stories", None)),
+                        _safe(getattr(feedback, "reasons_to_decline", None)),
+                    ]
+                )
 
-        for feedback in getattr(recap, "account_feedback", []).all():
-            account_feedback_sheet.append(
-                [
-                    _safe(getattr(recap, "uuid", None)),
-                    _safe(getattr(recap, "name", None)),
-                    _safe(getattr(feedback, "do_differently_feedback", None)),
-                    _safe(getattr(feedback, "feedback", None)),
-                    _safe(getattr(feedback, "corpo_card", None)),
-                ]
-            )
+        if account_feedback_sheet is not None:
+            for feedback in _related_items(recap, "account_feedback"):
+                account_feedback_sheet.append(
+                    [
+                        _safe(getattr(recap, "uuid", None)),
+                        _safe(getattr(recap, "name", None)),
+                        _safe(getattr(feedback, "do_differently_feedback", None)),
+                        _safe(getattr(feedback, "feedback", None)),
+                        _safe(getattr(feedback, "corpo_card", None)),
+                    ]
+                )
 
-        for recap_file in getattr(recap, "recap_files", []).all():
-            file_path = getattr(recap_file, "file", None)
+        for recap_file in _related_items(recap, "recap_files", "custom_recap_files"):
+            file_path = _file_field_value(recap_file)
             blob_name = extract_blob_name_from_url(str(file_path)) if file_path else None
             signed_url = ""
             if frontend_base_url:
@@ -319,6 +432,30 @@ def build_recaps_xlsx(
                 cell = files_sheet.cell(row=files_sheet.max_row, column=7)
                 cell.hyperlink = signed_url
                 cell.style = "Hyperlink"
+
+        if section_sheets:
+            value_by_field_id = {
+                getattr(getattr(custom_field_value, "custom_field", None), "id", None): _safe(
+                    getattr(custom_field_value, "value", None)
+                )
+                for custom_field_value in _related_items(recap, "custom_field_value")
+            }
+            for section_id, (section_sheet, section_fields) in section_sheets.items():
+                row = [
+                    _safe(getattr(recap, "uuid", None)),
+                    _safe(getattr(recap, "name", None)),
+                ]
+                has_section_field = False
+                for field in section_fields:
+                    field_id = getattr(field, "id", None)
+                    field_section = getattr(field, "recap_section", None)
+                    if getattr(field_section, "id", None) != section_id:
+                        row.append("")
+                        continue
+                    has_section_field = True
+                    row.append(value_by_field_id.get(field_id, ""))
+                if has_section_field:
+                    section_sheet.append(row)
 
     output = BytesIO()
     wb.save(output)

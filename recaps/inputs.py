@@ -175,6 +175,19 @@ class ExportRecapXlsxInput(SparkGraphQLInput):
 
 
 @strawberry.input
+class ExportCustomRecapsXlsxInput(SparkGraphQLInput):
+    tenant_id: strawberry.ID | None = None
+    custom_recap_template_id: strawberry.ID | None = None
+    start_date: str | None = None
+    end_date: str | None = None
+
+
+@strawberry.input
+class ExportCustomRecapXlsxInput(SparkGraphQLInput):
+    id: strawberry.ID
+
+
+@strawberry.input
 class RecapFileDownloadUrlInput(SparkGraphQLInput):
     uuid: strawberry.ID
 
