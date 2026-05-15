@@ -1208,12 +1208,168 @@ class DashboardQueries:
                 strongest_brand_awareness=strongest_brand_awareness
             )
 
-            # Reuse market_points for market_analysis (already computed above)
-            # Sort by consumers descending
-            market_points.sort(key=lambda x: x.consumers, reverse=True)
+            # Market Analysis should include approved recaps and approved custom recaps only.
+            approved_recaps_queryset = base_queryset.filter(approved=True)
+
+            approved_custom_recaps_queryset = recap_models.CustomRecap.objects.filter(
+                approved=True
+            )
+            approved_custom_recaps_queryset = service._apply_recap_dashboard_filters(
+                approved_custom_recaps_queryset, filters
+            )
+            approved_custom_recaps_queryset = approved_custom_recaps_queryset.filter(
+                Q(event__date__date__gte=start_date, event__date__date__lte=end_date) |
+                Q(event__start_time__date__gte=start_date, event__start_time__date__lte=end_date) |
+                Q(event__request__date__date__gte=start_date,
+                  event__request__date__date__lte=end_date) |
+                Q(created_at__date__gte=start_date,
+                  created_at__date__lte=end_date)
+            )
+
+            approved_market_data_recap = await sync_to_async(list)(
+                approved_recaps_queryset.select_related('retailer')
+                .filter(retailer__isnull=False)
+                .values('retailer_id', 'retailer__name')
+                .annotate(
+                    consumers=Sum(
+                        'consumer_engagements__total_consumer', default=0),
+                    purchases=Sum('products_sold', default=0),
+                    demos=Sum('total_engagements', default=0),
+                    willing=Sum(
+                        'consumer_engagements__willing_to_purchase_consumers', default=0)
+                )
+            )
+
+            approved_market_data_event = await sync_to_async(list)(
+                approved_recaps_queryset.select_related('event__request__retailer')
+                .filter(
+                    retailer__isnull=True,
+                    event__request__retailer__isnull=False
+                )
+                .values('event__request__retailer_id', 'event__request__retailer__name')
+                .annotate(
+                    consumers=Sum(
+                        'consumer_engagements__total_consumer', default=0),
+                    purchases=Sum('products_sold', default=0),
+                    demos=Sum('total_engagements', default=0),
+                    willing=Sum(
+                        'consumer_engagements__willing_to_purchase_consumers', default=0)
+                )
+            )
+
+            custom_market_data_recap = await sync_to_async(list)(
+                approved_custom_recaps_queryset.select_related('retailer')
+                .filter(retailer__isnull=False)
+                .values('retailer_id', 'retailer__name')
+                .annotate(
+                    demos=Sum('total_engagements', default=0),
+                    purchases=Sum(
+                        'custom_recap_product_sample__quantity', default=0)
+                )
+            )
+
+            custom_market_data_event = await sync_to_async(list)(
+                approved_custom_recaps_queryset.select_related('event__request__retailer')
+                .filter(
+                    retailer__isnull=True,
+                    event__request__retailer__isnull=False
+                )
+                .values('event__request__retailer_id', 'event__request__retailer__name')
+                .annotate(
+                    demos=Sum('total_engagements', default=0),
+                    purchases=Sum(
+                        'custom_recap_product_sample__quantity', default=0)
+                )
+            )
+
+            market_analysis_dict = {}
+
+            def _accumulate_market(
+                market_id,
+                market_name,
+                consumers=0,
+                purchases=0,
+                demos=0,
+                willing=0,
+            ):
+                if market_id not in market_analysis_dict:
+                    market_analysis_dict[market_id] = {
+                        'market_id': market_id,
+                        'market_name': market_name,
+                        'consumers': 0,
+                        'purchases': 0,
+                        'demos': 0,
+                        'willing': 0,
+                    }
+                market_analysis_dict[market_id]['consumers'] += consumers or 0
+                market_analysis_dict[market_id]['purchases'] += purchases or 0
+                market_analysis_dict[market_id]['demos'] += demos or 0
+                market_analysis_dict[market_id]['willing'] += willing or 0
+
+            for item in approved_market_data_recap:
+                _accumulate_market(
+                    item['retailer_id'],
+                    item['retailer__name'],
+                    consumers=item['consumers'],
+                    purchases=item['purchases'],
+                    demos=item['demos'],
+                    willing=item['willing'],
+                )
+
+            for item in approved_market_data_event:
+                _accumulate_market(
+                    item['event__request__retailer_id'],
+                    item['event__request__retailer__name'],
+                    consumers=item['consumers'],
+                    purchases=item['purchases'],
+                    demos=item['demos'],
+                    willing=item['willing'],
+                )
+
+            for item in custom_market_data_recap:
+                _accumulate_market(
+                    item['retailer_id'],
+                    item['retailer__name'],
+                    purchases=item['purchases'],
+                    demos=item['demos'],
+                )
+
+            for item in custom_market_data_event:
+                _accumulate_market(
+                    item['event__request__retailer_id'],
+                    item['event__request__retailer__name'],
+                    purchases=item['purchases'],
+                    demos=item['demos'],
+                )
+
+            market_analysis_points = []
+            for market in market_analysis_dict.values():
+                market_consumers = market['consumers']
+                market_willing = market['willing']
+                market_conversion = clamp_percentage(
+                    (market_willing / market_consumers * 100)
+                    if market_consumers > 0 else 0.0
+                )
+                market_efficiency = clamp_percentage(
+                    (market['purchases'] / market_consumers * 100)
+                    if market_consumers > 0 else 0.0
+                )
+                market_analysis_points.append(
+                    types.MarketPerformanceData(
+                        market_id=str(market['market_id']),
+                        market_name=market['market_name'] or '',
+                        consumers=market_consumers,
+                        purchases=market['purchases'],
+                        conversion=round(market_conversion, 1),
+                        demos=market['demos'],
+                        efficiency=round(market_efficiency, 1)
+                    )
+                )
+
+            market_analysis_points.sort(key=lambda x: x.consumers, reverse=True)
 
             market_analysis = types.MarketPerformanceAnalysis(
-                data_points=market_points
+                data_points=market_analysis_points
             )
 
             # RMM Performance (grouped by retailer, similar to market analysis)

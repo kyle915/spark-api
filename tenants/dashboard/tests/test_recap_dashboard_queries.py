@@ -801,6 +801,107 @@ class TestRecapDashboardQueries(DashboardGraphQLTestCase):
             assert 0 <= point['efficiency'] <= 100
 
     @pytest.mark.asyncio
+    async def test_recap_dashboard_market_analysis_counts_only_approved_and_includes_custom_recaps(self):
+        """Market analysis should include approved custom recaps and exclude unapproved recaps."""
+        from events import models as event_models
+        from recaps import models as recap_models
+
+        @sync_to_async
+        def create_custom_recaps():
+            system_user = self.get_system_user()
+            template = recap_models.CustomRecapTemplate.objects.create(
+                name="Dashboard custom recap template",
+                event_type=self.event_type,
+                tenant=self.tenant,
+                created_by=system_user,
+            )
+            product_type = event_models.ProductType.objects.create(
+                name="Dashboard Product Type",
+                tenant=self.tenant,
+                created_by=system_user,
+            )
+            product = event_models.Product.objects.create(
+                name="Dashboard Product",
+                product_type=product_type,
+                tenant=self.tenant,
+                created_by=system_user,
+            )
+
+            approved_custom_recap = recap_models.CustomRecap.objects.create(
+                name="Approved custom recap",
+                approved=True,
+                total_engagements=33,
+                event=self.event1,
+                tenant=self.tenant,
+                retailer=self.retailer,
+                custom_recap_template=template,
+                ambassador=self.ambassador,
+                created_by=system_user,
+            )
+            recap_models.CustomRecapProductSample.objects.create(
+                custom_recap=approved_custom_recap,
+                product=product,
+                quantity=7,
+                created_by=system_user,
+            )
+
+            unapproved_custom_recap = recap_models.CustomRecap.objects.create(
+                name="Unapproved custom recap",
+                approved=False,
+                total_engagements=99,
+                event=self.event1,
+                tenant=self.tenant,
+                retailer=self.retailer,
+                custom_recap_template=template,
+                ambassador=self.ambassador,
+                created_by=system_user,
+            )
+            recap_models.CustomRecapProductSample.objects.create(
+                custom_recap=unapproved_custom_recap,
+                product=product,
+                quantity=99,
+                created_by=system_user,
+            )
+
+        await create_custom_recaps()
+
+        query = """
+        query {
+            recapDashboard {
+                marketAnalysis {
+                    dataPoints {
+                        marketId
+                        consumers
+                        purchases
+                        demos
+                        conversion
+                    }
+                }
+            }
+        }
+        """
+
+        result = await self._execute_query_authenticated(
+            query,
+            {},
+            self.client_user
+        )
+
+        assert result.errors is None
+        assert result.data is not None
+
+        points = result.data["recapDashboard"]["marketAnalysis"]["dataPoints"]
+        retailer_point = next(
+            point for point in points
+            if point["marketId"] == str(self.retailer.id)
+        )
+
+        assert retailer_point["consumers"] == 220
+        assert retailer_point["purchases"] == 117
+        assert retailer_point["demos"] == 253
+        assert retailer_point["conversion"] == 72.7
+
+    @pytest.mark.asyncio
     async def test_recap_dashboard_rmm_performance(self):
         """Test recap_dashboard RMM performance."""
         query = """
