@@ -2,14 +2,17 @@ from unittest.mock import patch
 
 import pytest
 from asgiref.sync import sync_to_async
+from openpyxl import load_workbook
 import strawberry_django  # noqa: F401
 from django.test import override_settings
+from io import BytesIO
 
 from ambassadors.models import AmbassadorEvent
-from events.models import EventType
+from events.models import EventType, Product, ProductType
 from jobs.tests.base import JobsGraphQLTestCase
 from recaps import models as recap_models
 from recaps.envelopes import RecapApprovedNotificationMailer
+from recaps.excel import build_recaps_xlsx
 from recaps.mutations import _notify_recap_ready_for_review_to_admins
 
 
@@ -339,6 +342,231 @@ class TestApproveRecapNotifications(JobsGraphQLTestCase):
         custom_recap_file = await get_custom_recap_file()
         assert str(custom_recap_file.url).startswith("recaps/pdfs/custom-")
         assert custom_recap_file.created_by_id == self.spark_user.id
+
+    @pytest.mark.asyncio
+    async def test_build_recaps_xlsx_supports_custom_recap(self):
+        @sync_to_async
+        def create_custom_recap_data():
+            system_user = self.get_system_user()
+            event_type = EventType.objects.create(
+                name="Excel Custom Sampling",
+                slug="excel-custom-sampling",
+                tenant=self.tenant,
+                created_by=system_user,
+            )
+            template = recap_models.CustomRecapTemplate.objects.create(
+                name="Excel custom recap",
+                event_type=event_type,
+                tenant=self.tenant,
+                created_by=system_user,
+            )
+            field_type = recap_models.CustomRecapFieldType.objects.create(
+                name="Text",
+                created_by=system_user,
+            )
+            section = recap_models.RecapSection.objects.create(
+                name="Summary",
+                tenant=self.tenant,
+                created_by=system_user,
+            )
+            custom_field = recap_models.CustomField.objects.create(
+                name="Execution notes",
+                required=False,
+                custom_recap_template=template,
+                custom_field_type=field_type,
+                recap_section=section,
+                created_by=system_user,
+            )
+            custom_recap = recap_models.CustomRecap.objects.create(
+                name="Custom recap export",
+                approved=True,
+                event=self.event,
+                tenant=self.tenant,
+                custom_recap_template=template,
+                ambassador=self.ambassador,
+                created_by=self.spark_user,
+            )
+            product_type = ProductType.objects.create(
+                name="Beverage",
+                tenant=self.tenant,
+                created_by=system_user,
+            )
+            product = Product.objects.create(
+                name="Sample Product",
+                product_type=product_type,
+                tenant=self.tenant,
+                created_by=system_user,
+            )
+            type_of_good = recap_models.TypeOfGood.objects.create(
+                name="Can",
+                tenant=self.tenant,
+                created_by=system_user,
+            )
+            recap_models.CustomRecapProductSample.objects.create(
+                custom_recap=custom_recap,
+                product=product,
+                quantity=24,
+                created_by=self.spark_user,
+            )
+            recap_models.CustomRecapSalePerformance.objects.create(
+                custom_recap=custom_recap,
+                product=product,
+                type_of_good=type_of_good,
+                price="12.5000",
+                created_by=self.spark_user,
+            )
+            recap_models.CustomFieldValue.objects.create(
+                custom_recap=custom_recap,
+                custom_field=custom_field,
+                value="Store manager asked for follow-up",
+                created_by=self.spark_user,
+            )
+            file_type = self.create_file_type(name="Image", extension=".jpg")
+            custom_recap_file = recap_models.CustomRecapFile.objects.create(
+                name="Store photo",
+                url="recap_files/custom/store-photo.jpg",
+                custom_recap=custom_recap,
+                file_type=file_type,
+                created_by=self.spark_user,
+            )
+            return (
+                recap_models.CustomRecap.objects.select_related(
+                    "event",
+                    "event__request__retailer",
+                    "event__request__distributor",
+                    "ambassador__user",
+                )
+                .prefetch_related(
+                    "custom_recap_product_sample__product",
+                    "custom_recap_sale_performance__product",
+                    "custom_recap_sale_performance__type_of_good",
+                    "custom_field_value__custom_field__custom_field_type",
+                    "custom_field_value__custom_field__recap_section",
+                    "custom_recap_files",
+                )
+                .get(id=custom_recap.id),
+                str(custom_recap_file.uuid),
+            )
+
+        custom_recap, custom_recap_file_uuid = await create_custom_recap_data()
+        workbook_bytes = build_recaps_xlsx(
+            [custom_recap],
+            frontend_base_url="https://spark-admin.example.com",
+        )
+        workbook = load_workbook(BytesIO(workbook_bytes))
+        sheet_names = workbook.sheetnames
+
+        recaps_rows = list(workbook["Recaps"].iter_rows(min_row=2, values_only=True))
+        sample_rows = list(
+            workbook["ProductSamples"].iter_rows(min_row=2, values_only=True)
+        )
+        sales_rows = list(
+            workbook["SalesPerformance"].iter_rows(min_row=2, values_only=True)
+        )
+        file_rows = list(
+            workbook["RecapFiles"].iter_rows(min_row=2, values_only=True)
+        )
+        file_hyperlink = workbook["RecapFiles"].cell(row=2, column=7).hyperlink
+        section_headers = list(
+            workbook["Summary"].iter_rows(min_row=1, max_row=1, values_only=True)
+        )[0]
+        section_rows = list(
+            workbook["Summary"].iter_rows(min_row=2, values_only=True)
+        )
+
+        assert recaps_rows[0][1] == "Custom recap export"
+        assert sample_rows[0][2] == "Sample Product"
+        assert sales_rows[0][3] == "Can"
+        assert file_rows[0][2] == "Store photo"
+        assert file_hyperlink is not None
+        assert (
+            file_hyperlink.target
+            == f"https://spark-admin.example.com/recap/file/{custom_recap_file_uuid}"
+        )
+        assert "ConsumerEngagements" not in sheet_names
+        assert "ConsumerFeedback" not in sheet_names
+        assert "AccountFeedback" not in sheet_names
+        assert section_headers == ("recap_uuid", "recap_name", "Execution notes")
+        assert section_rows[0][1] == "Custom recap export"
+        assert section_rows[0][2] == "Store manager asked for follow-up"
+
+    @pytest.mark.asyncio
+    async def test_export_custom_recap_xlsx_returns_file_url(self):
+        @sync_to_async
+        def create_custom_recap():
+            system_user = self.get_system_user()
+            event_type = EventType.objects.create(
+                name="Single Export Custom Sampling",
+                slug="single-export-custom-sampling",
+                tenant=self.tenant,
+                created_by=system_user,
+            )
+            template = recap_models.CustomRecapTemplate.objects.create(
+                name="Single export custom recap",
+                event_type=event_type,
+                tenant=self.tenant,
+                created_by=system_user,
+            )
+            return recap_models.CustomRecap.objects.create(
+                name="Custom recap single export",
+                approved=True,
+                event=self.event,
+                tenant=self.tenant,
+                custom_recap_template=template,
+                created_by=self.spark_user,
+            )
+
+        custom_recap = await create_custom_recap()
+
+        mutation = """
+        mutation ExportCustomRecapXlsx($input: ExportCustomRecapXlsxInput!) {
+            exportCustomRecapXlsx(input: $input) {
+                success
+                message
+                fileUrl
+            }
+        }
+        """
+        variables = {"input": {"id": str(custom_recap.id)}}
+
+        class _FakeBlob:
+            def __init__(self, name):
+                self.name = name
+
+            def delete(self):
+                return None
+
+        class _FakeBucket:
+            def list_blobs(self, prefix):
+                return [_FakeBlob(f"{prefix}old.xlsx")]
+
+        class _FakeClient:
+            def bucket(self, _name):
+                return _FakeBucket()
+
+        with (
+            patch("recaps.mutations.get_gcs_client", return_value=_FakeClient()),
+            patch("recaps.mutations.upload_bytes") as mock_upload_bytes,
+            patch(
+                "recaps.mutations.generate_download_url",
+                return_value="https://example.com/custom-recap.xlsx",
+            ),
+        ):
+            result = await self._execute_mutation_authenticated(
+                mutation,
+                variables,
+                self.spark_user,
+                self.endpoint_path,
+            )
+
+        assert result.errors is None
+        assert result.data is not None
+        assert result.data["exportCustomRecapXlsx"]["success"] is True
+        assert (
+            result.data["exportCustomRecapXlsx"]["fileUrl"]
+            == "https://example.com/custom-recap.xlsx"
+        )
+        assert mock_upload_bytes.called
 
     @pytest.mark.asyncio
     async def test_recap_approved_mailer_template_renders(self):
