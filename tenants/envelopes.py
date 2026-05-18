@@ -43,8 +43,9 @@ class MagicLinkMailer(Mailer):
         return Envelope(
             subject="Your Spark sign-in link",
             template="tenants.templates.emails.magic_link",
-            from_email="Spark by Ignite <staffing@igniteproductions.co>",
+            from_email="Spark by Ignite <no-reply@igniteproductions.co>",
             to_emails=[self.user.email],
+            # Replies route to the staffing inbox so humans can pick up.
             headers={"Reply-To": "staffing@igniteproductions.co"},
             context={
                 "user": self.user,

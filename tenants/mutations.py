@@ -544,7 +544,8 @@ class SparkUserMutations:
         if not user.is_active:
             return MagicLinkLoginResponse(success=False, message="Account is inactive.")
 
-        jwt = get_token(user)
+        # gqlauth.core.utils.get_token requires an action arg for v2+
+        jwt = get_token(user, "authentication")
         return MagicLinkLoginResponse(
             success=True,
             message="Signed in.",
