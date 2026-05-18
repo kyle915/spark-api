@@ -320,6 +320,15 @@ class ClientRequestCreatedNotificationMailer(Mailer):
 
 
 class RequestorRequestCreatedMailer(Mailer):
+    """Spark v2 branded 'We received your request' email — sent to the
+    person who submitted the request form (public or internal). Pulls
+    requestor name, routed-to RMM, full address, distributor, and the
+    rest into the new template's context. Skips the auto-attached
+    spark_logo.png (the template references the hosted URL directly)."""
+
+    def _build_logo_attachment(self):
+        return None
+
     def __init__(
         self,
         request: models.Request,
@@ -332,13 +341,71 @@ class RequestorRequestCreatedMailer(Mailer):
 
     def envelope(self) -> Envelope:
         offset = _get_timezone_offset_minutes(self.request)
+
+        # Pull the RMM the request was routed to so we can surface the
+        # name in the email + the post-submit popup. rmm_asigned is the
+        # canonical column.
+        routed_to_name = None
+        try:
+            rmm = getattr(self.request, "rmm_asigned", None)
+            if rmm:
+                routed_to_name = (
+                    f"{rmm.first_name or ''} {rmm.last_name or ''}".strip()
+                    or rmm.email
+                )
+        except Exception:
+            pass
+
+        # Requestor identity — explicit fields on the request, falling
+        # back to client_name / requestor_email.
+        requestor_name = (
+            getattr(self.request, "client_name", None)
+            or getattr(self.request, "requestor_email", None)
+            or ""
+        ).strip()
+        if requestor_name:
+            requestor_first = requestor_name.split()[0]
+        else:
+            requestor_first = "there"
+
+        # Account / venue label — fall back through retailer → name →
+        # location so we always show something useful.
+        account_name = None
+        retailer = getattr(self.request, "retailer", None)
+        if retailer and getattr(retailer, "name", None):
+            account_name = retailer.name
+        if not account_name:
+            account_name = (
+                getattr(self.request, "name", None)
+                or (self.location.name if self.location else None)
+            )
+
         return Envelope(
-            subject="We received your request",
-            template="events.templates.emails.request_created_requestor_notification",
+            subject="We received your request — Spark by Ignite",
+            template="events.templates.emails.request_created_requestor_notification_v2",
+            from_email="Spark by Ignite <no-reply@igniteproductions.co>",
             to_emails=self.to_emails,
+            headers={"Reply-To": "staffing@igniteproductions.co"},
             context={
                 "request": self.request,
                 "location": self.location,
+                "request_id": getattr(self.request, "id", None),
+                "requestor_name": requestor_name,
+                "requestor_email": getattr(self.request, "requestor_email", None)
+                or getattr(self.request, "client_email", None),
+                "first_name": requestor_first,
+                "routed_to_name": routed_to_name,
+                "tenant_name": getattr(
+                    getattr(self.request, "tenant", None), "name", None
+                ),
+                "account_name": account_name,
+                "full_address": getattr(self.request, "address", None),
+                "activation_type": getattr(
+                    getattr(self.request, "request_type", None), "name", None
+                ),
+                "distributor_name": getattr(
+                    getattr(self.request, "distributor", None), "name", None
+                ),
                 "request_date": _format_dt_no_tz(
                     self.request.date, "%B %d, %Y", offset
                 ),

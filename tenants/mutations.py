@@ -213,6 +213,11 @@ class InviteUserInput(SparkGraphQLInput):
     note: str | None = None
 
 
+@strawberry.input
+class DeleteUserInput(SparkGraphQLInput):
+    user_id: strawberry.ID
+
+
 @strawberry.type
 class MagicLinkLoginResponse:
     success: bool
@@ -806,6 +811,54 @@ class SparkUserMutations:
                 if created
                 else f"User exists — re-sent sign-in link to {email}."
             ),
+            client_mutation_id=input.client_mutation_id,
+        )
+
+    @relay.mutation
+    async def delete_user(
+        self,
+        info: strawberry.Info,
+        input: DeleteUserInput,
+    ) -> UpdateUserResponse:
+        """Soft-delete by deactivating the user + clearing their tenant
+        links. We never hard-delete because foreign keys (requests,
+        events, recaps) reference the user; flipping is_active=false is
+        enough to revoke access immediately."""
+        uid = resolve_id_to_int(input.user_id)
+        actor = await sync_to_async(
+            lambda: getattr(info.context, "user", None)
+        )()
+        if actor and getattr(actor, "id", None) == uid:
+            return UpdateUserResponse(
+                success=False,
+                message="You can't deactivate yourself.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        @sync_to_async
+        def _deactivate():
+            target = User.objects.filter(id=uid).first()
+            if not target:
+                return None
+            target.is_active = False
+            target.save(update_fields=["is_active", "updated_at"])
+            # Mark tenant links inactive too — the existing tenant
+            # queryset filters on is_active so this hides them from
+            # invite lists immediately.
+            TenantedUser = __import__("tenants.models", fromlist=["TenantedUser"]).TenantedUser
+            TenantedUser.objects.filter(user_id=uid).update(is_active=False)
+            return target
+
+        target = await _deactivate()
+        if not target:
+            return UpdateUserResponse(
+                success=False,
+                message="User not found.",
+                client_mutation_id=input.client_mutation_id,
+            )
+        return UpdateUserResponse(
+            success=True,
+            message=f"Deactivated {target.email}.",
             client_mutation_id=input.client_mutation_id,
         )
 
