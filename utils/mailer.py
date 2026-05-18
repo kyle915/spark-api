@@ -147,7 +147,16 @@ class ResendMailDriver(MailDriver):
             params["cc"] = envelope.cc_emails
         if envelope.attachments:
             params["attachments"] = envelope.attachments
-        resend.Emails.send(params)
+        result = resend.Emails.send(params)
+        # Log the response so we can verify deliveries in Cloud Run logs.
+        # When the API key is invalid or the FROM domain isn't verified,
+        # the SDK still returns a payload (no exception) but `id` is
+        # missing — surfacing it here is the difference between silent
+        # success and silent failure.
+        logger.info(
+            "Resend send to=%s subject=%r result=%s",
+            envelope.to_emails, envelope.subject, result,
+        )
 
 
 class MailpitMailDriver(MailDriver):
