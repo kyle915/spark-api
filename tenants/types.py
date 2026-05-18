@@ -1,6 +1,7 @@
 import django.contrib.sites.requests
 import strawberry
 import strawberry_django
+from asgiref.sync import sync_to_async
 from utils.gcs import extract_blob_name_from_url, public_url
 from .models import Tenant, Role, User, TenantTheme
 from strawberry.relay import Node
@@ -20,7 +21,7 @@ class TenantType(Node):
     request_url_name: strawberry.auto
 
     @strawberry.field
-    def image(self) -> str | None:
+    async def image(self) -> str | None:
         """Return the public URL for the tenant image if one exists.
 
         Reads the image FieldFile via a fresh Tenant.objects.get() to
@@ -29,7 +30,9 @@ class TenantType(Node):
         skips signed-URL generation because the bucket is public — the
         signing path raises on Cloud Run service-account credentials.
         """
-        row = Tenant.objects.only("id", "image").get(pk=self.pk)
+        row = await sync_to_async(
+            Tenant.objects.only("id", "image").get, thread_sensitive=True
+        )(pk=self.pk)
         field_file = row.image
         if not field_file:
             return None

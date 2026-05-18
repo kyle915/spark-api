@@ -474,11 +474,15 @@ class Event(Node):
     ) = None
 
     @strawberry.field
-    def tenant_image(self) -> str | None:
+    async def tenant_image(self) -> str | None:
         """Return the public URL for the tenant image if one exists."""
-        if not self.tenant or not self.tenant.image:
+        tenant = await sync_to_async(lambda: self.tenant, thread_sensitive=True)()
+        if not tenant:
             return None
-        blob_name = extract_blob_name_from_url(self.tenant.image.name)
+        image = await sync_to_async(lambda: tenant.image, thread_sensitive=True)()
+        if not image:
+            return None
+        blob_name = extract_blob_name_from_url(image.name)
         return public_url(blob_name)
 
     @strawberry.field
