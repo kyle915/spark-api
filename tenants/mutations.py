@@ -781,6 +781,16 @@ class SparkUserMutations:
                 # ours to overwrite from an admin button), but ALWAYS
                 # backfill tenant links so existing admins with zero
                 # TenantedUser rows aren't locked out.
+                #
+                # Reactivate the user account itself. delete_user soft-
+                # deletes by flipping is_active=False, and the magic-link
+                # login mutation hard-rejects inactive users with
+                # "Account is inactive". Without this, re-inviting a
+                # previously-removed user looked successful (email sent)
+                # but the magic link landed in a "you can't log in" wall.
+                if not existing.is_active:
+                    existing.is_active = True
+                    existing.save(update_fields=["is_active"])
                 _ensure_tenant_links(existing, existing.role_id or role_id)
                 return existing, False
             # Match the seed script: unusable password marker so the
