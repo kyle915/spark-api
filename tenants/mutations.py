@@ -742,8 +742,46 @@ class SparkUserMutations:
         @sync_to_async
         def _create_or_get() -> tuple:
             from django.utils.crypto import get_random_string
+            from .models import TenantedUser
+
+            def _ensure_tenant_links(user, role_id):
+                """Make sure the user has at least one active tenant link.
+
+                Admins → all tenants. Client/BA → the inviter-specified
+                tenant (or no-op when one wasn't provided).
+
+                This runs for both new AND existing users so an admin
+                that was created via some other path (seed script,
+                manual SQL) without TenantedUser rows can still log in
+                after a re-invite. Without this, the existing-user
+                branch was a silent dead-end — user got the magic link,
+                clicked through, then hit "No companies associated."
+                """
+                if role_id == 2:
+                    tenants_qs = Tenant.objects.all()
+                elif input.tenant_id:
+                    tid = resolve_id_to_int(input.tenant_id)
+                    tenants_qs = Tenant.objects.filter(id=tid)
+                else:
+                    tenants_qs = Tenant.objects.none()
+                for t in tenants_qs:
+                    obj, was_created = TenantedUser.objects.get_or_create(
+                        user=user, tenant=t, defaults={"is_active": True},
+                    )
+                    # Re-activate any pre-existing soft-deleted link so
+                    # the user can log in again.
+                    if not was_created and not obj.is_active:
+                        obj.is_active = True
+                        obj.save(update_fields=["is_active"])
+
             existing = User.objects.filter(email__iexact=email).first()
             if existing:
+                # Idempotent re-invite: don't touch the user's role
+                # (that's intentional — a previously-set role isn't
+                # ours to overwrite from an admin button), but ALWAYS
+                # backfill tenant links so existing admins with zero
+                # TenantedUser rows aren't locked out.
+                _ensure_tenant_links(existing, existing.role_id or role_id)
                 return existing, False
             # Match the seed script: unusable password marker so the
             # user is forced through magic-link / password-reset to set
@@ -759,21 +797,7 @@ class SparkUserMutations:
                 is_superuser=False,
                 role_id=role_id,
             )
-            # Tenant linkage: admins → every tenant; client/BA → only
-            # the one the inviter specified (defaults to the inviter's
-            # primary tenant if blank).
-            if role_id == 2:
-                tenants = Tenant.objects.all()
-            elif input.tenant_id:
-                tid = resolve_id_to_int(input.tenant_id)
-                tenants = Tenant.objects.filter(id=tid)
-            else:
-                tenants = Tenant.objects.none()
-            for t in tenants:
-                from .models import TenantedUser
-                TenantedUser.objects.get_or_create(
-                    user=user, tenant=t, defaults={"is_active": True},
-                )
+            _ensure_tenant_links(user, role_id)
             return user, True
 
         try:
