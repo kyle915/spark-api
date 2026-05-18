@@ -44,7 +44,10 @@ class Command(BaseCommand):
         email = (opts.get("email") or "").strip().lower() or None
         dry = bool(opts.get("dry_run"))
 
-        qs = User.objects.filter(role_id=ROLE_ID_ADMIN, is_active=True)
+        # Include inactive admins too — a previously-removed admin should
+        # be re-linkable + re-activated by this command (delete_user soft-
+        # deletes, and we want a one-shot way to undo it).
+        qs = User.objects.filter(role_id=ROLE_ID_ADMIN)
         if email:
             qs = qs.filter(email__iexact=email)
 
@@ -62,6 +65,7 @@ class Command(BaseCommand):
 
         total_created = 0
         total_reactivated = 0
+        users_reactivated = 0
         affected_users = 0
 
         for u in users:
@@ -71,19 +75,25 @@ class Command(BaseCommand):
                 )
             )
             missing = [t for t in all_tenants if t.id not in active_tenant_ids]
-            if not missing:
+            user_inactive = not u.is_active
+            if not missing and not user_inactive:
                 continue
 
             affected_users += 1
             self.stdout.write(
                 f"  • {u.email or u.username} (id={u.id}): "
-                f"active={len(active_tenant_ids)}, missing={len(missing)}"
+                f"user_active={u.is_active} active_links={len(active_tenant_ids)} "
+                f"missing={len(missing)}"
             )
 
             if dry:
                 continue
 
             with transaction.atomic():
+                if user_inactive:
+                    u.is_active = True
+                    u.save(update_fields=["is_active"])
+                    users_reactivated += 1
                 for t in missing:
                     obj, created = TenantedUser.objects.get_or_create(
                         user=u, tenant=t, defaults={"is_active": True},
@@ -97,7 +107,8 @@ class Command(BaseCommand):
 
         msg = (
             f"Done. users_affected={affected_users} "
-            f"created={total_created} reactivated={total_reactivated} "
+            f"users_reactivated={users_reactivated} "
+            f"links_created={total_created} links_reactivated={total_reactivated} "
             f"{'(DRY RUN)' if dry else ''}"
         )
         self.stdout.write(self.style.SUCCESS(msg))
