@@ -319,6 +319,103 @@ class ClientRequestCreatedNotificationMailer(Mailer):
         )
 
 
+class RmmAssignedRequestMailer(Mailer):
+    """Sent to the RMM(s) responsible for a territory when a new
+    public request comes in. CC's the Ignite team. Includes one-tap
+    Approve/Decline links into the Spark admin."""
+
+    def _build_logo_attachment(self):
+        return None
+
+    def __init__(
+        self,
+        request: models.Request,
+        location: models.Location | None,
+        to_emails: list[str],
+        cc_emails: list[str] | None = None,
+        rmm_first_name: str | None = None,
+        state_code: str | None = None,
+        review_link: str | None = None,
+    ) -> None:
+        self.request = request
+        self.location = location
+        self.to_emails = to_emails
+        self.cc_emails = cc_emails or []
+        self.rmm_first_name = rmm_first_name
+        self.state_code = state_code
+        self.review_link = review_link
+
+    def envelope(self) -> Envelope:
+        from django.conf import settings
+        offset = _get_timezone_offset_minutes(self.request)
+
+        requestor_name = (
+            getattr(self.request, "client_name", None)
+            or getattr(self.request, "requestor_email", None)
+            or ""
+        ).strip()
+        requestor_email = (
+            getattr(self.request, "requestor_email", None)
+            or getattr(self.request, "client_email", None)
+        )
+        account_name = None
+        retailer = getattr(self.request, "retailer", None)
+        if retailer and getattr(retailer, "name", None):
+            account_name = retailer.name
+        if not account_name:
+            account_name = (
+                getattr(self.request, "name", None)
+                or (self.location.name if self.location else None)
+            )
+
+        admin_base = getattr(
+            settings, "ADMIN_FRONTEND_URL", "https://spark-new-admin.web.app",
+        ).rstrip("/")
+        review_link = (
+            self.review_link
+            or f"{admin_base}/approvals?request={self.request.id}"
+        )
+
+        return Envelope(
+            subject=f"[{getattr(getattr(self.request, 'tenant', None), 'name', 'New')}] {account_name or 'Request'} — needs your approval",
+            template="events.templates.emails.rmm_assigned_request",
+            from_email="Spark by Ignite <no-reply@igniteproductions.co>",
+            to_emails=self.to_emails,
+            cc_emails=self.cc_emails,
+            headers={"Reply-To": "staffing@igniteproductions.co"},
+            context={
+                "request": self.request,
+                "location": self.location,
+                "request_id": getattr(self.request, "id", None),
+                "rmm_first_name": self.rmm_first_name,
+                "state_code": self.state_code,
+                "review_link": review_link,
+                "requestor_name": requestor_name,
+                "requestor_email": requestor_email,
+                "tenant_name": getattr(
+                    getattr(self.request, "tenant", None), "name", None
+                ),
+                "account_name": account_name,
+                "full_address": getattr(self.request, "address", None),
+                "activation_type": getattr(
+                    getattr(self.request, "request_type", None), "name", None
+                ),
+                "distributor_name": getattr(
+                    getattr(self.request, "distributor", None), "name", None
+                ),
+                "request_date": _format_dt_no_tz(
+                    self.request.date, "%B %d, %Y", offset
+                ),
+                "request_start_time": _format_dt_no_tz(
+                    self.request.start_time, "%I:%M %p", offset
+                ),
+                "request_end_time": _format_dt_no_tz(
+                    self.request.end_time, "%I:%M %p", offset
+                ),
+            },
+        )
+
+
 class RequestorRequestCreatedMailer(Mailer):
     """Spark v2 branded 'We received your request' email — sent to the
     person who submitted the request form (public or internal). Pulls

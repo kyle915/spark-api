@@ -189,31 +189,39 @@ class Recap(Node):
     # directly side-steps the name collision.
 
     @strawberry.field
-    def recap_file(self) -> RecapFile | None:
+    async def recap_file(self) -> RecapFile | None:
         """Return first linked recap file for backward compatibility."""
-        first = (
-            models.RecapFile.objects.filter(recap=self)
+        first = await sync_to_async(
+            lambda: models.RecapFile.objects.filter(recap=self)
             .order_by("id")
-            .first()
-        )
+            .first(),
+            thread_sensitive=True,
+        )()
         return first
 
     @strawberry.field
-    def recap_file_id(self) -> strawberry.ID | None:
+    async def recap_file_id(self) -> strawberry.ID | None:
         """Return id for the first linked recap file."""
-        first = (
-            models.RecapFile.objects.filter(recap=self)
+        first = await sync_to_async(
+            lambda: models.RecapFile.objects.filter(recap=self)
             .order_by("id")
-            .first()
-        )
+            .first(),
+            thread_sensitive=True,
+        )()
         return strawberry.ID(str(first.id)) if first else None
 
     @strawberry.field
-    def recap_files(self) -> List[RecapFile]:
-        """Return all recap files linked to this recap."""
-        return list(
-            models.RecapFile.objects.filter(recap=self).order_by("id")
-        )
+    async def recap_files(self) -> List[RecapFile]:
+        """Return all recap files linked to this recap. ORM call has
+        to be wrapped in sync_to_async because Strawberry runs the
+        resolver inside the request's async loop and Django refuses
+        synchronous DB I/O there."""
+        return await sync_to_async(
+            lambda: list(
+                models.RecapFile.objects.filter(recap=self).order_by("id")
+            ),
+            thread_sensitive=True,
+        )()
 
     @strawberry.field(deprecation_reason="Use ambassador instead.")
     def ambassadors(self) -> List[ambassador_types.Ambassador]:
