@@ -27,6 +27,35 @@ class EmailVerificationMailer(Mailer):
         )
 
 
+class PasswordResetLinkMailer(Mailer):
+    """
+    Branded password-reset email. Mirrors the MagicLinkMailer template
+    but the CTA leads to /reset-password/<token> on the admin app where
+    the BA picks a new password.
+    """
+
+    def __init__(self, user: User, link: str, expires_minutes: int):
+        self.user = user
+        self.link = link
+        self.expires_minutes = expires_minutes
+
+    def envelope(self) -> Envelope:
+        first = (self.user.first_name or self.user.email.split("@")[0]).strip()
+        return Envelope(
+            subject="Reset your Spark password",
+            template="tenants.templates.emails.password_reset",
+            from_email="Spark by Ignite <no-reply@igniteproductions.co>",
+            to_emails=[self.user.email],
+            headers={"Reply-To": "staffing@igniteproductions.co"},
+            context={
+                "user": self.user,
+                "first_name": first,
+                "link": self.link,
+                "expires_minutes": self.expires_minutes,
+            },
+        )
+
+
 class MagicLinkMailer(Mailer):
     """
     One-click magic-link login. Sends an email with a tokenised URL

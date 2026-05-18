@@ -24,7 +24,12 @@ from .models import Role, TenantedUser, Tenant, TenantTheme, PasswordResetCode
 from .types import TenantType, TenantThemeType
 from .inputs import CreateOrUpdateTenantThemeInput
 from .social_auth import BaseSocialAuthMutations, SocialAuthResponse
-from .envelopes import EmailVerificationMailer, ForgotPasswordCodeMailer, MagicLinkMailer
+from .envelopes import (
+    EmailVerificationMailer,
+    ForgotPasswordCodeMailer,
+    MagicLinkMailer,
+    PasswordResetLinkMailer,
+)
 from django.core import signing
 from urllib.parse import quote
 from events.models import EventStatus, EventType, RequestStatus, RequestType
@@ -184,6 +189,18 @@ class RequestMagicLinkInput(SparkGraphQLInput):
 @strawberry.input
 class LoginWithMagicTokenInput(SparkGraphQLInput):
     token: str
+
+
+@strawberry.input
+class RequestPasswordResetInput(SparkGraphQLInput):
+    email: str
+
+
+@strawberry.input
+class ConfirmPasswordResetInput(SparkGraphQLInput):
+    token: str
+    password1: str
+    password2: str
 
 
 @strawberry.type
@@ -555,6 +572,119 @@ class SparkUserMutations:
             email=user.email,
             first_name=user.first_name or None,
             last_name=user.last_name or None,
+        )
+
+    @relay.mutation
+    async def request_password_reset(
+        self,
+        info: strawberry.Info,
+        input: RequestPasswordResetInput,
+    ) -> UpdateUserResponse:
+        """Email a one-click password-reset link. Generic success
+        regardless of whether the email matches (anti-enumeration)."""
+        email = (input.email or "").strip().lower()
+        generic = UpdateUserResponse(
+            success=True,
+            message="If the email exists, we sent a reset link.",
+            client_mutation_id=input.client_mutation_id,
+        )
+        if not email:
+            return UpdateUserResponse(
+                success=False, message="Email is required.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        user = await sync_to_async(
+            lambda: User.objects.filter(email__iexact=email).first()
+        )()
+        if not user:
+            return generic
+
+        token = signing.dumps(
+            {"u": user.id, "e": user.email, "k": "pwd"},
+            salt="spark.password-reset.v1",
+        )
+        base = getattr(settings, "ADMIN_FRONTEND_URL", "https://spark-new-admin.web.app").rstrip("/")
+        link = f"{base}/reset-password/{token}"
+
+        try:
+            mailer = PasswordResetLinkMailer(
+                user=user, link=link, expires_minutes=30,
+            )
+            await mailer.send_async_now()
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception(
+                "Password-reset email failed for %s", email,
+            )
+            return generic
+        return generic
+
+    @relay.mutation
+    async def confirm_password_reset(
+        self,
+        info: strawberry.Info,
+        input: ConfirmPasswordResetInput,
+    ) -> UpdateUserResponse:
+        """Validate a password-reset token + set a new password."""
+        if not input.password1 or len(input.password1) < 8:
+            return UpdateUserResponse(
+                success=False,
+                message="Password must be at least 8 characters.",
+                client_mutation_id=input.client_mutation_id,
+            )
+        if input.password1 != input.password2:
+            return UpdateUserResponse(
+                success=False,
+                message="Passwords don't match.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        try:
+            payload = signing.loads(
+                input.token,
+                salt="spark.password-reset.v1",
+                max_age=60 * 30,  # 30 min
+            )
+        except signing.SignatureExpired:
+            return UpdateUserResponse(
+                success=False,
+                message="Reset link expired. Request a new one.",
+                client_mutation_id=input.client_mutation_id,
+            )
+        except signing.BadSignature:
+            return UpdateUserResponse(
+                success=False,
+                message="Invalid reset link.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        user = await sync_to_async(
+            lambda: User.objects.filter(id=payload.get("u")).first()
+        )()
+        if not user or user.email != payload.get("e") or payload.get("k") != "pwd":
+            return UpdateUserResponse(
+                success=False,
+                message="Account not found.",
+                client_mutation_id=input.client_mutation_id,
+            )
+        if not user.is_active:
+            return UpdateUserResponse(
+                success=False,
+                message="Account is inactive.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        @sync_to_async
+        def _save():
+            user.set_password(input.password1)
+            user.save(update_fields=["password"])
+
+        await _save()
+        return UpdateUserResponse(
+            success=True,
+            message="Password updated.",
+            client_mutation_id=input.client_mutation_id,
         )
 
     @relay.mutation
