@@ -20,23 +20,22 @@ class TenantType(Node):
     slug: strawberry.auto
     request_url_name: strawberry.auto
 
-    @strawberry.field
-    async def image(self) -> str | None:
+    @strawberry.field(name="image")
+    def image_url(self) -> str | None:
         """Return the public URL for the tenant image if one exists.
 
-        Reads the image FieldFile via a fresh Tenant.objects.get() to
-        sidestep the name-shadow issue (this resolver is named `image`
-        and would otherwise recurse into itself on `self.image`). Also
-        skips signed-URL generation because the bucket is public — the
-        signing path raises on Cloud Run service-account credentials.
+        Aliased to GraphQL field `image` via name= so we can keep the
+        Python method off the shadow path. Avoids an extra ORM round
+        trip per row.
         """
-        row = await sync_to_async(
-            Tenant.objects.only("id", "image").get, thread_sensitive=True
-        )(pk=self.pk)
-        field_file = row.image
+        field_file = self.__dict__.get("image") or getattr(self, "image", None)
         if not field_file:
             return None
-        blob_name = extract_blob_name_from_url(field_file.name)
+        try:
+            blob = field_file.name
+        except Exception:
+            blob = str(field_file)
+        blob_name = extract_blob_name_from_url(blob)
         return public_url(blob_name)
 
 

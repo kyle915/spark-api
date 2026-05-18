@@ -220,20 +220,21 @@ class Product(Node):
     created_at: str
     updated_at: str
 
-    @strawberry_django.field(only=["image"])
-    def image(self) -> str | None:
+    @strawberry.field(name="image")
+    def image_url(self) -> str | None:
         """Return the public URL for the product image if one exists.
 
-        We re-read the image field through the Django model manager
-        because the resolver is named `image` and would otherwise
-        shadow the FileField on `self.image`. Public URL avoids the
-        signed-URL credential failure on Cloud Run.
+        Aliased via name= so the resolver method doesn't shadow the
+        Django ImageField on `self`. No extra ORM hit per row.
         """
-        from .models import Product as ProductModel  # local import to avoid cycle
-        row = ProductModel.objects.only("id", "image").get(pk=self.pk)
-        if not row.image:
+        field_file = self.__dict__.get("image") or getattr(self, "image", None)
+        if not field_file:
             return None
-        blob_name = extract_blob_name_from_url(row.image.name)
+        try:
+            blob = field_file.name
+        except Exception:
+            blob = str(field_file)
+        blob_name = extract_blob_name_from_url(blob)
         return public_url(blob_name)
 
 
@@ -482,7 +483,11 @@ class Event(Node):
         image = await sync_to_async(lambda: tenant.image, thread_sensitive=True)()
         if not image:
             return None
-        blob_name = extract_blob_name_from_url(image.name)
+        try:
+            blob = image.name
+        except Exception:
+            blob = str(image)
+        blob_name = extract_blob_name_from_url(blob)
         return public_url(blob_name)
 
     @strawberry.field

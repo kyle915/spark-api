@@ -11,6 +11,7 @@ from jobs import types as job_types
 from ambassadors import types as ambassador_types
 from tenants import types as tenant_types
 from . import models
+from asgiref.sync import sync_to_async
 from utils.gcs import public_url, extract_blob_name_from_url
 
 
@@ -27,19 +28,24 @@ class RecapFile(Node):
     file_type: ambassador_types.FileType
     file_recap_category: FileRecapCategory | None
 
-    @strawberry_django.field(only=["file"])
-    def file(self) -> str | None:
-        """Return the public URL for the recap file if one exists.
-
-        Re-read via the model manager because this resolver shadows
-        the FileField named `file`. Returns the unsigned bucket URL
-        so it loads cross-origin without a private key.
-        """
-        from .models import RecapFile as RecapFileModel
-        row = RecapFileModel.objects.only("id", "file").get(pk=self.pk)
-        if not row.file:
+    # We deliberately use a different Python method name (file_url) and
+    # alias it back to the GraphQL field name `file` via the strawberry
+    # `name=` arg. A resolver literally named `file` would shadow the
+    # Django FileField on the instance and force a fresh per-row DB
+    # lookup — fatal for the recaps list which serializes 9.4k file
+    # rows per request.
+    @strawberry.field(name="file")
+    def file_url(self) -> str | None:
+        """Return the public URL for the recap file if one exists."""
+        field_file = self.__dict__.get("file") or getattr(self, "file", None)
+        if not field_file:
             return None
-        blob_name = extract_blob_name_from_url(row.file.name)
+        # field_file is a Django FieldFile — .name is the blob path.
+        try:
+            blob = field_file.name
+        except Exception:
+            blob = str(field_file)
+        blob_name = extract_blob_name_from_url(blob)
         return public_url(blob_name)
 
 
@@ -331,14 +337,17 @@ class CustomRecapFile(Node):
     file_type: ambassador_types.FileType
     file_recap_category: FileRecapCategory | None
 
-    @strawberry_django.field(only=["url"])
-    def url(self) -> str | None:
+    @strawberry.field(name="url")
+    def url_str(self) -> str | None:
         """Return the public URL for the custom recap file if any."""
-        from .models import CustomRecapFile as CRF
-        row = CRF.objects.only("id", "url").get(pk=self.pk)
-        if not row.url:
+        field_file = self.__dict__.get("url") or getattr(self, "url", None)
+        if not field_file:
             return None
-        blob_name = extract_blob_name_from_url(row.url.name)
+        try:
+            blob = field_file.name
+        except Exception:
+            blob = str(field_file)
+        blob_name = extract_blob_name_from_url(blob)
         return public_url(blob_name)
 
 
