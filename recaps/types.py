@@ -168,22 +168,41 @@ class Recap(Node):
     consumer_feedback: List[ConsumerFeedback]
     account_feedback: List[AccountFeedback]
 
+    # NOTE: we use models.RecapFile.objects.filter(recap=self) instead
+    # of self.recap_files.all() because defining a method named
+    # `recap_files` on a strawberry type shadows the Django reverse-
+    # accessor of the same name. Inside the resolver body, `self.recap_files`
+    # would resolve to the bound method (not the manager), and `.all()`
+    # would silently fail — returning [] for every recap in the API
+    # despite the DB having the rows. Going through the model manager
+    # directly side-steps the name collision.
+
     @strawberry.field
     def recap_file(self) -> RecapFile | None:
         """Return first linked recap file for backward compatibility."""
-        files = list(self.recap_files.all())
-        return files[0] if files else None
+        first = (
+            models.RecapFile.objects.filter(recap=self)
+            .order_by("id")
+            .first()
+        )
+        return first
 
     @strawberry.field
     def recap_file_id(self) -> strawberry.ID | None:
         """Return id for the first linked recap file."""
-        files = list(self.recap_files.all())
-        return strawberry.ID(str(files[0].id)) if files else None
+        first = (
+            models.RecapFile.objects.filter(recap=self)
+            .order_by("id")
+            .first()
+        )
+        return strawberry.ID(str(first.id)) if first else None
 
     @strawberry.field
     def recap_files(self) -> List[RecapFile]:
         """Return all recap files linked to this recap."""
-        return list(self.recap_files.all())
+        return list(
+            models.RecapFile.objects.filter(recap=self).order_by("id")
+        )
 
     @strawberry.field(deprecation_reason="Use ambassador instead.")
     def ambassadors(self) -> List[ambassador_types.Ambassador]:
