@@ -114,6 +114,9 @@ class RequestApprovedNotificationMailer(Mailer):
 
 
 class RequestorRequestApprovedMailer(Mailer):
+    def _build_logo_attachment(self):
+        return None
+
     def __init__(
         self,
         request: models.Request,
@@ -156,28 +159,56 @@ class RequestorRequestApprovedMailer(Mailer):
             approved_by_email = self.request.approved_by.email or "-"
 
         bas_requested = self.request.request_details.count()
+        requestor_name = (
+            getattr(self.request, "client_name", None)
+            or self.request.requestor_email
+            or ""
+        ).strip()
+        first_name = (
+            requestor_name.split()[0]
+            if requestor_name and " " in requestor_name
+            else requestor_name or "there"
+        )
+        account_name = None
+        retailer = getattr(self.request, "retailer", None)
+        if retailer and getattr(retailer, "name", None):
+            account_name = retailer.name
+        if not account_name:
+            account_name = self.request.name or (
+                self.location.name if self.location else None
+            )
+
         return Envelope(
-            subject="Great news - your activation request is approved",
-            template="events.templates.emails.request_approved_requestor_notification",
+            subject="Your activation request is approved — Spark by Ignite",
+            template="events.templates.emails.request_approved_requestor_v2",
             to_emails=self.to_emails,
             cc_emails=self.cc_emails,
             headers={"Reply-To": "events@igniteproductions.co"},
-            from_email=getattr(
-                settings,
-                "DEFAULT_FROM_EMAIL",
-                "Spark by Ignite <no-reply@igniteproductions.co>",
-            ),
+            from_email="Spark by Ignite <no-reply@igniteproductions.co>",
             context={
                 "request": self.request,
                 "location": self.location,
-                "request_id": request_id,
-                "location_name": location_name,
-                "submitted_name": submitted_name,
-                "approved_by_name": approved_by_name,
-                "approved_by_email": approved_by_email,
+                "request_id": getattr(self.request, "id", None),
+                "first_name": first_name,
+                "requestor_name": requestor_name,
+                "requestor_email": getattr(self.request, "requestor_email", None)
+                or getattr(self.request, "client_email", None),
+                "reviewed_by_name": approved_by_name,
+                "reviewed_by_email": approved_by_email,
+                "tenant_name": getattr(
+                    getattr(self.request, "tenant", None), "name", None
+                ),
+                "account_name": account_name,
+                "full_address": getattr(self.request, "address", None),
+                "activation_type": getattr(
+                    getattr(self.request, "request_type", None), "name", None
+                ),
+                "distributor_name": getattr(
+                    getattr(self.request, "distributor", None), "name", None
+                ),
                 "bas_requested": bas_requested,
                 "request_date": _format_dt_no_tz(
-                    self.request.date, "%m/%d/%Y", offset
+                    self.request.date, "%B %d, %Y", offset
                 ),
                 "request_start_time": _format_dt_no_tz(
                     self.request.start_time, "%I:%M %p", offset
@@ -190,6 +221,9 @@ class RequestorRequestApprovedMailer(Mailer):
 
 
 class RequestorRequestDeclinedMailer(Mailer):
+    def _build_logo_attachment(self):
+        return None
+
     def __init__(
         self,
         request: models.Request,
@@ -219,28 +253,63 @@ class RequestorRequestDeclinedMailer(Mailer):
 
         submitted_name = self.request.name or "there"
 
+        requestor_name = (
+            getattr(self.request, "client_name", None)
+            or self.request.requestor_email
+            or submitted_name
+            or ""
+        ).strip()
+        first_name = (
+            requestor_name.split()[0]
+            if requestor_name and " " in requestor_name
+            else requestor_name or "there"
+        )
+        account_name = None
+        retailer = getattr(self.request, "retailer", None)
+        if retailer and getattr(retailer, "name", None):
+            account_name = retailer.name
+        if not account_name:
+            account_name = (
+                self.request.name or (self.location.name if self.location else None)
+            )
+
         return Envelope(
-            subject="Update on your activation request - revision needed",
-            template="events.templates.emails.request_declined_requestor_notification",
+            subject="Update on your activation request — revision needed",
+            template="events.templates.emails.request_declined_requestor_v2",
             to_emails=self.to_emails,
             cc_emails=self.cc_emails,
             headers={"Reply-To": "events@igniteproductions.co"},
-            from_email=getattr(
-                settings,
-                "DEFAULT_FROM_EMAIL",
-                "Spark by Ignite <no-reply@igniteproductions.co>",
-            ),
+            from_email="Spark by Ignite <no-reply@igniteproductions.co>",
             context={
                 "request": self.request,
                 "location": self.location,
-                "request_id": request_id,
-                "location_name": location_name,
-                "submitted_name": submitted_name,
-                "reviewed_by_name": self.reviewed_by_name or "-",
+                "request_id": getattr(self.request, "id", None),
+                "first_name": first_name,
+                "requestor_name": requestor_name,
+                "requestor_email": getattr(self.request, "requestor_email", None)
+                or getattr(self.request, "client_email", None),
+                "reviewed_by_name": self.reviewed_by_name or "the brand POC",
                 "reviewed_by_email": self.reviewed_by_email or "-",
                 "decline_reason": self.request.decline_reason or "",
+                "tenant_name": getattr(
+                    getattr(self.request, "tenant", None), "name", None
+                ),
+                "account_name": account_name,
+                "full_address": getattr(self.request, "address", None),
+                "activation_type": getattr(
+                    getattr(self.request, "request_type", None), "name", None
+                ),
+                "distributor_name": getattr(
+                    getattr(self.request, "distributor", None), "name", None
+                ),
                 "request_date": _format_dt_no_tz(
-                    self.request.date, "%m/%d/%Y", offset
+                    self.request.date, "%B %d, %Y", offset
+                ),
+                "request_start_time": _format_dt_no_tz(
+                    self.request.start_time, "%I:%M %p", offset
+                ),
+                "request_end_time": _format_dt_no_tz(
+                    self.request.end_time, "%I:%M %p", offset
                 ),
             },
         )

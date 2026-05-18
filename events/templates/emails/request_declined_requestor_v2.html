@@ -1,0 +1,293 @@
+{% load static %}<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sign in to Spark</title>
+    <style type="text/css">
+      @media only screen and (max-width: 600px) {
+        .shell { width: 100% !important; }
+        .pad   { padding-left: 24px !important; padding-right: 24px !important; }
+        .hero  { font-size: 28px !important; line-height: 32px !important; }
+      }
+      a.cta:hover { filter: brightness(1.05); }
+    </style>
+  </head>
+  <body
+    style="margin:0;padding:0;background:#f4f4f0;
+           font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,
+                       'Helvetica Neue',Arial,sans-serif;
+           color:#0a0d09;">
+    <table role="presentation" cellspacing="0" cellpadding="0" border="0"
+           width="100%" style="background:#f4f4f0;">
+      <tr>
+        <td align="center" style="padding:24px 12px;">
+          <!-- Email card -->
+          <table role="presentation" cellspacing="0" cellpadding="0" border="0"
+                 width="600" class="shell"
+                 style="width:600px;max-width:600px;
+                        background:#ffffff;border-radius:18px;
+                        overflow:hidden;
+                        box-shadow:0 1px 2px rgba(10,13,9,0.04);">
+
+            <!-- Header: actual Spark BY IGNITE logo image on dark band.
+                 Inverted to white for legibility via CSS filter; falls
+                 back to plain image in clients that don't support
+                 filter. -->
+            <tr>
+              <td class="pad"
+                  style="padding:24px 40px;background:#0a0d09;">
+                <img src="https://spark-new-admin.web.app/legal/spark-logo.png"
+                     alt="Spark by Ignite"
+                     width="180" height="auto"
+                     style="display:block;height:auto;border:0;outline:none;
+                            text-decoration:none;
+                            filter:invert(1) hue-rotate(180deg);" />
+              </td>
+            </tr>
+
+            <!-- Hero copy -->
+            <tr>
+              <td class="pad" style="padding:36px 40px 8px 40px;">
+                <p style="margin:0 0 4px 0;
+                          font-family:'Courier New',Courier,monospace;
+                          font-size:10px;letter-spacing:0.22em;
+                          color:#5a6354;">
+                  REVISION NEEDED
+                </p>
+                <h1 class="hero"
+                    style="margin:0;
+                           font-family:Georgia,'Times New Roman',serif;
+                           font-weight:700;font-size:34px;line-height:38px;
+                           letter-spacing:-0.02em;color:#0a0d09;">
+                  Quick update, {{ requestor_name|default:first_name }}.
+                </h1>
+              </td>
+            </tr>
+
+            <!-- Body copy -->
+            <tr>
+              <td class="pad" style="padding:16px 40px 4px 40px;">
+                <p style="margin:0;font-size:15px;line-height:22px;color:#3b4034;">
+                  {% if reviewed_by_name %}<strong>{{ reviewed_by_name }}</strong>{% else %}The brand POC{% endif %}
+                  reviewed your activation request and asked for a revision
+                  before it can be approved. Their note is below — adjust
+                  and resubmit in Spark and we'll route it back for review.
+                </p>
+              </td>
+            </tr>
+
+            <!-- Decline reason card -->
+            {% if decline_reason %}
+            <tr>
+              <td class="pad" style="padding:20px 40px 0 40px;">
+                <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%"
+                       style="border-radius:14px;background:#fdebe1;border:1px solid #ef5a2a;">
+                  <tr>
+                    <td style="padding:16px 18px;">
+                      <p style="margin:0 0 6px 0;
+                                font-family:'Courier New',Courier,monospace;
+                                font-size:10px;letter-spacing:0.22em;
+                                color:#c2421e;">
+                        NOTE FROM {{ reviewed_by_name|upper|default:"THE BRAND" }}
+                      </p>
+                      <p style="margin:0;font-size:14px;line-height:21px;
+                                color:#3b1f10;font-style:italic;">
+                        &ldquo;{{ decline_reason }}&rdquo;
+                      </p>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+            {% endif %}
+
+            <!-- REVISION REQUESTED pill -->
+            <tr>
+              <td class="pad" style="padding:20px 40px 16px 40px;">
+                <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%"
+                       style="border-radius:14px;background:#fbdfd2;border:1px solid #ef5a2a;">
+                  <tr>
+                    <td align="center"
+                        style="padding:14px;
+                               font-family:Georgia,'Times New Roman',serif;
+                               font-weight:700;font-size:18px;
+                               letter-spacing:0.02em;color:#a3340c;">
+                      ✗ REVISION REQUESTED
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+
+            <!-- Request details table -->
+            <tr>
+              <td class="pad" style="padding:0 40px 4px 40px;">
+                <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%"
+                       style="border:1px solid #eeeae0;border-radius:12px;border-collapse:separate;border-spacing:0;overflow:hidden;">
+                  {% if request_id %}
+                  <tr>
+                    <td style="padding:10px 14px;border-bottom:1px solid #eeeae0;font-size:12px;font-weight:700;color:#3b4034;width:140px;">Request ID</td>
+                    <td style="padding:10px 14px;border-bottom:1px solid #eeeae0;font-size:12px;color:#0a0d09;font-family:'Courier New',Courier,monospace;letter-spacing:0.1em;">REQ-{{ request_id }}</td>
+                  </tr>
+                  {% endif %}
+                  <tr>
+                    <td style="padding:10px 14px;border-bottom:1px solid #eeeae0;font-size:12px;font-weight:700;color:#3b4034;">Brand</td>
+                    <td style="padding:10px 14px;border-bottom:1px solid #eeeae0;font-size:13px;color:#0a0d09;">{{ tenant_name|default:"—" }}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:10px 14px;border-bottom:1px solid #eeeae0;font-size:12px;font-weight:700;color:#3b4034;">Account / Venue</td>
+                    <td style="padding:10px 14px;border-bottom:1px solid #eeeae0;font-size:13px;color:#0a0d09;">{{ account_name|default:"—" }}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:10px 14px;border-bottom:1px solid #eeeae0;font-size:12px;font-weight:700;color:#3b4034;">Full Address</td>
+                    <td style="padding:10px 14px;border-bottom:1px solid #eeeae0;font-size:13px;color:#0a0d09;">{{ full_address|default:"—" }}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:10px 14px;border-bottom:1px solid #eeeae0;font-size:12px;font-weight:700;color:#3b4034;">Activation Type</td>
+                    <td style="padding:10px 14px;border-bottom:1px solid #eeeae0;font-size:13px;color:#0a0d09;">{{ activation_type|default:"—" }}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:10px 14px;border-bottom:1px solid #eeeae0;font-size:12px;font-weight:700;color:#3b4034;">Date</td>
+                    <td style="padding:10px 14px;border-bottom:1px solid #eeeae0;font-size:13px;color:#0a0d09;">{{ request_date|default:"—" }}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:10px 14px;border-bottom:1px solid #eeeae0;font-size:12px;font-weight:700;color:#3b4034;">Time</td>
+                    <td style="padding:10px 14px;border-bottom:1px solid #eeeae0;font-size:13px;color:#0a0d09;">{{ request_start_time }} – {{ request_end_time }}</td>
+                  </tr>
+                  {% if distributor_name %}
+                  <tr>
+                    <td style="padding:10px 14px;border-bottom:1px solid #eeeae0;font-size:12px;font-weight:700;color:#3b4034;">Distributor</td>
+                    <td style="padding:10px 14px;border-bottom:1px solid #eeeae0;font-size:13px;color:#0a0d09;">{{ distributor_name }}</td>
+                  </tr>
+                  {% endif %}
+                  <tr>
+                    <td style="padding:10px 14px;font-size:12px;font-weight:700;color:#3b4034;">Submitted By</td>
+                    <td style="padding:10px 14px;font-size:13px;color:#0a0d09;">
+                      {{ requestor_name|default:"—" }}{% if requestor_email %}<br/><a href="mailto:{{ requestor_email }}" style="color:#5fb8ef;text-decoration:none;">{{ requestor_email }}</a>{% endif %}
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+
+            <!-- What to do next -->
+            <tr>
+              <td class="pad" style="padding:24px 40px 4px 40px;">
+                <p style="margin:0 0 8px 0;
+                          font-family:Georgia,'Times New Roman',serif;
+                          font-weight:700;font-size:18px;
+                          letter-spacing:-0.01em;color:#0a0d09;">
+                  What to do next
+                </p>
+                <ol style="margin:0;padding-left:18px;font-size:13px;line-height:20px;color:#3b4034;">
+                  <li>Adjust the request based on the note above.</li>
+                  <li>Resubmit via the same Spark form and we'll route it back to the brand POC for review.</li>
+                  <li>Or reply to this email and the Ignite team will help reshape the request.</li>
+                </ol>
+              </td>
+            </tr>
+
+            <!-- Sign-off -->
+            <tr>
+              <td class="pad" style="padding:24px 40px 4px 40px;">
+                <p style="margin:0;font-size:14px;line-height:20px;color:#3b4034;">
+                  — Spark, Ignite Productions
+                </p>
+              </td>
+            </tr>
+
+            <!-- Divider -->
+            <tr>
+              <td class="pad" style="padding:8px 40px 0 40px;">
+                <hr style="border:0;border-top:1px solid #ef5a2a;margin:0;" />
+              </td>
+            </tr>
+
+            <!-- AI / human disclaimer -->
+            <tr>
+              <td class="pad" style="padding:16px 40px 8px 40px;">
+                <p style="margin:0;font-size:12px;line-height:18px;
+                          color:#7a8074;font-style:italic;">
+                  This message was sent by Spark, Ignite's field marketing
+                  platform. If you'd like to speak with a team member, simply
+                  reply to this email and a human will follow up.
+                </p>
+              </td>
+            </tr>
+
+            <!-- Ignite signature block -->
+            <tr>
+              <td class="pad" style="padding:16px 40px 36px 40px;">
+                <table role="presentation" cellspacing="0" cellpadding="0" border="0"
+                       width="100%">
+                  <tr>
+                    <td valign="top" width="140" style="padding-right:18px;">
+                      <img src="https://spark-new-admin.web.app/legal/ignite-logo.png"
+                           alt="Ignite Productions"
+                           width="130" height="130"
+                           style="display:block;width:130px;height:130px;
+                                  border-radius:8px;border:0;outline:none;
+                                  text-decoration:none;object-fit:cover;" />
+                    </td>
+                    <td valign="top" style="font-size:14px;line-height:22px;color:#0a0d09;">
+                      <p style="margin:0 0 4px 0;color:#ef5a2a;font-weight:700;font-size:16px;">
+                        Ignite Productions
+                      </p>
+                      <p style="margin:0 0 4px 0;color:#3b4034;">
+                        Brand Activation &amp; Event Marketing Agency
+                      </p>
+                      <p style="margin:0;">
+                        📞 <a href="tel:+17754060435"
+                              style="color:#0a0d09;text-decoration:none;">
+                          775-406-0435
+                        </a>
+                      </p>
+                      <p style="margin:0;">
+                        ✉️ <a href="mailto:staffing@igniteproductions.co"
+                              style="color:#ef5a2a;text-decoration:none;">
+                          staffing@igniteproductions.co
+                        </a>
+                      </p>
+                      <p style="margin:0;">
+                        🌐 <a href="https://www.igniteproductions.co"
+                              style="color:#5fb8ef;text-decoration:none;">
+                          igniteproductions.co
+                        </a>
+                      </p>
+                      <p style="margin:6px 0 0 0;">
+                        <a href="https://www.linkedin.com/company/ignite-productions-llc"
+                           style="color:#5fb8ef;text-decoration:none;font-weight:600;">
+                          LinkedIn
+                        </a>
+                      </p>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+
+            <!-- Legal footer -->
+            <tr>
+              <td class="pad"
+                  style="padding:18px 40px 28px 40px;
+                         background:#f9f9f4;border-top:1px solid #eeeae0;">
+                <p style="margin:0;font-family:'Courier New',Courier,monospace;
+                          font-size:10px;letter-spacing:0.16em;color:#7a8074;
+                          line-height:16px;">
+                  © {% now "Y" %} IGNITE PRODUCTIONS LLC<br/>
+                  <a href="https://spark-new-admin.web.app/legal/terms-of-service.pdf"
+                     style="color:#7a8074;">TERMS</a>
+                  &nbsp;·&nbsp;
+                  <a href="https://spark-new-admin.web.app/legal/privacy-policy.pdf"
+                     style="color:#7a8074;">PRIVACY</a>
+                </p>
+              </td>
+            </tr>
+          </table>
+
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>
