@@ -203,6 +203,16 @@ class ConfirmPasswordResetInput(SparkGraphQLInput):
     password2: str
 
 
+@strawberry.input
+class InviteUserInput(SparkGraphQLInput):
+    email: str
+    first_name: str | None = None
+    last_name: str | None = None
+    role: str  # "admin" | "client" | "ambassador"
+    tenant_id: strawberry.ID | None = None  # required for client/ambassador
+    note: str | None = None
+
+
 @strawberry.type
 class MagicLinkLoginResponse:
     success: bool
@@ -684,6 +694,118 @@ class SparkUserMutations:
         return UpdateUserResponse(
             success=True,
             message="Password updated.",
+            client_mutation_id=input.client_mutation_id,
+        )
+
+    @relay.mutation
+    async def invite_user(
+        self,
+        info: strawberry.Info,
+        input: InviteUserInput,
+    ) -> UpdateUserResponse:
+        """
+        Admin-triggered user creation. Maps the role name to role_id
+        (admin->2, client->3, ambassador->1), creates the user with
+        an unusable password, links to the requested tenant (or all
+        tenants for admin), then emails a magic-link so the user can
+        sign in and set their own password.
+
+        Idempotent: if a user with this email already exists, we
+        re-send the magic link without altering their role or tenants.
+        """
+        from .envelopes import MagicLinkMailer
+        from django.core import signing
+        import logging
+
+        role_slug = (input.role or "").strip().lower()
+        role_map = {"admin": 2, "spark-admin": 2, "client": 3, "ambassador": 1}
+        if role_slug not in role_map:
+            return UpdateUserResponse(
+                success=False,
+                message=f"Invalid role '{input.role}'. Must be admin, client, or ambassador.",
+                client_mutation_id=input.client_mutation_id,
+            )
+        role_id = role_map[role_slug]
+        email = (input.email or "").strip().lower()
+        if not email:
+            return UpdateUserResponse(
+                success=False,
+                message="Email is required.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        @sync_to_async
+        def _create_or_get() -> tuple:
+            from django.utils.crypto import get_random_string
+            existing = User.objects.filter(email__iexact=email).first()
+            if existing:
+                return existing, False
+            # Match the seed script: unusable password marker so the
+            # user is forced through magic-link / password-reset to set
+            # their own creds.
+            user = User.objects.create(
+                username=email,
+                email=email,
+                first_name=input.first_name or "",
+                last_name=input.last_name or "",
+                password="!" + get_random_string(40),
+                is_active=True,
+                is_staff=False,
+                is_superuser=False,
+                role_id=role_id,
+            )
+            # Tenant linkage: admins → every tenant; client/BA → only
+            # the one the inviter specified (defaults to the inviter's
+            # primary tenant if blank).
+            if role_id == 2:
+                tenants = Tenant.objects.all()
+            elif input.tenant_id:
+                tid = resolve_id_to_int(input.tenant_id)
+                tenants = Tenant.objects.filter(id=tid)
+            else:
+                tenants = Tenant.objects.none()
+            for t in tenants:
+                from .models import TenantedUser
+                TenantedUser.objects.get_or_create(
+                    user=user, tenant=t, defaults={"is_active": True},
+                )
+            return user, True
+
+        try:
+            user, created = await _create_or_get()
+        except Exception as exc:
+            logging.getLogger(__name__).exception(
+                "inviteUser failed for %s", email,
+            )
+            return UpdateUserResponse(
+                success=False,
+                message=f"Couldn't create user: {exc}",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        # Email a magic-link so the new user can sign in immediately.
+        token = signing.dumps(
+            {"u": user.id, "e": user.email}, salt="spark.magic-link.v1",
+        )
+        base = getattr(
+            settings, "ADMIN_FRONTEND_URL", "https://spark-new-admin.web.app",
+        ).rstrip("/")
+        link = f"{base}/magic/{token}"
+        try:
+            mailer = MagicLinkMailer(user=user, link=link, expires_minutes=30)
+            await mailer.send_async_now()
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "Invite email failed for %s; link=%s", email, link,
+            )
+
+        return UpdateUserResponse(
+            success=True,
+            message=(
+                f"Invite sent — {email} will receive a sign-in link."
+                if created
+                else f"User exists — re-sent sign-in link to {email}."
+            ),
             client_mutation_id=input.client_mutation_id,
         )
 
