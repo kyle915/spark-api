@@ -30,31 +30,19 @@
                         overflow:hidden;
                         box-shadow:0 1px 2px rgba(10,13,9,0.04);">
 
-            <!-- Header: Spark BY IGNITE wordmark on dark band -->
+            <!-- Header: actual Spark BY IGNITE logo image on dark band.
+                 Inverted to white for legibility via CSS filter; falls
+                 back to plain image in clients that don't support
+                 filter. -->
             <tr>
               <td class="pad"
-                  style="padding:28px 40px;background:#0a0d09;">
-                <table role="presentation" cellspacing="0" cellpadding="0" border="0">
-                  <tr>
-                    <td style="vertical-align:baseline;">
-                      <span
-                        style="font-family:Georgia,'Times New Roman',serif;
-                               font-style:italic;font-weight:700;font-size:34px;
-                               color:#f2f3ee;letter-spacing:-0.02em;
-                               line-height:1;">
-                        Spark
-                      </span>
-                    </td>
-                    <td style="padding-left:10px;vertical-align:baseline;">
-                      <span
-                        style="font-family:'Courier New',Courier,monospace;
-                               font-size:10px;letter-spacing:0.28em;
-                               color:#c5f546;line-height:1;">
-                        BY IGNITE
-                      </span>
-                    </td>
-                  </tr>
-                </table>
+                  style="padding:24px 40px;background:#0a0d09;">
+                <img src="https://spark-new-admin.web.app/legal/spark-logo.png"
+                     alt="Spark by Ignite"
+                     width="180" height="auto"
+                     style="display:block;height:auto;border:0;outline:none;
+                            text-decoration:none;
+                            filter:invert(1) hue-rotate(180deg);" />
               </td>
             </tr>
 
@@ -176,26 +164,12 @@
                        width="100%">
                   <tr>
                     <td valign="top" width="140" style="padding-right:18px;">
-                      <table role="presentation" cellspacing="0" cellpadding="0" border="0"
-                             width="130"
-                             style="background:linear-gradient(135deg,#ef5a2a,#0a3aef);
-                                    border-radius:8px;">
-                        <tr>
-                          <td align="center" valign="middle"
-                              height="130"
-                              style="font-family:Georgia,'Times New Roman',serif;
-                                     font-style:italic;font-weight:700;font-size:28px;
-                                     letter-spacing:-0.01em;color:#ffffff;
-                                     line-height:1;">
-                            IGNITE<br/>
-                            <span style="font-family:'Courier New',Courier,monospace;
-                                         font-style:normal;font-size:9px;
-                                         letter-spacing:0.28em;color:#ffffff;">
-                              PRODUCTIONS
-                            </span>
-                          </td>
-                        </tr>
-                      </table>
+                      <img src="https://spark-new-admin.web.app/legal/ignite-logo.png"
+                           alt="Ignite Productions"
+                           width="130" height="130"
+                           style="display:block;width:130px;height:130px;
+                                  border-radius:8px;border:0;outline:none;
+                                  text-decoration:none;object-fit:cover;" />
                     </td>
                     <td valign="top" style="font-size:14px;line-height:22px;color:#0a0d09;">
                       <p style="margin:0 0 4px 0;color:#ef5a2a;font-weight:700;font-size:16px;">
@@ -242,7 +216,7 @@
                 <p style="margin:0;font-family:'Courier New',Courier,monospace;
                           font-size:10px;letter-spacing:0.16em;color:#7a8074;
                           line-height:16px;">
-                  © {% now "Y" %} IGNITE PRODUCTIONS LLC · A VETERAN-OWNED SMALL BUSINESS<br/>
+                  © {% now "Y" %} IGNITE PRODUCTIONS LLC<br/>
                   <a href="https://spark-new-admin.web.app/legal/terms-of-service.pdf"
                      style="color:#7a8074;">TERMS</a>
                   &nbsp;·&nbsp;
@@ -253,11 +227,6 @@
             </tr>
           </table>
 
-          <!-- Outer footer -->
-          <p style="margin:18px 0 0 0;font-family:'Courier New',Courier,monospace;
-                    font-size:10px;letter-spacing:0.18em;color:#9a9d92;">
-            SPARK BY IGNITE · FIELD MARKETING, REIMAGINED
-          </p>
         </td>
       </tr>
     </table>

@@ -2602,7 +2602,8 @@ class RequestMutations:
                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 ),
             )
-            file_url = await sync_to_async(generate_download_url)(blob_name)
+            from utils.gcs import public_url
+            file_url = public_url(blob_name) or ""
 
             return build_mutation_response(
                 types.RequestBatchTemplateResponse,
