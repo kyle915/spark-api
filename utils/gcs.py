@@ -134,6 +134,24 @@ def download_blob_bytes(blob_name: str) -> Optional[bytes]:
         return None
 
 
+def public_url(blob_name: str | None) -> str | None:
+    """
+    Return a non-signed, publicly-loadable URL for a blob.
+
+    Use this for tenant logos, product images, and recap files where the
+    bucket grants allUsers:objectViewer (uniform bucket access). Avoids
+    the "you need a private key to sign credentials" failure that
+    generate_signed_url() triggers on Cloud Run service accounts.
+    """
+    if not blob_name:
+        return None
+    bucket = getattr(__import__("django.conf", fromlist=["settings"]).settings, "GS_BUCKET_NAME", "")
+    if not bucket:
+        return None
+    cleaned = blob_name.lstrip("/")
+    return f"https://storage.googleapis.com/{bucket}/{cleaned}"
+
+
 def extract_blob_name_from_url(url_or_path: str | None) -> str | None:
     """
     Extract the blob path from a GCS signed URL or return the path as-is.

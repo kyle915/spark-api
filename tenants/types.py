@@ -1,7 +1,8 @@
 import django.contrib.sites.requests
 import strawberry
 import strawberry_django
-from utils.gcs import extract_blob_name_from_url, generate_download_url
+from asgiref.sync import sync_to_async
+from utils.gcs import extract_blob_name_from_url, public_url
 from .models import Tenant, Role, User, TenantTheme
 from strawberry.relay import Node
 
@@ -19,17 +20,23 @@ class TenantType(Node):
     slug: strawberry.auto
     request_url_name: strawberry.auto
 
-    @strawberry.field
-    def image(self) -> str | None:
-        """Return a signed URL for the tenant image if it exists."""
-        if not self.image:
-            return None
+    @strawberry.field(name="image")
+    def image_url(self) -> str | None:
+        """Return the public URL for the tenant image if one exists.
 
-        blob_name = extract_blob_name_from_url(self.image.name)
-        if not blob_name:
+        Aliased to GraphQL field `image` via name= so we can keep the
+        Python method off the shadow path. Avoids an extra ORM round
+        trip per row.
+        """
+        field_file = self.__dict__.get("image") or getattr(self, "image", None)
+        if not field_file:
             return None
-
-        return generate_download_url(blob_name)
+        try:
+            blob = field_file.name
+        except Exception:
+            blob = str(field_file)
+        blob_name = extract_blob_name_from_url(blob)
+        return public_url(blob_name)
 
 
 @strawberry_django.type(User)

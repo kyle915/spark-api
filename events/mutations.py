@@ -1,5 +1,6 @@
 import strawberry
 import datetime
+import logging
 
 import strawberry
 from strawberry import relay
@@ -30,6 +31,12 @@ from .envelopes import (
     RequestorRequestDeclinedMailer,
     RequestCreatedNotificationMailer,
     RequestorRequestCreatedMailer,
+    RmmAssignedRequestMailer,
+)
+from .routing import (
+    assign_rmm_for_request,
+    extract_state_code,
+    IGNITE_REVIEW_CC,
 )
 from utils.gcs import (
     delete_blob,
@@ -53,6 +60,8 @@ from jobs import models as job_models
 from jobs.notification_rules import should_send_ambassador_event_email
 
 ensure_relay_mutation()
+
+logger = logging.getLogger(__name__)
 
 User = get_user_model()
 
@@ -2192,6 +2201,31 @@ class PublicRequestMutations:
             await _notify_spark_admins_for_client_request(
                 request_with_relations, location, delay_seconds=1
             )
+            # Per-tenant state-based RMM routing (LD only today). The
+            # helper sets request.rmm_asigned_id + returns the TO email
+            # list (a single RMM, or every RMM in the table if the
+            # state isn't covered).
+            assigned_rmm, rmm_emails = await assign_rmm_for_request(
+                request_with_relations, request_url_name
+            )
+            if rmm_emails:
+                await _notify_rmm_for_request_created(
+                    request_with_relations,
+                    location,
+                    rmm_emails,
+                    assigned_rmm,
+                )
+                # Refresh the in-memory model so the requestor email
+                # below picks up the freshly-set rmm_asigned (used in
+                # the 'routed to {name}' line).
+                request_with_relations = await sync_to_async(
+                    models.Request.objects.select_related(
+                        "tenant", "timezone", "request_type",
+                        "retailer__location__state",
+                        "distributor__location__state",
+                        "rmm_asigned",
+                    ).get
+                )(id=request_with_relations.id)
             await _notify_requestor_for_request_created(
                 request_with_relations, location, delay_seconds=2
             )
@@ -2439,6 +2473,30 @@ async def _notify_spark_admins_for_client_request(
     return
 
 
+async def _notify_rmm_for_request_created(
+    request: models.Request,
+    location: models.Location | None,
+    to_emails: list[str],
+    assigned_rmm,
+) -> None:
+    """Send the routing email to the territory's RMM(s) and CC the
+    Ignite team."""
+    rmm_first = (
+        (getattr(assigned_rmm, "first_name", None) or "").strip()
+        or (assigned_rmm.email.split("@")[0] if assigned_rmm else "team")
+    )
+    state_code = extract_state_code(getattr(request, "address", None))
+    mailer = RmmAssignedRequestMailer(
+        request=request,
+        location=location,
+        to_emails=to_emails,
+        cc_emails=IGNITE_REVIEW_CC,
+        rmm_first_name=rmm_first,
+        state_code=state_code,
+    )
+    await sync_to_async(mailer.send)()
+
+
 async def _notify_requestor_for_request_created(
     request: models.Request,
     location: models.Location | None,
@@ -2602,7 +2660,8 @@ class RequestMutations:
                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 ),
             )
-            file_url = await sync_to_async(generate_download_url)(blob_name)
+            from utils.gcs import public_url
+            file_url = public_url(blob_name) or ""
 
             return build_mutation_response(
                 types.RequestBatchTemplateResponse,
@@ -2870,6 +2929,31 @@ class RequestMutations:
             request.approved_by = user
             await sync_to_async(request.save)()
 
+            # Materialize a real Event row so Ignite ops can staff against it.
+            # The approved email promises "Ignite staffs a BA + calendar invite",
+            # which requires an Event in the operational pipeline. We skip
+            # creation if an event already exists for this request (idempotent).
+            event = await sync_to_async(
+                lambda: models.Event.objects.filter(request_id=request.id)
+                .order_by("-id")
+                .first()
+            )()
+            if event is None:
+                try:
+                    event = await models.Event.objects.from_request(
+                        request=request,
+                        created_by=user,
+                    )
+                except Exception as exc:
+                    # Don't block approval if event creation fails — log via
+                    # the response message tail but still mark approved.
+                    logger.exception(
+                        "approve_request: failed to materialize Event for request_id=%s: %s",
+                        request.id,
+                        exc,
+                    )
+                    event = None
+
             location = await _resolve_request_location(request)
             await _notify_notification_group_users_for_request(request, location)
             await _notify_requestor_for_request_approved(request, location)
@@ -2880,7 +2964,7 @@ class RequestMutations:
                 message="Request approved successfully.",
                 input_obj=input,
                 request=request,
-                event=None,
+                event=event,
             )
         except GraphQLError as e:
             return build_mutation_response(

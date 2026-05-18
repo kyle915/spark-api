@@ -9,7 +9,7 @@ from gqlauth.user.queries import UserQueries
 from strawberry_django.permissions import IsAuthenticated
 from django.db.models import Q
 from asgiref.sync import sync_to_async
-from utils.gcs import extract_blob_name_from_url, generate_download_url
+from utils.gcs import extract_blob_name_from_url, public_url
 from utils.graphql.permissions import StrictIsAuthenticated
 from strawberry.relay import Node
 
@@ -46,17 +46,19 @@ class CustomUserType(Node):
     last_name: strawberry.auto
     role: RoleType
 
-    @strawberry.field
-    def image(self) -> str | None:
-        """Return a signed URL for the user image if it exists."""
-        if not self.image:
+    @strawberry.field(name="image")
+    def image_url(self) -> str | None:
+        """Return the public URL for the user image if any. Aliased
+        via name= so the resolver doesn't shadow self.image."""
+        field_file = self.__dict__.get("image") or getattr(self, "image", None)
+        if not field_file:
             return None
-
-        blob_name = extract_blob_name_from_url(self.image.name)
-        if not blob_name:
-            return None
-
-        return generate_download_url(blob_name)
+        try:
+            blob = field_file.name
+        except Exception:
+            blob = str(field_file)
+        blob_name = extract_blob_name_from_url(blob)
+        return public_url(blob_name)
 
 
 @strawberry.type

@@ -10,7 +10,7 @@ import datetime
 from django.utils import timezone
 from asgiref.sync import sync_to_async
 from tenants.types import SparkUserType, TenantType
-from utils.gcs import extract_blob_name_from_url, generate_download_url
+from utils.gcs import extract_blob_name_from_url, public_url
 
 from . import models
 
@@ -220,17 +220,22 @@ class Product(Node):
     created_at: str
     updated_at: str
 
-    @strawberry_django.field(only=["image"])
-    def image(self) -> str | None:
-        """Return a signed URL for the product image if it exists."""
-        if not self.image:
-            return None
+    @strawberry.field(name="image")
+    def image_url(self) -> str | None:
+        """Return the public URL for the product image if one exists.
 
-        blob_name = extract_blob_name_from_url(self.image.name)
-        if not blob_name:
+        Aliased via name= so the resolver method doesn't shadow the
+        Django ImageField on `self`. No extra ORM hit per row.
+        """
+        field_file = self.__dict__.get("image") or getattr(self, "image", None)
+        if not field_file:
             return None
-
-        return generate_download_url(blob_name)
+        try:
+            blob = field_file.name
+        except Exception:
+            blob = str(field_file)
+        blob_name = extract_blob_name_from_url(blob)
+        return public_url(blob_name)
 
 
 @strawberry.type
@@ -470,16 +475,20 @@ class Event(Node):
     ) = None
 
     @strawberry.field
-    def tenant_image(self) -> str | None:
-        """Return a signed URL for the tenant image if it exists."""
-        if not self.tenant or not self.tenant.image:
+    async def tenant_image(self) -> str | None:
+        """Return the public URL for the tenant image if one exists."""
+        tenant = await sync_to_async(lambda: self.tenant, thread_sensitive=True)()
+        if not tenant:
             return None
-
-        blob_name = extract_blob_name_from_url(self.tenant.image.name)
-        if not blob_name:
+        image = await sync_to_async(lambda: tenant.image, thread_sensitive=True)()
+        if not image:
             return None
-
-        return generate_download_url(blob_name)
+        try:
+            blob = image.name
+        except Exception:
+            blob = str(image)
+        blob_name = extract_blob_name_from_url(blob)
+        return public_url(blob_name)
 
     @strawberry.field
     def name(self) -> str:

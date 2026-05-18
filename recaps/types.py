@@ -11,7 +11,8 @@ from jobs import types as job_types
 from ambassadors import types as ambassador_types
 from tenants import types as tenant_types
 from . import models
-from utils.gcs import generate_download_url, extract_blob_name_from_url
+from asgiref.sync import sync_to_async
+from utils.gcs import public_url, extract_blob_name_from_url
 
 
 @strawberry_django.type(models.RecapFile)
@@ -27,15 +28,25 @@ class RecapFile(Node):
     file_type: ambassador_types.FileType
     file_recap_category: FileRecapCategory | None
 
-    @strawberry_django.field(only=["file"])
-    def file(self) -> str | None:
-        """Return a signed URL for the product image if it exists."""
-        if not self.file:
+    # We deliberately use a different Python method name (file_url) and
+    # alias it back to the GraphQL field name `file` via the strawberry
+    # `name=` arg. A resolver literally named `file` would shadow the
+    # Django FileField on the instance and force a fresh per-row DB
+    # lookup — fatal for the recaps list which serializes 9.4k file
+    # rows per request.
+    @strawberry.field(name="file")
+    def file_url(self) -> str | None:
+        """Return the public URL for the recap file if one exists."""
+        field_file = self.__dict__.get("file") or getattr(self, "file", None)
+        if not field_file:
             return None
-        blob_name = extract_blob_name_from_url(self.file.name)
-        if not blob_name:
-            return None
-        return generate_download_url(blob_name)
+        # field_file is a Django FieldFile — .name is the blob path.
+        try:
+            blob = field_file.name
+        except Exception:
+            blob = str(field_file)
+        blob_name = extract_blob_name_from_url(blob)
+        return public_url(blob_name)
 
 
 @strawberry.type
@@ -168,22 +179,49 @@ class Recap(Node):
     consumer_feedback: List[ConsumerFeedback]
     account_feedback: List[AccountFeedback]
 
+    # NOTE: we use models.RecapFile.objects.filter(recap=self) instead
+    # of self.recap_files.all() because defining a method named
+    # `recap_files` on a strawberry type shadows the Django reverse-
+    # accessor of the same name. Inside the resolver body, `self.recap_files`
+    # would resolve to the bound method (not the manager), and `.all()`
+    # would silently fail — returning [] for every recap in the API
+    # despite the DB having the rows. Going through the model manager
+    # directly side-steps the name collision.
+
     @strawberry.field
-    def recap_file(self) -> RecapFile | None:
+    async def recap_file(self) -> RecapFile | None:
         """Return first linked recap file for backward compatibility."""
-        files = list(self.recap_files.all())
-        return files[0] if files else None
+        first = await sync_to_async(
+            lambda: models.RecapFile.objects.filter(recap=self)
+            .order_by("id")
+            .first(),
+            thread_sensitive=True,
+        )()
+        return first
 
     @strawberry.field
-    def recap_file_id(self) -> strawberry.ID | None:
+    async def recap_file_id(self) -> strawberry.ID | None:
         """Return id for the first linked recap file."""
-        files = list(self.recap_files.all())
-        return strawberry.ID(str(files[0].id)) if files else None
+        first = await sync_to_async(
+            lambda: models.RecapFile.objects.filter(recap=self)
+            .order_by("id")
+            .first(),
+            thread_sensitive=True,
+        )()
+        return strawberry.ID(str(first.id)) if first else None
 
     @strawberry.field
-    def recap_files(self) -> List[RecapFile]:
-        """Return all recap files linked to this recap."""
-        return list(self.recap_files.all())
+    async def recap_files(self) -> List[RecapFile]:
+        """Return all recap files linked to this recap. ORM call has
+        to be wrapped in sync_to_async because Strawberry runs the
+        resolver inside the request's async loop and Django refuses
+        synchronous DB I/O there."""
+        return await sync_to_async(
+            lambda: list(
+                models.RecapFile.objects.filter(recap=self).order_by("id")
+            ),
+            thread_sensitive=True,
+        )()
 
     @strawberry.field(deprecation_reason="Use ambassador instead.")
     def ambassadors(self) -> List[ambassador_types.Ambassador]:
@@ -307,15 +345,18 @@ class CustomRecapFile(Node):
     file_type: ambassador_types.FileType
     file_recap_category: FileRecapCategory | None
 
-    @strawberry_django.field(only=["url"])
-    def url(self) -> str | None:
-        """Return a signed URL for the custom recap file if it exists."""
-        if not self.url:
+    @strawberry.field(name="url")
+    def url_str(self) -> str | None:
+        """Return the public URL for the custom recap file if any."""
+        field_file = self.__dict__.get("url") or getattr(self, "url", None)
+        if not field_file:
             return None
-        blob_name = extract_blob_name_from_url(self.url.name)
-        if not blob_name:
-            return None
-        return generate_download_url(blob_name)
+        try:
+            blob = field_file.name
+        except Exception:
+            blob = str(field_file)
+        blob_name = extract_blob_name_from_url(blob)
+        return public_url(blob_name)
 
 
 @strawberry.type

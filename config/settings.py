@@ -188,9 +188,16 @@ if GS_CREDENTIALS_JSON:
 else:
     GS_CREDENTIALS = None
 
-# Make bucket private by default
+# Bucket-level access is set to public (object-viewer for allUsers) on
+# sparkio-production / sparkio-new. The Cloud Run service account ships
+# with a token only — no private key — so generate_signed_url() raises
+# "you need a private key to sign credentials" and every FileField.url
+# bubbles a GraphQL error (product images, tenant logos, recap files).
+# Switching to public URL mode bypasses signing entirely: django-storages
+# returns https://storage.googleapis.com/<bucket>/<key> which the public
+# bucket serves directly.
 GS_DEFAULT_ACL = None  # Use bucket's default ACL (uniform bucket-level access)
-GS_QUERYSTRING_AUTH = True  # Enable signed URLs for private access
+GS_QUERYSTRING_AUTH = env.bool("GS_QUERYSTRING_AUTH", default=False)
 
 # File storage backend
 DEFAULT_FILE_STORAGE = "storages.backends.gcloud.GoogleCloudStorage"

@@ -24,7 +24,14 @@ from .models import Role, TenantedUser, Tenant, TenantTheme, PasswordResetCode
 from .types import TenantType, TenantThemeType
 from .inputs import CreateOrUpdateTenantThemeInput
 from .social_auth import BaseSocialAuthMutations, SocialAuthResponse
-from .envelopes import EmailVerificationMailer, ForgotPasswordCodeMailer
+from .envelopes import (
+    EmailVerificationMailer,
+    ForgotPasswordCodeMailer,
+    MagicLinkMailer,
+    PasswordResetLinkMailer,
+)
+from django.core import signing
+from urllib.parse import quote
 from events.models import EventStatus, EventType, RequestStatus, RequestType
 from jobs.models import Status as JobStatus, RateType
 from recaps.models import FileRecapCategory, TypeOfGood
@@ -171,6 +178,56 @@ class ResetPasswordWithCodeInput(SparkGraphQLInput):
     code: str
     password1: str
     password2: str
+
+
+@strawberry.input
+class RequestMagicLinkInput(SparkGraphQLInput):
+    email: str
+    redirect: str | None = None
+
+
+@strawberry.input
+class LoginWithMagicTokenInput(SparkGraphQLInput):
+    token: str
+
+
+@strawberry.input
+class RequestPasswordResetInput(SparkGraphQLInput):
+    email: str
+
+
+@strawberry.input
+class ConfirmPasswordResetInput(SparkGraphQLInput):
+    token: str
+    password1: str
+    password2: str
+
+
+@strawberry.input
+class InviteUserInput(SparkGraphQLInput):
+    email: str
+    first_name: str | None = None
+    last_name: str | None = None
+    role: str  # "admin" | "client" | "ambassador"
+    tenant_id: strawberry.ID | None = None  # required for client/ambassador
+    note: str | None = None
+
+
+@strawberry.input
+class DeleteUserInput(SparkGraphQLInput):
+    user_id: strawberry.ID
+
+
+@strawberry.type
+class MagicLinkLoginResponse:
+    success: bool
+    message: str
+    token: str | None = None
+    refresh_token: str | None = None
+    user_id: strawberry.ID | None = None
+    email: str | None = None
+    first_name: str | None = None
+    last_name: str | None = None
 
 
 @strawberry.input
@@ -435,8 +492,376 @@ class SparkCustomRegister:
         )
 
 
+MAGIC_LINK_SALT = "spark.magic-link.v1"
+MAGIC_LINK_TTL_SECONDS = 60 * 30  # 30 min
+
+
+def _build_magic_link(token: str, redirect: str | None) -> str:
+    base = getattr(settings, "ADMIN_FRONTEND_URL", "https://spark-new-admin.web.app").rstrip("/")
+    suffix = f"?next={quote(redirect)}" if redirect else ""
+    return f"{base}/magic/{token}{suffix}"
+
+
 @strawberry.type
 class SparkUserMutations:
+    @relay.mutation
+    async def request_magic_link(
+        self,
+        info: strawberry.Info,
+        input: RequestMagicLinkInput,
+    ) -> UpdateUserResponse:
+        """Email a one-click sign-in link. Generic success regardless
+        of whether the email matches a real user (anti-enumeration)."""
+        email = (input.email or "").strip().lower()
+        generic = UpdateUserResponse(
+            success=True,
+            message="If the email exists, we sent a sign-in link.",
+            client_mutation_id=input.client_mutation_id,
+        )
+        if not email:
+            return UpdateUserResponse(
+                success=False, message="Email is required.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        user = await sync_to_async(
+            lambda: User.objects.filter(email__iexact=email).first()
+        )()
+        if not user:
+            # Generic response — never confirm/deny membership.
+            return generic
+
+        token = signing.dumps(
+            {"u": user.id, "e": user.email}, salt=MAGIC_LINK_SALT
+        )
+        link = _build_magic_link(token, input.redirect)
+
+        try:
+            mailer = MagicLinkMailer(
+                user=user, link=link, expires_minutes=MAGIC_LINK_TTL_SECONDS // 60,
+            )
+            # send_async_now bypasses the django-rq queue (Redis isn't
+            # provisioned on Cloud Run) and dispatches the email
+            # synchronously via the Resend driver.
+            await mailer.send_async_now()
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception(
+                "Magic-link email failed for %s; link=%s", email, link,
+            )
+            return generic
+        return generic
+
+    @relay.mutation
+    async def login_with_magic_token(
+        self,
+        info: strawberry.Info,
+        input: LoginWithMagicTokenInput,
+    ) -> MagicLinkLoginResponse:
+        """Exchange a magic-link token for a JWT."""
+        try:
+            payload = signing.loads(
+                input.token, salt=MAGIC_LINK_SALT, max_age=MAGIC_LINK_TTL_SECONDS,
+            )
+        except signing.SignatureExpired:
+            return MagicLinkLoginResponse(success=False, message="Link expired. Request a new one.")
+        except signing.BadSignature:
+            return MagicLinkLoginResponse(success=False, message="Invalid sign-in link.")
+
+        user = await sync_to_async(
+            lambda: User.objects.filter(id=payload["u"]).first()
+        )()
+        if not user or user.email != payload.get("e"):
+            return MagicLinkLoginResponse(success=False, message="Account not found.")
+        if not user.is_active:
+            return MagicLinkLoginResponse(success=False, message="Account is inactive.")
+
+        # gqlauth.core.utils.get_token requires an action arg for v2+
+        jwt = get_token(user, "authentication")
+        return MagicLinkLoginResponse(
+            success=True,
+            message="Signed in.",
+            token=jwt,
+            refresh_token=None,
+            user_id=strawberry.ID(str(user.id)),
+            email=user.email,
+            first_name=user.first_name or None,
+            last_name=user.last_name or None,
+        )
+
+    @relay.mutation
+    async def request_password_reset(
+        self,
+        info: strawberry.Info,
+        input: RequestPasswordResetInput,
+    ) -> UpdateUserResponse:
+        """Email a one-click password-reset link. Generic success
+        regardless of whether the email matches (anti-enumeration)."""
+        email = (input.email or "").strip().lower()
+        generic = UpdateUserResponse(
+            success=True,
+            message="If the email exists, we sent a reset link.",
+            client_mutation_id=input.client_mutation_id,
+        )
+        if not email:
+            return UpdateUserResponse(
+                success=False, message="Email is required.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        user = await sync_to_async(
+            lambda: User.objects.filter(email__iexact=email).first()
+        )()
+        if not user:
+            return generic
+
+        token = signing.dumps(
+            {"u": user.id, "e": user.email, "k": "pwd"},
+            salt="spark.password-reset.v1",
+        )
+        base = getattr(settings, "ADMIN_FRONTEND_URL", "https://spark-new-admin.web.app").rstrip("/")
+        link = f"{base}/reset-password/{token}"
+
+        try:
+            mailer = PasswordResetLinkMailer(
+                user=user, link=link, expires_minutes=30,
+            )
+            await mailer.send_async_now()
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception(
+                "Password-reset email failed for %s", email,
+            )
+            return generic
+        return generic
+
+    @relay.mutation
+    async def confirm_password_reset(
+        self,
+        info: strawberry.Info,
+        input: ConfirmPasswordResetInput,
+    ) -> UpdateUserResponse:
+        """Validate a password-reset token + set a new password."""
+        if not input.password1 or len(input.password1) < 8:
+            return UpdateUserResponse(
+                success=False,
+                message="Password must be at least 8 characters.",
+                client_mutation_id=input.client_mutation_id,
+            )
+        if input.password1 != input.password2:
+            return UpdateUserResponse(
+                success=False,
+                message="Passwords don't match.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        try:
+            payload = signing.loads(
+                input.token,
+                salt="spark.password-reset.v1",
+                max_age=60 * 30,  # 30 min
+            )
+        except signing.SignatureExpired:
+            return UpdateUserResponse(
+                success=False,
+                message="Reset link expired. Request a new one.",
+                client_mutation_id=input.client_mutation_id,
+            )
+        except signing.BadSignature:
+            return UpdateUserResponse(
+                success=False,
+                message="Invalid reset link.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        user = await sync_to_async(
+            lambda: User.objects.filter(id=payload.get("u")).first()
+        )()
+        if not user or user.email != payload.get("e") or payload.get("k") != "pwd":
+            return UpdateUserResponse(
+                success=False,
+                message="Account not found.",
+                client_mutation_id=input.client_mutation_id,
+            )
+        if not user.is_active:
+            return UpdateUserResponse(
+                success=False,
+                message="Account is inactive.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        @sync_to_async
+        def _save():
+            user.set_password(input.password1)
+            user.save(update_fields=["password"])
+
+        await _save()
+        return UpdateUserResponse(
+            success=True,
+            message="Password updated.",
+            client_mutation_id=input.client_mutation_id,
+        )
+
+    @relay.mutation
+    async def invite_user(
+        self,
+        info: strawberry.Info,
+        input: InviteUserInput,
+    ) -> UpdateUserResponse:
+        """
+        Admin-triggered user creation. Maps the role name to role_id
+        (admin->2, client->3, ambassador->1), creates the user with
+        an unusable password, links to the requested tenant (or all
+        tenants for admin), then emails a magic-link so the user can
+        sign in and set their own password.
+
+        Idempotent: if a user with this email already exists, we
+        re-send the magic link without altering their role or tenants.
+        """
+        from .envelopes import MagicLinkMailer
+        from django.core import signing
+        import logging
+
+        role_slug = (input.role or "").strip().lower()
+        role_map = {"admin": 2, "spark-admin": 2, "client": 3, "ambassador": 1}
+        if role_slug not in role_map:
+            return UpdateUserResponse(
+                success=False,
+                message=f"Invalid role '{input.role}'. Must be admin, client, or ambassador.",
+                client_mutation_id=input.client_mutation_id,
+            )
+        role_id = role_map[role_slug]
+        email = (input.email or "").strip().lower()
+        if not email:
+            return UpdateUserResponse(
+                success=False,
+                message="Email is required.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        @sync_to_async
+        def _create_or_get() -> tuple:
+            from django.utils.crypto import get_random_string
+            existing = User.objects.filter(email__iexact=email).first()
+            if existing:
+                return existing, False
+            # Match the seed script: unusable password marker so the
+            # user is forced through magic-link / password-reset to set
+            # their own creds.
+            user = User.objects.create(
+                username=email,
+                email=email,
+                first_name=input.first_name or "",
+                last_name=input.last_name or "",
+                password="!" + get_random_string(40),
+                is_active=True,
+                is_staff=False,
+                is_superuser=False,
+                role_id=role_id,
+            )
+            # Tenant linkage: admins → every tenant; client/BA → only
+            # the one the inviter specified (defaults to the inviter's
+            # primary tenant if blank).
+            if role_id == 2:
+                tenants = Tenant.objects.all()
+            elif input.tenant_id:
+                tid = resolve_id_to_int(input.tenant_id)
+                tenants = Tenant.objects.filter(id=tid)
+            else:
+                tenants = Tenant.objects.none()
+            for t in tenants:
+                from .models import TenantedUser
+                TenantedUser.objects.get_or_create(
+                    user=user, tenant=t, defaults={"is_active": True},
+                )
+            return user, True
+
+        try:
+            user, created = await _create_or_get()
+        except Exception as exc:
+            logging.getLogger(__name__).exception(
+                "inviteUser failed for %s", email,
+            )
+            return UpdateUserResponse(
+                success=False,
+                message=f"Couldn't create user: {exc}",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        # Email a magic-link so the new user can sign in immediately.
+        token = signing.dumps(
+            {"u": user.id, "e": user.email}, salt="spark.magic-link.v1",
+        )
+        base = getattr(
+            settings, "ADMIN_FRONTEND_URL", "https://spark-new-admin.web.app",
+        ).rstrip("/")
+        link = f"{base}/magic/{token}"
+        try:
+            mailer = MagicLinkMailer(user=user, link=link, expires_minutes=30)
+            await mailer.send_async_now()
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "Invite email failed for %s; link=%s", email, link,
+            )
+
+        return UpdateUserResponse(
+            success=True,
+            message=(
+                f"Invite sent — {email} will receive a sign-in link."
+                if created
+                else f"User exists — re-sent sign-in link to {email}."
+            ),
+            client_mutation_id=input.client_mutation_id,
+        )
+
+    @relay.mutation
+    async def delete_user(
+        self,
+        info: strawberry.Info,
+        input: DeleteUserInput,
+    ) -> UpdateUserResponse:
+        """Soft-delete by deactivating the user + clearing their tenant
+        links. We never hard-delete because foreign keys (requests,
+        events, recaps) reference the user; flipping is_active=false is
+        enough to revoke access immediately."""
+        uid = resolve_id_to_int(input.user_id)
+        actor = await sync_to_async(
+            lambda: getattr(info.context, "user", None)
+        )()
+        if actor and getattr(actor, "id", None) == uid:
+            return UpdateUserResponse(
+                success=False,
+                message="You can't deactivate yourself.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        @sync_to_async
+        def _deactivate():
+            target = User.objects.filter(id=uid).first()
+            if not target:
+                return None
+            target.is_active = False
+            target.save(update_fields=["is_active", "updated_at"])
+            # Mark tenant links inactive too — the existing tenant
+            # queryset filters on is_active so this hides them from
+            # invite lists immediately.
+            TenantedUser = __import__("tenants.models", fromlist=["TenantedUser"]).TenantedUser
+            TenantedUser.objects.filter(user_id=uid).update(is_active=False)
+            return target
+
+        target = await _deactivate()
+        if not target:
+            return UpdateUserResponse(
+                success=False,
+                message="User not found.",
+                client_mutation_id=input.client_mutation_id,
+            )
+        return UpdateUserResponse(
+            success=True,
+            message=f"Deactivated {target.email}.",
+            client_mutation_id=input.client_mutation_id,
+        )
+
     @relay.mutation
     async def forgot_password(
         self,
