@@ -1,5 +1,6 @@
 import strawberry
 import datetime
+import logging
 
 import strawberry
 from strawberry import relay
@@ -59,6 +60,8 @@ from jobs import models as job_models
 from jobs.notification_rules import should_send_ambassador_event_email
 
 ensure_relay_mutation()
+
+logger = logging.getLogger(__name__)
 
 User = get_user_model()
 
@@ -2926,6 +2929,31 @@ class RequestMutations:
             request.approved_by = user
             await sync_to_async(request.save)()
 
+            # Materialize a real Event row so Ignite ops can staff against it.
+            # The approved email promises "Ignite staffs a BA + calendar invite",
+            # which requires an Event in the operational pipeline. We skip
+            # creation if an event already exists for this request (idempotent).
+            event = await sync_to_async(
+                lambda: models.Event.objects.filter(request_id=request.id)
+                .order_by("-id")
+                .first()
+            )()
+            if event is None:
+                try:
+                    event = await models.Event.objects.from_request(
+                        request=request,
+                        created_by=user,
+                    )
+                except Exception as exc:
+                    # Don't block approval if event creation fails — log via
+                    # the response message tail but still mark approved.
+                    logger.exception(
+                        "approve_request: failed to materialize Event for request_id=%s: %s",
+                        request.id,
+                        exc,
+                    )
+                    event = None
+
             location = await _resolve_request_location(request)
             await _notify_notification_group_users_for_request(request, location)
             await _notify_requestor_for_request_approved(request, location)
@@ -2936,7 +2964,7 @@ class RequestMutations:
                 message="Request approved successfully.",
                 input_obj=input,
                 request=request,
-                event=None,
+                event=event,
             )
         except GraphQLError as e:
             return build_mutation_response(
