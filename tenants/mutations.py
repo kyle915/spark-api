@@ -460,7 +460,6 @@ class SparkCustomRegister:
         )
 
 
-@strawberry.type
 MAGIC_LINK_SALT = "spark.magic-link.v1"
 MAGIC_LINK_TTL_SECONDS = 60 * 30  # 30 min
 
@@ -471,6 +470,7 @@ def _build_magic_link(token: str, redirect: str | None) -> str:
     return f"{base}/magic/{token}{suffix}"
 
 
+@strawberry.type
 class SparkUserMutations:
     @relay.mutation
     async def request_magic_link(
