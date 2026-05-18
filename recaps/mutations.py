@@ -31,6 +31,7 @@ from utils.graphql.relay import ensure_relay_mutation
 from utils.graphql.mixins import SparkGraphQLMixin, resolve_id_to_int
 from utils.utils import build_mutation_response
 from utils.gcs import (
+    public_url,
     extract_blob_name_from_url,
     delete_blob,
     upload_bytes,
@@ -2937,7 +2938,7 @@ class RecapMutationService(SparkGraphQLMixin):
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             ),
         )
-        return generate_download_url(blob_name)
+        return public_url(blob_name)
 
     async def export_recap_xlsx(self) -> str:
         """Generate an Excel report for a single recap and return a signed URL."""
@@ -3000,7 +3001,7 @@ class RecapMutationService(SparkGraphQLMixin):
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             ),
         )
-        return generate_download_url(blob_name)
+        return public_url(blob_name)
 
     async def export_custom_recaps_xlsx(self) -> str:
         """Generate an Excel report with all custom recaps for a tenant."""
@@ -3078,7 +3079,7 @@ class RecapMutationService(SparkGraphQLMixin):
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             ),
         )
-        return generate_download_url(blob_name)
+        return public_url(blob_name)
 
     async def export_custom_recap_xlsx(self) -> str:
         """Generate an Excel report for a single custom recap."""
@@ -3137,7 +3138,7 @@ class RecapMutationService(SparkGraphQLMixin):
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             ),
         )
-        return generate_download_url(blob_name)
+        return public_url(blob_name)
 
     async def get_recap_file_download_url(self) -> str:
         """Return a signed download URL for a recap or custom recap file."""
@@ -3203,7 +3204,7 @@ class RecapMutationService(SparkGraphQLMixin):
         blob_name = extract_blob_name_from_url(str(file_field))
         if not blob_name:
             raise GraphQLError("Recap file not found.")
-        return generate_download_url(blob_name)
+        return public_url(blob_name)
 
 
 @strawberry.type

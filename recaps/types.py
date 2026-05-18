@@ -11,7 +11,7 @@ from jobs import types as job_types
 from ambassadors import types as ambassador_types
 from tenants import types as tenant_types
 from . import models
-from utils.gcs import generate_download_url, extract_blob_name_from_url
+from utils.gcs import public_url, extract_blob_name_from_url
 
 
 @strawberry_django.type(models.RecapFile)
@@ -29,13 +29,18 @@ class RecapFile(Node):
 
     @strawberry_django.field(only=["file"])
     def file(self) -> str | None:
-        """Return a signed URL for the product image if it exists."""
-        if not self.file:
+        """Return the public URL for the recap file if one exists.
+
+        Re-read via the model manager because this resolver shadows
+        the FileField named `file`. Returns the unsigned bucket URL
+        so it loads cross-origin without a private key.
+        """
+        from .models import RecapFile as RecapFileModel
+        row = RecapFileModel.objects.only("id", "file").get(pk=self.pk)
+        if not row.file:
             return None
-        blob_name = extract_blob_name_from_url(self.file.name)
-        if not blob_name:
-            return None
-        return generate_download_url(blob_name)
+        blob_name = extract_blob_name_from_url(row.file.name)
+        return public_url(blob_name)
 
 
 @strawberry.type
@@ -328,13 +333,13 @@ class CustomRecapFile(Node):
 
     @strawberry_django.field(only=["url"])
     def url(self) -> str | None:
-        """Return a signed URL for the custom recap file if it exists."""
-        if not self.url:
+        """Return the public URL for the custom recap file if any."""
+        from .models import CustomRecapFile as CRF
+        row = CRF.objects.only("id", "url").get(pk=self.pk)
+        if not row.url:
             return None
-        blob_name = extract_blob_name_from_url(self.url.name)
-        if not blob_name:
-            return None
-        return generate_download_url(blob_name)
+        blob_name = extract_blob_name_from_url(row.url.name)
+        return public_url(blob_name)
 
 
 @strawberry.type

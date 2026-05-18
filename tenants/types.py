@@ -1,7 +1,7 @@
 import django.contrib.sites.requests
 import strawberry
 import strawberry_django
-from utils.gcs import extract_blob_name_from_url, generate_download_url
+from utils.gcs import extract_blob_name_from_url, public_url
 from .models import Tenant, Role, User, TenantTheme
 from strawberry.relay import Node
 
@@ -21,15 +21,20 @@ class TenantType(Node):
 
     @strawberry.field
     def image(self) -> str | None:
-        """Return a signed URL for the tenant image if it exists."""
-        if not self.image:
-            return None
+        """Return the public URL for the tenant image if one exists.
 
-        blob_name = extract_blob_name_from_url(self.image.name)
-        if not blob_name:
+        Reads the image FieldFile via a fresh Tenant.objects.get() to
+        sidestep the name-shadow issue (this resolver is named `image`
+        and would otherwise recurse into itself on `self.image`). Also
+        skips signed-URL generation because the bucket is public — the
+        signing path raises on Cloud Run service-account credentials.
+        """
+        row = Tenant.objects.only("id", "image").get(pk=self.pk)
+        field_file = row.image
+        if not field_file:
             return None
-
-        return generate_download_url(blob_name)
+        blob_name = extract_blob_name_from_url(field_file.name)
+        return public_url(blob_name)
 
 
 @strawberry_django.type(User)

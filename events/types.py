@@ -10,7 +10,7 @@ import datetime
 from django.utils import timezone
 from asgiref.sync import sync_to_async
 from tenants.types import SparkUserType, TenantType
-from utils.gcs import extract_blob_name_from_url, generate_download_url
+from utils.gcs import extract_blob_name_from_url, public_url
 
 from . import models
 
@@ -222,15 +222,19 @@ class Product(Node):
 
     @strawberry_django.field(only=["image"])
     def image(self) -> str | None:
-        """Return a signed URL for the product image if it exists."""
-        if not self.image:
-            return None
+        """Return the public URL for the product image if one exists.
 
-        blob_name = extract_blob_name_from_url(self.image.name)
-        if not blob_name:
+        We re-read the image field through the Django model manager
+        because the resolver is named `image` and would otherwise
+        shadow the FileField on `self.image`. Public URL avoids the
+        signed-URL credential failure on Cloud Run.
+        """
+        from .models import Product as ProductModel  # local import to avoid cycle
+        row = ProductModel.objects.only("id", "image").get(pk=self.pk)
+        if not row.image:
             return None
-
-        return generate_download_url(blob_name)
+        blob_name = extract_blob_name_from_url(row.image.name)
+        return public_url(blob_name)
 
 
 @strawberry.type
@@ -471,15 +475,11 @@ class Event(Node):
 
     @strawberry.field
     def tenant_image(self) -> str | None:
-        """Return a signed URL for the tenant image if it exists."""
+        """Return the public URL for the tenant image if one exists."""
         if not self.tenant or not self.tenant.image:
             return None
-
         blob_name = extract_blob_name_from_url(self.tenant.image.name)
-        if not blob_name:
-            return None
-
-        return generate_download_url(blob_name)
+        return public_url(blob_name)
 
     @strawberry.field
     def name(self) -> str:
