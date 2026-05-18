@@ -24,7 +24,9 @@ from .models import Role, TenantedUser, Tenant, TenantTheme, PasswordResetCode
 from .types import TenantType, TenantThemeType
 from .inputs import CreateOrUpdateTenantThemeInput
 from .social_auth import BaseSocialAuthMutations, SocialAuthResponse
-from .envelopes import EmailVerificationMailer, ForgotPasswordCodeMailer
+from .envelopes import EmailVerificationMailer, ForgotPasswordCodeMailer, MagicLinkMailer
+from django.core import signing
+from urllib.parse import quote
 from events.models import EventStatus, EventType, RequestStatus, RequestType
 from jobs.models import Status as JobStatus, RateType
 from recaps.models import FileRecapCategory, TypeOfGood
@@ -171,6 +173,29 @@ class ResetPasswordWithCodeInput(SparkGraphQLInput):
     code: str
     password1: str
     password2: str
+
+
+@strawberry.input
+class RequestMagicLinkInput(SparkGraphQLInput):
+    email: str
+    redirect: str | None = None
+
+
+@strawberry.input
+class LoginWithMagicTokenInput(SparkGraphQLInput):
+    token: str
+
+
+@strawberry.type
+class MagicLinkLoginResponse:
+    success: bool
+    message: str
+    token: str | None = None
+    refresh_token: str | None = None
+    user_id: strawberry.ID | None = None
+    email: str | None = None
+    first_name: str | None = None
+    last_name: str | None = None
 
 
 @strawberry.input
@@ -436,7 +461,100 @@ class SparkCustomRegister:
 
 
 @strawberry.type
+MAGIC_LINK_SALT = "spark.magic-link.v1"
+MAGIC_LINK_TTL_SECONDS = 60 * 30  # 30 min
+
+
+def _build_magic_link(token: str, redirect: str | None) -> str:
+    base = getattr(settings, "ADMIN_FRONTEND_URL", "https://spark-new-admin.web.app").rstrip("/")
+    suffix = f"?next={quote(redirect)}" if redirect else ""
+    return f"{base}/magic/{token}{suffix}"
+
+
 class SparkUserMutations:
+    @relay.mutation
+    async def request_magic_link(
+        self,
+        info: strawberry.Info,
+        input: RequestMagicLinkInput,
+    ) -> UpdateUserResponse:
+        """Email a one-click sign-in link. Generic success regardless
+        of whether the email matches a real user (anti-enumeration)."""
+        email = (input.email or "").strip().lower()
+        generic = UpdateUserResponse(
+            success=True,
+            message="If the email exists, we sent a sign-in link.",
+            client_mutation_id=input.client_mutation_id,
+        )
+        if not email:
+            return UpdateUserResponse(
+                success=False, message="Email is required.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        user = await sync_to_async(
+            lambda: User.objects.filter(email__iexact=email).first()
+        )()
+        if not user:
+            # Generic response — never confirm/deny membership.
+            return generic
+
+        token = signing.dumps(
+            {"u": user.id, "e": user.email}, salt=MAGIC_LINK_SALT
+        )
+        link = _build_magic_link(token, input.redirect)
+
+        try:
+            mailer = MagicLinkMailer(
+                user=user, link=link, expires_minutes=MAGIC_LINK_TTL_SECONDS // 60,
+            )
+            await mailer.send_async()
+        except Exception:
+            # Log only — return generic message to the caller. We don't
+            # want to leak whether the user exists via error text.
+            import logging
+            logging.getLogger(__name__).exception(
+                "Magic-link email failed for %s; link=%s", email, link,
+            )
+            return generic
+        return generic
+
+    @relay.mutation
+    async def login_with_magic_token(
+        self,
+        info: strawberry.Info,
+        input: LoginWithMagicTokenInput,
+    ) -> MagicLinkLoginResponse:
+        """Exchange a magic-link token for a JWT."""
+        try:
+            payload = signing.loads(
+                input.token, salt=MAGIC_LINK_SALT, max_age=MAGIC_LINK_TTL_SECONDS,
+            )
+        except signing.SignatureExpired:
+            return MagicLinkLoginResponse(success=False, message="Link expired. Request a new one.")
+        except signing.BadSignature:
+            return MagicLinkLoginResponse(success=False, message="Invalid sign-in link.")
+
+        user = await sync_to_async(
+            lambda: User.objects.filter(id=payload["u"]).first()
+        )()
+        if not user or user.email != payload.get("e"):
+            return MagicLinkLoginResponse(success=False, message="Account not found.")
+        if not user.is_active:
+            return MagicLinkLoginResponse(success=False, message="Account is inactive.")
+
+        jwt = get_token(user)
+        return MagicLinkLoginResponse(
+            success=True,
+            message="Signed in.",
+            token=jwt,
+            refresh_token=None,
+            user_id=strawberry.ID(str(user.id)),
+            email=user.email,
+            first_name=user.first_name or None,
+            last_name=user.last_name or None,
+        )
+
     @relay.mutation
     async def forgot_password(
         self,
