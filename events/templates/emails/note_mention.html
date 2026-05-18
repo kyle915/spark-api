@@ -1,0 +1,158 @@
+{% load static %}<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>You were tagged in Spark</title>
+    <style type="text/css">
+      @media only screen and (max-width: 600px) {
+        .shell { width: 100% !important; }
+        .pad   { padding-left: 24px !important; padding-right: 24px !important; }
+        .hero  { font-size: 28px !important; line-height: 32px !important; }
+      }
+      a.cta:hover { filter: brightness(1.05); }
+    </style>
+  </head>
+  <body
+    style="margin:0;padding:0;background:#f4f4f0;
+           font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,
+                       'Helvetica Neue',Arial,sans-serif;
+           color:#0a0d09;">
+    <table role="presentation" cellspacing="0" cellpadding="0" border="0"
+           width="100%" style="background:#f4f4f0;">
+      <tr>
+        <td align="center" style="padding:24px 12px;">
+          <!-- Email card -->
+          <table role="presentation" cellspacing="0" cellpadding="0" border="0"
+                 width="600" class="shell"
+                 style="width:600px;max-width:600px;
+                        background:#ffffff;border-radius:18px;
+                        overflow:hidden;
+                        box-shadow:0 1px 2px rgba(10,13,9,0.04);">
+
+            <!-- Header -->
+            <tr>
+              <td class="pad"
+                  style="padding:24px 40px;background:#0a0d09;">
+                <img src="https://spark-new-admin.web.app/legal/spark-logo.png"
+                     alt="Spark by Ignite"
+                     width="180" height="auto"
+                     style="display:block;height:auto;border:0;outline:none;
+                            text-decoration:none;
+                            filter:invert(1) hue-rotate(180deg);" />
+              </td>
+            </tr>
+
+            <!-- Hero copy -->
+            <tr>
+              <td class="pad" style="padding:36px 40px 8px 40px;">
+                <p style="margin:0 0 4px 0;
+                          font-family:'Courier New',Courier,monospace;
+                          font-size:10px;letter-spacing:0.22em;
+                          color:#5a6354;">
+                  YOU WERE TAGGED · INTERNAL NOTE
+                </p>
+                <h1 class="hero"
+                    style="margin:0;
+                           font-family:Georgia,'Times New Roman',serif;
+                           font-weight:700;font-size:34px;line-height:38px;
+                           letter-spacing:-0.02em;color:#0a0d09;">
+                  Hey {{ first_name }},
+                </h1>
+              </td>
+            </tr>
+
+            <!-- Body copy -->
+            <tr>
+              <td class="pad" style="padding:16px 40px 4px 40px;">
+                <p style="margin:0;font-size:15px;line-height:22px;color:#3b4034;">
+                  <strong>{{ author_name }}</strong> tagged you on
+                  <strong>{{ account_name }}</strong>{% if tenant_name and tenant_name != "—" %}
+                  ({{ tenant_name }}){% endif %} in an internal note.
+                </p>
+              </td>
+            </tr>
+
+            <!-- Note body card -->
+            <tr>
+              <td class="pad" style="padding:20px 40px 0 40px;">
+                <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%"
+                       style="border-radius:14px;background:#f5f8e8;border:1px solid #b8d343;">
+                  <tr>
+                    <td style="padding:16px 18px;">
+                      <p style="margin:0 0 6px 0;
+                                font-family:'Courier New',Courier,monospace;
+                                font-size:10px;letter-spacing:0.22em;
+                                color:#3f5610;">
+                        {{ author_name|upper }} WROTE
+                      </p>
+                      <p style="margin:0;font-size:14px;line-height:21px;
+                                color:#0a0d09;white-space:pre-wrap;">
+                        {{ note_body }}
+                      </p>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+
+            <!-- CTA -->
+            <tr>
+              <td class="pad" style="padding:24px 40px 8px 40px;">
+                <a class="cta"
+                   href="{{ request_url }}"
+                   style="display:inline-block;background:#c5f546;
+                          color:#0a0d09;font-weight:700;
+                          padding:12px 22px;border-radius:14px;
+                          text-decoration:none;font-size:14px;">
+                  Open {{ request_id }} →
+                </a>
+              </td>
+            </tr>
+
+            <!-- Sign-off -->
+            <tr>
+              <td class="pad" style="padding:20px 40px 4px 40px;">
+                <p style="margin:0;font-size:13px;line-height:20px;color:#7a8074;">
+                  Reply directly to this email to respond to {{ author_name }}{% if author_email %} ({{ author_email }}){% endif %}.
+                </p>
+              </td>
+            </tr>
+
+            <!-- Divider -->
+            <tr>
+              <td class="pad" style="padding:8px 40px 0 40px;">
+                <hr style="border:0;border-top:1px solid #ef5a2a;margin:0;" />
+              </td>
+            </tr>
+
+            <!-- AI / human disclaimer -->
+            <tr>
+              <td class="pad" style="padding:16px 40px 24px 40px;">
+                <p style="margin:0;font-size:12px;line-height:18px;
+                          color:#7a8074;font-style:italic;">
+                  This message was sent by Spark, Ignite's field marketing
+                  platform. A human teammate left this note for you.
+                </p>
+              </td>
+            </tr>
+
+            <!-- Legal footer -->
+            <tr>
+              <td class="pad"
+                  style="padding:18px 40px 28px 40px;
+                         background:#f9f9f4;border-top:1px solid #eeeae0;">
+                <p style="margin:0;font-family:'Courier New',Courier,monospace;
+                          font-size:10px;letter-spacing:0.16em;color:#7a8074;
+                          line-height:16px;">
+                  © {% now "Y" %} IGNITE PRODUCTIONS LLC
+                </p>
+              </td>
+            </tr>
+          </table>
+
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>

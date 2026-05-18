@@ -32,6 +32,7 @@ from .envelopes import (
     RequestCreatedNotificationMailer,
     RequestorRequestCreatedMailer,
     RmmAssignedRequestMailer,
+    NoteMentionMailer,
 )
 from .routing import (
     assign_rmm_for_request,
@@ -3122,6 +3123,161 @@ class RequestMutations:
                 success=False,
                 message=str(e),
                 input_obj=input,
+            )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def notify_note_mention(
+        self,
+        info: strawberry.Info,
+        input: inputs.NotifyNoteMentionInput,
+    ) -> types.NotifyNoteMentionResponse:
+        """
+        Send a branded email to each recipient telling them they were
+        @-mentioned in an internal note on a request. Notes themselves
+        aren't persisted server-side yet (localStorage only); this
+        mutation is purely the notification fanout.
+
+        Anti-spam:
+          - Recipient emails are deduped.
+          - Caller must be authenticated (StrictIsAuthenticated).
+          - Each recipient is sent inline (no queue/Redis); a failure
+            on one email is logged and skipped, others continue.
+        """
+        try:
+            service = RequestMutationService()
+            user: User = await service.get_user(info)
+
+            # Resolve the request — tenant membership check piggy-backs
+            # off the existing get_tenant guard.
+            try:
+                request_id = resolve_id_to_int(input.request_id)
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Invalid request ID.")
+
+            request_obj: models.Request = await sync_to_async(
+                models.Request.objects.select_related(
+                    "tenant", "retailer"
+                ).get
+            )(id=request_id)
+
+            tenant: Tenant = await sync_to_async(Tenant.objects.get)(
+                id=request_obj.tenant_id
+            )
+            is_spark_admin = await user.role.is_spark_admin
+            if not is_spark_admin:
+                try:
+                    await sync_to_async(user.get_tenant)(tenant_id=tenant.id)
+                except Exception:
+                    raise GraphQLError(
+                        "You are not authorized to send notes on this tenant."
+                    )
+
+            body = (input.note_body or "").strip()
+            if not body:
+                raise GraphQLError("Note body is empty.")
+
+            # Dedupe + lowercase normalize recipient list.
+            seen: set[str] = set()
+            recipients: list[str] = []
+            for raw in input.recipient_emails or []:
+                email = (raw or "").strip().lower()
+                if email and email not in seen:
+                    seen.add(email)
+                    recipients.append(email)
+            if not recipients:
+                raise GraphQLError("No recipients to notify.")
+
+            author_name = (
+                user.get_full_name() or user.email or "A teammate"
+            ).strip()
+            author_email = (user.email or "").strip() or None
+
+            base = getattr(
+                settings,
+                "ADMIN_FRONTEND_URL",
+                "https://spark-new-admin.web.app",
+            ).rstrip("/")
+            request_url = (
+                (input.request_url or "").strip()
+                or f"{base}/request/view/{request_obj.uuid}"
+            )
+
+            # Best-effort: per-recipient mailer so one bad address
+            # doesn't drop the whole batch.
+            sent = 0
+            failed: list[str] = []
+            for to_email in recipients:
+                # Try to look up the recipient user for a friendlier
+                # greeting. Not having a user row isn't fatal — we'll
+                # fall back to "there".
+                target_user = await sync_to_async(
+                    lambda: User.objects.filter(email__iexact=to_email).first()
+                )()
+                mentioned_name = (
+                    (target_user.get_full_name() if target_user else None)
+                    or (target_user.email if target_user else None)
+                    or None
+                )
+                mailer = NoteMentionMailer(
+                    request=request_obj,
+                    mentioned_email=to_email,
+                    mentioned_name=mentioned_name,
+                    note_body=body,
+                    author_name=author_name,
+                    author_email=author_email,
+                    request_url=request_url,
+                )
+                try:
+                    await sync_to_async(mailer.send)()
+                    sent += 1
+                except Exception as exc:
+                    import logging
+                    logging.getLogger(__name__).exception(
+                        "note-mention email failed for %s on request_id=%s: %s",
+                        to_email,
+                        request_obj.id,
+                        exc,
+                    )
+                    failed.append(to_email)
+
+            return build_mutation_response(
+                types.NotifyNoteMentionResponse,
+                success=len(failed) == 0,
+                message=(
+                    f"Notified {sent} teammate{'s' if sent != 1 else ''}."
+                    if not failed
+                    else f"Notified {sent}, failed {len(failed)}."
+                ),
+                input_obj=input,
+                sent_count=sent,
+                failed_emails=failed or None,
+            )
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.NotifyNoteMentionResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+                sent_count=0,
+                failed_emails=None,
+            )
+        except models.Request.DoesNotExist:
+            return build_mutation_response(
+                types.NotifyNoteMentionResponse,
+                success=False,
+                message="Request not found.",
+                input_obj=input,
+                sent_count=0,
+                failed_emails=None,
+            )
+        except Exception as e:
+            return build_mutation_response(
+                types.NotifyNoteMentionResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+                sent_count=0,
+                failed_emails=None,
             )
 
 
