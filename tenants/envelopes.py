@@ -43,28 +43,15 @@ class MagicLinkMailer(Mailer):
         return Envelope(
             subject="Your Spark sign-in link",
             template="tenants.templates.emails.magic_link",
+            from_email="Spark by Ignite <staffing@igniteproductions.co>",
             to_emails=[self.user.email],
+            headers={"Reply-To": "staffing@igniteproductions.co"},
             context={
                 "user": self.user,
                 "first_name": first,
                 "link": self.link,
                 "expires_minutes": self.expires_minutes,
             },
-            # html fallback in case the template isn't packaged in the
-            # container — keeps magic-link login working from day one.
-            html=(
-                f"<p>Hey {first},</p>"
-                f"<p>Click this link to sign in to Spark. It expires in "
-                f"{self.expires_minutes} minutes.</p>"
-                f'<p><a href="{self.link}" '
-                f'style="background:#c5f546;color:#0a0d09;padding:12px 20px;'
-                f'border-radius:12px;text-decoration:none;font-weight:600;">'
-                f"Sign in to Spark →</a></p>"
-                f"<p>If the button doesn't work, paste this in your browser:<br/>"
-                f'<a href="{self.link}">{self.link}</a></p>'
-                f"<p>If you didn't request this, you can ignore the email.</p>"
-                f"<p>— The Ignite team</p>"
-            ),
         )
 
 
