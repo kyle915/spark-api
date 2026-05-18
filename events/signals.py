@@ -23,11 +23,26 @@ def sync_event_on_create_or_update(sender, instance: Event, created: bool, **kwa
             f"Event {instance.id} created by ambassador, skipping sync (will be handled by AmbassadorEvent)")
         return
 
-    queues.default.add(sync_event_to_all_connected_users, instance.id)
+    # Calendar sync is best-effort. Cloud Run has no Redis, so RQ enqueue
+    # will raise — we don't want that to bubble up and abort Event.save()
+    # (which would break approve_request, create_event, etc).
+    try:
+        queues.default.add(sync_event_to_all_connected_users, instance.id)
+    except Exception as exc:
+        logger.warning(
+            f"Skipping calendar sync for event {instance.id} — queue unavailable: {exc}"
+        )
 
 
 @receiver(post_save, sender=AmbassadorEvent)
 def sync_event_for_ambassador(sender, instance: AmbassadorEvent, created: bool, **kwargs):
-    from events.jobs.google_calendar_jobs import EventGoogleCalendarJob
-    job: EventGoogleCalendarJob = EventGoogleCalendarJob(instance.event_id)
-    job.send_to_ambassadors()
+    # Same best-effort posture — don't let calendar sync abort the
+    # ambassador-event save path.
+    try:
+        from events.jobs.google_calendar_jobs import EventGoogleCalendarJob
+        job: EventGoogleCalendarJob = EventGoogleCalendarJob(instance.event_id)
+        job.send_to_ambassadors()
+    except Exception as exc:
+        logger.warning(
+            f"Skipping ambassador calendar sync for event {instance.event_id}: {exc}"
+        )
