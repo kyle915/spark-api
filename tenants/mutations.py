@@ -508,10 +508,11 @@ class SparkUserMutations:
             mailer = MagicLinkMailer(
                 user=user, link=link, expires_minutes=MAGIC_LINK_TTL_SECONDS // 60,
             )
-            await mailer.send_async()
+            # send_async_now bypasses the django-rq queue (Redis isn't
+            # provisioned on Cloud Run) and dispatches the email
+            # synchronously via the Resend driver.
+            await mailer.send_async_now()
         except Exception:
-            # Log only — return generic message to the caller. We don't
-            # want to leak whether the user exists via error text.
             import logging
             logging.getLogger(__name__).exception(
                 "Magic-link email failed for %s; link=%s", email, link,
