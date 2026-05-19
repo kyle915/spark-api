@@ -484,6 +484,14 @@ class OAuthUserType:
 
 
 @strawberry.type
+class InviteAmbassadorToShiftResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    ambassador_event_uuid: strawberry.ID | None = None
+
+
+@strawberry.type
 class RespondToShiftOfferResponse:
     success: bool
     message: str
