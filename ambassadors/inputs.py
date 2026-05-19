@@ -525,6 +525,19 @@ class GoogleSignInInput(SparkGraphQLInput):
 
 
 @strawberry.input
+class InviteAmbassadorToShiftInput(SparkGraphQLInput):
+    """Admin invites a specific BA to a specific event.
+
+    Creates an AmbassadorEvent (is_approved=False), which fires the
+    existing post_save signal → "New shift offered" push to the
+    BA's mobile device.
+    """
+
+    ambassador_id: strawberry.ID
+    event_id: strawberry.ID
+
+
+@strawberry.input
 class RespondToShiftOfferInput(SparkGraphQLInput):
     """BA's response to a shift invitation pushed from the admin app.
 

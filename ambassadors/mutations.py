@@ -58,6 +58,7 @@ from .types import (
     OAuthSignInResponse,
     LocationPingResponse,
     RespondToShiftOfferResponse,
+    InviteAmbassadorToShiftResponse,
 )
 from . import inputs
 from .services import (
@@ -227,6 +228,82 @@ class AmbassadorMutations:
 
         return ApplyAmbassadorEventResponse(
             success=True, message="Application successful", application=application
+        )
+
+    @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
+    async def invite_ambassador_to_shift(
+        self,
+        info: strawberry.Info,
+        input: inputs.InviteAmbassadorToShiftInput,
+    ) -> InviteAmbassadorToShiftResponse:
+        """Admin invites a specific BA to a specific event.
+
+        Creates an `AmbassadorEvent` row with `is_approved=False`.
+        The existing post_save signal fans out:
+          - "New shift offered" push to the BA's device
+          - Google Calendar sync if the BA is connected
+        BA can then accept / decline via the mobile shift-offer
+        screen, which flips is_approved=True (accept) or deletes
+        the row (decline).
+
+        Idempotent on (ambassador, event) — re-inviting the same
+        BA returns success=False with a helpful message so admins
+        don't accidentally double-push.
+        """
+        user = info.context.request.user
+
+        try:
+            resolved_ambassador_id = resolve_id_to_int(input.ambassador_id)
+            ambassador = await Ambassador.objects.aget(id=resolved_ambassador_id)
+        except (Ambassador.DoesNotExist, ValueError, TypeError, GraphQLError):
+            return InviteAmbassadorToShiftResponse(
+                success=False,
+                message="Ambassador not found.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        try:
+            resolved_event_id = resolve_id_to_int(input.event_id)
+            event = await Event.objects.select_related("tenant").aget(
+                id=resolved_event_id
+            )
+        except (Event.DoesNotExist, ValueError, TypeError, GraphQLError):
+            return InviteAmbassadorToShiftResponse(
+                success=False,
+                message="Event not found.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        if await AmbassadorEvent.objects.filter(
+            ambassador=ambassador, event=event
+        ).aexists():
+            return InviteAmbassadorToShiftResponse(
+                success=False,
+                message="This BA is already invited to this shift.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        try:
+            ae = await AmbassadorEvent.objects.acreate(
+                ambassador=ambassador,
+                event=event,
+                tenant=event.tenant,
+                is_approved=False,
+                created_by=user,
+                updated_by=user,
+            )
+        except Exception as exc:
+            return InviteAmbassadorToShiftResponse(
+                success=False,
+                message=f"Could not create invite: {exc}",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        return InviteAmbassadorToShiftResponse(
+            success=True,
+            message="Invite sent. The BA has been notified.",
+            client_mutation_id=input.client_mutation_id,
+            ambassador_event_uuid=strawberry.ID(str(ae.uuid)),
         )
 
     @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
