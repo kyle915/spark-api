@@ -454,7 +454,15 @@ class RequestBatchTemplateResponse:
     success: bool
     message: str
     client_mutation_id: strawberry.ID | None = None
+    # Public URL to a GCS-hosted copy. Legacy path — requires the
+    # Cloud Run service account to have storage.objects.create on
+    # the import-templates prefix. Kept for backward compat.
     file_url: str | None = None
+    # Base64-encoded XLSX bytes inlined into the response. Preferred
+    # — no GCS round-trip, no IAM dependencies, ~30 kB inline is
+    # cheap. Front-end decodes into a Blob and triggers download.
+    file_base64: str | None = None
+    file_name: str | None = None
 
 
 @strawberry.type
