@@ -415,6 +415,23 @@ class PublicAmbassadorCreationService(BaseAmbassadorService):
                 )
                 await generated_password_email.send_async()
 
+            # Best-effort admin alert — same posture as the OAuth path.
+            # Only fires for public (non-admin-created) signups; when an
+            # admin creates an ambassador they already know about it.
+            if not is_admin_created:
+                try:
+                    from ambassadors.envelopes import NewAmbassadorAlertMailer
+
+                    alert = NewAmbassadorAlertMailer(ambassador, provider="email")
+                    await alert.send_async()
+                except Exception:
+                    import logging
+
+                    logging.getLogger(__name__).exception(
+                        "new ambassador alert email failed for ambassador_id=%s",
+                        ambassador.id,
+                    )
+
             return build_mutation_response(
                 PublicAmbassadorCreationResponse,
                 success=True,
@@ -3615,15 +3632,31 @@ class OAuthSignInService(BaseAmbassadorService):
                 defaults={"verified": True, "archived": False},
             )
             # Ambassador profile — starts pending admin approval.
-            Ambassador.objects.create(
+            ambassador = Ambassador.objects.create(
                 user=user,
                 is_active=False,
                 created_by=user,
                 updated_by=user,
             )
-            return user
+            return user, ambassador
 
-        return await make_user(), True
+        user, ambassador = await make_user()
+
+        # Best-effort admin alert. Swallow failures so the user
+        # still gets signed in if email is down.
+        try:
+            from ambassadors.envelopes import NewAmbassadorAlertMailer
+
+            mailer = NewAmbassadorAlertMailer(ambassador, provider=provider)
+            await mailer.send_async()
+        except Exception:
+            import logging
+
+            logging.getLogger(__name__).exception(
+                "new ambassador alert email failed for user_id=%s", user.id
+            )
+
+        return user, True
 
     @classmethod
     async def sign_in_with_apple(
