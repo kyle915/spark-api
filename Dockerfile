@@ -22,6 +22,11 @@ RUN uv sync --frozen --no-dev
 
 COPY . /code
 
+RUN chmod +x /code/scripts/entrypoint.sh
+
 EXPOSE 8000
 
-CMD ["uv", "run", "hypercorn", "config.asgi:application", "--bind", "0.0.0.0:8000"]
+# Entry-point honors $PORT (Cloud Run injects this — typically 8080)
+# and runs `manage.py migrate --noinput` before exec'ing hypercorn,
+# so each new image lands its migrations on first container boot.
+CMD ["/code/scripts/entrypoint.sh"]
