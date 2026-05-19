@@ -2579,6 +2579,78 @@ async def _notify_requestor_for_request_declined(
     await sync_to_async(mailer.send)(delay_seconds=delay_seconds)
 
 
+async def _push_requestor_for_request_verdict(
+    request: models.Request,
+    *,
+    approved: bool,
+    decline_reason: str | None = None,
+) -> None:
+    """Push the approve / decline outcome to the requestor's mobile.
+
+    Best-effort. Finds the User by the request's `requestor_email`
+    (falls back to created_by) and fires the existing send-push helper
+    via the django-rq queue. Email delivery is handled separately by
+    `_notify_requestor_for_request_approved` / _declined; this is
+    additive — mobile users who'd otherwise have to refresh the app
+    get a real-time ping.
+
+    Swallows every exception so a push hiccup doesn't roll back the
+    approve/decline (the email + status change still ship).
+    """
+    try:
+        from ambassadors.push import enqueue_push
+
+        recipient_email = (
+            getattr(request, "requestor_email", None)
+            or ""
+        ).strip().lower()
+        recipient_user_id: int | None = None
+        if recipient_email:
+            recipient_user_id = await sync_to_async(
+                lambda: User.objects.filter(email__iexact=recipient_email)
+                .values_list("id", flat=True)
+                .first()
+            )()
+        if not recipient_user_id:
+            recipient_user_id = getattr(request, "created_by_id", None)
+        if not recipient_user_id:
+            return
+
+        venue = (getattr(request, "retailer_name", None) or "").strip()
+        name = (
+            getattr(request, "name", None)
+            or venue
+            or f"Request R-{str(getattr(request, 'uuid', ''))[-4:].upper()}"
+        )[:80]
+
+        if approved:
+            title = "Request approved"
+            body = f"{name} is approved. Ignite ops will staff it."
+        else:
+            reason = (decline_reason or "").strip()
+            title = "Request declined"
+            body = (
+                f"{name} was declined."
+                + (f" Reason: {reason}" if reason else "")
+            )[:200]
+
+        enqueue_push(
+            recipient_user_id,
+            title=title,
+            body=body,
+            data={
+                "screen": "request",
+                "requestUuid": str(getattr(request, "uuid", "")),
+                "verdict": "approved" if approved else "declined",
+            },
+        )
+    except Exception:
+        logger.exception(
+            "push requestor verdict notify failed for request_id=%s",
+            getattr(request, "id", None),
+        )
+
+
 async def _notify_requestor_for_request_auto_approved(
     request: models.Request,
     location: models.Location | None,
@@ -2985,6 +3057,7 @@ class RequestMutations:
             location = await _resolve_request_location(request)
             await _notify_notification_group_users_for_request(request, location)
             await _notify_requestor_for_request_approved(request, location)
+            await _push_requestor_for_request_verdict(request, approved=True)
 
             return build_mutation_response(
                 types.ApproveRequestResponse,
@@ -3065,6 +3138,11 @@ class RequestMutations:
                 location=location,
                 reviewed_by_name=reviewed_by_name,
                 reviewed_by_email=reviewed_by_email,
+            )
+            await _push_requestor_for_request_verdict(
+                request,
+                approved=False,
+                decline_reason=input.decline_reason,
             )
 
             return build_mutation_response(

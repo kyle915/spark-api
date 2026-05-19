@@ -18,6 +18,13 @@ class Tenant(Asyncable, models.Model):
     image = models.ImageField(upload_to="tenants/images", null=True)
     request_url_name = models.CharField(max_length=100, unique=True, null=True)
     slug = models.SlugField(max_length=50, null=True)
+    # Per-tenant Google Sheet that mirrors the Master Tracker. Set by
+    # admins via the front-end "Link Sheet" chip; the "Copy for Sheets"
+    # TSV path expects this URL to live somewhere persistent. Storing
+    # here (instead of localStorage) means every teammate sees the
+    # same link from any device, and Phase 2 sync workers know which
+    # sheet to write back to.
+    linked_sheet_url = models.URLField(max_length=512, null=True, blank=True)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,

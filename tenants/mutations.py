@@ -1532,6 +1532,16 @@ class UpdateTenantInput(SparkGraphQLInput):
     image: str | None = None
 
 
+@strawberry.input
+class SetLinkedSheetInput(SparkGraphQLInput):
+    """Set or clear the Master-Tracker-linked Google Sheet for a tenant."""
+
+    # Defaults to the active tenant when omitted.
+    tenant_id: strawberry.ID | None = None
+    # Empty string / null clears the link.
+    sheet_url: str | None = None
+
+
 @strawberry.type
 class UpdateTenantResponse:
     success: bool
@@ -1783,6 +1793,93 @@ class SparkTenantMutations:
                 message=f"Error updating tenant: {e}",
                 client_mutation_id=input.client_mutation_id,
             )
+
+    @relay.mutation
+    async def set_linked_sheet(
+        self,
+        info: strawberry.Info,
+        input: SetLinkedSheetInput,
+    ) -> UpdateTenantResponse:
+        """Set or clear the tenant's linked Master-Tracker Google Sheet.
+
+        Stored on Tenant.linked_sheet_url. Front-end LinkedSheetChip
+        and per-page deep-link buttons read it from the tenant query
+        instead of localStorage so every teammate sees the same link
+        from every device. Phase-2 sync workers also use this URL.
+
+        Auth: any signed-in user in the tenant can set/clear. We
+        don't require spark-admin because client-side users with the
+        permissions to see the Master Tracker should be able to wire
+        their own integration.
+        """
+        user = info.context.request.user
+        if not user.is_authenticated:
+            return UpdateTenantResponse(
+                success=False,
+                message="User not authenticated.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        # Resolve target tenant — explicit input wins, otherwise use the
+        # request's bound tenant.
+        try:
+            if input.tenant_id:
+                tenant_id = resolve_id_to_int(input.tenant_id)
+            else:
+                bound = await sync_to_async(user.get_tenant)()
+                tenant_id = bound.id if bound else None
+            if not tenant_id:
+                return UpdateTenantResponse(
+                    success=False,
+                    message="No tenant in scope.",
+                    client_mutation_id=input.client_mutation_id,
+                )
+            tenant = await sync_to_async(Tenant.objects.get)(pk=tenant_id)
+        except (Tenant.DoesNotExist, GraphQLError, ValueError, TypeError):
+            return UpdateTenantResponse(
+                success=False,
+                message="Tenant not found.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        # Light sanity check — accept blank/None to clear, otherwise
+        # require an https URL pointing at docs.google.com.
+        url = (input.sheet_url or "").strip()
+        if url and not url.startswith("https://"):
+            return UpdateTenantResponse(
+                success=False,
+                message="Sheet URL must start with https://.",
+                client_mutation_id=input.client_mutation_id,
+            )
+        if url and "docs.google.com" not in url:
+            return UpdateTenantResponse(
+                success=False,
+                message="That doesn't look like a Google Sheets URL.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        @sync_to_async
+        def save():
+            tenant.linked_sheet_url = url or None
+            tenant.updated_by = user
+            tenant.save(update_fields=["linked_sheet_url", "updated_by", "updated_at"])
+            return tenant
+
+        try:
+            saved = await save()
+        except Exception as exc:
+            return UpdateTenantResponse(
+                success=False,
+                message=f"Could not save: {exc}",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        return UpdateTenantResponse(
+            success=True,
+            message="Linked sheet cleared." if not url else "Linked sheet saved.",
+            tenant=saved,
+            client_mutation_id=input.client_mutation_id,
+        )
 
 
 @strawberry.type
