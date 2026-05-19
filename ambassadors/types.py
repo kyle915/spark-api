@@ -484,6 +484,29 @@ class OAuthUserType:
 
 
 @strawberry.type
+class LocationPingType:
+    """Slim shape — what the Today map actually renders."""
+
+    uuid: strawberry.ID
+    lat: float
+    lng: float
+    accuracy_meters: float | None
+    recorded_at: str
+    source: str
+    ambassador_uuid: strawberry.ID
+    ambassador_name: str
+    event_uuid: strawberry.ID
+    event_name: str
+
+
+@strawberry.type
+class LocationPingResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+
+
+@strawberry.type
 class OAuthSignInResponse:
     """Response for the mobile appleSignIn / googleSignIn mutations.
 

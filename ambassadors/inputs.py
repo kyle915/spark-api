@@ -522,3 +522,21 @@ class GoogleSignInInput(SparkGraphQLInput):
     """Google ID token sign-in."""
 
     id_token: str
+
+
+@strawberry.input
+class LocationPingInput(SparkGraphQLInput):
+    """A GPS reading the spark-mobile activation tracker fires every
+    ~2 min during an active shift. The mobile client supplies the
+    Event uuid so we can scope the ping to the shift the BA is on,
+    plus the recorded-at timestamp so freshness math doesn't depend
+    on the server clock."""
+
+    event_uuid: strawberry.ID
+    lat: float
+    lng: float
+    accuracy_meters: float | None = None
+    # ISO-8601. If omitted we fall back to the server clock.
+    recorded_at: str | None = None
+    # "foreground" | "background" | "clock_in" | "clock_out"
+    source: str | None = "background"

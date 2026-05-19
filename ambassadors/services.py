@@ -48,6 +48,7 @@ from .models import (
     Attendance,
     AttendanceType,
     PushDevice,
+    LocationPing,
 )
 from jobs import models as job_models
 from .types import (
@@ -82,6 +83,7 @@ from .types import (
     OAuthSignInResponse,
     OAuthTokenType,
     OAuthUserType,
+    LocationPingResponse,
 )
 from events.models import Client
 from . import inputs
@@ -3762,4 +3764,117 @@ class OAuthSignInService(BaseAmbassadorService):
                 last_name=user.last_name or None,
             ),
             is_new_account=is_new,
+        )
+
+
+class LocationPingService(BaseAmbassadorService):
+    """Ingest GPS pings the spark-mobile activation tracker sends every
+    ~2 min. The mutation is intentionally cheap — no validation beyond
+    "the BA is on this event" — so the mobile client can fire-and-forget
+    on a flaky cellular connection without backpressuring the user.
+    """
+
+    @classmethod
+    async def record(
+        cls,
+        input: "inputs.LocationPingInput",
+        info: strawberry.Info,
+    ) -> LocationPingResponse:
+        user = info.context.request.user
+        if not getattr(user, "is_authenticated", False):
+            return build_mutation_response(
+                LocationPingResponse,
+                success=False,
+                message="Authentication required.",
+                input_obj=input,
+            )
+
+        # The ping is BA-scoped — anybody else hitting this is misuse.
+        try:
+            ambassador = await sync_to_async(
+                lambda: Ambassador.objects.filter(user=user).first()
+            )()
+        except Exception:
+            ambassador = None
+        if not ambassador:
+            return build_mutation_response(
+                LocationPingResponse,
+                success=False,
+                message="No ambassador profile.",
+                input_obj=input,
+            )
+
+        # Event lookup — accept opaque relay IDs or raw uuids.
+        from events.models import Event as EventModel
+
+        event_uuid = str(input.event_uuid or "")
+        try:
+            # Strip Relay base64 prefix if present.
+            try:
+                from utils.graphql.mixins import resolve_id_to_int
+
+                # If it's a Relay id, resolve_id_to_int returns an int —
+                # which means it isn't a uuid. We fall back to id lookup.
+                int_id = resolve_id_to_int(event_uuid)
+            except Exception:
+                int_id = None
+
+            if int_id is not None:
+                event = await sync_to_async(
+                    lambda: EventModel.objects.filter(id=int_id).only("id").first()
+                )()
+            else:
+                event = await sync_to_async(
+                    lambda: EventModel.objects.filter(uuid=event_uuid).only("id").first()
+                )()
+        except Exception:
+            event = None
+        if not event:
+            return build_mutation_response(
+                LocationPingResponse,
+                success=False,
+                message="Event not found.",
+                input_obj=input,
+            )
+
+        # Timestamp — trust client when supplied, fall back to server.
+        recorded_at = timezone.now()
+        if input.recorded_at:
+            try:
+                # parse iso datetime (with or without trailing Z)
+                dt_str = input.recorded_at.replace("Z", "+00:00")
+                recorded_at = datetime.fromisoformat(dt_str)
+            except Exception:
+                # Bad timestamp from the device — keep server time.
+                pass
+
+        source = (input.source or "background").strip().lower()
+        if source not in {"foreground", "background", "clock_in", "clock_out"}:
+            source = "background"
+
+        try:
+            await sync_to_async(
+                lambda: LocationPing.objects.create(
+                    ambassador=ambassador,
+                    event=event,
+                    lat=float(input.lat),
+                    lng=float(input.lng),
+                    accuracy_meters=input.accuracy_meters,
+                    recorded_at=recorded_at,
+                    source=source,
+                )
+            )()
+        except Exception as exc:
+            return build_mutation_response(
+                LocationPingResponse,
+                success=False,
+                message=f"Could not record ping: {exc}",
+                input_obj=input,
+            )
+
+        return build_mutation_response(
+            LocationPingResponse,
+            success=True,
+            message="ok",
+            input_obj=input,
         )

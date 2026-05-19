@@ -56,6 +56,7 @@ from .types import (
     AddAmbassadorsToGroupResponse,
     RegisterPushTokenResponse,
     OAuthSignInResponse,
+    LocationPingResponse,
 )
 from . import inputs
 from .services import (
@@ -84,6 +85,7 @@ from .services import (
     AmbassadorGroupMutationService,
     RegisterPushTokenService,
     OAuthSignInService,
+    LocationPingService,
     set_ambassador_job_real_amount_from_clock_out,
 )
 from .envelopes import AmbassadorEventApplicationMailer, NotifyApplicationToClientMailer
@@ -520,6 +522,14 @@ class AmbassadorMobileMutations:
         input: inputs.GoogleSignInInput,
     ) -> OAuthSignInResponse:
         return await OAuthSignInService.sign_in_with_google(input, info)
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def location_ping(
+        self,
+        info: strawberry.Info,
+        input: inputs.LocationPingInput,
+    ) -> LocationPingResponse:
+        return await LocationPingService.record(input, info)
 
 
 @strawberry.type

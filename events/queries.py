@@ -1,6 +1,7 @@
 import datetime
 import logging
-from typing import List
+from datetime import timedelta
+from typing import Annotated, List
 
 import strawberry
 from enum import Enum
@@ -730,6 +731,78 @@ class EventQueries:
             before=before,
             queryset=queryset,
         )
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def recent_location_pings(
+        self,
+        info: strawberry.Info,
+        within_minutes: int = 30,
+        tenant_id: strawberry.ID | None = None,
+    ) -> List[Annotated["LocationPingType", strawberry.lazy("ambassadors.types")]]:
+        """Latest GPS ping per Ambassador within the last N minutes.
+
+        Powers the "Today, on the ground" admin map. Returns one row
+        per Ambassador (the freshest ping), filtered to today's events
+        in the requested tenant. Older pings get superseded by newer
+        ones so the map shows the BA's current location, not a trail.
+
+        within_minutes defaults to 30 (recent enough to be "live" given
+        the mobile pinger fires every ~2 min). Bumping to 60+ lets ops
+        see slightly-stale pings during connectivity dropouts.
+        """
+        from ambassadors.models import LocationPing as LocationPingModel
+        from ambassadors.types import LocationPingType
+        from django.db.models import Max
+
+        service = EventQueriesService()
+        resolved_tenant_id = await service.resolve_tenant_id(
+            info, tenant_id=tenant_id
+        )
+
+        cutoff = timezone.now() - timedelta(minutes=within_minutes)
+
+        def _fetch() -> List:
+            qs = (
+                LocationPingModel.objects.filter(
+                    recorded_at__gte=cutoff,
+                    event__tenant_id=resolved_tenant_id,
+                )
+                .select_related(
+                    "ambassador",
+                    "ambassador__user",
+                    "event",
+                )
+                .order_by("ambassador_id", "-recorded_at")
+            )
+            # Collapse to latest-per-ambassador in Python rather than
+            # PostgreSQL's DISTINCT ON, so the query plan stays portable.
+            latest_per_ba: dict[int, LocationPingModel] = {}
+            for p in qs:
+                if p.ambassador_id not in latest_per_ba:
+                    latest_per_ba[p.ambassador_id] = p
+            out: List = []
+            for p in latest_per_ba.values():
+                name = (
+                    f"{(p.ambassador.user.first_name or '').strip()} "
+                    f"{(p.ambassador.user.last_name or '').strip()}"
+                ).strip() or (p.ambassador.user.email or "(BA)")
+                out.append(
+                    LocationPingType(
+                        uuid=strawberry.ID(str(p.uuid)),
+                        lat=p.lat,
+                        lng=p.lng,
+                        accuracy_meters=p.accuracy_meters,
+                        recorded_at=p.recorded_at.isoformat(),
+                        source=p.source,
+                        ambassador_uuid=strawberry.ID(str(p.ambassador.uuid)),
+                        ambassador_name=name,
+                        event_uuid=strawberry.ID(str(p.event.uuid)),
+                        event_name=p.event.name or "(event)",
+                    )
+                )
+            return out
+
+        return await sync_to_async(_fetch, thread_sensitive=True)()
 
 
 class EventTypeQueriesService(BaseEventQueriesService):
