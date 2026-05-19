@@ -19,6 +19,7 @@ class TenantType(Node):
     name: strawberry.auto
     slug: strawberry.auto
     request_url_name: strawberry.auto
+    linked_sheet_url: strawberry.auto
 
     @strawberry.field(name="image")
     def image_url(self) -> str | None:

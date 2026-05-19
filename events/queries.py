@@ -878,6 +878,14 @@ class RequestQueriesService(BaseEventQueriesService):
                 "request_product__product",
                 "event_set",
                 "event_set__tenant",
+                # Master Tracker RECAP chip + /request/view Field
+                # Reports panel both traverse Request → events → recaps.
+                # Without this prefetch each row would trigger a
+                # separate `Event.objects.filter(...)` *and* a
+                # `Recap.objects.filter(...)` query (N+1×2 per page).
+                # Limit to id-only fields on Recap since neither
+                # consumer needs the full recap detail at list time.
+                "event_set__recaps",
             )
         )
 
