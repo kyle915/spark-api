@@ -290,6 +290,14 @@ ONESIGNAL_API_URL = env("ONESIGNAL_API_URL", default="https://api.onesignal.com"
 ONESIGNAL_TARGET_CHANNEL = env("ONESIGNAL_TARGET_CHANNEL", default="push")
 ONESIGNAL_TIMEOUT_SECONDS = env.float("ONESIGNAL_TIMEOUT_SECONDS", default=10.0)
 
+# Expo Push relay (used by spark-mobile via expo-notifications).
+# EXPO_PUSH_ACCESS_TOKEN is optional — recommended in production so
+# Expo can throttle/identify the sender. Without it, requests still
+# succeed but are subject to anonymous rate limits.
+EXPO_PUSH_API_URL = env("EXPO_PUSH_API_URL", default="https://exp.host/--/api/v2/push")
+EXPO_PUSH_ACCESS_TOKEN = env("EXPO_PUSH_ACCESS_TOKEN", default="")
+EXPO_PUSH_TIMEOUT_SECONDS = env.float("EXPO_PUSH_TIMEOUT_SECONDS", default=10.0)
+
 # Gemini AI Configuration
 GEMINI_API_KEY = env("GEMINI_API_KEY", default="")
 
