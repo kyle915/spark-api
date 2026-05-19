@@ -298,6 +298,31 @@ EXPO_PUSH_API_URL = env("EXPO_PUSH_API_URL", default="https://exp.host/--/api/v2
 EXPO_PUSH_ACCESS_TOKEN = env("EXPO_PUSH_ACCESS_TOKEN", default="")
 EXPO_PUSH_TIMEOUT_SECONDS = env.float("EXPO_PUSH_TIMEOUT_SECONDS", default=10.0)
 
+# Sign in with Apple — `aud` claims we accept on identity tokens.
+# Comma-separated list of bundle ids / services ids. Defaults to the
+# spark-mobile bundle id.
+APPLE_OAUTH_AUDIENCES = env.list(
+    "APPLE_OAUTH_AUDIENCES",
+    default=["co.igniteproductions.spark"],
+)
+APPLE_OAUTH_KEYS_URL = env(
+    "APPLE_OAUTH_KEYS_URL", default="https://appleid.apple.com/auth/keys"
+)
+APPLE_OAUTH_ISSUER = env(
+    "APPLE_OAUTH_ISSUER", default="https://appleid.apple.com"
+)
+
+# Sign in with Google — `aud` claims we accept on id tokens. The web
+# client id is used by the legacy admin app; the iOS client id is what
+# spark-mobile sends. Both should be listed.
+GOOGLE_OAUTH_AUDIENCES = env.list(
+    "GOOGLE_OAUTH_AUDIENCES",
+    default=[
+        # Web client (existing).
+        "490085168610-ork3r7pnev7e9ksmkf1osp7v6c34g851.apps.googleusercontent.com",
+    ],
+)
+
 # Gemini AI Configuration
 GEMINI_API_KEY = env("GEMINI_API_KEY", default="")
 

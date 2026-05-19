@@ -465,3 +465,37 @@ class RegisterPushTokenResponse:
     success: bool
     message: str
     client_mutation_id: strawberry.ID | None = None
+
+
+@strawberry.type
+class OAuthTokenType:
+    """Mirrors the gqlauth TokenType shape mobile expects."""
+
+    token: str
+    refresh_token: str | None = None
+
+
+@strawberry.type
+class OAuthUserType:
+    uuid: strawberry.ID
+    email: str
+    first_name: str | None = None
+    last_name: str | None = None
+
+
+@strawberry.type
+class OAuthSignInResponse:
+    """Response for the mobile appleSignIn / googleSignIn mutations.
+
+    Shape mirrors what the LoginScreen consumes:
+        { token { token, refreshToken }, user { uuid, email, firstName, lastName } }
+    Plus a ``success`` / ``message`` envelope so we can surface
+    verification errors without throwing.
+    """
+
+    success: bool
+    message: str
+    token: OAuthTokenType | None = None
+    user: OAuthUserType | None = None
+    is_new_account: bool = False
+    client_mutation_id: strawberry.ID | None = None

@@ -503,3 +503,22 @@ class RegisterPushTokenInput(SparkGraphQLInput):
     platform: str  # "ios" | "android" | "web"
     device_name: str | None = None
     app_version: str | None = None
+
+
+@strawberry.input
+class AppleSignInInput(SparkGraphQLInput):
+    """Sign in with Apple — identity token issued by Apple to the device."""
+
+    id_token: str
+    # Apple only sends name/email on the FIRST sign-in. The mobile client
+    # caches whatever it got and resends it on every call so we can fill
+    # in the user's name on initial account creation.
+    first_name: str | None = None
+    last_name: str | None = None
+
+
+@strawberry.input
+class GoogleSignInInput(SparkGraphQLInput):
+    """Google ID token sign-in."""
+
+    id_token: str

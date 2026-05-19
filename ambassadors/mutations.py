@@ -55,6 +55,7 @@ from .types import (
     AmbassadorGroupResponse,
     AddAmbassadorsToGroupResponse,
     RegisterPushTokenResponse,
+    OAuthSignInResponse,
 )
 from . import inputs
 from .services import (
@@ -82,6 +83,7 @@ from .services import (
     GroupTypeMutationService,
     AmbassadorGroupMutationService,
     RegisterPushTokenService,
+    OAuthSignInService,
     set_ambassador_job_real_amount_from_clock_out,
 )
 from .envelopes import AmbassadorEventApplicationMailer, NotifyApplicationToClientMailer
@@ -500,6 +502,24 @@ class AmbassadorMobileMutations:
         input: inputs.RegisterPushTokenInput,
     ) -> RegisterPushTokenResponse:
         return await RegisterPushTokenService.register(input, info)
+
+    # NB: no permission class — sign-in is the path to becoming
+    # authenticated, so requiring auth would be a chicken-and-egg.
+    @relay.mutation
+    async def apple_sign_in(
+        self,
+        info: strawberry.Info,
+        input: inputs.AppleSignInInput,
+    ) -> OAuthSignInResponse:
+        return await OAuthSignInService.sign_in_with_apple(input, info)
+
+    @relay.mutation
+    async def google_sign_in(
+        self,
+        info: strawberry.Info,
+        input: inputs.GoogleSignInInput,
+    ) -> OAuthSignInResponse:
+        return await OAuthSignInService.sign_in_with_google(input, info)
 
 
 @strawberry.type
