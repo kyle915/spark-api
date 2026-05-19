@@ -32,6 +32,8 @@ Usage::
 
 from __future__ import annotations
 
+import asyncio
+import datetime
 import logging
 from typing import Any
 
@@ -146,3 +148,180 @@ async def send_push_to_user(
         logger.exception("failed to update PushDevice rows after send")
 
     return ok_count
+
+
+# ---------------------------------------------------------------------------
+# RQ-friendly entry points
+# ---------------------------------------------------------------------------
+#
+# RQ workers are sync. The helpers below let any caller — signals,
+# mutations, the recap nudge cron — enqueue a push without awaiting
+# anything themselves.
+
+
+def _send_push_to_user_sync(
+    user_id: int,
+    *,
+    title: str,
+    body: str,
+    data: dict[str, Any] | None = None,
+    sound: str | None = "default",
+    badge: int | None = None,
+    priority: str | None = "high",
+) -> int:
+    """Sync wrapper RQ workers can call. Runs the async send in a loop."""
+    return asyncio.run(
+        send_push_to_user(
+            user_id,
+            title=title,
+            body=body,
+            data=data,
+            sound=sound,
+            badge=badge,
+            priority=priority,
+        )
+    )
+
+
+def enqueue_push(
+    user_id: int,
+    *,
+    title: str,
+    body: str,
+    data: dict[str, Any] | None = None,
+) -> None:
+    """Enqueue a push to be sent ASAP via RQ. Best-effort.
+
+    Falls back to running the send inline if the queue (Redis) is
+    unreachable — same posture as utils/mailer.send().
+    """
+    try:
+        from utils.queues import Queues
+
+        Queues().default.add(
+            _send_push_to_user_sync,
+            user_id,
+            title=title,
+            body=body,
+            data=data,
+        )
+    except Exception as exc:
+        logger.warning(
+            "push queue unreachable (%s); sending inline to user_id=%s", exc, user_id
+        )
+        try:
+            _send_push_to_user_sync(user_id, title=title, body=body, data=data)
+        except Exception:
+            logger.exception("inline push fallback failed for user_id=%s", user_id)
+
+
+def schedule_push_at(
+    eta: datetime.datetime,
+    user_id: int,
+    *,
+    title: str,
+    body: str,
+    data: dict[str, Any] | None = None,
+) -> None:
+    """Schedule a push to fire at ``eta`` (UTC). Best-effort.
+
+    If ``eta`` is in the past or within the next 5 seconds, we just
+    enqueue it immediately. If the scheduler is unreachable, we log
+    and drop — there's no inline fallback for a future-dated send.
+    """
+    now = timezone.now()
+    if eta <= now + datetime.timedelta(seconds=5):
+        enqueue_push(user_id, title=title, body=body, data=data)
+        return
+
+    try:
+        import django_rq
+
+        scheduler = django_rq.get_scheduler("default")
+        scheduler.enqueue_at(
+            eta,
+            _send_push_to_user_sync,
+            user_id,
+            title=title,
+            body=body,
+            data=data,
+        )
+    except Exception as exc:
+        logger.warning(
+            "push scheduler unreachable (%s); dropping eta=%s user_id=%s title=%r",
+            exc, eta.isoformat(), user_id, title,
+        )
+
+
+def _send_recap_nudge_if_unfiled(
+    user_id: int,
+    ambassador_id: int,
+    event_id: int,
+    *,
+    title: str,
+    body: str,
+    data: dict[str, Any] | None = None,
+) -> None:
+    """Recap-nudge worker entry point.
+
+    Runs at event end + N hours. Short-circuits if the BA already filed
+    a recap for this event — we don't want to nag people who did the
+    thing.
+    """
+    from recaps.models import Recap  # local import to avoid app-loading order issues
+
+    already_filed = Recap.objects.filter(
+        event_id=event_id,
+        ambassador_id=ambassador_id,
+        submited_at__isnull=False,
+    ).exists()
+    if already_filed:
+        logger.info(
+            "recap nudge skipped — already filed event_id=%s ambassador_id=%s",
+            event_id, ambassador_id,
+        )
+        return
+    _send_push_to_user_sync(user_id, title=title, body=body, data=data)
+
+
+def schedule_recap_nudge_at(
+    eta: datetime.datetime,
+    user_id: int,
+    ambassador_id: int,
+    event_id: int,
+    *,
+    title: str,
+    body: str,
+    data: dict[str, Any] | None = None,
+) -> None:
+    """Like ``schedule_push_at``, but checks the recap state at fire time."""
+    now = timezone.now()
+    if eta <= now + datetime.timedelta(seconds=5):
+        # Past-due: fire the recap-check inline.
+        try:
+            _send_recap_nudge_if_unfiled(
+                user_id, ambassador_id, event_id, title=title, body=body, data=data,
+            )
+        except Exception:
+            logger.exception("inline recap nudge failed event_id=%s", event_id)
+        return
+
+    try:
+        import django_rq
+
+        scheduler = django_rq.get_scheduler("default")
+        scheduler.enqueue_at(
+            eta,
+            _send_recap_nudge_if_unfiled,
+            user_id,
+            ambassador_id,
+            event_id,
+            title=title,
+            body=body,
+            data=data,
+        )
+    except Exception as exc:
+        logger.warning(
+            "recap nudge scheduler unreachable (%s); dropping eta=%s event_id=%s",
+            exc, eta.isoformat(), event_id,
+        )
