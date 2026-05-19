@@ -84,6 +84,8 @@ from .types import (
     OAuthTokenType,
     OAuthUserType,
     LocationPingResponse,
+    RespondToShiftOfferResponse,
+    ShiftOfferDetails,
 )
 from events.models import Client
 from . import inputs
@@ -3877,4 +3879,164 @@ class LocationPingService(BaseAmbassadorService):
             success=True,
             message="ok",
             input_obj=input,
+        )
+
+
+class ShiftOfferService(BaseAmbassadorService):
+    """Accept / decline an AmbassadorEvent invitation from the mobile
+    app. Spawned by the admin app creating an AmbassadorEvent row
+    (is_approved=False). The push notification carries the
+    ambassadorEventUuid; mobile fetches the offer here and lets the
+    BA respond.
+
+    Accept → is_approved=True. Decline → delete the row so the
+    admin can re-invite a different BA without conflict.
+    """
+
+    @classmethod
+    async def get_offer(
+        cls, ambassador_event_uuid: str, info: strawberry.Info
+    ) -> ShiftOfferDetails | None:
+        user = info.context.request.user
+        if not getattr(user, "is_authenticated", False):
+            return None
+
+        @sync_to_async
+        def fetch():
+            from ambassadors.models import (
+                Ambassador as A,
+                AmbassadorEvent as AE,
+            )
+
+            try:
+                ambassador = A.objects.get(user=user)
+            except A.DoesNotExist:
+                return None
+            ae = (
+                AE.objects.select_related(
+                    "event",
+                    "event__retailer",
+                    "event__state",
+                )
+                .filter(uuid=str(ambassador_event_uuid), ambassador=ambassador)
+                .first()
+            )
+            if not ae:
+                return None
+            ev = ae.event
+            venue = (
+                getattr(ev, "name", None)
+                or getattr(getattr(ev, "retailer", None), "name", None)
+            )
+            state_code = getattr(getattr(ev, "state", None), "code", None)
+            date = (
+                ev.date.isoformat()
+                if getattr(ev, "date", None)
+                else None
+            )
+            return ShiftOfferDetails(
+                ambassador_event_uuid=strawberry.ID(str(ae.uuid)),
+                event_uuid=strawberry.ID(str(ev.uuid)),
+                event_name=venue or "(shift)",
+                venue=venue,
+                address=getattr(ev, "address", None),
+                date=date,
+                start_time=(
+                    ev.start_time.isoformat()
+                    if getattr(ev, "start_time", None)
+                    else None
+                ),
+                end_time=(
+                    ev.end_time.isoformat()
+                    if getattr(ev, "end_time", None)
+                    else None
+                ),
+                state_code=state_code,
+                is_approved=bool(ae.is_approved),
+            )
+
+        return await fetch()
+
+    @classmethod
+    async def respond(
+        cls,
+        input: "inputs.RespondToShiftOfferInput",
+        info: strawberry.Info,
+    ) -> RespondToShiftOfferResponse:
+        user = info.context.request.user
+        if not getattr(user, "is_authenticated", False):
+            return build_mutation_response(
+                RespondToShiftOfferResponse,
+                success=False,
+                message="Authentication required.",
+                input_obj=input,
+            )
+
+        from ambassadors.models import AmbassadorEvent as AE
+
+        @sync_to_async
+        def lookup():
+            try:
+                ambassador = Ambassador.objects.get(user=user)
+            except Ambassador.DoesNotExist:
+                return None
+            return (
+                AE.objects.select_related("event")
+                .filter(
+                    uuid=str(input.ambassador_event_uuid),
+                    ambassador=ambassador,
+                )
+                .first()
+            )
+
+        ae = await lookup()
+        if not ae:
+            return build_mutation_response(
+                RespondToShiftOfferResponse,
+                success=False,
+                message="Offer not found.",
+                input_obj=input,
+            )
+
+        if input.accepted:
+            @sync_to_async
+            def accept():
+                ae.is_approved = True
+                ae.updated_by = user
+                ae.save(update_fields=["is_approved", "updated_by", "updated_at"])
+                return ae
+
+            try:
+                await accept()
+            except Exception as exc:
+                return build_mutation_response(
+                    RespondToShiftOfferResponse,
+                    success=False,
+                    message=f"Could not accept: {exc}",
+                    input_obj=input,
+                )
+            return build_mutation_response(
+                RespondToShiftOfferResponse,
+                success=True,
+                message="Shift accepted.",
+                input_obj=input,
+                accepted=True,
+            )
+
+        # Decline → delete so admin can re-invite cleanly.
+        try:
+            await sync_to_async(ae.delete)()
+        except Exception as exc:
+            return build_mutation_response(
+                RespondToShiftOfferResponse,
+                success=False,
+                message=f"Could not decline: {exc}",
+                input_obj=input,
+            )
+        return build_mutation_response(
+            RespondToShiftOfferResponse,
+            success=True,
+            message="Shift declined.",
+            input_obj=input,
+            accepted=False,
         )

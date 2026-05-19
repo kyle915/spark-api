@@ -57,6 +57,7 @@ from .types import (
     RegisterPushTokenResponse,
     OAuthSignInResponse,
     LocationPingResponse,
+    RespondToShiftOfferResponse,
 )
 from . import inputs
 from .services import (
@@ -86,6 +87,7 @@ from .services import (
     RegisterPushTokenService,
     OAuthSignInService,
     LocationPingService,
+    ShiftOfferService,
     set_ambassador_job_real_amount_from_clock_out,
 )
 from .envelopes import AmbassadorEventApplicationMailer, NotifyApplicationToClientMailer
@@ -530,6 +532,14 @@ class AmbassadorMobileMutations:
         input: inputs.LocationPingInput,
     ) -> LocationPingResponse:
         return await LocationPingService.record(input, info)
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def respond_to_shift_offer(
+        self,
+        info: strawberry.Info,
+        input: inputs.RespondToShiftOfferInput,
+    ) -> RespondToShiftOfferResponse:
+        return await ShiftOfferService.respond(input, info)
 
 
 @strawberry.type

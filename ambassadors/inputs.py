@@ -525,6 +525,19 @@ class GoogleSignInInput(SparkGraphQLInput):
 
 
 @strawberry.input
+class RespondToShiftOfferInput(SparkGraphQLInput):
+    """BA's response to a shift invitation pushed from the admin app.
+
+    Created by an admin (AmbassadorEvent with is_approved=False).
+    Mobile renders the offer + Accept/Decline. Accept flips
+    is_approved=True; decline removes the invitation row.
+    """
+
+    ambassador_event_uuid: strawberry.ID
+    accepted: bool
+
+
+@strawberry.input
 class LocationPingInput(SparkGraphQLInput):
     """A GPS reading the spark-mobile activation tracker fires every
     ~2 min during an active shift. The mobile client supplies the
