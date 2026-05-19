@@ -733,6 +733,70 @@ class EventQueries:
         )
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def event_location_trail(
+        self,
+        info: strawberry.Info,
+        event_uuid: strawberry.ID,
+    ) -> List[Annotated["LocationPingType", strawberry.lazy("ambassadors.types")]]:
+        """All GPS pings for an event, oldest first.
+
+        Powers the "shift replay" panel on /request/view and the
+        Event detail page — admins can scrub through the BA's path
+        during the activation to audit on-site presence + dispute
+        resolution. Returns up to 1000 points; further capping is
+        future work (resample at ~50m for very long shifts).
+        """
+        from ambassadors.models import LocationPing as LocationPingModel
+        from ambassadors.types import LocationPingType
+        from events.models import Event as EventModel
+
+        service = EventQueriesService()
+        tenant_id = await service.resolve_tenant_id(info)
+
+        def _fetch() -> List:
+            event = (
+                EventModel.objects.filter(uuid=str(event_uuid))
+                .only("id", "tenant_id")
+                .first()
+            )
+            if not event:
+                return []
+            # Tenant scoping — never leak another tenant's BA path.
+            if tenant_id and event.tenant_id != tenant_id:
+                # Spark-admin gets cross-tenant access via the
+                # standard mixin; if resolve_tenant_id returned a
+                # value it means the request is tenant-bound.
+                return []
+            qs = (
+                LocationPingModel.objects.filter(event_id=event.id)
+                .select_related("ambassador", "ambassador__user", "event")
+                .order_by("recorded_at")[:1000]
+            )
+            out: List = []
+            for p in qs:
+                name = (
+                    f"{(p.ambassador.user.first_name or '').strip()} "
+                    f"{(p.ambassador.user.last_name or '').strip()}"
+                ).strip() or (p.ambassador.user.email or "(BA)")
+                out.append(
+                    LocationPingType(
+                        uuid=strawberry.ID(str(p.uuid)),
+                        lat=p.lat,
+                        lng=p.lng,
+                        accuracy_meters=p.accuracy_meters,
+                        recorded_at=p.recorded_at.isoformat(),
+                        source=p.source,
+                        ambassador_uuid=strawberry.ID(str(p.ambassador.uuid)),
+                        ambassador_name=name,
+                        event_uuid=strawberry.ID(str(p.event.uuid)),
+                        event_name=p.event.name or "(event)",
+                    )
+                )
+            return out
+
+        return await sync_to_async(_fetch, thread_sensitive=True)()
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def recent_location_pings(
         self,
         info: strawberry.Info,
