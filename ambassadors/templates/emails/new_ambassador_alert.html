@@ -1,0 +1,73 @@
+{% extends "emails/base.html" %} {% block content %}
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+  <tr>
+    <td style="font-size: 18px; font-weight: 600; color: #333333; padding-bottom: 15px;">
+      New ambassador signup
+    </td>
+  </tr>
+  <tr>
+    <td style="font-size: 16px; color: #555555; line-height: 1.6;">
+      <p style="margin: 0 0 20px 0;">
+        Someone just created an account on Spark BA. Their profile is
+        sitting pending approval — they can sign in and browse, but
+        they can't pick up shifts until you flip them active.
+      </p>
+
+      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #f9f9f9; border-radius: 5px; margin: 20px 0;">
+        <tr>
+          <td style="padding: 20px;">
+            <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+              <tr>
+                <td style="padding: 5px 0;">
+                  <strong>Name:</strong> {{ full_name }}
+                </td>
+              </tr>
+              <tr>
+                <td style="padding: 5px 0;">
+                  <strong>Email:</strong> {{ user.email }}
+                </td>
+              </tr>
+              {% if ambassador.phone %}
+              <tr>
+                <td style="padding: 5px 0;">
+                  <strong>Phone:</strong> {{ ambassador.phone }}
+                </td>
+              </tr>
+              {% endif %}
+              <tr>
+                <td style="padding: 5px 0;">
+                  <strong>Signed up via:</strong>
+                  {% if provider == "apple" %}Sign in with Apple
+                  {% elif provider == "google" %}Sign in with Google
+                  {% else %}Email + password
+                  {% endif %}
+                </td>
+              </tr>
+              <tr>
+                <td style="padding: 5px 0;">
+                  <strong>Ambassador ID:</strong> {{ ambassador.uuid }}
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+      </table>
+
+      {% if admin_url %}
+      <p style="margin: 24px 0 0 0; text-align: center;">
+        <a href="{{ admin_url }}"
+           style="background: #c5f546; color: #0a0d09; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: 600; display: inline-block;">
+          Review pending ambassadors →
+        </a>
+      </p>
+      {% endif %}
+
+      <p style="margin: 24px 0 0 0; font-size: 13px; color: #888;">
+        You're receiving this because your address is in
+        <code>NEW_AMBASSADOR_ALERT_EMAILS</code> on spark-api. To stop:
+        update the env list.
+      </p>
+    </td>
+  </tr>
+</table>
+{% endblock %}

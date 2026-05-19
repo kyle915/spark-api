@@ -358,6 +358,34 @@ class AmbassadorManagementQueries:
         )
 
     @strawberry.field(permission_classes=[IsClientOrSparkAdmin])
+    async def pending_ambassadors(
+        self,
+        info: strawberry.Info,
+        first: int | None = 50,
+        after: str | None = None,
+    ) -> CountableConnection[types.Ambassador]:
+        """Ambassadors waiting for admin approval — newest first.
+
+        Pulls every Ambassador with is_active=False whose user is
+        also active (i.e. signed up but not yet approved). Admin
+        front-end uses this to render the Pending queue on /people.
+        """
+        from utils.graphql.relay import connection_from_queryset_async
+        from ambassadors.models import Ambassador as AmbassadorModel
+
+        qs = (
+            AmbassadorModel.objects.filter(
+                is_active=False,
+                user__is_active=True,
+            )
+            .select_related("user")
+            .order_by("-created_at")
+        )
+        return await connection_from_queryset_async(
+            qs, first=first, after=after, last=None, before=None
+        )
+
+    @strawberry.field(permission_classes=[IsClientOrSparkAdmin])
     async def invited_groups_by_job(
         self,
         info: strawberry.Info,

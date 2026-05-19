@@ -264,6 +264,11 @@ RESEND_API_KEY = env("RESEND_API_KEY", default="")
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="Spark <onboarding@resend.dev>")
 REQUEST_REVIEW_COPY_EMAILS = env.list("REQUEST_REVIEW_COPY_EMAILS", default=[])
 RECAP_REVIEW_COPY_EMAILS = env.list("RECAP_REVIEW_COPY_EMAILS", default=[])
+# Comma-separated admin emails alerted when a new BA signs up via
+# any public path (createPublicAmbassador / Apple / Google).
+# Empty default → no alert. Set this in prod env to plug the silent-
+# signup failure mode.
+NEW_AMBASSADOR_ALERT_EMAILS = env.list("NEW_AMBASSADOR_ALERT_EMAILS", default=[])
 REQUEST_REVIEW_COPY_DELAY_SECONDS = env.float(
     "REQUEST_REVIEW_COPY_DELAY_SECONDS",
     default=2.0,
