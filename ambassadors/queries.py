@@ -1,6 +1,6 @@
 import logging
 import asyncio
-from typing import Annotated
+from typing import Annotated, List
 import strawberry
 from enum import Enum
 from asgiref.sync import sync_to_async
@@ -253,6 +253,85 @@ class FileTypeQueries:
 
 @strawberry.type
 class AmbassadorEventQueries:
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def my_upcoming_shifts(
+        self,
+        info: strawberry.Info,
+        within_days: int = 14,
+    ) -> List[types.ShiftOfferDetails]:
+        """Accepted (is_approved=True) AmbassadorEvent rows for the
+        current BA whose event date is in the next N days (default 14).
+
+        Powers the "Upcoming" section on the spark-mobile Shifts tab.
+        Sorted by event start_time ascending (next-up first). Returns
+        empty for non-ambassador users; cross-tenant access blocked
+        via the Ambassador→user relationship.
+        """
+        from datetime import timedelta
+        from django.utils import timezone
+
+        user = info.context.request.user
+        if not getattr(user, "is_authenticated", False):
+            return []
+
+        from ambassadors import models as a_models
+        from ambassadors import types as a_types
+
+        cutoff = timezone.now() + timedelta(days=max(1, within_days))
+
+        def _fetch() -> List:
+            try:
+                ambassador = a_models.Ambassador.objects.get(user=user)
+            except a_models.Ambassador.DoesNotExist:
+                return []
+            qs = (
+                a_models.AmbassadorEvent.objects.select_related(
+                    "event",
+                    "event__retailer",
+                    "event__state",
+                )
+                .filter(
+                    ambassador=ambassador,
+                    is_approved=True,
+                    event__start_time__gte=timezone.now(),
+                    event__start_time__lte=cutoff,
+                )
+                .order_by("event__start_time")
+            )
+            out: List = []
+            for ae in qs:
+                ev = ae.event
+                venue = (
+                    getattr(ev, "name", None)
+                    or getattr(getattr(ev, "retailer", None), "name", None)
+                )
+                state_code = getattr(getattr(ev, "state", None), "code", None)
+                out.append(
+                    a_types.ShiftOfferDetails(
+                        ambassador_event_uuid=strawberry.ID(str(ae.uuid)),
+                        event_uuid=strawberry.ID(str(ev.uuid)),
+                        event_name=venue or "(shift)",
+                        venue=venue,
+                        address=getattr(ev, "address", None),
+                        date=ev.date.isoformat() if getattr(ev, "date", None) else None,
+                        start_time=(
+                            ev.start_time.isoformat()
+                            if getattr(ev, "start_time", None)
+                            else None
+                        ),
+                        end_time=(
+                            ev.end_time.isoformat()
+                            if getattr(ev, "end_time", None)
+                            else None
+                        ),
+                        state_code=state_code,
+                        is_approved=True,
+                    )
+                )
+            return out
+
+        return await sync_to_async(_fetch, thread_sensitive=True)()
+
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def shift_offer(
         self,
