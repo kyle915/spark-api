@@ -2649,27 +2649,54 @@ class RequestMutations:
                 tenant_id=tenant_id
             )
             timestamp = datetime.datetime.utcnow().strftime("%Y%m%d%H%M%S")
-            blob_name = (
-                f"requests/import-templates/tenant-{tenant_id}/"
-                f"requests-import-template-{timestamp}.xlsx"
-            )
+            file_name = f"spark-bulk-template-{timestamp}.xlsx"
 
-            await sync_to_async(upload_bytes)(
-                blob_name,
-                template_bytes,
-                content_type=(
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                ),
-            )
-            from utils.gcs import public_url
-            file_url = public_url(blob_name) or ""
+            # Inline path — no GCS dependency. Front-end decodes the
+            # base64 into a Blob and triggers a browser download.
+            # Much faster (one round-trip instead of two) and works
+            # even when the service account doesn't have
+            # storage.objects.create on the bucket.
+            import base64
+
+            file_base64 = base64.b64encode(template_bytes).decode("ascii")
+
+            # Best-effort GCS mirror — keeps the legacy `file_url`
+            # path alive for any caller still reading it, but
+            # failure is non-fatal now.
+            file_url: str | None = None
+            try:
+                blob_name = (
+                    f"requests/import-templates/tenant-{tenant_id}/"
+                    f"requests-import-template-{timestamp}.xlsx"
+                )
+                await sync_to_async(upload_bytes)(
+                    blob_name,
+                    template_bytes,
+                    content_type=(
+                        "application/vnd.openxmlformats-officedocument."
+                        "spreadsheetml.sheet"
+                    ),
+                )
+                from utils.gcs import public_url
+
+                file_url = public_url(blob_name) or None
+            except Exception as exc:  # noqa: BLE001
+                import logging
+
+                logging.getLogger(__name__).info(
+                    "skipping GCS mirror for request batch template "
+                    "(falling back to inline base64): %s",
+                    exc,
+                )
 
             return build_mutation_response(
                 types.RequestBatchTemplateResponse,
                 success=True,
-                message="Template URL generated successfully.",
+                message="Template ready.",
                 input_obj=input,
                 file_url=file_url,
+                file_base64=file_base64,
+                file_name=file_name,
             )
         except (GraphQLError, ValueError) as e:
             return build_mutation_response(
