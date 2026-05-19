@@ -373,6 +373,20 @@ class Request(Node):
             return cached[0] if cached else None
         return await sync_to_async(self.event_set.first)()
 
+    @strawberry.field
+    async def events(self) -> List["Event"]:
+        """All events for this request, oldest first.
+
+        A request can spawn multiple events when an activation is
+        scheduled across multiple days or venues. Front-end uses this
+        to render the Field Reports panel — one section per event,
+        each with its recap(s).
+        """
+        cached = getattr(self, "_prefetched_objects_cache", {}).get("event_set")
+        if cached is not None:
+            return list(cached)
+        return await sync_to_async(list)(self.event_set.order_by("start_time"))
+
     request_type: RequestType | None = None
     status: RequestStatus | None = None
     tenant_id: strawberry.ID
@@ -512,6 +526,21 @@ class Event(Node):
     def new_end_time(self) -> str | None:
         offset = _get_offset_minutes_from_instance(self)
         return _serialize_dt(_get_field(self, "new_end_time"), offset_minutes=offset)
+
+    @strawberry.field
+    async def recaps(
+        self,
+    ) -> List[Annotated["Recap", strawberry.lazy("recaps.types")]]:
+        """All recaps filed against this event, newest first.
+
+        Used by the front-end Field Reports panel on /request/view to
+        surface what BAs reported in for the activation. Empty list
+        is normal — recap is filed post-event.
+        """
+        cached = getattr(self, "_prefetched_objects_cache", {}).get("recaps")
+        if cached is not None:
+            return list(cached)
+        return await sync_to_async(list)(self.recaps.order_by("-created_at"))
 
 
 @strawberry.type
