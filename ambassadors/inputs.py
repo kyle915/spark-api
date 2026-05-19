@@ -493,3 +493,13 @@ class AssignGroupToJobInput(BaseTenantInput):
 
     group_id: strawberry.ID
     job_id: strawberry.ID
+
+
+@strawberry.input
+class RegisterPushTokenInput(SparkGraphQLInput):
+    """Input for the mobile app registering an Expo push token."""
+
+    token: str
+    platform: str  # "ios" | "android" | "web"
+    device_name: str | None = None
+    app_version: str | None = None

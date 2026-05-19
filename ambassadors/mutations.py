@@ -54,6 +54,7 @@ from .types import (
     GroupTypeResponse,
     AmbassadorGroupResponse,
     AddAmbassadorsToGroupResponse,
+    RegisterPushTokenResponse,
 )
 from . import inputs
 from .services import (
@@ -80,6 +81,7 @@ from .services import (
     UpsertAmbassadorProfileService,
     GroupTypeMutationService,
     AmbassadorGroupMutationService,
+    RegisterPushTokenService,
     set_ambassador_job_real_amount_from_clock_out,
 )
 from .envelopes import AmbassadorEventApplicationMailer, NotifyApplicationToClientMailer
@@ -490,6 +492,14 @@ class AmbassadorMobileMutations:
         info: strawberry.Info,
     ) -> DisableAmbassadorResponse:
         return await DisableAmbassadorService.disable_mobile(info)
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def register_push_token(
+        self,
+        info: strawberry.Info,
+        input: inputs.RegisterPushTokenInput,
+    ) -> RegisterPushTokenResponse:
+        return await RegisterPushTokenService.register(input, info)
 
 
 @strawberry.type

@@ -941,3 +941,50 @@ class UserGroup(models.Model):
 
     def __str__(self):
         return f"{self.user.username} - {self.group.name}"
+
+
+class PushDevice(models.Model):
+    """A registered Expo push token for a user device.
+
+    A user may have many devices (phone + tablet, multiple installs). The
+    token is unique per install — re-registering with the same token is
+    idempotent (we just bump `updated_at` + the device metadata).
+
+    `is_active` is flipped off when the Expo push relay tells us the
+    token is invalid (DeviceNotRegistered receipt). The mobile client
+    overwrites the row by re-registering on next launch.
+    """
+
+    PLATFORM_CHOICES = (
+        ("ios", "iOS"),
+        ("android", "Android"),
+        ("web", "Web"),
+    )
+
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        null=False,
+        related_name="push_devices",
+    )
+    token = models.CharField(max_length=255, unique=True, db_index=True)
+    platform = models.CharField(max_length=20, choices=PLATFORM_CHOICES)
+    device_name = models.CharField(max_length=255, null=True, blank=True)
+    app_version = models.CharField(max_length=40, null=True, blank=True)
+
+    is_active = models.BooleanField(default=True)
+    last_used_at = models.DateTimeField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["user", "is_active"]),
+        ]
+
+    def __str__(self):
+        return f"{self.user_id}:{self.platform}:{self.token[:12]}…"

@@ -47,6 +47,7 @@ from .models import (
     UserGroup,
     Attendance,
     AttendanceType,
+    PushDevice,
 )
 from jobs import models as job_models
 from .types import (
@@ -77,6 +78,7 @@ from .types import (
     AmbassadorProfile,
     GroupTypeResponse,
     AmbassadorGroupResponse,
+    RegisterPushTokenResponse,
 )
 from events.models import Client
 from . import inputs
@@ -3465,3 +3467,82 @@ class AmbassadorGroupMutationService(BaseMutationService):
                     )
 
         return user_groups
+
+
+class RegisterPushTokenService(BaseAmbassadorService):
+    """Service for registering a mobile device's Expo push token.
+
+    Idempotent on `token`: re-registering the same token just updates
+    the device metadata + `last_used_at`. If the token previously
+    belonged to a different user (account switch on the same device),
+    we move ownership to the current user — the new user is now the
+    one we should target.
+    """
+
+    PLATFORMS = {"ios", "android", "web"}
+
+    @classmethod
+    async def register(
+        cls,
+        input: "inputs.RegisterPushTokenInput",
+        info: strawberry.Info,
+    ) -> RegisterPushTokenResponse:
+        user = info.context.request.user
+        if not getattr(user, "is_authenticated", False):
+            return build_mutation_response(
+                RegisterPushTokenResponse,
+                success=False,
+                message="Authentication required.",
+                input_obj=input,
+            )
+
+        token = (input.token or "").strip()
+        platform = (input.platform or "").strip().lower()
+        if not token:
+            return build_mutation_response(
+                RegisterPushTokenResponse,
+                success=False,
+                message="Token is required.",
+                input_obj=input,
+            )
+        if platform not in cls.PLATFORMS:
+            return build_mutation_response(
+                RegisterPushTokenResponse,
+                success=False,
+                message=f"Unsupported platform: {input.platform!r}.",
+                input_obj=input,
+            )
+
+        now = timezone.now()
+
+        @sync_to_async
+        def upsert():
+            device, _ = PushDevice.objects.update_or_create(
+                token=token,
+                defaults={
+                    "user": user,
+                    "platform": platform,
+                    "device_name": input.device_name or None,
+                    "app_version": input.app_version or None,
+                    "is_active": True,
+                    "last_used_at": now,
+                },
+            )
+            return device
+
+        try:
+            await upsert()
+        except Exception as e:
+            return build_mutation_response(
+                RegisterPushTokenResponse,
+                success=False,
+                message=f"Error registering push token: {e}",
+                input_obj=input,
+            )
+
+        return build_mutation_response(
+            RegisterPushTokenResponse,
+            success=True,
+            message="Push token registered.",
+            input_obj=input,
+        )

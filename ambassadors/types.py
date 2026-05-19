@@ -458,3 +458,10 @@ class AddAmbassadorsToGroupResponse:
     message: str
     client_mutation_id: strawberry.ID | None = None
     members: list[UserGroup] | None = None
+
+
+@strawberry.type
+class RegisterPushTokenResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
