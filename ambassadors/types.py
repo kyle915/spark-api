@@ -484,6 +484,32 @@ class OAuthUserType:
 
 
 @strawberry.type
+class RespondToShiftOfferResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    accepted: bool = False
+
+
+@strawberry.type
+class ShiftOfferDetails:
+    """Slim shape for the mobile ShiftOfferScreen — just what the
+    BA needs to decide. Avoids pulling the full AmbassadorEvent /
+    Event graph when most of it isn't shown."""
+
+    ambassador_event_uuid: strawberry.ID
+    event_uuid: strawberry.ID
+    event_name: str
+    venue: str | None
+    address: str | None
+    date: str | None
+    start_time: str | None
+    end_time: str | None
+    state_code: str | None
+    is_approved: bool
+
+
+@strawberry.type
 class LocationPingType:
     """Slim shape — what the Today map actually renders."""
 

@@ -1,5 +1,6 @@
 import logging
 import asyncio
+from typing import Annotated
 import strawberry
 from enum import Enum
 from asgiref.sync import sync_to_async
@@ -252,6 +253,21 @@ class FileTypeQueries:
 
 @strawberry.type
 class AmbassadorEventQueries:
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def shift_offer(
+        self,
+        info: strawberry.Info,
+        ambassador_event_uuid: strawberry.ID,
+    ) -> types.ShiftOfferDetails | None:
+        """Fetch a single shift offer (AmbassadorEvent invitation) for
+        the current BA. Powers the mobile ShiftOfferScreen that deep-
+        links from the "New shift offered" push notification."""
+        from .services import ShiftOfferService
+
+        return await ShiftOfferService.get_offer(
+            str(ambassador_event_uuid), info
+        )
+
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def ambassador_events(
         self,
