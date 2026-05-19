@@ -76,9 +76,20 @@ class MagicLinkMailer(_NoAttachedLogoMixin, Mailer):
     that the front-end exchanges for a JWT via loginWithMagicToken.
     """
 
-    def __init__(self, user: User, link: str, expires_minutes: int):
+    def __init__(
+        self,
+        user: User,
+        link: str,
+        expires_minutes: int,
+        mobile_link: str | None = None,
+    ):
         self.user = user
         self.link = link
+        # Optional `spark://magic/<token>` URL the mobile app catches
+        # via expo-linking. Included as a secondary CTA in the email
+        # so taps on a phone with the app installed open the app
+        # directly. None falls back to web-only.
+        self.mobile_link = mobile_link
         self.expires_minutes = expires_minutes
 
     def envelope(self) -> Envelope:
@@ -94,6 +105,7 @@ class MagicLinkMailer(_NoAttachedLogoMixin, Mailer):
                 "user": self.user,
                 "first_name": first,
                 "link": self.link,
+                "mobile_link": self.mobile_link,
                 "expires_minutes": self.expires_minutes,
             },
         )
