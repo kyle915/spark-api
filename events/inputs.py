@@ -363,6 +363,19 @@ class UpsertRequestReviewedInput(SparkGraphQLInput):
 
 
 @strawberry.input
+class NotifyNoteMentionInput(SparkGraphQLInput):
+    """Notify a teammate that they were @-mentioned in an internal note on
+    a request. Sends a branded email to each recipient email."""
+
+    request_id: strawberry.ID
+    note_body: str
+    recipient_emails: List[str]
+    # Front-end origin so the email link points back at the right
+    # admin app (defaults to ADMIN_FRONTEND_URL when omitted).
+    request_url: str | None = None
+
+
+@strawberry.input
 class CreateRequestDetailInput(SparkGraphQLInput):
     is_table_needed: bool = False
     table_size: int | None = None

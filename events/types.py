@@ -552,3 +552,12 @@ class DeclineRequestResponse:
     message: str
     client_mutation_id: strawberry.ID | None = None
     request: Request | None = None
+
+
+@strawberry.type
+class NotifyNoteMentionResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    sent_count: int = 0
+    failed_emails: List[str] | None = None

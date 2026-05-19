@@ -22,7 +22,7 @@ from tenants.envelopes import EmailVerificationMailer
 from gqlauth.core.utils import get_token
 from gqlauth.models import UserStatus
 from events.models import Location
-from utils.utils import build_mutation_response
+from utils.utils import ROLE_ID, build_mutation_response
 from utils.graphql.inputs import SparkGraphQLInput
 from utils.graphql.mixins import (
     SparkGraphQLMixin,
@@ -47,6 +47,7 @@ from .models import (
     UserGroup,
     Attendance,
     AttendanceType,
+    PushDevice,
 )
 from jobs import models as job_models
 from .types import (
@@ -77,6 +78,10 @@ from .types import (
     AmbassadorProfile,
     GroupTypeResponse,
     AmbassadorGroupResponse,
+    RegisterPushTokenResponse,
+    OAuthSignInResponse,
+    OAuthTokenType,
+    OAuthUserType,
 )
 from events.models import Client
 from . import inputs
@@ -3465,3 +3470,263 @@ class AmbassadorGroupMutationService(BaseMutationService):
                     )
 
         return user_groups
+
+
+class RegisterPushTokenService(BaseAmbassadorService):
+    """Service for registering a mobile device's Expo push token.
+
+    Idempotent on `token`: re-registering the same token just updates
+    the device metadata + `last_used_at`. If the token previously
+    belonged to a different user (account switch on the same device),
+    we move ownership to the current user — the new user is now the
+    one we should target.
+    """
+
+    PLATFORMS = {"ios", "android", "web"}
+
+    @classmethod
+    async def register(
+        cls,
+        input: "inputs.RegisterPushTokenInput",
+        info: strawberry.Info,
+    ) -> RegisterPushTokenResponse:
+        user = info.context.request.user
+        if not getattr(user, "is_authenticated", False):
+            return build_mutation_response(
+                RegisterPushTokenResponse,
+                success=False,
+                message="Authentication required.",
+                input_obj=input,
+            )
+
+        token = (input.token or "").strip()
+        platform = (input.platform or "").strip().lower()
+        if not token:
+            return build_mutation_response(
+                RegisterPushTokenResponse,
+                success=False,
+                message="Token is required.",
+                input_obj=input,
+            )
+        if platform not in cls.PLATFORMS:
+            return build_mutation_response(
+                RegisterPushTokenResponse,
+                success=False,
+                message=f"Unsupported platform: {input.platform!r}.",
+                input_obj=input,
+            )
+
+        now = timezone.now()
+
+        @sync_to_async
+        def upsert():
+            device, _ = PushDevice.objects.update_or_create(
+                token=token,
+                defaults={
+                    "user": user,
+                    "platform": platform,
+                    "device_name": input.device_name or None,
+                    "app_version": input.app_version or None,
+                    "is_active": True,
+                    "last_used_at": now,
+                },
+            )
+            return device
+
+        try:
+            await upsert()
+        except Exception as e:
+            return build_mutation_response(
+                RegisterPushTokenResponse,
+                success=False,
+                message=f"Error registering push token: {e}",
+                input_obj=input,
+            )
+
+        return build_mutation_response(
+            RegisterPushTokenResponse,
+            success=True,
+            message="Push token registered.",
+            input_obj=input,
+        )
+
+
+class OAuthSignInService(BaseAmbassadorService):
+    """Sign in / sign up via Apple or Google id_tokens.
+
+    Pattern:
+      1. Verify the platform-issued id_token cryptographically.
+      2. Look up an existing User by email.
+      3. If new: create User (role = Ambassador, is_active=True,
+         UserStatus.verified=True) and an Ambassador profile row tied
+         to that user. Profile starts ``is_active=False`` so admins
+         still gate who can pick up shifts — but the account itself
+         is signed in and usable for browsing.
+      4. Issue gqlauth TokenType + RefreshToken.
+      5. Return the same shape mobile expects.
+
+    Errors are returned in the response envelope, never raised — so
+    the mobile client gets a clean message string to surface.
+    """
+
+    @classmethod
+    async def _issue_tokens(cls, user) -> tuple[str, str | None]:
+        from gqlauth.jwt.types_ import TokenType
+        from gqlauth.models import RefreshToken
+
+        token_obj = await sync_to_async(TokenType.from_user)(user)
+        try:
+            refresh_obj = await sync_to_async(RefreshToken.from_user)(user)
+            refresh_token = refresh_obj.token
+        except Exception:
+            refresh_token = None
+        return token_obj.token, refresh_token
+
+    @classmethod
+    async def _find_or_create_user(
+        cls,
+        *,
+        email: str,
+        first_name: str | None,
+        last_name: str | None,
+        provider: str,
+    ) -> tuple[Any, bool]:
+        """Return (user, is_new). Creates User + Ambassador on first sign-in."""
+        existing = await sync_to_async(
+            User.objects.filter(email__iexact=email).first
+        )()
+        if existing:
+            return existing, False
+
+        @sync_to_async
+        @transaction.atomic
+        def make_user():
+            role = Role.objects.get(pk=ROLE_ID.Ambassadors)
+            user = User.objects.create(
+                first_name=(first_name or "").strip()[:150],
+                last_name=(last_name or "").strip()[:150],
+                username=email,
+                email=email,
+                role=role,
+                is_active=True,
+            )
+            UserStatus.objects.update_or_create(
+                user=user,
+                defaults={"verified": True, "archived": False},
+            )
+            # Ambassador profile — starts pending admin approval.
+            Ambassador.objects.create(
+                user=user,
+                is_active=False,
+                created_by=user,
+                updated_by=user,
+            )
+            return user
+
+        return await make_user(), True
+
+    @classmethod
+    async def sign_in_with_apple(
+        cls,
+        input: "inputs.AppleSignInInput",
+        info: strawberry.Info,
+    ) -> OAuthSignInResponse:
+        from tenants.oauth import (
+            OAuthVerificationError,
+            verify_apple_id_token,
+        )
+
+        try:
+            identity = await sync_to_async(verify_apple_id_token)(
+                input.id_token,
+                name_hint={
+                    "first_name": input.first_name,
+                    "last_name": input.last_name,
+                },
+            )
+        except OAuthVerificationError as exc:
+            return build_mutation_response(
+                OAuthSignInResponse,
+                success=False,
+                message=str(exc),
+                input_obj=input,
+            )
+
+        return await cls._finish(input, identity)
+
+    @classmethod
+    async def sign_in_with_google(
+        cls,
+        input: "inputs.GoogleSignInInput",
+        info: strawberry.Info,
+    ) -> OAuthSignInResponse:
+        from tenants.oauth import (
+            OAuthVerificationError,
+            verify_google_id_token,
+        )
+
+        try:
+            identity = await sync_to_async(verify_google_id_token)(input.id_token)
+        except OAuthVerificationError as exc:
+            return build_mutation_response(
+                OAuthSignInResponse,
+                success=False,
+                message=str(exc),
+                input_obj=input,
+            )
+
+        return await cls._finish(input, identity)
+
+    @classmethod
+    async def _finish(cls, input, identity) -> OAuthSignInResponse:
+        try:
+            user, is_new = await cls._find_or_create_user(
+                email=identity.email,
+                first_name=identity.first_name,
+                last_name=identity.last_name,
+                provider=identity.provider,
+            )
+        except Exception as exc:
+            return build_mutation_response(
+                OAuthSignInResponse,
+                success=False,
+                message=f"Could not provision account: {exc}",
+                input_obj=input,
+            )
+
+        if not user.is_active:
+            return build_mutation_response(
+                OAuthSignInResponse,
+                success=False,
+                message="Account is disabled. Contact your RMM at Ignite.",
+                input_obj=input,
+            )
+
+        try:
+            token, refresh_token = await cls._issue_tokens(user)
+        except Exception as exc:
+            return build_mutation_response(
+                OAuthSignInResponse,
+                success=False,
+                message=f"Could not issue token: {exc}",
+                input_obj=input,
+            )
+
+        return build_mutation_response(
+            OAuthSignInResponse,
+            success=True,
+            message=(
+                "Welcome! Your account is pending approval."
+                if is_new
+                else "Signed in."
+            ),
+            input_obj=input,
+            token=OAuthTokenType(token=token, refresh_token=refresh_token),
+            user=OAuthUserType(
+                uuid=strawberry.ID(str(getattr(user, "uuid", user.id))),
+                email=user.email,
+                first_name=user.first_name or None,
+                last_name=user.last_name or None,
+            ),
+            is_new_account=is_new,
+        )

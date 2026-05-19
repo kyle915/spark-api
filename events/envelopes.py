@@ -650,3 +650,79 @@ class RequestorRequestAutoApprovedMailer(Mailer):
                 ),
             },
         )
+
+
+class NoteMentionMailer(Mailer):
+    """
+    Fires when a teammate @-mentions someone in an internal Master
+    Tracker note. The mentioned user gets a branded email with the
+    note text + a link to the request so they can open and respond.
+
+    No backend notes table yet (notes are localStorage-only), so this
+    mailer takes the body + author info as plain inputs rather than
+    loading a Note row. When server-side notes ship the wiring stays
+    the same — we just stop passing the body verbatim.
+    """
+
+    def _build_logo_attachment(self):
+        return None
+
+    def __init__(
+        self,
+        *,
+        request: models.Request,
+        mentioned_email: str,
+        mentioned_name: str | None,
+        note_body: str,
+        author_name: str,
+        author_email: str | None,
+        request_url: str,
+    ) -> None:
+        self.request = request
+        self.mentioned_email = mentioned_email
+        self.mentioned_name = mentioned_name
+        self.note_body = note_body
+        self.author_name = author_name
+        self.author_email = author_email
+        self.request_url = request_url
+
+    def envelope(self) -> Envelope:
+        request_id = f"REQ-{self.request.id}" if self.request.id else "-"
+        account_name = None
+        retailer = getattr(self.request, "retailer", None)
+        if retailer and getattr(retailer, "name", None):
+            account_name = retailer.name
+        if not account_name:
+            account_name = self.request.name or "—"
+
+        tenant_name = "—"
+        tenant = getattr(self.request, "tenant", None)
+        if tenant and getattr(tenant, "name", None):
+            tenant_name = tenant.name
+
+        first_name = "there"
+        if self.mentioned_name:
+            first = self.mentioned_name.split()[0].strip() if self.mentioned_name else ""
+            if first:
+                first_name = first
+        elif self.mentioned_email:
+            first_name = self.mentioned_email.split("@")[0]
+
+        return Envelope(
+            subject=f"[{tenant_name}] {self.author_name} tagged you on {account_name}",
+            template="events.templates.emails.note_mention",
+            from_email="Spark by Ignite <no-reply@igniteproductions.co>",
+            to_emails=[self.mentioned_email],
+            headers={"Reply-To": self.author_email or "staffing@igniteproductions.co"},
+            context={
+                "first_name": first_name,
+                "mentioned_name": self.mentioned_name or "",
+                "author_name": self.author_name,
+                "author_email": self.author_email or "",
+                "note_body": self.note_body,
+                "request_id": request_id,
+                "request_url": self.request_url,
+                "account_name": account_name,
+                "tenant_name": tenant_name,
+            },
+        )
