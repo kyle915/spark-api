@@ -269,6 +269,84 @@ class AmbassadorEventQueries:
         )
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def my_pending_offers(
+        self,
+        info: strawberry.Info,
+    ) -> list[types.ShiftOfferDetails]:
+        """All unaccepted shift offers for the current BA — invitations
+        that haven't been accepted yet (is_approved=False).
+
+        Powers the "Pending invites" section on the mobile Shifts tab,
+        which surfaces offers the BA missed via push tap. The mobile
+        client opens each into the existing ShiftOfferScreen for
+        accept/decline.
+
+        Excludes shifts whose event.start_time is already in the past
+        — those are stale and shouldn't be acted on. Sorted by start
+        time ascending (next-up first). Returns empty for non-
+        ambassador users; cross-tenant access blocked via the
+        Ambassador→user relationship.
+        """
+        from django.utils import timezone
+
+        user = info.context.request.user
+        if not getattr(user, "is_authenticated", False):
+            return []
+
+        def _fetch() -> list:
+            try:
+                ambassador = models.Ambassador.objects.get(user=user)
+            except models.Ambassador.DoesNotExist:
+                return []
+            now = timezone.now()
+            qs = (
+                models.AmbassadorEvent.objects.select_related(
+                    "event",
+                    "event__retailer",
+                    "event__state",
+                )
+                .filter(
+                    ambassador=ambassador,
+                    is_approved=False,
+                    event__start_time__gte=now,
+                )
+                .order_by("event__start_time")
+            )
+            out: list = []
+            for ae in qs:
+                ev = ae.event
+                venue = (
+                    getattr(ev, "name", None)
+                    or getattr(getattr(ev, "retailer", None), "name", None)
+                )
+                state_code = getattr(getattr(ev, "state", None), "code", None)
+                out.append(
+                    types.ShiftOfferDetails(
+                        ambassador_event_uuid=strawberry.ID(str(ae.uuid)),
+                        event_uuid=strawberry.ID(str(ev.uuid)),
+                        event_name=venue or "(shift)",
+                        venue=venue,
+                        address=getattr(ev, "address", None),
+                        date=ev.date.isoformat() if getattr(ev, "date", None) else None,
+                        start_time=(
+                            ev.start_time.isoformat()
+                            if getattr(ev, "start_time", None)
+                            else None
+                        ),
+                        end_time=(
+                            ev.end_time.isoformat()
+                            if getattr(ev, "end_time", None)
+                            else None
+                        ),
+                        state_code=state_code,
+                        is_approved=False,
+                    )
+                )
+            return out
+
+        return await sync_to_async(_fetch, thread_sensitive=True)()
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def ambassador_events(
         self,
         info: strawberry.Info,
