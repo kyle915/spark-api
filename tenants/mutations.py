@@ -502,6 +502,18 @@ def _build_magic_link(token: str, redirect: str | None) -> str:
     return f"{base}/magic/{token}{suffix}"
 
 
+def _build_magic_link_mobile(token: str) -> str:
+    """Custom-scheme URL that spark-mobile catches via expo-linking.
+
+    The scheme is registered in spark-mobile/app.json (`expo.scheme`).
+    When a user taps this link on a device with the app installed,
+    iOS / Android route it to the app — which then calls
+    loginWithMagicToken to swap the token for a JWT.
+    """
+    scheme = getattr(settings, "MOBILE_DEEP_LINK_SCHEME", "spark")
+    return f"{scheme}://magic/{token}"
+
+
 @strawberry.type
 class SparkUserMutations:
     @relay.mutation
@@ -535,10 +547,14 @@ class SparkUserMutations:
             {"u": user.id, "e": user.email}, salt=MAGIC_LINK_SALT
         )
         link = _build_magic_link(token, input.redirect)
+        mobile_link = _build_magic_link_mobile(token)
 
         try:
             mailer = MagicLinkMailer(
-                user=user, link=link, expires_minutes=MAGIC_LINK_TTL_SECONDS // 60,
+                user=user,
+                link=link,
+                mobile_link=mobile_link,
+                expires_minutes=MAGIC_LINK_TTL_SECONDS // 60,
             )
             # send_async_now bypasses the django-rq queue (Redis isn't
             # provisioned on Cloud Run) and dispatches the email

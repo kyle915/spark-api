@@ -98,6 +98,24 @@
               </td>
             </tr>
 
+            {% if mobile_link %}
+            <!-- Mobile app deep-link. Tap on a phone that has Spark BA
+                 installed → app catches the spark:// URL via expo-linking
+                 and signs the user in directly. Web button above is the
+                 fallback for desktop and phones without the app. -->
+            <tr>
+              <td class="pad" style="padding:0 40px 20px 40px;">
+                <p style="margin:0;font-size:13px;line-height:20px;color:#3b4034;">
+                  On your phone with the Spark BA app installed?
+                  <a href="{{ mobile_link }}"
+                     style="color:#ef5a2a;font-weight:700;text-decoration:none;">
+                    Open in app →
+                  </a>
+                </p>
+              </td>
+            </tr>
+            {% endif %}
+
             <!-- Fallback link -->
             <tr>
               <td class="pad" style="padding:8px 40px 20px 40px;">
