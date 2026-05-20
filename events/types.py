@@ -428,6 +428,20 @@ class RequestDetailResponse:
 
 
 @strawberry.type
+class BulkCloneRequestResponse:
+    """Result of `bulkCloneRequest`. `created_count` is the number of
+    new requests actually saved; `created_uuids` lets the UI deep-link
+    to each one (or open a filtered Master Tracker view).
+    """
+
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    created_count: int = 0
+    created_uuids: list[str] = strawberry.field(default_factory=list)
+
+
+@strawberry.type
 class RequestBatchRowResult:
     row_number: int
     success: bool
