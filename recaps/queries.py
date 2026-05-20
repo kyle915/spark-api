@@ -1,3 +1,5 @@
+from typing import List
+
 import strawberry
 from asgiref.sync import sync_to_async
 from graphql import GraphQLError
