@@ -510,6 +510,16 @@ class InviteAmbassadorToShiftResponse:
 
 
 @strawberry.type
+class CancelShiftInviteResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    # The deleted row's uuid, echoed back so the front-end can update
+    # its local cache without re-fetching the roster.
+    ambassador_event_uuid: strawberry.ID | None = None
+
+
+@strawberry.type
 class RespondToShiftOfferResponse:
     success: bool
     message: str
