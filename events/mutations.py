@@ -3007,6 +3007,15 @@ class RequestMutations:
                 input_obj=input,
             )
 
+        # Pull the acting user once outside the sync block so we can
+        # attribute each clone's audit-log entry to them. None is fine
+        # for system-initiated paths.
+        try:
+            _service = EventMutationService()
+            actor_user = await _service.get_user(info)
+        except Exception:
+            actor_user = None
+
         # ISO parser shared across all copies. Accepts date-only
         # (YYYY-MM-DD) and full ISO datetime. Date-only gets midnight
         # UTC to match the source's typical pattern.
@@ -3119,6 +3128,21 @@ class RequestMutations:
                 )
                 clone.save()
                 created_uuids.append(str(clone.uuid))
+                # Audit log: each clone gets a "cloned_from" entry
+                # pointing at the source. Best-effort; never raises.
+                try:
+                    _evm.RequestActivityLog.objects.create(
+                        tenant=clone.tenant,
+                        request=clone,
+                        kind=_evm.RequestActivityLog.KIND_CLONED_FROM,
+                        actor_user=actor_user
+                        if getattr(actor_user, "id", None)
+                        else None,
+                        summary=f"Cloned from {str(source.uuid)[:8]}",
+                        metadata={"source_request_uuid": str(source.uuid)},
+                    )
+                except Exception:
+                    pass
             return created_uuids
 
         try:
@@ -3223,9 +3247,36 @@ class RequestMutations:
                 raise GraphQLError(
                     "Approval status not found. Please ensure you have a status with slug 'approved'."
                 )
+            prev_status_slug = ""
+            try:
+                if request.status_id:
+                    prev_status_obj = await sync_to_async(
+                        lambda: models.RequestStatus.objects.filter(
+                            id=request.status_id
+                        ).first()
+                    )()
+                    prev_status_slug = (
+                        getattr(prev_status_obj, "slug", "") or ""
+                    )
+            except Exception:
+                prev_status_slug = ""
+
             request.status = approval_status
             request.approved_by = user
             await sync_to_async(request.save)()
+
+            # Audit log: capture the status transition for the timeline.
+            try:
+                await sync_to_async(models.RequestActivityLog.objects.create)(
+                    tenant=request.tenant,
+                    request=request,
+                    kind=models.RequestActivityLog.KIND_STATUS_CHANGED,
+                    actor_user=user if getattr(user, "id", None) else None,
+                    summary=f"Status: {prev_status_slug or '—'} → approved",
+                    metadata={"from": prev_status_slug, "to": "approved"},
+                )
+            except Exception:
+                pass
 
             # Materialize a real Event row so Ignite ops can staff against it.
             # The approved email promises "Ignite staffs a BA + calendar invite",
@@ -3325,9 +3376,40 @@ class RequestMutations:
                 raise GraphQLError(
                     "Decline status not found. Please ensure you have a status with slug 'decline'."
                 )
+            prev_status_slug = ""
+            try:
+                if request.status_id:
+                    prev_status_obj = await sync_to_async(
+                        lambda: models.RequestStatus.objects.filter(
+                            id=request.status_id
+                        ).first()
+                    )()
+                    prev_status_slug = (
+                        getattr(prev_status_obj, "slug", "") or ""
+                    )
+            except Exception:
+                prev_status_slug = ""
+
             request.status = decline_status
             request.decline_reason = input.decline_reason
             await sync_to_async(request.save)()
+
+            # Audit log: capture the decline transition + reason.
+            try:
+                await sync_to_async(models.RequestActivityLog.objects.create)(
+                    tenant=request.tenant,
+                    request=request,
+                    kind=models.RequestActivityLog.KIND_STATUS_CHANGED,
+                    actor_user=user if getattr(user, "id", None) else None,
+                    summary=f"Status: {prev_status_slug or '—'} → declined",
+                    metadata={
+                        "from": prev_status_slug,
+                        "to": "declined",
+                        "decline_reason": (input.decline_reason or "")[:500],
+                    },
+                )
+            except Exception:
+                pass
             location = await _resolve_request_location(request)
             reviewed_by_name = (user.get_full_name() or user.email or "").strip() or "-"
             reviewed_by_email = (user.email or "").strip() or "-"

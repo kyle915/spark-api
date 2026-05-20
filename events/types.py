@@ -398,6 +398,65 @@ class Request(Node):
     created_at: str
     updated_at: str
 
+    @strawberry.field
+    async def activity_log(self) -> List["RequestActivityLogEntry"]:
+        """Audit trail of every meaningful change to this request.
+
+        Newest first. Powers the timeline panel on the front-end
+        request detail page so kyle / RMMs can answer "who did what
+        when" without going to the DB.
+        """
+        from .models import RequestActivityLog as _Log
+
+        rows = await sync_to_async(list)(
+            _Log.objects.filter(request=self)
+            .select_related("actor_user")
+            .order_by("-created_at")[:200]
+        )
+        return [
+            RequestActivityLogEntry(
+                uuid=str(r.uuid),
+                kind=r.kind,
+                summary=r.summary or "",
+                metadata_json=__import__("json").dumps(r.metadata or {}),
+                actor_email=(r.actor_user.email if r.actor_user_id else None),
+                actor_name=(
+                    " ".join(
+                        filter(
+                            None,
+                            [
+                                getattr(r.actor_user, "first_name", None),
+                                getattr(r.actor_user, "last_name", None),
+                            ],
+                        )
+                    )
+                    if r.actor_user_id
+                    else None
+                ),
+                created_at=r.created_at.isoformat() if r.created_at else "",
+            )
+            for r in rows
+        ]
+
+
+@strawberry.type
+class RequestActivityLogEntry:
+    """Single entry in a request's append-only audit trail.
+
+    `metadata_json` is shipped as a string-encoded JSON blob (not a raw
+    JSON scalar) so the GraphQL schema stays portable across clients
+    without needing a JSON scalar definition. The front-end parses on
+    read.
+    """
+
+    uuid: str
+    kind: str
+    summary: str
+    metadata_json: str
+    actor_email: str | None
+    actor_name: str | None
+    created_at: str
+
 
 @strawberry_django.type(models.RequestStoreManager)
 class RequestStoreManager(Node):
