@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import re
 from io import BytesIO
 from typing import Iterable
 
@@ -456,13 +457,12 @@ def build_recap_pdf_html(recap, images: Iterable[dict[str, bytes]]) -> str:
 """
 
 
-def build_recap_pdf(recap, images: Iterable[dict[str, bytes]]) -> bytes:
-    from weasyprint import HTML, CSS
-
-    html = build_recap_pdf_html(recap, images)
-
-    css = CSS(
-        string="""
+# Shared stylesheet used by both the per-recap PDF and the multi-recap
+# campaign report. Kept as a module-level string so the campaign builder
+# below can extend it with cover-page + page-break rules without
+# duplicating the base styles. WeasyPrint resolves these via
+# `CSS(string=...)` at render time.
+_PDF_BASE_CSS = """
         @page {
             size: Letter;
             margin: 0.7in;
@@ -472,7 +472,16 @@ def build_recap_pdf(recap, images: Iterable[dict[str, bytes]]) -> bytes:
             color: #1f2933;
             background: #f5f6f8;
             font-size: 11px;
-        }
+        }"""
+
+
+def build_recap_pdf(recap, images: Iterable[dict[str, bytes]]) -> bytes:
+    from weasyprint import HTML, CSS
+
+    html = build_recap_pdf_html(recap, images)
+
+    css = CSS(
+        string=_PDF_BASE_CSS + """
         h1 {
             font-size: 28px;
             margin: 0 0 4px 0;
@@ -590,3 +599,302 @@ def build_recap_pdf(recap, images: Iterable[dict[str, bytes]]) -> bytes:
     )
 
     return HTML(string=html).write_pdf(stylesheets=[css])
+
+
+# ─── Campaign report ────────────────────────────────────────────────
+#
+# Combines multiple recaps into one PDF — the deliverable an agency
+# hands to a client at the end of a sampling campaign. v1 design:
+#   - One cover page with the campaign title, date range, recap count,
+#     and aggregate consumer numbers (so the client sees the headline
+#     before the per-recap detail)
+#   - One detail page per recap, reusing the same body the single-recap
+#     PDF renders. A `page-break-before: always` between recaps so each
+#     starts cleanly on a fresh page.
+#
+# We do HTML-glue (one big doc → WeasyPrint once) rather than
+# multi-PDF merging so we don't pull in pypdf. Each per-recap body is
+# pulled from the existing `build_recap_pdf_html` and the surrounding
+# `<html>/<body>` shell is stripped via a tolerant regex.
+
+_RECAP_BODY_RE = re.compile(
+    r"<body[^>]*>(?P<body>.*?)</body>",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def _extract_body(single_html: str) -> str:
+    """Pull the body content out of a full recap HTML doc.
+
+    Falls back to the whole string if the regex misses (e.g. someone
+    rewrites build_recap_pdf_html without `<body>` later) — better to
+    over-include than to silently drop a recap's data.
+    """
+    match = _RECAP_BODY_RE.search(single_html)
+    return match.group("body") if match else single_html
+
+
+def _aggregate_engagements(recaps: Iterable) -> dict[str, int]:
+    """Sum the consumer-engagement numbers across recaps for the cover
+    page. Returns zeros for any field that's missing on every recap so
+    the template doesn't have to guard each cell.
+    """
+    totals = {
+        "total_consumer": 0,
+        "first_time_consumers": 0,
+        "brand_aware_consumers": 0,
+        "willing_to_purchase_consumers": 0,
+    }
+    for recap in recaps:
+        engagements = _related_items(recap, "consumer_engagements")
+        if not engagements:
+            continue
+        eng = engagements[0]
+        for key in totals.keys():
+            val = getattr(eng, key, None)
+            if isinstance(val, (int, float)):
+                totals[key] += int(val)
+    return totals
+
+
+def _format_date_range(recaps: list) -> str:
+    """Earliest → latest event date label for the cover page. Falls back
+    to '—' when no events have a usable date.
+    """
+    dates: list = []
+    for r in recaps:
+        ev = getattr(r, "event", None)
+        d = getattr(ev, "date", None) if ev else None
+        if d:
+            dates.append(d)
+    if not dates:
+        return "—"
+    dates.sort()
+    if dates[0] == dates[-1]:
+        return dates[0].strftime("%b %d, %Y")
+    return f"{dates[0].strftime('%b %d, %Y')} – {dates[-1].strftime('%b %d, %Y')}"
+
+
+def build_campaign_report_pdf(
+    *,
+    title: str,
+    subtitle: str,
+    recaps_with_images: list,
+) -> bytes:
+    """Build a multi-recap campaign report PDF.
+
+    `recaps_with_images` is a list of (recap, images) tuples — same
+    shape `build_recap_pdf` takes per row.
+
+    Returns the rendered PDF bytes; callers upload to GCS via the
+    existing recap-file pattern.
+    """
+    from weasyprint import HTML, CSS
+
+    if not recaps_with_images:
+        raise ValueError("Campaign report requires at least one recap")
+
+    recap_objs = [r for (r, _imgs) in recaps_with_images]
+    totals = _aggregate_engagements(recap_objs)
+    date_range = _format_date_range(recap_objs)
+    count = len(recap_objs)
+
+    # Cover page — campaign-level rollup so the client sees the
+    # headline before flipping to per-recap detail.
+    cover_html = f"""
+    <section class="cover-card">
+      <p class="cover-eyebrow">{safe(subtitle)}</p>
+      <h1 class="cover-title">{safe(title)}</h1>
+      <p class="cover-date">{safe(date_range)} · {count} recap{'s' if count != 1 else ''}</p>
+
+      <div class="cover-stats">
+        <div>
+          <span>Total Consumers</span>
+          <strong>{totals['total_consumer']:,}</strong>
+        </div>
+        <div>
+          <span>First-Time</span>
+          <strong>{totals['first_time_consumers']:,}</strong>
+        </div>
+        <div>
+          <span>Brand Aware</span>
+          <strong>{totals['brand_aware_consumers']:,}</strong>
+        </div>
+        <div>
+          <span>Willing To Buy</span>
+          <strong>{totals['willing_to_purchase_consumers']:,}</strong>
+        </div>
+      </div>
+    </section>
+    """
+
+    detail_pages: list[str] = []
+    for idx, (recap, images) in enumerate(recaps_with_images):
+        body = _extract_body(build_recap_pdf_html(recap, images))
+        # Force each detail block to start on a fresh page (the cover
+        # owns the first page).
+        detail_pages.append(
+            f'<div class="recap-detail" style="page-break-before: always">{body}</div>'
+        )
+
+    html_doc = f"""
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>{safe(title)}</title>
+  </head>
+  <body>
+    {cover_html}
+    {"".join(detail_pages)}
+  </body>
+</html>
+"""
+
+    cover_css = """
+        .cover-card {
+            background: #ffffff;
+            border-radius: 16px;
+            padding: 56px 48px;
+            box-shadow: 0 12px 30px rgba(15, 23, 42, 0.12);
+            text-align: center;
+            margin-top: 40px;
+        }
+        .cover-eyebrow {
+            margin: 0 0 8px 0;
+            font-size: 11px;
+            color: #6b7280;
+            text-transform: uppercase;
+            letter-spacing: 0.18em;
+        }
+        .cover-title {
+            margin: 0 0 6px 0;
+            font-size: 36px;
+        }
+        .cover-date {
+            margin: 0 0 32px 0;
+            font-size: 13px;
+            color: #52606d;
+        }
+        .cover-stats {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 18px;
+            margin-top: 18px;
+        }
+        .cover-stats div {
+            background: #f5f6f8;
+            border-radius: 10px;
+            padding: 14px 10px;
+        }
+        .cover-stats span {
+            display: block;
+            font-size: 9px;
+            color: #6b7280;
+            text-transform: uppercase;
+            letter-spacing: 0.10em;
+            margin-bottom: 6px;
+        }
+        .cover-stats strong {
+            font-size: 18px;
+            color: #111827;
+        }
+        .recap-detail .header h1 {
+            font-size: 22px;
+        }
+    """
+
+    # Pull in the same base CSS the per-recap PDF uses so card / grid
+    # / gallery styling is identical between the standalone and rollup
+    # variants.
+    single_pdf_css = """
+        h1 {
+            font-size: 28px;
+            margin: 0 0 4px 0;
+        }
+        h2 {
+            font-size: 16px;
+            margin: 0 0 10px 0;
+        }
+        .subtitle { margin: 0; font-size: 12px; color: #52606d; }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 18px;
+        }
+        .badge {
+            background: #111827;
+            color: #f9fafb;
+            padding: 8px 14px;
+            border-radius: 999px;
+            font-weight: 600;
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+        .card {
+            background: #ffffff;
+            border-radius: 12px;
+            padding: 14px 16px;
+            box-shadow: 0 6px 16px rgba(15, 23, 42, 0.08);
+            margin-bottom: 16px;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px 18px;
+        }
+        .grid div span {
+            display: block;
+            font-size: 9px;
+            color: #6b7280;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            margin-bottom: 4px;
+        }
+        .grid div strong { font-size: 12px; color: #111827; }
+        .list { margin: 0; padding-left: 16px; }
+        .list li { margin-bottom: 4px; }
+        .stack div { margin-bottom: 10px; }
+        .stack span {
+            display: block;
+            font-size: 9px;
+            color: #6b7280;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            margin-bottom: 4px;
+        }
+        .stack p { margin: 0; font-size: 11px; color: #111827; }
+        .gallery {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 12px;
+        }
+        .image-group { margin-bottom: 14px; }
+        .image-group h3 {
+            margin: 0 0 8px 0;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: #6b7280;
+        }
+        .gallery figure {
+            margin: 0;
+            background: #f3f4f6;
+            border-radius: 10px;
+            padding: 8px;
+            text-align: center;
+        }
+        .gallery img {
+            max-width: 100%;
+            max-height: 220px;
+            object-fit: contain;
+            border-radius: 6px;
+        }
+        .gallery figcaption { margin-top: 6px; font-size: 9px; }
+        .empty { margin: 0; color: #9ca3af; font-style: italic; }
+    """
+
+    css = CSS(string=_PDF_BASE_CSS + single_pdf_css + cover_css)
+    return HTML(string=html_doc).write_pdf(stylesheets=[css])
