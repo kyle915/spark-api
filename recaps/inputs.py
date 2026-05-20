@@ -201,6 +201,28 @@ class NudgeAmbassadorForRecapInput(SparkGraphQLInput):
 
 
 @strawberry.input
+class EmailCampaignReportInput(SparkGraphQLInput):
+    """Generate the campaign-report PDF + email it as an attachment.
+
+    Same recap selection as `generateCampaignReportPdf`, plus a
+    recipient list and an optional cover-letter `message`. Used from
+    the Recaps page when kyle wants to send a deliverable directly
+    to a client without going through the download → attach flow.
+
+    `recipients` is a list of email addresses. Single-address case
+    works; the backend de-duplicates and validates each before send.
+    """
+
+    recap_ids: list[strawberry.ID]
+    recipients: list[str]
+    title: str | None = None
+    subtitle: str | None = None
+    # Free-text cover letter rendered above the summary in the email
+    # body. Optional — if omitted the email just says "Attached".
+    message: str | None = None
+
+
+@strawberry.input
 class GenerateCampaignReportPdfInput(SparkGraphQLInput):
     """Bundle N recaps into one client-deliverable PDF.
 

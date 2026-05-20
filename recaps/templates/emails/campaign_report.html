@@ -1,0 +1,61 @@
+{% extends "emails/base.html" %}
+{% block content %}
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+  <tr>
+    <td style="padding-bottom: 18px;">
+      <p style="margin: 0; font-size: 11px; letter-spacing: 0.18em; color: #888888; text-transform: uppercase;">
+        SPARK · CAMPAIGN REPORT
+      </p>
+      <h1 style="margin: 8px 0 0 0; font-size: 26px; font-weight: 700; color: #1a1a1a; letter-spacing: -0.02em;">
+        {{ campaign_title }}
+      </h1>
+      <p style="margin: 6px 0 0 0; font-size: 14px; color: #555555;">
+        {{ campaign_subtitle }}
+      </p>
+    </td>
+  </tr>
+
+  {# Optional cover-letter message — surfaced verbatim above the
+     stats so clients see the human framing first. Linebreaks
+     auto-escaped via the |linebreaksbr filter. #}
+  {% if cover_message %}
+  <tr>
+    <td style="padding: 18px 0;">
+      <p style="margin: 0; font-size: 14px; line-height: 1.55; color: #1a1a1a;">
+        {{ cover_message|linebreaksbr }}
+      </p>
+    </td>
+  </tr>
+  {% endif %}
+
+  <tr>
+    <td style="padding: 8px 0 24px 0;">
+      <p style="margin: 0; font-size: 12px; color: #555555;">
+        Attached: a {{ recap_count }}-recap PDF rollup with field-level photos and
+        consumer-engagement numbers. Reply with any questions — we have the
+        BA-level raw data on file if you need it broken down.
+      </p>
+    </td>
+  </tr>
+
+  <tr>
+    <td style="background: #f5f5f5; border-radius: 8px; padding: 14px 18px;">
+      <p style="margin: 0; font-size: 11px; letter-spacing: 0.12em; color: #888888; text-transform: uppercase;">
+        Summary
+      </p>
+      <p style="margin: 6px 0 0 0; font-size: 13px; color: #1a1a1a;">
+        <strong>{{ recap_count }}</strong> recap{{ recap_count|pluralize }} ·
+        <strong>{{ total_consumers|default:"—" }}</strong> total consumers reached
+      </p>
+    </td>
+  </tr>
+
+  <tr>
+    <td style="padding-top: 28px;">
+      <p style="margin: 0; font-size: 13px; color: #555555;">
+        — The {{ sender_tenant_name|default:"Spark" }} team
+      </p>
+    </td>
+  </tr>
+</table>
+{% endblock %}
