@@ -2921,6 +2921,26 @@ class RequestMutations:
                 ).get
             )(id=request.id)
 
+            # Audit log: first entry in the request's timeline.
+            try:
+                await sync_to_async(models.RequestActivityLog.objects.create)(
+                    tenant=request_with_relations.tenant,
+                    request=request_with_relations,
+                    kind=models.RequestActivityLog.KIND_CREATED,
+                    actor_user=service.user if getattr(service.user, "id", None) else None,
+                    summary=(
+                        "Request created"
+                        + (
+                            f" for {request_with_relations.retailer_name}"
+                            if request_with_relations.retailer_name
+                            else ""
+                        )
+                    ),
+                    metadata={},
+                )
+            except Exception:
+                pass
+
             is_client = service.user is not None and await service.user.role.is_client
             if is_client:
                 location = await _resolve_request_location(request_with_relations)

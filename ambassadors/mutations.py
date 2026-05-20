@@ -300,6 +300,47 @@ class AmbassadorMutations:
                 client_mutation_id=input.client_mutation_id,
             )
 
+        # Audit log: write a ba_invited entry on the request that
+        # spawned this event so the activity timeline on the request
+        # detail page picks it up. Best-effort; never raises.
+        try:
+            from asgiref.sync import sync_to_async
+            from events.models import Request, RequestActivityLog
+
+            req = None
+            if getattr(event, "request_id", None):
+                req = await sync_to_async(
+                    lambda: Request.objects.filter(id=event.request_id).first()
+                )()
+            if req is not None:
+                ba_name = (
+                    " ".join(
+                        filter(
+                            None,
+                            [
+                                getattr(ambassador, "first_name", None),
+                                getattr(ambassador, "last_name", None),
+                            ],
+                        )
+                    )
+                    or getattr(ambassador, "email", "")
+                    or "BA"
+                )
+                await sync_to_async(RequestActivityLog.objects.create)(
+                    tenant=event.tenant,
+                    request=req,
+                    kind=RequestActivityLog.KIND_BA_INVITED,
+                    actor_user=user if getattr(user, "id", None) else None,
+                    summary=f"Invited {ba_name}",
+                    metadata={
+                        "ambassador_uuid": str(ambassador.uuid),
+                        "ba_name": ba_name,
+                        "event_uuid": str(event.uuid),
+                    },
+                )
+        except Exception:
+            pass
+
         return InviteAmbassadorToShiftResponse(
             success=True,
             message="Invite sent. The BA has been notified.",

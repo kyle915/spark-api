@@ -4335,6 +4335,56 @@ class RecapMutations:
                 },
             )
 
+            # Audit log: write a nudge_sent entry on the request that
+            # spawned this event so the timeline panel picks it up.
+            # Best-effort; the nudge itself is the important action.
+            try:
+                req = None
+                if getattr(event, "request_id", None):
+                    req = await sync_to_async(
+                        lambda: e_models.Request.objects.filter(
+                            id=event.request_id
+                        ).first()
+                    )()
+                if req is not None:
+                    ambassador_obj = ae.ambassador
+                    ba_name = (
+                        " ".join(
+                            filter(
+                                None,
+                                [
+                                    getattr(ambassador_obj, "first_name", None),
+                                    getattr(ambassador_obj, "last_name", None),
+                                ],
+                            )
+                        )
+                        or getattr(ambassador_obj, "email", "")
+                        or "BA"
+                    )
+                    # The user calling this mutation is the admin, not
+                    # the ambassador receiving the nudge. Pull from info.
+                    actor = None
+                    try:
+                        actor = info.context.request.user
+                    except Exception:
+                        actor = None
+                    await sync_to_async(
+                        e_models.RequestActivityLog.objects.create
+                    )(
+                        tenant=req.tenant,
+                        request=req,
+                        kind=e_models.RequestActivityLog.KIND_NUDGE_SENT,
+                        actor_user=actor if getattr(actor, "id", None) else None,
+                        summary=f"Nudged {ba_name} for recap",
+                        metadata={
+                            "ba_name": ba_name,
+                            "devices_notified": devices_notified,
+                            "event_uuid": str(getattr(event, "uuid", "")),
+                        },
+                    )
+            except Exception:
+                pass
+
             return build_mutation_response(
                 types.NudgeRecapResponse,
                 success=True,
