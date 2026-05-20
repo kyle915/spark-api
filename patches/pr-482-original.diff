@@ -1,0 +1,714 @@
+diff --git a/config/settings.py b/config/settings.py
+index dca8ba4..b5c227c 100644
+--- a/config/settings.py
++++ b/config/settings.py
+@@ -61,6 +61,7 @@
+     "jobs",
+     "recaps",
+     "chats",
++    "digest",
+ ]
+ 
+ AUTH_USER_MODEL = "tenants.User"
+diff --git a/digest/__init__.py b/digest/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/digest/apps.py b/digest/apps.py
+new file mode 100644
+index 0000000..bcde2c1
+--- /dev/null
++++ b/digest/apps.py
+@@ -0,0 +1,6 @@
++from django.apps import AppConfig
++
++
++class DigestConfig(AppConfig):
++    default_auto_field = "django.db.models.BigAutoField"
++    name = "digest"
+diff --git a/digest/envelopes.py b/digest/envelopes.py
+new file mode 100644
+index 0000000..1bfd5ca
+--- /dev/null
++++ b/digest/envelopes.py
+@@ -0,0 +1,43 @@
++from utils.mailer import Envelope, Mailer
++from .services import TenantDigest
++
++
++class AdminDigestMailer(Mailer):
++    """Daily/weekly Spark digest for tenant admins.
++
++    Caller is responsible for deciding whether to send (e.g. skip
++    empty digests) — this just builds the envelope.
++    """
++
++    def __init__(
++        self,
++        digest: TenantDigest,
++        *,
++        to_emails: list[str],
++        web_app_base_url: str = "https://spark-new-admin.web.app",
++    ):
++        self.digest = digest
++        self.to_emails = to_emails
++        self.web_app_base_url = web_app_base_url.rstrip("/")
++
++    def envelope(self) -> Envelope:
++        d = self.digest
++        action_chip = (
++            f"{d.pending_approvals.count} pending · {d.unfiled_recaps.count} unfiled recaps"
++            if d.total_action_items
++            else "All clear"
++        )
++        subject = f"Spark {d.window_label.lower()} digest — {d.tenant_name} · {action_chip}"
++        return Envelope(
++            subject=subject,
++            template="digest.templates.emails.admin_digest",
++            to_emails=self.to_emails,
++            context={
++                "digest": d,
++                "web_app_base_url": self.web_app_base_url,
++                "tracker_url": f"{self.web_app_base_url}/requests/list",
++                "inbox_url": f"{self.web_app_base_url}/inbox",
++                "approvals_url": f"{self.web_app_base_url}/approvals",
++                "recaps_url": f"{self.web_app_base_url}/recaps/list",
++            },
++        )
+diff --git a/digest/management/__init__.py b/digest/management/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/digest/management/commands/__init__.py b/digest/management/commands/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/digest/management/commands/send_admin_digest.py b/digest/management/commands/send_admin_digest.py
+new file mode 100644
+index 0000000..6d915c5
+--- /dev/null
++++ b/digest/management/commands/send_admin_digest.py
+@@ -0,0 +1,144 @@
++"""
++Cron entrypoint for the admin digest email.
++
++Designed to be invoked by Cloud Scheduler → Cloud Run job (or `manage.py`
++on a host with a working email config). Walks every active tenant, builds
++its TenantDigest, and sends the email to that tenant's admin + spark-admin
++users.
++
++Usage:
++    python manage.py send_admin_digest                       # daily window
++    python manage.py send_admin_digest --window weekly       # 30-day upcoming
++    python manage.py send_admin_digest --tenant-id 12        # one tenant
++    python manage.py send_admin_digest --skip-empty          # don't email
++                                                             # "all clear"
++    python manage.py send_admin_digest --dry-run             # log, don't send
++    python manage.py send_admin_digest --to ops@example.com  # override recipients
++"""
++
++from __future__ import annotations
++
++from django.core.management.base import BaseCommand
++
++from digest.envelopes import AdminDigestMailer
++from digest.services import (
++    admin_recipients_for_tenant,
++    build_tenant_digest,
++)
++from tenants.models import Tenant
++from utils.mailer import MailChain
++
++
++class Command(BaseCommand):
++    help = (
++        "Send the admin digest email to admins of every active tenant. "
++        "Intended to run from Cloud Scheduler daily (or weekly)."
++    )
++
++    def add_arguments(self, parser):
++        parser.add_argument(
++            "--window",
++            choices=["daily", "weekly"],
++            default="daily",
++            help=(
++                "Daily uses a 7-day upcoming window; weekly uses 30. "
++                "Both run the same aggregator otherwise."
++            ),
++        )
++        parser.add_argument(
++            "--tenant-id",
++            type=int,
++            default=None,
++            help="Only build/send the digest for this tenant.",
++        )
++        parser.add_argument(
++            "--skip-empty",
++            action="store_true",
++            help=(
++                "Don't send when there are no pending approvals + no "
++                "unfiled recaps + no upcoming shifts."
++            ),
++        )
++        parser.add_argument(
++            "--dry-run",
++            action="store_true",
++            help="Build the digest + log the summary but skip the email send.",
++        )
++        parser.add_argument(
++            "--to",
++            type=str,
++            default=None,
++            help=(
++                "Override recipients. Comma-separated emails. Useful for "
++                "testing — fires to this address regardless of tenant admins."
++            ),
++        )
++
++    def handle(self, *args, **opts):
++        window = opts["window"]
++        window_label = "Daily" if window == "daily" else "Weekly"
++        upcoming_days = 7 if window == "daily" else 30
++        tenant_id = opts.get("tenant_id")
++        skip_empty = opts.get("skip_empty", False)
++        dry_run = opts.get("dry_run", False)
++        to_override = opts.get("to")
++
++        tenants_qs = Tenant.objects.all()
++        if tenant_id:
++            tenants_qs = tenants_qs.filter(id=tenant_id)
++
++        mailers = []
++        sent = 0
++        skipped = 0
++        for tenant in tenants_qs:
++            digest = build_tenant_digest(
++                tenant,
++                window_label=window_label,
++                upcoming_days=upcoming_days,
++            )
++
++            if skip_empty and digest.is_empty:
++                self.stdout.write(
++                    f"  · skip empty digest for tenant {tenant.id} ({tenant.name})"
++                )
++                skipped += 1
++                continue
++
++            recipients = (
++                [r.strip() for r in to_override.split(",") if r.strip()]
++                if to_override
++                else admin_recipients_for_tenant(tenant)
++            )
++            if not recipients:
++                self.stdout.write(
++                    f"  · skip tenant {tenant.id} ({tenant.name}) — no admin recipients"
++                )
++                skipped += 1
++                continue
++
++            self.stdout.write(
++                f"  · tenant {tenant.id} ({tenant.name}) — "
++                f"pending {digest.pending_approvals.count}, "
++                f"unfiled {digest.unfiled_recaps.count}, "
++                f"upcoming {digest.upcoming_shifts.count} → {len(recipients)} recipients"
++            )
++
++            if dry_run:
++                continue
++
++            mailers.append(
++                AdminDigestMailer(digest=digest, to_emails=recipients)
++            )
++            sent += 1
++
++        if mailers and not dry_run:
++            # Fire one chain so RQ enqueues sequentially. Falls back to
++            # inline send on Cloud Run where Redis isn't reachable.
++            MailChain(mailers).send()
++
++        self.stdout.write(
++            self.style.SUCCESS(
++                f"send_admin_digest complete: {sent} sent, {skipped} skipped, "
++                f"window={window}"
++            )
++        )
+diff --git a/digest/services.py b/digest/services.py
+new file mode 100644
+index 0000000..61d7221
+--- /dev/null
++++ b/digest/services.py
+@@ -0,0 +1,276 @@
++"""
++Admin digest aggregator.
++
++Pulls together what the ops team cares about — pending requests
++that need a call, upcoming shifts in the next 7 days, and unfiled
++recaps — into a single per-tenant snapshot. The mailer template
++renders this dict directly so the shape is the public contract.
++"""
++
++from __future__ import annotations
++
++import datetime
++from dataclasses import dataclass, field
++from typing import Iterable
++
++from django.db.models import Q
++from django.utils import timezone
++
++from ambassadors.models import AmbassadorEvent
++from events.models import Event, Request
++from recaps.models import Recap
++from tenants.models import Tenant, TenantedUser, Role
++
++
++# Tunables — keep the digest concise. Bigger numbers make the email
++# noisy + slow.
++MAX_PER_SECTION = 10
++PENDING_AGE_HOURS = 24
++UNFILED_RECAP_GRACE_HOURS = 4
++UPCOMING_WINDOW_DAYS = 7
++
++
++@dataclass
++class DigestSection:
++    label: str  # "PENDING APPROVALS · >24H"
++    tone: str   # "orange" / "gold" / "sky"
++    count: int
++    rows: list[dict] = field(default_factory=list)
++
++
++@dataclass
++class TenantDigest:
++    tenant_id: int
++    tenant_name: str
++    pending_approvals: DigestSection
++    upcoming_shifts: DigestSection
++    unfiled_recaps: DigestSection
++    generated_at: str
++    window_label: str  # "Daily" or "Weekly"
++
++    @property
++    def is_empty(self) -> bool:
++        return (
++            self.pending_approvals.count == 0
++            and self.upcoming_shifts.count == 0
++            and self.unfiled_recaps.count == 0
++        )
++
++    @property
++    def total_action_items(self) -> int:
++        return (
++            self.pending_approvals.count
++            + self.unfiled_recaps.count
++        )
++
++
++def _slug(s: str | None) -> str:
++    return (s or "").lower()
++
++
++def _request_label(request: Request) -> str:
++    retailer = getattr(request, "retailer", None)
++    return (
++        getattr(retailer, "name", None)
++        or request.name
++        or f"Request {request.id}"
++    )
++
++
++def _request_market(request: Request) -> str:
++    retailer = getattr(request, "retailer", None)
++    loc = getattr(retailer, "location", None) if retailer else None
++    state = getattr(loc, "state", None) if loc else None
++    parts = []
++    if loc and getattr(loc, "name", None):
++        parts.append(loc.name)
++    if state and getattr(state, "code", None):
++        parts.append(state.code)
++    return ", ".join(parts) or "—"
++
++
++def build_pending_approvals(tenant: Tenant) -> DigestSection:
++    """Requests still pending past the SLA cutoff (default: 24h)."""
++    cutoff = timezone.now() - datetime.timedelta(hours=PENDING_AGE_HOURS)
++    qs = (
++        Request.objects.filter(tenant=tenant, status__slug="pending")
++        .filter(created_at__lte=cutoff)
++        .select_related("retailer", "retailer__location", "retailer__location__state", "status")
++        .order_by("created_at")
++    )
++    rows = []
++    for r in qs[:MAX_PER_SECTION]:
++        rows.append(
++            {
++                "id": r.id,
++                "uuid": str(r.uuid),
++                "label": _request_label(r),
++                "market": _request_market(r),
++                "created_at": r.created_at.isoformat() if r.created_at else None,
++                "age_hours": int(
++                    (timezone.now() - r.created_at).total_seconds() / 3600
++                )
++                if r.created_at
++                else None,
++            }
++        )
++    return DigestSection(
++        label=f"PENDING · OPEN >{PENDING_AGE_HOURS}H",
++        tone="orange",
++        count=qs.count(),
++        rows=rows,
++    )
++
++
++def build_upcoming_shifts(tenant: Tenant, *, days: int = UPCOMING_WINDOW_DAYS) -> DigestSection:
++    """Confirmed events (accepted AmbassadorEvent rows) starting in
++    the next `days`. Surfaces what the ops team is on the hook for.
++    """
++    now = timezone.now()
++    cutoff = now + datetime.timedelta(days=days)
++    qs = (
++        AmbassadorEvent.objects.filter(
++            tenant=tenant,
++            is_approved=True,
++            event__start_time__gte=now,
++            event__start_time__lte=cutoff,
++        )
++        .select_related(
++            "event",
++            "event__retailer",
++            "event__retailer__location",
++            "event__retailer__location__state",
++            "ambassador",
++            "ambassador__user",
++        )
++        .order_by("event__start_time")
++    )
++    rows = []
++    for ae in qs[:MAX_PER_SECTION]:
++        ev = ae.event
++        retailer = getattr(ev, "retailer", None)
++        loc = getattr(retailer, "location", None) if retailer else None
++        state = getattr(loc, "state", None) if loc else None
++        rows.append(
++            {
++                "id": ae.id,
++                "uuid": str(ae.uuid),
++                "event_label": getattr(ev, "name", None) or "(shift)",
++                "venue": getattr(retailer, "name", None) or "—",
++                "market": ", ".join(
++                    p
++                    for p in [
++                        getattr(loc, "name", None),
++                        getattr(state, "code", None),
++                    ]
++                    if p
++                )
++                or "—",
++                "start_time": ev.start_time.isoformat() if ev.start_time else None,
++                "ba_name": " ".join(
++                    p
++                    for p in [
++                        getattr(ae.ambassador.user, "first_name", None),
++                        getattr(ae.ambassador.user, "last_name", None),
++                    ]
++                    if p
++                )
++                or (getattr(ae.ambassador.user, "email", None) or "—"),
++            }
++        )
++    return DigestSection(
++        label=f"UPCOMING · NEXT {days}D",
++        tone="lime",
++        count=qs.count(),
++        rows=rows,
++    )
++
++
++def build_unfiled_recaps(tenant: Tenant) -> DigestSection:
++    """Events whose end_time has passed by ≥ grace hours but no
++    Recap has been submitted yet.
++    """
++    cutoff = timezone.now() - datetime.timedelta(hours=UNFILED_RECAP_GRACE_HOURS)
++    qs = (
++        Event.objects.filter(
++            tenant=tenant,
++            end_time__lte=cutoff,
++        )
++        .exclude(
++            id__in=Recap.objects.filter(
++                event__tenant=tenant, submited_at__isnull=False
++            ).values_list("event_id", flat=True)
++        )
++        .select_related("retailer", "retailer__location", "retailer__location__state")
++        .order_by("-end_time")
++    )
++    rows = []
++    for ev in qs[:MAX_PER_SECTION]:
++        retailer = getattr(ev, "retailer", None)
++        loc = getattr(retailer, "location", None) if retailer else None
++        state = getattr(loc, "state", None) if loc else None
++        rows.append(
++            {
++                "id": ev.id,
++                "uuid": str(ev.uuid),
++                "label": getattr(ev, "name", None) or "(event)",
++                "venue": getattr(retailer, "name", None) or "—",
++                "market": ", ".join(
++                    p
++                    for p in [
++                        getattr(loc, "name", None),
++                        getattr(state, "code", None),
++                    ]
++                    if p
++                )
++                or "—",
++                "ended_at": ev.end_time.isoformat() if ev.end_time else None,
++            }
++        )
++    return DigestSection(
++        label=f"UNFILED RECAPS · >{UNFILED_RECAP_GRACE_HOURS}H PAST END",
++        tone="gold",
++        count=qs.count(),
++        rows=rows,
++    )
++
++
++def build_tenant_digest(
++    tenant: Tenant,
++    *,
++    window_label: str = "Daily",
++    upcoming_days: int = UPCOMING_WINDOW_DAYS,
++) -> TenantDigest:
++    """Aggregate everything for one tenant. Pure function — no side
++    effects, no email send. Caller decides whether to skip empty
++    digests, send to which recipients, etc.
++    """
++    return TenantDigest(
++        tenant_id=tenant.id,
++        tenant_name=tenant.name,
++        pending_approvals=build_pending_approvals(tenant),
++        upcoming_shifts=build_upcoming_shifts(tenant, days=upcoming_days),
++        unfiled_recaps=build_unfiled_recaps(tenant),
++        generated_at=timezone.now().isoformat(),
++        window_label=window_label,
++    )
++
++
++def admin_recipients_for_tenant(tenant: Tenant) -> list[str]:
++    """Email addresses for the admin + spark-admin users in this
++    tenant. Filters out blanks. Falls back to settings.NEW_AMBASSADOR_ALERT_EMAILS
++    when no admins are found so the digest still goes somewhere.
++    """
++    qs = (
++        TenantedUser.objects.filter(tenant=tenant, is_active=True)
++        .select_related("user", "user__role")
++        .filter(
++            Q(user__role__slug=Role.SPARK_ADMIN_SLUG)
++            | Q(user__role__name__iexact="admin")
++        )
++    )
++    emails = []
++    for tu in qs:
++        if tu.user and tu.user.email:
++            emails.append(tu.user.email)
++    return list(dict.fromkeys(emails))  # de-dupe, preserve order
+diff --git a/digest/templates/emails/admin_digest.html b/digest/templates/emails/admin_digest.html
+new file mode 100644
+index 0000000..646c64d
+--- /dev/null
++++ b/digest/templates/emails/admin_digest.html
+@@ -0,0 +1,136 @@
++{% extends "emails/base.html" %}
++{% block content %}
++<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
++  <tr>
++    <td style="padding-bottom: 18px;">
++      <p style="margin: 0; font-size: 11px; letter-spacing: 0.18em; color: #888888; text-transform: uppercase;">
++        SPARK · {{ digest.window_label|upper }} DIGEST
++      </p>
++      <h1 style="margin: 8px 0 0 0; font-size: 26px; font-weight: 700; color: #1a1a1a; letter-spacing: -0.02em;">
++        {{ digest.tenant_name }}
++      </h1>
++      <p style="margin: 6px 0 0 0; font-size: 14px; color: #555555;">
++        {% if digest.total_action_items %}
++          {{ digest.pending_approvals.count }} pending approval{% if digest.pending_approvals.count != 1 %}s{% endif %} ·
++          {{ digest.unfiled_recaps.count }} unfiled recap{% if digest.unfiled_recaps.count != 1 %}s{% endif %} ·
++          {{ digest.upcoming_shifts.count }} upcoming shift{% if digest.upcoming_shifts.count != 1 %}s{% endif %}.
++        {% else %}
++          Inbox zero. {{ digest.upcoming_shifts.count }} upcoming shift{% if digest.upcoming_shifts.count != 1 %}s{% endif %} in the next 7 days.
++        {% endif %}
++      </p>
++    </td>
++  </tr>
++
++  {# ====== PENDING APPROVALS ====== #}
++  {% if digest.pending_approvals.count %}
++  <tr>
++    <td style="padding-top: 14px; padding-bottom: 8px;">
++      <p style="margin: 0; font-size: 11px; letter-spacing: 0.16em; color: #c2410c; text-transform: uppercase;">
++        ● {{ digest.pending_approvals.label }} · {{ digest.pending_approvals.count }}
++      </p>
++    </td>
++  </tr>
++  <tr>
++    <td style="background: #fff7ed; border: 1px solid #fed7aa; border-radius: 12px; padding: 14px 18px;">
++      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
++        {% for r in digest.pending_approvals.rows %}
++          <tr>
++            <td style="padding: 6px 0; font-size: 14px; color: #1a1a1a;">
++              <strong>{{ r.label }}</strong>
++              <span style="color: #666;"> · {{ r.market }}</span>
++              {% if r.age_hours %}
++                <span style="float: right; font-size: 11px; color: #c2410c; letter-spacing: 0.12em;">{{ r.age_hours }}H OLD</span>
++              {% endif %}
++            </td>
++          </tr>
++        {% endfor %}
++      </table>
++      <p style="margin: 12px 0 0 0;">
++        <a href="{{ approvals_url }}" style="font-size: 12px; color: #c2410c; font-weight: 600; text-decoration: none;">Review approvals →</a>
++      </p>
++    </td>
++  </tr>
++  {% endif %}
++
++  {# ====== UNFILED RECAPS ====== #}
++  {% if digest.unfiled_recaps.count %}
++  <tr>
++    <td style="padding-top: 18px; padding-bottom: 8px;">
++      <p style="margin: 0; font-size: 11px; letter-spacing: 0.16em; color: #a16207; text-transform: uppercase;">
++        ● {{ digest.unfiled_recaps.label }} · {{ digest.unfiled_recaps.count }}
++      </p>
++    </td>
++  </tr>
++  <tr>
++    <td style="background: #fffbeb; border: 1px solid #fcd34d; border-radius: 12px; padding: 14px 18px;">
++      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
++        {% for r in digest.unfiled_recaps.rows %}
++          <tr>
++            <td style="padding: 6px 0; font-size: 14px; color: #1a1a1a;">
++              <strong>{{ r.venue }}</strong>
++              <span style="color: #666;"> · {{ r.market }}</span>
++              {% if r.ended_at %}
++                <span style="float: right; font-size: 11px; color: #a16207; letter-spacing: 0.12em;">ENDED {{ r.ended_at|slice:":10" }}</span>
++              {% endif %}
++            </td>
++          </tr>
++        {% endfor %}
++      </table>
++      <p style="margin: 12px 0 0 0;">
++        <a href="{{ recaps_url }}" style="font-size: 12px; color: #a16207; font-weight: 600; text-decoration: none;">Open recaps →</a>
++      </p>
++    </td>
++  </tr>
++  {% endif %}
++
++  {# ====== UPCOMING SHIFTS ====== #}
++  {% if digest.upcoming_shifts.count %}
++  <tr>
++    <td style="padding-top: 18px; padding-bottom: 8px;">
++      <p style="margin: 0; font-size: 11px; letter-spacing: 0.16em; color: #4d7c0f; text-transform: uppercase;">
++        ● {{ digest.upcoming_shifts.label }} · {{ digest.upcoming_shifts.count }}
++      </p>
++    </td>
++  </tr>
++  <tr>
++    <td style="background: #f7fee7; border: 1px solid #bef264; border-radius: 12px; padding: 14px 18px;">
++      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
++        {% for r in digest.upcoming_shifts.rows %}
++          <tr>
++            <td style="padding: 6px 0; font-size: 14px; color: #1a1a1a;">
++              <strong>{{ r.venue }}</strong>
++              <span style="color: #666;"> · {{ r.ba_name }}</span>
++              {% if r.start_time %}
++                <span style="float: right; font-size: 11px; color: #4d7c0f; letter-spacing: 0.12em;">{{ r.start_time|slice:":16" }}</span>
++              {% endif %}
++            </td>
++          </tr>
++        {% endfor %}
++      </table>
++      <p style="margin: 12px 0 0 0;">
++        <a href="{{ tracker_url }}" style="font-size: 12px; color: #4d7c0f; font-weight: 600; text-decoration: none;">Open tracker →</a>
++      </p>
++    </td>
++  </tr>
++  {% endif %}
++
++  {# ====== EMPTY STATE ====== #}
++  {% if digest.is_empty %}
++  <tr>
++    <td style="background: #f7fee7; border: 1px solid #bef264; border-radius: 12px; padding: 22px 18px; text-align: center;">
++      <p style="margin: 0; font-size: 11px; letter-spacing: 0.22em; color: #4d7c0f;">ALL CLEAR</p>
++      <p style="margin: 8px 0 0 0; font-size: 14px; color: #1a1a1a;">
++        Nothing in the queue needs your attention right now.
++      </p>
++    </td>
++  </tr>
++  {% endif %}
++
++  <tr>
++    <td style="padding-top: 28px; font-size: 12px; color: #888888; line-height: 1.6;">
++      Generated at {{ digest.generated_at|slice:":19" }} UTC. To stop these digests, reply to this email or contact{" "}
++      <a href="mailto:engineering@igniteproductions.co" style="color: #555;">engineering@igniteproductions.co</a>.
++    </td>
++  </tr>
++</table>
++{% endblock %}
+diff --git a/digest/tests/__init__.py b/digest/tests/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/digest/tests/test_services.py b/digest/tests/test_services.py
+new file mode 100644
+index 0000000..9f7c24d
+--- /dev/null
++++ b/digest/tests/test_services.py
+@@ -0,0 +1,49 @@
++"""
++Tests for the digest aggregator. Focuses on the boundary cases:
++empty digest, pending-only, recipient resolution.
++"""
++
++import datetime
++import pytest
++from django.utils import timezone
++
++from digest.services import (
++    build_tenant_digest,
++    admin_recipients_for_tenant,
++)
++from events.models import Event, Request
++from recaps.models import Recap
++from tenants.tests.base import BaseGraphQLTestCase
++
++
++@pytest.mark.django_db(transaction=True)
++class TestDigestServices(BaseGraphQLTestCase):
++    @pytest.fixture(autouse=True)
++    def setup(self, db):
++        self.roles = self.setup_default_roles()
++        self.tenant = self.create_tenant(name="Digest Test Tenant")
++
++    def test_empty_digest_for_empty_tenant(self):
++        digest = build_tenant_digest(self.tenant, window_label="Daily")
++        assert digest.tenant_id == self.tenant.id
++        assert digest.tenant_name == "Digest Test Tenant"
++        assert digest.pending_approvals.count == 0
++        assert digest.upcoming_shifts.count == 0
++        assert digest.unfiled_recaps.count == 0
++        assert digest.is_empty is True
++        assert digest.total_action_items == 0
++
++    def test_admin_recipients_empty_when_no_admins(self):
++        emails = admin_recipients_for_tenant(self.tenant)
++        assert emails == []
++
++    def test_admin_recipients_include_admin_users(self):
++        admin = self.create_user(
++            username="adm-digest",
++            email="adm-digest@test.com",
++            role=self.roles["spark_admin"],
++        )
++        self.create_tenanted_user(admin, self.tenant)
++
++        emails = admin_recipients_for_tenant(self.tenant)
++        assert emails == ["adm-digest@test.com"]

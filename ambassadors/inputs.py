@@ -538,6 +538,19 @@ class InviteAmbassadorToShiftInput(SparkGraphQLInput):
 
 
 @strawberry.input
+class CancelShiftInviteInput(SparkGraphQLInput):
+    """Admin retracts a pending shift invite (or removes an accepted
+    BA from a shift). Deletes the AmbassadorEvent row.
+
+    For "pending" rows, this is symmetric with the BA's decline path
+    (same delete). For "accepted" rows, this is effectively kicking
+    the BA off the shift — admins should confirm before calling.
+    """
+
+    ambassador_event_uuid: strawberry.ID
+
+
+@strawberry.input
 class RespondToShiftOfferInput(SparkGraphQLInput):
     """BA's response to a shift invitation pushed from the admin app.
 
