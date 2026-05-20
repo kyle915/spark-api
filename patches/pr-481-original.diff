@@ -1,0 +1,696 @@
+diff --git a/config/schema_client.py b/config/schema_client.py
+index 39c51cb..17bb3df 100644
+--- a/config/schema_client.py
++++ b/config/schema_client.py
+@@ -8,6 +8,7 @@
+ from tenants.dashboard.schema import DashboardQueries
+ from tenants.dashboard.mutations import DashboardMutations
+ from jobs.schema import ClientJobMutations, ClientJobQueries
++from wingspan.schema import WingspanQueryClient
+ from utils.utils import BlockIntrospectionForAnonymous
+ from utils.graphql.gcs_schema import GCSQuery
+ 
+@@ -22,6 +23,7 @@
+         ClientJobQueries,
+         DashboardQueries,
+         GCSQuery,
++        WingspanQueryClient,
+     ),
+ )
+ MutationClients = merge_types(
+diff --git a/config/schema_spark.py b/config/schema_spark.py
+index cdaf732..dbd8c59 100644
+--- a/config/schema_spark.py
++++ b/config/schema_spark.py
+@@ -8,12 +8,13 @@
+ from tenants.dashboard.schema import DashboardQueries
+ from tenants.dashboard.mutations import DashboardMutations
+ from jobs.schema import SparkJobMutations, SparkJobQueries
++from wingspan.schema import WingspanQuerySpark
+ from utils.utils import BlockIntrospectionForAnonymous
+ from utils.graphql.gcs_schema import GCSQuery
+ 
+ # Spark Schemas
+ QuerySpark = merge_types(
+-    "Query", (EventQuerySpark, RecapQuerySpark, AmbassadorQuerySpark, QuerySpark, SparkJobQueries, DashboardQueries, GCSQuery))
++    "Query", (EventQuerySpark, RecapQuerySpark, AmbassadorQuerySpark, QuerySpark, SparkJobQueries, DashboardQueries, GCSQuery, WingspanQuerySpark))
+ MutationSpark = merge_types(
+     "Mutation", (EventMutationsSpark, RecapMutationsSpark, MutationSpark, SparkJobMutations, AmbassadorMutationsSpark, DashboardMutations))
+ 
+diff --git a/config/settings.py b/config/settings.py
+index dca8ba4..021c37d 100644
+--- a/config/settings.py
++++ b/config/settings.py
+@@ -61,6 +61,7 @@
+     "jobs",
+     "recaps",
+     "chats",
++    "wingspan",
+ ]
+ 
+ AUTH_USER_MODEL = "tenants.User"
+@@ -303,6 +304,17 @@
+ EXPO_PUSH_ACCESS_TOKEN = env("EXPO_PUSH_ACCESS_TOKEN", default="")
+ EXPO_PUSH_TIMEOUT_SECONDS = env.float("EXPO_PUSH_TIMEOUT_SECONDS", default=10.0)
+ 
++# Wingspan integration — admin UI for Payroll · Hours + Payments.
++# Set WINGSPAN_API_KEY on Cloud Run to enable; otherwise the front-
++# end renders a "not connected" empty state instead of fake numbers.
++# WINGSPAN_MOCK=true forces the empty-state path even when a key is
++# set (useful for staging / screenshots).
++WINGSPAN_API_KEY = env("WINGSPAN_API_KEY", default="")
++WINGSPAN_API_BASE = env(
++    "WINGSPAN_API_BASE", default="https://api.wingspan.app"
++)
++WINGSPAN_MOCK = env.bool("WINGSPAN_MOCK", default=False)
++
+ # Sign in with Apple — `aud` claims we accept on identity tokens.
+ # Comma-separated list of bundle ids / services ids. Defaults to the
+ # spark-mobile bundle id.
+diff --git a/wingspan/__init__.py b/wingspan/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/wingspan/apps.py b/wingspan/apps.py
+new file mode 100644
+index 0000000..468c1a6
+--- /dev/null
++++ b/wingspan/apps.py
+@@ -0,0 +1,6 @@
++from django.apps import AppConfig
++
++
++class WingspanConfig(AppConfig):
++    default_auto_field = "django.db.models.BigAutoField"
++    name = "wingspan"
+diff --git a/wingspan/client.py b/wingspan/client.py
+new file mode 100644
+index 0000000..9f65094
+--- /dev/null
++++ b/wingspan/client.py
+@@ -0,0 +1,282 @@
++"""
++Async Wingspan API client.
++
++Wraps the Wingspan REST API for two surfaces the admin UI needs:
++  - Payroll periods (pay cycles, status, total)
++  - Payments / payouts (disbursements to BAs in a period)
++
++Configuration (env vars, read via django.conf.settings):
++  - WINGSPAN_API_KEY (required for non-mock mode)
++  - WINGSPAN_API_BASE (default: https://api.wingspan.app)
++  - WINGSPAN_MOCK    (default: False — when True, returns canned
++                     "no data" responses so the front-end can render
++                     its empty states without a live key)
++
++The client is intentionally read-only for v1. No payouts run via
++Spark — payroll is still kicked off from the Wingspan dashboard.
++"""
++
++from __future__ import annotations
++
++import logging
++from dataclasses import dataclass, field
++from datetime import datetime
++from typing import Any, Optional
++
++import httpx
++from django.conf import settings
++
++
++logger = logging.getLogger(__name__)
++
++
++class WingspanNotConfigured(Exception):
++    """Raised when callers ask for live data but no API key is set.
++
++    Resolver layer should catch this and return a structured "not
++    connected" payload so the admin UI can render a friendly state
++    instead of a GraphQL error.
++    """
++
++
++class WingspanAPIError(Exception):
++    """Network / auth / 5xx error from Wingspan."""
++
++
++@dataclass
++class PayrollPeriod:
++    """A Wingspan pay cycle. Names mirror common Wingspan terminology
++    so the resolver can pass them through unchanged. Optional fields
++    are None when Wingspan's response doesn't include them.
++    """
++
++    id: str
++    label: str  # e.g. "May 13 – May 19"
++    starts_at: Optional[str] = None  # ISO date
++    ends_at: Optional[str] = None
++    pay_date: Optional[str] = None
++    status: Optional[str] = None  # open | processing | paid
++    total_amount: Optional[float] = None  # USD
++    contractor_count: Optional[int] = None
++
++
++@dataclass
++class Payment:
++    """A single disbursement to a contractor (BA) within a period."""
++
++    id: str
++    contractor_name: Optional[str] = None
++    contractor_email: Optional[str] = None
++    amount: Optional[float] = None
++    status: Optional[str] = None  # pending | sent | failed
++    pay_date: Optional[str] = None
++    period_id: Optional[str] = None
++    memo: Optional[str] = None
++
++
++@dataclass
++class WingspanConfig:
++    api_key: str
++    base_url: str = "https://api.wingspan.app"
++    mock: bool = False
++
++    @classmethod
++    def from_settings(cls) -> "WingspanConfig":
++        api_key = getattr(settings, "WINGSPAN_API_KEY", "") or ""
++        base_url = (
++            getattr(settings, "WINGSPAN_API_BASE", "") or "https://api.wingspan.app"
++        )
++        mock = bool(getattr(settings, "WINGSPAN_MOCK", False))
++        return cls(api_key=api_key, base_url=base_url, mock=mock)
++
++
++def _config() -> WingspanConfig:
++    return WingspanConfig.from_settings()
++
++
++def is_connected() -> bool:
++    """Cheap configuration check — does the backend have a key?"""
++    cfg = _config()
++    if cfg.mock:
++        return False
++    return bool(cfg.api_key)
++
++
++async def _request(
++    method: str,
++    path: str,
++    *,
++    params: dict[str, Any] | None = None,
++) -> dict[str, Any]:
++    cfg = _config()
++    if not cfg.api_key and not cfg.mock:
++        raise WingspanNotConfigured(
++            "WINGSPAN_API_KEY is not set. Set it on Cloud Run to enable "
++            "the integration, or set WINGSPAN_MOCK=true for an empty-state demo."
++        )
++    if cfg.mock:
++        # Mock mode: deliberately return empty so the UI renders its
++        # "no data" state instead of fake numbers.
++        return {"results": [], "data": [], "items": []}
++
++    url = f"{cfg.base_url.rstrip('/')}{path}"
++    headers = {
++        "Authorization": f"Bearer {cfg.api_key}",
++        "Accept": "application/json",
++        "User-Agent": "spark-api/wingspan-client",
++    }
++    try:
++        async with httpx.AsyncClient(timeout=15.0) as client:
++            resp = await client.request(
++                method, url, headers=headers, params=params
++            )
++    except httpx.HTTPError as exc:
++        logger.warning("Wingspan transport error %s %s: %s", method, path, exc)
++        raise WingspanAPIError(f"Wingspan transport error: {exc}") from exc
++
++    if resp.status_code == 401 or resp.status_code == 403:
++        raise WingspanAPIError(
++            f"Wingspan auth failed ({resp.status_code}) — check WINGSPAN_API_KEY."
++        )
++    if resp.status_code >= 400:
++        snippet = (resp.text or "")[:200]
++        raise WingspanAPIError(
++            f"Wingspan {method} {path} returned {resp.status_code}: {snippet}"
++        )
++
++    try:
++        return resp.json()
++    except ValueError:
++        return {}
++
++
++def _coerce_amount(raw: Any) -> Optional[float]:
++    if raw is None:
++        return None
++    try:
++        return float(raw)
++    except (TypeError, ValueError):
++        return None
++
++
++def _coerce_int(raw: Any) -> Optional[int]:
++    if raw is None:
++        return None
++    try:
++        return int(raw)
++    except (TypeError, ValueError):
++        return None
++
++
++def _normalize_period(row: dict[str, Any]) -> PayrollPeriod:
++    """Best-effort field aliasing. Different Wingspan response shapes
++    use different key names; we look in the obvious places without
++    making assumptions hard-fail.
++    """
++    period_id = (
++        row.get("id")
++        or row.get("payrollId")
++        or row.get("uuid")
++        or ""
++    )
++    label = (
++        row.get("label")
++        or row.get("name")
++        or row.get("period")
++        or row.get("payDate")
++        or str(period_id)
++    )
++    return PayrollPeriod(
++        id=str(period_id),
++        label=str(label),
++        starts_at=row.get("startsAt") or row.get("startDate"),
++        ends_at=row.get("endsAt") or row.get("endDate"),
++        pay_date=row.get("payDate") or row.get("disburseAt"),
++        status=row.get("status"),
++        total_amount=_coerce_amount(
++            row.get("totalAmount") or row.get("total")
++        ),
++        contractor_count=_coerce_int(
++            row.get("contractorCount") or row.get("count")
++        ),
++    )
++
++
++def _normalize_payment(row: dict[str, Any]) -> Payment:
++    payee = row.get("contractor") or row.get("payee") or row.get("recipient") or {}
++    name = (
++        row.get("contractorName")
++        or payee.get("name")
++        or " ".join(
++            [
++                payee.get("firstName", "") or "",
++                payee.get("lastName", "") or "",
++            ]
++        ).strip()
++        or None
++    )
++    return Payment(
++        id=str(
++            row.get("id") or row.get("paymentId") or row.get("uuid") or ""
++        ),
++        contractor_name=name,
++        contractor_email=row.get("contractorEmail") or payee.get("email"),
++        amount=_coerce_amount(row.get("amount") or row.get("total")),
++        status=row.get("status"),
++        pay_date=row.get("payDate") or row.get("createdAt"),
++        period_id=row.get("periodId") or row.get("payrollId"),
++        memo=row.get("memo") or row.get("description"),
++    )
++
++
++def _extract_list(payload: dict[str, Any]) -> list[dict[str, Any]]:
++    """Pick whichever rows-shaped field the response uses."""
++    for key in ("results", "data", "items", "rows"):
++        v = payload.get(key)
++        if isinstance(v, list):
++            return v
++    return []
++
++
++async def list_payroll_periods(
++    *, limit: int = 12
++) -> list[PayrollPeriod]:
++    """Recent payroll periods, newest first.
++
++    Returns [] (not raises) when the API isn't configured — the
++    resolver layer surfaces a "not connected" flag separately so the
++    UI can show a setup nudge.
++    """
++    if not is_connected():
++        return []
++    try:
++        payload = await _request(
++            "GET",
++            "/v1/payroll",
++            params={"limit": limit},
++        )
++    except WingspanNotConfigured:
++        return []
++    return [_normalize_period(r) for r in _extract_list(payload)]
++
++
++async def list_payments(
++    *,
++    period_id: str | None = None,
++    limit: int = 50,
++) -> list[Payment]:
++    """Recent payments / disbursements.
++
++    Filter to a single period via `period_id`. Same not-configured
++    posture as `list_payroll_periods`.
++    """
++    if not is_connected():
++        return []
++    params: dict[str, Any] = {"limit": limit}
++    if period_id:
++        params["periodId"] = period_id
++    try:
++        payload = await _request("GET", "/v1/payments", params=params)
++    except WingspanNotConfigured:
++        return []
++    return [_normalize_payment(r) for r in _extract_list(payload)]
+diff --git a/wingspan/queries.py b/wingspan/queries.py
+new file mode 100644
+index 0000000..b091d8c
+--- /dev/null
++++ b/wingspan/queries.py
+@@ -0,0 +1,89 @@
++"""Wingspan GraphQL queries — admin-only, read-only."""
++
++from __future__ import annotations
++
++from typing import List
++
++import strawberry
++
++from utils.graphql.permissions import IsClientOrSparkAdmin
++
++from . import client, types
++
++
++@strawberry.type
++class WingspanQueries:
++    @strawberry.field(permission_classes=[IsClientOrSparkAdmin])
++    async def wingspan_status(self, info: strawberry.Info) -> types.WingspanStatus:
++        """Connection check — does this tenant have a key wired?"""
++        if client.is_connected():
++            return types.WingspanStatus(
++                connected=True,
++                message="Wingspan integration is live.",
++            )
++        return types.WingspanStatus(
++            connected=False,
++            message=(
++                "Wingspan is not connected. Set WINGSPAN_API_KEY on Cloud Run "
++                "(or WINGSPAN_MOCK=true for an empty-state demo) to enable "
++                "Payroll · Hours and Payments · Wingspan."
++            ),
++        )
++
++    @strawberry.field(permission_classes=[IsClientOrSparkAdmin])
++    async def wingspan_payroll_periods(
++        self,
++        info: strawberry.Info,
++        limit: int = 12,
++    ) -> List[types.WingspanPayrollPeriod]:
++        """Recent payroll periods, newest first. Returns empty list
++        when Wingspan isn't connected — use wingspanStatus to detect.
++        """
++        try:
++            periods = await client.list_payroll_periods(limit=max(1, min(limit, 50)))
++        except client.WingspanAPIError:
++            return []
++        return [
++            types.WingspanPayrollPeriod(
++                id=strawberry.ID(p.id),
++                label=p.label,
++                starts_at=p.starts_at,
++                ends_at=p.ends_at,
++                pay_date=p.pay_date,
++                status=p.status,
++                total_amount=p.total_amount,
++                contractor_count=p.contractor_count,
++            )
++            for p in periods
++        ]
++
++    @strawberry.field(permission_classes=[IsClientOrSparkAdmin])
++    async def wingspan_payments(
++        self,
++        info: strawberry.Info,
++        period_id: strawberry.ID | None = None,
++        limit: int = 50,
++    ) -> List[types.WingspanPayment]:
++        """Recent payments / disbursements. Filter to a single period
++        with `periodId`. Empty list when not connected.
++        """
++        try:
++            payments = await client.list_payments(
++                period_id=str(period_id) if period_id else None,
++                limit=max(1, min(limit, 200)),
++            )
++        except client.WingspanAPIError:
++            return []
++        return [
++            types.WingspanPayment(
++                id=strawberry.ID(p.id),
++                contractor_name=p.contractor_name,
++                contractor_email=p.contractor_email,
++                amount=p.amount,
++                status=p.status,
++                pay_date=p.pay_date,
++                period_id=p.period_id,
++                memo=p.memo,
++            )
++            for p in payments
++        ]
+diff --git a/wingspan/schema.py b/wingspan/schema.py
+new file mode 100644
+index 0000000..5c062de
+--- /dev/null
++++ b/wingspan/schema.py
+@@ -0,0 +1,13 @@
++import strawberry
++
++from . import queries
++
++
++@strawberry.type
++class WingspanQuerySpark(queries.WingspanQueries):
++    pass
++
++
++@strawberry.type
++class WingspanQueryClient(queries.WingspanQueries):
++    pass
+diff --git a/wingspan/tests/__init__.py b/wingspan/tests/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/wingspan/tests/test_client.py b/wingspan/tests/test_client.py
+new file mode 100644
+index 0000000..79c7166
+--- /dev/null
++++ b/wingspan/tests/test_client.py
+@@ -0,0 +1,156 @@
++"""
++Tests for the Wingspan API client.
++
++The client is HTTP-mocked here — we don't actually call Wingspan.
++The contract under test:
++  - is_connected() reflects WINGSPAN_API_KEY presence
++  - list_payroll_periods / list_payments return [] without a key
++    instead of raising (so resolvers can fall through cleanly)
++  - Field aliasing handles snake_case + camelCase + nested payee
++"""
++
++import pytest
++from unittest.mock import AsyncMock, patch
++
++from django.test import override_settings
++
++from wingspan import client
++
++
++@override_settings(WINGSPAN_API_KEY="", WINGSPAN_MOCK=False)
++def test_not_connected_when_key_absent():
++    assert client.is_connected() is False
++
++
++@override_settings(WINGSPAN_API_KEY="ws_test_abc", WINGSPAN_MOCK=False)
++def test_connected_when_key_set():
++    assert client.is_connected() is True
++
++
++@override_settings(WINGSPAN_API_KEY="ws_test_abc", WINGSPAN_MOCK=True)
++def test_mock_mode_treated_as_not_connected():
++    # Mock mode hides live data even when a key is set.
++    assert client.is_connected() is False
++
++
++@pytest.mark.asyncio
++@override_settings(WINGSPAN_API_KEY="", WINGSPAN_MOCK=False)
++async def test_list_periods_returns_empty_without_key():
++    out = await client.list_payroll_periods()
++    assert out == []
++
++
++@pytest.mark.asyncio
++@override_settings(WINGSPAN_API_KEY="", WINGSPAN_MOCK=False)
++async def test_list_payments_returns_empty_without_key():
++    out = await client.list_payments()
++    assert out == []
++
++
++@pytest.mark.asyncio
++@override_settings(
++    WINGSPAN_API_KEY="ws_test_abc",
++    WINGSPAN_API_BASE="https://api.wingspan.app",
++    WINGSPAN_MOCK=False,
++)
++async def test_list_periods_parses_payload():
++    fake_payload = {
++        "results": [
++            {
++                "id": "wsp_001",
++                "label": "May 13 – 19",
++                "startDate": "2026-05-13",
++                "endDate": "2026-05-19",
++                "payDate": "2026-05-22",
++                "status": "open",
++                "totalAmount": "1240.50",
++                "contractorCount": 6,
++            },
++            {
++                # Alternate keys (payrollId, name, total, count)
++                "payrollId": "wsp_002",
++                "name": "May 6 – 12",
++                "status": "paid",
++                "total": 980,
++                "count": 5,
++            },
++        ]
++    }
++    with patch.object(client, "_request", new=AsyncMock(return_value=fake_payload)):
++        out = await client.list_payroll_periods(limit=5)
++
++    assert len(out) == 2
++    assert out[0].id == "wsp_001"
++    assert out[0].label == "May 13 – 19"
++    assert out[0].status == "open"
++    assert out[0].total_amount == 1240.5
++    assert out[0].contractor_count == 6
++    # 2nd row uses the fallback aliases
++    assert out[1].id == "wsp_002"
++    assert out[1].label == "May 6 – 12"
++    assert out[1].total_amount == 980.0
++    assert out[1].contractor_count == 5
++
++
++@pytest.mark.asyncio
++@override_settings(
++    WINGSPAN_API_KEY="ws_test_abc",
++    WINGSPAN_MOCK=False,
++)
++async def test_list_payments_handles_nested_payee():
++    fake_payload = {
++        "data": [
++            {
++                "id": "pay_001",
++                "amount": "120.00",
++                "status": "sent",
++                "payDate": "2026-05-22",
++                "payrollId": "wsp_001",
++                "memo": "May 13 shift",
++                "contractor": {
++                    "firstName": "Maya",
++                    "lastName": "Rodriguez",
++                    "email": "maya@example.com",
++                },
++            },
++            {
++                "id": "pay_002",
++                "contractorName": "Jordan T.",
++                "amount": 87.5,
++                "status": "pending",
++            },
++        ]
++    }
++    with patch.object(client, "_request", new=AsyncMock(return_value=fake_payload)):
++        out = await client.list_payments()
++
++    assert len(out) == 2
++    assert out[0].contractor_name == "Maya Rodriguez"
++    assert out[0].contractor_email == "maya@example.com"
++    assert out[0].amount == 120.0
++    assert out[0].period_id == "wsp_001"
++    assert out[0].memo == "May 13 shift"
++    assert out[1].contractor_name == "Jordan T."
++    assert out[1].amount == 87.5
++
++
++@pytest.mark.asyncio
++@override_settings(
++    WINGSPAN_API_KEY="ws_test_abc",
++    WINGSPAN_MOCK=False,
++)
++async def test_list_payments_filter_passes_period_id():
++    captured = {}
++
++    async def fake_request(method, path, *, params=None):
++        captured["method"] = method
++        captured["path"] = path
++        captured["params"] = params
++        return {"results": []}
++
++    with patch.object(client, "_request", new=fake_request):
++        await client.list_payments(period_id="wsp_001", limit=10)
++
++    assert captured["method"] == "GET"
++    assert captured["path"] == "/v1/payments"
++    assert captured["params"] == {"limit": 10, "periodId": "wsp_001"}
+diff --git a/wingspan/types.py b/wingspan/types.py
+new file mode 100644
+index 0000000..a404b50
+--- /dev/null
++++ b/wingspan/types.py
+@@ -0,0 +1,39 @@
++from __future__ import annotations
++
++import strawberry
++
++
++@strawberry.type
++class WingspanPayrollPeriod:
++    id: strawberry.ID
++    label: str
++    starts_at: str | None = None
++    ends_at: str | None = None
++    pay_date: str | None = None
++    status: str | None = None
++    total_amount: float | None = None
++    contractor_count: int | None = None
++
++
++@strawberry.type
++class WingspanPayment:
++    id: strawberry.ID
++    contractor_name: str | None = None
++    contractor_email: str | None = None
++    amount: float | None = None
++    status: str | None = None
++    pay_date: str | None = None
++    period_id: str | None = None
++    memo: str | None = None
++
++
++@strawberry.type
++class WingspanStatus:
++    """Surface whether the integration is wired so the front-end can
++    render a setup nudge instead of an empty list when there's no key.
++    """
++
++    connected: bool
++    # Helpful text for the admin when not connected — never includes
++    # the key itself.
++    message: str

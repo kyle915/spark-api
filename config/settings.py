@@ -61,6 +61,8 @@ INSTALLED_APPS = [
     "jobs",
     "recaps",
     "chats",
+    "academy",
+    "digest",
     "wingspan",
 ]
 
