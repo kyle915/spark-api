@@ -547,6 +547,79 @@ class AmbassadorEventQueries:
             before=before,
         )
 
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def ambassadors_booked_on_date(
+        self,
+        info: strawberry.Info,
+        on_date: str,
+        tenant_id: strawberry.ID | None = None,
+    ) -> List[strawberry.ID]:
+        """Return Ambassador relay-encoded IDs already booked on the
+        given date (any AmbassadorEvent.event.date == on_date).
+
+        Powers the "⚠ Already on another shift that day" red chip in
+        the InviteBAModal. The front-end calls this with the event
+        date being scheduled and cross-references the returned set
+        against the BA list so admins don't double-book a BA.
+
+        `on_date` is an ISO date string (YYYY-MM-DD). Tolerates a
+        full ISO datetime and slices to the date part.
+
+        Includes BOTH approved (already accepted) and pending
+        (invited-but-not-yet-responded) shifts so the chip catches
+        the "this BA has 3 pending invites for the same day" case
+        too, not just confirmed double-bookings.
+        """
+        from datetime import datetime
+        from ambassadors import models as a_models
+
+        raw = (on_date or "").strip()
+        if not raw:
+            return []
+        # Accept "2026-05-10" or "2026-05-10T18:30:00Z" — pick the date.
+        try:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            target_date = parsed.date()
+        except ValueError:
+            try:
+                target_date = datetime.strptime(raw[:10], "%Y-%m-%d").date()
+            except ValueError:
+                raise GraphQLError("on_date must be ISO format.")
+
+        resolved_tenant_id: int | None = None
+        if tenant_id not in (None, ""):
+            try:
+                resolved_tenant_id = resolve_id_to_int(tenant_id)
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Invalid tenant id.")
+
+        def _fetch() -> List[strawberry.ID]:
+            qs = a_models.AmbassadorEvent.objects.select_related(
+                "ambassador", "event"
+            ).filter(event__date=target_date)
+            if resolved_tenant_id is not None:
+                qs = qs.filter(event__tenant_id=resolved_tenant_id)
+            # We want the relay-encoded Ambassador.id (what the
+            # InviteBAModal's row.id holds), not the int pk.
+            seen: set[str] = set()
+            out: list[strawberry.ID] = []
+            for ae in qs.only("ambassador__id"):
+                if not ae.ambassador_id:
+                    continue
+                key = str(ae.ambassador_id)
+                if key in seen:
+                    continue
+                seen.add(key)
+                # The Ambassador type uses relay encoding via Strawberry
+                # — the int pk is what `resolve_id_to_int` round-trips
+                # against, so the front-end's row.id comparison just
+                # needs to match the int. Return as string so the
+                # GraphQL ID scalar accepts it cleanly.
+                out.append(strawberry.ID(key))
+            return out
+
+        return await sync_to_async(_fetch, thread_sensitive=True)()
+
 
 @strawberry.type
 class AmbassadorManagementQueries:

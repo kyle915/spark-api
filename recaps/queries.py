@@ -1558,6 +1558,142 @@ class RecapQueries:
         except GraphQLError:
             return None
 
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def missing_recap_events(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID | None = None,
+        lookback_days: int = 30,
+    ) -> List[types.MissingRecapEventType]:
+        """Events that already wrapped (end_time < now) but have no
+        recap row attached. Drives the /recaps/missing admin page —
+        the one-stop list for "what does my team still owe me?"
+
+        `lookback_days` caps how far back we go so the query stays
+        cheap on long-running tenants. Default 30 days; bump for
+        quarterly audits. Hard ceiling of 365 days to keep the
+        select sane.
+
+        Returns one row per Event, with all assigned BAs in
+        `assigned_ambassadors` so the UI can offer a per-row
+        "Nudge BA" / "File for them" action without an N+1 round
+        trip per ambassador.
+        """
+        from datetime import timedelta
+        from django.utils import timezone
+        from events import models as event_models
+        from ambassadors import models as a_models
+
+        days = max(1, min(int(lookback_days or 30), 365))
+        now = timezone.now()
+        cutoff = now - timedelta(days=days)
+
+        resolved_tenant_id: int | None = None
+        if tenant_id not in (None, ""):
+            try:
+                resolved_tenant_id = resolve_id_to_int(tenant_id)
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Invalid tenant id.")
+
+        def _fetch() -> List[types.MissingRecapEventType]:
+            qs = (
+                event_models.Event.objects.select_related(
+                    "retailer",
+                    "state",
+                    "tenant",
+                    "request",
+                )
+                .filter(
+                    end_time__lt=now,
+                    end_time__gte=cutoff,
+                )
+                .filter(recaps__isnull=True)
+                .order_by("-end_time")
+            )
+            if resolved_tenant_id is not None:
+                qs = qs.filter(tenant_id=resolved_tenant_id)
+
+            # Prefetch ambassador assignments so the per-event loop
+            # below doesn't do N+1.
+            qs = qs.prefetch_related(
+                "ambassador_events__ambassador__user",
+            )
+
+            rows: List[types.MissingRecapEventType] = []
+            for ev in qs[:200]:  # safety cap — UI paginates client-side
+                hours_overdue: int | None = None
+                end = getattr(ev, "end_time", None) or getattr(ev, "start_time", None)
+                if end:
+                    delta = now - end
+                    hours_overdue = max(0, int(delta.total_seconds() // 3600))
+
+                ambassadors: List[types.MissingRecapAmbassadorInfo] = []
+                for ae in ev.ambassador_events.all():
+                    amb = getattr(ae, "ambassador", None)
+                    user = getattr(amb, "user", None) if amb else None
+                    name = (
+                        " ".join(
+                            filter(
+                                None,
+                                [
+                                    getattr(user, "first_name", "") or "",
+                                    getattr(user, "last_name", "") or "",
+                                ],
+                            )
+                        ).strip()
+                        or getattr(user, "email", None)
+                        or "(unnamed)"
+                    )
+                    ambassadors.append(
+                        types.MissingRecapAmbassadorInfo(
+                            ambassador_event_uuid=strawberry.ID(str(ae.uuid)),
+                            ambassador_uuid=strawberry.ID(
+                                str(getattr(amb, "uuid", "")) if amb else ""
+                            ),
+                            name=name,
+                            email=getattr(user, "email", None) if user else None,
+                            is_approved=bool(getattr(ae, "is_approved", False)),
+                        )
+                    )
+
+                venue = (
+                    getattr(ev, "name", None)
+                    or getattr(getattr(ev, "retailer", None), "name", None)
+                )
+                state_code = getattr(getattr(ev, "state", None), "code", None)
+                req_uuid = getattr(getattr(ev, "request", None), "uuid", None)
+
+                rows.append(
+                    types.MissingRecapEventType(
+                        event_uuid=strawberry.ID(str(ev.uuid)),
+                        event_name=venue or "(shift)",
+                        venue=venue,
+                        address=getattr(ev, "address", None),
+                        state_code=state_code,
+                        date=(
+                            ev.date.isoformat() if getattr(ev, "date", None) else None
+                        ),
+                        start_time=(
+                            ev.start_time.isoformat()
+                            if getattr(ev, "start_time", None)
+                            else None
+                        ),
+                        end_time=(
+                            ev.end_time.isoformat()
+                            if getattr(ev, "end_time", None)
+                            else None
+                        ),
+                        hours_overdue=hours_overdue,
+                        request_uuid=(
+                            strawberry.ID(str(req_uuid)) if req_uuid else None
+                        ),
+                        assigned_ambassadors=ambassadors,
+                    )
+                )
+            return rows
+
+        return await sync_to_async(_fetch, thread_sensitive=True)()
+
 
 @strawberry.type
 class RecapMobileQueries:

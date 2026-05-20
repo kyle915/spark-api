@@ -170,6 +170,37 @@ class ExportRecapsXlsxInput(SparkGraphQLInput):
 
 
 @strawberry.input
+class ReassignRecapEventInput(SparkGraphQLInput):
+    """Move a recap from one Event to another within the same tenant.
+
+    Used to fix wrong-event mis-links (BA picked the wrong shift when
+    filing) without forcing a re-file. Backend validates both events
+    belong to the same tenant so this can't be used to leak data
+    across tenant boundaries.
+    """
+
+    recap_id: strawberry.ID
+    event_id: strawberry.ID
+
+
+@strawberry.input
+class NudgeAmbassadorForRecapInput(SparkGraphQLInput):
+    """Fire a "you still owe a recap" push to a BA who was assigned to
+    a shift that already wrapped. `ambassador_event_uuid` is what the
+    /recaps/missing UI hands us — uniquely identifies the BA + event
+    pair without needing two ids.
+    """
+
+    ambassador_event_uuid: strawberry.ID
+    # Optional override of the push title / body. If absent we use
+    # the standard "Don't forget your recap" / event-name template
+    # the recap-nudge cron already uses, so the BA gets the same
+    # copy from both surfaces.
+    title: str | None = None
+    body: str | None = None
+
+
+@strawberry.input
 class GenerateCampaignReportPdfInput(SparkGraphQLInput):
     """Bundle N recaps into one client-deliverable PDF.
 
