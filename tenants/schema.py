@@ -134,12 +134,58 @@ class TenantThemingQuery:
         return theme
 
 
+@strawberry.type
+class ServerInfoType:
+    """Lightweight build/runtime snapshot — what's running right now.
+
+    Used to verify a deploy without tailing Cloud Run logs. Exposed
+    unauthenticated (matches `healthcheck`); contains no secrets.
+    """
+
+    # ISO-8601 timestamp of the server's now() at request time.
+    server_time: str
+    # Cloud Build / git SHA of the running revision. Comes from the
+    # ``GIT_SHA`` env var if set; falls back to "dev".
+    git_sha: str
+    # Cloud Run revision tag (e.g. "spark-api-new-00035-nmp"). Falls
+    # back to "local" outside Cloud Run.
+    revision: str
+    # True when the default database connection responds to SELECT 1.
+    database_ok: bool
+
+
+def _build_server_info() -> ServerInfoType:
+    """Snapshot the running container — never raises."""
+    import os
+    from datetime import datetime, timezone as _tz
+    from django.db import connection
+
+    db_ok = False
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT 1")
+            db_ok = bool(cursor.fetchone())
+    except Exception:
+        db_ok = False
+
+    return ServerInfoType(
+        server_time=datetime.now(_tz.utc).isoformat(),
+        git_sha=os.environ.get("GIT_SHA", "dev"),
+        revision=os.environ.get("K_REVISION", "local"),
+        database_ok=db_ok,
+    )
+
+
 # Spark Schema
 @strawberry.type()
 class QuerySpark(GoogleCalendarQueries, TenantThemingQuery):
     @strawberry.field
     def healthcheck(self) -> str:
         return "ok"
+
+    @strawberry.field
+    def server_info(self) -> ServerInfoType:
+        return _build_server_info()
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     def me(self, info) -> CustomUserType:
@@ -358,6 +404,10 @@ class QueryAmbassadors(GoogleCalendarQueries, TenantThemingQuery):
         return "ok"
 
     @strawberry.field
+    def server_info(self) -> ServerInfoType:
+        return _build_server_info()
+
+    @strawberry.field
     def me(self, info) -> CustomUserType:
         return info.context.request.user
 
@@ -381,6 +431,10 @@ class QueryClients(GoogleCalendarQueries, TenantThemingQuery):
     @strawberry.field
     def healthcheck(self) -> str:
         return "ok"
+
+    @strawberry.field
+    def server_info(self) -> ServerInfoType:
+        return _build_server_info()
 
     @strawberry.field
     async def tenant_public(
@@ -614,6 +668,10 @@ class QueryMobile(TenantThemingQuery):
     @strawberry.field
     def healthcheck(self) -> str:
         return "ok"
+
+    @strawberry.field
+    def server_info(self) -> ServerInfoType:
+        return _build_server_info()
 
     @strawberry.field
     def me(self, info) -> CustomUserType:
