@@ -51,10 +51,16 @@ class CustomUserType(Node):
         """Return the public URL for the user image if any. Aliased
         via name= so the resolver doesn't shadow self.image.
 
-        __dict__-only — never getattr, which triggers FieldFile lazy
-        load (sync SQL) and crashes async resolvers.
+        __dict__-first with safe getattr fallback. Bare __dict__-only
+        broke avatars on optimizer-deferred queries; bare getattr was
+        the original sync-crash hazard.
         """
         field_file = self.__dict__.get("image")
+        if field_file is None:
+            try:
+                field_file = getattr(self, "image", None)
+            except Exception:
+                return None
         if not field_file:
             return None
         try:
