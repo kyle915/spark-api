@@ -225,9 +225,18 @@ class Product(Node):
         """Return the public URL for the product image if one exists.
 
         Aliased via name= so the resolver method doesn't shadow the
-        Django ImageField on `self`. No extra ORM hit per row.
+        Django ImageField on `self`.
+
+        Strictly async-safe: only reads from `__dict__`, never falls
+        back to `getattr(self, "image")`. The fallback used to trigger
+        Django's FieldFile lazy load, which calls `refresh_from_db`
+        (sync SQL) — fatal from an async resolver. The trade-off is
+        that rows loaded with deferred fields will return None here;
+        all live callers prefetch the column so this is fine in
+        practice, and the alternative (sync_to_async per row) would
+        N+1 the response.
         """
-        field_file = self.__dict__.get("image") or getattr(self, "image", None)
+        field_file = self.__dict__.get("image")
         if not field_file:
             return None
         try:

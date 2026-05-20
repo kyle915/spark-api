@@ -37,7 +37,10 @@ class RecapFile(Node):
     @strawberry.field(name="file")
     def file_url(self) -> str | None:
         """Return the public URL for the recap file if one exists."""
-        field_file = self.__dict__.get("file") or getattr(self, "file", None)
+        # Strictly __dict__-only — never `getattr(self, "file")` which
+        # triggers Django FieldFile lazy load (sync SQL) and crashes
+        # async resolvers with SynchronousOnlyOperation.
+        field_file = self.__dict__.get("file")
         if not field_file:
             return None
         # field_file is a Django FieldFile — .name is the blob path.
@@ -483,8 +486,12 @@ class CustomRecapFile(Node):
 
     @strawberry.field(name="url")
     def url_str(self) -> str | None:
-        """Return the public URL for the custom recap file if any."""
-        field_file = self.__dict__.get("url") or getattr(self, "url", None)
+        """Return the public URL for the custom recap file if any.
+
+        __dict__-only access to stay async-safe; see RecapFile.file_url
+        above for the rationale.
+        """
+        field_file = self.__dict__.get("url")
         if not field_file:
             return None
         try:
