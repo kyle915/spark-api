@@ -136,6 +136,44 @@ class NudgeRecapResponse:
     devices_notified: int | None = None
 
 
+@strawberry.type
+class ExecutiveSummaryRow:
+    """One ranked row in the top-stores / top-BAs lists."""
+
+    label: str
+    primary_metric: int
+    secondary_metric: str | None = None
+
+
+@strawberry.type
+class ExecutiveSummaryType:
+    """GraphQL projection of digest.exec_services.ExecutiveSummary.
+
+    Powers the dashboard "Pace" widget — same numbers the weekly
+    email surfaces, exposed live so kyle can refresh and see the
+    delta without waiting for Monday morning.
+    """
+
+    tenant_id: strawberry.ID
+    tenant_name: str
+    period_label: str
+    recap_count: int
+    consumer_reach: int
+    samples_distributed: int
+    top_stores: List[ExecutiveSummaryRow] = strawberry.field(
+        default_factory=list,
+    )
+    top_bas: List[ExecutiveSummaryRow] = strawberry.field(
+        default_factory=list,
+    )
+    # Same delta logic the email template uses. None means no prior
+    # period available (e.g. tenant is brand new).
+    recap_count_delta: int | None = None
+    consumer_reach_delta: int | None = None
+    recap_count_delta_chip: str | None = None
+    consumer_reach_delta_chip: str | None = None
+
+
 @strawberry_django.type(models.ConsumerEngagements)
 class ConsumerEngagements(Node):
     uuid: str
