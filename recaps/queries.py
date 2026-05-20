@@ -1561,6 +1561,74 @@ class RecapQueries:
             return None
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def executive_summary(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID | None = None,
+        window_days: int = 7,
+    ) -> types.ExecutiveSummaryType | None:
+        """Top-line tenant rollup for the dashboard "Pace" widget.
+
+        Same aggregator the weekly executive-summary email uses
+        (`digest.exec_services.build_executive_summary`). Live query
+        means kyle can refresh mid-week and see the delta without
+        waiting for Monday's email.
+
+        Returns null when no tenant is in scope — the caller should
+        either pass `tenantId` explicitly or rely on the implicit
+        tenant from their session (TODO: wire tenant context once
+        we have it on `info.context`).
+        """
+        from tenants.models import Tenant
+        from digest.exec_services import build_executive_summary
+
+        if tenant_id in (None, ""):
+            return None
+        try:
+            resolved_id = resolve_id_to_int(tenant_id)
+        except (TypeError, ValueError, GraphQLError):
+            raise GraphQLError("Invalid tenant id.")
+
+        days = max(1, min(int(window_days or 7), 365))
+
+        def _build() -> types.ExecutiveSummaryType | None:
+            try:
+                tenant = Tenant.objects.get(pk=resolved_id)
+            except Tenant.DoesNotExist:
+                return None
+            summary = build_executive_summary(tenant, window_days=days)
+            return types.ExecutiveSummaryType(
+                tenant_id=strawberry.ID(str(summary.tenant_id)),
+                tenant_name=summary.tenant_name,
+                period_label=summary.period_label,
+                recap_count=summary.recap_count,
+                consumer_reach=summary.consumer_reach,
+                samples_distributed=summary.samples_distributed,
+                top_stores=[
+                    types.ExecutiveSummaryRow(
+                        label=r.label,
+                        primary_metric=r.primary_metric,
+                        secondary_metric=r.secondary_metric,
+                    )
+                    for r in summary.top_stores
+                ],
+                top_bas=[
+                    types.ExecutiveSummaryRow(
+                        label=r.label,
+                        primary_metric=r.primary_metric,
+                        secondary_metric=r.secondary_metric,
+                    )
+                    for r in summary.top_bas
+                ],
+                recap_count_delta=summary.recap_count_delta,
+                consumer_reach_delta=summary.consumer_reach_delta,
+                recap_count_delta_chip=summary.delta_chip("recaps"),
+                consumer_reach_delta_chip=summary.delta_chip("reach"),
+            )
+
+        return await sync_to_async(_build, thread_sensitive=True)()
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def missing_recap_events(
         self,
         info: strawberry.Info,
