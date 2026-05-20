@@ -49,8 +49,12 @@ class CustomUserType(Node):
     @strawberry.field(name="image")
     def image_url(self) -> str | None:
         """Return the public URL for the user image if any. Aliased
-        via name= so the resolver doesn't shadow self.image."""
-        field_file = self.__dict__.get("image") or getattr(self, "image", None)
+        via name= so the resolver doesn't shadow self.image.
+
+        __dict__-only — never getattr, which triggers FieldFile lazy
+        load (sync SQL) and crashes async resolvers.
+        """
+        field_file = self.__dict__.get("image")
         if not field_file:
             return None
         try:
