@@ -36,14 +36,28 @@ class RecapFile(Node):
     # rows per request.
     @strawberry.field(name="file")
     def file_url(self) -> str | None:
-        """Return the public URL for the recap file if one exists."""
-        # Strictly __dict__-only — never `getattr(self, "file")` which
-        # triggers Django FieldFile lazy load (sync SQL) and crashes
-        # async resolvers with SynchronousOnlyOperation.
+        """Return the public URL for the recap file if one exists.
+
+        Reads from __dict__ first (the fast path — column is already
+        loaded on every well-formed query). Falls back to getattr only
+        if __dict__ is empty AND we're in a context where it's safe;
+        the broad except catches Django's SynchronousOnlyOperation when
+        a deferred field would otherwise trigger sync SQL in an async
+        resolver. PR #501 went too aggressive and dropped the fallback
+        entirely, which silently broke the recap-list hero thumbnails
+        for rows where the optimizer had deferred the file column.
+        """
         field_file = self.__dict__.get("file")
+        if field_file is None:
+            try:
+                field_file = getattr(self, "file", None)
+            except Exception:
+                # SynchronousOnlyOperation, RuntimeError on Postgres
+                # async context — any of them mean we can't safely
+                # read the field. Better to return None than crash.
+                return None
         if not field_file:
             return None
-        # field_file is a Django FieldFile — .name is the blob path.
         try:
             blob = field_file.name
         except Exception:
@@ -488,10 +502,15 @@ class CustomRecapFile(Node):
     def url_str(self) -> str | None:
         """Return the public URL for the custom recap file if any.
 
-        __dict__-only access to stay async-safe; see RecapFile.file_url
+        __dict__-first with a safe getattr fallback — see RecapFile.file_url
         above for the rationale.
         """
         field_file = self.__dict__.get("url")
+        if field_file is None:
+            try:
+                field_file = getattr(self, "url", None)
+            except Exception:
+                return None
         if not field_file:
             return None
         try:

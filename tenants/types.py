@@ -29,9 +29,14 @@ class TenantType(Node):
         Python method off the shadow path. Avoids an extra ORM round
         trip per row.
         """
-        # __dict__-only: getattr fallback triggers Django FieldFile
-        # lazy load (sync SQL) which is fatal in async resolvers.
+        # __dict__-first; safe getattr fallback for queries where the
+        # optimizer defers the column.
         field_file = self.__dict__.get("image")
+        if field_file is None:
+            try:
+                field_file = getattr(self, "image", None)
+            except Exception:
+                return None
         if not field_file:
             return None
         try:
