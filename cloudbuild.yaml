@@ -1,0 +1,135 @@
+# Cloud Build pipeline for spark-api → Cloud Run.
+#
+# This file is the GCP-native alternative to .github/workflows/
+# deploy-cloud-run.yml. Both do the same job: build the Docker image
+# from this repo and roll it to the spark-api-new Cloud Run service.
+#
+# Two paths, why both exist:
+#   - GitHub Actions (deploy-cloud-run.yml): familiar Git-side
+#     workflow, smoke check after deploy, manual workflow_dispatch
+#     for ad-hoc redeploys. Uses GHA minutes (free tier covers it).
+#   - Cloud Build trigger (this file): GCP-native, no GHA minutes,
+#     runs even if GitHub Actions is having an outage, slightly
+#     faster builds because Cloud Build runs inside GCP networking.
+#
+# Pick ONE to be the active deploy. Running both wastes minutes and
+# can cause a race where two builds compete for the same Cloud Run
+# revision slot. We recommend keeping GHA as the primary (already
+# wired up post-PR #490) and only switching to this file if you
+# decide you want to drop the GHA dependency entirely.
+#
+# To activate this as your deploy path:
+#
+#   1. Disable the GHA workflow:
+#        mv .github/workflows/deploy-cloud-run.yml \
+#           .github/workflows/deploy-cloud-run.yml.disabled
+#        git commit -am "chore(ci): switch backend deploys to Cloud Build trigger"
+#
+#   2. Wire this file to a trigger (one-time, ~30s):
+#        gcloud beta builds triggers create github \
+#          --project=spark-479222 \
+#          --region=us-central1 \
+#          --name=spark-api-develop \
+#          --repo-name=spark-api \
+#          --repo-owner=kyle915 \
+#          --branch-pattern=^develop$ \
+#          --build-config=cloudbuild.yaml \
+#          --description="Auto-deploy spark-api to Cloud Run on push to develop"
+#
+#   3. The Cloud Build SA needs Cloud Run Admin + iam.serviceAccountUser.
+#      Most projects have it already; if you see a permissions error
+#      on the first run, grant:
+#        gcloud projects add-iam-policy-binding spark-479222 \
+#          --member=serviceAccount:490085168610@cloudbuild.gserviceaccount.com \
+#          --role=roles/run.admin
+#        gcloud projects add-iam-policy-binding spark-479222 \
+#          --member=serviceAccount:490085168610@cloudbuild.gserviceaccount.com \
+#          --role=roles/iam.serviceAccountUser
+
+substitutions:
+  _CLOUD_RUN_SERVICE: spark-api-new
+  _REGION: us-central1
+
+steps:
+  # Build the image using the existing Dockerfile (which already
+  # ships the WeasyPrint runtime libs from PR #485).
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --tag=us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/spark-api-new:$SHORT_SHA
+      - --tag=us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/spark-api-new:latest
+      - .
+
+  # Push both tags so the Cloud Run rollback story works: every
+  # commit gets its own image, plus :latest tracks the most recent.
+  - id: push-sha
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/spark-api-new:$SHORT_SHA
+    waitFor: ["build"]
+  - id: push-latest
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/spark-api-new:latest
+    waitFor: ["build"]
+
+  # Roll the new image to Cloud Run. Preserves all env vars,
+  # secrets, Cloud SQL connection annotations, and traffic splits.
+  - id: deploy
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - ${_CLOUD_RUN_SERVICE}
+      - --image=us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/spark-api-new:$SHORT_SHA
+      - --region=${_REGION}
+      - --project=$PROJECT_ID
+      - --quiet
+    waitFor: ["push-sha"]
+
+  # Post-deploy smoke: serverInfo.databaseOk must be true on the
+  # new revision. Catches "container started but can't talk to
+  # Postgres" — same check the GHA workflow runs.
+  - id: smoke
+    name: gcr.io/cloud-builders/curl
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        RESPONSE=$$(curl -s -X POST \
+          "https://spark-api-new-490085168610.us-central1.run.app/api/v483927/graphql/spark" \
+          -H "Content-Type: application/json" \
+          -d '{"query":"{ serverInfo { revision databaseOk } }"}')
+        echo "$$RESPONSE"
+        if ! echo "$$RESPONSE" | grep -q '"databaseOk": true'; then
+          echo "::error::serverInfo.databaseOk is false — DB unreachable on the new revision."
+          exit 1
+        fi
+    waitFor: ["deploy"]
+
+# Image registry: where the built image lands. Same path as
+# `gcloud run deploy --source .` would produce, so old + new
+# tools see the same artifacts.
+images:
+  - us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/spark-api-new:$SHORT_SHA
+  - us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/spark-api-new:latest
+
+options:
+  # logging: GH UI gets the headlines; Cloud Build console has full
+  # streaming logs. Both visible in PR-comment status checks via the
+  # Cloud Build GitHub App.
+  logging: CLOUD_LOGGING_ONLY
+  # E2_HIGHCPU_8: the Docker build is the bottleneck. 8 vCPUs cuts
+  # the typical build time from ~5 min to ~2 min — well within free
+  # tier on a project at this scale.
+  machineType: E2_HIGHCPU_8
+
+# Hard timeout: a stuck build should fail fast rather than burn
+# budget. 15 minutes covers any reasonable Docker build + deploy +
+# smoke for this codebase.
+timeout: 900s
