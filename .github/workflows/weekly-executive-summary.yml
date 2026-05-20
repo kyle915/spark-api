@@ -1,0 +1,63 @@
+name: Weekly executive summary
+
+# Sister workflow to daily-admin-digest.yml. Same scheduler pattern,
+# different command, weekly cadence. Fires the
+# `/internal/cron/send-executive-summary` endpoint which runs the
+# `send_executive_summary` management command for every active tenant.
+#
+# Auth: shares the `INTERNAL_CRON_SECRET` GitHub secret with the
+# daily digest workflow. One secret, two cron jobs.
+#
+# Schedule: Mondays at 15:30 UTC = 08:30 PT / 07:30 PST. Picking 30-
+# past-the-hour avoids GHA's well-documented cron jitter on hour
+# boundaries.
+
+on:
+  schedule:
+    # Monday at 15:30 UTC (08:30 PT)
+    - cron: "30 15 * * 1"
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "Window size in days (default 7)"
+        required: false
+        default: "7"
+        type: string
+      dry_run:
+        description: "Build + log the summary but don't send"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+jobs:
+  fire-summary:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire executive summary cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/send-executive-summary
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          DAYS: ${{ github.event.inputs.days || '7' }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            echo "See daily-admin-digest.yml for setup instructions."
+            exit 1
+          fi
+
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL?days=$DAYS&skip_empty=true&dry_run=$DRY_RUN" \
+            -H "X-Cron-Secret: $CRON_SECRET")
+
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS — see body above."
+            exit 1
+          fi

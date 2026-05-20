@@ -150,10 +150,92 @@ class SendAdminDigestView(View):
         return JsonResponse({"ok": True, "endpoint": "send-admin-digest"})
 
 
+@method_decorator(csrf_exempt, name="dispatch")
+class SendExecutiveSummaryView(View):
+    """POST `/internal/cron/send-executive-summary`.
+
+    Same secret-gating + dry_run / skip_empty flags as the daily
+    digest endpoint; fires the `send_executive_summary` management
+    command. Designed for the weekly GHA cron (Monday morning).
+
+    Body / query params (all optional):
+      - days: int (default 7)
+      - skip_empty: "1" / "true" / "yes" (default ON)
+      - dry_run: "1" / "true" / "yes"
+      - tenant_id: int — restrict to a single tenant
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _bool(name: str, default: bool = False) -> bool:
+            raw = (request.GET.get(name) or request.POST.get(name) or "").lower()
+            if not raw:
+                return default
+            return raw in ("1", "true", "yes", "on")
+
+        try:
+            days = int(
+                request.GET.get("days") or request.POST.get("days") or 7
+            )
+        except ValueError:
+            return JsonResponse(
+                {"ok": False, "error": "days must be an integer"}, status=400
+            )
+
+        skip_empty = _bool("skip_empty", default=True)
+        dry_run = _bool("dry_run", default=False)
+        tenant_id = request.GET.get("tenant_id") or request.POST.get(
+            "tenant_id"
+        )
+
+        cmd_args: list[str] = ["--days", str(days)]
+        if skip_empty:
+            cmd_args.append("--skip-empty")
+        if dry_run:
+            cmd_args.append("--dry-run")
+        if tenant_id:
+            cmd_args.extend(["--tenant-id", str(tenant_id)])
+
+        out = io.StringIO()
+        try:
+            call_command("send_executive_summary", *cmd_args, stdout=out)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("Executive summary cron failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "log": out.getvalue(),
+                },
+                status=500,
+            )
+
+        return JsonResponse(
+            {
+                "ok": True,
+                "days": days,
+                "dry_run": dry_run,
+                "skip_empty": skip_empty,
+                "log": out.getvalue(),
+            }
+        )
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        return JsonResponse({"ok": True, "endpoint": "send-executive-summary"})
+
+
 def _registered_views() -> dict[str, Any]:
     """Map URL path → view class. Lets `digest/urls.py` mount these
     without each one being re-exported explicitly.
     """
     return {
         "send-admin-digest": SendAdminDigestView,
+        "send-executive-summary": SendExecutiveSummaryView,
     }
