@@ -61,6 +61,7 @@ INSTALLED_APPS = [
     "jobs",
     "recaps",
     "chats",
+    "wingspan",
 ]
 
 AUTH_USER_MODEL = "tenants.User"
@@ -302,6 +303,17 @@ ONESIGNAL_TIMEOUT_SECONDS = env.float("ONESIGNAL_TIMEOUT_SECONDS", default=10.0)
 EXPO_PUSH_API_URL = env("EXPO_PUSH_API_URL", default="https://exp.host/--/api/v2/push")
 EXPO_PUSH_ACCESS_TOKEN = env("EXPO_PUSH_ACCESS_TOKEN", default="")
 EXPO_PUSH_TIMEOUT_SECONDS = env.float("EXPO_PUSH_TIMEOUT_SECONDS", default=10.0)
+
+# Wingspan integration — admin UI for Payroll · Hours + Payments.
+# Set WINGSPAN_API_KEY on Cloud Run to enable; otherwise the front-
+# end renders a "not connected" empty state instead of fake numbers.
+# WINGSPAN_MOCK=true forces the empty-state path even when a key is
+# set (useful for staging / screenshots).
+WINGSPAN_API_KEY = env("WINGSPAN_API_KEY", default="")
+WINGSPAN_API_BASE = env(
+    "WINGSPAN_API_BASE", default="https://api.wingspan.app"
+)
+WINGSPAN_MOCK = env.bool("WINGSPAN_MOCK", default=False)
 
 # Sign in with Apple — `aud` claims we accept on identity tokens.
 # Comma-separated list of bundle ids / services ids. Defaults to the
