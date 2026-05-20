@@ -54,6 +54,11 @@ urlpatterns = [
             )
         ),
     ),
+    # Internal cron endpoints — `X-Cron-Secret` header guards each.
+    # The path is intentionally not under /api/ so casual scanners
+    # looking for GraphQL surface don't trip on it. See
+    # `digest/cron_views.py` for the secret-validation flow.
+    path("internal/cron/", include("digest.urls")),
 ]
 
 # Add RQ dashboard in DEBUG mode

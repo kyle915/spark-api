@@ -1,0 +1,89 @@
+name: Daily admin digest
+
+# Fires the `/internal/cron/send-admin-digest` endpoint on Cloud Run
+# once a day. Pairs with PR #482 (the digest backend + management
+# command) which already builds the per-tenant rollup and sends the
+# email; this file just gives that command a wall-clock schedule.
+#
+# Why GHA cron and not Cloud Scheduler?
+#   - One fewer GCP setup step for the maintainer
+#   - Logs land in the GH Actions UI alongside the other workflows,
+#     so debugging stays in one place
+#   - Free for the runtime we need (one ~5 s curl per day)
+#
+# The endpoint itself is in digest/cron_views.py — secret-gated via
+# `X-Cron-Secret`. The secret lives in two places:
+#   - INTERNAL_CRON_SECRET env var on Cloud Run (the receiver)
+#   - INTERNAL_CRON_SECRET GitHub secret (the sender, this workflow)
+# Both must match. Generate once with `openssl rand -hex 32` and
+# paste into both surfaces.
+#
+# Schedule: 15:30 UTC = 08:30 PT (during DST) / 07:30 PST (winter).
+# Picking 30-past-the-hour avoids GHA's well-documented cron jitter
+# on hour boundaries — the first 10 minutes of any hour are when GHA
+# is most loaded and on-hour crons routinely run 15-20 minutes late.
+
+on:
+  schedule:
+    # Daily at 15:30 UTC (08:30 PT / 07:30 PST)
+    - cron: "30 15 * * *"
+  # Manual trigger for ad-hoc fires (debug, re-send a missed day, etc.)
+  workflow_dispatch:
+    inputs:
+      window:
+        description: "Window: daily (7-day upcoming) or weekly (30-day)"
+        required: false
+        default: "daily"
+        type: choice
+        options:
+          - daily
+          - weekly
+      dry_run:
+        description: "Build + log the digest but don't send"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+jobs:
+  fire-digest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire admin digest cron endpoint
+        env:
+          # Cloud Run service URL — same one everything else points at.
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/send-admin-digest
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          # When run on schedule, github.event.inputs is null; default
+          # to "daily" + non-dry-run.
+          WINDOW: ${{ github.event.inputs.window || 'daily' }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            echo "Generate one with: openssl rand -hex 32"
+            echo "Then set it as INTERNAL_CRON_SECRET in:"
+            echo "  - repo secrets:  https://github.com/kyle915/spark-api/settings/secrets/actions"
+            echo "  - Cloud Run env: gcloud run services update spark-api-new"
+            echo "                   --region us-central1 --project spark-479222"
+            echo "                   --update-env-vars INTERNAL_CRON_SECRET=<the-same-value>"
+            exit 1
+          fi
+
+          # The endpoint expects POST + the secret header. skip_empty
+          # is true by default so "all clear" runs don't send a noisy
+          # "nothing to report" email to every tenant admin.
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL?window=$WINDOW&skip_empty=true&dry_run=$DRY_RUN" \
+            -H "X-Cron-Secret: $CRON_SECRET")
+
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS — see body above."
+            exit 1
+          fi

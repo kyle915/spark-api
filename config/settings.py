@@ -306,6 +306,14 @@ EXPO_PUSH_API_URL = env("EXPO_PUSH_API_URL", default="https://exp.host/--/api/v2
 EXPO_PUSH_ACCESS_TOKEN = env("EXPO_PUSH_ACCESS_TOKEN", default="")
 EXPO_PUSH_TIMEOUT_SECONDS = env.float("EXPO_PUSH_TIMEOUT_SECONDS", default=10.0)
 
+# Internal-cron shared secret. Used by the `/internal/cron/…`
+# endpoints (see digest/cron_views.py) to gate POST calls from
+# whatever schedules the admin digest. Set to a long random string
+# in production (`openssl rand -hex 32`); leave empty in DEV — the
+# endpoint fails closed with 503 when unset rather than running
+# unauthed.
+INTERNAL_CRON_SECRET = env("INTERNAL_CRON_SECRET", default="")
+
 # Wingspan integration — admin UI for Payroll · Hours + Payments.
 # Set WINGSPAN_API_KEY on Cloud Run to enable; otherwise the front-
 # end renders a "not connected" empty state instead of fake numbers.
