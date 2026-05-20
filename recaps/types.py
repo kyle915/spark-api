@@ -73,6 +73,69 @@ class RecapFileUrlResponse:
     file_url: str | None = None
 
 
+@strawberry.type
+class MissingRecapAmbassadorInfo:
+    """Shape of an assigned BA on a recap-missing event row.
+
+    Surfaced to the /recaps/missing UI so the admin can see who was on
+    the shift, then either nudge them via push or file the recap on
+    their behalf.
+    """
+
+    # AmbassadorEvent.uuid — what the nudge mutation takes.
+    ambassador_event_uuid: strawberry.ID
+    # Ambassador.uuid — passed to /recap/create?event=…&ambassador=…
+    # when admin clicks "File for them".
+    ambassador_uuid: strawberry.ID
+    name: str
+    email: str | None = None
+    # Whether the BA accepted the invite (is_approved). Pending invites
+    # haven't formally said yes; the admin may want to nudge them
+    # differently or skip nudging entirely.
+    is_approved: bool
+
+
+@strawberry.type
+class MissingRecapEventType:
+    """One row in the /recaps/missing report — an event that's already
+    over but doesn't have a recap yet.
+    """
+
+    event_uuid: strawberry.ID
+    # Human-friendly fallback chain for the row label: event name →
+    # retailer name → "(shift)". Lets the UI skip the null-check it'd
+    # otherwise scatter across the row template.
+    event_name: str
+    venue: str | None = None
+    address: str | None = None
+    state_code: str | None = None
+    date: str | None = None
+    start_time: str | None = None
+    end_time: str | None = None
+    # Hours since the shift ended (end_time, falling back to start_time).
+    # Lets the UI render an "OVERDUE 18h" chip without re-computing
+    # local dates from the date/time strings.
+    hours_overdue: int | None = None
+    # Deep-link target so the row can deep-link to the parent request
+    # on the Master Tracker.
+    request_uuid: strawberry.ID | None = None
+    # All BAs assigned to this shift — admin can nudge any of them.
+    assigned_ambassadors: List[MissingRecapAmbassadorInfo] = strawberry.field(
+        default_factory=list,
+    )
+
+
+@strawberry.type
+class NudgeRecapResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    # Number of devices the push hit (Expo "ok" tickets). 0 means the
+    # BA has no registered devices — UI surfaces a clearer hint than
+    # a generic "failed".
+    devices_notified: int | None = None
+
+
 @strawberry_django.type(models.ConsumerEngagements)
 class ConsumerEngagements(Node):
     uuid: str

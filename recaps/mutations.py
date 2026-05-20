@@ -3945,6 +3945,188 @@ class RecapMutations:
             )
 
     @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def reassign_recap_event(
+        self,
+        info: strawberry.Info,
+        input: inputs.ReassignRecapEventInput,
+    ) -> types.RecapDetailResponse:
+        """Move a recap from one Event to another within the same
+        tenant. Fixes wrong-event mis-links (BA picked the wrong shift
+        when filing) without forcing a re-file.
+
+        Both events must belong to the same tenant — this avoids the
+        cross-tenant leak surface and lines up with the implicit
+        invariant elsewhere in the schema (recap.event.tenant matches
+        the caller's tenant).
+
+        Returns the updated recap so the UI can re-render with the
+        new event link in place.
+        """
+        from events import models as e_models
+
+        try:
+            try:
+                recap_pk = resolve_id_to_int(input.recap_id)
+                new_event_pk = resolve_id_to_int(input.event_id)
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Invalid recap_id or event_id.")
+
+            @sync_to_async
+            def _reassign() -> models.Recap:
+                recap = (
+                    models.Recap.objects.select_related("event").filter(pk=recap_pk).first()
+                )
+                if not recap:
+                    raise GraphQLError("Recap not found.")
+                new_event = (
+                    e_models.Event.objects.select_related("tenant")
+                    .filter(pk=new_event_pk)
+                    .first()
+                )
+                if not new_event:
+                    raise GraphQLError("Target event not found.")
+                # Cross-tenant guard: the new event must live in the
+                # same tenant as the recap's current event. We compare
+                # tenant_id rather than tenant objects to avoid an
+                # extra fetch.
+                current_tenant_id = (
+                    recap.event.tenant_id if recap.event_id else None
+                )
+                if (
+                    current_tenant_id is not None
+                    and new_event.tenant_id is not None
+                    and current_tenant_id != new_event.tenant_id
+                ):
+                    raise GraphQLError(
+                        "Cannot move a recap across tenants."
+                    )
+                recap.event = new_event
+                recap.save(update_fields=["event"])
+                return recap
+
+            recap = await _reassign()
+            return build_mutation_response(
+                types.RecapDetailResponse,
+                success=True,
+                message="Recap moved to the selected event.",
+                input_obj=input,
+                recap=recap,
+            )
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.RecapDetailResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def nudge_ambassador_for_recap(
+        self,
+        info: strawberry.Info,
+        input: inputs.NudgeAmbassadorForRecapInput,
+    ) -> types.NudgeRecapResponse:
+        """Push "you still owe a recap" notification to a specific BA
+        on a specific event. Powers the per-row "Nudge" button on the
+        /recaps/missing admin drill-down.
+
+        Sends to every active device on the BA's account. Returns the
+        device count so the UI can show "Nudged on 2 devices" vs
+        "Nudged but BA has no registered devices" (encourages admin to
+        DM them instead).
+
+        No-op (success=False) for AmbassadorEvents that already have
+        a recap — avoids embarrassing nudges to a BA who already
+        filed. Same idempotency guard the recap-nudge cron uses.
+        """
+        from ambassadors.push import send_push_to_user
+        from ambassadors import models as a_models
+        from events import models as e_models
+
+        try:
+            ae_uuid = str(input.ambassador_event_uuid)
+            if not ae_uuid:
+                raise GraphQLError("ambassador_event_uuid is required.")
+
+            @sync_to_async
+            def _fetch():
+                ae = (
+                    a_models.AmbassadorEvent.objects.select_related(
+                        "ambassador__user",
+                        "event",
+                        "event__retailer",
+                    )
+                    .filter(uuid=ae_uuid)
+                    .first()
+                )
+                if not ae:
+                    return (None, None, False)
+                # Idempotency: if a recap already exists for this
+                # event, don't push. The Inbox/Tracker UI will refresh
+                # off the existing recap.
+                already_filed = e_models.Event.objects.filter(
+                    pk=ae.event_id, recaps__isnull=False
+                ).exists()
+                return (ae, ae.ambassador.user if ae.ambassador else None,
+                        already_filed)
+
+            ae, user, already_filed = await _fetch()
+            if not ae:
+                raise GraphQLError("Shift assignment not found.")
+            if not user:
+                raise GraphQLError("Ambassador has no user account.")
+            if already_filed:
+                return build_mutation_response(
+                    types.NudgeRecapResponse,
+                    success=False,
+                    message="Recap already filed — no nudge sent.",
+                    input_obj=input,
+                    devices_notified=0,
+                )
+
+            event = ae.event
+            event_name = (
+                getattr(event, "name", None)
+                or getattr(getattr(event, "retailer", None), "name", None)
+                or "your shift"
+            )
+            title = (input.title or "").strip() or "Don't forget your recap"
+            body = (
+                (input.body or "").strip()
+                or f"Submit your recap for {event_name}"
+            )
+
+            devices_notified = await send_push_to_user(
+                user,
+                title=title,
+                body=body,
+                data={
+                    "screen": "recap",
+                    "eventUuid": str(getattr(event, "uuid", "")),
+                },
+            )
+
+            return build_mutation_response(
+                types.NudgeRecapResponse,
+                success=True,
+                message=(
+                    f"Nudged on {devices_notified} device"
+                    f"{'s' if devices_notified != 1 else ''}."
+                    if devices_notified > 0
+                    else "Nudge attempted, but the BA has no registered devices."
+                ),
+                input_obj=input,
+                devices_notified=devices_notified,
+            )
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.NudgeRecapResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
     async def export_recaps_xlsx(
         self,
         info: strawberry.Info,
