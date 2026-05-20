@@ -223,6 +223,41 @@ class Recap(Node):
             thread_sensitive=True,
         )()
 
+    @strawberry.field
+    async def recap_files_count(self) -> int:
+        """Count of files linked to this recap. Cheap COUNT(*) instead
+        of returning the full array — the recap list card only needs
+        the number for the "◉ N FILES" chip, not the per-file metadata."""
+        return await sync_to_async(
+            lambda: models.RecapFile.objects.filter(recap=self).count(),
+            thread_sensitive=True,
+        )()
+
+    @strawberry.field
+    async def hero_file(self) -> RecapFile | None:
+        """First browser-renderable image attached to this recap, if any.
+
+        Used by the /recaps list card to render a single thumbnail
+        without round-tripping the full recapFiles array. Skips HEIC
+        / PDF / video / unknown — those can't be <img src>'d directly
+        in browsers without a client-side decoder.
+        """
+        IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".gif")
+
+        def _pick():
+            qs = models.RecapFile.objects.filter(recap=self).order_by("id")
+            for f in qs:
+                path = (getattr(f, "file", None) or "").lower()
+                if not path:
+                    continue
+                # Strip any query string before the extension check
+                clean = path.split("?", 1)[0]
+                if clean.endswith(IMAGE_EXTS):
+                    return f
+            return None
+
+        return await sync_to_async(_pick, thread_sensitive=True)()
+
     @strawberry.field(deprecation_reason="Use ambassador instead.")
     def ambassadors(self) -> List[ambassador_types.Ambassador]:
         """Backward-compatible ambassador list wrapper."""

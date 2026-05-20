@@ -98,10 +98,22 @@ def push_on_ambassador_event_change(
             return
 
         event_name = (event.name or "your upcoming shift")[:80]
-        deep_link_data = {
+        # Offer-only payload: includes ambassadorEventUuid so the mobile
+        # push tap handler mounts the ShiftOfferScreen for accept/decline.
+        # Use this ONLY for the initial invite — once approved, tapping
+        # the activation reminder should land on the Shifts tab, not
+        # re-open the offer screen.
+        offer_data = {
             "screen": "shifts",
             "eventUuid": str(event.uuid),
             "ambassadorEventUuid": str(instance.uuid),
+        }
+        # Reminder-only payload: no ambassadorEventUuid, so the mobile
+        # tap handler falls through to data.screen and routes to the
+        # Shifts tab via navigationRef.
+        reminder_data = {
+            "screen": "shifts",
+            "eventUuid": str(event.uuid),
         }
 
         if created:
@@ -110,7 +122,7 @@ def push_on_ambassador_event_change(
                 user.id,
                 title="New shift offered",
                 body=event_name,
-                data=deep_link_data,
+                data=offer_data,
             )
 
         # If the invite has been approved AND the event has a start_time,
@@ -122,7 +134,7 @@ def push_on_ambassador_event_change(
                 user.id,
                 title="Your shift starts in 15 minutes",
                 body=event_name,
-                data=deep_link_data,
+                data=reminder_data,
             )
             if event.end_time:
                 schedule_recap_nudge_at(

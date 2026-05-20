@@ -59,6 +59,7 @@ from .types import (
     LocationPingResponse,
     RespondToShiftOfferResponse,
     InviteAmbassadorToShiftResponse,
+    CancelShiftInviteResponse,
 )
 from . import inputs
 from .services import (
@@ -304,6 +305,46 @@ class AmbassadorMutations:
             message="Invite sent. The BA has been notified.",
             client_mutation_id=input.client_mutation_id,
             ambassador_event_uuid=strawberry.ID(str(ae.uuid)),
+        )
+
+    @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
+    async def cancel_shift_invite(
+        self,
+        info: strawberry.Info,
+        input: inputs.CancelShiftInviteInput,
+    ) -> CancelShiftInviteResponse:
+        """Admin retracts a pending invite or removes an accepted BA
+        from a shift. Deletes the AmbassadorEvent row.
+
+        Symmetric with the BA's decline path. Returns success=False
+        when the row doesn't exist (already declined / never created)
+        rather than raising — front-end can treat as idempotent.
+        """
+        try:
+            ae = await AmbassadorEvent.objects.select_related(
+                "ambassador", "event"
+            ).aget(uuid=str(input.ambassador_event_uuid))
+        except AmbassadorEvent.DoesNotExist:
+            return CancelShiftInviteResponse(
+                success=False,
+                message="Invite not found — may have already been declined.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        try:
+            await ae.adelete()
+        except Exception as exc:  # noqa: BLE001
+            return CancelShiftInviteResponse(
+                success=False,
+                message=f"Could not cancel invite: {exc}",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        return CancelShiftInviteResponse(
+            success=True,
+            message="Invite cancelled.",
+            client_mutation_id=input.client_mutation_id,
+            ambassador_event_uuid=input.ambassador_event_uuid,
         )
 
     @strawberry.mutation(permission_classes=[StrictIsAuthenticated])

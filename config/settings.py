@@ -61,6 +61,7 @@ INSTALLED_APPS = [
     "jobs",
     "recaps",
     "chats",
+    "academy",
 ]
 
 AUTH_USER_MODEL = "tenants.User"

@@ -46,6 +46,24 @@ class AmbassadorEventType(Node):
 
 
 @strawberry.type
+class MyEarningsStats:
+    """Lightweight per-BA earnings snapshot used by the mobile Earnings
+    tab. No dollar figures: Spark doesn't own the payroll system. We
+    surface a real shift count and the hour estimate so the BA can
+    sanity-check their Wingspan/Gusto payouts.
+    """
+
+    # Number of approved AmbassadorEvent rows whose event.date falls
+    # within the window.
+    shifts_count: int
+    # Sum of (event.end_time - event.start_time) across those shifts,
+    # expressed as decimal hours. None when no shifts are eligible.
+    hours_estimate: float | None
+    # The lookback window the numbers were computed over.
+    within_days: int
+
+
+@strawberry.type
 class FileTypeDetailResponse:
     success: bool
     message: str
@@ -488,6 +506,16 @@ class InviteAmbassadorToShiftResponse:
     success: bool
     message: str
     client_mutation_id: strawberry.ID | None = None
+    ambassador_event_uuid: strawberry.ID | None = None
+
+
+@strawberry.type
+class CancelShiftInviteResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    # The deleted row's uuid, echoed back so the front-end can update
+    # its local cache without re-fetching the roster.
     ambassador_event_uuid: strawberry.ID | None = None
 
 
