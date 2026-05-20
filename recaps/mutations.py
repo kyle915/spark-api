@@ -2732,6 +2732,146 @@ class RecapMutationService(SparkGraphQLMixin):
                 delete_blob(existing_blob_name)
         return recap_file
 
+    async def build_campaign_report_pdf_with_meta(
+        self,
+        *,
+        recap_ids: list,
+        title: str | None,
+        subtitle: str | None,
+    ) -> tuple:
+        """Shared core for both `generate_campaign_report_pdf` (which
+        uploads to GCS and returns a URL) and `email_campaign_report`
+        (which attaches the bytes to an email).
+
+        Returns a 6-tuple:
+          (pdf_bytes, recap_count, total_consumers, title, subtitle, tenant_name)
+
+        Side-effects: none — pure compute + GCS reads. Caller decides
+        whether to upload + return a URL or hand the bytes to an email.
+        """
+        raw_ids = list(recap_ids or [])
+        if not raw_ids:
+            raise GraphQLError("At least one recap is required.")
+        if len(raw_ids) > 50:
+            raise GraphQLError(
+                "Campaign report is limited to 50 recaps per export."
+            )
+
+        resolved_ids: list[int] = []
+        for raw in raw_ids:
+            try:
+                resolved_ids.append(resolve_id_to_int(raw))
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError(f"Invalid recap id: {raw!r}")
+
+        @sync_to_async
+        def fetch_recaps():
+            qs = (
+                models.Recap.objects.select_related(
+                    "event",
+                    "event__tenant",
+                    "event__event_type",
+                    "job",
+                    "retailer",
+                    "ambassador",
+                    "ambassador__user",
+                )
+                .prefetch_related(
+                    Prefetch(
+                        "recap_files",
+                        queryset=models.RecapFile.objects.select_related(
+                            "file_type",
+                            "file_recap_category",
+                        ),
+                    ),
+                    "consumer_engagements",
+                    Prefetch(
+                        "product_samples",
+                        queryset=models.ProductSamples.objects.select_related(
+                            "product"
+                        ),
+                    ),
+                    Prefetch(
+                        "sales_performance",
+                        queryset=models.SalesPerformance.objects.select_related(
+                            "product",
+                            "type_of_good",
+                        ),
+                    ),
+                    "consumer_feedback",
+                    "account_feedback",
+                )
+                .filter(id__in=resolved_ids)
+            )
+            recaps_by_id = {r.id: r for r in qs}
+            return [recaps_by_id[i] for i in resolved_ids if i in recaps_by_id]
+
+        recaps = await fetch_recaps()
+        if not recaps:
+            raise GraphQLError("None of the supplied recap ids were found.")
+
+        recaps_with_images: list = []
+        total_consumers = 0
+        any_consumer_data = False
+        for recap in recaps:
+            image_entries = []
+            for recap_file in recap.recap_files.all():
+                blob_name = extract_blob_name_from_url(str(recap_file.file))
+                if not blob_name:
+                    continue
+                image_bytes = download_blob_bytes(blob_name)
+                if not image_bytes:
+                    continue
+                if not should_embed_recap_file(recap_file) and not is_image_bytes(
+                    image_bytes
+                ):
+                    continue
+                image_entries.append(
+                    {
+                        "name": recap_file.name,
+                        "bytes": image_bytes,
+                        "category": (
+                            recap_file.file_recap_category.name
+                            if recap_file.file_recap_category
+                            else "Uncategorized"
+                        ),
+                    }
+                )
+            recaps_with_images.append((recap, image_entries))
+            # Sum the headline consumer count for the email body
+            # summary chip. Use the first consumer_engagements row
+            # (which is what the PDF cover also uses).
+            for eng in recap.consumer_engagements.all():
+                tc = getattr(eng, "total_consumer", None)
+                if isinstance(tc, (int, float)):
+                    total_consumers += int(tc)
+                    any_consumer_data = True
+                break  # only the first row
+
+        # Title / subtitle defaults
+        resolved_title = (title or "").strip() or "Campaign Report"
+        first_event = getattr(recaps[0], "event", None)
+        tenant = getattr(first_event, "tenant", None) if first_event else None
+        tenant_name = getattr(tenant, "name", None) or ""
+        resolved_subtitle = (subtitle or "").strip() or (
+            tenant_name or "Sampling Campaign"
+        )
+
+        pdf_bytes = build_campaign_report_pdf(
+            title=resolved_title,
+            subtitle=resolved_subtitle,
+            recaps_with_images=recaps_with_images,
+        )
+
+        return (
+            pdf_bytes,
+            len(recaps),
+            total_consumers if any_consumer_data else None,
+            resolved_title,
+            resolved_subtitle,
+            tenant_name,
+        )
+
     async def generate_campaign_report_pdf(self) -> str:
         """Combine N recaps into one client-deliverable PDF.
 
@@ -3882,6 +4022,95 @@ class RecapMutations:
         except GraphQLError as e:
             return build_mutation_response(
                 types.RecapFileDetailResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def email_campaign_report(
+        self,
+        info: strawberry.Info,
+        input: inputs.EmailCampaignReportInput,
+    ) -> types.RecapExportResponse:
+        """Generate the campaign-report PDF + email it as an
+        attachment to the supplied recipients.
+
+        Same recap selection + caps as `generateCampaignReportPdf`.
+        Cover-letter `message` is optional. Returns success/error
+        message; the response file_url field is left null (the PDF
+        lives in the recipient's inbox, not GCS).
+        """
+        import re
+        from recaps.envelopes import CampaignReportMailer
+
+        try:
+            service = RecapMutationService.with_input(input)
+            await service.set_user(info)
+
+            raw_recipients = list(input.recipients or [])
+            if not raw_recipients:
+                raise GraphQLError("At least one recipient is required.")
+            # Light email-format check — Resend will reject bad
+            # addresses anyway but a structured error here is friendlier
+            # than waiting for the API to bounce.
+            email_re = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+            for r in raw_recipients:
+                if not email_re.match((r or "").strip()):
+                    raise GraphQLError(
+                        f"Recipient {r!r} doesn't look like a valid email."
+                    )
+
+            # Build the PDF first — if there are no recaps or the
+            # render fails we bail before composing the email.
+            pdf_bytes, recap_count, total_consumers, title, subtitle, tenant_name = (
+                await service.build_campaign_report_pdf_with_meta(
+                    recap_ids=input.recap_ids,
+                    title=input.title,
+                    subtitle=input.subtitle,
+                )
+            )
+
+            from django.utils import timezone as django_timezone
+            timestamp = django_timezone.now().strftime("%Y%m%d-%H%M")
+            # Filename uses a sanitized title slug so the inbox preview
+            # is readable. Falls back to a generic name if the title
+            # only has non-alphanum characters.
+            safe_title = re.sub(r"[^a-zA-Z0-9]+", "-", title).strip("-").lower()
+            if not safe_title:
+                safe_title = "campaign-report"
+            pdf_filename = f"{safe_title}-{timestamp}.pdf"
+
+            mailer = CampaignReportMailer(
+                recipients=raw_recipients,
+                campaign_title=title,
+                campaign_subtitle=subtitle,
+                cover_message=input.message,
+                recap_count=recap_count,
+                total_consumers=total_consumers,
+                sender_tenant_name=tenant_name,
+                pdf_bytes=pdf_bytes,
+                pdf_filename=pdf_filename,
+            )
+            # send_async_now: don't wait for the RQ worker (no Redis
+            # on Cloud Run) but also don't fire-and-forget — the
+            # caller wants to know if the send actually queued.
+            await mailer.send_async_now()
+
+            return build_mutation_response(
+                types.RecapExportResponse,
+                success=True,
+                message=(
+                    f"Sent {recap_count}-recap report to "
+                    f"{len(raw_recipients)} recipient"
+                    f"{'s' if len(raw_recipients) != 1 else ''}."
+                ),
+                input_obj=input,
+                file_url=None,
+            )
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.RecapExportResponse,
                 success=False,
                 message=str(e),
                 input_obj=input,
