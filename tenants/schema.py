@@ -154,19 +154,36 @@ class ServerInfoType:
     database_ok: bool
 
 
-def _build_server_info() -> ServerInfoType:
-    """Snapshot the running container — never raises."""
-    import os
-    from datetime import datetime, timezone as _tz
+def _check_database_ok_sync() -> bool:
+    """Run a SELECT 1 round-trip on the default connection.
+
+    Pulled out so it can be wrapped by ``sync_to_async`` — Django's
+    ``connection.cursor()`` does sync I/O, and Strawberry's mobile/spark
+    schemas execute resolvers on the asyncio loop. Calling sync I/O
+    directly there raises ``SynchronousOnlyOperation``, which the old
+    catch-all blanket-converted into ``database_ok=False`` — making the
+    probe always lie. Now the sync work runs on a worker thread.
+    """
     from django.db import connection
 
-    db_ok = False
     try:
         with connection.cursor() as cursor:
             cursor.execute("SELECT 1")
-            db_ok = bool(cursor.fetchone())
+            return bool(cursor.fetchone())
     except Exception:
-        db_ok = False
+        return False
+
+
+async def _build_server_info() -> ServerInfoType:
+    """Snapshot the running container — never raises.
+
+    Async so the DB probe can be awaited via ``sync_to_async``. All
+    callers (Spark, Client, Ambassador, Mobile schemas) await this.
+    """
+    import os
+    from datetime import datetime, timezone as _tz
+
+    db_ok = await sync_to_async(_check_database_ok_sync, thread_sensitive=False)()
 
     return ServerInfoType(
         server_time=datetime.now(_tz.utc).isoformat(),
@@ -184,8 +201,8 @@ class QuerySpark(GoogleCalendarQueries, TenantThemingQuery):
         return "ok"
 
     @strawberry.field
-    def server_info(self) -> ServerInfoType:
-        return _build_server_info()
+    async def server_info(self) -> ServerInfoType:
+        return await _build_server_info()
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     def me(self, info) -> CustomUserType:
@@ -404,8 +421,8 @@ class QueryAmbassadors(GoogleCalendarQueries, TenantThemingQuery):
         return "ok"
 
     @strawberry.field
-    def server_info(self) -> ServerInfoType:
-        return _build_server_info()
+    async def server_info(self) -> ServerInfoType:
+        return await _build_server_info()
 
     @strawberry.field
     def me(self, info) -> CustomUserType:
@@ -433,8 +450,8 @@ class QueryClients(GoogleCalendarQueries, TenantThemingQuery):
         return "ok"
 
     @strawberry.field
-    def server_info(self) -> ServerInfoType:
-        return _build_server_info()
+    async def server_info(self) -> ServerInfoType:
+        return await _build_server_info()
 
     @strawberry.field
     async def tenant_public(
@@ -670,8 +687,8 @@ class QueryMobile(TenantThemingQuery):
         return "ok"
 
     @strawberry.field
-    def server_info(self) -> ServerInfoType:
-        return _build_server_info()
+    async def server_info(self) -> ServerInfoType:
+        return await _build_server_info()
 
     @strawberry.field
     def me(self, info) -> CustomUserType:
