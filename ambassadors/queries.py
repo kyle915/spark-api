@@ -348,6 +348,75 @@ class AmbassadorEventQueries:
         )
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def my_earnings_stats(
+        self,
+        info: strawberry.Info,
+        within_days: int = 30,
+    ) -> types.MyEarningsStats:
+        """Honest BA-facing earnings preview: completed shift count + an
+        hour estimate over the last `withinDays` days.
+
+        Approximations (until payroll is wired):
+        - "Completed" = AmbassadorEvent.is_approved=True AND event.date
+          < now. Doesn't require an attendance row, so it works even
+          where the BA forgot to clock out.
+        - "Hours" = sum of (event.end_time - event.start_time) across
+          those shifts. Treats start/end as same-day local; rolls over
+          midnight as +24h. None when the window has zero shifts.
+        """
+        from datetime import datetime, timedelta, timezone as _tz
+
+        service = AmbassadorEventQueriesService()
+        user = await service.get_user(info)
+
+        days = max(1, min(int(within_days), 365))
+        now = datetime.now(_tz.utc)
+        cutoff = now - timedelta(days=days)
+
+        qs = (
+            service.get_model()
+            .objects.select_related("event")
+            .filter(
+                ambassador__user=user,
+                is_approved=True,
+                event__date__gte=cutoff,
+                event__date__lte=now,
+            )
+        )
+        rows = await sync_to_async(list)(qs)
+
+        shifts_count = len(rows)
+        if shifts_count == 0:
+            return types.MyEarningsStats(
+                shifts_count=0,
+                hours_estimate=None,
+                within_days=days,
+            )
+
+        total_seconds = 0.0
+        for ae in rows:
+            ev = ae.event
+            start = getattr(ev, "start_time", None)
+            end = getattr(ev, "end_time", None)
+            if not start or not end:
+                continue
+            # start/end are TimeField — combine with a sentinel date
+            # to compute the delta. Roll over midnight by adding 24h.
+            s_secs = (start.hour * 3600) + (start.minute * 60) + start.second
+            e_secs = (end.hour * 3600) + (end.minute * 60) + end.second
+            delta = e_secs - s_secs
+            if delta < 0:
+                delta += 24 * 3600
+            total_seconds += float(delta)
+
+        hours = total_seconds / 3600.0
+        return types.MyEarningsStats(
+            shifts_count=shifts_count,
+            hours_estimate=round(hours, 2),
+            within_days=days,
+        )
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def ambassador_events(
         self,
         info: strawberry.Info,
