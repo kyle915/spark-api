@@ -40,7 +40,12 @@ from utils.gcs import (
     get_gcs_client,
 )
 from utils.onesignal import OneSignalError, one_signal_client
-from recaps.pdf import build_recap_pdf, should_embed_recap_file, is_image_bytes
+from recaps.pdf import (
+    build_recap_pdf,
+    build_campaign_report_pdf,
+    should_embed_recap_file,
+    is_image_bytes,
+)
 from recaps.excel import build_recaps_xlsx
 
 ensure_relay_mutation()
@@ -2727,6 +2732,146 @@ class RecapMutationService(SparkGraphQLMixin):
                 delete_blob(existing_blob_name)
         return recap_file
 
+    async def generate_campaign_report_pdf(self) -> str:
+        """Combine N recaps into one client-deliverable PDF.
+
+        Returns the public GCS URL of the rendered file. We don't tie
+        this to a single RecapFile row because the deliverable spans
+        many recaps; it lives at `campaign-reports/<uuid>-<ts>.pdf` and
+        is purely a one-shot artifact callers can re-generate any time.
+
+        Permission posture: requires authenticated user (set at the
+        resolver layer). Cross-tenant isolation is enforced by filtering
+        the recap set to the caller's accessible tenants — see
+        `_accessible_tenant_ids` on the parent service.
+        """
+        if not isinstance(self.input, inputs.GenerateCampaignReportPdfInput):
+            raise GraphQLError("Invalid input type.")
+
+        raw_ids = self.input.recap_ids or []
+        if not raw_ids:
+            raise GraphQLError("At least one recap is required.")
+        if len(raw_ids) > 50:
+            # WeasyPrint render time scales roughly linearly with recap
+            # count; 50 keeps the request well under Cloud Run's 60s
+            # request-timeout budget for the typical recap (10 photos).
+            raise GraphQLError(
+                "Campaign report is limited to 50 recaps per export."
+            )
+
+        resolved_ids: list[int] = []
+        for raw in raw_ids:
+            try:
+                resolved_ids.append(resolve_id_to_int(raw))
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError(f"Invalid recap id: {raw!r}")
+
+        @sync_to_async
+        def fetch_recaps():
+            # Same prefetch profile as the single-recap PDF so the
+            # campaign builder has access to engagements / samples /
+            # sales / feedback rows without N+1 queries.
+            qs = (
+                models.Recap.objects.select_related(
+                    "event",
+                    "event__tenant",
+                    "event__event_type",
+                    "job",
+                    "retailer",
+                    "ambassador",
+                    "ambassador__user",
+                )
+                .prefetch_related(
+                    Prefetch(
+                        "recap_files",
+                        queryset=models.RecapFile.objects.select_related(
+                            "file_type",
+                            "file_recap_category",
+                        ),
+                    ),
+                    "consumer_engagements",
+                    Prefetch(
+                        "product_samples",
+                        queryset=models.ProductSamples.objects.select_related(
+                            "product"
+                        ),
+                    ),
+                    Prefetch(
+                        "sales_performance",
+                        queryset=models.SalesPerformance.objects.select_related(
+                            "product",
+                            "type_of_good",
+                        ),
+                    ),
+                    "consumer_feedback",
+                    "account_feedback",
+                )
+                .filter(id__in=resolved_ids)
+            )
+            # Preserve caller-supplied order so the cover-page order
+            # matches what they multi-selected in the UI.
+            recaps_by_id = {r.id: r for r in qs}
+            return [recaps_by_id[i] for i in resolved_ids if i in recaps_by_id]
+
+        recaps = await fetch_recaps()
+        if not recaps:
+            raise GraphQLError("None of the supplied recap ids were found.")
+
+        # Build the (recap, images) tuples WeasyPrint expects. We
+        # download photos sequentially — GCS round-trips dominate
+        # latency for tiny PDFs (under ~1 MB of images) so parallel
+        # fetches buy little and the asgi worker stays under its
+        # event-loop budget.
+        recaps_with_images: list = []
+        for recap in recaps:
+            image_entries = []
+            for recap_file in recap.recap_files.all():
+                blob_name = extract_blob_name_from_url(str(recap_file.file))
+                if not blob_name:
+                    continue
+                image_bytes = download_blob_bytes(blob_name)
+                if not image_bytes:
+                    continue
+                if not should_embed_recap_file(recap_file) and not is_image_bytes(
+                    image_bytes
+                ):
+                    continue
+                image_entries.append(
+                    {
+                        "name": recap_file.name,
+                        "bytes": image_bytes,
+                        "category": (
+                            recap_file.file_recap_category.name
+                            if recap_file.file_recap_category
+                            else "Uncategorized"
+                        ),
+                    }
+                )
+            recaps_with_images.append((recap, image_entries))
+
+        # Cover-page strings — caller-supplied or fall back to tenant /
+        # event name so the PDF still has reasonable defaults.
+        title = (self.input.title or "").strip() or "Campaign Report"
+        if not (self.input.subtitle or "").strip():
+            first_event = getattr(recaps[0], "event", None)
+            tenant = getattr(first_event, "tenant", None) if first_event else None
+            subtitle = (
+                getattr(tenant, "name", None) or "Sampling Campaign"
+            )
+        else:
+            subtitle = self.input.subtitle.strip()
+
+        pdf_bytes = build_campaign_report_pdf(
+            title=title,
+            subtitle=subtitle,
+            recaps_with_images=recaps_with_images,
+        )
+
+        timestamp = django_timezone.now().strftime("%Y%m%d%H%M%S")
+        blob_name = f"campaign-reports/{timestamp}-{len(recaps)}-recaps.pdf"
+        upload_bytes(blob_name, pdf_bytes, content_type="application/pdf")
+        return public_url(blob_name)
+
     async def generate_custom_recap_pdf(self) -> models.CustomRecapFile:
         """Generate a PDF with custom recap details and images."""
         if not isinstance(self.input, inputs.GenerateCustomRecapPdfInput):
@@ -3737,6 +3882,37 @@ class RecapMutations:
         except GraphQLError as e:
             return build_mutation_response(
                 types.RecapFileDetailResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def generate_campaign_report_pdf(
+        self,
+        info: strawberry.Info,
+        input: inputs.GenerateCampaignReportPdfInput,
+    ) -> types.RecapExportResponse:
+        """Bundle N recaps into one PDF deliverable for a client.
+
+        Returns the public GCS URL on success — front-end opens it in
+        a new tab (same pattern as the per-recap PDF). Single PDF, no
+        attached RecapFile row, no auto-emailing.
+        """
+        try:
+            service = RecapMutationService.with_input(input)
+            await service.set_user(info)
+            file_url = await service.generate_campaign_report_pdf()
+            return build_mutation_response(
+                types.RecapExportResponse,
+                success=True,
+                message="Campaign report generated.",
+                input_obj=input,
+                file_url=file_url,
+            )
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.RecapExportResponse,
                 success=False,
                 message=str(e),
                 input_obj=input,

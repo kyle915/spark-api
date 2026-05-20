@@ -170,6 +170,25 @@ class ExportRecapsXlsxInput(SparkGraphQLInput):
 
 
 @strawberry.input
+class GenerateCampaignReportPdfInput(SparkGraphQLInput):
+    """Bundle N recaps into one client-deliverable PDF.
+
+    `recap_ids` is the relay-encoded ID list the front-end collects via
+    multi-select on the Master Tracker or Recaps page. Both relay
+    `Recap:N` IDs and bare ints/uuids resolve via the standard
+    `resolve_id_to_int` helper.
+
+    `title` and `subtitle` drive the cover page (e.g. "Liquid Death · May
+    Sampling" with subtitle "Campaign Report"). Optional — sensible
+    defaults applied when absent.
+    """
+
+    recap_ids: list[strawberry.ID]
+    title: str | None = None
+    subtitle: str | None = None
+
+
+@strawberry.input
 class ExportRecapXlsxInput(SparkGraphQLInput):
     id: strawberry.ID
 
