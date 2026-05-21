@@ -1740,7 +1740,12 @@ class RecapQueries:
                     end_time__lt=now,
                     end_time__gte=cutoff,
                 )
-                .filter(recaps__isnull=True)
+                # An event is missing a recap if neither the standard
+                # `recaps` nor the tenant-custom `custom_recap` tables
+                # have a row. Borjomi-style tenants file via the latter,
+                # and without this check every Borjomi event with a
+                # filed customRecap was still flagged as missing.
+                .filter(recaps__isnull=True, custom_recap__isnull=True)
                 .order_by("-end_time")
             )
             if resolved_tenant_id is not None:
