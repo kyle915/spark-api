@@ -352,6 +352,12 @@ class Request(models.Model):
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     name = models.CharField(max_length=255)
     date = models.DateTimeField(null=True)
+    # Soft-delete timestamp. Null = live; non-null = deleted at this time.
+    # All list/detail queries filter to deleted_at IS NULL so the request
+    # disappears from the UI; the row stays in the DB so the activity log
+    # and any FK-linked events / recaps survive intact. An admin could
+    # restore by setting this back to NULL.
+    deleted_at = models.DateTimeField(null=True, blank=True, db_index=True)
     start_time = models.DateTimeField(null=True, db_index=True)
     end_time = models.DateTimeField(null=True, blank=True)
     address = models.TextField(null=False)

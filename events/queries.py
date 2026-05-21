@@ -995,10 +995,18 @@ class RequestQueriesService(BaseEventQueriesService):
         return models.Request
 
     def get_queryset(self) -> QuerySet:
-        """Get the queryset for the service."""
+        """Get the queryset for the service.
+
+        Excludes soft-deleted requests (deleted_at IS NOT NULL) so the
+        deleteRequest mutation effectively hides the row from every
+        list, detail, single-fetch, and export path that flows through
+        this base queryset. The row stays in the DB so its activity log
+        + linked events / recaps survive intact.
+        """
         return (
             self.get_model()
-            .objects.select_related(
+            .objects.filter(deleted_at__isnull=True)
+            .select_related(
                 "tenant",
                 "timezone",
                 "billing_entity__state",

@@ -357,6 +357,11 @@ class DeclineRequestInput(SparkGraphQLInput):
 
 
 @strawberry.input
+class DeleteRequestInput(SparkGraphQLInput):
+    id: strawberry.ID
+
+
+@strawberry.input
 class UpsertRequestReviewedInput(SparkGraphQLInput):
     id: strawberry.ID
     reviewed: bool
