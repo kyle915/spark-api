@@ -1634,6 +1634,40 @@ class JobRequirementAnswerQueries:
 
 
 # -------------------------------------------------------------------
+# Job lifecycle queries — applications + favorites
+# -------------------------------------------------------------------
+
+@strawberry.type
+class JobApplicationQueries:
+    """Admin-facing view of BA applications for a specific Job."""
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def job_applications(
+        self,
+        info: strawberry.Info,
+        job_id: strawberry.ID,
+    ) -> list[types.JobApplication]:
+        """Every application row attached to a Job, ordered newest
+        first. Includes the BA's name/email/uuid via the type resolver,
+        so the admin Jobs page can render the applicant list without
+        an N+1 round-trip."""
+        def _list():
+            from utils.graphql.mixins import resolve_id_to_int
+            try:
+                job_pk = resolve_id_to_int(job_id)
+            except Exception:
+                return []
+            qs = (
+                models.JobApplication.objects
+                .select_related("ambassador__user")
+                .filter(job_id=job_pk)
+                .order_by("-applied_at")
+            )
+            return list(qs)
+        return await sync_to_async(_list)()
+
+
+# -------------------------------------------------------------------
 # BA Briefing queries
 # -------------------------------------------------------------------
 
