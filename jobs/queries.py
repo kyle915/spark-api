@@ -1638,6 +1638,42 @@ class JobRequirementAnswerQueries:
 # -------------------------------------------------------------------
 
 @strawberry.type
+class FavoriteAmbassadorQueries:
+    """Per-tenant favorite-BA roster. Drives the Favorites tab."""
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def favorite_ambassadors(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID | None = None,
+    ) -> list[types.TenantFavoriteAmbassador]:
+        """Return every favorited BA for the caller's tenant. Admins
+        can override with an explicit tenant_id."""
+        def _list():
+            from utils.graphql.mixins import resolve_id_to_int
+            actor = getattr(info.context.request, "user", None)
+            resolved = None
+            if tenant_id:
+                try:
+                    resolved = resolve_id_to_int(tenant_id)
+                except Exception:
+                    resolved = None
+            if not resolved and actor:
+                t = actor.get_tenant() if hasattr(actor, "get_tenant") else None
+                resolved = t.id if t else None
+            if not resolved:
+                return []
+            qs = (
+                models.TenantFavoriteAmbassador.objects
+                .select_related("ambassador__user")
+                .filter(tenant_id=resolved)
+                .order_by("-created_at")
+            )
+            return list(qs)
+        return await sync_to_async(_list)()
+
+
+@strawberry.type
 class JobApplicationQueries:
     """Admin-facing view of BA applications for a specific Job."""
 
