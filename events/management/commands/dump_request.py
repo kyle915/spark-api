@@ -17,9 +17,10 @@ class Command(BaseCommand):
                 .select_related(
                     "tenant", "retailer", "distributor",
                     "location", "state", "request_type",
-                    "status", "rmm_asigned", "event",
+                    "status", "rmm_asigned",
                     "created_by",
                 )
+                .prefetch_related("event_set")
                 .get(uuid=opts["uuid"])
             )
         except models.Request.DoesNotExist:
@@ -49,8 +50,6 @@ class Command(BaseCommand):
             ("status.name", getattr(req.status, "name", None)),
             ("rmm_asigned_id", req.rmm_asigned_id),
             ("rmm_asigned.email", getattr(req.rmm_asigned, "email", None)),
-            ("event_id", req.event_id),
-            ("event.name", getattr(req.event, "name", None)),
             ("created_by_id", req.created_by_id),
             ("created_by.email", getattr(req.created_by, "email", None)),
             ("created_at", req.created_at),
