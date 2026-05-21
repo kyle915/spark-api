@@ -360,3 +360,68 @@ class AcceptAmbassadorJobInvitationInput(SparkGraphQLInput):
 class InviteAmbassadorsToJobInput(BaseTenantInput):
     ambassador_ids: List[strawberry.ID]
     job_id: strawberry.ID
+
+
+# -------------------------------------------------------------------
+# Job-lifecycle inputs (Post / Open-to-all / Apply / Assign / Favorites)
+# -------------------------------------------------------------------
+
+@strawberry.input
+class PostJobInput(SparkGraphQLInput):
+    """Admin transitions a Pending job → Posted.
+
+    Sets hours / pay / uniform notes and flips lifecycle_status to
+    'posted'. Job becomes visible to favorite ambassadors first;
+    open_to_all=true ships straight to all BAs at post time.
+    """
+    id: strawberry.ID
+    total_hours: float
+    hourly_rate: float
+    uniform_notes: str | None = None
+    description: str | None = None
+    max_applications: int | None = None
+    open_to_all: bool | None = None
+
+
+@strawberry.input
+class OpenJobToAllInput(SparkGraphQLInput):
+    """Admin clicks "Open to all BAs" on a favorites-gated posted job."""
+    id: strawberry.ID
+
+
+@strawberry.input
+class ApplyToJobInput(SparkGraphQLInput):
+    """BA taps Apply on the mobile job board."""
+    job_id: strawberry.ID
+    note: str | None = None
+
+
+@strawberry.input
+class WithdrawJobApplicationInput(SparkGraphQLInput):
+    application_id: strawberry.ID
+
+
+@strawberry.input
+class AssignAmbassadorToJobInput(SparkGraphQLInput):
+    """Admin assigns a specific BA to a job. Bypasses the application
+    flow entirely or accepts an existing application.
+
+    If the BA already has an Applied row for this job, it flips to
+    accepted. Otherwise a new Accepted row is created. Job lifecycle
+    transitions to filled. Other Applied rows go to declined.
+    """
+    job_id: strawberry.ID
+    ambassador_id: strawberry.ID
+
+
+@strawberry.input
+class AddFavoriteAmbassadorInput(SparkGraphQLInput):
+    tenant_id: strawberry.ID | None = None
+    ambassador_id: strawberry.ID
+    note: str | None = None
+
+
+@strawberry.input
+class RemoveFavoriteAmbassadorInput(SparkGraphQLInput):
+    tenant_id: strawberry.ID | None = None
+    ambassador_id: strawberry.ID

@@ -46,6 +46,7 @@ class AmbassadorJobMutations(
     mutations.AmbassadorJobMutations,
     mutations.AcceptAmbassadorJobInvitationMutations,
     mutations.AmbassadorToAmbassadorReviewMutations,
+    mutations.JobApplicationMutations,
 ):
     pass
 
@@ -75,6 +76,8 @@ class ClientJobMutations(
     mutations.ManageAmbassadorJobMutations,
     mutations.ApproveAmbassadorJobMutations,
     mutations.DeclineAmbassadorJobMutations,
+    mutations.JobLifecycleMutations,
+    mutations.FavoriteAmbassadorMutations,
 ):
     pass
 
