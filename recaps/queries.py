@@ -1752,9 +1752,12 @@ class RecapQueries:
                 qs = qs.filter(tenant_id=resolved_tenant_id)
 
             # Prefetch ambassador assignments so the per-event loop
-            # below doesn't do N+1.
+            # below doesn't do N+1. Event → AmbassadorEvent reverse
+            # accessor is `ambassadors_events` (note: plural at the
+            # start) — `ambassador_events` was a typo that crashed
+            # the /recaps/missing page with a prefetch_related error.
             qs = qs.prefetch_related(
-                "ambassador_events__ambassador__user",
+                "ambassadors_events__ambassador__user",
             )
 
             rows: List[types.MissingRecapEventType] = []
@@ -1766,7 +1769,7 @@ class RecapQueries:
                     hours_overdue = max(0, int(delta.total_seconds() // 3600))
 
                 ambassadors: List[types.MissingRecapAmbassadorInfo] = []
-                for ae in ev.ambassador_events.all():
+                for ae in ev.ambassadors_events.all():
                     amb = getattr(ae, "ambassador", None)
                     user = getattr(amb, "user", None) if amb else None
                     name = (
