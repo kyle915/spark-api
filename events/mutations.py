@@ -3567,7 +3567,8 @@ class RequestMutations:
                     deleted_request_uuid=str(request.uuid),
                 )
 
-            request.deleted_at = django_timezone.now()
+            from django.utils import timezone as _tz
+            request.deleted_at = _tz.now()
             request.updated_by = user
             await sync_to_async(request.save)(
                 update_fields=["deleted_at", "updated_by", "updated_at"]
