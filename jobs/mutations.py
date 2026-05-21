@@ -2076,3 +2076,229 @@ class FavoriteAmbassadorMutations:
         return types.FavoriteAmbassadorResponse(
             success=ok, message=msg, client_mutation_id=input.client_mutation_id,
         )
+
+
+# -------------------------------------------------------------------
+# BA Briefing mutations
+# -------------------------------------------------------------------
+#
+# Saved templates live per-tenant. Applying a template to a job
+# does a one-shot copy: job.briefing_title, job.briefing_body, and a
+# fresh set of JobBriefingAttachment rows. The job keeps a pointer to
+# the source template so the UI can show "Using template: X".
+
+def _resolve_actor_tenant_id(info, supplied: object | None) -> int | None:
+    if supplied:
+        try:
+            return _resolve_id(supplied)
+        except Exception:
+            return None
+    actor = getattr(info.context, "request", None)
+    actor = getattr(actor, "user", None) if actor else None
+    if not actor:
+        return None
+    try:
+        t = actor.get_tenant() if hasattr(actor, "get_tenant") else None
+        return t.id if t else None
+    except Exception:
+        return None
+
+
+def _copy_attachment_dict(att) -> dict:
+    return dict(
+        name=att.name,
+        url=att.url,
+        content_type=att.content_type or "",
+        size=att.size,
+    )
+
+
+@strawberry.type
+class BriefingTemplateMutations:
+    """CRUD for reusable BA Briefing templates (per-tenant)."""
+
+    @relay.mutation(permission_classes=[_StrictIsAuth])
+    async def create_briefing_template(
+        self, info, input: inputs.CreateBriefingTemplateInput,
+    ) -> types.BriefingTemplateResponse:
+        def _create():
+            actor = info.context.request.user
+            tenant_id = _resolve_actor_tenant_id(info, input.tenant_id)
+            if not tenant_id:
+                return None, "No tenant in scope."
+            tpl = models.BriefingTemplate.objects.create(
+                tenant_id=tenant_id,
+                name=input.name.strip(),
+                title=(input.title or "").strip(),
+                body=input.body or "",
+                created_by=actor if getattr(actor, "is_authenticated", False) else None,
+                updated_by=actor if getattr(actor, "is_authenticated", False) else None,
+            )
+            for att in (input.attachments or []):
+                models.BriefingTemplateAttachment.objects.create(
+                    template=tpl,
+                    name=att.name,
+                    url=att.url,
+                    content_type=att.content_type or "",
+                    size=att.size,
+                )
+            return tpl, "Briefing template created."
+
+        tpl, msg = await sync_to_async(_create)()
+        return types.BriefingTemplateResponse(
+            success=tpl is not None,
+            message=msg,
+            briefing_template=tpl,
+            client_mutation_id=input.client_mutation_id,
+        )
+
+    @relay.mutation(permission_classes=[_StrictIsAuth])
+    async def update_briefing_template(
+        self, info, input: inputs.UpdateBriefingTemplateInput,
+    ) -> types.BriefingTemplateResponse:
+        def _update():
+            try:
+                tpl_pk = _resolve_id(input.template_id)
+            except Exception:
+                return None, "Invalid template id."
+            try:
+                tpl = models.BriefingTemplate.objects.get(id=tpl_pk)
+            except models.BriefingTemplate.DoesNotExist:
+                return None, "Template not found."
+            actor = info.context.request.user
+            if input.name is not None:
+                tpl.name = input.name.strip()
+            if input.title is not None:
+                tpl.title = input.title.strip()
+            if input.body is not None:
+                tpl.body = input.body
+            tpl.updated_by = actor if getattr(actor, "is_authenticated", False) else None
+            tpl.save()
+            if input.attachments is not None:
+                # Replace-all semantics.
+                tpl.attachments.all().delete()
+                for att in input.attachments:
+                    models.BriefingTemplateAttachment.objects.create(
+                        template=tpl,
+                        name=att.name,
+                        url=att.url,
+                        content_type=att.content_type or "",
+                        size=att.size,
+                    )
+            return tpl, "Template updated."
+
+        tpl, msg = await sync_to_async(_update)()
+        return types.BriefingTemplateResponse(
+            success=tpl is not None,
+            message=msg,
+            briefing_template=tpl,
+            client_mutation_id=input.client_mutation_id,
+        )
+
+    @relay.mutation(permission_classes=[_StrictIsAuth])
+    async def archive_briefing_template(
+        self, info, input: inputs.ArchiveBriefingTemplateInput,
+    ) -> types.BriefingTemplateResponse:
+        def _archive():
+            try:
+                tpl_pk = _resolve_id(input.template_id)
+            except Exception:
+                return None, "Invalid template id."
+            try:
+                tpl = models.BriefingTemplate.objects.get(id=tpl_pk)
+            except models.BriefingTemplate.DoesNotExist:
+                return None, "Template not found."
+            tpl.is_archived = True
+            tpl.save(update_fields=["is_archived", "updated_at"])
+            return tpl, "Template archived."
+
+        tpl, msg = await sync_to_async(_archive)()
+        return types.BriefingTemplateResponse(
+            success=tpl is not None,
+            message=msg,
+            briefing_template=tpl,
+            client_mutation_id=input.client_mutation_id,
+        )
+
+
+@strawberry.type
+class JobBriefingMutations:
+    """Per-job briefing edits + template-apply."""
+
+    @relay.mutation(permission_classes=[_StrictIsAuth])
+    async def set_job_briefing(
+        self, info, input: inputs.SetJobBriefingInput,
+    ) -> types.JobBriefingResponse:
+        def _set():
+            try:
+                job_pk = _resolve_id(input.job_id)
+            except Exception:
+                return None, "Invalid job id."
+            try:
+                job = models.Job.objects.get(id=job_pk)
+            except models.Job.DoesNotExist:
+                return None, "Job not found."
+            if input.title is not None:
+                job.briefing_title = input.title.strip()
+            if input.body is not None:
+                job.briefing_body = input.body
+            job.save(update_fields=["briefing_title", "briefing_body", "updated_at"])
+            if input.attachments is not None:
+                job.briefing_attachments.all().delete()
+                for att in input.attachments:
+                    models.JobBriefingAttachment.objects.create(
+                        job=job,
+                        name=att.name,
+                        url=att.url,
+                        content_type=att.content_type or "",
+                        size=att.size,
+                    )
+            return job, "Briefing updated."
+
+        job, msg = await sync_to_async(_set)()
+        return types.JobBriefingResponse(
+            success=job is not None,
+            message=msg,
+            job_uuid=str(job.uuid) if job else None,
+            title=job.briefing_title if job else None,
+            client_mutation_id=input.client_mutation_id,
+        )
+
+    @relay.mutation(permission_classes=[_StrictIsAuth])
+    async def apply_briefing_template(
+        self, info, input: inputs.ApplyBriefingTemplateInput,
+    ) -> types.JobBriefingResponse:
+        def _apply():
+            try:
+                job_pk = _resolve_id(input.job_id)
+                tpl_pk = _resolve_id(input.template_id)
+            except Exception:
+                return None, "Invalid id."
+            try:
+                job = models.Job.objects.get(id=job_pk)
+                tpl = models.BriefingTemplate.objects.get(id=tpl_pk)
+            except (models.Job.DoesNotExist, models.BriefingTemplate.DoesNotExist):
+                return None, "Job or template not found."
+            job.briefing_title = tpl.title
+            job.briefing_body = tpl.body
+            job.briefing_template_id = tpl.id
+            job.save(update_fields=[
+                "briefing_title", "briefing_body", "briefing_template",
+                "updated_at",
+            ])
+            # Replace attachments with a fresh clone of the template's.
+            job.briefing_attachments.all().delete()
+            for att in tpl.attachments.all():
+                models.JobBriefingAttachment.objects.create(
+                    job=job, **_copy_attachment_dict(att),
+                )
+            return job, "Briefing applied from template."
+
+        job, msg = await sync_to_async(_apply)()
+        return types.JobBriefingResponse(
+            success=job is not None,
+            message=msg,
+            job_uuid=str(job.uuid) if job else None,
+            title=job.briefing_title if job else None,
+            client_mutation_id=input.client_mutation_id,
+        )

@@ -425,3 +425,61 @@ class AddFavoriteAmbassadorInput(SparkGraphQLInput):
 class RemoveFavoriteAmbassadorInput(SparkGraphQLInput):
     tenant_id: strawberry.ID | None = None
     ambassador_id: strawberry.ID
+
+
+# -------------------------------------------------------------------
+# Briefing template + per-job briefing inputs
+# -------------------------------------------------------------------
+
+@strawberry.input
+class BriefingTemplateAttachmentInput(SparkGraphQLInput):
+    name: str
+    url: str
+    content_type: str | None = None
+    size: int | None = None
+
+
+@strawberry.input
+class CreateBriefingTemplateInput(SparkGraphQLInput):
+    tenant_id: strawberry.ID | None = None
+    name: str
+    title: str | None = None
+    body: str | None = None
+    attachments: list[BriefingTemplateAttachmentInput] | None = None
+
+
+@strawberry.input
+class UpdateBriefingTemplateInput(SparkGraphQLInput):
+    template_id: strawberry.ID
+    name: str | None = None
+    title: str | None = None
+    body: str | None = None
+    # If supplied, replaces the entire attachment list (delete + re-create).
+    # Pass an empty list to clear; pass None to leave untouched.
+    attachments: list[BriefingTemplateAttachmentInput] | None = None
+
+
+@strawberry.input
+class ArchiveBriefingTemplateInput(SparkGraphQLInput):
+    template_id: strawberry.ID
+
+
+@strawberry.input
+class SetJobBriefingInput(SparkGraphQLInput):
+    """Direct edits to a Job's briefing (no template copy). Pass any
+    subset of fields. `attachments` semantics match
+    UpdateBriefingTemplateInput: None=untouched, []=clear, [...]=replace."""
+    job_id: strawberry.ID
+    title: str | None = None
+    body: str | None = None
+    attachments: list[BriefingTemplateAttachmentInput] | None = None
+
+
+@strawberry.input
+class ApplyBriefingTemplateInput(SparkGraphQLInput):
+    """Copy a saved BriefingTemplate onto a Job. Overwrites any
+    existing briefing_title / briefing_body / attachments on the Job
+    — admins who want to keep edits should not apply a template after
+    editing manually."""
+    job_id: strawberry.ID
+    template_id: strawberry.ID

@@ -1631,3 +1631,80 @@ class JobRequirementAnswerQueries:
             )
         except GraphQLError:
             return None
+
+
+# -------------------------------------------------------------------
+# BA Briefing queries
+# -------------------------------------------------------------------
+
+@strawberry.type
+class BriefingTemplateQueries:
+    """List + lookup for per-tenant BriefingTemplates."""
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def briefing_templates(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID | None = None,
+        include_archived: bool = False,
+    ) -> list[types.BriefingTemplate]:
+        """Return templates available to the caller's tenant. Admins
+        can pass an explicit tenant_id to look up another's templates."""
+        def _list():
+            from utils.graphql.mixins import resolve_id_to_int
+            actor = getattr(info.context.request, "user", None)
+            resolved = None
+            if tenant_id:
+                try:
+                    resolved = resolve_id_to_int(tenant_id)
+                except Exception:
+                    resolved = None
+            if not resolved and actor:
+                t = actor.get_tenant() if hasattr(actor, "get_tenant") else None
+                resolved = t.id if t else None
+            if not resolved:
+                return []
+            qs = models.BriefingTemplate.objects.filter(tenant_id=resolved)
+            if not include_archived:
+                qs = qs.filter(is_archived=False)
+            # Pre-fetch attachments so the type resolver doesn't N+1.
+            qs = qs.prefetch_related("attachments")
+            return list(qs)
+        return await sync_to_async(_list)()
+
+
+@strawberry.type
+class JobBriefingQueries:
+    """One-shot lookup for the briefing attached to a specific job."""
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def job_briefing(
+        self,
+        info: strawberry.Info,
+        job_id: strawberry.ID,
+    ) -> types.JobBriefingPayload | None:
+        def _get():
+            from utils.graphql.mixins import resolve_id_to_int
+            try:
+                job_pk = resolve_id_to_int(job_id)
+            except Exception:
+                return None
+            try:
+                job = (
+                    models.Job.objects
+                    .prefetch_related("briefing_attachments")
+                    .select_related("briefing_template")
+                    .get(id=job_pk)
+                )
+            except models.Job.DoesNotExist:
+                return None
+            return types.JobBriefingPayload(
+                title=job.briefing_title or "",
+                body=job.briefing_body or "",
+                template_uuid=(
+                    str(job.briefing_template.uuid)
+                    if job.briefing_template_id else None
+                ),
+                attachments=list(job.briefing_attachments.all()),
+            )
+        return await sync_to_async(_get)()

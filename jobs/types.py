@@ -228,6 +228,33 @@ class Job(Node):
         """Whether the current ambassador user already applied to this job."""
         return bool(getattr(self, "applied", False))
 
+    @strawberry.field
+    async def briefing(self) -> "JobBriefingPayload":
+        """The job's BA briefing — title, body, attachments. Always
+        returns a payload (even when empty) so mobile clients can
+        unconditionally render the briefing section."""
+        def _build():
+            title = getattr(self, "briefing_title", None) or ""
+            body = getattr(self, "briefing_body", None) or ""
+            tpl_uuid = None
+            tpl_id = getattr(self, "briefing_template_id", None)
+            if tpl_id:
+                try:
+                    tpl_uuid = str(self.briefing_template.uuid)
+                except Exception:
+                    tpl_uuid = None
+            try:
+                atts = list(self.briefing_attachments.all())
+            except Exception:
+                atts = []
+            return JobBriefingPayload(
+                title=title,
+                body=body,
+                template_uuid=tpl_uuid,
+                attachments=atts,
+            )
+        return await sync_to_async(_build)()
+
 
 @strawberry.type
 class JobDetailResponse:
@@ -527,3 +554,77 @@ class JobLifecycleResponse:
     client_mutation_id: strawberry.ID | None = None
     job_uuid: str | None = None
     lifecycle_status: str | None = None
+
+
+# -------------------------------------------------------------------
+# BA Briefing types — template + per-job + attachments
+# -------------------------------------------------------------------
+
+@strawberry_django.type(models.BriefingTemplateAttachment)
+class BriefingTemplateAttachment:
+    uuid: str
+    name: str
+    url: str
+    content_type: str
+    size: int | None
+    created_at: str
+
+
+@strawberry_django.type(models.BriefingTemplate)
+class BriefingTemplate:
+    uuid: str
+    name: str
+    title: str
+    body: str
+    is_archived: bool
+    tenant_id: strawberry.ID
+    created_at: str
+    updated_at: str
+
+    @strawberry.field
+    def attachments(self) -> List[BriefingTemplateAttachment]:
+        # `attachments` related-manager is pre-fetched on the list
+        # resolver. Falling back to a query here keeps this safe in
+        # single-object lookups too.
+        try:
+            return list(self.attachments.all())
+        except Exception:
+            return []
+
+
+@strawberry_django.type(models.JobBriefingAttachment)
+class JobBriefingAttachment:
+    uuid: str
+    name: str
+    url: str
+    content_type: str
+    size: int | None
+    created_at: str
+
+
+@strawberry.type
+class JobBriefingPayload:
+    """Computed bundle representing a Job's briefing — the title, body,
+    and the per-job attachments. Surfaced as `job.briefing` so the
+    mobile/admin clients don't have to glue the two fields together."""
+    title: str
+    body: str
+    template_uuid: str | None
+    attachments: List[JobBriefingAttachment]
+
+
+@strawberry.type
+class BriefingTemplateResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    briefing_template: BriefingTemplate | None = None
+
+
+@strawberry.type
+class JobBriefingResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    job_uuid: str | None = None
+    title: str | None = None
