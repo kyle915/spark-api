@@ -3468,6 +3468,99 @@ class RequestMutations:
             )
 
     @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def delete_request(
+        self,
+        info: strawberry.Info,
+        input: inputs.DeleteRequestInput,
+    ) -> types.DeleteRequestResponse:
+        """Soft-delete a request.
+
+        Sets `deleted_at` so the request disappears from lists, detail
+        pages, and exports. The row stays in the DB — its activity log
+        and any FK-linked events / recaps survive. To restore, an admin
+        can NULL out deleted_at directly in the DB (no UI for that yet).
+
+        Auth: spark-admin or client role that owns the tenant.
+        Ambassadors are blocked.
+        """
+        try:
+            service: RequestMutationService = RequestMutationService()
+            user: User = await service.get_user(info)
+            if user.role_id == ROLE_ID.Ambassadors:
+                raise GraphQLError("You are not authorized to delete requests.")
+
+            try:
+                request_pk = resolve_id_to_int(input.id)
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Invalid request ID.")
+
+            request: models.Request = await sync_to_async(
+                models.Request.objects.select_related("tenant").get
+            )(id=request_pk)
+
+            # Client-role users can only delete in their own tenant.
+            is_spark_admin = await user.role.is_spark_admin
+            if not is_spark_admin:
+                try:
+                    await sync_to_async(user.get_tenant)(tenant_id=request.tenant_id)
+                except Exception:
+                    raise GraphQLError(
+                        "You are not authorized to delete requests for this tenant."
+                    )
+
+            if request.deleted_at is not None:
+                return build_mutation_response(
+                    types.DeleteRequestResponse,
+                    success=False,
+                    message="This request is already deleted.",
+                    input_obj=input,
+                    deleted_request_uuid=str(request.uuid),
+                )
+
+            request.deleted_at = django_timezone.now()
+            request.updated_by = user
+            await sync_to_async(request.save)(
+                update_fields=["deleted_at", "updated_by", "updated_at"]
+            )
+
+            # Audit log entry — keeps the timeline honest even though the
+            # request itself is no longer visible. Uses KIND_UPDATED with a
+            # "deleted" metadata flag since there's no dedicated KIND yet.
+            try:
+                await sync_to_async(models.RequestActivityLog.objects.create)(
+                    tenant=request.tenant,
+                    request=request,
+                    kind=models.RequestActivityLog.KIND_UPDATED,
+                    actor_user=user if getattr(user, "id", None) else None,
+                    summary="Request deleted",
+                    metadata={"deleted": True},
+                )
+            except Exception:
+                pass
+
+            return build_mutation_response(
+                types.DeleteRequestResponse,
+                success=True,
+                message="Request deleted.",
+                input_obj=input,
+                deleted_request_uuid=str(request.uuid),
+            )
+        except models.Request.DoesNotExist:
+            return build_mutation_response(
+                types.DeleteRequestResponse,
+                success=False,
+                message="Request not found.",
+                input_obj=input,
+            )
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.DeleteRequestResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
     async def upsert_request_reviewed(
         self,
         info: strawberry.Info,

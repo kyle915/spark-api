@@ -678,6 +678,14 @@ class DeclineRequestResponse:
 
 
 @strawberry.type
+class DeleteRequestResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    deleted_request_uuid: str | None = None
+
+
+@strawberry.type
 class NotifyNoteMentionResponse:
     success: bool
     message: str
