@@ -2535,6 +2535,35 @@ def _get_request_review_copy_emails(exclude_email: str | None = None) -> list[st
     return unique_emails
 
 
+def _get_spark_admin_emails() -> list[str]:
+    """Every active Spark admin's email. Used so any new admin we add
+    is automatically copied on every request approval — no settings
+    file edit, no code change. Hardcoded `IGNITE_REVIEW_CC` still
+    fronts the list (consistency for the historical ops team), this
+    just folds in anyone else with role=spark-admin."""
+    from tenants.models import Role
+    from django.contrib.auth import get_user_model
+
+    User = get_user_model()
+    try:
+        emails = list(
+            User.objects.filter(
+                role__slug=Role.SPARK_ADMIN_SLUG,
+                is_active=True,
+            )
+            .exclude(email__isnull=True)
+            .exclude(email__exact="")
+            .values_list("email", flat=True)
+        )
+    except Exception:
+        return []
+    return [e.strip() for e in emails if (e or "").strip()]
+
+
+async def _get_spark_admin_emails_async() -> list[str]:
+    return await sync_to_async(_get_spark_admin_emails)()
+
+
 async def _notify_requestor_for_request_approved(
     request: models.Request,
     location: models.Location | None,
@@ -2546,16 +2575,24 @@ async def _notify_requestor_for_request_approved(
 
     request.requestor_email = requestor_email
     # CC the Ignite ops team on every approval — events@, kyle@,
-    # myriant@, nevena@, madison@ — so the team has a paper trail
-    # without having to be in the notification group. Dedupes against
-    # the requestor's address so no one CC's themselves.
+    # myriant@, nevena@, madison@ — plus every active Spark admin in
+    # the DB so new admins get the paper trail automatically without
+    # editing settings. Dedupes against the requestor's address so no
+    # one CC's themselves.
+    admin_emails = await _get_spark_admin_emails_async()
+    normalized_exclude = requestor_email.strip().lower()
     copy_emails = list(
         dict.fromkeys(
             _get_request_review_copy_emails(exclude_email=requestor_email)
             + [
                 e
                 for e in IGNITE_REVIEW_CC
-                if (e or "").strip().lower() != requestor_email.strip().lower()
+                if (e or "").strip().lower() != normalized_exclude
+            ]
+            + [
+                e
+                for e in admin_emails
+                if (e or "").strip().lower() != normalized_exclude
             ]
         )
     )
