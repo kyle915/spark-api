@@ -400,6 +400,24 @@ class Job(models.Model):
     posted_at = models.DateTimeField(null=True, blank=True, db_index=True)
     max_applications = models.PositiveIntegerField(null=True, blank=True)
 
+    # ---- BA Briefing ----
+    # Free-form briefing surfaced to the BA on the mobile job detail
+    # screen. Title is short ("Liquid Death · Whole Foods PDX demo"),
+    # body is markdown-ish plain text. Attachments (PDFs, decks,
+    # images) live on the JobBriefingAttachment model below.
+    #
+    # `briefing_template` is the optional saved template this briefing
+    # was copied from — kept so admins can tell at a glance whether a
+    # job is using a stock briefing or got bespoke edits.
+    briefing_title = models.CharField(max_length=200, blank=True, default="")
+    briefing_body = models.TextField(blank=True, default="")
+    briefing_template = models.ForeignKey(
+        "jobs.BriefingTemplate",
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name="jobs_using_template",
+    )
+
     job_title = models.ForeignKey(
         JobTitle,
         on_delete=models.RESTRICT,
@@ -1012,3 +1030,95 @@ class TenantFavoriteAmbassador(models.Model):
             ),
         ]
         ordering = ("-created_at",)
+
+
+# ---------------------------------------------------------------------
+# BA Briefing Template + Attachments
+# ---------------------------------------------------------------------
+#
+# A reusable per-tenant briefing template (title, body, attachments)
+# that admins can "apply to job" — copies the title/body onto Job and
+# clones attachments into JobBriefingAttachment rows. Each Job also
+# carries its own briefing_title / briefing_body / attachments so the
+# briefing can drift from the template (edits don't write back).
+#
+# Attachments are stored as GCS blob paths (we already have this for
+# recap files); the resolved URL is computed at read time so the
+# bucket can move without rewriting rows.
+class BriefingTemplate(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+
+    tenant = models.ForeignKey(
+        Tenant,
+        on_delete=models.CASCADE,
+        related_name="briefing_templates",
+    )
+    name = models.CharField(max_length=120)
+    title = models.CharField(max_length=200, blank=True, default="")
+    body = models.TextField(blank=True, default="")
+    # Soft-delete so a Job that's still pointing at a deleted template
+    # doesn't 500. Use the queryset filter `is_archived=False` for the
+    # admin picker.
+    is_archived = models.BooleanField(default=False, db_index=True)
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name="briefing_templates_created",
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name="briefing_templates_updated",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("name",)
+
+
+class BriefingTemplateAttachment(models.Model):
+    """Attachment row belonging to a reusable BriefingTemplate."""
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+
+    template = models.ForeignKey(
+        BriefingTemplate,
+        on_delete=models.CASCADE,
+        related_name="attachments",
+    )
+    name = models.CharField(max_length=200)
+    # GCS object path or external URL. Treated as a URL by the
+    # mobile app — we pass through whatever's stored here.
+    url = models.CharField(max_length=1024)
+    content_type = models.CharField(max_length=120, blank=True, default="")
+    size = models.PositiveBigIntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("id",)
+
+
+class JobBriefingAttachment(models.Model):
+    """Per-job attachment. Cloned from the BriefingTemplate at apply
+    time but free to drift after."""
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+
+    job = models.ForeignKey(
+        Job,
+        on_delete=models.CASCADE,
+        related_name="briefing_attachments",
+    )
+    name = models.CharField(max_length=200)
+    url = models.CharField(max_length=1024)
+    content_type = models.CharField(max_length=120, blank=True, default="")
+    size = models.PositiveBigIntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("id",)
