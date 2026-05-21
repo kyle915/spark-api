@@ -39,11 +39,16 @@ class RecapApprovedNotificationMailer(Mailer):
         to_emails: list[str],
         recipient_first_name: str | None = None,
         reply_to_email: str | None = None,
+        attachments: list[dict] | None = None,
     ) -> None:
         self.recap = recap
         self.to_emails = to_emails
         self.recipient_first_name = recipient_first_name
         self.reply_to_email = reply_to_email or "events@igniteproductions.co"
+        # PDF (or other) attachments — passed through to Envelope so
+        # the recipient gets the recap document inline with the
+        # approval notification.
+        self.attachments = attachments or []
 
     def _location_name(self) -> str:
         if self.recap.retailer and self.recap.retailer.name:
@@ -181,6 +186,7 @@ class RecapApprovedNotificationMailer(Mailer):
             template=template,
             to_emails=self.to_emails,
             headers={"Reply-To": self.reply_to_email},
+            attachments=self.attachments,
             from_email=getattr(
                 settings,
                 "DEFAULT_FROM_EMAIL",

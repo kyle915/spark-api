@@ -55,6 +55,98 @@ User = get_user_model()
 logger = logging.getLogger(__name__)
 
 
+async def _resolve_recap_pdf_attachment(
+    recap: models.Recap | models.CustomRecap,
+) -> list[dict] | None:
+    """If the recap has a generated PDF (CustomRecapFile with .pdf
+    extension or RecapFile equivalent), return an `attachments` list
+    shaped for the Mailer. Returns None when no PDF exists or the
+    blob fetch fails — caller falls back to a link-only email.
+    """
+    def _find_blob() -> tuple[str, str] | None:
+        try:
+            if isinstance(recap, models.CustomRecap):
+                qs = recap.custom_recap_files.filter(
+                    file_type__extension__iexact=".pdf"
+                ) | recap.custom_recap_files.filter(
+                    file_type__extension__iexact="pdf"
+                )
+                pdf = qs.order_by("-id").first()
+            else:
+                qs = recap.recap_files.filter(
+                    file_type__extension__iexact=".pdf"
+                ) | recap.recap_files.filter(
+                    file_type__extension__iexact="pdf"
+                )
+                pdf = qs.order_by("-id").first()
+            if not pdf:
+                return None
+            blob = extract_blob_name_from_url(str(pdf.url)) or str(pdf.url)
+            return blob, (pdf.name or f"recap-{recap.uuid}.pdf")
+        except Exception:
+            return None
+
+    found = await sync_to_async(_find_blob)()
+    if not found:
+        return None
+    blob_name, friendly_name = found
+    try:
+        pdf_bytes = await sync_to_async(download_blob_bytes)(blob_name)
+    except Exception as exc:
+        logger.warning(
+            "Could not fetch PDF blob %s for recap %s: %s",
+            blob_name,
+            recap.id,
+            exc,
+        )
+        return None
+    if not pdf_bytes:
+        return None
+    safe_name = friendly_name if friendly_name.lower().endswith(".pdf") else f"{friendly_name}.pdf"
+    return [
+        {
+            "filename": safe_name,
+            "content": pdf_bytes,
+            "content_type": "application/pdf",
+        }
+    ]
+
+
+async def _resolve_recap_requestor_recipients(
+    recap: models.Recap | models.CustomRecap,
+) -> list[tuple[str, str]]:
+    """Pull the original request's requestor (created_by + the
+    requestor_email override). Returns a list of (email, first_name)
+    tuples, deduped, ready to merge into the approval recipient set.
+    """
+    def _collect() -> list[tuple[str, str]]:
+        out: list[tuple[str, str]] = []
+        seen: set[str] = set()
+        try:
+            req = getattr(recap.event, "request", None)
+        except Exception:
+            req = None
+        if not req:
+            return out
+
+        def add(email: str | None, first: str | None):
+            e = (email or "").strip()
+            if not e or e.lower() in seen:
+                return
+            seen.add(e.lower())
+            out.append((e, (first or "").strip()))
+
+        # `requestor_email` is the public-form override — wins if set.
+        add(getattr(req, "requestor_email", None), None)
+        # Authenticated creator (admin/client portal submission).
+        cb = getattr(req, "created_by", None)
+        if cb:
+            add(getattr(cb, "email", None), getattr(cb, "first_name", None))
+        return out
+
+    return await sync_to_async(_collect)()
+
+
 async def _notify_recap_approved_to_rmm_or_clients(
     recap: models.Recap | models.CustomRecap,
 ) -> None:
@@ -65,14 +157,21 @@ async def _notify_recap_approved_to_rmm_or_clients(
         getattr(rmm_user, "email", None) or ""
     ).strip() or fallback_reply_to
 
+    # Build recipient list: RMM (or fallback to client tenanted users)
+    # + the original requestor (request.created_by + requestor_email).
+    # Per-row dedupe so a requestor who's also the RMM gets one email.
     recipients: list[tuple[str, str]] = []
+    seen: set[str] = set()
+
+    def _push(email: str | None, first: str | None):
+        e = (email or "").strip()
+        if not e or e.lower() in seen:
+            return
+        seen.add(e.lower())
+        recipients.append((e, (first or "").strip()))
+
     if rmm_user and rmm_user.email:
-        recipients.append(
-            (
-                rmm_user.email.strip(),
-                (rmm_user.first_name or "").strip(),
-            )
-        )
+        _push(rmm_user.email, rmm_user.first_name)
     else:
         rows = await sync_to_async(list)(
             TenantedUser.objects.filter(
@@ -82,13 +181,19 @@ async def _notify_recap_approved_to_rmm_or_clients(
             ).values("user__email", "user__first_name")
         )
         for row in rows:
-            email = (row.get("user__email") or "").strip()
-            if not email:
-                continue
-            recipients.append((email, (row.get("user__first_name") or "").strip()))
+            _push(row.get("user__email"), row.get("user__first_name"))
+
+    # Add the original requestor — same activation owner the admin
+    # CC's on the request approval email. Closes the loop: requestor
+    # → request approved → recap filed → recap approved.
+    for email, first in await _resolve_recap_requestor_recipients(recap):
+        _push(email, first)
 
     if not recipients:
         return
+
+    # Resolve PDF once and reuse — saves one GCS fetch per recipient.
+    attachments = await _resolve_recap_pdf_attachment(recap)
 
     for email, first_name in recipients:
         mailer = RecapApprovedNotificationMailer(
@@ -96,6 +201,7 @@ async def _notify_recap_approved_to_rmm_or_clients(
             to_emails=[email],
             recipient_first_name=first_name or None,
             reply_to_email=reply_to_email,
+            attachments=attachments,
         )
         await sync_to_async(mailer.send)()
 
