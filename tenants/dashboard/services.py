@@ -362,6 +362,36 @@ class DashboardQueriesService(SparkGraphQLMixin):
         if distributor_ids:
             queryset = queryset.filter(request__distributor_id__in=distributor_ids)
 
+        # State filter — events can hit `state_id` directly or via the
+        # request → location → state chain. Accept either single id or
+        # list, then merge into a single IN-clause so callers don't
+        # have to pick.
+        state_ids = self._resolve_id_list_filter(
+            getattr(filters, "state_id", None),
+            getattr(filters, "state_ids", None),
+            "state",
+        )
+        if state_ids:
+            queryset = queryset.filter(
+                Q(state_id__in=state_ids)
+                | Q(request__state_id__in=state_ids)
+                | Q(location__state_id__in=state_ids)
+            )
+
+        # Retailer filter — retailer is stored on event + request. We
+        # use OR'd lookups for robustness so legacy rows without an
+        # event-level retailer still match the request-level one.
+        retailer_ids = self._resolve_id_list_filter(
+            getattr(filters, "retailer_id", None),
+            getattr(filters, "retailer_ids", None),
+            "retailer",
+        )
+        if retailer_ids:
+            queryset = queryset.filter(
+                Q(retailer_id__in=retailer_ids)
+                | Q(request__retailer_id__in=retailer_ids)
+            )
+
         return queryset
 
     def _get_event_dashboard_date_range(
@@ -448,6 +478,22 @@ class DashboardQueriesService(SparkGraphQLMixin):
             filter_dict['distributor_ids'] = ",".join(
                 str(distributor_id) for distributor_id in distributor_ids
             )
+        # State / retailer filters fold into the cache key so the same
+        # tenant viewed under different filter combos doesn't collide.
+        state_ids = self._resolve_id_list_filter(
+            getattr(filters, "state_id", None),
+            getattr(filters, "state_ids", None),
+            "state",
+        )
+        if state_ids:
+            filter_dict['state_ids'] = ",".join(str(s) for s in state_ids)
+        retailer_ids = self._resolve_id_list_filter(
+            getattr(filters, "retailer_id", None),
+            getattr(filters, "retailer_ids", None),
+            "retailer",
+        )
+        if retailer_ids:
+            filter_dict['retailer_ids'] = ",".join(str(r) for r in retailer_ids)
         tenant_id = self._resolve_filter_tenant_id(filters)
         if tenant_id:
             filter_dict['tenant_id'] = str(tenant_id)
@@ -680,3 +726,24 @@ class DashboardQueriesService(SparkGraphQLMixin):
 
         # Deduplicate and normalize order for deterministic cache keys.
         return sorted(set(resolved_ids))
+
+    def _resolve_id_list_filter(
+        self,
+        single_value: strawberry.ID | None,
+        list_value: list[strawberry.ID] | None,
+        label: str,
+    ) -> list[int]:
+        """Generic helper: collapse `<label>_id` + `<label>_ids` into a
+        single deduped, sorted list of DB ids. Used by state / retailer
+        filters (and now distributor follows the same pattern).
+        """
+        resolved: list[int] = []
+        if single_value:
+            r = self._resolve_filter_id(single_value, label)
+            if r is not None:
+                resolved.append(r)
+        for v in (list_value or []):
+            r = self._resolve_filter_id(v, label)
+            if r is not None:
+                resolved.append(r)
+        return sorted(set(resolved))
