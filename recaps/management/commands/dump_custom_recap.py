@@ -58,7 +58,10 @@ class Command(BaseCommand):
         for f in files:
             ext_name = (f.file_type.name if f.file_type else "?")
             cat = (f.file_recap_category.name if f.file_recap_category else "?")
-            url_stored = (f.url or "").strip()
+            # CustomRecapFile.url is a FileField → coerce to str (blob
+            # path), not the FieldFile descriptor itself.
+            raw = f.url
+            url_stored = (str(raw) if raw else "").strip()
             # Build the URL the same way the frontend does
             if url_stored.startswith("http://") or url_stored.startswith("https://"):
                 public_url = url_stored
