@@ -461,3 +461,69 @@ class InviteAmbassadorsToJobResponse:
     message: str
     client_mutation_id: strawberry.ID | None = None
     ambassador_jobs: List[AmbassadorJob] | None = None
+
+
+# -------------------------------------------------------------------
+# Job lifecycle types
+# -------------------------------------------------------------------
+
+@strawberry_django.type(models.JobApplication)
+class JobApplication:
+    uuid: str
+    status: str
+    note: str
+    applied_at: str
+    decided_at: str | None
+
+    @strawberry.field
+    def ambassador_first_name(self) -> str:
+        a = self.__dict__.get("ambassador")
+        if not a:
+            return ""
+        u = getattr(a, "user", None)
+        return (getattr(u, "first_name", None) or "") if u else ""
+
+    @strawberry.field
+    def ambassador_last_name(self) -> str:
+        a = self.__dict__.get("ambassador")
+        if not a:
+            return ""
+        u = getattr(a, "user", None)
+        return (getattr(u, "last_name", None) or "") if u else ""
+
+    @strawberry.field
+    def ambassador_email(self) -> str:
+        a = self.__dict__.get("ambassador")
+        if not a:
+            return ""
+        u = getattr(a, "user", None)
+        return (getattr(u, "email", None) or "") if u else ""
+
+    @strawberry.field
+    def ambassador_uuid(self) -> str:
+        a = self.__dict__.get("ambassador")
+        return str(a.uuid) if a and getattr(a, "uuid", None) else ""
+
+
+@strawberry.type
+class JobApplicationResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    application_uuid: str | None = None
+
+
+@strawberry.type
+class FavoriteAmbassadorResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+
+
+@strawberry.type
+class JobLifecycleResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    job_uuid: str | None = None
+    lifecycle_status: str | None = None
