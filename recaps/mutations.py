@@ -16,6 +16,7 @@ from django.utils.text import slugify
 from recaps import types
 from recaps import models
 from recaps import inputs
+from recaps import heic_conversion
 from recaps.envelopes import (
     RecapApprovedNotificationMailer,
     RecapReadyForReviewAdminMailer,
@@ -778,6 +779,25 @@ class RecapMutationService(SparkGraphQLMixin):
                 models.RecapFile.objects.filter(
                     id__in=[recap_file.id for recap_file in recap_files]
                 ).update(recap=recap)
+
+                # HEIC sibling generation — for each .heic/.heif file the
+                # BA uploaded, kick off a server-side conversion to .jpg
+                # and store the result as a sibling RecapFile row pointing
+                # at the same recap. Browsers can't render HEIC natively
+                # so the recap-list hero picker prefers the .jpg variant
+                # and shows it without the slow in-browser libheif WASM
+                # fallback. Best-effort — a failure on any single file
+                # logs + keeps the HEIC alone, never aborts the upload.
+                for heic_rf in recap_files:
+                    if not heic_conversion.is_heic_blob(str(heic_rf.file)):
+                        continue
+                    heic_conversion.ensure_jpg_sibling(
+                        heic_blob_name=str(heic_rf.file),
+                        recap_id=recap.id,
+                        file_type=heic_rf.file_type,
+                        file_recap_category=heic_rf.file_recap_category,
+                        created_by=self.user,
+                    )
 
                 # Create related objects
                 if self._has_any_consumer_engagements(self.input.consumer_engagements):
