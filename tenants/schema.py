@@ -21,6 +21,7 @@ from .mutations import (
     ClientsCustomRegister,
     SparkCustomRegister,
     SparkTenantMutations,
+    LinkedSheetMutations,
     TenantThemeMutations,
     SparkUserMutations,
     AmbassadorUserMutations,
@@ -681,6 +682,10 @@ class MutationClients(
     SparkUserMutations,
     GoogleCalendarMutations,
     TenantThemeMutations,
+    # Linked-sheet management — admin frontend (which uses the clients
+    # GraphQL endpoint) needs to call setLinkedSheet. Same mixin is on
+    # SparkTenantMutations for the spark schema, so both surfaces work.
+    LinkedSheetMutations,
 ):
     verify_token = mutations.VerifyToken.field
     token_auth = mutations.ObtainJSONWebToken.field
