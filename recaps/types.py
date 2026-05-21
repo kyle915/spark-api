@@ -35,26 +35,28 @@ class RecapFile(Node):
     # lookup — fatal for the recaps list which serializes 9.4k file
     # rows per request.
     @strawberry.field(name="file")
-    def file_url(self) -> str | None:
+    async def file_url(self) -> str | None:
         """Return the public URL for the recap file if one exists.
 
-        Reads from __dict__ first (the fast path — column is already
-        loaded on every well-formed query). Falls back to getattr only
-        if __dict__ is empty AND we're in a context where it's safe;
-        the broad except catches Django's SynchronousOnlyOperation when
-        a deferred field would otherwise trigger sync SQL in an async
-        resolver. PR #501 went too aggressive and dropped the fallback
-        entirely, which silently broke the recap-list hero thumbnails
-        for rows where the optimizer had deferred the file column.
+        Two-step (mirrors CustomRecapFile.url_str):
+        1. Fast path — __dict__ when the column is loaded.
+        2. Slow path — `refresh_from_db(fields=["file"])` wrapped in
+           sync_to_async when the column was deferred. Previously the
+           bare getattr fallback raised SynchronousOnlyOperation in
+           async Django and silently returned None — the bug that
+           produced empty <img src> tags on recap pages even though
+           the bucket had every blob.
         """
         field_file = self.__dict__.get("file")
         if field_file is None:
+            def _reload():
+                self.refresh_from_db(fields=["file"])
+                return self.__dict__.get("file")
             try:
-                field_file = getattr(self, "file", None)
+                field_file = await sync_to_async(
+                    _reload, thread_sensitive=True
+                )()
             except Exception:
-                # SynchronousOnlyOperation, RuntimeError on Postgres
-                # async context — any of them mean we can't safely
-                # read the field. Better to return None than crash.
                 return None
         if not field_file:
             return None
@@ -515,16 +517,35 @@ class CustomRecapFile(Node):
     file_recap_category: FileRecapCategory | None
 
     @strawberry.field(name="url")
-    def url_str(self) -> str | None:
+    async def url_str(self) -> str | None:
         """Return the public URL for the custom recap file if any.
 
-        __dict__-first with a safe getattr fallback — see RecapFile.file_url
-        above for the rationale.
+        Two-step:
+        1. Read from __dict__ when the column is loaded (the optimizer
+           usually selects every column on a one-shot customRecap
+           lookup, so this is the fast path).
+        2. If the column is deferred — which happens when the
+           strawberry-django optimizer trims to only-the-fields-Relay-
+           asked-for and the parent is a *plural* connection — pull the
+           row's `url` via `refresh_from_db` inside `sync_to_async`.
+           The previous implementation did a bare `getattr(self, "url")`
+           that raised `SynchronousOnlyOperation` in async Django and
+           the broad `except` silently returned None. That's exactly
+           what produced 62 × `<img src="">` on the custom-recap
+           detail page even though the DB had every blob path.
         """
+        # Fast path: column already on instance.
         field_file = self.__dict__.get("url")
         if field_file is None:
+            # Slow path: refresh just the `url` column so we don't pull
+            # the whole row twice. Async-safe.
+            def _reload():
+                self.refresh_from_db(fields=["url"])
+                return self.__dict__.get("url")
             try:
-                field_file = getattr(self, "url", None)
+                field_file = await sync_to_async(
+                    _reload, thread_sensitive=True
+                )()
             except Exception:
                 return None
         if not field_file:
