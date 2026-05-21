@@ -701,6 +701,149 @@ class AmbassadorMobileMutations:
         return await ShiftOfferService.respond(input, info)
 
 
+# -------------------------------------------------------------------
+# BA-side shift attendance — arrive / clock-in / clock-out
+# -------------------------------------------------------------------
+#
+# Mobile uses these from the shift-detail screen. Each one creates an
+# Attendance row keyed to the BA's ambassador_event uuid; admin sees
+# the timestamps + GPS in the shift replay panel.
+
+@strawberry.input
+class ArriveAtShiftInput:
+    ambassador_event_uuid: strawberry.ID
+    latitude: float | None = None
+    longitude: float | None = None
+    client_mutation_id: strawberry.ID | None = None
+
+
+@strawberry.input
+class ClockInToShiftInput:
+    ambassador_event_uuid: strawberry.ID
+    latitude: float | None = None
+    longitude: float | None = None
+    client_mutation_id: strawberry.ID | None = None
+
+
+@strawberry.input
+class ClockOutOfShiftInput:
+    ambassador_event_uuid: strawberry.ID
+    latitude: float | None = None
+    longitude: float | None = None
+    client_mutation_id: strawberry.ID | None = None
+
+
+@strawberry.type
+class ShiftAttendanceResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    attendance_uuid: str | None = None
+    clock_time: str | None = None
+    kind: str | None = None  # "arrived" | "clock_in" | "clock_out"
+
+
+def _resolve_amb_event_by_uuid(uuid: str):
+    from ambassadors.models import AmbassadorEvent
+    try:
+        return AmbassadorEvent.objects.select_related(
+            "ambassador", "ambassador__user", "event"
+        ).get(uuid=uuid)
+    except AmbassadorEvent.DoesNotExist:
+        return None
+
+
+def _ensure_source(name: str):
+    """Get-or-create the Source lookup row by name."""
+    from ambassadors.models import Source
+    source, _ = Source.objects.get_or_create(name=name)
+    return source
+
+
+def _record_attendance(*, amb_event, source_name: str, coordinates, actor):
+    """Insert one Attendance row + return it.
+
+    `coordinates` is an optional [lat, lng] list (matches the model's
+    ArrayField(size=2)). Wrapping in sync_to_async happens at the
+    caller — this stays pure-sync so it can run inside @sync_to_async.
+    """
+    from ambassadors.models import Attendance
+    from django.utils import timezone as _tz
+    source = _ensure_source(source_name)
+    return Attendance.objects.create(
+        clock_time=_tz.now(),
+        coordinates=coordinates,
+        ambassador=amb_event.ambassador,
+        job=None,
+        event=amb_event.event,
+        source=source,
+    )
+
+
+@strawberry.type
+class ShiftAttendanceMutations:
+    """BA-side mobile mutations for the shift detail screen."""
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def arrive_at_shift(
+        self, info: strawberry.Info, input: ArriveAtShiftInput,
+    ) -> ShiftAttendanceResponse:
+        """'I'm here' — first ping when the BA arrives at the venue."""
+        return await _do_attendance(info, input, kind="arrived")
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def clock_in_to_shift(
+        self, info: strawberry.Info, input: ClockInToShiftInput,
+    ) -> ShiftAttendanceResponse:
+        """Start the activation timer."""
+        return await _do_attendance(info, input, kind="clock_in")
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def clock_out_of_shift(
+        self, info: strawberry.Info, input: ClockOutOfShiftInput,
+    ) -> ShiftAttendanceResponse:
+        """End the activation timer."""
+        return await _do_attendance(info, input, kind="clock_out")
+
+
+async def _do_attendance(info, input, *, kind: str) -> "ShiftAttendanceResponse":
+    actor = info.context.request.user
+
+    def _go():
+        amb_event = _resolve_amb_event_by_uuid(str(input.ambassador_event_uuid))
+        if not amb_event:
+            return None, "Shift not found."
+        # Authz — BA can only clock themselves
+        own_user_id = (
+            amb_event.ambassador.user_id if amb_event.ambassador else None
+        )
+        if own_user_id and getattr(actor, "id", None) != own_user_id:
+            return None, "Not your shift."
+        coords = None
+        if input.latitude is not None and input.longitude is not None:
+            coords = [float(input.latitude), float(input.longitude)]
+        att = _record_attendance(
+            amb_event=amb_event, source_name=kind,
+            coordinates=coords, actor=actor,
+        )
+        return att, "OK"
+
+    att, msg = await sync_to_async(_go)()
+    if att is None:
+        return ShiftAttendanceResponse(
+            success=False, message=msg,
+            client_mutation_id=None, kind=None,
+        )
+    return ShiftAttendanceResponse(
+        success=True,
+        message=msg,
+        client_mutation_id=None,
+        attendance_uuid=str(att.uuid),
+        clock_time=att.clock_time.isoformat(),
+        kind=kind,
+    )
+
+
 @strawberry.type
 class GroupTypeMutations:
     @relay.mutation(permission_classes=[IsClientOrSparkAdmin])

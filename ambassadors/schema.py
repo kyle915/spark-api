@@ -65,6 +65,7 @@ class AmbassadorMutationsMobile(
     mutations.AmbassadorMutations,
     mutations.AmbassadorMobileMutations,
     mutations.AttendanceMutations,
+    mutations.ShiftAttendanceMutations,
 ):
     pass
 
