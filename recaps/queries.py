@@ -1057,6 +1057,31 @@ class CustomRecapQueriesService(SparkGraphQLMixin):
             raise GraphQLError("Custom recap not found.")
 
 
+# ---------------------------------------------------------------------------
+# Tenant scoping helper — used to enforce per-client data isolation on the
+# recap-side resolvers. The events/requests resolvers already do this via
+# `resolve_tenant_id` on their service; recap resolvers historically bypassed
+# the same pattern, which let a client user with the right token pass a
+# different tenant_id (or omit it) and read cross-tenant recaps. This helper
+# closes that gap by forcing the tenant_id for client-role users to their own
+# tenant, regardless of what came in via filters.tenant_id.
+# ---------------------------------------------------------------------------
+async def _enforce_client_tenant(
+    service: SparkGraphQLMixin,
+    info: strawberry.Info,
+    filters_tenant_id: int | None,
+) -> int | None:
+    user = await service.get_user(info)
+    role_slug = service.get_role_slug(user)
+    if role_slug == "client":
+        # Reuse the tenant resolver from the shared mixin. It validates that
+        # the user actually has access to the requested tenant; passing
+        # tenant_id=None falls back to the user's default tenant.
+        tenant = await service.get_user_tenant(info, tenant_id=filters_tenant_id)
+        return tenant.id
+    return filters_tenant_id
+
+
 @strawberry.type
 class RecapQueries:
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
@@ -1074,10 +1099,16 @@ class RecapQueries:
         service = RecapQueriesService()
         user = await service.get_user(info)
 
-        tenant_id: int | None = (
+        # Client users see only their own tenant — even if filters.tenant_id
+        # is unset or points elsewhere. Spark admins / ambassadors keep the
+        # filters.tenant_id pass-through behavior.
+        filters_tenant_id_raw: int | None = (
             resolve_id_to_int(filters.tenant_id)
             if filters and filters.tenant_id not in (None, "")
             else None
+        )
+        tenant_id = await _enforce_client_tenant(
+            service, info, filters_tenant_id_raw
         )
         event_id: int | None = (
             resolve_id_to_int(filters.event_id)
@@ -1164,11 +1195,25 @@ class RecapQueries:
     async def recap(
         self, info: strawberry.Info, uuid: strawberry.ID
     ) -> types.Recap | None:
-        """Get a single recap by UUID."""
+        """Get a single recap by UUID.
+
+        For client-role users we look up the recap and then verify the
+        recap's tenant matches the user's. Cross-tenant uuids return None
+        instead of raising — keeps the resolver indistinguishable from a
+        "not found" lookup so we don't leak the existence of cross-tenant
+        records.
+        """
         try:
             service = RecapQueriesService()
             user = await service.get_user(info)
             recap = await service.get_record_by_uuid(str(uuid))
+            if recap is None:
+                return None
+            if service.get_role_slug(user) == "client":
+                # tenant_id is a direct FK on Recap — no extra query needed.
+                user_tenant = await service.get_user_tenant(info)
+                if recap.tenant_id != user_tenant.id:
+                    return None
             return recap
         except GraphQLError:
             return None
@@ -1184,14 +1229,21 @@ class RecapQueries:
         q: str | None = None,
         filters: CustomRecapFiltersInput | None = None,
     ) -> CountableConnection[types.CustomRecap]:
-        """Get custom recaps using Relay pagination."""
+        """Get custom recaps using Relay pagination.
+
+        Client-role users are forced to their own tenant — same scoping
+        pattern as the recaps resolver above.
+        """
         service = CustomRecapQueriesService()
         await service.get_user(info)
 
-        resolved_tenant_id = (
+        filters_tenant_id_raw = (
             resolve_id_to_int(filters.tenant_id)
             if filters and filters.tenant_id not in (None, "")
             else None
+        )
+        resolved_tenant_id = await _enforce_client_tenant(
+            service, info, filters_tenant_id_raw
         )
         resolved_event_id = (
             resolve_id_to_int(filters.event_id)
@@ -1290,14 +1342,25 @@ class RecapQueries:
         id: strawberry.ID | None = None,
         uuid: strawberry.ID | None = None,
     ) -> types.CustomRecap | None:
-        """Get a single custom recap by id or UUID."""
+        """Get a single custom recap by id or UUID.
+
+        Client users only get the record back if it belongs to their tenant.
+        Cross-tenant lookups silently return None (matches "not found" so
+        we don't leak the existence of other-tenant records).
+        """
         try:
             service = CustomRecapQueriesService()
-            await service.get_user(info)
+            user = await service.get_user(info)
             record = await service.get_record(
                 id=int(id) if id not in (None, "") else None,
                 uuid=str(uuid) if uuid not in (None, "") else None,
             )
+            if record is None:
+                return None
+            if service.get_role_slug(user) == "client":
+                user_tenant = await service.get_user_tenant(info)
+                if record.tenant_id != user_tenant.id:
+                    return None
             return record
         except GraphQLError:
             return None
