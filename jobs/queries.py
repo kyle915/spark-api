@@ -1678,6 +1678,66 @@ class JobApplicationQueries:
     """Admin-facing view of BA applications for a specific Job."""
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def my_available_jobs(
+        self,
+        info: strawberry.Info,
+    ) -> list[types.Job]:
+        """Posted jobs the calling BA can apply to.
+
+        Filtering:
+          - lifecycle_status == 'posted' (job is live on the board)
+          - If `favorites_only=True`, BA must be on the tenant's
+            TenantFavoriteAmbassador roster
+          - BA can't see jobs they've already applied to (any status)
+            so the board doesn't show their own past applications
+
+        Newest posted first so today's drops are at the top.
+        """
+        actor = getattr(info.context.request, "user", None)
+
+        def _list():
+            from ambassadors.models import Ambassador
+            if not actor or not getattr(actor, "id", None):
+                return []
+            try:
+                amb = Ambassador.objects.get(user_id=actor.id)
+            except Ambassador.DoesNotExist:
+                return []
+
+            # Which tenants have this BA on their favorites list — used
+            # to satisfy the favorites_only gate without joining for
+            # every Job row.
+            fav_tenant_ids = set(
+                models.TenantFavoriteAmbassador.objects.filter(
+                    ambassador=amb
+                ).values_list("tenant_id", flat=True)
+            )
+
+            # Jobs they've already applied to (any status) — hide them.
+            applied_job_ids = set(
+                models.JobApplication.objects.filter(
+                    ambassador=amb
+                ).values_list("job_id", flat=True)
+            )
+
+            qs = (
+                models.Job.objects
+                .select_related("event", "event__tenant", "job_title")
+                .filter(lifecycle_status=models.Job.STATUS_POSTED)
+                .exclude(id__in=applied_job_ids)
+                .order_by("-posted_at", "-id")
+            )
+
+            visible = []
+            for job in qs[:200]:
+                if job.favorites_only and job.tenant_id not in fav_tenant_ids:
+                    continue
+                visible.append(job)
+            return visible
+
+        return await sync_to_async(_list)()
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def job_applications(
         self,
         info: strawberry.Info,

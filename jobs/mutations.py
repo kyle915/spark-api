@@ -1865,6 +1865,31 @@ class JobLifecycleMutations:
             return job, f"{amb.user.get_full_name() if amb.user else 'BA'} assigned to the job."
 
         job, msg = await sync_to_async(_assign)()
+        # Push the assignment to the BA — admin moved their applied row
+        # to accepted (or assigned them outright). Without this the BA
+        # has no idea they got the gig until they re-open the app.
+        if job is not None:
+            try:
+                from ambassadors.push import enqueue_push
+                ba_user_id = await sync_to_async(
+                    lambda: _Ambassador.objects.values_list(
+                        "user_id", flat=True
+                    ).get(pk=ba_pk)
+                )()
+                if ba_user_id:
+                    enqueue_push(
+                        ba_user_id,
+                        title="You got the gig",
+                        body=f"You've been assigned to {job.name}. Tap to see details.",
+                        data={
+                            "kind": "job_assigned",
+                            "jobUuid": str(job.uuid),
+                            "eventUuid": str(getattr(job.event, "uuid", "")),
+                        },
+                    )
+            except Exception:
+                # Push is best-effort — don't fail the assignment.
+                pass
         return _build_lifecycle_response(job is not None, msg, job=job, input_obj=input)
 
 

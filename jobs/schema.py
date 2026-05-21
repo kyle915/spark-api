@@ -4,7 +4,12 @@ from jobs import mutations, queries
 
 
 @strawberry.type
-class AmbassadorJobQueries(queries.AmbassadorJobQueries):
+class AmbassadorJobQueries(
+    queries.AmbassadorJobQueries,
+    # myAvailableJobs lives here so the mobile schema sees it.
+    queries.JobApplicationQueries,
+    queries.JobBriefingQueries,
+):
     pass
 
 
