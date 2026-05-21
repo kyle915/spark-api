@@ -14,6 +14,25 @@ def _apply_offset(
     return value + datetime.timedelta(minutes=offset_minutes)
 
 
+def _admin_request_url(request: models.Request | None) -> str:
+    """Canonical deep-link to the request detail page on the admin site.
+
+    Reads ADMIN_FRONTEND_URL from settings (set to
+    https://admin.igniteproductions.co on Cloud Run; falls back to the
+    *.web.app default in local/dev). Every transactional email should
+    surface this so the reviewer goes straight to the request instead
+    of landing on /requests/list and hunting for it.
+    """
+    if not request or not getattr(request, "uuid", None):
+        return ""
+    base = getattr(
+        settings,
+        "ADMIN_FRONTEND_URL",
+        "https://spark-new-admin.web.app",
+    ).rstrip("/")
+    return f"{base}/request/view/{request.uuid}"
+
+
 def _get_timezone_offset_minutes(obj) -> int:
     """Return timezone offset (minutes) for event/request, default 0."""
     try:
@@ -189,6 +208,7 @@ class RequestorRequestApprovedMailer(Mailer):
                 "request": self.request,
                 "location": self.location,
                 "request_id": getattr(self.request, "id", None),
+                "request_url": _admin_request_url(self.request),
                 "first_name": first_name,
                 "requestor_name": requestor_name,
                 "requestor_email": getattr(self.request, "requestor_email", None)
@@ -284,6 +304,7 @@ class RequestorRequestDeclinedMailer(Mailer):
                 "request": self.request,
                 "location": self.location,
                 "request_id": getattr(self.request, "id", None),
+                "request_url": _admin_request_url(self.request),
                 "first_name": first_name,
                 "requestor_name": requestor_name,
                 "requestor_email": getattr(self.request, "requestor_email", None)
@@ -456,6 +477,7 @@ class RmmAssignedRequestMailer(Mailer):
                 "request": self.request,
                 "location": self.location,
                 "request_id": getattr(self.request, "id", None),
+                "request_url": _admin_request_url(self.request),
                 "rmm_first_name": self.rmm_first_name,
                 "state_code": self.state_code,
                 "review_link": review_link,
@@ -556,6 +578,7 @@ class RequestorRequestCreatedMailer(Mailer):
                 "request": self.request,
                 "location": self.location,
                 "request_id": getattr(self.request, "id", None),
+                "request_url": _admin_request_url(self.request),
                 "requestor_name": requestor_name,
                 "requestor_email": getattr(self.request, "requestor_email", None)
                 or getattr(self.request, "client_email", None),
@@ -635,6 +658,7 @@ class RequestorRequestAutoApprovedMailer(Mailer):
                 "request": self.request,
                 "location": self.location,
                 "request_id": request_id,
+                "request_url": _admin_request_url(self.request),
                 "location_name": location_name,
                 "submitted_name": submitted_name,
                 "submitted_email": submitted_email,
