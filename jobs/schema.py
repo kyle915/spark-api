@@ -34,6 +34,7 @@ class ClientJobQueries(
     queries.JobRequirementAnswerQueries,
     queries.BriefingTemplateQueries,
     queries.JobBriefingQueries,
+    queries.JobApplicationQueries,
 ):
     pass
 

@@ -203,6 +203,15 @@ class Job(Node):
     ongoing: bool
     coordinates: List[float] | None
     extension_rate: float | None
+    # Lifecycle fields — drive the admin Jobs page columns.
+    # Stored as a CharField so the GraphQL type stays a plain string.
+    lifecycle_status: str
+    total_hours: float | None
+    hourly_rate: float | None
+    uniform_notes: str | None
+    favorites_only: bool
+    posted_at: str | None
+    max_applications: int | None
     job_title: JobTitle
     other_title: JobTitle | None
     event: Event
