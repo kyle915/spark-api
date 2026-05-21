@@ -238,6 +238,32 @@ class Job(Node):
         return bool(getattr(self, "applied", False))
 
     @strawberry.field
+    async def applications_count(self) -> int:
+        """Number of BA applications attached to this job, across all
+        statuses (applied + accepted + declined + withdrawn). Used by
+        the admin Jobs board to show "N applicants" per row without a
+        round-trip per job."""
+        def _count() -> int:
+            try:
+                return int(self.applications.count())
+            except Exception:
+                return 0
+        return await sync_to_async(_count)()
+
+    @strawberry.field
+    async def applied_count(self) -> int:
+        """Just the ones in `applied` status — i.e. waiting on admin
+        decision. Drives the orange "N pending" pill on Posted rows."""
+        def _count() -> int:
+            try:
+                return int(
+                    self.applications.filter(status="applied").count()
+                )
+            except Exception:
+                return 0
+        return await sync_to_async(_count)()
+
+    @strawberry.field
     async def briefing(self) -> "JobBriefingPayload":
         """The job's BA briefing — title, body, attachments. Always
         returns a payload (even when empty) so mobile clients can
@@ -637,3 +663,53 @@ class JobBriefingResponse:
     client_mutation_id: strawberry.ID | None = None
     job_uuid: str | None = None
     title: str | None = None
+
+
+# -------------------------------------------------------------------
+# Tenant favorite ambassador types (Favorites tab UI)
+# -------------------------------------------------------------------
+
+@strawberry_django.type(models.TenantFavoriteAmbassador)
+class TenantFavoriteAmbassador:
+    uuid: str
+    tenant_id: strawberry.ID
+    note: str
+    created_at: str
+
+    @strawberry.field
+    def ambassador_uuid(self) -> str:
+        a = self.__dict__.get("ambassador") or getattr(self, "_ambassador_cache", None)
+        if not a:
+            try:
+                a = self.ambassador
+            except Exception:
+                a = None
+        return str(a.uuid) if a and getattr(a, "uuid", None) else ""
+
+    @strawberry.field
+    def ambassador_id(self) -> strawberry.ID:
+        a = self.__dict__.get("ambassador") or getattr(self, "_ambassador_cache", None)
+        if not a:
+            try:
+                a = self.ambassador
+            except Exception:
+                a = None
+        return strawberry.ID(str(a.id)) if a and getattr(a, "id", None) else strawberry.ID("")
+
+    @strawberry.field
+    def first_name(self) -> str:
+        a = self.__dict__.get("ambassador")
+        u = getattr(a, "user", None) if a else None
+        return (getattr(u, "first_name", None) or "") if u else ""
+
+    @strawberry.field
+    def last_name(self) -> str:
+        a = self.__dict__.get("ambassador")
+        u = getattr(a, "user", None) if a else None
+        return (getattr(u, "last_name", None) or "") if u else ""
+
+    @strawberry.field
+    def email(self) -> str:
+        a = self.__dict__.get("ambassador")
+        u = getattr(a, "user", None) if a else None
+        return (getattr(u, "email", None) or "") if u else ""

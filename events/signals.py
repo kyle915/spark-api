@@ -20,7 +20,7 @@ import logging
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 
-from events.models import Event
+from events.models import Event, Request
 from ambassadors.models import AmbassadorEvent
 from events.tasks import sync_event_to_all_connected_users
 from utils.queues import Queues
@@ -152,4 +152,134 @@ def push_on_ambassador_event_change(
     except Exception as exc:
         logger.warning(
             "push wiring failed for ambassador_event=%s: %s", instance.id, exc
+        )
+
+
+# ----------------------------------------------------------------------
+# Auto-create Pending Job on Request approval
+# ----------------------------------------------------------------------
+#
+# When admin flips a request to "approved", we want every Event under
+# that request to land in the admin Jobs page Pending queue. The Job
+# lifecycle (Pending → Posted → Filled) ships separately; this hook
+# just bridges the request approval to the job creation.
+#
+# Idempotent: skips events that already have a Job. Best-effort: a
+# Job creation failure logs and continues — the approval itself
+# already shipped, we don't want to roll it back.
+@receiver(post_save, sender=Request)
+def auto_create_pending_job_on_request_approval(
+    sender, instance: Request, created: bool, **kwargs
+):
+    try:
+        status = getattr(instance, "status", None)
+        slug = (getattr(status, "slug", None) or "").lower()
+        if slug != "approved":
+            return
+
+        from jobs.models import Job, STATUS_PENDING
+        from jobs.models import JobTitle, Rate
+
+        # Fetch every event tied to this request. .all() forces a query
+        # but lets us iterate; the event count per request is small
+        # (typically 1, sometimes 2-3) so this is cheap.
+        events = list(instance.events.all())
+        if not events:
+            return
+
+        # Default JobTitle + Rate for the tenant. We just need *a*
+        # pointer to populate the non-null FKs; the admin edits these
+        # during posting. Picking the first JobTitle/Rate for the
+        # tenant; fall back to the first global one.
+        def _first_for(model, tenant_id):
+            try:
+                qs = model.objects.filter(tenant_id=tenant_id).order_by("id")
+                row = qs.first()
+                if row:
+                    return row
+            except Exception:
+                pass
+            try:
+                return model.objects.order_by("id").first()
+            except Exception:
+                return None
+
+        default_title = _first_for(JobTitle, instance.tenant_id)
+        default_rate = _first_for(Rate, instance.tenant_id)
+        if not default_title or not default_rate:
+            logger.warning(
+                "auto_create_job: tenant %s missing JobTitle or Rate — skipping",
+                instance.tenant_id,
+            )
+            return
+
+        for ev in events:
+            try:
+                if Job.objects.filter(event_id=ev.id).exists():
+                    continue
+                Job.objects.create(
+                    tenant_id=instance.tenant_id,
+                    event_id=ev.id,
+                    name=(ev.name or instance.name or "Activation")[:200],
+                    address=ev.address or instance.address or "",
+                    start_date=ev.start_time,
+                    end_date=ev.end_time,
+                    job_title=default_title,
+                    rate=default_rate,
+                    lifecycle_status=STATUS_PENDING,
+                    favorites_only=True,
+                    public=False,
+                    closed=False,
+                    national=False,
+                    ongoing=False,
+                    created_by_id=getattr(instance, "approved_by_id", None)
+                    or instance.created_by_id,
+                    updated_by_id=getattr(instance, "approved_by_id", None)
+                    or instance.created_by_id,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "auto_create_job: failed for event=%s: %s",
+                    getattr(ev, "id", None),
+                    exc,
+                )
+    except Exception as exc:
+        logger.warning(
+            "auto_create_job: unexpected failure for request=%s: %s",
+            getattr(instance, "id", None),
+            exc,
+        )
+
+
+# ----------------------------------------------------------------------
+# Google Sheets master-tracker mirror
+# ----------------------------------------------------------------------
+#
+# When a Request changes, mirror the row to the tenant's linked Sheet
+# (see Tenant.linked_sheet_url). Push happens via django-rq so the
+# user-facing save doesn't wait on a Sheets API round-trip; falls
+# back to inline sync on dev/test where there's no Redis.
+@receiver(post_save, sender=Request)
+def mirror_request_to_sheets(sender, instance: Request, created: bool, **kwargs):
+    try:
+        from utils.sheets_mirror import upsert_request_row
+        try:
+            queues.default.add(upsert_request_row, instance)
+        except Exception:
+            # No queue (dev/test or Redis down) — do it inline so the
+            # behavior is at least visible. Wrapped so a Sheets API
+            # error still doesn't bubble up.
+            try:
+                upsert_request_row(instance)
+            except Exception as exc:
+                logger.warning(
+                    "sheets mirror inline failed for request=%s: %s",
+                    getattr(instance, "id", None),
+                    exc,
+                )
+    except Exception as exc:
+        logger.warning(
+            "sheets mirror dispatch failed for request=%s: %s",
+            getattr(instance, "id", None),
+            exc,
         )
