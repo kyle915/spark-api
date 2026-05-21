@@ -636,6 +636,26 @@ class Event(Node):
             return list(cached)
         return await sync_to_async(list)(self.recaps.order_by("-created_at"))
 
+    @strawberry.field
+    async def custom_recaps(
+        self,
+    ) -> List[Annotated["CustomRecap", strawberry.lazy("recaps.types")]]:
+        """Custom-template recaps (per-tenant schemas) tied to this event.
+
+        Same shape as `recaps` but for tenants on the custom recap
+        builder (Borjomi, Carbliss, etc.). The Master Tracker chip
+        considers an event "recap filed" if EITHER list is non-empty,
+        so this needs to be queryable alongside `recaps`.
+        """
+        cached = getattr(self, "_prefetched_objects_cache", {}).get(
+            "custom_recap"
+        )
+        if cached is not None:
+            return list(cached)
+        return await sync_to_async(list)(
+            self.custom_recap.order_by("-created_at")
+        )
+
 
 @strawberry.type
 class EventListResponse:
