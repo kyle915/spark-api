@@ -353,26 +353,42 @@ class Recap(Node):
 
     @strawberry.field
     async def hero_file(self) -> RecapFile | None:
-        """First browser-renderable image attached to this recap, if any.
+        """First renderable image attached to this recap, if any.
 
         Used by the /recaps list card to render a single thumbnail
-        without round-tripping the full recapFiles array. Skips HEIC
-        / PDF / video / unknown — those can't be <img src>'d directly
-        in browsers without a client-side decoder.
+        without round-tripping the full recapFiles array.
+
+        Picking order:
+          1. Any JPG/PNG/WEBP/GIF — most browsers render these natively.
+          2. Fall back to HEIC/HEIF — the frontend has a libheif
+             decoder for these on the detail page, and Safari/iOS
+             render them natively. Better to show a real (decoded)
+             photo than the empty-diamond placeholder.
+          3. Skip PDFs / video / unknown — those can't <img src>.
         """
-        IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".gif")
+        WEB_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".gif")
+        HEIC_EXTS = (".heic", ".heif")
+        SKIP_EXTS = (".pdf", ".mp4", ".mov", ".webm", ".doc", ".docx", ".xlsx")
 
         def _pick():
             qs = models.RecapFile.objects.filter(recap=self).order_by("id")
+            heic_fallback = None
             for f in qs:
-                path = (getattr(f, "file", None) or "").lower()
+                path = (getattr(f, "file", None) or "")
                 if not path:
                     continue
-                # Strip any query string before the extension check
+                try:
+                    path = str(path).lower()
+                except Exception:
+                    continue
                 clean = path.split("?", 1)[0]
-                if clean.endswith(IMAGE_EXTS):
+                if clean.endswith(SKIP_EXTS):
+                    continue
+                if clean.endswith(WEB_EXTS):
                     return f
-            return None
+                if clean.endswith(HEIC_EXTS) and heic_fallback is None:
+                    heic_fallback = f
+            return heic_fallback
 
         return await sync_to_async(_pick, thread_sensitive=True)()
 
