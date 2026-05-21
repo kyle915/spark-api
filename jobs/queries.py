@@ -1678,6 +1678,48 @@ class JobBriefingQueries:
     """One-shot lookup for the briefing attached to a specific job."""
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def job_briefing_for_event(
+        self,
+        info: strawberry.Info,
+        event_uuid: strawberry.ID,
+    ) -> types.JobBriefingPayload | None:
+        """Look up a job briefing by the parent event's UUID. The BA
+        mobile app receives shift offers keyed by event/ambassador-event
+        UUID — they don't see Job IDs directly — so this is the entry
+        point for "show me the briefing for the shift I was offered."
+
+        Returns None when no job is attached to the event (BA accepting
+        a shift before the job's been posted)."""
+        def _get():
+            try:
+                event_uuid_str = str(event_uuid)
+            except Exception:
+                return None
+            try:
+                job = (
+                    models.Job.objects
+                    .prefetch_related("briefing_attachments")
+                    .select_related("briefing_template")
+                    .filter(event__uuid=event_uuid_str)
+                    .order_by("-id")
+                    .first()
+                )
+            except Exception:
+                return None
+            if not job:
+                return None
+            return types.JobBriefingPayload(
+                title=job.briefing_title or "",
+                body=job.briefing_body or "",
+                template_uuid=(
+                    str(job.briefing_template.uuid)
+                    if job.briefing_template_id else None
+                ),
+                attachments=list(job.briefing_attachments.all()),
+            )
+        return await sync_to_async(_get)()
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def job_briefing(
         self,
         info: strawberry.Info,
