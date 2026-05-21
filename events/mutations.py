@@ -2545,7 +2545,20 @@ async def _notify_requestor_for_request_approved(
         return
 
     request.requestor_email = requestor_email
-    copy_emails = _get_request_review_copy_emails(exclude_email=requestor_email)
+    # CC the Ignite ops team on every approval — events@, kyle@,
+    # myriant@, nevena@, madison@ — so the team has a paper trail
+    # without having to be in the notification group. Dedupes against
+    # the requestor's address so no one CC's themselves.
+    copy_emails = list(
+        dict.fromkeys(
+            _get_request_review_copy_emails(exclude_email=requestor_email)
+            + [
+                e
+                for e in IGNITE_REVIEW_CC
+                if (e or "").strip().lower() != requestor_email.strip().lower()
+            ]
+        )
+    )
     mailer = RequestorRequestApprovedMailer(
         request=request,
         location=location,

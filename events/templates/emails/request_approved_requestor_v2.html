@@ -144,6 +144,26 @@
               </td>
             </tr>
 
+            {% if request_url %}
+            <!-- Deep-link to the request detail page on the admin app.
+                 Reviewer / requestor lands directly on the right record
+                 instead of /requests/list. -->
+            <tr>
+              <td class="pad" align="center" style="padding:20px 40px 4px 40px;">
+                <a href="{{ request_url }}"
+                   style="display:inline-block;
+                          background:#c5f546;color:#0a0d09;
+                          padding:12px 22px;border-radius:999px;
+                          font-family:Georgia,'Times New Roman',serif;
+                          font-weight:700;font-size:14px;
+                          text-decoration:none;letter-spacing:-0.01em;
+                          box-shadow:0 0 0 1px #b2dd41 inset;">
+                  View request in Spark →
+                </a>
+              </td>
+            </tr>
+            {% endif %}
+
             <!-- What happens next -->
             <tr>
               <td class="pad" style="padding:24px 40px 4px 40px;">
@@ -206,19 +226,16 @@
                            the front-end public/ folder — Firebase SPA
                            fallback served index.html as text/html so email
                            clients rendered it as a broken image. -->
-                      <table role="presentation" cellspacing="0" cellpadding="0" border="0"
-                             width="130" style="width:130px;background:#0a0d09;border-radius:8px;">
-                        <tr>
-                          <td align="center" valign="middle"
-                              style="height:130px;padding:30px 16px;">
-                            <img src="https://spark-new-admin.web.app/legal/ignite-typemark-white.png"
-                                 alt="Ignite Productions"
-                                 width="98" height="auto"
-                                 style="display:block;width:98px;height:auto;
-                                        border:0;outline:none;text-decoration:none;" />
-                          </td>
-                        </tr>
-                      </table>
+                      <a href="https://www.igniteproductions.co"
+                         style="display:inline-block;text-decoration:none;">
+                        <img src="https://admin.igniteproductions.co/legal/ignite-full-white.png"
+                             alt="Ignite Productions"
+                             width="140" height="auto"
+                             style="display:block;width:140px;height:auto;
+                                    border:0;outline:none;text-decoration:none;
+                                    background:#0a0d09;padding:14px;
+                                    border-radius:10px;" />
+                      </a>
                     </td>
                     <td valign="top" style="font-size:14px;line-height:22px;color:#0a0d09;">
                       <p style="margin:0 0 4px 0;color:#ef5a2a;font-weight:700;font-size:16px;">
