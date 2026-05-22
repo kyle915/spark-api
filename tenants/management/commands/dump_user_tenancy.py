@@ -50,7 +50,7 @@ class Command(BaseCommand):
                 f"is_active={u.is_active} is_staff={u.is_staff} "
                 f"is_superuser={u.is_superuser}"
             )
-            tus = list(TenantedUser.objects.filter(user=u).select_related("tenant", "role"))
+            tus = list(TenantedUser.objects.filter(user=u).select_related("tenant"))
             if not tus:
                 self.stdout.write(self.style.WARNING(
                     "    No TenantedUser rows. This is why TenantGuard returns "
@@ -60,14 +60,10 @@ class Command(BaseCommand):
                 ))
                 continue
             for tu in tus:
-                role_name = tu.role.name if tu.role else "<no role>"
-                tenant_name = tu.tenant.name if tu.tenant else "<no tenant>"
-                tenant_slug = (
-                    tu.tenant.tenant_slug if tu.tenant and hasattr(tu.tenant, "tenant_slug")
-                    else "?"
-                )
+                tenant = tu.tenant
+                tenant_name = tenant.name if tenant else "<no tenant>"
+                tenant_slug = getattr(tenant, "tenant_slug", None) or "?"
                 self.stdout.write(
                     f"    TU id={tu.id} tenant='{tenant_name}' "
-                    f"slug={tenant_slug} role={role_name} "
-                    f"is_active={tu.is_active}"
+                    f"slug={tenant_slug} is_active={tu.is_active}"
                 )
