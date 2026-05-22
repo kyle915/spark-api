@@ -3000,6 +3000,65 @@ class RequestMutations:
                 await _notify_requestor_for_request_auto_approved(
                     request_with_relations, location, delay_seconds=1
                 )
+            else:
+                # Admin log-event flow: skip the RMM approval cycle and
+                # land the request straight on the Master Tracker as
+                # approved. Mirrors the moves approve_request does —
+                # status flip + materialize an Event row — but without
+                # the requestor email (admin is creating on someone
+                # else's behalf, no point sending self a notification).
+                try:
+                    approved_status = await sync_to_async(
+                        models.RequestStatus.objects.get_by_slug
+                    )(slug="approved", tenant=request_with_relations.tenant_id)
+                    if approved_status:
+                        request_with_relations.status = approved_status
+                        request_with_relations.approved_by = service.user
+                        await sync_to_async(request_with_relations.save)()
+                        try:
+                            await sync_to_async(
+                                models.RequestActivityLog.objects.create
+                            )(
+                                tenant=request_with_relations.tenant,
+                                request=request_with_relations,
+                                kind=models.RequestActivityLog.KIND_STATUS_CHANGED,
+                                actor_user=(
+                                    service.user
+                                    if getattr(service.user, "id", None)
+                                    else None
+                                ),
+                                summary="Logged by admin · auto-approved",
+                                metadata={"from": "pending", "to": "approved"},
+                            )
+                        except Exception:
+                            pass
+                        # Materialize a corresponding Event row so the
+                        # tracker shows the activation as scheduled.
+                        # Idempotent: skip if an event already exists.
+                        try:
+                            existing = await sync_to_async(
+                                lambda: models.Event.objects.filter(
+                                    request_id=request_with_relations.id
+                                )
+                                .order_by("-id")
+                                .first()
+                            )()
+                            if existing is None:
+                                await models.Event.objects.from_request(
+                                    request=request_with_relations,
+                                    created_by=service.user,
+                                )
+                        except Exception:
+                            import logging
+                            logging.getLogger(__name__).exception(
+                                "log-event: failed to materialize Event for "
+                                "request_id=%s",
+                                request_with_relations.id,
+                            )
+                except Exception:
+                    # Don't fail the whole create if approval steps
+                    # blow up — admin can still approve manually.
+                    pass
             return build_mutation_response(
                 types.RequestDetailResponse,
                 success=True,
