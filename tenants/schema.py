@@ -643,15 +643,24 @@ class QueryClients(GoogleCalendarQueries, TenantThemingQuery):
     ) -> CountableConnection[TenantType]:
         user = info.context.request.user
 
-        filter_dict = {
-            "tenanted_users__is_active": True,
-        }
-        if user_uuid:
-            filter_dict["tenanted_users__user__uuid"] = user_uuid
+        # Staff / superusers see every tenant regardless of TenantedUser
+        # membership. TenantGuard's "auto-pick a tenant on first sign-in"
+        # flow can't land anywhere if the platform owner has no explicit
+        # TenantedUser row — they'd see "No companies associated with this
+        # account" even though they manage all of them. Non-staff users
+        # are still scoped by tenanted_users membership.
+        if user.is_staff or user.is_superuser:
+            queryset = Tenant.objects.all()
         else:
-            filter_dict["tenanted_users__user"] = user
+            filter_dict = {
+                "tenanted_users__is_active": True,
+            }
+            if user_uuid:
+                filter_dict["tenanted_users__user__uuid"] = user_uuid
+            else:
+                filter_dict["tenanted_users__user"] = user
 
-        queryset = Tenant.objects.filter(**filter_dict)
+            queryset = Tenant.objects.filter(**filter_dict)
 
         if filters:
             if filters.name:
