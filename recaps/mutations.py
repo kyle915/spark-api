@@ -3896,6 +3896,8 @@ class RecapMutations:
             name = f"Imported from Connecteam · {stamp}"
 
         def _create() -> models.CustomRecap:
+            from django.core.files.base import ContentFile
+
             with transaction.atomic():
                 recap = models.CustomRecap.objects.create(
                     name=name,
@@ -3916,6 +3918,37 @@ class RecapMutations:
                         value=mr.pdf_value,
                         created_by=user,
                     )
+
+                # Stash the source PDF as a CustomRecapFile so the
+                # admin can audit / re-download the original from the
+                # recap view. Without this, the PDF the user uploaded
+                # is gone the moment the mutation responds — only the
+                # extracted values remain.
+                try:
+                    pdf_filetype, _ = FileType.objects.get_or_create(
+                        name="pdf",
+                    )
+                    source_file = models.CustomRecapFile(
+                        custom_recap=recap,
+                        file_type=pdf_filetype,
+                        name="Connecteam source PDF",
+                        approved=False,
+                        created_by=user,
+                    )
+                    source_file.url.save(
+                        f"connecteam-source-{recap.uuid}.pdf",
+                        ContentFile(pdf_bytes),
+                        save=False,
+                    )
+                    source_file.save()
+                except Exception:
+                    # Non-fatal — the recap itself was created
+                    # successfully. Audit-trail file is nice-to-have.
+                    logging.getLogger(__name__).exception(
+                        "connecteam-import: source PDF attach failed "
+                        "recap_id=%s", recap.id,
+                    )
+
                 return recap
 
         try:
