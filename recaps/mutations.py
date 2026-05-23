@@ -3787,6 +3787,178 @@ class RecapMutations:
             )
 
     @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def import_connecteam_recap_pdf(
+        self,
+        info: strawberry.Info,
+        input: inputs.ImportConnecteamRecapPdfInput,
+    ) -> types.ImportConnecteamRecapPdfResponse:
+        """Parse a Connecteam recap PDF and draft a CustomRecap from it.
+
+        The flow:
+          1. base64-decode + run through recaps.connecteam.parse_pdf_bytes
+          2. Fetch the Event + CustomRecapTemplate (+ all CustomField rows)
+          3. Match parsed labels → CustomField via normalize + fuzzy
+          4. Create the CustomRecap shell + CustomFieldValue rows for
+             every matched, non-empty value
+          5. Return the recap + a per-field stats report so the admin
+             can see exactly what landed where (and what didn't).
+        """
+        import base64
+
+        from recaps.connecteam import parse_pdf_bytes, match_fields
+
+        user = info.context.request.user
+
+        try:
+            event_id = resolve_id_to_int(input.event_id)
+            event = await sync_to_async(
+                Event.objects.select_related("tenant").get
+            )(id=event_id)
+        except (Event.DoesNotExist, TypeError, ValueError, GraphQLError):
+            return build_mutation_response(
+                types.ImportConnecteamRecapPdfResponse,
+                success=False,
+                message="Event not found.",
+                input_obj=input,
+            )
+
+        try:
+            template_id = resolve_id_to_int(input.custom_recap_template_id)
+            template = await sync_to_async(
+                models.CustomRecapTemplate.objects.get
+            )(id=template_id)
+        except (
+            models.CustomRecapTemplate.DoesNotExist,
+            TypeError,
+            ValueError,
+            GraphQLError,
+        ):
+            return build_mutation_response(
+                types.ImportConnecteamRecapPdfResponse,
+                success=False,
+                message="Custom recap template not found.",
+                input_obj=input,
+            )
+
+        if template.tenant_id != event.tenant_id:
+            return build_mutation_response(
+                types.ImportConnecteamRecapPdfResponse,
+                success=False,
+                message="Template does not belong to the event tenant.",
+                input_obj=input,
+            )
+
+        try:
+            pdf_bytes = base64.b64decode(input.pdf_base64, validate=True)
+        except Exception:
+            return build_mutation_response(
+                types.ImportConnecteamRecapPdfResponse,
+                success=False,
+                message="pdf_base64 is not valid base64.",
+                input_obj=input,
+            )
+
+        try:
+            parsed = await sync_to_async(parse_pdf_bytes)(pdf_bytes)
+        except Exception as e:
+            logging.getLogger(__name__).exception(
+                "connecteam-import: PDF parse failed event_id=%s", event.id,
+            )
+            return build_mutation_response(
+                types.ImportConnecteamRecapPdfResponse,
+                success=False,
+                message=f"Couldn't read PDF: {e}",
+                input_obj=input,
+            )
+
+        if not parsed.raw_pairs:
+            return build_mutation_response(
+                types.ImportConnecteamRecapPdfResponse,
+                success=False,
+                message=(
+                    "No labeled fields found in PDF. Check that this is a "
+                    "Connecteam recap export (look for 'Label::' pairs)."
+                ),
+                input_obj=input,
+            )
+
+        custom_fields = await sync_to_async(list)(
+            models.CustomField.objects.filter(custom_recap_template=template)
+            .select_related("custom_field_type", "recap_section")
+        )
+
+        match_results = match_fields(parsed, custom_fields)
+
+        # Default name "Imported from Connecteam · <event date>"
+        name = (input.name or "").strip()
+        if not name:
+            stamp = django_timezone.now().strftime("%Y-%m-%d")
+            name = f"Imported from Connecteam · {stamp}"
+
+        def _create() -> models.CustomRecap:
+            with transaction.atomic():
+                recap = models.CustomRecap.objects.create(
+                    name=name,
+                    event=event,
+                    tenant=event.tenant,
+                    custom_recap_template=template,
+                    created_by=user,
+                    submitted_at=django_timezone.now(),
+                )
+                for mr in match_results:
+                    if mr.field_id is None:
+                        continue
+                    if not mr.pdf_value:
+                        continue
+                    models.CustomFieldValue.objects.create(
+                        custom_recap=recap,
+                        custom_field_id=mr.field_id,
+                        value=mr.pdf_value,
+                        created_by=user,
+                    )
+                return recap
+
+        try:
+            recap = await sync_to_async(_create)()
+        except Exception as e:
+            logging.getLogger(__name__).exception(
+                "connecteam-import: DB write failed event_id=%s", event.id,
+            )
+            return build_mutation_response(
+                types.ImportConnecteamRecapPdfResponse,
+                success=False,
+                message=f"Couldn't create draft recap: {e}",
+                input_obj=input,
+            )
+
+        matched = sum(1 for mr in match_results if mr.field_id and mr.pdf_value)
+        unmatched = sum(1 for mr in match_results if not mr.field_id)
+        stats = [
+            types.ImportConnecteamRecapPdfStat(
+                pdf_label=mr.pdf_label,
+                pdf_value=mr.pdf_value,
+                field_name=mr.field_name,
+                field_id=strawberry.ID(str(mr.field_id)) if mr.field_id else None,
+                score=mr.score,
+                skipped_reason=mr.skipped_reason,
+            )
+            for mr in match_results
+        ]
+        return build_mutation_response(
+            types.ImportConnecteamRecapPdfResponse,
+            success=True,
+            message=(
+                f"Drafted recap from PDF: {matched} field(s) imported, "
+                f"{unmatched} unmatched."
+            ),
+            input_obj=input,
+            custom_recap=recap,
+            matched_count=matched,
+            unmatched_count=unmatched,
+            stats=stats,
+        )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
     async def create_custom_recap_mobile(
         self,
         info: strawberry.Info,
