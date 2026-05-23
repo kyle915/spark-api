@@ -3924,6 +3924,13 @@ class RecapMutations:
                 # recap view. Without this, the PDF the user uploaded
                 # is gone the moment the mutation responds — only the
                 # extracted values remain.
+                source_category, _ = (
+                    models.FileRecapCategory.objects.get_or_create(
+                        tenant=event.tenant,
+                        name="Source documents",
+                        defaults={"created_by": user},
+                    )
+                )
                 try:
                     pdf_filetype, _ = FileType.objects.get_or_create(
                         name="pdf",
@@ -3931,6 +3938,7 @@ class RecapMutations:
                     source_file = models.CustomRecapFile(
                         custom_recap=recap,
                         file_type=pdf_filetype,
+                        file_recap_category=source_category,
                         name="Connecteam source PDF",
                         approved=False,
                         created_by=user,
@@ -3954,10 +3962,18 @@ class RecapMutations:
                 # and attach each as a CustomRecapFile. Without this
                 # step, Kyle's team has to manually re-upload every
                 # photo even after a successful field-text import.
+                #
+                # GROUPING: tag each image with a FileRecapCategory
+                # derived from the preceding-label hint so the recap
+                # view groups them into sections instead of one giant
+                # 26-file gallery. Nevena flagged this specifically.
                 try:
                     image_filetype, _ = FileType.objects.get_or_create(
                         name="image",
                     )
+                    # Cache categories per-label so we don't hammer
+                    # get_or_create on every image in the loop.
+                    category_by_label: dict[str, models.FileRecapCategory] = {}
                     for parsed_img in parsed.images:
                         # Skip obvious zero-byte / placeholder entries.
                         if not parsed_img.bytes_:
@@ -3970,13 +3986,33 @@ class RecapMutations:
                         # Name carries the preceding-label hint so the
                         # admin can tell receipt from sampling photo
                         # at a glance.
+                        label = parsed_img.preceding_label
                         nice_name = (
-                            parsed_img.preceding_label
+                            label
                             or f"PDF page {parsed_img.page_index + 1}"
                         )
+                        # Category: the verbatim preceding-label,
+                        # truncated to fit max_length=100. Falls back
+                        # to "Other photos" when there's no label
+                        # hint at all. This is what gives Nevena's
+                        # recap view its grouped-by-section layout
+                        # instead of one bucket of every file.
+                        category_key = (label or "Other photos")[:100]
+                        category = category_by_label.get(category_key)
+                        if category is None:
+                            category, _ = (
+                                models.FileRecapCategory.objects.get_or_create(
+                                    tenant=event.tenant,
+                                    name=category_key,
+                                    defaults={"created_by": user},
+                                )
+                            )
+                            category_by_label[category_key] = category
+
                         file_row = models.CustomRecapFile(
                             custom_recap=recap,
                             file_type=image_filetype,
+                            file_recap_category=category,
                             name=nice_name,
                             approved=False,
                             created_by=user,
