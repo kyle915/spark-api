@@ -3949,6 +3949,55 @@ class RecapMutations:
                         "recap_id=%s", recap.id,
                     )
 
+                # Extract embedded images from the PDF (sampling photos,
+                # table-setup pics, in-stock product, receipt, etc.)
+                # and attach each as a CustomRecapFile. Without this
+                # step, Kyle's team has to manually re-upload every
+                # photo even after a successful field-text import.
+                try:
+                    image_filetype, _ = FileType.objects.get_or_create(
+                        name="image",
+                    )
+                    for parsed_img in parsed.images:
+                        # Skip obvious zero-byte / placeholder entries.
+                        if not parsed_img.bytes_:
+                            continue
+                        if len(parsed_img.bytes_) < 1024:
+                            # Sub-1KB blobs are almost always icons,
+                            # logos, or rendering artifacts — not the
+                            # full-size sampling photos we want.
+                            continue
+                        # Name carries the preceding-label hint so the
+                        # admin can tell receipt from sampling photo
+                        # at a glance.
+                        nice_name = (
+                            parsed_img.preceding_label
+                            or f"PDF page {parsed_img.page_index + 1}"
+                        )
+                        file_row = models.CustomRecapFile(
+                            custom_recap=recap,
+                            file_type=image_filetype,
+                            name=nice_name,
+                            approved=False,
+                            created_by=user,
+                        )
+                        file_row.url.save(
+                            (
+                                f"connecteam-img-{recap.uuid}"
+                                f"-p{parsed_img.page_index}"
+                                f"-i{parsed_img.image_index}"
+                                f"{parsed_img.extension}"
+                            ),
+                            ContentFile(parsed_img.bytes_),
+                            save=False,
+                        )
+                        file_row.save()
+                except Exception:
+                    logging.getLogger(__name__).exception(
+                        "connecteam-import: image attach failed "
+                        "recap_id=%s", recap.id,
+                    )
+
                 return recap
 
         try:

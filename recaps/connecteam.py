@@ -28,6 +28,22 @@ from dataclasses import dataclass, field
 
 
 @dataclass
+class ParsedImage:
+    """One image extracted from a PDF page.
+
+    `preceding_label` is the closest "Label::" line that came right
+    before this image in the PDF — useful for telling sampling photos
+    apart from receipt photos when the admin previews the import.
+    """
+
+    bytes_: bytes
+    extension: str  # ".png" / ".jpg" / ".jpeg"
+    page_index: int  # 0-based
+    image_index: int  # within the page
+    preceding_label: str | None = None
+
+
+@dataclass
 class ParsedRecap:
     """Result of parsing a Connecteam recap PDF."""
 
@@ -38,6 +54,9 @@ class ParsedRecap:
     # Free-form header info (BA name, date, store) that doesn't have a
     # "::" label but appears in the top of every Connecteam recap.
     header: dict[str, str] = field(default_factory=dict)
+    # Images embedded in the PDF, with the label of the field they
+    # most likely belong to (computed from text position on the page).
+    images: list[ParsedImage] = field(default_factory=list)
 
 
 # Lines like "Please enter the sales figures below." that separate
@@ -55,16 +74,53 @@ _FIELD_PATTERN = re.compile(r"^(.+?)::\s*(.*)$")
 
 
 def parse_pdf_bytes(data: bytes) -> ParsedRecap:
-    """Extract every `Label:: Value` pair from a Connecteam recap PDF."""
+    """Extract every `Label:: Value` pair from a Connecteam recap PDF,
+    and pull out any embedded page images so the importer can attach
+    them to the resulting CustomRecap as CustomRecapFile rows."""
     # Local import so the rest of the codebase doesn't pay the
     # pypdf import cost just by touching recaps.connecteam.
     from pypdf import PdfReader
 
     reader = PdfReader(io.BytesIO(data))
-    pages = [page.extract_text() or "" for page in reader.pages]
+    pages_objs = list(reader.pages)
+    pages = [p.extract_text() or "" for p in pages_objs]
 
     text = "\n".join(pages)
     result = ParsedRecap(page_texts=pages)
+
+    # Walk page-by-page to pull images. The last "Label::" we saw on
+    # the same page is the most likely owner of any image that
+    # follows — Connecteam renders image upload rows as "<Label>::"
+    # immediately above the image cell.
+    for page_idx, page in enumerate(pages_objs):
+        page_text = pages[page_idx]
+        # Find the last label line on this page; we'll use it as the
+        # preceding label for any image extracted from this page.
+        last_label_on_page: str | None = None
+        for line in reversed(page_text.splitlines()):
+            stripped = line.strip()
+            m = _FIELD_PATTERN.match(stripped)
+            if m:
+                last_label_on_page = m.group(1).strip()
+                break
+        try:
+            page_images = list(page.images)
+        except Exception:
+            # Some PDFs have malformed image streams — skip gracefully.
+            page_images = []
+        for img_idx, image_obj in enumerate(page_images):
+            try:
+                blob = bytes(image_obj.data)
+            except Exception:
+                continue
+            ext = _ext_from_image(image_obj)
+            result.images.append(ParsedImage(
+                bytes_=blob,
+                extension=ext,
+                page_index=page_idx,
+                image_index=img_idx,
+                preceding_label=last_label_on_page,
+            ))
 
     current_label: str | None = None
     current_value_parts: list[str] = []
@@ -115,6 +171,29 @@ def parse_pdf_bytes(data: bytes) -> ParsedRecap:
 
     flush()
     return result
+
+
+def _ext_from_image(image_obj) -> str:
+    """Pick a sensible file extension for an image extracted by pypdf.
+
+    pypdf's `Page.images` items expose `.name` (e.g. "/Im1.jpg") and
+    sometimes a sniffable `.image` PIL object. Fall back to `.png` if
+    nothing tips us off — most browsers will still render correctly
+    based on content type detection at upload time.
+    """
+    name = getattr(image_obj, "name", None) or ""
+    if "." in name:
+        ext = name.rsplit(".", 1)[-1].lower().strip("/")
+        if ext in {"png", "jpg", "jpeg", "webp", "gif"}:
+            return f".{ext}"
+    # Sniff via PIL if available.
+    pil = getattr(image_obj, "image", None)
+    fmt = getattr(pil, "format", "") if pil else ""
+    if fmt:
+        fmt = fmt.lower()
+        if fmt in {"png", "jpg", "jpeg", "webp", "gif"}:
+            return f".{fmt if fmt != 'jpeg' else 'jpg'}"
+    return ".png"
 
 
 def _normalize(name: str) -> str:
