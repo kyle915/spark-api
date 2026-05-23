@@ -32,7 +32,7 @@ from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
-from events.models import EventType, Product, ProductType
+from events.models import EventType, Product, ProductType, RequestType
 from recaps.models import (
     CustomField,
     CustomRecapFieldType,
@@ -55,6 +55,13 @@ PRODUCTS = [
     "Grapefruit Guava 6-Pack",
     "Peach 6-Pack",
     "Tangerine 6-Pack",
+]
+
+# Names that the frontend SparkRequestCreate.tsx whitelist will surface
+# in the Request Type dropdown. Kept lowercase-insensitively matched.
+REQUEST_TYPES = [
+    "Retail Sampling",
+    "On-Premise Sampling",
 ]
 
 # Field-type names. The frontend renders inputs based on these strings;
@@ -193,6 +200,7 @@ class Command(BaseCommand):
             tenant = self._upsert_tenant(owner)
             product_type = self._upsert_product_type(tenant, owner)
             self._upsert_products(tenant, product_type, owner)
+            self._upsert_request_types(tenant, owner)
             event_type = self._upsert_event_type(tenant, owner)
             field_types = self._upsert_field_types(owner)
             template = self._upsert_template(tenant, event_type, owner)
@@ -218,6 +226,8 @@ class Command(BaseCommand):
         self.stdout.write(f"  ProductType: 'Beer' under {TENANT_NAME}")
         for p in PRODUCTS:
             self.stdout.write(f"    - Product '{p}'")
+        for rt in REQUEST_TYPES:
+            self.stdout.write(f"  RequestType: '{rt}' under {TENANT_NAME}")
         self.stdout.write(f"  EventType: 'Retail Sampling' under {TENANT_NAME}")
         for section_name, fields in SECTIONS:
             self.stdout.write(f"  RecapSection: '{section_name}'")
@@ -269,6 +279,24 @@ class Command(BaseCommand):
             )
             self.stdout.write(
                 f"    {'Created' if created else 'Found'} Product id={product.id} '{name}'"
+            )
+
+    def _upsert_request_types(self, tenant: Tenant, owner) -> None:
+        # RequestType is what the public-facing request form's "Request
+        # Type" dropdown is populated from. The frontend filter in
+        # SparkRequestCreate.tsx whitelists "retail sampling" and
+        # "on-premise sampling" (case-insensitive); names here must
+        # match that list or the option simply won't appear in the
+        # dropdown even if the row exists.
+        for name in REQUEST_TYPES:
+            rt, created = RequestType.objects.get_or_create(
+                tenant=tenant,
+                name=name,
+                defaults={"created_by": owner},
+            )
+            self.stdout.write(
+                f"  {'Created' if created else 'Found'} RequestType "
+                f"id={rt.id} '{name}'"
             )
 
     def _upsert_event_type(self, tenant: Tenant, owner) -> EventType:
