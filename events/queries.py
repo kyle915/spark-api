@@ -166,7 +166,19 @@ class BaseEventQueriesService(SparkGraphQLMixin):
         return await self.get_record(uuid=uuid, tenant_id=tenant_id)
 
     def has_unrestricted_tenant_access(self, user) -> bool:
-        """Return True when role can query any tenant without membership."""
+        """Return True when role can query any tenant without membership.
+
+        Staff / superuser ALSO bypass — Kyle reported a blank
+        /request/view/<uuid> page when the request belonged to a
+        tenant he wasn't currently switched to. Same cross-tenant
+        deep-link pattern as the staff-bypass we shipped on the
+        tenants resolver (PR #531). Without this, a platform owner
+        clicking a request URL from email or Slack lands on
+        "Request not found" unless they happen to be on the right
+        tenant first.
+        """
+        if getattr(user, "is_staff", False) or getattr(user, "is_superuser", False):
+            return True
         return self.get_role_slug(user) in {"spark-admin", "ambassador"}
 
     async def resolve_tenant_id(
