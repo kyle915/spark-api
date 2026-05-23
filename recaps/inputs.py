@@ -403,3 +403,18 @@ class CreateRecapSectionInput(SparkGraphQLInput):
 @strawberry.input
 class UpdateRecapSectionInput(CreateRecapSectionInput):
     id: strawberry.ID
+
+
+@strawberry.input
+class ImportConnecteamRecapPdfInput(SparkGraphQLInput):
+    """Drop a Connecteam-exported recap PDF onto an event, get back a
+    pre-filled draft CustomRecap. Admin reviews/edits before approving."""
+
+    event_id: strawberry.ID
+    custom_recap_template_id: strawberry.ID
+    # Base64-encoded PDF bytes. Avoids needing multipart upload spec
+    # in the GraphQL transport. ~530KB encoded for a typical 400KB
+    # Connecteam recap PDF — well under any practical request limit.
+    pdf_base64: str
+    # Optional override name; if blank we derive "Imported · <date>".
+    name: str | None = None

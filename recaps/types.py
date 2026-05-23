@@ -567,6 +567,32 @@ class CustomRecapDetailResponse:
 
 
 @strawberry.type
+class ImportConnecteamRecapPdfStat:
+    """One row in the importer's per-field report. Tells the admin
+    exactly which PDF labels mapped where and at what confidence."""
+
+    pdf_label: str
+    pdf_value: str
+    field_name: str | None = None
+    field_id: strawberry.ID | None = None
+    score: float | None = None  # null when exact match
+    skipped_reason: str | None = None  # null when value imported
+
+
+@strawberry.type
+class ImportConnecteamRecapPdfResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    custom_recap: CustomRecap | None = None
+    matched_count: int = 0
+    unmatched_count: int = 0
+    stats: list[ImportConnecteamRecapPdfStat] = strawberry.field(
+        default_factory=list,
+    )
+
+
+@strawberry.type
 class CustomRecapFileDetailResponse:
     success: bool
     message: str
