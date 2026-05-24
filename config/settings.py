@@ -167,10 +167,11 @@ USE_TZ = True
 # the rest of the request envelope. Past the default ceiling Django
 # returns a 413 HTML page that the frontend can't parse as JSON
 # ("Unexpected token '<', '<!doctype'... is not valid JSON" — see
-# Nevena's Trevor Simmons import attempt). 50MB is generous enough
-# to cover any reasonable single-PDF upload without enabling abuse.
-DATA_UPLOAD_MAX_MEMORY_SIZE = 50 * 1024 * 1024  # 50MB
-FILE_UPLOAD_MAX_MEMORY_SIZE = 50 * 1024 * 1024  # 50MB
+# Nevena's Trevor Simmons import attempt). 100MB ceiling covers
+# multi-page recap PDFs with lots of high-res photos without
+# enabling pathological uploads.
+DATA_UPLOAD_MAX_MEMORY_SIZE = 100 * 1024 * 1024  # 100MB
+FILE_UPLOAD_MAX_MEMORY_SIZE = 100 * 1024 * 1024  # 100MB
 
 
 # Static files (CSS, JavaScript, Images)
