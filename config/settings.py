@@ -161,6 +161,18 @@ USE_I18N = True
 USE_TZ = True
 
 
+# Request body size — bumped past Django's 2.5MB default to make
+# Connecteam-PDF imports work. A typical recap PDF with photos is
+# 1–3MB; base64-encoding for the GraphQL payload adds ~33%, plus
+# the rest of the request envelope. Past the default ceiling Django
+# returns a 413 HTML page that the frontend can't parse as JSON
+# ("Unexpected token '<', '<!doctype'... is not valid JSON" — see
+# Nevena's Trevor Simmons import attempt). 50MB is generous enough
+# to cover any reasonable single-PDF upload without enabling abuse.
+DATA_UPLOAD_MAX_MEMORY_SIZE = 50 * 1024 * 1024  # 50MB
+FILE_UPLOAD_MAX_MEMORY_SIZE = 50 * 1024 * 1024  # 50MB
+
+
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
