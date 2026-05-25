@@ -2194,6 +2194,49 @@ class RecapMobileQueries:
             return None
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def custom_recap_templates(
+        self,
+        info: strawberry.Info,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        filters: CustomRecapTemplateFiltersInput | None = None,
+    ) -> CountableConnection[types.CustomRecapTemplate]:
+        """Return CustomRecapTemplate records (mobile).
+
+        The mobile RecapSubmitScreen calls this to pick the right
+        template for the BA's current shift — filtered by event_type
+        of the shift's parent event so the form matches the event the
+        BA's recapping.
+        """
+        service = CustomRecapTemplateQueriesService()
+        await service.get_user(info)
+        resolved_tenant_id = (
+            resolve_id_to_int(filters.tenant_id)
+            if filters and filters.tenant_id not in (None, "")
+            else None
+        )
+        resolved_event_type_id = (
+            resolve_id_to_int(filters.event_type_id)
+            if filters and filters.event_type_id not in (None, "")
+            else None
+        )
+        queryset = service.get_ordered_queryset(
+            tenant_id=resolved_tenant_id,
+            event_type_id=resolved_event_type_id,
+        )
+        return await service.get_connection(
+            tenant_id=resolved_tenant_id,
+            event_type_id=resolved_event_type_id,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+            queryset=queryset,
+        )
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def custom_recap_field_types(
         self,
         info: strawberry.Info,
