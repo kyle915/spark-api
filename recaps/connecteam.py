@@ -72,6 +72,15 @@ _SECTION_HEADER_PATTERN = re.compile(
 # those for separators.
 _FIELD_PATTERN = re.compile(r"^(.+?)::\s*(.*)$")
 
+# Fallback for Connecteam PDFs that render with single colons (newer
+# template versions strip the `::` Nevena's testing surfaced one such
+# PDF where every label ended in a single `:`). We only use this
+# fallback when the strict double-colon pass found ZERO matches —
+# otherwise it would catch every "Total: 42" appearing inside a
+# value. The trailing-colon requirement plus a length cap on the
+# label (under 120 chars) keeps it from devouring sentences.
+_FIELD_PATTERN_FALLBACK = re.compile(r"^(.{1,120}?):\s*(.*)$")
+
 
 def parse_pdf_bytes(data: bytes) -> ParsedRecap:
     """Extract every `Label:: Value` pair from a Connecteam recap PDF,
@@ -122,6 +131,23 @@ def parse_pdf_bytes(data: bytes) -> ParsedRecap:
                 preceding_label=last_label_on_page,
             ))
 
+    _extract_pairs(text, result, _FIELD_PATTERN)
+
+    # Connecteam fallback — if the strict pass found nothing, try
+    # single-colon labels. This catches the newer template variants
+    # that stopped using `::` (Nevena's Trevor Simmons recap was the
+    # first PDF we saw with this shape).
+    if not result.raw_pairs:
+        _extract_pairs(text, result, _FIELD_PATTERN_FALLBACK)
+
+    return result
+
+
+def _extract_pairs(text: str, result: "ParsedRecap", pattern: re.Pattern) -> None:
+    """Walk every line of `text`, populate `result.raw_pairs` using
+    the given label pattern. Stateful: when a `Label:` line appears,
+    the next non-label, non-section-header lines are appended to the
+    current value until the next label arrives."""
     current_label: str | None = None
     current_value_parts: list[str] = []
 
@@ -143,17 +169,24 @@ def parse_pdf_bytes(data: bytes) -> ParsedRecap:
             continue
 
         # Section header — flush and skip.
-        if _SECTION_HEADER_PATTERN.match(line) and "::" not in line:
+        if _SECTION_HEADER_PATTERN.match(line) and ":" not in line:
             flush()
             continue
 
         # Field line.
-        m = _FIELD_PATTERN.match(line)
+        m = pattern.match(line)
         if m:
             # Starting a new field — flush the previous one.
             flush()
             label = m.group(1).strip()
             tail = m.group(2).strip()
+            # Reject obvious false positives: "URL: http..." style
+            # values, time stamps "07:10 PM", "10:00 - 14:00", etc.
+            # Labels typically don't have leading digits.
+            if label and label[0].isdigit():
+                if current_label is not None:
+                    current_value_parts.append(line)
+                continue
             current_label = label
             if tail:
                 current_value_parts = [tail]
@@ -161,7 +194,7 @@ def parse_pdf_bytes(data: bytes) -> ParsedRecap:
                 current_value_parts = []
             continue
 
-        # No "::" — this is either a continuation of the current value
+        # No label — this is either a continuation of the current value
         # or top-of-page decoration (Connecteam often repeats the title
         # on every page). Heuristic: only treat as a continuation if
         # we have an active label *and* the line looks like a value
@@ -170,7 +203,6 @@ def parse_pdf_bytes(data: bytes) -> ParsedRecap:
             current_value_parts.append(line)
 
     flush()
-    return result
 
 
 def _ext_from_image(image_obj) -> str:
