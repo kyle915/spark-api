@@ -39,11 +39,16 @@ class RecapApprovedNotificationMailer(Mailer):
         to_emails: list[str],
         recipient_first_name: str | None = None,
         reply_to_email: str | None = None,
+        attachments: list[dict] | None = None,
     ) -> None:
         self.recap = recap
         self.to_emails = to_emails
         self.recipient_first_name = recipient_first_name
         self.reply_to_email = reply_to_email or "events@igniteproductions.co"
+        # PDF (or other) attachments — passed through to Envelope so
+        # the recipient gets the recap document inline with the
+        # approval notification.
+        self.attachments = attachments or []
 
     def _location_name(self) -> str:
         if self.recap.retailer and self.recap.retailer.name:
@@ -181,6 +186,7 @@ class RecapApprovedNotificationMailer(Mailer):
             template=template,
             to_emails=self.to_emails,
             headers={"Reply-To": self.reply_to_email},
+            attachments=self.attachments,
             from_email=getattr(
                 settings,
                 "DEFAULT_FROM_EMAIL",
@@ -249,4 +255,90 @@ class RecapReadyForReviewAdminMailer(Mailer):
                 "brand_name": tenant.name or "-",
                 "review_link": review_link,
             },
+        )
+
+
+# ─── Campaign Report email ──────────────────────────────────────
+#
+# Wraps a generated campaign-report PDF (recaps/pdf.py
+# build_campaign_report_pdf) in a client-facing email. Sent from the
+# `emailCampaignReport` mutation when the admin picks "Email to
+# client@…" instead of "Download" on the Recaps multi-select bar.
+#
+# Keeping render + send separate means the same PDF artifact is
+# reusable: future "download + email" combo doesn't render twice.
+
+import base64 as _base64
+from typing import Iterable as _Iterable
+
+
+class CampaignReportMailer(Mailer):
+    """Send a campaign-report PDF as an email attachment."""
+
+    def __init__(
+        self,
+        *,
+        recipients: _Iterable[str],
+        campaign_title: str,
+        campaign_subtitle: str,
+        cover_message: str | None,
+        recap_count: int,
+        total_consumers: int | None,
+        sender_tenant_name: str | None,
+        pdf_bytes: bytes,
+        pdf_filename: str,
+    ) -> None:
+        # De-dup recipients case-insensitively + strip whitespace.
+        # Single-address case works trivially; multi-recipient
+        # typo-protection is cheap insurance.
+        seen: set[str] = set()
+        clean: list[str] = []
+        for r in recipients:
+            norm = (r or "").strip()
+            if not norm:
+                continue
+            key = norm.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            clean.append(norm)
+        self.recipients = clean
+        self.campaign_title = campaign_title
+        self.campaign_subtitle = campaign_subtitle
+        self.cover_message = (cover_message or "").strip() or None
+        self.recap_count = recap_count
+        self.total_consumers = total_consumers
+        self.sender_tenant_name = (sender_tenant_name or "").strip() or None
+        self.pdf_bytes = pdf_bytes
+        self.pdf_filename = pdf_filename
+
+    def envelope(self) -> Envelope:
+        action_chip = (
+            f"{self.recap_count} recap{'s' if self.recap_count != 1 else ''}"
+        )
+        subject = f"{self.campaign_title} — {action_chip}"
+        # Resend accepts base64-encoded content directly. Matches the
+        # codebase's existing attachment pattern (utils/gcs inline
+        # base64). content_type kept explicit for the EmailMulti-
+        # Alternatives fallback path.
+        encoded = _base64.b64encode(self.pdf_bytes).decode("ascii")
+        return Envelope(
+            subject=subject,
+            template="recaps.templates.emails.campaign_report",
+            to_emails=self.recipients,
+            context={
+                "campaign_title": self.campaign_title,
+                "campaign_subtitle": self.campaign_subtitle,
+                "cover_message": self.cover_message,
+                "recap_count": self.recap_count,
+                "total_consumers": self.total_consumers,
+                "sender_tenant_name": self.sender_tenant_name,
+            },
+            attachments=[
+                {
+                    "filename": self.pdf_filename,
+                    "content": encoded,
+                    "content_type": "application/pdf",
+                }
+            ],
         )

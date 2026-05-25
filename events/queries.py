@@ -1,6 +1,7 @@
 import datetime
 import logging
-from typing import List
+from datetime import timedelta
+from typing import Annotated, List
 
 import strawberry
 from enum import Enum
@@ -165,7 +166,19 @@ class BaseEventQueriesService(SparkGraphQLMixin):
         return await self.get_record(uuid=uuid, tenant_id=tenant_id)
 
     def has_unrestricted_tenant_access(self, user) -> bool:
-        """Return True when role can query any tenant without membership."""
+        """Return True when role can query any tenant without membership.
+
+        Staff / superuser ALSO bypass — Kyle reported a blank
+        /request/view/<uuid> page when the request belonged to a
+        tenant he wasn't currently switched to. Same cross-tenant
+        deep-link pattern as the staff-bypass we shipped on the
+        tenants resolver (PR #531). Without this, a platform owner
+        clicking a request URL from email or Slack lands on
+        "Request not found" unless they happen to be on the right
+        tenant first.
+        """
+        if getattr(user, "is_staff", False) or getattr(user, "is_superuser", False):
+            return True
         return self.get_role_slug(user) in {"spark-admin", "ambassador"}
 
     async def resolve_tenant_id(
@@ -731,6 +744,142 @@ class EventQueries:
             queryset=queryset,
         )
 
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def event_location_trail(
+        self,
+        info: strawberry.Info,
+        event_uuid: strawberry.ID,
+    ) -> List[Annotated["LocationPingType", strawberry.lazy("ambassadors.types")]]:
+        """All GPS pings for an event, oldest first.
+
+        Powers the "shift replay" panel on /request/view and the
+        Event detail page — admins can scrub through the BA's path
+        during the activation to audit on-site presence + dispute
+        resolution. Returns up to 1000 points; further capping is
+        future work (resample at ~50m for very long shifts).
+        """
+        from ambassadors.models import LocationPing as LocationPingModel
+        from ambassadors.types import LocationPingType
+        from events.models import Event as EventModel
+
+        service = EventQueriesService()
+        tenant_id = await service.resolve_tenant_id(info)
+
+        def _fetch() -> List:
+            event = (
+                EventModel.objects.filter(uuid=str(event_uuid))
+                .only("id", "tenant_id")
+                .first()
+            )
+            if not event:
+                return []
+            # Tenant scoping — never leak another tenant's BA path.
+            if tenant_id and event.tenant_id != tenant_id:
+                # Spark-admin gets cross-tenant access via the
+                # standard mixin; if resolve_tenant_id returned a
+                # value it means the request is tenant-bound.
+                return []
+            qs = (
+                LocationPingModel.objects.filter(event_id=event.id)
+                .select_related("ambassador", "ambassador__user", "event")
+                .order_by("recorded_at")[:1000]
+            )
+            out: List = []
+            for p in qs:
+                name = (
+                    f"{(p.ambassador.user.first_name or '').strip()} "
+                    f"{(p.ambassador.user.last_name or '').strip()}"
+                ).strip() or (p.ambassador.user.email or "(BA)")
+                out.append(
+                    LocationPingType(
+                        uuid=strawberry.ID(str(p.uuid)),
+                        lat=p.lat,
+                        lng=p.lng,
+                        accuracy_meters=p.accuracy_meters,
+                        recorded_at=p.recorded_at.isoformat(),
+                        source=p.source,
+                        ambassador_uuid=strawberry.ID(str(p.ambassador.uuid)),
+                        ambassador_name=name,
+                        event_uuid=strawberry.ID(str(p.event.uuid)),
+                        event_name=p.event.name or "(event)",
+                    )
+                )
+            return out
+
+        return await sync_to_async(_fetch, thread_sensitive=True)()
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def recent_location_pings(
+        self,
+        info: strawberry.Info,
+        within_minutes: int = 30,
+        tenant_id: strawberry.ID | None = None,
+    ) -> List[Annotated["LocationPingType", strawberry.lazy("ambassadors.types")]]:
+        """Latest GPS ping per Ambassador within the last N minutes.
+
+        Powers the "Today, on the ground" admin map. Returns one row
+        per Ambassador (the freshest ping), filtered to today's events
+        in the requested tenant. Older pings get superseded by newer
+        ones so the map shows the BA's current location, not a trail.
+
+        within_minutes defaults to 30 (recent enough to be "live" given
+        the mobile pinger fires every ~2 min). Bumping to 60+ lets ops
+        see slightly-stale pings during connectivity dropouts.
+        """
+        from ambassadors.models import LocationPing as LocationPingModel
+        from ambassadors.types import LocationPingType
+        from django.db.models import Max
+
+        service = EventQueriesService()
+        resolved_tenant_id = await service.resolve_tenant_id(
+            info, tenant_id=tenant_id
+        )
+
+        cutoff = timezone.now() - timedelta(minutes=within_minutes)
+
+        def _fetch() -> List:
+            qs = (
+                LocationPingModel.objects.filter(
+                    recorded_at__gte=cutoff,
+                    event__tenant_id=resolved_tenant_id,
+                )
+                .select_related(
+                    "ambassador",
+                    "ambassador__user",
+                    "event",
+                )
+                .order_by("ambassador_id", "-recorded_at")
+            )
+            # Collapse to latest-per-ambassador in Python rather than
+            # PostgreSQL's DISTINCT ON, so the query plan stays portable.
+            latest_per_ba: dict[int, LocationPingModel] = {}
+            for p in qs:
+                if p.ambassador_id not in latest_per_ba:
+                    latest_per_ba[p.ambassador_id] = p
+            out: List = []
+            for p in latest_per_ba.values():
+                name = (
+                    f"{(p.ambassador.user.first_name or '').strip()} "
+                    f"{(p.ambassador.user.last_name or '').strip()}"
+                ).strip() or (p.ambassador.user.email or "(BA)")
+                out.append(
+                    LocationPingType(
+                        uuid=strawberry.ID(str(p.uuid)),
+                        lat=p.lat,
+                        lng=p.lng,
+                        accuracy_meters=p.accuracy_meters,
+                        recorded_at=p.recorded_at.isoformat(),
+                        source=p.source,
+                        ambassador_uuid=strawberry.ID(str(p.ambassador.uuid)),
+                        ambassador_name=name,
+                        event_uuid=strawberry.ID(str(p.event.uuid)),
+                        event_name=p.event.name or "(event)",
+                    )
+                )
+            return out
+
+        return await sync_to_async(_fetch, thread_sensitive=True)()
+
 
 class EventTypeQueriesService(BaseEventQueriesService):
     """Service for event type queries."""
@@ -858,10 +1007,18 @@ class RequestQueriesService(BaseEventQueriesService):
         return models.Request
 
     def get_queryset(self) -> QuerySet:
-        """Get the queryset for the service."""
+        """Get the queryset for the service.
+
+        Excludes soft-deleted requests (deleted_at IS NOT NULL) so the
+        deleteRequest mutation effectively hides the row from every
+        list, detail, single-fetch, and export path that flows through
+        this base queryset. The row stays in the DB so its activity log
+        + linked events / recaps survive intact.
+        """
         return (
             self.get_model()
-            .objects.select_related(
+            .objects.filter(deleted_at__isnull=True)
+            .select_related(
                 "tenant",
                 "timezone",
                 "billing_entity__state",
@@ -878,6 +1035,14 @@ class RequestQueriesService(BaseEventQueriesService):
                 "request_product__product",
                 "event_set",
                 "event_set__tenant",
+                # Master Tracker RECAP chip + /request/view Field
+                # Reports panel both traverse Request → events → recaps.
+                # Without this prefetch each row would trigger a
+                # separate `Event.objects.filter(...)` *and* a
+                # `Recap.objects.filter(...)` query (N+1×2 per page).
+                # Limit to id-only fields on Recap since neither
+                # consumer needs the full recap detail at list time.
+                "event_set__recaps",
             )
         )
 
@@ -1049,6 +1214,66 @@ class RequestQueries:
             return request
         except GraphQLError:
             raise GraphQLError
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def activity_logs(
+        self,
+        info: strawberry.Info,
+        first: int | None = 50,
+        kind: str | None = None,
+    ) -> list[types.RequestActivityLogEntry]:
+        """Tenant-wide audit feed.
+
+        Returns the most recent RequestActivityLog rows across every
+        request in the current tenant — sorted newest-first. Powers
+        the /audit admin page that surfaces "who did what when" for
+        support / compliance debugging. Capped at 200 to keep payload
+        sane; pagination not built yet (add when needed).
+
+        `kind`, when set, filters to a single KIND_* value (e.g.
+        'status_changed', 'recap_filed') for narrowing.
+        """
+        from events.models import RequestActivityLog
+        from asgiref.sync import sync_to_async
+
+        service = RequestQueriesService()
+        tenant_id = await service.resolve_tenant_id(info)
+        first_capped = max(1, min(first or 50, 200))
+
+        def fetch():
+            qs = (
+                RequestActivityLog.objects.select_related(
+                    "actor_user", "request"
+                )
+                .order_by("-created_at")
+            )
+            if tenant_id:
+                qs = qs.filter(tenant_id=tenant_id)
+            if kind:
+                qs = qs.filter(kind=kind)
+            rows = list(qs[:first_capped])
+            return [
+                types.RequestActivityLogEntry(
+                    uuid=str(row.uuid),
+                    kind=row.kind,
+                    summary=row.summary or "",
+                    metadata_json=__import__("json").dumps(row.metadata or {}),
+                    actor_email=getattr(row.actor_user, "email", None),
+                    actor_name=(
+                        " ".join(
+                            filter(None, [
+                                getattr(row.actor_user, "first_name", None),
+                                getattr(row.actor_user, "last_name", None),
+                            ])
+                        )
+                        or None
+                    ) if row.actor_user else None,
+                    created_at=row.created_at.isoformat(),
+                )
+                for row in rows
+            ]
+
+        return await sync_to_async(fetch)()
 
 
 @strawberry.type

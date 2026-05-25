@@ -29,6 +29,16 @@ class EventDashboardFiltersInput(BaseTenantInput):
     distributor_id: strawberry.ID | None = None
     distributor_ids: list[strawberry.ID] | None = None
 
+    # State filter — narrows the dashboard to a single US state. Used
+    # by the per-tenant dashboard's "by state" view.
+    state_id: strawberry.ID | None = None
+    state_ids: list[strawberry.ID] | None = None
+
+    # Retailer filter — narrows to a single retailer chain (Whole Foods,
+    # Sprouts, etc.).
+    retailer_id: strawberry.ID | None = None
+    retailer_ids: list[strawberry.ID] | None = None
+
     # Optional year for goals progress (e.g. 2025); when not set, year is derived from dashboard date range
     year: int | None = None
 

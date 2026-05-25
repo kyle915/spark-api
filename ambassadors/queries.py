@@ -1,5 +1,6 @@
 import logging
 import asyncio
+from typing import Annotated, List
 import strawberry
 from enum import Enum
 from asgiref.sync import sync_to_async
@@ -253,6 +254,246 @@ class FileTypeQueries:
 @strawberry.type
 class AmbassadorEventQueries:
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def my_upcoming_shifts(
+        self,
+        info: strawberry.Info,
+        within_days: int = 14,
+    ) -> List[types.ShiftOfferDetails]:
+        """Accepted (is_approved=True) AmbassadorEvent rows for the
+        current BA whose event date is in the next N days (default 14).
+
+        Powers the "Upcoming" section on the spark-mobile Shifts tab.
+        Sorted by event start_time ascending (next-up first). Returns
+        empty for non-ambassador users; cross-tenant access blocked
+        via the Ambassador→user relationship.
+        """
+        from datetime import timedelta
+        from django.utils import timezone
+
+        user = info.context.request.user
+        if not getattr(user, "is_authenticated", False):
+            return []
+
+        from ambassadors import models as a_models
+        from ambassadors import types as a_types
+
+        cutoff = timezone.now() + timedelta(days=max(1, within_days))
+
+        def _fetch() -> List:
+            try:
+                ambassador = a_models.Ambassador.objects.get(user=user)
+            except a_models.Ambassador.DoesNotExist:
+                return []
+            qs = (
+                a_models.AmbassadorEvent.objects.select_related(
+                    "event",
+                    "event__retailer",
+                    "event__state",
+                )
+                .filter(
+                    ambassador=ambassador,
+                    is_approved=True,
+                    event__start_time__gte=timezone.now(),
+                    event__start_time__lte=cutoff,
+                )
+                .order_by("event__start_time")
+            )
+            out: List = []
+            for ae in qs:
+                ev = ae.event
+                venue = (
+                    getattr(ev, "name", None)
+                    or getattr(getattr(ev, "retailer", None), "name", None)
+                )
+                state_code = getattr(getattr(ev, "state", None), "code", None)
+                out.append(
+                    a_types.ShiftOfferDetails(
+                        ambassador_event_uuid=strawberry.ID(str(ae.uuid)),
+                        event_uuid=strawberry.ID(str(ev.uuid)),
+                        event_name=venue or "(shift)",
+                        venue=venue,
+                        address=getattr(ev, "address", None),
+                        date=ev.date.isoformat() if getattr(ev, "date", None) else None,
+                        start_time=(
+                            ev.start_time.isoformat()
+                            if getattr(ev, "start_time", None)
+                            else None
+                        ),
+                        end_time=(
+                            ev.end_time.isoformat()
+                            if getattr(ev, "end_time", None)
+                            else None
+                        ),
+                        state_code=state_code,
+                        is_approved=True,
+                    )
+                )
+            return out
+
+        return await sync_to_async(_fetch, thread_sensitive=True)()
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def shift_offer(
+        self,
+        info: strawberry.Info,
+        ambassador_event_uuid: strawberry.ID,
+    ) -> types.ShiftOfferDetails | None:
+        """Fetch a single shift offer (AmbassadorEvent invitation) for
+        the current BA. Powers the mobile ShiftOfferScreen that deep-
+        links from the "New shift offered" push notification."""
+        from .services import ShiftOfferService
+
+        return await ShiftOfferService.get_offer(
+            str(ambassador_event_uuid), info
+        )
+
+    async def my_pending_offers(
+        self,
+        info: strawberry.Info,
+    ) -> list[types.ShiftOfferDetails]:
+        """All unaccepted shift offers for the current BA — invitations
+        that haven't been accepted yet (is_approved=False).
+
+        Powers the "Pending invites" section on the mobile Shifts tab,
+        which surfaces offers the BA missed via push tap. The mobile
+        client opens each into the existing ShiftOfferScreen for
+        accept/decline.
+
+        Excludes shifts whose event.start_time is already in the past
+        — those are stale and shouldn't be acted on. Sorted by start
+        time ascending (next-up first). Returns empty for non-
+        ambassador users; cross-tenant access blocked via the
+        Ambassador→user relationship.
+        """
+        from django.utils import timezone
+
+        user = info.context.request.user
+        if not getattr(user, "is_authenticated", False):
+            return []
+
+        def _fetch() -> list:
+            try:
+                ambassador = models.Ambassador.objects.get(user=user)
+            except models.Ambassador.DoesNotExist:
+                return []
+            now = timezone.now()
+            qs = (
+                models.AmbassadorEvent.objects.select_related(
+                    "event",
+                    "event__retailer",
+                    "event__state",
+                )
+                .filter(
+                    ambassador=ambassador,
+                    is_approved=False,
+                    event__start_time__gte=now,
+                )
+                .order_by("event__start_time")
+            )
+            out: list = []
+            for ae in qs:
+                ev = ae.event
+                venue = (
+                    getattr(ev, "name", None)
+                    or getattr(getattr(ev, "retailer", None), "name", None)
+                )
+                state_code = getattr(getattr(ev, "state", None), "code", None)
+                out.append(
+                    types.ShiftOfferDetails(
+                        ambassador_event_uuid=strawberry.ID(str(ae.uuid)),
+                        event_uuid=strawberry.ID(str(ev.uuid)),
+                        event_name=venue or "(shift)",
+                        venue=venue,
+                        address=getattr(ev, "address", None),
+                        date=ev.date.isoformat() if getattr(ev, "date", None) else None,
+                        start_time=(
+                            ev.start_time.isoformat()
+                            if getattr(ev, "start_time", None)
+                            else None
+                        ),
+                        end_time=(
+                            ev.end_time.isoformat()
+                            if getattr(ev, "end_time", None)
+                            else None
+                        ),
+                        state_code=state_code,
+                        is_approved=False,
+                    )
+                )
+            return out
+
+        return await sync_to_async(_fetch, thread_sensitive=True)()
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def my_earnings_stats(
+        self,
+        info: strawberry.Info,
+        within_days: int = 30,
+    ) -> types.MyEarningsStats:
+        """Honest BA-facing earnings preview: completed shift count + an
+        hour estimate over the last `withinDays` days.
+
+        Approximations (until payroll is wired):
+        - "Completed" = AmbassadorEvent.is_approved=True AND event.date
+          < now. Doesn't require an attendance row, so it works even
+          where the BA forgot to clock out.
+        - "Hours" = sum of (event.end_time - event.start_time) across
+          those shifts. Treats start/end as same-day local; rolls over
+          midnight as +24h. None when the window has zero shifts.
+        """
+        from datetime import datetime, timedelta, timezone as _tz
+
+        service = AmbassadorEventQueriesService()
+        user = await service.get_user(info)
+
+        days = max(1, min(int(within_days), 365))
+        now = datetime.now(_tz.utc)
+        cutoff = now - timedelta(days=days)
+
+        qs = (
+            service.get_model()
+            .objects.select_related("event")
+            .filter(
+                ambassador__user=user,
+                is_approved=True,
+                event__date__gte=cutoff,
+                event__date__lte=now,
+            )
+        )
+        rows = await sync_to_async(list)(qs)
+
+        shifts_count = len(rows)
+        if shifts_count == 0:
+            return types.MyEarningsStats(
+                shifts_count=0,
+                hours_estimate=None,
+                within_days=days,
+            )
+
+        total_seconds = 0.0
+        for ae in rows:
+            ev = ae.event
+            start = getattr(ev, "start_time", None)
+            end = getattr(ev, "end_time", None)
+            if not start or not end:
+                continue
+            # start/end are TimeField — combine with a sentinel date
+            # to compute the delta. Roll over midnight by adding 24h.
+            s_secs = (start.hour * 3600) + (start.minute * 60) + start.second
+            e_secs = (end.hour * 3600) + (end.minute * 60) + end.second
+            delta = e_secs - s_secs
+            if delta < 0:
+                delta += 24 * 3600
+            total_seconds += float(delta)
+
+        hours = total_seconds / 3600.0
+        return types.MyEarningsStats(
+            shifts_count=shifts_count,
+            hours_estimate=round(hours, 2),
+            within_days=days,
+        )
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def ambassador_events(
         self,
         info: strawberry.Info,
@@ -306,6 +547,79 @@ class AmbassadorEventQueries:
             before=before,
         )
 
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def ambassadors_booked_on_date(
+        self,
+        info: strawberry.Info,
+        on_date: str,
+        tenant_id: strawberry.ID | None = None,
+    ) -> List[strawberry.ID]:
+        """Return Ambassador relay-encoded IDs already booked on the
+        given date (any AmbassadorEvent.event.date == on_date).
+
+        Powers the "⚠ Already on another shift that day" red chip in
+        the InviteBAModal. The front-end calls this with the event
+        date being scheduled and cross-references the returned set
+        against the BA list so admins don't double-book a BA.
+
+        `on_date` is an ISO date string (YYYY-MM-DD). Tolerates a
+        full ISO datetime and slices to the date part.
+
+        Includes BOTH approved (already accepted) and pending
+        (invited-but-not-yet-responded) shifts so the chip catches
+        the "this BA has 3 pending invites for the same day" case
+        too, not just confirmed double-bookings.
+        """
+        from datetime import datetime
+        from ambassadors import models as a_models
+
+        raw = (on_date or "").strip()
+        if not raw:
+            return []
+        # Accept "2026-05-10" or "2026-05-10T18:30:00Z" — pick the date.
+        try:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            target_date = parsed.date()
+        except ValueError:
+            try:
+                target_date = datetime.strptime(raw[:10], "%Y-%m-%d").date()
+            except ValueError:
+                raise GraphQLError("on_date must be ISO format.")
+
+        resolved_tenant_id: int | None = None
+        if tenant_id not in (None, ""):
+            try:
+                resolved_tenant_id = resolve_id_to_int(tenant_id)
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Invalid tenant id.")
+
+        def _fetch() -> List[strawberry.ID]:
+            qs = a_models.AmbassadorEvent.objects.select_related(
+                "ambassador", "event"
+            ).filter(event__date=target_date)
+            if resolved_tenant_id is not None:
+                qs = qs.filter(event__tenant_id=resolved_tenant_id)
+            # We want the relay-encoded Ambassador.id (what the
+            # InviteBAModal's row.id holds), not the int pk.
+            seen: set[str] = set()
+            out: list[strawberry.ID] = []
+            for ae in qs.only("ambassador__id"):
+                if not ae.ambassador_id:
+                    continue
+                key = str(ae.ambassador_id)
+                if key in seen:
+                    continue
+                seen.add(key)
+                # The Ambassador type uses relay encoding via Strawberry
+                # — the int pk is what `resolve_id_to_int` round-trips
+                # against, so the front-end's row.id comparison just
+                # needs to match the int. Return as string so the
+                # GraphQL ID scalar accepts it cleanly.
+                out.append(strawberry.ID(key))
+            return out
+
+        return await sync_to_async(_fetch, thread_sensitive=True)()
+
 
 @strawberry.type
 class AmbassadorManagementQueries:
@@ -355,6 +669,34 @@ class AmbassadorManagementQueries:
             last=last,
             before=before,
             filters=filters,
+        )
+
+    @strawberry.field(permission_classes=[IsClientOrSparkAdmin])
+    async def pending_ambassadors(
+        self,
+        info: strawberry.Info,
+        first: int | None = 50,
+        after: str | None = None,
+    ) -> CountableConnection[types.Ambassador]:
+        """Ambassadors waiting for admin approval — newest first.
+
+        Pulls every Ambassador with is_active=False whose user is
+        also active (i.e. signed up but not yet approved). Admin
+        front-end uses this to render the Pending queue on /people.
+        """
+        from utils.graphql.relay import connection_from_queryset_async
+        from ambassadors.models import Ambassador as AmbassadorModel
+
+        qs = (
+            AmbassadorModel.objects.filter(
+                is_active=False,
+                user__is_active=True,
+            )
+            .select_related("user")
+            .order_by("-created_at")
+        )
+        return await connection_from_queryset_async(
+            qs, first=first, after=after, last=None, before=None
         )
 
     @strawberry.field(permission_classes=[IsClientOrSparkAdmin])

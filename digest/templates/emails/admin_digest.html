@@ -1,0 +1,136 @@
+{% extends "emails/base.html" %}
+{% block content %}
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+  <tr>
+    <td style="padding-bottom: 18px;">
+      <p style="margin: 0; font-size: 11px; letter-spacing: 0.18em; color: #888888; text-transform: uppercase;">
+        SPARK · {{ digest.window_label|upper }} DIGEST
+      </p>
+      <h1 style="margin: 8px 0 0 0; font-size: 26px; font-weight: 700; color: #1a1a1a; letter-spacing: -0.02em;">
+        {{ digest.tenant_name }}
+      </h1>
+      <p style="margin: 6px 0 0 0; font-size: 14px; color: #555555;">
+        {% if digest.total_action_items %}
+          {{ digest.pending_approvals.count }} pending approval{% if digest.pending_approvals.count != 1 %}s{% endif %} ·
+          {{ digest.unfiled_recaps.count }} unfiled recap{% if digest.unfiled_recaps.count != 1 %}s{% endif %} ·
+          {{ digest.upcoming_shifts.count }} upcoming shift{% if digest.upcoming_shifts.count != 1 %}s{% endif %}.
+        {% else %}
+          Inbox zero. {{ digest.upcoming_shifts.count }} upcoming shift{% if digest.upcoming_shifts.count != 1 %}s{% endif %} in the next 7 days.
+        {% endif %}
+      </p>
+    </td>
+  </tr>
+
+  {# ====== PENDING APPROVALS ====== #}
+  {% if digest.pending_approvals.count %}
+  <tr>
+    <td style="padding-top: 14px; padding-bottom: 8px;">
+      <p style="margin: 0; font-size: 11px; letter-spacing: 0.16em; color: #c2410c; text-transform: uppercase;">
+        ● {{ digest.pending_approvals.label }} · {{ digest.pending_approvals.count }}
+      </p>
+    </td>
+  </tr>
+  <tr>
+    <td style="background: #fff7ed; border: 1px solid #fed7aa; border-radius: 12px; padding: 14px 18px;">
+      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+        {% for r in digest.pending_approvals.rows %}
+          <tr>
+            <td style="padding: 6px 0; font-size: 14px; color: #1a1a1a;">
+              <strong>{{ r.label }}</strong>
+              <span style="color: #666;"> · {{ r.market }}</span>
+              {% if r.age_hours %}
+                <span style="float: right; font-size: 11px; color: #c2410c; letter-spacing: 0.12em;">{{ r.age_hours }}H OLD</span>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </table>
+      <p style="margin: 12px 0 0 0;">
+        <a href="{{ approvals_url }}" style="font-size: 12px; color: #c2410c; font-weight: 600; text-decoration: none;">Review approvals →</a>
+      </p>
+    </td>
+  </tr>
+  {% endif %}
+
+  {# ====== UNFILED RECAPS ====== #}
+  {% if digest.unfiled_recaps.count %}
+  <tr>
+    <td style="padding-top: 18px; padding-bottom: 8px;">
+      <p style="margin: 0; font-size: 11px; letter-spacing: 0.16em; color: #a16207; text-transform: uppercase;">
+        ● {{ digest.unfiled_recaps.label }} · {{ digest.unfiled_recaps.count }}
+      </p>
+    </td>
+  </tr>
+  <tr>
+    <td style="background: #fffbeb; border: 1px solid #fcd34d; border-radius: 12px; padding: 14px 18px;">
+      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+        {% for r in digest.unfiled_recaps.rows %}
+          <tr>
+            <td style="padding: 6px 0; font-size: 14px; color: #1a1a1a;">
+              <strong>{{ r.venue }}</strong>
+              <span style="color: #666;"> · {{ r.market }}</span>
+              {% if r.ended_at %}
+                <span style="float: right; font-size: 11px; color: #a16207; letter-spacing: 0.12em;">ENDED {{ r.ended_at|slice:":10" }}</span>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </table>
+      <p style="margin: 12px 0 0 0;">
+        <a href="{{ recaps_url }}" style="font-size: 12px; color: #a16207; font-weight: 600; text-decoration: none;">Open recaps →</a>
+      </p>
+    </td>
+  </tr>
+  {% endif %}
+
+  {# ====== UPCOMING SHIFTS ====== #}
+  {% if digest.upcoming_shifts.count %}
+  <tr>
+    <td style="padding-top: 18px; padding-bottom: 8px;">
+      <p style="margin: 0; font-size: 11px; letter-spacing: 0.16em; color: #4d7c0f; text-transform: uppercase;">
+        ● {{ digest.upcoming_shifts.label }} · {{ digest.upcoming_shifts.count }}
+      </p>
+    </td>
+  </tr>
+  <tr>
+    <td style="background: #f7fee7; border: 1px solid #bef264; border-radius: 12px; padding: 14px 18px;">
+      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+        {% for r in digest.upcoming_shifts.rows %}
+          <tr>
+            <td style="padding: 6px 0; font-size: 14px; color: #1a1a1a;">
+              <strong>{{ r.venue }}</strong>
+              <span style="color: #666;"> · {{ r.ba_name }}</span>
+              {% if r.start_time %}
+                <span style="float: right; font-size: 11px; color: #4d7c0f; letter-spacing: 0.12em;">{{ r.start_time|slice:":16" }}</span>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </table>
+      <p style="margin: 12px 0 0 0;">
+        <a href="{{ tracker_url }}" style="font-size: 12px; color: #4d7c0f; font-weight: 600; text-decoration: none;">Open tracker →</a>
+      </p>
+    </td>
+  </tr>
+  {% endif %}
+
+  {# ====== EMPTY STATE ====== #}
+  {% if digest.is_empty %}
+  <tr>
+    <td style="background: #f7fee7; border: 1px solid #bef264; border-radius: 12px; padding: 22px 18px; text-align: center;">
+      <p style="margin: 0; font-size: 11px; letter-spacing: 0.22em; color: #4d7c0f;">ALL CLEAR</p>
+      <p style="margin: 8px 0 0 0; font-size: 14px; color: #1a1a1a;">
+        Nothing in the queue needs your attention right now.
+      </p>
+    </td>
+  </tr>
+  {% endif %}
+
+  <tr>
+    <td style="padding-top: 28px; font-size: 12px; color: #888888; line-height: 1.6;">
+      Generated at {{ digest.generated_at|slice:":19" }} UTC. To stop these digests, reply to this email or contact{" "}
+      <a href="mailto:engineering@igniteproductions.co" style="color: #555;">engineering@igniteproductions.co</a>.
+    </td>
+  </tr>
+</table>
+{% endblock %}

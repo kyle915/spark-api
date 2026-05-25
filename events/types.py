@@ -10,7 +10,7 @@ import datetime
 from django.utils import timezone
 from asgiref.sync import sync_to_async
 from tenants.types import SparkUserType, TenantType
-from utils.gcs import extract_blob_name_from_url, generate_download_url
+from utils.gcs import extract_blob_name_from_url, public_url
 
 from . import models
 
@@ -220,17 +220,35 @@ class Product(Node):
     created_at: str
     updated_at: str
 
-    @strawberry_django.field(only=["image"])
-    def image(self) -> str | None:
-        """Return a signed URL for the product image if it exists."""
-        if not self.image:
-            return None
+    @strawberry.field(name="image")
+    def image_url(self) -> str | None:
+        """Return the public URL for the product image if one exists.
 
-        blob_name = extract_blob_name_from_url(self.image.name)
-        if not blob_name:
-            return None
+        Aliased via name= so the resolver method doesn't shadow the
+        Django ImageField on `self`.
 
-        return generate_download_url(blob_name)
+        Pattern: __dict__ fast path, then a getattr fallback wrapped
+        in a broad except. Bare __dict__-only is too strict (breaks
+        optimizer-deferred queries); bare getattr triggers FieldFile
+        lazy load → refresh_from_db → SynchronousOnlyOperation in
+        async resolvers. The try/except gives us the fallback's
+        coverage without the crash — if we can't read the column,
+        return None.
+        """
+        field_file = self.__dict__.get("image")
+        if field_file is None:
+            try:
+                field_file = getattr(self, "image", None)
+            except Exception:
+                return None
+        if not field_file:
+            return None
+        try:
+            blob = field_file.name
+        except Exception:
+            blob = str(field_file)
+        blob_name = extract_blob_name_from_url(blob)
+        return public_url(blob_name)
 
 
 @strawberry.type
@@ -368,6 +386,20 @@ class Request(Node):
             return cached[0] if cached else None
         return await sync_to_async(self.event_set.first)()
 
+    @strawberry.field
+    async def events(self) -> List["Event"]:
+        """All events for this request, oldest first.
+
+        A request can spawn multiple events when an activation is
+        scheduled across multiple days or venues. Front-end uses this
+        to render the Field Reports panel — one section per event,
+        each with its recap(s).
+        """
+        cached = getattr(self, "_prefetched_objects_cache", {}).get("event_set")
+        if cached is not None:
+            return list(cached)
+        return await sync_to_async(list)(self.event_set.order_by("start_time"))
+
     request_type: RequestType | None = None
     status: RequestStatus | None = None
     tenant_id: strawberry.ID
@@ -378,6 +410,65 @@ class Request(Node):
     approved_by: SparkUserType | None = None
     created_at: str
     updated_at: str
+
+    @strawberry.field
+    async def activity_log(self) -> List["RequestActivityLogEntry"]:
+        """Audit trail of every meaningful change to this request.
+
+        Newest first. Powers the timeline panel on the front-end
+        request detail page so kyle / RMMs can answer "who did what
+        when" without going to the DB.
+        """
+        from .models import RequestActivityLog as _Log
+
+        rows = await sync_to_async(list)(
+            _Log.objects.filter(request=self)
+            .select_related("actor_user")
+            .order_by("-created_at")[:200]
+        )
+        return [
+            RequestActivityLogEntry(
+                uuid=str(r.uuid),
+                kind=r.kind,
+                summary=r.summary or "",
+                metadata_json=__import__("json").dumps(r.metadata or {}),
+                actor_email=(r.actor_user.email if r.actor_user_id else None),
+                actor_name=(
+                    " ".join(
+                        filter(
+                            None,
+                            [
+                                getattr(r.actor_user, "first_name", None),
+                                getattr(r.actor_user, "last_name", None),
+                            ],
+                        )
+                    )
+                    if r.actor_user_id
+                    else None
+                ),
+                created_at=r.created_at.isoformat() if r.created_at else "",
+            )
+            for r in rows
+        ]
+
+
+@strawberry.type
+class RequestActivityLogEntry:
+    """Single entry in a request's append-only audit trail.
+
+    `metadata_json` is shipped as a string-encoded JSON blob (not a raw
+    JSON scalar) so the GraphQL schema stays portable across clients
+    without needing a JSON scalar definition. The front-end parses on
+    read.
+    """
+
+    uuid: str
+    kind: str
+    summary: str
+    metadata_json: str
+    actor_email: str | None
+    actor_name: str | None
+    created_at: str
 
 
 @strawberry_django.type(models.RequestStoreManager)
@@ -409,6 +500,20 @@ class RequestDetailResponse:
 
 
 @strawberry.type
+class BulkCloneRequestResponse:
+    """Result of `bulkCloneRequest`. `created_count` is the number of
+    new requests actually saved; `created_uuids` lets the UI deep-link
+    to each one (or open a filtered Master Tracker view).
+    """
+
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    created_count: int = 0
+    created_uuids: list[str] = strawberry.field(default_factory=list)
+
+
+@strawberry.type
 class RequestBatchRowResult:
     row_number: int
     success: bool
@@ -435,7 +540,15 @@ class RequestBatchTemplateResponse:
     success: bool
     message: str
     client_mutation_id: strawberry.ID | None = None
+    # Public URL to a GCS-hosted copy. Legacy path — requires the
+    # Cloud Run service account to have storage.objects.create on
+    # the import-templates prefix. Kept for backward compat.
     file_url: str | None = None
+    # Base64-encoded XLSX bytes inlined into the response. Preferred
+    # — no GCS round-trip, no IAM dependencies, ~30 kB inline is
+    # cheap. Front-end decodes into a Blob and triggers download.
+    file_base64: str | None = None
+    file_name: str | None = None
 
 
 @strawberry.type
@@ -470,16 +583,20 @@ class Event(Node):
     ) = None
 
     @strawberry.field
-    def tenant_image(self) -> str | None:
-        """Return a signed URL for the tenant image if it exists."""
-        if not self.tenant or not self.tenant.image:
+    async def tenant_image(self) -> str | None:
+        """Return the public URL for the tenant image if one exists."""
+        tenant = await sync_to_async(lambda: self.tenant, thread_sensitive=True)()
+        if not tenant:
             return None
-
-        blob_name = extract_blob_name_from_url(self.tenant.image.name)
-        if not blob_name:
+        image = await sync_to_async(lambda: tenant.image, thread_sensitive=True)()
+        if not image:
             return None
-
-        return generate_download_url(blob_name)
+        try:
+            blob = image.name
+        except Exception:
+            blob = str(image)
+        blob_name = extract_blob_name_from_url(blob)
+        return public_url(blob_name)
 
     @strawberry.field
     def name(self) -> str:
@@ -503,6 +620,41 @@ class Event(Node):
     def new_end_time(self) -> str | None:
         offset = _get_offset_minutes_from_instance(self)
         return _serialize_dt(_get_field(self, "new_end_time"), offset_minutes=offset)
+
+    @strawberry.field
+    async def recaps(
+        self,
+    ) -> List[Annotated["Recap", strawberry.lazy("recaps.types")]]:
+        """All recaps filed against this event, newest first.
+
+        Used by the front-end Field Reports panel on /request/view to
+        surface what BAs reported in for the activation. Empty list
+        is normal — recap is filed post-event.
+        """
+        cached = getattr(self, "_prefetched_objects_cache", {}).get("recaps")
+        if cached is not None:
+            return list(cached)
+        return await sync_to_async(list)(self.recaps.order_by("-created_at"))
+
+    @strawberry.field
+    async def custom_recaps(
+        self,
+    ) -> List[Annotated["CustomRecap", strawberry.lazy("recaps.types")]]:
+        """Custom-template recaps (per-tenant schemas) tied to this event.
+
+        Same shape as `recaps` but for tenants on the custom recap
+        builder (Borjomi, Carbliss, etc.). The Master Tracker chip
+        considers an event "recap filed" if EITHER list is non-empty,
+        so this needs to be queryable alongside `recaps`.
+        """
+        cached = getattr(self, "_prefetched_objects_cache", {}).get(
+            "custom_recap"
+        )
+        if cached is not None:
+            return list(cached)
+        return await sync_to_async(list)(
+            self.custom_recap.order_by("-created_at")
+        )
 
 
 @strawberry.type
@@ -543,3 +695,20 @@ class DeclineRequestResponse:
     message: str
     client_mutation_id: strawberry.ID | None = None
     request: Request | None = None
+
+
+@strawberry.type
+class DeleteRequestResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    deleted_request_uuid: str | None = None
+
+
+@strawberry.type
+class NotifyNoteMentionResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    sent_count: int = 0
+    failed_emails: List[str] | None = None

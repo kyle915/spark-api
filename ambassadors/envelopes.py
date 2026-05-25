@@ -28,6 +28,57 @@ class AmbassadorEventApplicationMailer(Mailer):
         )
 
 
+class NewAmbassadorAlertMailer(Mailer):
+    """Fires when a new Ambassador signs up via a public path
+    (createPublicAmbassador / appleSignIn / googleSignIn) so the
+    admin team knows there's a pending profile to approve.
+
+    Recipients come from `settings.NEW_AMBASSADOR_ALERT_EMAILS` —
+    a comma-separated env list. If empty, the mailer no-ops; callers
+    don't need a feature flag, just leave the setting unset on envs
+    where the alert isn't wanted.
+    """
+
+    def __init__(self, ambassador, provider: str = "email"):
+        self.ambassador = ambassador
+        self.provider = provider  # "email" | "apple" | "google"
+
+    def envelope(self) -> Envelope:
+        recipients = list(getattr(settings, "NEW_AMBASSADOR_ALERT_EMAILS", []) or [])
+        if not recipients:
+            # Mailer.send() will short-circuit on an empty to_emails
+            # — Envelope.compile() raises and falls through to the
+            # inline path which is also a no-op when there's no one to
+            # send to. We pass a sentinel template name so it's obvious
+            # in logs if a misconfig ever surfaces an actual send.
+            return Envelope(
+                subject="New ambassador signup — no alert recipients configured",
+                template="ambassadors.templates.emails.new_ambassador_alert",
+                to_emails=[],
+                context={"ambassador": self.ambassador, "provider": self.provider},
+            )
+
+        user = self.ambassador.user
+        full_name = " ".join(
+            filter(None, [user.first_name, user.last_name])
+        ).strip() or user.email
+        return Envelope(
+            subject=f"New ambassador signup: {full_name}",
+            template="ambassadors.templates.emails.new_ambassador_alert",
+            to_emails=recipients,
+            context={
+                "ambassador": self.ambassador,
+                "user": user,
+                "full_name": full_name,
+                "provider": self.provider,
+                "admin_url": (
+                    getattr(settings, "ADMIN_FRONTEND_URL", "")
+                    + f"/people/pending"
+                ),
+            },
+        )
+
+
 class NotifyApplicationToClientMailer(Mailer):
     def __init__(self, application: AmbassadorEvent):
         self.application = application

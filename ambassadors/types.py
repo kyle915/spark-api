@@ -46,6 +46,24 @@ class AmbassadorEventType(Node):
 
 
 @strawberry.type
+class MyEarningsStats:
+    """Lightweight per-BA earnings snapshot used by the mobile Earnings
+    tab. No dollar figures: Spark doesn't own the payroll system. We
+    surface a real shift count and the hour estimate so the BA can
+    sanity-check their Wingspan/Gusto payouts.
+    """
+
+    # Number of approved AmbassadorEvent rows whose event.date falls
+    # within the window.
+    shifts_count: int
+    # Sum of (event.end_time - event.start_time) across those shifts,
+    # expressed as decimal hours. None when no shifts are eligible.
+    hours_estimate: float | None
+    # The lookback window the numbers were computed over.
+    within_days: int
+
+
+@strawberry.type
 class FileTypeDetailResponse:
     success: bool
     message: str
@@ -458,3 +476,111 @@ class AddAmbassadorsToGroupResponse:
     message: str
     client_mutation_id: strawberry.ID | None = None
     members: list[UserGroup] | None = None
+
+
+@strawberry.type
+class RegisterPushTokenResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+
+
+@strawberry.type
+class OAuthTokenType:
+    """Mirrors the gqlauth TokenType shape mobile expects."""
+
+    token: str
+    refresh_token: str | None = None
+
+
+@strawberry.type
+class OAuthUserType:
+    uuid: strawberry.ID
+    email: str
+    first_name: str | None = None
+    last_name: str | None = None
+
+
+@strawberry.type
+class InviteAmbassadorToShiftResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    ambassador_event_uuid: strawberry.ID | None = None
+
+
+@strawberry.type
+class CancelShiftInviteResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    # The deleted row's uuid, echoed back so the front-end can update
+    # its local cache without re-fetching the roster.
+    ambassador_event_uuid: strawberry.ID | None = None
+
+
+@strawberry.type
+class RespondToShiftOfferResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    accepted: bool = False
+
+
+@strawberry.type
+class ShiftOfferDetails:
+    """Slim shape for the mobile ShiftOfferScreen — just what the
+    BA needs to decide. Avoids pulling the full AmbassadorEvent /
+    Event graph when most of it isn't shown."""
+
+    ambassador_event_uuid: strawberry.ID
+    event_uuid: strawberry.ID
+    event_name: str
+    venue: str | None
+    address: str | None
+    date: str | None
+    start_time: str | None
+    end_time: str | None
+    state_code: str | None
+    is_approved: bool
+
+
+@strawberry.type
+class LocationPingType:
+    """Slim shape — what the Today map actually renders."""
+
+    uuid: strawberry.ID
+    lat: float
+    lng: float
+    accuracy_meters: float | None
+    recorded_at: str
+    source: str
+    ambassador_uuid: strawberry.ID
+    ambassador_name: str
+    event_uuid: strawberry.ID
+    event_name: str
+
+
+@strawberry.type
+class LocationPingResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+
+
+@strawberry.type
+class OAuthSignInResponse:
+    """Response for the mobile appleSignIn / googleSignIn mutations.
+
+    Shape mirrors what the LoginScreen consumes:
+        { token { token, refreshToken }, user { uuid, email, firstName, lastName } }
+    Plus a ``success`` / ``message`` envelope so we can surface
+    verification errors without throwing.
+    """
+
+    success: bool
+    message: str
+    token: OAuthTokenType | None = None
+    user: OAuthUserType | None = None
+    is_new_account: bool = False
+    client_mutation_id: strawberry.ID | None = None

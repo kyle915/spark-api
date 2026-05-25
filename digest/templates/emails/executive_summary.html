@@ -1,0 +1,132 @@
+{% extends "emails/base.html" %}
+{% block content %}
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+  <tr>
+    <td style="padding-bottom: 18px;">
+      <p style="margin: 0; font-size: 11px; letter-spacing: 0.18em; color: #888888; text-transform: uppercase;">
+        SPARK · WEEKLY EXECUTIVE SUMMARY
+      </p>
+      <h1 style="margin: 8px 0 0 0; font-size: 26px; font-weight: 700; color: #1a1a1a; letter-spacing: -0.02em;">
+        {{ summary.tenant_name }}
+      </h1>
+      <p style="margin: 6px 0 0 0; font-size: 14px; color: #555555;">
+        {{ summary.period_label }}
+      </p>
+    </td>
+  </tr>
+
+  {# ====== HEADLINE STATS ====== #}
+  <tr>
+    <td style="padding: 18px 0;">
+      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+        <tr>
+          <td width="33%" style="padding-right: 8px;">
+            <div style="background: #f5f5f5; border-radius: 10px; padding: 14px 16px;">
+              <p style="margin: 0; font-size: 10px; letter-spacing: 0.14em; color: #888888; text-transform: uppercase;">
+                Recaps Filed
+              </p>
+              <p style="margin: 4px 0 0 0; font-size: 28px; font-weight: 700; color: #1a1a1a;">
+                {{ summary.recap_count }}
+              </p>
+              {% with chip=summary.delta_chip:"recaps" %}
+              {% if chip %}
+              <p style="margin: 4px 0 0 0; font-size: 11px; color: #666666;">{{ chip }}</p>
+              {% endif %}
+              {% endwith %}
+            </div>
+          </td>
+          <td width="33%" style="padding: 0 4px;">
+            <div style="background: #f5f5f5; border-radius: 10px; padding: 14px 16px;">
+              <p style="margin: 0; font-size: 10px; letter-spacing: 0.14em; color: #888888; text-transform: uppercase;">
+                Consumers Reached
+              </p>
+              <p style="margin: 4px 0 0 0; font-size: 28px; font-weight: 700; color: #1a1a1a;">
+                {{ summary.consumer_reach }}
+              </p>
+              {% with chip=summary.delta_chip:"reach" %}
+              {% if chip %}
+              <p style="margin: 4px 0 0 0; font-size: 11px; color: #666666;">{{ chip }}</p>
+              {% endif %}
+              {% endwith %}
+            </div>
+          </td>
+          <td width="33%" style="padding-left: 8px;">
+            <div style="background: #f5f5f5; border-radius: 10px; padding: 14px 16px;">
+              <p style="margin: 0; font-size: 10px; letter-spacing: 0.14em; color: #888888; text-transform: uppercase;">
+                Samples Out
+              </p>
+              <p style="margin: 4px 0 0 0; font-size: 28px; font-weight: 700; color: #1a1a1a;">
+                {{ summary.samples_distributed }}
+              </p>
+            </div>
+          </td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+
+  {# ====== TOP STORES ====== #}
+  {% if summary.top_stores %}
+  <tr>
+    <td style="padding-top: 22px;">
+      <p style="margin: 0 0 10px 0; font-size: 11px; letter-spacing: 0.16em; color: #888888; text-transform: uppercase;">
+        Top stores by reach
+      </p>
+      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="border-collapse: collapse;">
+        {% for row in summary.top_stores %}
+        <tr>
+          <td style="padding: 10px 0; border-bottom: 1px solid #ececec;">
+            <p style="margin: 0; font-size: 14px; font-weight: 600; color: #1a1a1a;">{{ row.label }}</p>
+            {% if row.secondary_metric %}
+            <p style="margin: 2px 0 0 0; font-size: 11px; color: #888888;">{{ row.secondary_metric }}</p>
+            {% endif %}
+          </td>
+          <td align="right" style="padding: 10px 0; border-bottom: 1px solid #ececec;">
+            <p style="margin: 0; font-size: 16px; font-weight: 700; color: #1a1a1a;">{{ row.primary_metric }}</p>
+            <p style="margin: 0; font-size: 10px; letter-spacing: 0.12em; color: #888888; text-transform: uppercase;">Consumers</p>
+          </td>
+        </tr>
+        {% endfor %}
+      </table>
+    </td>
+  </tr>
+  {% endif %}
+
+  {# ====== TOP BAS ====== #}
+  {% if summary.top_bas %}
+  <tr>
+    <td style="padding-top: 22px;">
+      <p style="margin: 0 0 10px 0; font-size: 11px; letter-spacing: 0.16em; color: #888888; text-transform: uppercase;">
+        Top ambassadors by recaps filed
+      </p>
+      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="border-collapse: collapse;">
+        {% for row in summary.top_bas %}
+        <tr>
+          <td style="padding: 10px 0; border-bottom: 1px solid #ececec;">
+            <p style="margin: 0; font-size: 14px; font-weight: 600; color: #1a1a1a;">{{ row.label }}</p>
+          </td>
+          <td align="right" style="padding: 10px 0; border-bottom: 1px solid #ececec;">
+            <p style="margin: 0; font-size: 16px; font-weight: 700; color: #1a1a1a;">{{ row.primary_metric }}</p>
+            <p style="margin: 0; font-size: 10px; letter-spacing: 0.12em; color: #888888; text-transform: uppercase;">Recaps</p>
+          </td>
+        </tr>
+        {% endfor %}
+      </table>
+    </td>
+  </tr>
+  {% endif %}
+
+  {# ====== JUMP LINKS ====== #}
+  <tr>
+    <td style="padding-top: 28px;">
+      <a href="{{ reports_url }}" style="font-size: 13px; color: #5a8c1a; text-decoration: none; font-weight: 600;">
+        View full Reports →
+      </a>
+      &nbsp;&nbsp;
+      <a href="{{ recaps_url }}" style="font-size: 13px; color: #5a8c1a; text-decoration: none; font-weight: 600;">
+        Browse all recaps →
+      </a>
+    </td>
+  </tr>
+</table>
+{% endblock %}

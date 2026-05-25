@@ -147,7 +147,16 @@ class ResendMailDriver(MailDriver):
             params["cc"] = envelope.cc_emails
         if envelope.attachments:
             params["attachments"] = envelope.attachments
-        resend.Emails.send(params)
+        result = resend.Emails.send(params)
+        # Log the response so we can verify deliveries in Cloud Run logs.
+        # When the API key is invalid or the FROM domain isn't verified,
+        # the SDK still returns a payload (no exception) but `id` is
+        # missing — surfacing it here is the difference between silent
+        # success and silent failure.
+        logger.info(
+            "Resend send to=%s subject=%r result=%s",
+            envelope.to_emails, envelope.subject, result,
+        )
 
 
 class MailpitMailDriver(MailDriver):
@@ -346,20 +355,40 @@ class Mailer:
         This method enqueues the email sending task to be processed
         asynchronously by RQ workers. The email will be sent in the background
         without blocking the current request.
+
+        If Redis is unreachable (Cloud Run doesn't provision it by default),
+        we fall back to sending the email inline via the driver so the
+        calling mutation doesn't 500 on the whole request.
         """
         envelope: Envelope = self.envelope()
         envelope = self._prepare_envelope(envelope)
-        queues = Queues()
-        if delay_seconds and delay_seconds > 0:
-            scheduler = django_rq.get_scheduler("default")
-            scheduler.enqueue_in(
-                datetime.timedelta(seconds=delay_seconds),
-                send_email_task,
-                payload=envelope.compile(),
+        try:
+            queues = Queues()
+            if delay_seconds and delay_seconds > 0:
+                scheduler = django_rq.get_scheduler("default")
+                scheduler.enqueue_in(
+                    datetime.timedelta(seconds=delay_seconds),
+                    send_email_task,
+                    payload=envelope.compile(),
+                )
+                return
+            queues.default.add(send_email_task, payload=envelope.compile())
+        except Exception as exc:
+            # Redis ConnectionRefusedError / TimeoutError / any other
+            # queue-layer failure → swallow and dispatch inline. Worst
+            # case is the response takes ~200ms longer; best case is
+            # we don't 500 the user-facing mutation.
+            logger.warning(
+                "Mail queue unreachable (%s); falling back to inline send "
+                "for subject=%r to=%s",
+                exc, envelope.subject, envelope.to_emails,
             )
-            return
-
-        queues.default.add(send_email_task, payload=envelope.compile())
+            try:
+                self.get_driver().send(envelope)
+            except Exception as inline_exc:
+                logger.exception(
+                    "Inline mail fallback failed too: %s", inline_exc,
+                )
 
 
 class MailChain:

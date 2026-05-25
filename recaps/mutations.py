@@ -16,6 +16,7 @@ from django.utils.text import slugify
 from recaps import types
 from recaps import models
 from recaps import inputs
+from recaps import heic_conversion
 from recaps.envelopes import (
     RecapApprovedNotificationMailer,
     RecapReadyForReviewAdminMailer,
@@ -31,6 +32,7 @@ from utils.graphql.relay import ensure_relay_mutation
 from utils.graphql.mixins import SparkGraphQLMixin, resolve_id_to_int
 from utils.utils import build_mutation_response
 from utils.gcs import (
+    public_url,
     extract_blob_name_from_url,
     delete_blob,
     upload_bytes,
@@ -39,13 +41,110 @@ from utils.gcs import (
     get_gcs_client,
 )
 from utils.onesignal import OneSignalError, one_signal_client
-from recaps.pdf import build_recap_pdf, should_embed_recap_file, is_image_bytes
+from recaps.pdf import (
+    build_recap_pdf,
+    build_campaign_report_pdf,
+    should_embed_recap_file,
+    is_image_bytes,
+)
 from recaps.excel import build_recaps_xlsx
 
 ensure_relay_mutation()
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
+
+
+async def _resolve_recap_pdf_attachment(
+    recap: models.Recap | models.CustomRecap,
+) -> list[dict] | None:
+    """If the recap has a generated PDF (CustomRecapFile with .pdf
+    extension or RecapFile equivalent), return an `attachments` list
+    shaped for the Mailer. Returns None when no PDF exists or the
+    blob fetch fails — caller falls back to a link-only email.
+    """
+    def _find_blob() -> tuple[str, str] | None:
+        try:
+            if isinstance(recap, models.CustomRecap):
+                qs = recap.custom_recap_files.filter(
+                    file_type__extension__iexact=".pdf"
+                ) | recap.custom_recap_files.filter(
+                    file_type__extension__iexact="pdf"
+                )
+                pdf = qs.order_by("-id").first()
+            else:
+                qs = recap.recap_files.filter(
+                    file_type__extension__iexact=".pdf"
+                ) | recap.recap_files.filter(
+                    file_type__extension__iexact="pdf"
+                )
+                pdf = qs.order_by("-id").first()
+            if not pdf:
+                return None
+            blob = extract_blob_name_from_url(str(pdf.url)) or str(pdf.url)
+            return blob, (pdf.name or f"recap-{recap.uuid}.pdf")
+        except Exception:
+            return None
+
+    found = await sync_to_async(_find_blob)()
+    if not found:
+        return None
+    blob_name, friendly_name = found
+    try:
+        pdf_bytes = await sync_to_async(download_blob_bytes)(blob_name)
+    except Exception as exc:
+        logger.warning(
+            "Could not fetch PDF blob %s for recap %s: %s",
+            blob_name,
+            recap.id,
+            exc,
+        )
+        return None
+    if not pdf_bytes:
+        return None
+    safe_name = friendly_name if friendly_name.lower().endswith(".pdf") else f"{friendly_name}.pdf"
+    return [
+        {
+            "filename": safe_name,
+            "content": pdf_bytes,
+            "content_type": "application/pdf",
+        }
+    ]
+
+
+async def _resolve_recap_requestor_recipients(
+    recap: models.Recap | models.CustomRecap,
+) -> list[tuple[str, str]]:
+    """Pull the original request's requestor (created_by + the
+    requestor_email override). Returns a list of (email, first_name)
+    tuples, deduped, ready to merge into the approval recipient set.
+    """
+    def _collect() -> list[tuple[str, str]]:
+        out: list[tuple[str, str]] = []
+        seen: set[str] = set()
+        try:
+            req = getattr(recap.event, "request", None)
+        except Exception:
+            req = None
+        if not req:
+            return out
+
+        def add(email: str | None, first: str | None):
+            e = (email or "").strip()
+            if not e or e.lower() in seen:
+                return
+            seen.add(e.lower())
+            out.append((e, (first or "").strip()))
+
+        # `requestor_email` is the public-form override — wins if set.
+        add(getattr(req, "requestor_email", None), None)
+        # Authenticated creator (admin/client portal submission).
+        cb = getattr(req, "created_by", None)
+        if cb:
+            add(getattr(cb, "email", None), getattr(cb, "first_name", None))
+        return out
+
+    return await sync_to_async(_collect)()
 
 
 async def _notify_recap_approved_to_rmm_or_clients(
@@ -58,14 +157,21 @@ async def _notify_recap_approved_to_rmm_or_clients(
         getattr(rmm_user, "email", None) or ""
     ).strip() or fallback_reply_to
 
+    # Build recipient list: RMM (or fallback to client tenanted users)
+    # + the original requestor (request.created_by + requestor_email).
+    # Per-row dedupe so a requestor who's also the RMM gets one email.
     recipients: list[tuple[str, str]] = []
+    seen: set[str] = set()
+
+    def _push(email: str | None, first: str | None):
+        e = (email or "").strip()
+        if not e or e.lower() in seen:
+            return
+        seen.add(e.lower())
+        recipients.append((e, (first or "").strip()))
+
     if rmm_user and rmm_user.email:
-        recipients.append(
-            (
-                rmm_user.email.strip(),
-                (rmm_user.first_name or "").strip(),
-            )
-        )
+        _push(rmm_user.email, rmm_user.first_name)
     else:
         rows = await sync_to_async(list)(
             TenantedUser.objects.filter(
@@ -75,13 +181,19 @@ async def _notify_recap_approved_to_rmm_or_clients(
             ).values("user__email", "user__first_name")
         )
         for row in rows:
-            email = (row.get("user__email") or "").strip()
-            if not email:
-                continue
-            recipients.append((email, (row.get("user__first_name") or "").strip()))
+            _push(row.get("user__email"), row.get("user__first_name"))
+
+    # Add the original requestor — same activation owner the admin
+    # CC's on the request approval email. Closes the loop: requestor
+    # → request approved → recap filed → recap approved.
+    for email, first in await _resolve_recap_requestor_recipients(recap):
+        _push(email, first)
 
     if not recipients:
         return
+
+    # Resolve PDF once and reuse — saves one GCS fetch per recipient.
+    attachments = await _resolve_recap_pdf_attachment(recap)
 
     for email, first_name in recipients:
         mailer = RecapApprovedNotificationMailer(
@@ -89,6 +201,7 @@ async def _notify_recap_approved_to_rmm_or_clients(
             to_emails=[email],
             recipient_first_name=first_name or None,
             reply_to_email=reply_to_email,
+            attachments=attachments,
         )
         await sync_to_async(mailer.send)()
 
@@ -772,6 +885,25 @@ class RecapMutationService(SparkGraphQLMixin):
                 models.RecapFile.objects.filter(
                     id__in=[recap_file.id for recap_file in recap_files]
                 ).update(recap=recap)
+
+                # HEIC sibling generation — for each .heic/.heif file the
+                # BA uploaded, kick off a server-side conversion to .jpg
+                # and store the result as a sibling RecapFile row pointing
+                # at the same recap. Browsers can't render HEIC natively
+                # so the recap-list hero picker prefers the .jpg variant
+                # and shows it without the slow in-browser libheif WASM
+                # fallback. Best-effort — a failure on any single file
+                # logs + keeps the HEIC alone, never aborts the upload.
+                for heic_rf in recap_files:
+                    if not heic_conversion.is_heic_blob(str(heic_rf.file)):
+                        continue
+                    heic_conversion.ensure_jpg_sibling(
+                        heic_blob_name=str(heic_rf.file),
+                        recap_id=recap.id,
+                        file_type=heic_rf.file_type,
+                        file_recap_category=heic_rf.file_recap_category,
+                        created_by=self.user,
+                    )
 
                 # Create related objects
                 if self._has_any_consumer_engagements(self.input.consumer_engagements):
@@ -2660,31 +2792,63 @@ class RecapMutationService(SparkGraphQLMixin):
         except models.Recap.DoesNotExist:
             raise GraphQLError("Recap not found.")
 
-        image_entries = []
+        # Pre-filter to image-typed files BEFORE downloading — we used
+        # to download every blob (including PDFs / docs / videos) then
+        # drop non-images, paying a full GCS round-trip per skipped
+        # file. `should_embed_recap_file` looks at extension + file_type
+        # without I/O so we can cull early.
+        candidates: list[tuple[models.RecapFile, str]] = []
         for recap_file in recap.recap_files.all():
+            if not should_embed_recap_file(recap_file):
+                continue
             blob_name = extract_blob_name_from_url(str(recap_file.file))
             if not blob_name:
                 continue
-            image_bytes = download_blob_bytes(blob_name)
-            if not image_bytes:
-                continue
-            if not should_embed_recap_file(recap_file) and not is_image_bytes(
-                image_bytes
-            ):
-                continue
-            image_entries.append(
-                {
-                    "name": recap_file.name,
-                    "bytes": image_bytes,
-                    "category": (
-                        recap_file.file_recap_category.name
-                        if recap_file.file_recap_category
-                        else "Uncategorized"
-                    ),
-                }
-            )
+            candidates.append((recap_file, blob_name))
 
-        pdf_bytes = build_recap_pdf(recap, image_entries)
+        # Parallel blob fetch — biggest single perf win. Sequential
+        # downloads on a 60-image recap were ~18–30s of pure I/O wait;
+        # 16 workers brings that under 3s for the same recap.
+        import concurrent.futures as _cf
+
+        def _fetch_one(item):
+            recap_file, blob_name = item
+            try:
+                data = download_blob_bytes(blob_name)
+            except Exception:
+                return None
+            if not data:
+                return None
+            # Last-resort content sniff for files where the extension
+            # lies (BAs renaming a .heic to .jpg etc).
+            if not is_image_bytes(data):
+                return None
+            return {
+                "name": recap_file.name,
+                "bytes": data,
+                "category": (
+                    recap_file.file_recap_category.name
+                    if recap_file.file_recap_category
+                    else "Uncategorized"
+                ),
+            }
+
+        image_entries = []
+        if candidates:
+            # 16 ~ sweet spot for GCS HTTP/2 keep-alive in the Cloud
+            # Run container. More than this and we just queue inside
+            # urllib's connection pool.
+            with _cf.ThreadPoolExecutor(max_workers=16) as pool:
+                for entry in pool.map(_fetch_one, candidates):
+                    if entry is not None:
+                        image_entries.append(entry)
+
+        # Render PDF off-thread so a slow WeasyPrint pass doesn't block
+        # the event loop and so we don't trip Django's async-context
+        # warning when downstream ORM access happens during render.
+        pdf_bytes = await sync_to_async(
+            build_recap_pdf, thread_sensitive=False
+        )(recap, image_entries)
         timestamp = django_timezone.now().strftime("%Y%m%d%H%M%S")
         blob_name = f"recaps/pdfs/{recap.uuid}-{timestamp}.pdf"
         upload_bytes(blob_name, pdf_bytes, content_type="application/pdf")
@@ -2725,6 +2889,322 @@ class RecapMutationService(SparkGraphQLMixin):
             if existing_blob_name:
                 delete_blob(existing_blob_name)
         return recap_file
+
+    async def build_campaign_report_pdf_with_meta(
+        self,
+        *,
+        recap_ids: list,
+        title: str | None,
+        subtitle: str | None,
+    ) -> tuple:
+        """Shared core for both `generate_campaign_report_pdf` (which
+        uploads to GCS and returns a URL) and `email_campaign_report`
+        (which attaches the bytes to an email).
+
+        Returns a 6-tuple:
+          (pdf_bytes, recap_count, total_consumers, title, subtitle, tenant_name)
+
+        Side-effects: none — pure compute + GCS reads. Caller decides
+        whether to upload + return a URL or hand the bytes to an email.
+        """
+        raw_ids = list(recap_ids or [])
+        if not raw_ids:
+            raise GraphQLError("At least one recap is required.")
+        if len(raw_ids) > 50:
+            raise GraphQLError(
+                "Campaign report is limited to 50 recaps per export."
+            )
+
+        resolved_ids: list[int] = []
+        for raw in raw_ids:
+            try:
+                resolved_ids.append(resolve_id_to_int(raw))
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError(f"Invalid recap id: {raw!r}")
+
+        @sync_to_async
+        def fetch_recaps():
+            qs = (
+                models.Recap.objects.select_related(
+                    "event",
+                    "event__tenant",
+                    "event__event_type",
+                    "job",
+                    "retailer",
+                    "ambassador",
+                    "ambassador__user",
+                )
+                .prefetch_related(
+                    Prefetch(
+                        "recap_files",
+                        queryset=models.RecapFile.objects.select_related(
+                            "file_type",
+                            "file_recap_category",
+                        ),
+                    ),
+                    "consumer_engagements",
+                    Prefetch(
+                        "product_samples",
+                        queryset=models.ProductSamples.objects.select_related(
+                            "product"
+                        ),
+                    ),
+                    Prefetch(
+                        "sales_performance",
+                        queryset=models.SalesPerformance.objects.select_related(
+                            "product",
+                            "type_of_good",
+                        ),
+                    ),
+                    "consumer_feedback",
+                    "account_feedback",
+                )
+                .filter(id__in=resolved_ids)
+            )
+            recaps_by_id = {r.id: r for r in qs}
+            return [recaps_by_id[i] for i in resolved_ids if i in recaps_by_id]
+
+        recaps = await fetch_recaps()
+        if not recaps:
+            raise GraphQLError("None of the supplied recap ids were found.")
+
+        # Campaign reports bundle N recaps × M files each. Sequential
+        # blob fetches turned that into a multi-minute wall-clock task.
+        # Build one flat candidate list (recap_idx, file, blob), fetch
+        # them all in parallel, then re-bucket by recap.
+        import concurrent.futures as _cf
+
+        candidates: list[tuple[int, object, str]] = []
+        for idx, recap in enumerate(recaps):
+            for recap_file in recap.recap_files.all():
+                if not should_embed_recap_file(recap_file):
+                    continue
+                blob_name = extract_blob_name_from_url(str(recap_file.file))
+                if not blob_name:
+                    continue
+                candidates.append((idx, recap_file, blob_name))
+
+        def _fetch(item):
+            idx, recap_file, blob_name = item
+            try:
+                data = download_blob_bytes(blob_name)
+            except Exception:
+                return None
+            if not data or not is_image_bytes(data):
+                return None
+            return (
+                idx,
+                {
+                    "name": recap_file.name,
+                    "bytes": data,
+                    "category": (
+                        recap_file.file_recap_category.name
+                        if recap_file.file_recap_category
+                        else "Uncategorized"
+                    ),
+                },
+            )
+
+        per_recap: dict[int, list[dict]] = {i: [] for i in range(len(recaps))}
+        if candidates:
+            with _cf.ThreadPoolExecutor(max_workers=16) as pool:
+                for result in pool.map(_fetch, candidates):
+                    if result is not None:
+                        idx, entry = result
+                        per_recap[idx].append(entry)
+
+        recaps_with_images: list = []
+        total_consumers = 0
+        any_consumer_data = False
+        for idx, recap in enumerate(recaps):
+            recaps_with_images.append((recap, per_recap[idx]))
+            for eng in recap.consumer_engagements.all():
+                tc = getattr(eng, "total_consumer", None)
+                if isinstance(tc, (int, float)):
+                    total_consumers += int(tc)
+                    any_consumer_data = True
+                break  # only the first row
+
+        # Title / subtitle defaults
+        resolved_title = (title or "").strip() or "Campaign Report"
+        first_event = getattr(recaps[0], "event", None)
+        tenant = getattr(first_event, "tenant", None) if first_event else None
+        tenant_name = getattr(tenant, "name", None) or ""
+        resolved_subtitle = (subtitle or "").strip() or (
+            tenant_name or "Sampling Campaign"
+        )
+
+        pdf_bytes = build_campaign_report_pdf(
+            title=resolved_title,
+            subtitle=resolved_subtitle,
+            recaps_with_images=recaps_with_images,
+        )
+
+        return (
+            pdf_bytes,
+            len(recaps),
+            total_consumers if any_consumer_data else None,
+            resolved_title,
+            resolved_subtitle,
+            tenant_name,
+        )
+
+    async def generate_campaign_report_pdf(self) -> str:
+        """Combine N recaps into one client-deliverable PDF.
+
+        Returns the public GCS URL of the rendered file. We don't tie
+        this to a single RecapFile row because the deliverable spans
+        many recaps; it lives at `campaign-reports/<uuid>-<ts>.pdf` and
+        is purely a one-shot artifact callers can re-generate any time.
+
+        Permission posture: requires authenticated user (set at the
+        resolver layer). Cross-tenant isolation is enforced by filtering
+        the recap set to the caller's accessible tenants — see
+        `_accessible_tenant_ids` on the parent service.
+        """
+        if not isinstance(self.input, inputs.GenerateCampaignReportPdfInput):
+            raise GraphQLError("Invalid input type.")
+
+        raw_ids = self.input.recap_ids or []
+        if not raw_ids:
+            raise GraphQLError("At least one recap is required.")
+        if len(raw_ids) > 50:
+            # WeasyPrint render time scales roughly linearly with recap
+            # count; 50 keeps the request well under Cloud Run's 60s
+            # request-timeout budget for the typical recap (10 photos).
+            raise GraphQLError(
+                "Campaign report is limited to 50 recaps per export."
+            )
+
+        resolved_ids: list[int] = []
+        for raw in raw_ids:
+            try:
+                resolved_ids.append(resolve_id_to_int(raw))
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError(f"Invalid recap id: {raw!r}")
+
+        @sync_to_async
+        def fetch_recaps():
+            # Same prefetch profile as the single-recap PDF so the
+            # campaign builder has access to engagements / samples /
+            # sales / feedback rows without N+1 queries.
+            qs = (
+                models.Recap.objects.select_related(
+                    "event",
+                    "event__tenant",
+                    "event__event_type",
+                    "job",
+                    "retailer",
+                    "ambassador",
+                    "ambassador__user",
+                )
+                .prefetch_related(
+                    Prefetch(
+                        "recap_files",
+                        queryset=models.RecapFile.objects.select_related(
+                            "file_type",
+                            "file_recap_category",
+                        ),
+                    ),
+                    "consumer_engagements",
+                    Prefetch(
+                        "product_samples",
+                        queryset=models.ProductSamples.objects.select_related(
+                            "product"
+                        ),
+                    ),
+                    Prefetch(
+                        "sales_performance",
+                        queryset=models.SalesPerformance.objects.select_related(
+                            "product",
+                            "type_of_good",
+                        ),
+                    ),
+                    "consumer_feedback",
+                    "account_feedback",
+                )
+                .filter(id__in=resolved_ids)
+            )
+            # Preserve caller-supplied order so the cover-page order
+            # matches what they multi-selected in the UI.
+            recaps_by_id = {r.id: r for r in qs}
+            return [recaps_by_id[i] for i in resolved_ids if i in recaps_by_id]
+
+        recaps = await fetch_recaps()
+        if not recaps:
+            raise GraphQLError("None of the supplied recap ids were found.")
+
+        # Parallel blob fetch (16-worker pool) — same approach as the
+        # single-recap path. Sequential was killing campaign reports
+        # with 5+ recaps × 30+ files each. Pre-filter by extension so
+        # we don't round-trip a non-image just to drop it.
+        import concurrent.futures as _cf
+
+        candidates: list[tuple[int, object, str]] = []
+        for idx, recap in enumerate(recaps):
+            for recap_file in recap.recap_files.all():
+                if not should_embed_recap_file(recap_file):
+                    continue
+                blob_name = extract_blob_name_from_url(str(recap_file.file))
+                if not blob_name:
+                    continue
+                candidates.append((idx, recap_file, blob_name))
+
+        def _fetch(item):
+            idx, recap_file, blob_name = item
+            try:
+                data = download_blob_bytes(blob_name)
+            except Exception:
+                return None
+            if not data or not is_image_bytes(data):
+                return None
+            return (
+                idx,
+                {
+                    "name": recap_file.name,
+                    "bytes": data,
+                    "category": (
+                        recap_file.file_recap_category.name
+                        if recap_file.file_recap_category
+                        else "Uncategorized"
+                    ),
+                },
+            )
+
+        per_recap: dict[int, list[dict]] = {i: [] for i in range(len(recaps))}
+        if candidates:
+            with _cf.ThreadPoolExecutor(max_workers=16) as pool:
+                for r in pool.map(_fetch, candidates):
+                    if r is not None:
+                        idx, entry = r
+                        per_recap[idx].append(entry)
+
+        recaps_with_images: list = [
+            (recap, per_recap[i]) for i, recap in enumerate(recaps)
+        ]
+
+        # Cover-page strings — caller-supplied or fall back to tenant /
+        # event name so the PDF still has reasonable defaults.
+        title = (self.input.title or "").strip() or "Campaign Report"
+        if not (self.input.subtitle or "").strip():
+            first_event = getattr(recaps[0], "event", None)
+            tenant = getattr(first_event, "tenant", None) if first_event else None
+            subtitle = (
+                getattr(tenant, "name", None) or "Sampling Campaign"
+            )
+        else:
+            subtitle = self.input.subtitle.strip()
+
+        pdf_bytes = build_campaign_report_pdf(
+            title=title,
+            subtitle=subtitle,
+            recaps_with_images=recaps_with_images,
+        )
+
+        timestamp = django_timezone.now().strftime("%Y%m%d%H%M%S")
+        blob_name = f"campaign-reports/{timestamp}-{len(recaps)}-recaps.pdf"
+        upload_bytes(blob_name, pdf_bytes, content_type="application/pdf")
+        return public_url(blob_name)
 
     async def generate_custom_recap_pdf(self) -> models.CustomRecapFile:
         """Generate a PDF with custom recap details and images."""
@@ -2794,29 +3274,44 @@ class RecapMutationService(SparkGraphQLMixin):
 
         @sync_to_async
         def build_custom_recap_pdf_bytes():
-            image_entries = []
-            for custom_recap_file in custom_recap.custom_recap_files.all():
-                blob_name = extract_blob_name_from_url(str(custom_recap_file.url))
+            # Parallel blob fetch — same approach as the standard recap
+            # path. Big custom recaps (Liquid Death has 60+ images per
+            # event) used to take 20s+ sequentially.
+            import concurrent.futures as _cf
+
+            candidates: list[tuple[object, str]] = []
+            for crf in custom_recap.custom_recap_files.all():
+                if not should_embed_recap_file(crf):
+                    continue
+                blob_name = extract_blob_name_from_url(str(crf.url))
                 if not blob_name:
                     continue
-                image_bytes = download_blob_bytes(blob_name)
-                if not image_bytes:
-                    continue
-                if not should_embed_recap_file(
-                    custom_recap_file
-                ) and not is_image_bytes(image_bytes):
-                    continue
-                image_entries.append(
-                    {
-                        "name": custom_recap_file.name,
-                        "bytes": image_bytes,
-                        "category": (
-                            custom_recap_file.file_recap_category.name
-                            if custom_recap_file.file_recap_category
-                            else "Uncategorized"
-                        ),
-                    }
-                )
+                candidates.append((crf, blob_name))
+
+            def _fetch(item):
+                crf, blob_name = item
+                try:
+                    data = download_blob_bytes(blob_name)
+                except Exception:
+                    return None
+                if not data or not is_image_bytes(data):
+                    return None
+                return {
+                    "name": crf.name,
+                    "bytes": data,
+                    "category": (
+                        crf.file_recap_category.name
+                        if crf.file_recap_category
+                        else "Uncategorized"
+                    ),
+                }
+
+            image_entries: list[dict] = []
+            if candidates:
+                with _cf.ThreadPoolExecutor(max_workers=16) as pool:
+                    for entry in pool.map(_fetch, candidates):
+                        if entry is not None:
+                            image_entries.append(entry)
             return build_recap_pdf(custom_recap, image_entries)
 
         pdf_bytes = await build_custom_recap_pdf_bytes()
@@ -2937,7 +3432,7 @@ class RecapMutationService(SparkGraphQLMixin):
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             ),
         )
-        return generate_download_url(blob_name)
+        return public_url(blob_name)
 
     async def export_recap_xlsx(self) -> str:
         """Generate an Excel report for a single recap and return a signed URL."""
@@ -3000,7 +3495,7 @@ class RecapMutationService(SparkGraphQLMixin):
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             ),
         )
-        return generate_download_url(blob_name)
+        return public_url(blob_name)
 
     async def export_custom_recaps_xlsx(self) -> str:
         """Generate an Excel report with all custom recaps for a tenant."""
@@ -3078,7 +3573,7 @@ class RecapMutationService(SparkGraphQLMixin):
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             ),
         )
-        return generate_download_url(blob_name)
+        return public_url(blob_name)
 
     async def export_custom_recap_xlsx(self) -> str:
         """Generate an Excel report for a single custom recap."""
@@ -3137,7 +3632,7 @@ class RecapMutationService(SparkGraphQLMixin):
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             ),
         )
-        return generate_download_url(blob_name)
+        return public_url(blob_name)
 
     async def get_recap_file_download_url(self) -> str:
         """Return a signed download URL for a recap or custom recap file."""
@@ -3203,7 +3698,7 @@ class RecapMutationService(SparkGraphQLMixin):
         blob_name = extract_blob_name_from_url(str(file_field))
         if not blob_name:
             raise GraphQLError("Recap file not found.")
-        return generate_download_url(blob_name)
+        return public_url(blob_name)
 
 
 @strawberry.type
@@ -3290,6 +3785,285 @@ class RecapMutations:
                 message=str(e),
                 input_obj=input,
             )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def import_connecteam_recap_pdf(
+        self,
+        info: strawberry.Info,
+        input: inputs.ImportConnecteamRecapPdfInput,
+    ) -> types.ImportConnecteamRecapPdfResponse:
+        """Parse a Connecteam recap PDF and draft a CustomRecap from it.
+
+        The flow:
+          1. base64-decode + run through recaps.connecteam.parse_pdf_bytes
+          2. Fetch the Event + CustomRecapTemplate (+ all CustomField rows)
+          3. Match parsed labels → CustomField via normalize + fuzzy
+          4. Create the CustomRecap shell + CustomFieldValue rows for
+             every matched, non-empty value
+          5. Return the recap + a per-field stats report so the admin
+             can see exactly what landed where (and what didn't).
+        """
+        import base64
+
+        from recaps.connecteam import parse_pdf_bytes, match_fields
+
+        user = info.context.request.user
+
+        try:
+            event_id = resolve_id_to_int(input.event_id)
+            event = await sync_to_async(
+                Event.objects.select_related("tenant").get
+            )(id=event_id)
+        except (Event.DoesNotExist, TypeError, ValueError, GraphQLError):
+            return build_mutation_response(
+                types.ImportConnecteamRecapPdfResponse,
+                success=False,
+                message="Event not found.",
+                input_obj=input,
+            )
+
+        try:
+            template_id = resolve_id_to_int(input.custom_recap_template_id)
+            template = await sync_to_async(
+                models.CustomRecapTemplate.objects.get
+            )(id=template_id)
+        except (
+            models.CustomRecapTemplate.DoesNotExist,
+            TypeError,
+            ValueError,
+            GraphQLError,
+        ):
+            return build_mutation_response(
+                types.ImportConnecteamRecapPdfResponse,
+                success=False,
+                message="Custom recap template not found.",
+                input_obj=input,
+            )
+
+        if template.tenant_id != event.tenant_id:
+            return build_mutation_response(
+                types.ImportConnecteamRecapPdfResponse,
+                success=False,
+                message="Template does not belong to the event tenant.",
+                input_obj=input,
+            )
+
+        try:
+            pdf_bytes = base64.b64decode(input.pdf_base64, validate=True)
+        except Exception:
+            return build_mutation_response(
+                types.ImportConnecteamRecapPdfResponse,
+                success=False,
+                message="pdf_base64 is not valid base64.",
+                input_obj=input,
+            )
+
+        try:
+            parsed = await sync_to_async(parse_pdf_bytes)(pdf_bytes)
+        except Exception as e:
+            logging.getLogger(__name__).exception(
+                "connecteam-import: PDF parse failed event_id=%s", event.id,
+            )
+            return build_mutation_response(
+                types.ImportConnecteamRecapPdfResponse,
+                success=False,
+                message=f"Couldn't read PDF: {e}",
+                input_obj=input,
+            )
+
+        if not parsed.raw_pairs:
+            # Diagnostic: show the first ~200 chars of what pypdf
+            # actually extracted, so the admin (and we, debugging
+            # later) can tell whether the PDF was empty, image-only,
+            # or just a layout the parser doesn't know yet.
+            total_text = "\n".join(parsed.page_texts)
+            preview = total_text[:200].replace("\n", " ⏎ ").strip()
+            text_len = len(total_text)
+            page_count = len(parsed.page_texts)
+            image_count = len(parsed.images)
+            return build_mutation_response(
+                types.ImportConnecteamRecapPdfResponse,
+                success=False,
+                message=(
+                    f"No labeled fields found in PDF "
+                    f"(pages={page_count}, text={text_len}c, "
+                    f"images={image_count}). The parser looks for "
+                    f"'Label::' or 'Label:' pairs. Extracted text "
+                    f"started with: {preview!r}"
+                ),
+                input_obj=input,
+            )
+
+        custom_fields = await sync_to_async(list)(
+            models.CustomField.objects.filter(custom_recap_template=template)
+            .select_related("custom_field_type", "recap_section")
+        )
+
+        match_results = match_fields(parsed, custom_fields)
+
+        # Default name "Imported from Connecteam · <event date>"
+        name = (input.name or "").strip()
+        if not name:
+            stamp = django_timezone.now().strftime("%Y-%m-%d")
+            name = f"Imported from Connecteam · {stamp}"
+
+        def _create() -> models.CustomRecap:
+            from django.core.files.base import ContentFile
+
+            with transaction.atomic():
+                recap = models.CustomRecap.objects.create(
+                    name=name,
+                    event=event,
+                    tenant=event.tenant,
+                    custom_recap_template=template,
+                    created_by=user,
+                    submitted_at=django_timezone.now(),
+                )
+                for mr in match_results:
+                    if mr.field_id is None:
+                        continue
+                    if not mr.pdf_value:
+                        continue
+                    models.CustomFieldValue.objects.create(
+                        custom_recap=recap,
+                        custom_field_id=mr.field_id,
+                        value=mr.pdf_value,
+                        created_by=user,
+                    )
+
+                # Stash the source PDF as a CustomRecapFile so the
+                # admin can audit / re-download the original from the
+                # recap view. Without this, the PDF the user uploaded
+                # is gone the moment the mutation responds — only the
+                # extracted values remain.
+                #
+                # File-recap-category is intentionally NOT set —
+                # Kyle's team wants imported files to render as one
+                # flat gallery, not grouped by category (PR #543
+                # added grouping; this reverts that on Kyle's
+                # explicit ask).
+                try:
+                    pdf_filetype, _ = FileType.objects.get_or_create(
+                        name="pdf",
+                    )
+                    source_file = models.CustomRecapFile(
+                        custom_recap=recap,
+                        file_type=pdf_filetype,
+                        name="Connecteam source PDF",
+                        approved=False,
+                        created_by=user,
+                    )
+                    source_file.url.save(
+                        f"connecteam-source-{recap.uuid}.pdf",
+                        ContentFile(pdf_bytes),
+                        save=False,
+                    )
+                    source_file.save()
+                except Exception:
+                    # Non-fatal — the recap itself was created
+                    # successfully. Audit-trail file is nice-to-have.
+                    logging.getLogger(__name__).exception(
+                        "connecteam-import: source PDF attach failed "
+                        "recap_id=%s", recap.id,
+                    )
+
+                # Extract embedded images from the PDF (sampling photos,
+                # table-setup pics, in-stock product, receipt, etc.)
+                # and attach each as a CustomRecapFile. Without this
+                # step, Kyle's team has to manually re-upload every
+                # photo even after a successful field-text import.
+                #
+                # Kyle's call: imported photos render as one flat
+                # gallery — no FileRecapCategory tagging. The
+                # preceding-label hint still drives the per-file
+                # `name` so admins can tell receipt-vs-sampling at
+                # a glance, but the recap view doesn't split them
+                # into <details> sections anymore.
+                try:
+                    image_filetype, _ = FileType.objects.get_or_create(
+                        name="image",
+                    )
+                    for parsed_img in parsed.images:
+                        # Skip obvious zero-byte / placeholder entries.
+                        if not parsed_img.bytes_:
+                            continue
+                        if len(parsed_img.bytes_) < 1024:
+                            # Sub-1KB blobs are almost always icons,
+                            # logos, or rendering artifacts — not the
+                            # full-size sampling photos we want.
+                            continue
+                        # Name carries the preceding-label hint so the
+                        # admin can tell receipt from sampling photo
+                        # at a glance, even though the gallery is flat.
+                        nice_name = (
+                            parsed_img.preceding_label
+                            or f"PDF page {parsed_img.page_index + 1}"
+                        )
+                        file_row = models.CustomRecapFile(
+                            custom_recap=recap,
+                            file_type=image_filetype,
+                            name=nice_name,
+                            approved=False,
+                            created_by=user,
+                        )
+                        file_row.url.save(
+                            (
+                                f"connecteam-img-{recap.uuid}"
+                                f"-p{parsed_img.page_index}"
+                                f"-i{parsed_img.image_index}"
+                                f"{parsed_img.extension}"
+                            ),
+                            ContentFile(parsed_img.bytes_),
+                            save=False,
+                        )
+                        file_row.save()
+                except Exception:
+                    logging.getLogger(__name__).exception(
+                        "connecteam-import: image attach failed "
+                        "recap_id=%s", recap.id,
+                    )
+
+                return recap
+
+        try:
+            recap = await sync_to_async(_create)()
+        except Exception as e:
+            logging.getLogger(__name__).exception(
+                "connecteam-import: DB write failed event_id=%s", event.id,
+            )
+            return build_mutation_response(
+                types.ImportConnecteamRecapPdfResponse,
+                success=False,
+                message=f"Couldn't create draft recap: {e}",
+                input_obj=input,
+            )
+
+        matched = sum(1 for mr in match_results if mr.field_id and mr.pdf_value)
+        unmatched = sum(1 for mr in match_results if not mr.field_id)
+        stats = [
+            types.ImportConnecteamRecapPdfStat(
+                pdf_label=mr.pdf_label,
+                pdf_value=mr.pdf_value,
+                field_name=mr.field_name,
+                field_id=strawberry.ID(str(mr.field_id)) if mr.field_id else None,
+                score=mr.score,
+                skipped_reason=mr.skipped_reason,
+            )
+            for mr in match_results
+        ]
+        return build_mutation_response(
+            types.ImportConnecteamRecapPdfResponse,
+            success=True,
+            message=(
+                f"Drafted recap from PDF: {matched} field(s) imported, "
+                f"{unmatched} unmatched."
+            ),
+            input_obj=input,
+            custom_recap=recap,
+            matched_count=matched,
+            unmatched_count=unmatched,
+            stats=stats,
+        )
 
     @relay.mutation(permission_classes=[StrictIsAuthenticated])
     async def create_custom_recap_mobile(
@@ -3742,6 +4516,126 @@ class RecapMutations:
             )
 
     @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def email_campaign_report(
+        self,
+        info: strawberry.Info,
+        input: inputs.EmailCampaignReportInput,
+    ) -> types.RecapExportResponse:
+        """Generate the campaign-report PDF + email it as an
+        attachment to the supplied recipients.
+
+        Same recap selection + caps as `generateCampaignReportPdf`.
+        Cover-letter `message` is optional. Returns success/error
+        message; the response file_url field is left null (the PDF
+        lives in the recipient's inbox, not GCS).
+        """
+        import re
+        from recaps.envelopes import CampaignReportMailer
+
+        try:
+            service = RecapMutationService.with_input(input)
+            await service.set_user(info)
+
+            raw_recipients = list(input.recipients or [])
+            if not raw_recipients:
+                raise GraphQLError("At least one recipient is required.")
+            # Light email-format check — Resend will reject bad
+            # addresses anyway but a structured error here is friendlier
+            # than waiting for the API to bounce.
+            email_re = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+            for r in raw_recipients:
+                if not email_re.match((r or "").strip()):
+                    raise GraphQLError(
+                        f"Recipient {r!r} doesn't look like a valid email."
+                    )
+
+            # Build the PDF first — if there are no recaps or the
+            # render fails we bail before composing the email.
+            pdf_bytes, recap_count, total_consumers, title, subtitle, tenant_name = (
+                await service.build_campaign_report_pdf_with_meta(
+                    recap_ids=input.recap_ids,
+                    title=input.title,
+                    subtitle=input.subtitle,
+                )
+            )
+
+            from django.utils import timezone as django_timezone
+            timestamp = django_timezone.now().strftime("%Y%m%d-%H%M")
+            # Filename uses a sanitized title slug so the inbox preview
+            # is readable. Falls back to a generic name if the title
+            # only has non-alphanum characters.
+            safe_title = re.sub(r"[^a-zA-Z0-9]+", "-", title).strip("-").lower()
+            if not safe_title:
+                safe_title = "campaign-report"
+            pdf_filename = f"{safe_title}-{timestamp}.pdf"
+
+            mailer = CampaignReportMailer(
+                recipients=raw_recipients,
+                campaign_title=title,
+                campaign_subtitle=subtitle,
+                cover_message=input.message,
+                recap_count=recap_count,
+                total_consumers=total_consumers,
+                sender_tenant_name=tenant_name,
+                pdf_bytes=pdf_bytes,
+                pdf_filename=pdf_filename,
+            )
+            # send_async_now: don't wait for the RQ worker (no Redis
+            # on Cloud Run) but also don't fire-and-forget — the
+            # caller wants to know if the send actually queued.
+            await mailer.send_async_now()
+
+            return build_mutation_response(
+                types.RecapExportResponse,
+                success=True,
+                message=(
+                    f"Sent {recap_count}-recap report to "
+                    f"{len(raw_recipients)} recipient"
+                    f"{'s' if len(raw_recipients) != 1 else ''}."
+                ),
+                input_obj=input,
+                file_url=None,
+            )
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.RecapExportResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def generate_campaign_report_pdf(
+        self,
+        info: strawberry.Info,
+        input: inputs.GenerateCampaignReportPdfInput,
+    ) -> types.RecapExportResponse:
+        """Bundle N recaps into one PDF deliverable for a client.
+
+        Returns the public GCS URL on success — front-end opens it in
+        a new tab (same pattern as the per-recap PDF). Single PDF, no
+        attached RecapFile row, no auto-emailing.
+        """
+        try:
+            service = RecapMutationService.with_input(input)
+            await service.set_user(info)
+            file_url = await service.generate_campaign_report_pdf()
+            return build_mutation_response(
+                types.RecapExportResponse,
+                success=True,
+                message="Campaign report generated.",
+                input_obj=input,
+                file_url=file_url,
+            )
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.RecapExportResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
     async def generate_custom_recap_pdf(
         self,
         info: strawberry.Info,
@@ -3762,6 +4656,238 @@ class RecapMutations:
         except GraphQLError as e:
             return build_mutation_response(
                 types.CustomRecapFileDetailResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def reassign_recap_event(
+        self,
+        info: strawberry.Info,
+        input: inputs.ReassignRecapEventInput,
+    ) -> types.RecapDetailResponse:
+        """Move a recap from one Event to another within the same
+        tenant. Fixes wrong-event mis-links (BA picked the wrong shift
+        when filing) without forcing a re-file.
+
+        Both events must belong to the same tenant — this avoids the
+        cross-tenant leak surface and lines up with the implicit
+        invariant elsewhere in the schema (recap.event.tenant matches
+        the caller's tenant).
+
+        Returns the updated recap so the UI can re-render with the
+        new event link in place.
+        """
+        from events import models as e_models
+
+        try:
+            try:
+                recap_pk = resolve_id_to_int(input.recap_id)
+                new_event_pk = resolve_id_to_int(input.event_id)
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Invalid recap_id or event_id.")
+
+            @sync_to_async
+            def _reassign() -> models.Recap:
+                recap = (
+                    models.Recap.objects.select_related("event").filter(pk=recap_pk).first()
+                )
+                if not recap:
+                    raise GraphQLError("Recap not found.")
+                new_event = (
+                    e_models.Event.objects.select_related("tenant")
+                    .filter(pk=new_event_pk)
+                    .first()
+                )
+                if not new_event:
+                    raise GraphQLError("Target event not found.")
+                # Cross-tenant guard: the new event must live in the
+                # same tenant as the recap's current event. We compare
+                # tenant_id rather than tenant objects to avoid an
+                # extra fetch.
+                current_tenant_id = (
+                    recap.event.tenant_id if recap.event_id else None
+                )
+                if (
+                    current_tenant_id is not None
+                    and new_event.tenant_id is not None
+                    and current_tenant_id != new_event.tenant_id
+                ):
+                    raise GraphQLError(
+                        "Cannot move a recap across tenants."
+                    )
+                recap.event = new_event
+                recap.save(update_fields=["event"])
+                return recap
+
+            recap = await _reassign()
+            return build_mutation_response(
+                types.RecapDetailResponse,
+                success=True,
+                message="Recap moved to the selected event.",
+                input_obj=input,
+                recap=recap,
+            )
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.RecapDetailResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def nudge_ambassador_for_recap(
+        self,
+        info: strawberry.Info,
+        input: inputs.NudgeAmbassadorForRecapInput,
+    ) -> types.NudgeRecapResponse:
+        """Push "you still owe a recap" notification to a specific BA
+        on a specific event. Powers the per-row "Nudge" button on the
+        /recaps/missing admin drill-down.
+
+        Sends to every active device on the BA's account. Returns the
+        device count so the UI can show "Nudged on 2 devices" vs
+        "Nudged but BA has no registered devices" (encourages admin to
+        DM them instead).
+
+        No-op (success=False) for AmbassadorEvents that already have
+        a recap — avoids embarrassing nudges to a BA who already
+        filed. Same idempotency guard the recap-nudge cron uses.
+        """
+        from ambassadors.push import send_push_to_user
+        from ambassadors import models as a_models
+        from events import models as e_models
+
+        try:
+            ae_uuid = str(input.ambassador_event_uuid)
+            if not ae_uuid:
+                raise GraphQLError("ambassador_event_uuid is required.")
+
+            @sync_to_async
+            def _fetch():
+                ae = (
+                    a_models.AmbassadorEvent.objects.select_related(
+                        "ambassador__user",
+                        "event",
+                        "event__retailer",
+                    )
+                    .filter(uuid=ae_uuid)
+                    .first()
+                )
+                if not ae:
+                    return (None, None, False)
+                # Idempotency: if a recap already exists for this
+                # event, don't push. The Inbox/Tracker UI will refresh
+                # off the existing recap.
+                already_filed = e_models.Event.objects.filter(
+                    pk=ae.event_id, recaps__isnull=False
+                ).exists()
+                return (ae, ae.ambassador.user if ae.ambassador else None,
+                        already_filed)
+
+            ae, user, already_filed = await _fetch()
+            if not ae:
+                raise GraphQLError("Shift assignment not found.")
+            if not user:
+                raise GraphQLError("Ambassador has no user account.")
+            if already_filed:
+                return build_mutation_response(
+                    types.NudgeRecapResponse,
+                    success=False,
+                    message="Recap already filed — no nudge sent.",
+                    input_obj=input,
+                    devices_notified=0,
+                )
+
+            event = ae.event
+            event_name = (
+                getattr(event, "name", None)
+                or getattr(getattr(event, "retailer", None), "name", None)
+                or "your shift"
+            )
+            title = (input.title or "").strip() or "Don't forget your recap"
+            body = (
+                (input.body or "").strip()
+                or f"Submit your recap for {event_name}"
+            )
+
+            devices_notified = await send_push_to_user(
+                user,
+                title=title,
+                body=body,
+                data={
+                    "screen": "recap",
+                    "eventUuid": str(getattr(event, "uuid", "")),
+                },
+            )
+
+            # Audit log: write a nudge_sent entry on the request that
+            # spawned this event so the timeline panel picks it up.
+            # Best-effort; the nudge itself is the important action.
+            try:
+                req = None
+                if getattr(event, "request_id", None):
+                    req = await sync_to_async(
+                        lambda: e_models.Request.objects.filter(
+                            id=event.request_id
+                        ).first()
+                    )()
+                if req is not None:
+                    ambassador_obj = ae.ambassador
+                    ba_name = (
+                        " ".join(
+                            filter(
+                                None,
+                                [
+                                    getattr(ambassador_obj, "first_name", None),
+                                    getattr(ambassador_obj, "last_name", None),
+                                ],
+                            )
+                        )
+                        or getattr(ambassador_obj, "email", "")
+                        or "BA"
+                    )
+                    # The user calling this mutation is the admin, not
+                    # the ambassador receiving the nudge. Pull from info.
+                    actor = None
+                    try:
+                        actor = info.context.request.user
+                    except Exception:
+                        actor = None
+                    await sync_to_async(
+                        e_models.RequestActivityLog.objects.create
+                    )(
+                        tenant=req.tenant,
+                        request=req,
+                        kind=e_models.RequestActivityLog.KIND_NUDGE_SENT,
+                        actor_user=actor if getattr(actor, "id", None) else None,
+                        summary=f"Nudged {ba_name} for recap",
+                        metadata={
+                            "ba_name": ba_name,
+                            "devices_notified": devices_notified,
+                            "event_uuid": str(getattr(event, "uuid", "")),
+                        },
+                    )
+            except Exception:
+                pass
+
+            return build_mutation_response(
+                types.NudgeRecapResponse,
+                success=True,
+                message=(
+                    f"Nudged on {devices_notified} device"
+                    f"{'s' if devices_notified != 1 else ''}."
+                    if devices_notified > 0
+                    else "Nudge attempted, but the BA has no registered devices."
+                ),
+                input_obj=input,
+                devices_notified=devices_notified,
+            )
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.NudgeRecapResponse,
                 success=False,
                 message=str(e),
                 input_obj=input,

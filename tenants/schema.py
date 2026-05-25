@@ -9,7 +9,7 @@ from gqlauth.user.queries import UserQueries
 from strawberry_django.permissions import IsAuthenticated
 from django.db.models import Q
 from asgiref.sync import sync_to_async
-from utils.gcs import extract_blob_name_from_url, generate_download_url
+from utils.gcs import extract_blob_name_from_url, public_url
 from utils.graphql.permissions import StrictIsAuthenticated
 from strawberry.relay import Node
 
@@ -21,6 +21,7 @@ from .mutations import (
     ClientsCustomRegister,
     SparkCustomRegister,
     SparkTenantMutations,
+    LinkedSheetMutations,
     TenantThemeMutations,
     SparkUserMutations,
     AmbassadorUserMutations,
@@ -46,17 +47,29 @@ class CustomUserType(Node):
     last_name: strawberry.auto
     role: RoleType
 
-    @strawberry.field
-    def image(self) -> str | None:
-        """Return a signed URL for the user image if it exists."""
-        if not self.image:
-            return None
+    @strawberry.field(name="image")
+    def image_url(self) -> str | None:
+        """Return the public URL for the user image if any. Aliased
+        via name= so the resolver doesn't shadow self.image.
 
-        blob_name = extract_blob_name_from_url(self.image.name)
-        if not blob_name:
+        __dict__-first with safe getattr fallback. Bare __dict__-only
+        broke avatars on optimizer-deferred queries; bare getattr was
+        the original sync-crash hazard.
+        """
+        field_file = self.__dict__.get("image")
+        if field_file is None:
+            try:
+                field_file = getattr(self, "image", None)
+            except Exception:
+                return None
+        if not field_file:
             return None
-
-        return generate_download_url(blob_name)
+        try:
+            blob = field_file.name
+        except Exception:
+            blob = str(field_file)
+        blob_name = extract_blob_name_from_url(blob)
+        return public_url(blob_name)
 
 
 @strawberry.type
@@ -132,12 +145,75 @@ class TenantThemingQuery:
         return theme
 
 
+@strawberry.type
+class ServerInfoType:
+    """Lightweight build/runtime snapshot — what's running right now.
+
+    Used to verify a deploy without tailing Cloud Run logs. Exposed
+    unauthenticated (matches `healthcheck`); contains no secrets.
+    """
+
+    # ISO-8601 timestamp of the server's now() at request time.
+    server_time: str
+    # Cloud Build / git SHA of the running revision. Comes from the
+    # ``GIT_SHA`` env var if set; falls back to "dev".
+    git_sha: str
+    # Cloud Run revision tag (e.g. "spark-api-new-00035-nmp"). Falls
+    # back to "local" outside Cloud Run.
+    revision: str
+    # True when the default database connection responds to SELECT 1.
+    database_ok: bool
+
+
+def _check_database_ok_sync() -> bool:
+    """Run a SELECT 1 round-trip on the default connection.
+
+    Pulled out so it can be wrapped by ``sync_to_async`` — Django's
+    ``connection.cursor()`` does sync I/O, and Strawberry's mobile/spark
+    schemas execute resolvers on the asyncio loop. Calling sync I/O
+    directly there raises ``SynchronousOnlyOperation``, which the old
+    catch-all blanket-converted into ``database_ok=False`` — making the
+    probe always lie. Now the sync work runs on a worker thread.
+    """
+    from django.db import connection
+
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT 1")
+            return bool(cursor.fetchone())
+    except Exception:
+        return False
+
+
+async def _build_server_info() -> ServerInfoType:
+    """Snapshot the running container — never raises.
+
+    Async so the DB probe can be awaited via ``sync_to_async``. All
+    callers (Spark, Client, Ambassador, Mobile schemas) await this.
+    """
+    import os
+    from datetime import datetime, timezone as _tz
+
+    db_ok = await sync_to_async(_check_database_ok_sync, thread_sensitive=False)()
+
+    return ServerInfoType(
+        server_time=datetime.now(_tz.utc).isoformat(),
+        git_sha=os.environ.get("GIT_SHA", "dev"),
+        revision=os.environ.get("K_REVISION", "local"),
+        database_ok=db_ok,
+    )
+
+
 # Spark Schema
 @strawberry.type()
 class QuerySpark(GoogleCalendarQueries, TenantThemingQuery):
     @strawberry.field
     def healthcheck(self) -> str:
         return "ok"
+
+    @strawberry.field
+    async def server_info(self) -> ServerInfoType:
+        return await _build_server_info()
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     def me(self, info) -> CustomUserType:
@@ -356,6 +432,10 @@ class QueryAmbassadors(GoogleCalendarQueries, TenantThemingQuery):
         return "ok"
 
     @strawberry.field
+    async def server_info(self) -> ServerInfoType:
+        return await _build_server_info()
+
+    @strawberry.field
     def me(self, info) -> CustomUserType:
         return info.context.request.user
 
@@ -379,6 +459,10 @@ class QueryClients(GoogleCalendarQueries, TenantThemingQuery):
     @strawberry.field
     def healthcheck(self) -> str:
         return "ok"
+
+    @strawberry.field
+    async def server_info(self) -> ServerInfoType:
+        return await _build_server_info()
 
     @strawberry.field
     async def tenant_public(
@@ -559,15 +643,24 @@ class QueryClients(GoogleCalendarQueries, TenantThemingQuery):
     ) -> CountableConnection[TenantType]:
         user = info.context.request.user
 
-        filter_dict = {
-            "tenanted_users__is_active": True,
-        }
-        if user_uuid:
-            filter_dict["tenanted_users__user__uuid"] = user_uuid
+        # Staff / superusers see every tenant regardless of TenantedUser
+        # membership. TenantGuard's "auto-pick a tenant on first sign-in"
+        # flow can't land anywhere if the platform owner has no explicit
+        # TenantedUser row — they'd see "No companies associated with this
+        # account" even though they manage all of them. Non-staff users
+        # are still scoped by tenanted_users membership.
+        if user.is_staff or user.is_superuser:
+            queryset = Tenant.objects.all()
         else:
-            filter_dict["tenanted_users__user"] = user
+            filter_dict = {
+                "tenanted_users__is_active": True,
+            }
+            if user_uuid:
+                filter_dict["tenanted_users__user__uuid"] = user_uuid
+            else:
+                filter_dict["tenanted_users__user"] = user
 
-        queryset = Tenant.objects.filter(**filter_dict)
+            queryset = Tenant.objects.filter(**filter_dict)
 
         if filters:
             if filters.name:
@@ -598,6 +691,10 @@ class MutationClients(
     SparkUserMutations,
     GoogleCalendarMutations,
     TenantThemeMutations,
+    # Linked-sheet management — admin frontend (which uses the clients
+    # GraphQL endpoint) needs to call setLinkedSheet. Same mixin is on
+    # SparkTenantMutations for the spark schema, so both surfaces work.
+    LinkedSheetMutations,
 ):
     verify_token = mutations.VerifyToken.field
     token_auth = mutations.ObtainJSONWebToken.field
@@ -612,6 +709,10 @@ class QueryMobile(TenantThemingQuery):
     @strawberry.field
     def healthcheck(self) -> str:
         return "ok"
+
+    @strawberry.field
+    async def server_info(self) -> ServerInfoType:
+        return await _build_server_info()
 
     @strawberry.field
     def me(self, info) -> CustomUserType:

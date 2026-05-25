@@ -352,6 +352,12 @@ class Request(models.Model):
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     name = models.CharField(max_length=255)
     date = models.DateTimeField(null=True)
+    # Soft-delete timestamp. Null = live; non-null = deleted at this time.
+    # All list/detail queries filter to deleted_at IS NULL so the request
+    # disappears from the UI; the row stays in the DB so the activity log
+    # and any FK-linked events / recaps survive intact. An admin could
+    # restore by setting this back to NULL.
+    deleted_at = models.DateTimeField(null=True, blank=True, db_index=True)
     start_time = models.DateTimeField(null=True, db_index=True)
     end_time = models.DateTimeField(null=True, blank=True)
     address = models.TextField(null=False)
@@ -1009,3 +1015,99 @@ class NotificationGroupRole(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
     updated_at = models.DateTimeField(auto_now=True)
+
+
+# ---------------------------------------------------------------------------
+# RequestActivityLog
+# ---------------------------------------------------------------------------
+#
+# Append-only audit trail of every meaningful change to a Request. Powers
+# the activity timeline panel on the front-end request detail page so
+# kyle / RMMs can answer "who did what when" without going to the DB.
+#
+# Design choices:
+#   - Append-only by convention (no update/delete UI). If a row needs
+#     correcting, log a compensating entry instead — that keeps the
+#     audit story intact.
+#   - actor_user is nullable: system-driven events (e.g. recap nudge
+#     fires from a cron) have no human user.
+#   - kind is a CharField + choices instead of an enum FK so we don't
+#     need a separate seed migration each time we add a new event type.
+#   - metadata is a flexible JSON blob for kind-specific context (e.g.
+#     "from_status" / "to_status" on a status-change, "ba_name" on an
+#     invite). Keeps the table schema stable as new event types ship.
+#   - Indexed on (tenant, request, -created_at) for the timeline read
+#     pattern (latest first, scoped to one request).
+class RequestActivityLog(models.Model):
+    KIND_CREATED = "created"
+    KIND_UPDATED = "updated"
+    KIND_STATUS_CHANGED = "status_changed"
+    KIND_BA_INVITED = "ba_invited"
+    KIND_BA_ACCEPTED = "ba_accepted"
+    KIND_BA_DECLINED = "ba_declined"
+    KIND_BA_REMOVED = "ba_removed"
+    KIND_RECAP_FILED = "recap_filed"
+    KIND_CLONED_FROM = "cloned_from"
+    KIND_NOTE_ADDED = "note_added"
+    KIND_NUDGE_SENT = "nudge_sent"
+
+    KIND_CHOICES = [
+        (KIND_CREATED, "Created"),
+        (KIND_UPDATED, "Updated"),
+        (KIND_STATUS_CHANGED, "Status changed"),
+        (KIND_BA_INVITED, "BA invited"),
+        (KIND_BA_ACCEPTED, "BA accepted"),
+        (KIND_BA_DECLINED, "BA declined"),
+        (KIND_BA_REMOVED, "BA removed"),
+        (KIND_RECAP_FILED, "Recap filed"),
+        (KIND_CLONED_FROM, "Cloned from another request"),
+        (KIND_NOTE_ADDED, "Note added"),
+        (KIND_NUDGE_SENT, "Nudge sent"),
+    ]
+
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+
+    tenant = models.ForeignKey(
+        Tenant,
+        on_delete=models.CASCADE,
+        related_name="request_activity_logs",
+    )
+    request = models.ForeignKey(
+        "Request",
+        on_delete=models.CASCADE,
+        related_name="activity_logs",
+    )
+    kind = models.CharField(max_length=32, choices=KIND_CHOICES)
+
+    actor_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="request_activity_logs",
+    )
+    # Free-form summary, e.g. "Status: pending → approved". Optional —
+    # the front-end can also render from `kind` + `metadata` directly
+    # for finer styling.
+    summary = models.CharField(max_length=512, blank=True, default="")
+    # Kind-specific context. Examples:
+    #   status_changed: {"from": "pending", "to": "approved"}
+    #   ba_invited:     {"ambassador_uuid": "...", "ba_name": "..."}
+    #   cloned_from:    {"source_request_uuid": "..."}
+    metadata = models.JSONField(default=dict, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ("-created_at",)
+        indexes = [
+            models.Index(
+                fields=["tenant", "request", "-created_at"],
+                name="ev_actlog_t_r_ctd_idx",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        actor = self.actor_user.email if self.actor_user_id else "system"
+        return f"[{self.kind}] {actor} · request={self.request_id}"

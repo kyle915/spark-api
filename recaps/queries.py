@@ -1,3 +1,5 @@
+from typing import List
+
 import strawberry
 from asgiref.sync import sync_to_async
 from graphql import GraphQLError
@@ -1055,6 +1057,31 @@ class CustomRecapQueriesService(SparkGraphQLMixin):
             raise GraphQLError("Custom recap not found.")
 
 
+# ---------------------------------------------------------------------------
+# Tenant scoping helper — used to enforce per-client data isolation on the
+# recap-side resolvers. The events/requests resolvers already do this via
+# `resolve_tenant_id` on their service; recap resolvers historically bypassed
+# the same pattern, which let a client user with the right token pass a
+# different tenant_id (or omit it) and read cross-tenant recaps. This helper
+# closes that gap by forcing the tenant_id for client-role users to their own
+# tenant, regardless of what came in via filters.tenant_id.
+# ---------------------------------------------------------------------------
+async def _enforce_client_tenant(
+    service: SparkGraphQLMixin,
+    info: strawberry.Info,
+    filters_tenant_id: int | None,
+) -> int | None:
+    user = await service.get_user(info)
+    role_slug = service.get_role_slug(user)
+    if role_slug == "client":
+        # Reuse the tenant resolver from the shared mixin. It validates that
+        # the user actually has access to the requested tenant; passing
+        # tenant_id=None falls back to the user's default tenant.
+        tenant = await service.get_user_tenant(info, tenant_id=filters_tenant_id)
+        return tenant.id
+    return filters_tenant_id
+
+
 @strawberry.type
 class RecapQueries:
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
@@ -1072,10 +1099,16 @@ class RecapQueries:
         service = RecapQueriesService()
         user = await service.get_user(info)
 
-        tenant_id: int | None = (
+        # Client users see only their own tenant — even if filters.tenant_id
+        # is unset or points elsewhere. Spark admins / ambassadors keep the
+        # filters.tenant_id pass-through behavior.
+        filters_tenant_id_raw: int | None = (
             resolve_id_to_int(filters.tenant_id)
             if filters and filters.tenant_id not in (None, "")
             else None
+        )
+        tenant_id = await _enforce_client_tenant(
+            service, info, filters_tenant_id_raw
         )
         event_id: int | None = (
             resolve_id_to_int(filters.event_id)
@@ -1162,11 +1195,25 @@ class RecapQueries:
     async def recap(
         self, info: strawberry.Info, uuid: strawberry.ID
     ) -> types.Recap | None:
-        """Get a single recap by UUID."""
+        """Get a single recap by UUID.
+
+        For client-role users we look up the recap and then verify the
+        recap's tenant matches the user's. Cross-tenant uuids return None
+        instead of raising — keeps the resolver indistinguishable from a
+        "not found" lookup so we don't leak the existence of cross-tenant
+        records.
+        """
         try:
             service = RecapQueriesService()
             user = await service.get_user(info)
             recap = await service.get_record_by_uuid(str(uuid))
+            if recap is None:
+                return None
+            if service.get_role_slug(user) == "client":
+                # tenant_id is a direct FK on Recap — no extra query needed.
+                user_tenant = await service.get_user_tenant(info)
+                if recap.tenant_id != user_tenant.id:
+                    return None
             return recap
         except GraphQLError:
             return None
@@ -1182,14 +1229,21 @@ class RecapQueries:
         q: str | None = None,
         filters: CustomRecapFiltersInput | None = None,
     ) -> CountableConnection[types.CustomRecap]:
-        """Get custom recaps using Relay pagination."""
+        """Get custom recaps using Relay pagination.
+
+        Client-role users are forced to their own tenant — same scoping
+        pattern as the recaps resolver above.
+        """
         service = CustomRecapQueriesService()
         await service.get_user(info)
 
-        resolved_tenant_id = (
+        filters_tenant_id_raw = (
             resolve_id_to_int(filters.tenant_id)
             if filters and filters.tenant_id not in (None, "")
             else None
+        )
+        resolved_tenant_id = await _enforce_client_tenant(
+            service, info, filters_tenant_id_raw
         )
         resolved_event_id = (
             resolve_id_to_int(filters.event_id)
@@ -1288,14 +1342,25 @@ class RecapQueries:
         id: strawberry.ID | None = None,
         uuid: strawberry.ID | None = None,
     ) -> types.CustomRecap | None:
-        """Get a single custom recap by id or UUID."""
+        """Get a single custom recap by id or UUID.
+
+        Client users only get the record back if it belongs to their tenant.
+        Cross-tenant lookups silently return None (matches "not found" so
+        we don't leak the existence of other-tenant records).
+        """
         try:
             service = CustomRecapQueriesService()
-            await service.get_user(info)
+            user = await service.get_user(info)
             record = await service.get_record(
                 id=int(id) if id not in (None, "") else None,
                 uuid=str(uuid) if uuid not in (None, "") else None,
             )
+            if record is None:
+                return None
+            if service.get_role_slug(user) == "client":
+                user_tenant = await service.get_user_tenant(info)
+                if record.tenant_id != user_tenant.id:
+                    return None
             return record
         except GraphQLError:
             return None
@@ -1557,6 +1622,218 @@ class RecapQueries:
             return record
         except GraphQLError:
             return None
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def executive_summary(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID | None = None,
+        window_days: int = 7,
+    ) -> types.ExecutiveSummaryType | None:
+        """Top-line tenant rollup for the dashboard "Pace" widget.
+
+        Same aggregator the weekly executive-summary email uses
+        (`digest.exec_services.build_executive_summary`). Live query
+        means kyle can refresh mid-week and see the delta without
+        waiting for Monday's email.
+
+        Returns null when no tenant is in scope — the caller should
+        either pass `tenantId` explicitly or rely on the implicit
+        tenant from their session (TODO: wire tenant context once
+        we have it on `info.context`).
+        """
+        from tenants.models import Tenant
+        from digest.exec_services import build_executive_summary
+
+        if tenant_id in (None, ""):
+            return None
+        try:
+            resolved_id = resolve_id_to_int(tenant_id)
+        except (TypeError, ValueError, GraphQLError):
+            raise GraphQLError("Invalid tenant id.")
+
+        days = max(1, min(int(window_days or 7), 365))
+
+        def _build() -> types.ExecutiveSummaryType | None:
+            try:
+                tenant = Tenant.objects.get(pk=resolved_id)
+            except Tenant.DoesNotExist:
+                return None
+            summary = build_executive_summary(tenant, window_days=days)
+            return types.ExecutiveSummaryType(
+                tenant_id=strawberry.ID(str(summary.tenant_id)),
+                tenant_name=summary.tenant_name,
+                period_label=summary.period_label,
+                recap_count=summary.recap_count,
+                consumer_reach=summary.consumer_reach,
+                samples_distributed=summary.samples_distributed,
+                top_stores=[
+                    types.ExecutiveSummaryRow(
+                        label=r.label,
+                        primary_metric=r.primary_metric,
+                        secondary_metric=r.secondary_metric,
+                    )
+                    for r in summary.top_stores
+                ],
+                top_bas=[
+                    types.ExecutiveSummaryRow(
+                        label=r.label,
+                        primary_metric=r.primary_metric,
+                        secondary_metric=r.secondary_metric,
+                    )
+                    for r in summary.top_bas
+                ],
+                recap_count_delta=summary.recap_count_delta,
+                consumer_reach_delta=summary.consumer_reach_delta,
+                recap_count_delta_chip=summary.delta_chip("recaps"),
+                consumer_reach_delta_chip=summary.delta_chip("reach"),
+            )
+
+        return await sync_to_async(_build, thread_sensitive=True)()
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def missing_recap_events(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID | None = None,
+        lookback_days: int = 30,
+    ) -> List[types.MissingRecapEventType]:
+        """Events that already wrapped (end_time < now) but have no
+        recap row attached. Drives the /recaps/missing admin page —
+        the one-stop list for "what does my team still owe me?"
+
+        `lookback_days` caps how far back we go so the query stays
+        cheap on long-running tenants. Default 30 days; bump for
+        quarterly audits. Hard ceiling of 365 days to keep the
+        select sane.
+
+        Returns one row per Event, with all assigned BAs in
+        `assigned_ambassadors` so the UI can offer a per-row
+        "Nudge BA" / "File for them" action without an N+1 round
+        trip per ambassador.
+        """
+        from datetime import timedelta
+        from django.utils import timezone
+        from events import models as event_models
+        from ambassadors import models as a_models
+
+        days = max(1, min(int(lookback_days or 30), 365))
+        now = timezone.now()
+        cutoff = now - timedelta(days=days)
+
+        resolved_tenant_id: int | None = None
+        if tenant_id not in (None, ""):
+            try:
+                resolved_tenant_id = resolve_id_to_int(tenant_id)
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Invalid tenant id.")
+
+        def _fetch() -> List[types.MissingRecapEventType]:
+            qs = (
+                event_models.Event.objects.select_related(
+                    "retailer",
+                    "state",
+                    "tenant",
+                    "request",
+                )
+                .filter(
+                    end_time__lt=now,
+                    end_time__gte=cutoff,
+                )
+                # An event is missing a recap if neither the standard
+                # `recaps` nor the tenant-custom `custom_recap` tables
+                # have a row. Borjomi-style tenants file via the latter,
+                # and without this check every Borjomi event with a
+                # filed customRecap was still flagged as missing.
+                .filter(recaps__isnull=True, custom_recap__isnull=True)
+                .order_by("-end_time")
+            )
+            if resolved_tenant_id is not None:
+                qs = qs.filter(tenant_id=resolved_tenant_id)
+
+            # Prefetch ambassador assignments so the per-event loop
+            # below doesn't do N+1. Event → AmbassadorEvent reverse
+            # accessor is `ambassadors_events` (note: plural at the
+            # start) — `ambassador_events` was a typo that crashed
+            # the /recaps/missing page with a prefetch_related error.
+            qs = qs.prefetch_related(
+                "ambassadors_events__ambassador__user",
+            )
+
+            rows: List[types.MissingRecapEventType] = []
+            for ev in qs[:200]:  # safety cap — UI paginates client-side
+                hours_overdue: int | None = None
+                end = getattr(ev, "end_time", None) or getattr(ev, "start_time", None)
+                if end:
+                    delta = now - end
+                    hours_overdue = max(0, int(delta.total_seconds() // 3600))
+
+                ambassadors: List[types.MissingRecapAmbassadorInfo] = []
+                for ae in ev.ambassadors_events.all():
+                    amb = getattr(ae, "ambassador", None)
+                    user = getattr(amb, "user", None) if amb else None
+                    name = (
+                        " ".join(
+                            filter(
+                                None,
+                                [
+                                    getattr(user, "first_name", "") or "",
+                                    getattr(user, "last_name", "") or "",
+                                ],
+                            )
+                        ).strip()
+                        or getattr(user, "email", None)
+                        or "(unnamed)"
+                    )
+                    ambassadors.append(
+                        types.MissingRecapAmbassadorInfo(
+                            ambassador_event_uuid=strawberry.ID(str(ae.uuid)),
+                            ambassador_uuid=strawberry.ID(
+                                str(getattr(amb, "uuid", "")) if amb else ""
+                            ),
+                            name=name,
+                            email=getattr(user, "email", None) if user else None,
+                            is_approved=bool(getattr(ae, "is_approved", False)),
+                        )
+                    )
+
+                venue = (
+                    getattr(ev, "name", None)
+                    or getattr(getattr(ev, "retailer", None), "name", None)
+                )
+                state_code = getattr(getattr(ev, "state", None), "code", None)
+                req_uuid = getattr(getattr(ev, "request", None), "uuid", None)
+
+                rows.append(
+                    types.MissingRecapEventType(
+                        event_uuid=strawberry.ID(str(ev.uuid)),
+                        event_name=venue or "(shift)",
+                        venue=venue,
+                        address=getattr(ev, "address", None),
+                        state_code=state_code,
+                        date=(
+                            ev.date.isoformat() if getattr(ev, "date", None) else None
+                        ),
+                        start_time=(
+                            ev.start_time.isoformat()
+                            if getattr(ev, "start_time", None)
+                            else None
+                        ),
+                        end_time=(
+                            ev.end_time.isoformat()
+                            if getattr(ev, "end_time", None)
+                            else None
+                        ),
+                        hours_overdue=hours_overdue,
+                        request_uuid=(
+                            strawberry.ID(str(req_uuid)) if req_uuid else None
+                        ),
+                        assigned_ambassadors=ambassadors,
+                    )
+                )
+            return rows
+
+        return await sync_to_async(_fetch, thread_sensitive=True)()
 
 
 @strawberry.type
@@ -1915,6 +2192,49 @@ class RecapMobileQueries:
             return record
         except GraphQLError:
             return None
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def custom_recap_templates(
+        self,
+        info: strawberry.Info,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+        filters: CustomRecapTemplateFiltersInput | None = None,
+    ) -> CountableConnection[types.CustomRecapTemplate]:
+        """Return CustomRecapTemplate records (mobile).
+
+        The mobile RecapSubmitScreen calls this to pick the right
+        template for the BA's current shift — filtered by event_type
+        of the shift's parent event so the form matches the event the
+        BA's recapping.
+        """
+        service = CustomRecapTemplateQueriesService()
+        await service.get_user(info)
+        resolved_tenant_id = (
+            resolve_id_to_int(filters.tenant_id)
+            if filters and filters.tenant_id not in (None, "")
+            else None
+        )
+        resolved_event_type_id = (
+            resolve_id_to_int(filters.event_type_id)
+            if filters and filters.event_type_id not in (None, "")
+            else None
+        )
+        queryset = service.get_ordered_queryset(
+            tenant_id=resolved_tenant_id,
+            event_type_id=resolved_event_type_id,
+        )
+        return await service.get_connection(
+            tenant_id=resolved_tenant_id,
+            event_type_id=resolved_event_type_id,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+            queryset=queryset,
+        )
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def custom_recap_field_types(

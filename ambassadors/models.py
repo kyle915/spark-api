@@ -941,3 +941,109 @@ class UserGroup(models.Model):
 
     def __str__(self):
         return f"{self.user.username} - {self.group.name}"
+
+
+class PushDevice(models.Model):
+    """A registered Expo push token for a user device.
+
+    A user may have many devices (phone + tablet, multiple installs). The
+    token is unique per install — re-registering with the same token is
+    idempotent (we just bump `updated_at` + the device metadata).
+
+    `is_active` is flipped off when the Expo push relay tells us the
+    token is invalid (DeviceNotRegistered receipt). The mobile client
+    overwrites the row by re-registering on next launch.
+    """
+
+    PLATFORM_CHOICES = (
+        ("ios", "iOS"),
+        ("android", "Android"),
+        ("web", "Web"),
+    )
+
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        null=False,
+        related_name="push_devices",
+    )
+    token = models.CharField(max_length=255, unique=True, db_index=True)
+    platform = models.CharField(max_length=20, choices=PLATFORM_CHOICES)
+    device_name = models.CharField(max_length=255, null=True, blank=True)
+    app_version = models.CharField(max_length=40, null=True, blank=True)
+
+    is_active = models.BooleanField(default=True)
+    last_used_at = models.DateTimeField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["user", "is_active"]),
+        ]
+
+    def __str__(self):
+        return f"{self.user_id}:{self.platform}:{self.token[:12]}…"
+
+
+class LocationPing(models.Model):
+    """A single GPS reading from a BA's mobile app during an active shift.
+
+    The spark-mobile activation tracker pings here every 2 minutes (or
+    on 50m movement, whichever comes first) while the BA is inside the
+    activation window — from clock-in through clock-out + 15 min grace.
+
+    Used by the web admin "Today, on the ground" map to render live BA
+    pins, and by ops to retro-audit whether a BA was actually on-site
+    during the shift.
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+
+    ambassador = models.ForeignKey(
+        Ambassador,
+        on_delete=models.CASCADE,
+        null=False,
+        related_name="location_pings",
+    )
+    event = models.ForeignKey(
+        Event,
+        on_delete=models.CASCADE,
+        null=False,
+        related_name="location_pings",
+    )
+
+    lat = models.FloatField()
+    lng = models.FloatField()
+    accuracy_meters = models.FloatField(null=True, blank=True)
+    # ISO-ish timestamp from the device when the GPS reading was taken.
+    # Separate from created_at (server clock) so we can compute
+    # "freshness" without trusting the server time.
+    recorded_at = models.DateTimeField(db_index=True)
+
+    SOURCE_CHOICES = (
+        ("foreground", "Foreground"),
+        ("background", "Background"),
+        ("clock_in", "Clock-in"),
+        ("clock_out", "Clock-out"),
+    )
+    source = models.CharField(
+        max_length=20, choices=SOURCE_CHOICES, default="background"
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+
+    class Meta:
+        indexes = [
+            # "latest ping per BA in the last N minutes" is the hot query.
+            models.Index(fields=["ambassador", "-recorded_at"]),
+            models.Index(fields=["event", "-recorded_at"]),
+        ]
+
+    def __str__(self):
+        return f"ping {self.ambassador_id}@{self.event_id} {self.recorded_at}"

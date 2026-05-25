@@ -54,6 +54,12 @@ from .types import (
     GroupTypeResponse,
     AmbassadorGroupResponse,
     AddAmbassadorsToGroupResponse,
+    RegisterPushTokenResponse,
+    OAuthSignInResponse,
+    LocationPingResponse,
+    RespondToShiftOfferResponse,
+    InviteAmbassadorToShiftResponse,
+    CancelShiftInviteResponse,
 )
 from . import inputs
 from .services import (
@@ -80,6 +86,10 @@ from .services import (
     UpsertAmbassadorProfileService,
     GroupTypeMutationService,
     AmbassadorGroupMutationService,
+    RegisterPushTokenService,
+    OAuthSignInService,
+    LocationPingService,
+    ShiftOfferService,
     set_ambassador_job_real_amount_from_clock_out,
 )
 from .envelopes import AmbassadorEventApplicationMailer, NotifyApplicationToClientMailer
@@ -219,6 +229,163 @@ class AmbassadorMutations:
 
         return ApplyAmbassadorEventResponse(
             success=True, message="Application successful", application=application
+        )
+
+    @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
+    async def invite_ambassador_to_shift(
+        self,
+        info: strawberry.Info,
+        input: inputs.InviteAmbassadorToShiftInput,
+    ) -> InviteAmbassadorToShiftResponse:
+        """Admin invites a specific BA to a specific event.
+
+        Creates an `AmbassadorEvent` row with `is_approved=False`.
+        The existing post_save signal fans out:
+          - "New shift offered" push to the BA's device
+          - Google Calendar sync if the BA is connected
+        BA can then accept / decline via the mobile shift-offer
+        screen, which flips is_approved=True (accept) or deletes
+        the row (decline).
+
+        Idempotent on (ambassador, event) — re-inviting the same
+        BA returns success=False with a helpful message so admins
+        don't accidentally double-push.
+        """
+        user = info.context.request.user
+
+        try:
+            resolved_ambassador_id = resolve_id_to_int(input.ambassador_id)
+            ambassador = await Ambassador.objects.aget(id=resolved_ambassador_id)
+        except (Ambassador.DoesNotExist, ValueError, TypeError, GraphQLError):
+            return InviteAmbassadorToShiftResponse(
+                success=False,
+                message="Ambassador not found.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        try:
+            resolved_event_id = resolve_id_to_int(input.event_id)
+            event = await Event.objects.select_related("tenant").aget(
+                id=resolved_event_id
+            )
+        except (Event.DoesNotExist, ValueError, TypeError, GraphQLError):
+            return InviteAmbassadorToShiftResponse(
+                success=False,
+                message="Event not found.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        if await AmbassadorEvent.objects.filter(
+            ambassador=ambassador, event=event
+        ).aexists():
+            return InviteAmbassadorToShiftResponse(
+                success=False,
+                message="This BA is already invited to this shift.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        try:
+            ae = await AmbassadorEvent.objects.acreate(
+                ambassador=ambassador,
+                event=event,
+                tenant=event.tenant,
+                is_approved=False,
+                created_by=user,
+                updated_by=user,
+            )
+        except Exception as exc:
+            return InviteAmbassadorToShiftResponse(
+                success=False,
+                message=f"Could not create invite: {exc}",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        # Audit log: write a ba_invited entry on the request that
+        # spawned this event so the activity timeline on the request
+        # detail page picks it up. Best-effort; never raises.
+        try:
+            from asgiref.sync import sync_to_async
+            from events.models import Request, RequestActivityLog
+
+            req = None
+            if getattr(event, "request_id", None):
+                req = await sync_to_async(
+                    lambda: Request.objects.filter(id=event.request_id).first()
+                )()
+            if req is not None:
+                ba_name = (
+                    " ".join(
+                        filter(
+                            None,
+                            [
+                                getattr(ambassador, "first_name", None),
+                                getattr(ambassador, "last_name", None),
+                            ],
+                        )
+                    )
+                    or getattr(ambassador, "email", "")
+                    or "BA"
+                )
+                await sync_to_async(RequestActivityLog.objects.create)(
+                    tenant=event.tenant,
+                    request=req,
+                    kind=RequestActivityLog.KIND_BA_INVITED,
+                    actor_user=user if getattr(user, "id", None) else None,
+                    summary=f"Invited {ba_name}",
+                    metadata={
+                        "ambassador_uuid": str(ambassador.uuid),
+                        "ba_name": ba_name,
+                        "event_uuid": str(event.uuid),
+                    },
+                )
+        except Exception:
+            pass
+
+        return InviteAmbassadorToShiftResponse(
+            success=True,
+            message="Invite sent. The BA has been notified.",
+            client_mutation_id=input.client_mutation_id,
+            ambassador_event_uuid=strawberry.ID(str(ae.uuid)),
+        )
+
+    @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
+    async def cancel_shift_invite(
+        self,
+        info: strawberry.Info,
+        input: inputs.CancelShiftInviteInput,
+    ) -> CancelShiftInviteResponse:
+        """Admin retracts a pending invite or removes an accepted BA
+        from a shift. Deletes the AmbassadorEvent row.
+
+        Symmetric with the BA's decline path. Returns success=False
+        when the row doesn't exist (already declined / never created)
+        rather than raising — front-end can treat as idempotent.
+        """
+        try:
+            ae = await AmbassadorEvent.objects.select_related(
+                "ambassador", "event"
+            ).aget(uuid=str(input.ambassador_event_uuid))
+        except AmbassadorEvent.DoesNotExist:
+            return CancelShiftInviteResponse(
+                success=False,
+                message="Invite not found — may have already been declined.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        try:
+            await ae.adelete()
+        except Exception as exc:  # noqa: BLE001
+            return CancelShiftInviteResponse(
+                success=False,
+                message=f"Could not cancel invite: {exc}",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        return CancelShiftInviteResponse(
+            success=True,
+            message="Invite cancelled.",
+            client_mutation_id=input.client_mutation_id,
+            ambassador_event_uuid=input.ambassador_event_uuid,
         )
 
     @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
@@ -490,6 +657,191 @@ class AmbassadorMobileMutations:
         info: strawberry.Info,
     ) -> DisableAmbassadorResponse:
         return await DisableAmbassadorService.disable_mobile(info)
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def register_push_token(
+        self,
+        info: strawberry.Info,
+        input: inputs.RegisterPushTokenInput,
+    ) -> RegisterPushTokenResponse:
+        return await RegisterPushTokenService.register(input, info)
+
+    # NB: no permission class — sign-in is the path to becoming
+    # authenticated, so requiring auth would be a chicken-and-egg.
+    @relay.mutation
+    async def apple_sign_in(
+        self,
+        info: strawberry.Info,
+        input: inputs.AppleSignInInput,
+    ) -> OAuthSignInResponse:
+        return await OAuthSignInService.sign_in_with_apple(input, info)
+
+    @relay.mutation
+    async def google_sign_in(
+        self,
+        info: strawberry.Info,
+        input: inputs.GoogleSignInInput,
+    ) -> OAuthSignInResponse:
+        return await OAuthSignInService.sign_in_with_google(input, info)
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def location_ping(
+        self,
+        info: strawberry.Info,
+        input: inputs.LocationPingInput,
+    ) -> LocationPingResponse:
+        return await LocationPingService.record(input, info)
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def respond_to_shift_offer(
+        self,
+        info: strawberry.Info,
+        input: inputs.RespondToShiftOfferInput,
+    ) -> RespondToShiftOfferResponse:
+        return await ShiftOfferService.respond(input, info)
+
+
+# -------------------------------------------------------------------
+# BA-side shift attendance — arrive / clock-in / clock-out
+# -------------------------------------------------------------------
+#
+# Mobile uses these from the shift-detail screen. Each one creates an
+# Attendance row keyed to the BA's ambassador_event uuid; admin sees
+# the timestamps + GPS in the shift replay panel.
+
+@strawberry.input
+class ArriveAtShiftInput:
+    ambassador_event_uuid: strawberry.ID
+    latitude: float | None = None
+    longitude: float | None = None
+    client_mutation_id: strawberry.ID | None = None
+
+
+@strawberry.input
+class ClockInToShiftInput:
+    ambassador_event_uuid: strawberry.ID
+    latitude: float | None = None
+    longitude: float | None = None
+    client_mutation_id: strawberry.ID | None = None
+
+
+@strawberry.input
+class ClockOutOfShiftInput:
+    ambassador_event_uuid: strawberry.ID
+    latitude: float | None = None
+    longitude: float | None = None
+    client_mutation_id: strawberry.ID | None = None
+
+
+@strawberry.type
+class ShiftAttendanceResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    attendance_uuid: str | None = None
+    clock_time: str | None = None
+    kind: str | None = None  # "arrived" | "clock_in" | "clock_out"
+
+
+def _resolve_amb_event_by_uuid(uuid: str):
+    from ambassadors.models import AmbassadorEvent
+    try:
+        return AmbassadorEvent.objects.select_related(
+            "ambassador", "ambassador__user", "event"
+        ).get(uuid=uuid)
+    except AmbassadorEvent.DoesNotExist:
+        return None
+
+
+def _ensure_source(name: str):
+    """Get-or-create the Source lookup row by name."""
+    from ambassadors.models import Source
+    source, _ = Source.objects.get_or_create(name=name)
+    return source
+
+
+def _record_attendance(*, amb_event, source_name: str, coordinates, actor):
+    """Insert one Attendance row + return it.
+
+    `coordinates` is an optional [lat, lng] list (matches the model's
+    ArrayField(size=2)). Wrapping in sync_to_async happens at the
+    caller — this stays pure-sync so it can run inside @sync_to_async.
+    """
+    from ambassadors.models import Attendance
+    from django.utils import timezone as _tz
+    source = _ensure_source(source_name)
+    return Attendance.objects.create(
+        clock_time=_tz.now(),
+        coordinates=coordinates,
+        ambassador=amb_event.ambassador,
+        job=None,
+        event=amb_event.event,
+        source=source,
+    )
+
+
+@strawberry.type
+class ShiftAttendanceMutations:
+    """BA-side mobile mutations for the shift detail screen."""
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def arrive_at_shift(
+        self, info: strawberry.Info, input: ArriveAtShiftInput,
+    ) -> ShiftAttendanceResponse:
+        """'I'm here' — first ping when the BA arrives at the venue."""
+        return await _do_attendance(info, input, kind="arrived")
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def clock_in_to_shift(
+        self, info: strawberry.Info, input: ClockInToShiftInput,
+    ) -> ShiftAttendanceResponse:
+        """Start the activation timer."""
+        return await _do_attendance(info, input, kind="clock_in")
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def clock_out_of_shift(
+        self, info: strawberry.Info, input: ClockOutOfShiftInput,
+    ) -> ShiftAttendanceResponse:
+        """End the activation timer."""
+        return await _do_attendance(info, input, kind="clock_out")
+
+
+async def _do_attendance(info, input, *, kind: str) -> "ShiftAttendanceResponse":
+    actor = info.context.request.user
+
+    def _go():
+        amb_event = _resolve_amb_event_by_uuid(str(input.ambassador_event_uuid))
+        if not amb_event:
+            return None, "Shift not found."
+        # Authz — BA can only clock themselves
+        own_user_id = (
+            amb_event.ambassador.user_id if amb_event.ambassador else None
+        )
+        if own_user_id and getattr(actor, "id", None) != own_user_id:
+            return None, "Not your shift."
+        coords = None
+        if input.latitude is not None and input.longitude is not None:
+            coords = [float(input.latitude), float(input.longitude)]
+        att = _record_attendance(
+            amb_event=amb_event, source_name=kind,
+            coordinates=coords, actor=actor,
+        )
+        return att, "OK"
+
+    att, msg = await sync_to_async(_go)()
+    if att is None:
+        return ShiftAttendanceResponse(
+            success=False, message=msg,
+            client_mutation_id=None, kind=None,
+        )
+    return ShiftAttendanceResponse(
+        success=True,
+        message=msg,
+        client_mutation_id=None,
+        attendance_uuid=str(att.uuid),
+        clock_time=att.clock_time.isoformat(),
+        kind=kind,
+    )
 
 
 @strawberry.type

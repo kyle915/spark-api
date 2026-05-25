@@ -1,0 +1,89 @@
+name: Deploy to Cloud Run
+
+# Closes the dev loop: merging to develop redeploys spark-api-new on
+# Cloud Run without anyone running `gcloud run deploy --source .` by
+# hand. Same pattern the front-client uses for Firebase Hosting.
+#
+# The two existing workflows in this repo (gce-prod-deploy.yml +
+# fly-deploy.yml) target older / parallel hosts (legacy GCE box +
+# Fly.io). They're left untouched — this one drives the live Cloud
+# Run service that production actually serves out of.
+
+on:
+  push:
+    branches:
+      - develop
+  # Manual trigger so you can re-deploy whenever (e.g. after rotating
+  # a secret or env var without changing code).
+  workflow_dispatch:
+
+# Project + service identifiers — both safe to live in git. The
+# project ID is already visible in .firebaserc on the front-client
+# side; Cloud Run service name is whatever the deploy targets.
+env:
+  GCP_PROJECT_ID: spark-479222
+  GCP_REGION: us-central1
+  CLOUD_RUN_SERVICE: spark-api-new
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # Concurrency: only one deploy at a time per branch. If a second
+    # PR merges while the first is mid-deploy, cancel the in-flight
+    # run and start fresh on the newer SHA. Cheaper than waiting and
+    # avoids the "two builds racing for the same revision slot" race.
+    concurrency:
+      group: deploy-cloud-run-${{ github.ref }}
+      cancel-in-progress: true
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Service-account JSON → ADC via the google-github-actions/auth
+      # action. The secret needs Cloud Run Admin + Service Account User
+      # + Storage Admin (for Cloud Build artifacts) on the project.
+      # Setup steps for the service account are in the PR body — the
+      # same secret can be reused for any other gcloud-CLI workflow.
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_DEPLOY_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      # `gcloud run deploy --source .` does the full happy path:
+      # zips the source, ships to Cloud Build, builds the Dockerfile,
+      # pushes the resulting image to Artifact Registry, updates the
+      # Cloud Run service while preserving all existing env vars,
+      # secrets, Cloud SQL connections, and traffic settings.
+      #
+      # --quiet skips the "deploy to <env>?" interactive prompt.
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy "$CLOUD_RUN_SERVICE" \
+            --source . \
+            --region "$GCP_REGION" \
+            --project "$GCP_PROJECT_ID" \
+            --quiet
+
+      # Smoke check after the deploy — assert the new revision is
+      # ready and `serverInfo.databaseOk` is true. Catches the case
+      # where the container starts but can't reach Postgres (e.g. a
+      # bad secret or missing Cloud SQL connection annotation).
+      - name: Verify deployment
+        run: |
+          REVISION=$(gcloud run services describe "$CLOUD_RUN_SERVICE" \
+            --region "$GCP_REGION" --project "$GCP_PROJECT_ID" \
+            --format='value(status.latestReadyRevisionName)')
+          echo "Live revision: $REVISION"
+          RESPONSE=$(curl -s -X POST \
+            "https://spark-api-new-490085168610.us-central1.run.app/api/v483927/graphql/spark" \
+            -H "Content-Type: application/json" \
+            -d '{"query":"{ serverInfo { revision databaseOk } }"}')
+          echo "$RESPONSE"
+          if ! echo "$RESPONSE" | grep -q '"databaseOk": true'; then
+            echo "::error::serverInfo.databaseOk is false — DB unreachable on the new revision."
+            exit 1
+          fi

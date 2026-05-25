@@ -493,3 +493,89 @@ class AssignGroupToJobInput(BaseTenantInput):
 
     group_id: strawberry.ID
     job_id: strawberry.ID
+
+
+@strawberry.input
+class RegisterPushTokenInput(SparkGraphQLInput):
+    """Input for the mobile app registering an Expo push token."""
+
+    token: str
+    platform: str  # "ios" | "android" | "web"
+    device_name: str | None = None
+    app_version: str | None = None
+
+
+@strawberry.input
+class AppleSignInInput(SparkGraphQLInput):
+    """Sign in with Apple — identity token issued by Apple to the device."""
+
+    id_token: str
+    # Apple only sends name/email on the FIRST sign-in. The mobile client
+    # caches whatever it got and resends it on every call so we can fill
+    # in the user's name on initial account creation.
+    first_name: str | None = None
+    last_name: str | None = None
+
+
+@strawberry.input
+class GoogleSignInInput(SparkGraphQLInput):
+    """Google ID token sign-in."""
+
+    id_token: str
+
+
+@strawberry.input
+class InviteAmbassadorToShiftInput(SparkGraphQLInput):
+    """Admin invites a specific BA to a specific event.
+
+    Creates an AmbassadorEvent (is_approved=False), which fires the
+    existing post_save signal → "New shift offered" push to the
+    BA's mobile device.
+    """
+
+    ambassador_id: strawberry.ID
+    event_id: strawberry.ID
+
+
+@strawberry.input
+class CancelShiftInviteInput(SparkGraphQLInput):
+    """Admin retracts a pending shift invite (or removes an accepted
+    BA from a shift). Deletes the AmbassadorEvent row.
+
+    For "pending" rows, this is symmetric with the BA's decline path
+    (same delete). For "accepted" rows, this is effectively kicking
+    the BA off the shift — admins should confirm before calling.
+    """
+
+    ambassador_event_uuid: strawberry.ID
+
+
+@strawberry.input
+class RespondToShiftOfferInput(SparkGraphQLInput):
+    """BA's response to a shift invitation pushed from the admin app.
+
+    Created by an admin (AmbassadorEvent with is_approved=False).
+    Mobile renders the offer + Accept/Decline. Accept flips
+    is_approved=True; decline removes the invitation row.
+    """
+
+    ambassador_event_uuid: strawberry.ID
+    accepted: bool
+
+
+@strawberry.input
+class LocationPingInput(SparkGraphQLInput):
+    """A GPS reading the spark-mobile activation tracker fires every
+    ~2 min during an active shift. The mobile client supplies the
+    Event uuid so we can scope the ping to the shift the BA is on,
+    plus the recorded-at timestamp so freshness math doesn't depend
+    on the server clock."""
+
+    event_uuid: strawberry.ID
+    lat: float
+    lng: float
+    accuracy_meters: float | None = None
+    # ISO-8601. If omitted we fall back to the server clock.
+    recorded_at: str | None = None
+    # "foreground" | "background" | "clock_in" | "clock_out"
+    source: str | None = "background"

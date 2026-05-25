@@ -2,7 +2,7 @@
 GraphQL types and queries for Google Cloud Storage operations.
 """
 import strawberry
-from utils.gcs import generate_upload_url, generate_download_url
+from utils.gcs import generate_upload_url, public_url
 
 
 @strawberry.type
@@ -49,4 +49,5 @@ class GCSQuery:
         Returns:
             A signed URL for accessing the file
         """
-        return generate_download_url(file_path)
+        # Public bucket — return unsigned URL, signing fails on Cloud Run.
+        return public_url(file_path) or ""

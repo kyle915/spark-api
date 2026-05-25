@@ -5,9 +5,26 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV UV_SYSTEM_PYTHON=1
 
-RUN apt-get update && apt-get install -y \
+# Build + runtime deps.
+#
+#   libpq-dev / gcc  → psycopg build
+#   libgobject-2.0-0 / libpango-1.0-0 / libpangoft2-1.0-0 / libcairo2 /
+#   libgdk-pixbuf-2.0-0 / libffi-dev / shared-mime-info / fonts-liberation
+#                    → WeasyPrint runtime, used by recaps/pdf.py to render
+#                       the recap PDF. Without these the runtime raises
+#                       "cannot load library 'libgobject-2.0-0'" and the
+#                       GenerateRecapPdfMutation falls over.
+RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     gcc \
+    libgobject-2.0-0 \
+    libpango-1.0-0 \
+    libpangoft2-1.0-0 \
+    libcairo2 \
+    libgdk-pixbuf-2.0-0 \
+    libffi-dev \
+    shared-mime-info \
+    fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /code
@@ -22,6 +39,11 @@ RUN uv sync --frozen --no-dev
 
 COPY . /code
 
+RUN chmod +x /code/scripts/entrypoint.sh
+
 EXPOSE 8000
 
-CMD ["uv", "run", "hypercorn", "config.asgi:application", "--bind", "0.0.0.0:8000"]
+# Entry-point honors $PORT (Cloud Run injects this — typically 8080)
+# and runs `manage.py migrate --noinput` before exec'ing hypercorn,
+# so each new image lands its migrations on first container boot.
+CMD ["/code/scripts/entrypoint.sh"]

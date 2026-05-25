@@ -61,6 +61,9 @@ INSTALLED_APPS = [
     "jobs",
     "recaps",
     "chats",
+    "academy",
+    "digest",
+    "wingspan",
 ]
 
 AUTH_USER_MODEL = "tenants.User"
@@ -158,6 +161,19 @@ USE_I18N = True
 USE_TZ = True
 
 
+# Request body size — bumped past Django's 2.5MB default to make
+# Connecteam-PDF imports work. A typical recap PDF with photos is
+# 1–3MB; base64-encoding for the GraphQL payload adds ~33%, plus
+# the rest of the request envelope. Past the default ceiling Django
+# returns a 413 HTML page that the frontend can't parse as JSON
+# ("Unexpected token '<', '<!doctype'... is not valid JSON" — see
+# Nevena's Trevor Simmons import attempt). 100MB ceiling covers
+# multi-page recap PDFs with lots of high-res photos without
+# enabling pathological uploads.
+DATA_UPLOAD_MAX_MEMORY_SIZE = 100 * 1024 * 1024  # 100MB
+FILE_UPLOAD_MAX_MEMORY_SIZE = 100 * 1024 * 1024  # 100MB
+
+
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
@@ -188,9 +204,16 @@ if GS_CREDENTIALS_JSON:
 else:
     GS_CREDENTIALS = None
 
-# Make bucket private by default
+# Bucket-level access is set to public (object-viewer for allUsers) on
+# sparkio-production / sparkio-new. The Cloud Run service account ships
+# with a token only — no private key — so generate_signed_url() raises
+# "you need a private key to sign credentials" and every FileField.url
+# bubbles a GraphQL error (product images, tenant logos, recap files).
+# Switching to public URL mode bypasses signing entirely: django-storages
+# returns https://storage.googleapis.com/<bucket>/<key> which the public
+# bucket serves directly.
 GS_DEFAULT_ACL = None  # Use bucket's default ACL (uniform bucket-level access)
-GS_QUERYSTRING_AUTH = True  # Enable signed URLs for private access
+GS_QUERYSTRING_AUTH = env.bool("GS_QUERYSTRING_AUTH", default=False)
 
 # File storage backend
 DEFAULT_FILE_STORAGE = "storages.backends.gcloud.GoogleCloudStorage"
@@ -257,6 +280,11 @@ RESEND_API_KEY = env("RESEND_API_KEY", default="")
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="Spark <onboarding@resend.dev>")
 REQUEST_REVIEW_COPY_EMAILS = env.list("REQUEST_REVIEW_COPY_EMAILS", default=[])
 RECAP_REVIEW_COPY_EMAILS = env.list("RECAP_REVIEW_COPY_EMAILS", default=[])
+# Comma-separated admin emails alerted when a new BA signs up via
+# any public path (createPublicAmbassador / Apple / Google).
+# Empty default → no alert. Set this in prod env to plug the silent-
+# signup failure mode.
+NEW_AMBASSADOR_ALERT_EMAILS = env.list("NEW_AMBASSADOR_ALERT_EMAILS", default=[])
 REQUEST_REVIEW_COPY_DELAY_SECONDS = env.float(
     "REQUEST_REVIEW_COPY_DELAY_SECONDS",
     default=2.0,
@@ -282,6 +310,58 @@ ONESIGNAL_REST_API_KEY = env("ONESIGNAL_REST_API_KEY", default="")
 ONESIGNAL_API_URL = env("ONESIGNAL_API_URL", default="https://api.onesignal.com")
 ONESIGNAL_TARGET_CHANNEL = env("ONESIGNAL_TARGET_CHANNEL", default="push")
 ONESIGNAL_TIMEOUT_SECONDS = env.float("ONESIGNAL_TIMEOUT_SECONDS", default=10.0)
+
+# Expo Push relay (used by spark-mobile via expo-notifications).
+# EXPO_PUSH_ACCESS_TOKEN is optional — recommended in production so
+# Expo can throttle/identify the sender. Without it, requests still
+# succeed but are subject to anonymous rate limits.
+EXPO_PUSH_API_URL = env("EXPO_PUSH_API_URL", default="https://exp.host/--/api/v2/push")
+EXPO_PUSH_ACCESS_TOKEN = env("EXPO_PUSH_ACCESS_TOKEN", default="")
+EXPO_PUSH_TIMEOUT_SECONDS = env.float("EXPO_PUSH_TIMEOUT_SECONDS", default=10.0)
+
+# Internal-cron shared secret. Used by the `/internal/cron/…`
+# endpoints (see digest/cron_views.py) to gate POST calls from
+# whatever schedules the admin digest. Set to a long random string
+# in production (`openssl rand -hex 32`); leave empty in DEV — the
+# endpoint fails closed with 503 when unset rather than running
+# unauthed.
+INTERNAL_CRON_SECRET = env("INTERNAL_CRON_SECRET", default="")
+
+# Wingspan integration — admin UI for Payroll · Hours + Payments.
+# Set WINGSPAN_API_KEY on Cloud Run to enable; otherwise the front-
+# end renders a "not connected" empty state instead of fake numbers.
+# WINGSPAN_MOCK=true forces the empty-state path even when a key is
+# set (useful for staging / screenshots).
+WINGSPAN_API_KEY = env("WINGSPAN_API_KEY", default="")
+WINGSPAN_API_BASE = env(
+    "WINGSPAN_API_BASE", default="https://api.wingspan.app"
+)
+WINGSPAN_MOCK = env.bool("WINGSPAN_MOCK", default=False)
+
+# Sign in with Apple — `aud` claims we accept on identity tokens.
+# Comma-separated list of bundle ids / services ids. Defaults to the
+# spark-mobile bundle id.
+APPLE_OAUTH_AUDIENCES = env.list(
+    "APPLE_OAUTH_AUDIENCES",
+    default=["co.igniteproductions.spark"],
+)
+APPLE_OAUTH_KEYS_URL = env(
+    "APPLE_OAUTH_KEYS_URL", default="https://appleid.apple.com/auth/keys"
+)
+APPLE_OAUTH_ISSUER = env(
+    "APPLE_OAUTH_ISSUER", default="https://appleid.apple.com"
+)
+
+# Sign in with Google — `aud` claims we accept on id tokens. The web
+# client id is used by the legacy admin app; the iOS client id is what
+# spark-mobile sends. Both should be listed.
+GOOGLE_OAUTH_AUDIENCES = env.list(
+    "GOOGLE_OAUTH_AUDIENCES",
+    default=[
+        # Web client (existing).
+        "490085168610-ork3r7pnev7e9ksmkf1osp7v6c34g851.apps.googleusercontent.com",
+    ],
+)
 
 # Gemini AI Configuration
 GEMINI_API_KEY = env("GEMINI_API_KEY", default="")

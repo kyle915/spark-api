@@ -1631,3 +1631,252 @@ class JobRequirementAnswerQueries:
             )
         except GraphQLError:
             return None
+
+
+# -------------------------------------------------------------------
+# Job lifecycle queries — applications + favorites
+# -------------------------------------------------------------------
+
+@strawberry.type
+class FavoriteAmbassadorQueries:
+    """Per-tenant favorite-BA roster. Drives the Favorites tab."""
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def favorite_ambassadors(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID | None = None,
+    ) -> list[types.TenantFavoriteAmbassador]:
+        """Return every favorited BA for the caller's tenant. Admins
+        can override with an explicit tenant_id."""
+        def _list():
+            from utils.graphql.mixins import resolve_id_to_int
+            actor = getattr(info.context.request, "user", None)
+            resolved = None
+            if tenant_id:
+                try:
+                    resolved = resolve_id_to_int(tenant_id)
+                except Exception:
+                    resolved = None
+            if not resolved and actor:
+                t = actor.get_tenant() if hasattr(actor, "get_tenant") else None
+                resolved = t.id if t else None
+            if not resolved:
+                return []
+            qs = (
+                models.TenantFavoriteAmbassador.objects
+                .select_related("ambassador__user")
+                .filter(tenant_id=resolved)
+                .order_by("-created_at")
+            )
+            return list(qs)
+        return await sync_to_async(_list)()
+
+
+@strawberry.type
+class JobApplicationQueries:
+    """Admin-facing view of BA applications for a specific Job."""
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def my_available_jobs(
+        self,
+        info: strawberry.Info,
+    ) -> list[types.Job]:
+        """Posted jobs the calling BA can apply to.
+
+        Filtering:
+          - lifecycle_status == 'posted' (job is live on the board)
+          - If `favorites_only=True`, BA must be on the tenant's
+            TenantFavoriteAmbassador roster
+          - BA can't see jobs they've already applied to (any status)
+            so the board doesn't show their own past applications
+
+        Newest posted first so today's drops are at the top.
+        """
+        actor = getattr(info.context.request, "user", None)
+
+        def _list():
+            from ambassadors.models import Ambassador
+            if not actor or not getattr(actor, "id", None):
+                return []
+            try:
+                amb = Ambassador.objects.get(user_id=actor.id)
+            except Ambassador.DoesNotExist:
+                return []
+
+            # Which tenants have this BA on their favorites list — used
+            # to satisfy the favorites_only gate without joining for
+            # every Job row.
+            fav_tenant_ids = set(
+                models.TenantFavoriteAmbassador.objects.filter(
+                    ambassador=amb
+                ).values_list("tenant_id", flat=True)
+            )
+
+            # Jobs they've already applied to (any status) — hide them.
+            applied_job_ids = set(
+                models.JobApplication.objects.filter(
+                    ambassador=amb
+                ).values_list("job_id", flat=True)
+            )
+
+            qs = (
+                models.Job.objects
+                .select_related("event", "event__tenant", "job_title")
+                .filter(lifecycle_status=models.Job.STATUS_POSTED)
+                .exclude(id__in=applied_job_ids)
+                .order_by("-posted_at", "-id")
+            )
+
+            visible = []
+            for job in qs[:200]:
+                if job.favorites_only and job.tenant_id not in fav_tenant_ids:
+                    continue
+                visible.append(job)
+            return visible
+
+        return await sync_to_async(_list)()
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def job_applications(
+        self,
+        info: strawberry.Info,
+        job_id: strawberry.ID,
+    ) -> list[types.JobApplication]:
+        """Every application row attached to a Job, ordered newest
+        first. Includes the BA's name/email/uuid via the type resolver,
+        so the admin Jobs page can render the applicant list without
+        an N+1 round-trip."""
+        def _list():
+            from utils.graphql.mixins import resolve_id_to_int
+            try:
+                job_pk = resolve_id_to_int(job_id)
+            except Exception:
+                return []
+            qs = (
+                models.JobApplication.objects
+                .select_related("ambassador__user")
+                .filter(job_id=job_pk)
+                .order_by("-applied_at")
+            )
+            return list(qs)
+        return await sync_to_async(_list)()
+
+
+# -------------------------------------------------------------------
+# BA Briefing queries
+# -------------------------------------------------------------------
+
+@strawberry.type
+class BriefingTemplateQueries:
+    """List + lookup for per-tenant BriefingTemplates."""
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def briefing_templates(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID | None = None,
+        include_archived: bool = False,
+    ) -> list[types.BriefingTemplate]:
+        """Return templates available to the caller's tenant. Admins
+        can pass an explicit tenant_id to look up another's templates."""
+        def _list():
+            from utils.graphql.mixins import resolve_id_to_int
+            actor = getattr(info.context.request, "user", None)
+            resolved = None
+            if tenant_id:
+                try:
+                    resolved = resolve_id_to_int(tenant_id)
+                except Exception:
+                    resolved = None
+            if not resolved and actor:
+                t = actor.get_tenant() if hasattr(actor, "get_tenant") else None
+                resolved = t.id if t else None
+            if not resolved:
+                return []
+            qs = models.BriefingTemplate.objects.filter(tenant_id=resolved)
+            if not include_archived:
+                qs = qs.filter(is_archived=False)
+            # Pre-fetch attachments so the type resolver doesn't N+1.
+            qs = qs.prefetch_related("attachments")
+            return list(qs)
+        return await sync_to_async(_list)()
+
+
+@strawberry.type
+class JobBriefingQueries:
+    """One-shot lookup for the briefing attached to a specific job."""
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def job_briefing_for_event(
+        self,
+        info: strawberry.Info,
+        event_uuid: strawberry.ID,
+    ) -> types.JobBriefingPayload | None:
+        """Look up a job briefing by the parent event's UUID. The BA
+        mobile app receives shift offers keyed by event/ambassador-event
+        UUID — they don't see Job IDs directly — so this is the entry
+        point for "show me the briefing for the shift I was offered."
+
+        Returns None when no job is attached to the event (BA accepting
+        a shift before the job's been posted)."""
+        def _get():
+            try:
+                event_uuid_str = str(event_uuid)
+            except Exception:
+                return None
+            try:
+                job = (
+                    models.Job.objects
+                    .prefetch_related("briefing_attachments")
+                    .select_related("briefing_template")
+                    .filter(event__uuid=event_uuid_str)
+                    .order_by("-id")
+                    .first()
+                )
+            except Exception:
+                return None
+            if not job:
+                return None
+            return types.JobBriefingPayload(
+                title=job.briefing_title or "",
+                body=job.briefing_body or "",
+                template_uuid=(
+                    str(job.briefing_template.uuid)
+                    if job.briefing_template_id else None
+                ),
+                attachments=list(job.briefing_attachments.all()),
+            )
+        return await sync_to_async(_get)()
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def job_briefing(
+        self,
+        info: strawberry.Info,
+        job_id: strawberry.ID,
+    ) -> types.JobBriefingPayload | None:
+        def _get():
+            from utils.graphql.mixins import resolve_id_to_int
+            try:
+                job_pk = resolve_id_to_int(job_id)
+            except Exception:
+                return None
+            try:
+                job = (
+                    models.Job.objects
+                    .prefetch_related("briefing_attachments")
+                    .select_related("briefing_template")
+                    .get(id=job_pk)
+                )
+            except models.Job.DoesNotExist:
+                return None
+            return types.JobBriefingPayload(
+                title=job.briefing_title or "",
+                body=job.briefing_body or "",
+                template_uuid=(
+                    str(job.briefing_template.uuid)
+                    if job.briefing_template_id else None
+                ),
+                attachments=list(job.briefing_attachments.all()),
+            )
+        return await sync_to_async(_get)()

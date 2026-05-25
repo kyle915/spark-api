@@ -4,7 +4,12 @@ from jobs import mutations, queries
 
 
 @strawberry.type
-class AmbassadorJobQueries(queries.AmbassadorJobQueries):
+class AmbassadorJobQueries(
+    queries.AmbassadorJobQueries,
+    # myAvailableJobs lives here so the mobile schema sees it.
+    queries.JobApplicationQueries,
+    queries.JobBriefingQueries,
+):
     pass
 
 
@@ -32,6 +37,10 @@ class ClientJobQueries(
     queries.JobRequirementQuestionQueries,
     queries.QuestionOptionQueries,
     queries.JobRequirementAnswerQueries,
+    queries.BriefingTemplateQueries,
+    queries.JobBriefingQueries,
+    queries.JobApplicationQueries,
+    queries.FavoriteAmbassadorQueries,
 ):
     pass
 
@@ -46,6 +55,7 @@ class AmbassadorJobMutations(
     mutations.AmbassadorJobMutations,
     mutations.AcceptAmbassadorJobInvitationMutations,
     mutations.AmbassadorToAmbassadorReviewMutations,
+    mutations.JobApplicationMutations,
 ):
     pass
 
@@ -75,6 +85,10 @@ class ClientJobMutations(
     mutations.ManageAmbassadorJobMutations,
     mutations.ApproveAmbassadorJobMutations,
     mutations.DeclineAmbassadorJobMutations,
+    mutations.JobLifecycleMutations,
+    mutations.FavoriteAmbassadorMutations,
+    mutations.BriefingTemplateMutations,
+    mutations.JobBriefingMutations,
 ):
     pass
 

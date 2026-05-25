@@ -357,9 +357,62 @@ class DeclineRequestInput(SparkGraphQLInput):
 
 
 @strawberry.input
+class DeleteRequestInput(SparkGraphQLInput):
+    id: strawberry.ID
+
+
+@strawberry.input
 class UpsertRequestReviewedInput(SparkGraphQLInput):
     id: strawberry.ID
     reviewed: bool
+
+
+@strawberry.input
+class BulkCloneRequestCopyInput(SparkGraphQLInput):
+    """One copy spec for `bulkCloneRequest`. Each copy creates a new
+    Request row inheriting the source's activation type / distributor
+    / ba_count / notes etc., with the supplied date (and optionally a
+    different venue) overlaid.
+    """
+
+    # ISO-8601 date string (YYYY-MM-DD or full datetime). Required —
+    # the whole point of a clone is a different date.
+    date_iso: str
+    # Optional venue override. When absent the clone reuses the
+    # source's retailer + address + store_number + coordinates.
+    retailer_id: strawberry.ID | None = None
+    store_number: str | None = None
+    address: str | None = None
+    # Optional time overrides; default to source's start/end times.
+    start_time_iso: str | None = None
+    end_time_iso: str | None = None
+
+
+@strawberry.input
+class BulkCloneRequestInput(SparkGraphQLInput):
+    """Clone an existing request N times — same activation type, BA
+    count, distributor, notes, RMM routing, etc., with a new date
+    (and optionally a different venue) per copy.
+
+    Caps at 50 copies per call to keep the resolver under Cloud Run's
+    request-timeout budget. For larger campaigns split the call.
+    """
+
+    source_request_id: strawberry.ID
+    copies: list[BulkCloneRequestCopyInput]
+
+
+@strawberry.input
+class NotifyNoteMentionInput(SparkGraphQLInput):
+    """Notify a teammate that they were @-mentioned in an internal note on
+    a request. Sends a branded email to each recipient email."""
+
+    request_id: strawberry.ID
+    note_body: str
+    recipient_emails: List[str]
+    # Front-end origin so the email link points back at the right
+    # admin app (defaults to ADMIN_FRONTEND_URL when omitted).
+    request_url: str | None = None
 
 
 @strawberry.input

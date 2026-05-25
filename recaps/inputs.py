@@ -170,6 +170,78 @@ class ExportRecapsXlsxInput(SparkGraphQLInput):
 
 
 @strawberry.input
+class ReassignRecapEventInput(SparkGraphQLInput):
+    """Move a recap from one Event to another within the same tenant.
+
+    Used to fix wrong-event mis-links (BA picked the wrong shift when
+    filing) without forcing a re-file. Backend validates both events
+    belong to the same tenant so this can't be used to leak data
+    across tenant boundaries.
+    """
+
+    recap_id: strawberry.ID
+    event_id: strawberry.ID
+
+
+@strawberry.input
+class NudgeAmbassadorForRecapInput(SparkGraphQLInput):
+    """Fire a "you still owe a recap" push to a BA who was assigned to
+    a shift that already wrapped. `ambassador_event_uuid` is what the
+    /recaps/missing UI hands us — uniquely identifies the BA + event
+    pair without needing two ids.
+    """
+
+    ambassador_event_uuid: strawberry.ID
+    # Optional override of the push title / body. If absent we use
+    # the standard "Don't forget your recap" / event-name template
+    # the recap-nudge cron already uses, so the BA gets the same
+    # copy from both surfaces.
+    title: str | None = None
+    body: str | None = None
+
+
+@strawberry.input
+class EmailCampaignReportInput(SparkGraphQLInput):
+    """Generate the campaign-report PDF + email it as an attachment.
+
+    Same recap selection as `generateCampaignReportPdf`, plus a
+    recipient list and an optional cover-letter `message`. Used from
+    the Recaps page when kyle wants to send a deliverable directly
+    to a client without going through the download → attach flow.
+
+    `recipients` is a list of email addresses. Single-address case
+    works; the backend de-duplicates and validates each before send.
+    """
+
+    recap_ids: list[strawberry.ID]
+    recipients: list[str]
+    title: str | None = None
+    subtitle: str | None = None
+    # Free-text cover letter rendered above the summary in the email
+    # body. Optional — if omitted the email just says "Attached".
+    message: str | None = None
+
+
+@strawberry.input
+class GenerateCampaignReportPdfInput(SparkGraphQLInput):
+    """Bundle N recaps into one client-deliverable PDF.
+
+    `recap_ids` is the relay-encoded ID list the front-end collects via
+    multi-select on the Master Tracker or Recaps page. Both relay
+    `Recap:N` IDs and bare ints/uuids resolve via the standard
+    `resolve_id_to_int` helper.
+
+    `title` and `subtitle` drive the cover page (e.g. "Liquid Death · May
+    Sampling" with subtitle "Campaign Report"). Optional — sensible
+    defaults applied when absent.
+    """
+
+    recap_ids: list[strawberry.ID]
+    title: str | None = None
+    subtitle: str | None = None
+
+
+@strawberry.input
 class ExportRecapXlsxInput(SparkGraphQLInput):
     id: strawberry.ID
 
@@ -331,3 +403,18 @@ class CreateRecapSectionInput(SparkGraphQLInput):
 @strawberry.input
 class UpdateRecapSectionInput(CreateRecapSectionInput):
     id: strawberry.ID
+
+
+@strawberry.input
+class ImportConnecteamRecapPdfInput(SparkGraphQLInput):
+    """Drop a Connecteam-exported recap PDF onto an event, get back a
+    pre-filled draft CustomRecap. Admin reviews/edits before approving."""
+
+    event_id: strawberry.ID
+    custom_recap_template_id: strawberry.ID
+    # Base64-encoded PDF bytes. Avoids needing multipart upload spec
+    # in the GraphQL transport. ~530KB encoded for a typical 400KB
+    # Connecteam recap PDF — well under any practical request limit.
+    pdf_base64: str
+    # Optional override name; if blank we derive "Imported · <date>".
+    name: str | None = None

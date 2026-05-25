@@ -1707,3 +1707,623 @@ class AcceptAmbassadorJobInvitationMutations:
         input: inputs.AcceptAmbassadorJobInvitationInput,
     ) -> types.AmbassadorJobDetailResponse:
         return await AcceptAmbassadorJobInvitationMutationService.accept(input, info)
+
+
+# ============================================================
+# Job lifecycle mutations (Post / OpenToAll / Apply / Assign /
+# Favorites)
+# ============================================================
+from django.utils import timezone as _django_tz  # noqa: E402
+from ambassadors.models import Ambassador as _Ambassador  # noqa: E402
+from utils.graphql.mixins import resolve_id_to_int as _resolve_id  # noqa: E402
+from utils.graphql.permissions import StrictIsAuthenticated as _StrictIsAuth  # noqa: E402
+
+
+def _build_lifecycle_response(success, message, *, job=None, input_obj=None):
+    cmid = getattr(input_obj, "client_mutation_id", None) if input_obj else None
+    return types.JobLifecycleResponse(
+        success=success,
+        message=message,
+        client_mutation_id=cmid,
+        job_uuid=str(job.uuid) if job else None,
+        lifecycle_status=getattr(job, "lifecycle_status", None) if job else None,
+    )
+
+
+@strawberry.type
+class JobLifecycleMutations:
+    """Admin-side lifecycle transitions on a Job.
+
+    pending → posted   via post_job
+    posted (favorites_only=true) → favorites_only=false via open_job_to_all
+    posted → filled    via assign_ambassador_to_job
+    """
+
+    @relay.mutation(permission_classes=[_StrictIsAuth])
+    async def post_job(
+        self,
+        info: strawberry.Info,
+        input: inputs.PostJobInput,
+    ) -> types.JobLifecycleResponse:
+        try:
+            job_pk = _resolve_id(input.id)
+        except (TypeError, ValueError, GraphQLError):
+            return _build_lifecycle_response(False, "Invalid job id.", input_obj=input)
+
+        def _post():
+            try:
+                job = models.Job.objects.get(pk=job_pk)
+            except models.Job.DoesNotExist:
+                return None, "Job not found."
+            if job.lifecycle_status != models.Job.STATUS_PENDING:
+                return None, (
+                    f"Job is already {job.lifecycle_status}; can only post pending jobs."
+                )
+            job.total_hours = input.total_hours
+            job.hourly_rate = input.hourly_rate
+            if input.uniform_notes is not None:
+                job.uniform_notes = input.uniform_notes
+            if input.description is not None:
+                job.description = input.description
+            if input.max_applications is not None:
+                job.max_applications = input.max_applications
+            if input.open_to_all:
+                job.favorites_only = False
+            job.lifecycle_status = models.Job.STATUS_POSTED
+            job.posted_at = _django_tz.now()
+            job.public = True
+            job.save(update_fields=[
+                "total_hours", "hourly_rate", "uniform_notes",
+                "description", "max_applications", "favorites_only",
+                "lifecycle_status", "posted_at", "public", "updated_at",
+            ])
+            return job, "Job posted."
+
+        job, msg = await sync_to_async(_post)()
+        return _build_lifecycle_response(job is not None, msg, job=job, input_obj=input)
+
+    @relay.mutation(permission_classes=[_StrictIsAuth])
+    async def open_job_to_all(
+        self,
+        info: strawberry.Info,
+        input: inputs.OpenJobToAllInput,
+    ) -> types.JobLifecycleResponse:
+        try:
+            job_pk = _resolve_id(input.id)
+        except (TypeError, ValueError, GraphQLError):
+            return _build_lifecycle_response(False, "Invalid job id.", input_obj=input)
+
+        def _open():
+            try:
+                job = models.Job.objects.get(pk=job_pk)
+            except models.Job.DoesNotExist:
+                return None, "Job not found."
+            if job.lifecycle_status != models.Job.STATUS_POSTED:
+                return None, "Job must be posted before opening to all."
+            if not job.favorites_only:
+                return job, "Job is already open to all BAs."
+            job.favorites_only = False
+            job.save(update_fields=["favorites_only", "updated_at"])
+            return job, "Job opened to all BAs."
+
+        job, msg = await sync_to_async(_open)()
+        return _build_lifecycle_response(job is not None, msg, job=job, input_obj=input)
+
+    @relay.mutation(permission_classes=[_StrictIsAuth])
+    async def assign_ambassador_to_job(
+        self,
+        info: strawberry.Info,
+        input: inputs.AssignAmbassadorToJobInput,
+    ) -> types.JobLifecycleResponse:
+        try:
+            job_pk = _resolve_id(input.job_id)
+            ba_pk = _resolve_id(input.ambassador_id)
+        except (TypeError, ValueError, GraphQLError):
+            return _build_lifecycle_response(False, "Invalid ID.", input_obj=input)
+
+        actor = info.context.request.user
+
+        def _assign():
+            try:
+                job = models.Job.objects.get(pk=job_pk)
+                amb = _Ambassador.objects.get(pk=ba_pk)
+            except (models.Job.DoesNotExist, _Ambassador.DoesNotExist):
+                return None, "Job or ambassador not found."
+            if job.lifecycle_status not in (
+                models.Job.STATUS_PENDING, models.Job.STATUS_POSTED
+            ):
+                return None, f"Job is {job.lifecycle_status}; can't reassign."
+
+            now = _django_tz.now()
+            app, created = models.JobApplication.objects.get_or_create(
+                job=job, ambassador=amb,
+                defaults={
+                    "tenant_id": job.tenant_id,
+                    "status": models.JobApplication.STATUS_ACCEPTED,
+                    "decided_at": now,
+                    "decided_by": actor if getattr(actor, "id", None) else None,
+                    "note": "Manually assigned by admin.",
+                },
+            )
+            if not created:
+                app.status = models.JobApplication.STATUS_ACCEPTED
+                app.decided_at = now
+                app.decided_by = actor if getattr(actor, "id", None) else None
+                app.save(update_fields=["status", "decided_at", "decided_by", "updated_at"])
+
+            # Decline all other Applied rows for this job.
+            models.JobApplication.objects.filter(
+                job=job, status=models.JobApplication.STATUS_APPLIED,
+            ).exclude(pk=app.pk).update(
+                status=models.JobApplication.STATUS_DECLINED,
+                decided_at=now, decided_by=actor if getattr(actor, "id", None) else None,
+            )
+
+            job.lifecycle_status = models.Job.STATUS_FILLED
+            job.closed = True
+            job.save(update_fields=["lifecycle_status", "closed", "updated_at"])
+            return job, f"{amb.user.get_full_name() if amb.user else 'BA'} assigned to the job."
+
+        job, msg = await sync_to_async(_assign)()
+        # Push the assignment to the BA — admin moved their applied row
+        # to accepted (or assigned them outright). Without this the BA
+        # has no idea they got the gig until they re-open the app.
+        if job is not None:
+            try:
+                from ambassadors.push import enqueue_push
+                ba_user_id = await sync_to_async(
+                    lambda: _Ambassador.objects.values_list(
+                        "user_id", flat=True
+                    ).get(pk=ba_pk)
+                )()
+                if ba_user_id:
+                    enqueue_push(
+                        ba_user_id,
+                        title="You got the gig",
+                        body=f"You've been assigned to {job.name}. Tap to see details.",
+                        data={
+                            "kind": "job_assigned",
+                            "jobUuid": str(job.uuid),
+                            "eventUuid": str(getattr(job.event, "uuid", "")),
+                        },
+                    )
+            except Exception:
+                # Push is best-effort — don't fail the assignment.
+                pass
+        return _build_lifecycle_response(job is not None, msg, job=job, input_obj=input)
+
+
+@strawberry.type
+class JobApplicationMutations:
+    """BA-side mutations: apply / withdraw."""
+
+    @relay.mutation(permission_classes=[_StrictIsAuth])
+    async def apply_to_job(
+        self,
+        info: strawberry.Info,
+        input: inputs.ApplyToJobInput,
+    ) -> types.JobApplicationResponse:
+        try:
+            job_pk = _resolve_id(input.job_id)
+        except (TypeError, ValueError, GraphQLError):
+            return types.JobApplicationResponse(
+                success=False, message="Invalid job id.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        actor = info.context.request.user
+
+        def _apply():
+            try:
+                job = models.Job.objects.get(pk=job_pk)
+            except models.Job.DoesNotExist:
+                return None, "Job not found."
+            if job.lifecycle_status != models.Job.STATUS_POSTED:
+                return None, "Job isn't currently accepting applications."
+            try:
+                amb = _Ambassador.objects.get(user=actor)
+            except _Ambassador.DoesNotExist:
+                return None, "Only ambassadors can apply to jobs."
+
+            # If favorites-only, the BA must be on the tenant's favorites list.
+            if job.favorites_only:
+                is_fav = models.TenantFavoriteAmbassador.objects.filter(
+                    tenant_id=job.tenant_id, ambassador=amb,
+                ).exists()
+                if not is_fav:
+                    return None, (
+                        "This job is currently open to favorite BAs only."
+                    )
+
+            # Cap check
+            if job.max_applications:
+                live_count = models.JobApplication.objects.filter(
+                    job=job, status__in=[
+                        models.JobApplication.STATUS_APPLIED,
+                        models.JobApplication.STATUS_ACCEPTED,
+                    ],
+                ).count()
+                if live_count >= job.max_applications:
+                    return None, "Application cap reached for this job."
+
+            app, created = models.JobApplication.objects.get_or_create(
+                job=job, ambassador=amb,
+                defaults={
+                    "tenant_id": job.tenant_id,
+                    "status": models.JobApplication.STATUS_APPLIED,
+                    "note": (input.note or "")[:1000],
+                },
+            )
+            if not created:
+                # Re-apply path — flip withdrawn/declined back to applied
+                if app.status in (
+                    models.JobApplication.STATUS_WITHDRAWN,
+                    models.JobApplication.STATUS_DECLINED,
+                ):
+                    app.status = models.JobApplication.STATUS_APPLIED
+                    if input.note:
+                        app.note = input.note[:1000]
+                    app.save(update_fields=["status", "note", "updated_at"])
+                else:
+                    return app, "Application already on file."
+            return app, "Applied."
+
+        app, msg = await sync_to_async(_apply)()
+        return types.JobApplicationResponse(
+            success=app is not None,
+            message=msg,
+            client_mutation_id=input.client_mutation_id,
+            application_uuid=str(app.uuid) if app else None,
+        )
+
+    @relay.mutation(permission_classes=[_StrictIsAuth])
+    async def withdraw_job_application(
+        self,
+        info: strawberry.Info,
+        input: inputs.WithdrawJobApplicationInput,
+    ) -> types.JobApplicationResponse:
+        actor = info.context.request.user
+
+        def _withdraw():
+            try:
+                app = models.JobApplication.objects.get(uuid=str(input.application_id))
+            except models.JobApplication.DoesNotExist:
+                return None, "Application not found."
+            if not app.ambassador or not app.ambassador.user_id == getattr(actor, "id", None):
+                return None, "You can only withdraw your own application."
+            if app.status != models.JobApplication.STATUS_APPLIED:
+                return None, f"Application is {app.status}; can't withdraw."
+            app.status = models.JobApplication.STATUS_WITHDRAWN
+            app.save(update_fields=["status", "updated_at"])
+            return app, "Application withdrawn."
+
+        app, msg = await sync_to_async(_withdraw)()
+        return types.JobApplicationResponse(
+            success=app is not None,
+            message=msg,
+            client_mutation_id=input.client_mutation_id,
+            application_uuid=str(app.uuid) if app else None,
+        )
+
+
+@strawberry.type
+class FavoriteAmbassadorMutations:
+    """Tenant-curated list of BAs that get first-look at posted jobs.
+
+    Per-tenant unique on (tenant, ambassador). Admins manage from the
+    Favorites tab; both spark-admin and client roles in the tenant can
+    edit their own list.
+    """
+
+    @relay.mutation(permission_classes=[_StrictIsAuth])
+    async def add_favorite_ambassador(
+        self,
+        info: strawberry.Info,
+        input: inputs.AddFavoriteAmbassadorInput,
+    ) -> types.FavoriteAmbassadorResponse:
+        actor = info.context.request.user
+
+        def _add():
+            try:
+                ba_pk = _resolve_id(input.ambassador_id)
+            except (TypeError, ValueError, GraphQLError):
+                return False, "Invalid ambassador id."
+
+            # Resolve tenant — explicit input wins, else fall back to
+            # the actor's bound tenant.
+            tenant_id = None
+            if input.tenant_id:
+                try:
+                    tenant_id = _resolve_id(input.tenant_id)
+                except (TypeError, ValueError, GraphQLError):
+                    return False, "Invalid tenant id."
+            else:
+                bound = actor.get_tenant() if hasattr(actor, "get_tenant") else None
+                if bound:
+                    tenant_id = bound.id
+            if not tenant_id:
+                return False, "No tenant in scope."
+
+            try:
+                amb = _Ambassador.objects.get(pk=ba_pk)
+            except _Ambassador.DoesNotExist:
+                return False, "Ambassador not found."
+
+            fav, created = models.TenantFavoriteAmbassador.objects.get_or_create(
+                tenant_id=tenant_id, ambassador=amb,
+                defaults={
+                    "note": (input.note or "")[:255],
+                    "added_by": actor if getattr(actor, "id", None) else None,
+                },
+            )
+            if not created and input.note and fav.note != input.note:
+                fav.note = input.note[:255]
+                fav.save(update_fields=["note"])
+            return True, "Added to favorites." if created else "Already a favorite."
+
+        ok, msg = await sync_to_async(_add)()
+        return types.FavoriteAmbassadorResponse(
+            success=ok, message=msg, client_mutation_id=input.client_mutation_id,
+        )
+
+    @relay.mutation(permission_classes=[_StrictIsAuth])
+    async def remove_favorite_ambassador(
+        self,
+        info: strawberry.Info,
+        input: inputs.RemoveFavoriteAmbassadorInput,
+    ) -> types.FavoriteAmbassadorResponse:
+        actor = info.context.request.user
+
+        def _rm():
+            try:
+                ba_pk = _resolve_id(input.ambassador_id)
+            except (TypeError, ValueError, GraphQLError):
+                return False, "Invalid ambassador id."
+            tenant_id = None
+            if input.tenant_id:
+                try:
+                    tenant_id = _resolve_id(input.tenant_id)
+                except (TypeError, ValueError, GraphQLError):
+                    return False, "Invalid tenant id."
+            else:
+                bound = actor.get_tenant() if hasattr(actor, "get_tenant") else None
+                if bound:
+                    tenant_id = bound.id
+            if not tenant_id:
+                return False, "No tenant in scope."
+
+            deleted, _ = models.TenantFavoriteAmbassador.objects.filter(
+                tenant_id=tenant_id, ambassador_id=ba_pk,
+            ).delete()
+            return bool(deleted), "Removed from favorites." if deleted else "Wasn't on the list."
+
+        ok, msg = await sync_to_async(_rm)()
+        return types.FavoriteAmbassadorResponse(
+            success=ok, message=msg, client_mutation_id=input.client_mutation_id,
+        )
+
+
+# -------------------------------------------------------------------
+# BA Briefing mutations
+# -------------------------------------------------------------------
+#
+# Saved templates live per-tenant. Applying a template to a job
+# does a one-shot copy: job.briefing_title, job.briefing_body, and a
+# fresh set of JobBriefingAttachment rows. The job keeps a pointer to
+# the source template so the UI can show "Using template: X".
+
+def _resolve_actor_tenant_id(info, supplied: object | None) -> int | None:
+    if supplied:
+        try:
+            return _resolve_id(supplied)
+        except Exception:
+            return None
+    actor = getattr(info.context, "request", None)
+    actor = getattr(actor, "user", None) if actor else None
+    if not actor:
+        return None
+    try:
+        t = actor.get_tenant() if hasattr(actor, "get_tenant") else None
+        return t.id if t else None
+    except Exception:
+        return None
+
+
+def _copy_attachment_dict(att) -> dict:
+    return dict(
+        name=att.name,
+        url=att.url,
+        content_type=att.content_type or "",
+        size=att.size,
+    )
+
+
+@strawberry.type
+class BriefingTemplateMutations:
+    """CRUD for reusable BA Briefing templates (per-tenant)."""
+
+    @relay.mutation(permission_classes=[_StrictIsAuth])
+    async def create_briefing_template(
+        self, info, input: inputs.CreateBriefingTemplateInput,
+    ) -> types.BriefingTemplateResponse:
+        def _create():
+            actor = info.context.request.user
+            tenant_id = _resolve_actor_tenant_id(info, input.tenant_id)
+            if not tenant_id:
+                return None, "No tenant in scope."
+            tpl = models.BriefingTemplate.objects.create(
+                tenant_id=tenant_id,
+                name=input.name.strip(),
+                title=(input.title or "").strip(),
+                body=input.body or "",
+                created_by=actor if getattr(actor, "is_authenticated", False) else None,
+                updated_by=actor if getattr(actor, "is_authenticated", False) else None,
+            )
+            for att in (input.attachments or []):
+                models.BriefingTemplateAttachment.objects.create(
+                    template=tpl,
+                    name=att.name,
+                    url=att.url,
+                    content_type=att.content_type or "",
+                    size=att.size,
+                )
+            return tpl, "Briefing template created."
+
+        tpl, msg = await sync_to_async(_create)()
+        return types.BriefingTemplateResponse(
+            success=tpl is not None,
+            message=msg,
+            briefing_template=tpl,
+            client_mutation_id=input.client_mutation_id,
+        )
+
+    @relay.mutation(permission_classes=[_StrictIsAuth])
+    async def update_briefing_template(
+        self, info, input: inputs.UpdateBriefingTemplateInput,
+    ) -> types.BriefingTemplateResponse:
+        def _update():
+            try:
+                tpl_pk = _resolve_id(input.template_id)
+            except Exception:
+                return None, "Invalid template id."
+            try:
+                tpl = models.BriefingTemplate.objects.get(id=tpl_pk)
+            except models.BriefingTemplate.DoesNotExist:
+                return None, "Template not found."
+            actor = info.context.request.user
+            if input.name is not None:
+                tpl.name = input.name.strip()
+            if input.title is not None:
+                tpl.title = input.title.strip()
+            if input.body is not None:
+                tpl.body = input.body
+            tpl.updated_by = actor if getattr(actor, "is_authenticated", False) else None
+            tpl.save()
+            if input.attachments is not None:
+                # Replace-all semantics.
+                tpl.attachments.all().delete()
+                for att in input.attachments:
+                    models.BriefingTemplateAttachment.objects.create(
+                        template=tpl,
+                        name=att.name,
+                        url=att.url,
+                        content_type=att.content_type or "",
+                        size=att.size,
+                    )
+            return tpl, "Template updated."
+
+        tpl, msg = await sync_to_async(_update)()
+        return types.BriefingTemplateResponse(
+            success=tpl is not None,
+            message=msg,
+            briefing_template=tpl,
+            client_mutation_id=input.client_mutation_id,
+        )
+
+    @relay.mutation(permission_classes=[_StrictIsAuth])
+    async def archive_briefing_template(
+        self, info, input: inputs.ArchiveBriefingTemplateInput,
+    ) -> types.BriefingTemplateResponse:
+        def _archive():
+            try:
+                tpl_pk = _resolve_id(input.template_id)
+            except Exception:
+                return None, "Invalid template id."
+            try:
+                tpl = models.BriefingTemplate.objects.get(id=tpl_pk)
+            except models.BriefingTemplate.DoesNotExist:
+                return None, "Template not found."
+            tpl.is_archived = True
+            tpl.save(update_fields=["is_archived", "updated_at"])
+            return tpl, "Template archived."
+
+        tpl, msg = await sync_to_async(_archive)()
+        return types.BriefingTemplateResponse(
+            success=tpl is not None,
+            message=msg,
+            briefing_template=tpl,
+            client_mutation_id=input.client_mutation_id,
+        )
+
+
+@strawberry.type
+class JobBriefingMutations:
+    """Per-job briefing edits + template-apply."""
+
+    @relay.mutation(permission_classes=[_StrictIsAuth])
+    async def set_job_briefing(
+        self, info, input: inputs.SetJobBriefingInput,
+    ) -> types.JobBriefingResponse:
+        def _set():
+            try:
+                job_pk = _resolve_id(input.job_id)
+            except Exception:
+                return None, "Invalid job id."
+            try:
+                job = models.Job.objects.get(id=job_pk)
+            except models.Job.DoesNotExist:
+                return None, "Job not found."
+            if input.title is not None:
+                job.briefing_title = input.title.strip()
+            if input.body is not None:
+                job.briefing_body = input.body
+            job.save(update_fields=["briefing_title", "briefing_body", "updated_at"])
+            if input.attachments is not None:
+                job.briefing_attachments.all().delete()
+                for att in input.attachments:
+                    models.JobBriefingAttachment.objects.create(
+                        job=job,
+                        name=att.name,
+                        url=att.url,
+                        content_type=att.content_type or "",
+                        size=att.size,
+                    )
+            return job, "Briefing updated."
+
+        job, msg = await sync_to_async(_set)()
+        return types.JobBriefingResponse(
+            success=job is not None,
+            message=msg,
+            job_uuid=str(job.uuid) if job else None,
+            title=job.briefing_title if job else None,
+            client_mutation_id=input.client_mutation_id,
+        )
+
+    @relay.mutation(permission_classes=[_StrictIsAuth])
+    async def apply_briefing_template(
+        self, info, input: inputs.ApplyBriefingTemplateInput,
+    ) -> types.JobBriefingResponse:
+        def _apply():
+            try:
+                job_pk = _resolve_id(input.job_id)
+                tpl_pk = _resolve_id(input.template_id)
+            except Exception:
+                return None, "Invalid id."
+            try:
+                job = models.Job.objects.get(id=job_pk)
+                tpl = models.BriefingTemplate.objects.get(id=tpl_pk)
+            except (models.Job.DoesNotExist, models.BriefingTemplate.DoesNotExist):
+                return None, "Job or template not found."
+            job.briefing_title = tpl.title
+            job.briefing_body = tpl.body
+            job.briefing_template_id = tpl.id
+            job.save(update_fields=[
+                "briefing_title", "briefing_body", "briefing_template",
+                "updated_at",
+            ])
+            # Replace attachments with a fresh clone of the template's.
+            job.briefing_attachments.all().delete()
+            for att in tpl.attachments.all():
+                models.JobBriefingAttachment.objects.create(
+                    job=job, **_copy_attachment_dict(att),
+                )
+            return job, "Briefing applied from template."
+
+        job, msg = await sync_to_async(_apply)()
+        return types.JobBriefingResponse(
+            success=job is not None,
+            message=msg,
+            job_uuid=str(job.uuid) if job else None,
+            title=job.briefing_title if job else None,
+            client_mutation_id=input.client_mutation_id,
+        )

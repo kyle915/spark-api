@@ -11,7 +11,8 @@ from jobs import types as job_types
 from ambassadors import types as ambassador_types
 from tenants import types as tenant_types
 from . import models
-from utils.gcs import generate_download_url, extract_blob_name_from_url
+from asgiref.sync import sync_to_async
+from utils.gcs import public_url, extract_blob_name_from_url
 
 
 @strawberry_django.type(models.RecapFile)
@@ -27,15 +28,44 @@ class RecapFile(Node):
     file_type: ambassador_types.FileType
     file_recap_category: FileRecapCategory | None
 
-    @strawberry_django.field(only=["file"])
-    def file(self) -> str | None:
-        """Return a signed URL for the product image if it exists."""
-        if not self.file:
+    # We deliberately use a different Python method name (file_url) and
+    # alias it back to the GraphQL field name `file` via the strawberry
+    # `name=` arg. A resolver literally named `file` would shadow the
+    # Django FileField on the instance and force a fresh per-row DB
+    # lookup — fatal for the recaps list which serializes 9.4k file
+    # rows per request.
+    @strawberry.field(name="file")
+    async def file_url(self) -> str | None:
+        """Return the public URL for the recap file if one exists.
+
+        Two-step (mirrors CustomRecapFile.url_str):
+        1. Fast path — __dict__ when the column is loaded.
+        2. Slow path — `refresh_from_db(fields=["file"])` wrapped in
+           sync_to_async when the column was deferred. Previously the
+           bare getattr fallback raised SynchronousOnlyOperation in
+           async Django and silently returned None — the bug that
+           produced empty <img src> tags on recap pages even though
+           the bucket had every blob.
+        """
+        field_file = self.__dict__.get("file")
+        if field_file is None:
+            def _reload():
+                self.refresh_from_db(fields=["file"])
+                return self.__dict__.get("file")
+            try:
+                field_file = await sync_to_async(
+                    _reload, thread_sensitive=True
+                )()
+            except Exception:
+                return None
+        if not field_file:
             return None
-        blob_name = extract_blob_name_from_url(self.file.name)
-        if not blob_name:
-            return None
-        return generate_download_url(blob_name)
+        try:
+            blob = field_file.name
+        except Exception:
+            blob = str(field_file)
+        blob_name = extract_blob_name_from_url(blob)
+        return public_url(blob_name)
 
 
 @strawberry.type
@@ -60,6 +90,107 @@ class RecapFileUrlResponse:
     message: str
     client_mutation_id: strawberry.ID | None = None
     file_url: str | None = None
+
+
+@strawberry.type
+class MissingRecapAmbassadorInfo:
+    """Shape of an assigned BA on a recap-missing event row.
+
+    Surfaced to the /recaps/missing UI so the admin can see who was on
+    the shift, then either nudge them via push or file the recap on
+    their behalf.
+    """
+
+    # AmbassadorEvent.uuid — what the nudge mutation takes.
+    ambassador_event_uuid: strawberry.ID
+    # Ambassador.uuid — passed to /recap/create?event=…&ambassador=…
+    # when admin clicks "File for them".
+    ambassador_uuid: strawberry.ID
+    name: str
+    email: str | None = None
+    # Whether the BA accepted the invite (is_approved). Pending invites
+    # haven't formally said yes; the admin may want to nudge them
+    # differently or skip nudging entirely.
+    is_approved: bool
+
+
+@strawberry.type
+class MissingRecapEventType:
+    """One row in the /recaps/missing report — an event that's already
+    over but doesn't have a recap yet.
+    """
+
+    event_uuid: strawberry.ID
+    # Human-friendly fallback chain for the row label: event name →
+    # retailer name → "(shift)". Lets the UI skip the null-check it'd
+    # otherwise scatter across the row template.
+    event_name: str
+    venue: str | None = None
+    address: str | None = None
+    state_code: str | None = None
+    date: str | None = None
+    start_time: str | None = None
+    end_time: str | None = None
+    # Hours since the shift ended (end_time, falling back to start_time).
+    # Lets the UI render an "OVERDUE 18h" chip without re-computing
+    # local dates from the date/time strings.
+    hours_overdue: int | None = None
+    # Deep-link target so the row can deep-link to the parent request
+    # on the Master Tracker.
+    request_uuid: strawberry.ID | None = None
+    # All BAs assigned to this shift — admin can nudge any of them.
+    assigned_ambassadors: List[MissingRecapAmbassadorInfo] = strawberry.field(
+        default_factory=list,
+    )
+
+
+@strawberry.type
+class NudgeRecapResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    # Number of devices the push hit (Expo "ok" tickets). 0 means the
+    # BA has no registered devices — UI surfaces a clearer hint than
+    # a generic "failed".
+    devices_notified: int | None = None
+
+
+@strawberry.type
+class ExecutiveSummaryRow:
+    """One ranked row in the top-stores / top-BAs lists."""
+
+    label: str
+    primary_metric: int
+    secondary_metric: str | None = None
+
+
+@strawberry.type
+class ExecutiveSummaryType:
+    """GraphQL projection of digest.exec_services.ExecutiveSummary.
+
+    Powers the dashboard "Pace" widget — same numbers the weekly
+    email surfaces, exposed live so kyle can refresh and see the
+    delta without waiting for Monday morning.
+    """
+
+    tenant_id: strawberry.ID
+    tenant_name: str
+    period_label: str
+    recap_count: int
+    consumer_reach: int
+    samples_distributed: int
+    top_stores: List[ExecutiveSummaryRow] = strawberry.field(
+        default_factory=list,
+    )
+    top_bas: List[ExecutiveSummaryRow] = strawberry.field(
+        default_factory=list,
+    )
+    # Same delta logic the email template uses. None means no prior
+    # period available (e.g. tenant is brand new).
+    recap_count_delta: int | None = None
+    consumer_reach_delta: int | None = None
+    recap_count_delta_chip: str | None = None
+    consumer_reach_delta_chip: str | None = None
 
 
 @strawberry_django.type(models.ConsumerEngagements)
@@ -168,22 +299,100 @@ class Recap(Node):
     consumer_feedback: List[ConsumerFeedback]
     account_feedback: List[AccountFeedback]
 
+    # NOTE: we use models.RecapFile.objects.filter(recap=self) instead
+    # of self.recap_files.all() because defining a method named
+    # `recap_files` on a strawberry type shadows the Django reverse-
+    # accessor of the same name. Inside the resolver body, `self.recap_files`
+    # would resolve to the bound method (not the manager), and `.all()`
+    # would silently fail — returning [] for every recap in the API
+    # despite the DB having the rows. Going through the model manager
+    # directly side-steps the name collision.
+
     @strawberry.field
-    def recap_file(self) -> RecapFile | None:
+    async def recap_file(self) -> RecapFile | None:
         """Return first linked recap file for backward compatibility."""
-        files = list(self.recap_files.all())
-        return files[0] if files else None
+        first = await sync_to_async(
+            lambda: models.RecapFile.objects.filter(recap=self)
+            .order_by("id")
+            .first(),
+            thread_sensitive=True,
+        )()
+        return first
 
     @strawberry.field
-    def recap_file_id(self) -> strawberry.ID | None:
+    async def recap_file_id(self) -> strawberry.ID | None:
         """Return id for the first linked recap file."""
-        files = list(self.recap_files.all())
-        return strawberry.ID(str(files[0].id)) if files else None
+        first = await sync_to_async(
+            lambda: models.RecapFile.objects.filter(recap=self)
+            .order_by("id")
+            .first(),
+            thread_sensitive=True,
+        )()
+        return strawberry.ID(str(first.id)) if first else None
 
     @strawberry.field
-    def recap_files(self) -> List[RecapFile]:
-        """Return all recap files linked to this recap."""
-        return list(self.recap_files.all())
+    async def recap_files(self) -> List[RecapFile]:
+        """Return all recap files linked to this recap. ORM call has
+        to be wrapped in sync_to_async because Strawberry runs the
+        resolver inside the request's async loop and Django refuses
+        synchronous DB I/O there."""
+        return await sync_to_async(
+            lambda: list(
+                models.RecapFile.objects.filter(recap=self).order_by("id")
+            ),
+            thread_sensitive=True,
+        )()
+
+    @strawberry.field
+    async def recap_files_count(self) -> int:
+        """Count of files linked to this recap. Cheap COUNT(*) instead
+        of returning the full array — the recap list card only needs
+        the number for the "◉ N FILES" chip, not the per-file metadata."""
+        return await sync_to_async(
+            lambda: models.RecapFile.objects.filter(recap=self).count(),
+            thread_sensitive=True,
+        )()
+
+    @strawberry.field
+    async def hero_file(self) -> RecapFile | None:
+        """First renderable image attached to this recap, if any.
+
+        Used by the /recaps list card to render a single thumbnail
+        without round-tripping the full recapFiles array.
+
+        Picking order:
+          1. Any JPG/PNG/WEBP/GIF — most browsers render these natively.
+          2. Fall back to HEIC/HEIF — the frontend has a libheif
+             decoder for these on the detail page, and Safari/iOS
+             render them natively. Better to show a real (decoded)
+             photo than the empty-diamond placeholder.
+          3. Skip PDFs / video / unknown — those can't <img src>.
+        """
+        WEB_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".gif")
+        HEIC_EXTS = (".heic", ".heif")
+        SKIP_EXTS = (".pdf", ".mp4", ".mov", ".webm", ".doc", ".docx", ".xlsx")
+
+        def _pick():
+            qs = models.RecapFile.objects.filter(recap=self).order_by("id")
+            heic_fallback = None
+            for f in qs:
+                path = (getattr(f, "file", None) or "")
+                if not path:
+                    continue
+                try:
+                    path = str(path).lower()
+                except Exception:
+                    continue
+                clean = path.split("?", 1)[0]
+                if clean.endswith(SKIP_EXTS):
+                    continue
+                if clean.endswith(WEB_EXTS):
+                    return f
+                if clean.endswith(HEIC_EXTS) and heic_fallback is None:
+                    heic_fallback = f
+            return heic_fallback
+
+        return await sync_to_async(_pick, thread_sensitive=True)()
 
     @strawberry.field(deprecation_reason="Use ambassador instead.")
     def ambassadors(self) -> List[ambassador_types.Ambassador]:
@@ -307,15 +516,46 @@ class CustomRecapFile(Node):
     file_type: ambassador_types.FileType
     file_recap_category: FileRecapCategory | None
 
-    @strawberry_django.field(only=["url"])
-    def url(self) -> str | None:
-        """Return a signed URL for the custom recap file if it exists."""
-        if not self.url:
+    @strawberry.field(name="url")
+    async def url_str(self) -> str | None:
+        """Return the public URL for the custom recap file if any.
+
+        Two-step:
+        1. Read from __dict__ when the column is loaded (the optimizer
+           usually selects every column on a one-shot customRecap
+           lookup, so this is the fast path).
+        2. If the column is deferred — which happens when the
+           strawberry-django optimizer trims to only-the-fields-Relay-
+           asked-for and the parent is a *plural* connection — pull the
+           row's `url` via `refresh_from_db` inside `sync_to_async`.
+           The previous implementation did a bare `getattr(self, "url")`
+           that raised `SynchronousOnlyOperation` in async Django and
+           the broad `except` silently returned None. That's exactly
+           what produced 62 × `<img src="">` on the custom-recap
+           detail page even though the DB had every blob path.
+        """
+        # Fast path: column already on instance.
+        field_file = self.__dict__.get("url")
+        if field_file is None:
+            # Slow path: refresh just the `url` column so we don't pull
+            # the whole row twice. Async-safe.
+            def _reload():
+                self.refresh_from_db(fields=["url"])
+                return self.__dict__.get("url")
+            try:
+                field_file = await sync_to_async(
+                    _reload, thread_sensitive=True
+                )()
+            except Exception:
+                return None
+        if not field_file:
             return None
-        blob_name = extract_blob_name_from_url(self.url.name)
-        if not blob_name:
-            return None
-        return generate_download_url(blob_name)
+        try:
+            blob = field_file.name
+        except Exception:
+            blob = str(field_file)
+        blob_name = extract_blob_name_from_url(blob)
+        return public_url(blob_name)
 
 
 @strawberry.type
@@ -324,6 +564,32 @@ class CustomRecapDetailResponse:
     message: str
     client_mutation_id: strawberry.ID | None = None
     custom_recap: CustomRecap | None = None
+
+
+@strawberry.type
+class ImportConnecteamRecapPdfStat:
+    """One row in the importer's per-field report. Tells the admin
+    exactly which PDF labels mapped where and at what confidence."""
+
+    pdf_label: str
+    pdf_value: str
+    field_name: str | None = None
+    field_id: strawberry.ID | None = None
+    score: float | None = None  # null when exact match
+    skipped_reason: str | None = None  # null when value imported
+
+
+@strawberry.type
+class ImportConnecteamRecapPdfResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    custom_recap: CustomRecap | None = None
+    matched_count: int = 0
+    unmatched_count: int = 0
+    stats: list[ImportConnecteamRecapPdfStat] = strawberry.field(
+        default_factory=list,
+    )
 
 
 @strawberry.type

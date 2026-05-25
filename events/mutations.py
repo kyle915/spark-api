@@ -1,5 +1,6 @@
 import strawberry
 import datetime
+import logging
 
 import strawberry
 from strawberry import relay
@@ -30,6 +31,13 @@ from .envelopes import (
     RequestorRequestDeclinedMailer,
     RequestCreatedNotificationMailer,
     RequestorRequestCreatedMailer,
+    RmmAssignedRequestMailer,
+    NoteMentionMailer,
+)
+from .routing import (
+    assign_rmm_for_request,
+    extract_state_code,
+    IGNITE_REVIEW_CC,
 )
 from utils.gcs import (
     delete_blob,
@@ -53,6 +61,8 @@ from jobs import models as job_models
 from jobs.notification_rules import should_send_ambassador_event_email
 
 ensure_relay_mutation()
+
+logger = logging.getLogger(__name__)
 
 User = get_user_model()
 
@@ -2192,6 +2202,31 @@ class PublicRequestMutations:
             await _notify_spark_admins_for_client_request(
                 request_with_relations, location, delay_seconds=1
             )
+            # Per-tenant state-based RMM routing (LD only today). The
+            # helper sets request.rmm_asigned_id + returns the TO email
+            # list (a single RMM, or every RMM in the table if the
+            # state isn't covered).
+            assigned_rmm, rmm_emails = await assign_rmm_for_request(
+                request_with_relations, request_url_name
+            )
+            if rmm_emails:
+                await _notify_rmm_for_request_created(
+                    request_with_relations,
+                    location,
+                    rmm_emails,
+                    assigned_rmm,
+                )
+                # Refresh the in-memory model so the requestor email
+                # below picks up the freshly-set rmm_asigned (used in
+                # the 'routed to {name}' line).
+                request_with_relations = await sync_to_async(
+                    models.Request.objects.select_related(
+                        "tenant", "timezone", "request_type",
+                        "retailer__location__state",
+                        "distributor__location__state",
+                        "rmm_asigned",
+                    ).get
+                )(id=request_with_relations.id)
             await _notify_requestor_for_request_created(
                 request_with_relations, location, delay_seconds=2
             )
@@ -2439,6 +2474,30 @@ async def _notify_spark_admins_for_client_request(
     return
 
 
+async def _notify_rmm_for_request_created(
+    request: models.Request,
+    location: models.Location | None,
+    to_emails: list[str],
+    assigned_rmm,
+) -> None:
+    """Send the routing email to the territory's RMM(s) and CC the
+    Ignite team."""
+    rmm_first = (
+        (getattr(assigned_rmm, "first_name", None) or "").strip()
+        or (assigned_rmm.email.split("@")[0] if assigned_rmm else "team")
+    )
+    state_code = extract_state_code(getattr(request, "address", None))
+    mailer = RmmAssignedRequestMailer(
+        request=request,
+        location=location,
+        to_emails=to_emails,
+        cc_emails=IGNITE_REVIEW_CC,
+        rmm_first_name=rmm_first,
+        state_code=state_code,
+    )
+    await sync_to_async(mailer.send)()
+
+
 async def _notify_requestor_for_request_created(
     request: models.Request,
     location: models.Location | None,
@@ -2476,6 +2535,35 @@ def _get_request_review_copy_emails(exclude_email: str | None = None) -> list[st
     return unique_emails
 
 
+def _get_spark_admin_emails() -> list[str]:
+    """Every active Spark admin's email. Used so any new admin we add
+    is automatically copied on every request approval — no settings
+    file edit, no code change. Hardcoded `IGNITE_REVIEW_CC` still
+    fronts the list (consistency for the historical ops team), this
+    just folds in anyone else with role=spark-admin."""
+    from tenants.models import Role
+    from django.contrib.auth import get_user_model
+
+    User = get_user_model()
+    try:
+        emails = list(
+            User.objects.filter(
+                role__slug=Role.SPARK_ADMIN_SLUG,
+                is_active=True,
+            )
+            .exclude(email__isnull=True)
+            .exclude(email__exact="")
+            .values_list("email", flat=True)
+        )
+    except Exception:
+        return []
+    return [e.strip() for e in emails if (e or "").strip()]
+
+
+async def _get_spark_admin_emails_async() -> list[str]:
+    return await sync_to_async(_get_spark_admin_emails)()
+
+
 async def _notify_requestor_for_request_approved(
     request: models.Request,
     location: models.Location | None,
@@ -2486,7 +2574,28 @@ async def _notify_requestor_for_request_approved(
         return
 
     request.requestor_email = requestor_email
-    copy_emails = _get_request_review_copy_emails(exclude_email=requestor_email)
+    # CC the Ignite ops team on every approval — events@, kyle@,
+    # myriant@, nevena@, madison@ — plus every active Spark admin in
+    # the DB so new admins get the paper trail automatically without
+    # editing settings. Dedupes against the requestor's address so no
+    # one CC's themselves.
+    admin_emails = await _get_spark_admin_emails_async()
+    normalized_exclude = requestor_email.strip().lower()
+    copy_emails = list(
+        dict.fromkeys(
+            _get_request_review_copy_emails(exclude_email=requestor_email)
+            + [
+                e
+                for e in IGNITE_REVIEW_CC
+                if (e or "").strip().lower() != normalized_exclude
+            ]
+            + [
+                e
+                for e in admin_emails
+                if (e or "").strip().lower() != normalized_exclude
+            ]
+        )
+    )
     mailer = RequestorRequestApprovedMailer(
         request=request,
         location=location,
@@ -2518,6 +2627,78 @@ async def _notify_requestor_for_request_declined(
         reviewed_by_email=reviewed_by_email,
     )
     await sync_to_async(mailer.send)(delay_seconds=delay_seconds)
+
+
+async def _push_requestor_for_request_verdict(
+    request: models.Request,
+    *,
+    approved: bool,
+    decline_reason: str | None = None,
+) -> None:
+    """Push the approve / decline outcome to the requestor's mobile.
+
+    Best-effort. Finds the User by the request's `requestor_email`
+    (falls back to created_by) and fires the existing send-push helper
+    via the django-rq queue. Email delivery is handled separately by
+    `_notify_requestor_for_request_approved` / _declined; this is
+    additive — mobile users who'd otherwise have to refresh the app
+    get a real-time ping.
+
+    Swallows every exception so a push hiccup doesn't roll back the
+    approve/decline (the email + status change still ship).
+    """
+    try:
+        from ambassadors.push import enqueue_push
+
+        recipient_email = (
+            getattr(request, "requestor_email", None)
+            or ""
+        ).strip().lower()
+        recipient_user_id: int | None = None
+        if recipient_email:
+            recipient_user_id = await sync_to_async(
+                lambda: User.objects.filter(email__iexact=recipient_email)
+                .values_list("id", flat=True)
+                .first()
+            )()
+        if not recipient_user_id:
+            recipient_user_id = getattr(request, "created_by_id", None)
+        if not recipient_user_id:
+            return
+
+        venue = (getattr(request, "retailer_name", None) or "").strip()
+        name = (
+            getattr(request, "name", None)
+            or venue
+            or f"Request R-{str(getattr(request, 'uuid', ''))[-4:].upper()}"
+        )[:80]
+
+        if approved:
+            title = "Request approved"
+            body = f"{name} is approved. Ignite ops will staff it."
+        else:
+            reason = (decline_reason or "").strip()
+            title = "Request declined"
+            body = (
+                f"{name} was declined."
+                + (f" Reason: {reason}" if reason else "")
+            )[:200]
+
+        enqueue_push(
+            recipient_user_id,
+            title=title,
+            body=body,
+            data={
+                "screen": "request",
+                "requestUuid": str(getattr(request, "uuid", "")),
+                "verdict": "approved" if approved else "declined",
+            },
+        )
+    except Exception:
+        logger.exception(
+            "push requestor verdict notify failed for request_id=%s",
+            getattr(request, "id", None),
+        )
 
 
 async def _notify_requestor_for_request_auto_approved(
@@ -2590,26 +2771,54 @@ class RequestMutations:
                 tenant_id=tenant_id
             )
             timestamp = datetime.datetime.utcnow().strftime("%Y%m%d%H%M%S")
-            blob_name = (
-                f"requests/import-templates/tenant-{tenant_id}/"
-                f"requests-import-template-{timestamp}.xlsx"
-            )
+            file_name = f"spark-bulk-template-{timestamp}.xlsx"
 
-            await sync_to_async(upload_bytes)(
-                blob_name,
-                template_bytes,
-                content_type=(
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                ),
-            )
-            file_url = await sync_to_async(generate_download_url)(blob_name)
+            # Inline path — no GCS dependency. Front-end decodes the
+            # base64 into a Blob and triggers a browser download.
+            # Much faster (one round-trip instead of two) and works
+            # even when the service account doesn't have
+            # storage.objects.create on the bucket.
+            import base64
+
+            file_base64 = base64.b64encode(template_bytes).decode("ascii")
+
+            # Best-effort GCS mirror — keeps the legacy `file_url`
+            # path alive for any caller still reading it, but
+            # failure is non-fatal now.
+            file_url: str | None = None
+            try:
+                blob_name = (
+                    f"requests/import-templates/tenant-{tenant_id}/"
+                    f"requests-import-template-{timestamp}.xlsx"
+                )
+                await sync_to_async(upload_bytes)(
+                    blob_name,
+                    template_bytes,
+                    content_type=(
+                        "application/vnd.openxmlformats-officedocument."
+                        "spreadsheetml.sheet"
+                    ),
+                )
+                from utils.gcs import public_url
+
+                file_url = public_url(blob_name) or None
+            except Exception as exc:  # noqa: BLE001
+                import logging
+
+                logging.getLogger(__name__).info(
+                    "skipping GCS mirror for request batch template "
+                    "(falling back to inline base64): %s",
+                    exc,
+                )
 
             return build_mutation_response(
                 types.RequestBatchTemplateResponse,
                 success=True,
-                message="Template URL generated successfully.",
+                message="Template ready.",
                 input_obj=input,
                 file_url=file_url,
+                file_base64=file_base64,
+                file_name=file_name,
             )
         except (GraphQLError, ValueError) as e:
             return build_mutation_response(
@@ -2762,6 +2971,26 @@ class RequestMutations:
                 ).get
             )(id=request.id)
 
+            # Audit log: first entry in the request's timeline.
+            try:
+                await sync_to_async(models.RequestActivityLog.objects.create)(
+                    tenant=request_with_relations.tenant,
+                    request=request_with_relations,
+                    kind=models.RequestActivityLog.KIND_CREATED,
+                    actor_user=service.user if getattr(service.user, "id", None) else None,
+                    summary=(
+                        "Request created"
+                        + (
+                            f" for {request_with_relations.retailer_name}"
+                            if request_with_relations.retailer_name
+                            else ""
+                        )
+                    ),
+                    metadata={},
+                )
+            except Exception:
+                pass
+
             is_client = service.user is not None and await service.user.role.is_client
             if is_client:
                 location = await _resolve_request_location(request_with_relations)
@@ -2771,6 +3000,65 @@ class RequestMutations:
                 await _notify_requestor_for_request_auto_approved(
                     request_with_relations, location, delay_seconds=1
                 )
+            else:
+                # Admin log-event flow: skip the RMM approval cycle and
+                # land the request straight on the Master Tracker as
+                # approved. Mirrors the moves approve_request does —
+                # status flip + materialize an Event row — but without
+                # the requestor email (admin is creating on someone
+                # else's behalf, no point sending self a notification).
+                try:
+                    approved_status = await sync_to_async(
+                        models.RequestStatus.objects.get_by_slug
+                    )(slug="approved", tenant=request_with_relations.tenant_id)
+                    if approved_status:
+                        request_with_relations.status = approved_status
+                        request_with_relations.approved_by = service.user
+                        await sync_to_async(request_with_relations.save)()
+                        try:
+                            await sync_to_async(
+                                models.RequestActivityLog.objects.create
+                            )(
+                                tenant=request_with_relations.tenant,
+                                request=request_with_relations,
+                                kind=models.RequestActivityLog.KIND_STATUS_CHANGED,
+                                actor_user=(
+                                    service.user
+                                    if getattr(service.user, "id", None)
+                                    else None
+                                ),
+                                summary="Logged by admin · auto-approved",
+                                metadata={"from": "pending", "to": "approved"},
+                            )
+                        except Exception:
+                            pass
+                        # Materialize a corresponding Event row so the
+                        # tracker shows the activation as scheduled.
+                        # Idempotent: skip if an event already exists.
+                        try:
+                            existing = await sync_to_async(
+                                lambda: models.Event.objects.filter(
+                                    request_id=request_with_relations.id
+                                )
+                                .order_by("-id")
+                                .first()
+                            )()
+                            if existing is None:
+                                await models.Event.objects.from_request(
+                                    request=request_with_relations,
+                                    created_by=service.user,
+                                )
+                        except Exception:
+                            import logging
+                            logging.getLogger(__name__).exception(
+                                "log-event: failed to materialize Event for "
+                                "request_id=%s",
+                                request_with_relations.id,
+                            )
+                except Exception:
+                    # Don't fail the whole create if approval steps
+                    # blow up — admin can still approve manually.
+                    pass
             return build_mutation_response(
                 types.RequestDetailResponse,
                 success=True,
@@ -2785,6 +3073,228 @@ class RequestMutations:
                 message=str(e),
                 input_obj=input,
             )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def bulk_clone_request(
+        self,
+        info: strawberry.Info,
+        input: inputs.BulkCloneRequestInput,
+    ) -> types.BulkCloneRequestResponse:
+        """Clone an existing request N times with per-copy date (and
+        optional venue) overrides.
+
+        What gets copied from source per clone:
+          - name, address, request_type, distributor, retailer,
+            timezone, notes, store_number, billing_entity, client,
+            rmm_asigned, coordinates, retailer_*/distributor_*/
+            client_*/store_manager_* denormalized fields, location,
+            state, tenant
+        What's per-copy:
+          - date (required), start_time, end_time (default to source's)
+          - retailer / store_number / address (default to source's)
+        What's NOT copied (intentional):
+          - id, uuid (autogenerated)
+          - status (resets to default per-tenant via save())
+          - reviewed, approved_by (fresh approvals lifecycle)
+          - created_at, updated_at (autogenerated)
+          - RequestProduct + RequestDetail rows (admin re-adds as
+            needed; common case is product picker survives via
+            duplication of the source's notes/instructions)
+
+        Cross-tenant guard: caller must have access to the source's
+        tenant. Tenant inferred from source — clones land in the
+        same tenant.
+        """
+        from datetime import datetime as _datetime, timezone as _tz
+        from events import models as _evm
+
+        if not input.copies:
+            return build_mutation_response(
+                types.BulkCloneRequestResponse,
+                success=False,
+                message="At least one copy is required.",
+                input_obj=input,
+            )
+        if len(input.copies) > 50:
+            return build_mutation_response(
+                types.BulkCloneRequestResponse,
+                success=False,
+                message=(
+                    "Bulk clone is limited to 50 copies per call. "
+                    "Split larger campaigns across multiple submissions."
+                ),
+                input_obj=input,
+            )
+
+        try:
+            source_pk = resolve_id_to_int(input.source_request_id)
+        except (TypeError, ValueError, GraphQLError):
+            return build_mutation_response(
+                types.BulkCloneRequestResponse,
+                success=False,
+                message="Invalid source_request_id.",
+                input_obj=input,
+            )
+
+        # Pull the acting user once outside the sync block so we can
+        # attribute each clone's audit-log entry to them. None is fine
+        # for system-initiated paths.
+        try:
+            _service = EventMutationService()
+            actor_user = await _service.get_user(info)
+        except Exception:
+            actor_user = None
+
+        # ISO parser shared across all copies. Accepts date-only
+        # (YYYY-MM-DD) and full ISO datetime. Date-only gets midnight
+        # UTC to match the source's typical pattern.
+        def _parse_iso(raw: str | None) -> _datetime | None:
+            if not raw:
+                return None
+            s = raw.strip()
+            if not s:
+                return None
+            try:
+                dt = _datetime.fromisoformat(s.replace("Z", "+00:00"))
+            except ValueError:
+                try:
+                    dt = _datetime.strptime(s[:10], "%Y-%m-%d")
+                except ValueError as exc:
+                    raise GraphQLError(
+                        f"Could not parse date {raw!r} — expected ISO format."
+                    ) from exc
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=_tz.utc)
+            return dt
+
+        @sync_to_async
+        def _do_clone():
+            try:
+                source = _evm.Request.objects.select_related(
+                    "request_type",
+                    "distributor",
+                    "retailer",
+                    "timezone",
+                    "tenant",
+                    "client",
+                    "billing_entity",
+                    "rmm_asigned",
+                    "location",
+                    "state",
+                ).get(pk=source_pk)
+            except _evm.Request.DoesNotExist:
+                raise GraphQLError("Source request not found.")
+
+            created_uuids: list[str] = []
+            for idx, copy in enumerate(input.copies):
+                date_dt = _parse_iso(copy.date_iso)
+                if not date_dt:
+                    raise GraphQLError(
+                        f"Copy {idx + 1}: dateIso is required."
+                    )
+                start_dt = (
+                    _parse_iso(copy.start_time_iso) or source.start_time
+                )
+                end_dt = _parse_iso(copy.end_time_iso) or source.end_time
+
+                retailer = source.retailer
+                if copy.retailer_id not in (None, ""):
+                    try:
+                        retailer_pk = resolve_id_to_int(copy.retailer_id)
+                        retailer = _evm.Retailer.objects.filter(
+                            pk=retailer_pk
+                        ).first()
+                    except (TypeError, ValueError, GraphQLError):
+                        raise GraphQLError(
+                            f"Copy {idx + 1}: invalid retailerId."
+                        )
+                    if not retailer:
+                        raise GraphQLError(
+                            f"Copy {idx + 1}: retailer not found."
+                        )
+                    # Cross-tenant guard: retailers are tenant-scoped;
+                    # the cloned request can't pull a retailer from
+                    # another tenant.
+                    if (
+                        getattr(retailer, "tenant_id", None) is not None
+                        and retailer.tenant_id != source.tenant_id
+                    ):
+                        raise GraphQLError(
+                            f"Copy {idx + 1}: retailer belongs to a "
+                            f"different tenant."
+                        )
+
+                clone = _evm.Request(
+                    name=source.name,
+                    date=date_dt,
+                    start_time=start_dt,
+                    end_time=end_dt,
+                    address=(copy.address or source.address),
+                    notes=source.notes,
+                    store_number=(copy.store_number or source.store_number),
+                    coordinates=list(source.coordinates or []),
+                    client_name=source.client_name,
+                    client_email=source.client_email,
+                    distributor_name=source.distributor_name,
+                    distributor_email=source.distributor_email,
+                    retailer_name=source.retailer_name,
+                    retailer_address=source.retailer_address,
+                    retailer_store_contact=source.retailer_store_contact,
+                    store_manager_name=source.store_manager_name,
+                    store_manager_phone=source.store_manager_phone,
+                    timezone=source.timezone,
+                    client=source.client,
+                    distributor=source.distributor,
+                    retailer=retailer,
+                    request_type=source.request_type,
+                    tenant=source.tenant,
+                    billing_entity=source.billing_entity,
+                    rmm_asigned=source.rmm_asigned,
+                    location=source.location,
+                    state=source.state,
+                    created_by=source.created_by,
+                    requestor_email=source.requestor_email,
+                )
+                clone.save()
+                created_uuids.append(str(clone.uuid))
+                # Audit log: each clone gets a "cloned_from" entry
+                # pointing at the source. Best-effort; never raises.
+                try:
+                    _evm.RequestActivityLog.objects.create(
+                        tenant=clone.tenant,
+                        request=clone,
+                        kind=_evm.RequestActivityLog.KIND_CLONED_FROM,
+                        actor_user=actor_user
+                        if getattr(actor_user, "id", None)
+                        else None,
+                        summary=f"Cloned from {str(source.uuid)[:8]}",
+                        metadata={"source_request_uuid": str(source.uuid)},
+                    )
+                except Exception:
+                    pass
+            return created_uuids
+
+        try:
+            created_uuids = await _do_clone()
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.BulkCloneRequestResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
+        return build_mutation_response(
+            types.BulkCloneRequestResponse,
+            success=True,
+            message=(
+                f"Cloned {len(created_uuids)} request"
+                f"{'s' if len(created_uuids) != 1 else ''} from the source."
+            ),
+            input_obj=input,
+            created_count=len(created_uuids),
+            created_uuids=created_uuids,
+        )
 
     @relay.mutation(permission_classes=[StrictIsAuthenticated])
     async def update_request(
@@ -2866,13 +3376,66 @@ class RequestMutations:
                 raise GraphQLError(
                     "Approval status not found. Please ensure you have a status with slug 'approved'."
                 )
+            prev_status_slug = ""
+            try:
+                if request.status_id:
+                    prev_status_obj = await sync_to_async(
+                        lambda: models.RequestStatus.objects.filter(
+                            id=request.status_id
+                        ).first()
+                    )()
+                    prev_status_slug = (
+                        getattr(prev_status_obj, "slug", "") or ""
+                    )
+            except Exception:
+                prev_status_slug = ""
+
             request.status = approval_status
             request.approved_by = user
             await sync_to_async(request.save)()
 
+            # Audit log: capture the status transition for the timeline.
+            try:
+                await sync_to_async(models.RequestActivityLog.objects.create)(
+                    tenant=request.tenant,
+                    request=request,
+                    kind=models.RequestActivityLog.KIND_STATUS_CHANGED,
+                    actor_user=user if getattr(user, "id", None) else None,
+                    summary=f"Status: {prev_status_slug or '—'} → approved",
+                    metadata={"from": prev_status_slug, "to": "approved"},
+                )
+            except Exception:
+                pass
+
+            # Materialize a real Event row so Ignite ops can staff against it.
+            # The approved email promises "Ignite staffs a BA + calendar invite",
+            # which requires an Event in the operational pipeline. We skip
+            # creation if an event already exists for this request (idempotent).
+            event = await sync_to_async(
+                lambda: models.Event.objects.filter(request_id=request.id)
+                .order_by("-id")
+                .first()
+            )()
+            if event is None:
+                try:
+                    event = await models.Event.objects.from_request(
+                        request=request,
+                        created_by=user,
+                    )
+                except Exception as exc:
+                    # Don't block approval if event creation fails — log via
+                    # the response message tail but still mark approved.
+                    logger.exception(
+                        "approve_request: failed to materialize Event for request_id=%s: %s",
+                        request.id,
+                        exc,
+                    )
+                    event = None
+
             location = await _resolve_request_location(request)
             await _notify_notification_group_users_for_request(request, location)
             await _notify_requestor_for_request_approved(request, location)
+            await _push_requestor_for_request_verdict(request, approved=True)
 
             return build_mutation_response(
                 types.ApproveRequestResponse,
@@ -2880,7 +3443,7 @@ class RequestMutations:
                 message="Request approved successfully.",
                 input_obj=input,
                 request=request,
-                event=None,
+                event=event,
             )
         except GraphQLError as e:
             return build_mutation_response(
@@ -2942,9 +3505,40 @@ class RequestMutations:
                 raise GraphQLError(
                     "Decline status not found. Please ensure you have a status with slug 'decline'."
                 )
+            prev_status_slug = ""
+            try:
+                if request.status_id:
+                    prev_status_obj = await sync_to_async(
+                        lambda: models.RequestStatus.objects.filter(
+                            id=request.status_id
+                        ).first()
+                    )()
+                    prev_status_slug = (
+                        getattr(prev_status_obj, "slug", "") or ""
+                    )
+            except Exception:
+                prev_status_slug = ""
+
             request.status = decline_status
             request.decline_reason = input.decline_reason
             await sync_to_async(request.save)()
+
+            # Audit log: capture the decline transition + reason.
+            try:
+                await sync_to_async(models.RequestActivityLog.objects.create)(
+                    tenant=request.tenant,
+                    request=request,
+                    kind=models.RequestActivityLog.KIND_STATUS_CHANGED,
+                    actor_user=user if getattr(user, "id", None) else None,
+                    summary=f"Status: {prev_status_slug or '—'} → declined",
+                    metadata={
+                        "from": prev_status_slug,
+                        "to": "declined",
+                        "decline_reason": (input.decline_reason or "")[:500],
+                    },
+                )
+            except Exception:
+                pass
             location = await _resolve_request_location(request)
             reviewed_by_name = (user.get_full_name() or user.email or "").strip() or "-"
             reviewed_by_email = (user.email or "").strip() or "-"
@@ -2953,6 +3547,11 @@ class RequestMutations:
                 location=location,
                 reviewed_by_name=reviewed_by_name,
                 reviewed_by_email=reviewed_by_email,
+            )
+            await _push_requestor_for_request_verdict(
+                request,
+                approved=False,
+                decline_reason=input.decline_reason,
             )
 
             return build_mutation_response(
@@ -2972,6 +3571,100 @@ class RequestMutations:
         except Exception as e:
             return build_mutation_response(
                 types.DeclineRequestResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def delete_request(
+        self,
+        info: strawberry.Info,
+        input: inputs.DeleteRequestInput,
+    ) -> types.DeleteRequestResponse:
+        """Soft-delete a request.
+
+        Sets `deleted_at` so the request disappears from lists, detail
+        pages, and exports. The row stays in the DB — its activity log
+        and any FK-linked events / recaps survive. To restore, an admin
+        can NULL out deleted_at directly in the DB (no UI for that yet).
+
+        Auth: spark-admin or client role that owns the tenant.
+        Ambassadors are blocked.
+        """
+        try:
+            service: RequestMutationService = RequestMutationService()
+            user: User = await service.get_user(info)
+            if user.role_id == ROLE_ID.Ambassadors:
+                raise GraphQLError("You are not authorized to delete requests.")
+
+            try:
+                request_pk = resolve_id_to_int(input.id)
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Invalid request ID.")
+
+            request: models.Request = await sync_to_async(
+                models.Request.objects.select_related("tenant").get
+            )(id=request_pk)
+
+            # Client-role users can only delete in their own tenant.
+            is_spark_admin = await user.role.is_spark_admin
+            if not is_spark_admin:
+                try:
+                    await sync_to_async(user.get_tenant)(tenant_id=request.tenant_id)
+                except Exception:
+                    raise GraphQLError(
+                        "You are not authorized to delete requests for this tenant."
+                    )
+
+            if request.deleted_at is not None:
+                return build_mutation_response(
+                    types.DeleteRequestResponse,
+                    success=False,
+                    message="This request is already deleted.",
+                    input_obj=input,
+                    deleted_request_uuid=str(request.uuid),
+                )
+
+            from django.utils import timezone as _tz
+            request.deleted_at = _tz.now()
+            request.updated_by = user
+            await sync_to_async(request.save)(
+                update_fields=["deleted_at", "updated_by", "updated_at"]
+            )
+
+            # Audit log entry — keeps the timeline honest even though the
+            # request itself is no longer visible. Uses KIND_UPDATED with a
+            # "deleted" metadata flag since there's no dedicated KIND yet.
+            try:
+                await sync_to_async(models.RequestActivityLog.objects.create)(
+                    tenant=request.tenant,
+                    request=request,
+                    kind=models.RequestActivityLog.KIND_UPDATED,
+                    actor_user=user if getattr(user, "id", None) else None,
+                    summary="Request deleted",
+                    metadata={"deleted": True},
+                )
+            except Exception:
+                pass
+
+            return build_mutation_response(
+                types.DeleteRequestResponse,
+                success=True,
+                message="Request deleted.",
+                input_obj=input,
+                deleted_request_uuid=str(request.uuid),
+            )
+        except models.Request.DoesNotExist:
+            return build_mutation_response(
+                types.DeleteRequestResponse,
+                success=False,
+                message="Request not found.",
+                input_obj=input,
+            )
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.DeleteRequestResponse,
                 success=False,
                 message=str(e),
                 input_obj=input,
@@ -3038,6 +3731,161 @@ class RequestMutations:
                 success=False,
                 message=str(e),
                 input_obj=input,
+            )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def notify_note_mention(
+        self,
+        info: strawberry.Info,
+        input: inputs.NotifyNoteMentionInput,
+    ) -> types.NotifyNoteMentionResponse:
+        """
+        Send a branded email to each recipient telling them they were
+        @-mentioned in an internal note on a request. Notes themselves
+        aren't persisted server-side yet (localStorage only); this
+        mutation is purely the notification fanout.
+
+        Anti-spam:
+          - Recipient emails are deduped.
+          - Caller must be authenticated (StrictIsAuthenticated).
+          - Each recipient is sent inline (no queue/Redis); a failure
+            on one email is logged and skipped, others continue.
+        """
+        try:
+            service = RequestMutationService()
+            user: User = await service.get_user(info)
+
+            # Resolve the request — tenant membership check piggy-backs
+            # off the existing get_tenant guard.
+            try:
+                request_id = resolve_id_to_int(input.request_id)
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Invalid request ID.")
+
+            request_obj: models.Request = await sync_to_async(
+                models.Request.objects.select_related(
+                    "tenant", "retailer"
+                ).get
+            )(id=request_id)
+
+            tenant: Tenant = await sync_to_async(Tenant.objects.get)(
+                id=request_obj.tenant_id
+            )
+            is_spark_admin = await user.role.is_spark_admin
+            if not is_spark_admin:
+                try:
+                    await sync_to_async(user.get_tenant)(tenant_id=tenant.id)
+                except Exception:
+                    raise GraphQLError(
+                        "You are not authorized to send notes on this tenant."
+                    )
+
+            body = (input.note_body or "").strip()
+            if not body:
+                raise GraphQLError("Note body is empty.")
+
+            # Dedupe + lowercase normalize recipient list.
+            seen: set[str] = set()
+            recipients: list[str] = []
+            for raw in input.recipient_emails or []:
+                email = (raw or "").strip().lower()
+                if email and email not in seen:
+                    seen.add(email)
+                    recipients.append(email)
+            if not recipients:
+                raise GraphQLError("No recipients to notify.")
+
+            author_name = (
+                user.get_full_name() or user.email or "A teammate"
+            ).strip()
+            author_email = (user.email or "").strip() or None
+
+            base = getattr(
+                settings,
+                "ADMIN_FRONTEND_URL",
+                "https://spark-new-admin.web.app",
+            ).rstrip("/")
+            request_url = (
+                (input.request_url or "").strip()
+                or f"{base}/request/view/{request_obj.uuid}"
+            )
+
+            # Best-effort: per-recipient mailer so one bad address
+            # doesn't drop the whole batch.
+            sent = 0
+            failed: list[str] = []
+            for to_email in recipients:
+                # Try to look up the recipient user for a friendlier
+                # greeting. Not having a user row isn't fatal — we'll
+                # fall back to "there".
+                target_user = await sync_to_async(
+                    lambda: User.objects.filter(email__iexact=to_email).first()
+                )()
+                mentioned_name = (
+                    (target_user.get_full_name() if target_user else None)
+                    or (target_user.email if target_user else None)
+                    or None
+                )
+                mailer = NoteMentionMailer(
+                    request=request_obj,
+                    mentioned_email=to_email,
+                    mentioned_name=mentioned_name,
+                    note_body=body,
+                    author_name=author_name,
+                    author_email=author_email,
+                    request_url=request_url,
+                )
+                try:
+                    await sync_to_async(mailer.send)()
+                    sent += 1
+                except Exception as exc:
+                    import logging
+                    logging.getLogger(__name__).exception(
+                        "note-mention email failed for %s on request_id=%s: %s",
+                        to_email,
+                        request_obj.id,
+                        exc,
+                    )
+                    failed.append(to_email)
+
+            return build_mutation_response(
+                types.NotifyNoteMentionResponse,
+                success=len(failed) == 0,
+                message=(
+                    f"Notified {sent} teammate{'s' if sent != 1 else ''}."
+                    if not failed
+                    else f"Notified {sent}, failed {len(failed)}."
+                ),
+                input_obj=input,
+                sent_count=sent,
+                failed_emails=failed or None,
+            )
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.NotifyNoteMentionResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+                sent_count=0,
+                failed_emails=None,
+            )
+        except models.Request.DoesNotExist:
+            return build_mutation_response(
+                types.NotifyNoteMentionResponse,
+                success=False,
+                message="Request not found.",
+                input_obj=input,
+                sent_count=0,
+                failed_emails=None,
+            )
+        except Exception as e:
+            return build_mutation_response(
+                types.NotifyNoteMentionResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+                sent_count=0,
+                failed_emails=None,
             )
 
 

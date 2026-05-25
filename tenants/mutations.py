@@ -24,7 +24,14 @@ from .models import Role, TenantedUser, Tenant, TenantTheme, PasswordResetCode
 from .types import TenantType, TenantThemeType
 from .inputs import CreateOrUpdateTenantThemeInput
 from .social_auth import BaseSocialAuthMutations, SocialAuthResponse
-from .envelopes import EmailVerificationMailer, ForgotPasswordCodeMailer
+from .envelopes import (
+    EmailVerificationMailer,
+    ForgotPasswordCodeMailer,
+    MagicLinkMailer,
+    PasswordResetLinkMailer,
+)
+from django.core import signing
+from urllib.parse import quote
 from events.models import EventStatus, EventType, RequestStatus, RequestType
 from jobs.models import Status as JobStatus, RateType
 from recaps.models import FileRecapCategory, TypeOfGood
@@ -171,6 +178,56 @@ class ResetPasswordWithCodeInput(SparkGraphQLInput):
     code: str
     password1: str
     password2: str
+
+
+@strawberry.input
+class RequestMagicLinkInput(SparkGraphQLInput):
+    email: str
+    redirect: str | None = None
+
+
+@strawberry.input
+class LoginWithMagicTokenInput(SparkGraphQLInput):
+    token: str
+
+
+@strawberry.input
+class RequestPasswordResetInput(SparkGraphQLInput):
+    email: str
+
+
+@strawberry.input
+class ConfirmPasswordResetInput(SparkGraphQLInput):
+    token: str
+    password1: str
+    password2: str
+
+
+@strawberry.input
+class InviteUserInput(SparkGraphQLInput):
+    email: str
+    first_name: str | None = None
+    last_name: str | None = None
+    role: str  # "admin" | "client" | "ambassador"
+    tenant_id: strawberry.ID | None = None  # required for client/ambassador
+    note: str | None = None
+
+
+@strawberry.input
+class DeleteUserInput(SparkGraphQLInput):
+    user_id: strawberry.ID
+
+
+@strawberry.type
+class MagicLinkLoginResponse:
+    success: bool
+    message: str
+    token: str | None = None
+    refresh_token: str | None = None
+    user_id: strawberry.ID | None = None
+    email: str | None = None
+    first_name: str | None = None
+    last_name: str | None = None
 
 
 @strawberry.input
@@ -435,8 +492,426 @@ class SparkCustomRegister:
         )
 
 
+MAGIC_LINK_SALT = "spark.magic-link.v1"
+MAGIC_LINK_TTL_SECONDS = 60 * 30  # 30 min
+
+
+def _build_magic_link(token: str, redirect: str | None) -> str:
+    base = getattr(settings, "ADMIN_FRONTEND_URL", "https://spark-new-admin.web.app").rstrip("/")
+    suffix = f"?next={quote(redirect)}" if redirect else ""
+    return f"{base}/magic/{token}{suffix}"
+
+
+def _build_magic_link_mobile(token: str) -> str:
+    """Custom-scheme URL that spark-mobile catches via expo-linking.
+
+    The scheme is registered in spark-mobile/app.json (`expo.scheme`).
+    When a user taps this link on a device with the app installed,
+    iOS / Android route it to the app — which then calls
+    loginWithMagicToken to swap the token for a JWT.
+    """
+    scheme = getattr(settings, "MOBILE_DEEP_LINK_SCHEME", "spark")
+    return f"{scheme}://magic/{token}"
+
+
 @strawberry.type
 class SparkUserMutations:
+    @relay.mutation
+    async def request_magic_link(
+        self,
+        info: strawberry.Info,
+        input: RequestMagicLinkInput,
+    ) -> UpdateUserResponse:
+        """Email a one-click sign-in link. Generic success regardless
+        of whether the email matches a real user (anti-enumeration)."""
+        email = (input.email or "").strip().lower()
+        generic = UpdateUserResponse(
+            success=True,
+            message="If the email exists, we sent a sign-in link.",
+            client_mutation_id=input.client_mutation_id,
+        )
+        if not email:
+            return UpdateUserResponse(
+                success=False, message="Email is required.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        user = await sync_to_async(
+            lambda: User.objects.filter(email__iexact=email).first()
+        )()
+        if not user:
+            # Generic response — never confirm/deny membership.
+            return generic
+
+        token = signing.dumps(
+            {"u": user.id, "e": user.email}, salt=MAGIC_LINK_SALT
+        )
+        link = _build_magic_link(token, input.redirect)
+        mobile_link = _build_magic_link_mobile(token)
+
+        try:
+            mailer = MagicLinkMailer(
+                user=user,
+                link=link,
+                mobile_link=mobile_link,
+                expires_minutes=MAGIC_LINK_TTL_SECONDS // 60,
+            )
+            # send_async_now bypasses the django-rq queue (Redis isn't
+            # provisioned on Cloud Run) and dispatches the email
+            # synchronously via the Resend driver.
+            await mailer.send_async_now()
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception(
+                "Magic-link email failed for %s; link=%s", email, link,
+            )
+            return generic
+        return generic
+
+    @relay.mutation
+    async def login_with_magic_token(
+        self,
+        info: strawberry.Info,
+        input: LoginWithMagicTokenInput,
+    ) -> MagicLinkLoginResponse:
+        """Exchange a magic-link token for a JWT."""
+        try:
+            payload = signing.loads(
+                input.token, salt=MAGIC_LINK_SALT, max_age=MAGIC_LINK_TTL_SECONDS,
+            )
+        except signing.SignatureExpired:
+            return MagicLinkLoginResponse(success=False, message="Link expired. Request a new one.")
+        except signing.BadSignature:
+            return MagicLinkLoginResponse(success=False, message="Invalid sign-in link.")
+
+        user = await sync_to_async(
+            lambda: User.objects.filter(id=payload["u"]).first()
+        )()
+        if not user or user.email != payload.get("e"):
+            return MagicLinkLoginResponse(success=False, message="Account not found.")
+        if not user.is_active:
+            return MagicLinkLoginResponse(success=False, message="Account is inactive.")
+
+        # gqlauth.core.utils.get_token requires an action arg for v2+
+        jwt = get_token(user, "authentication")
+        return MagicLinkLoginResponse(
+            success=True,
+            message="Signed in.",
+            token=jwt,
+            refresh_token=None,
+            user_id=strawberry.ID(str(user.id)),
+            email=user.email,
+            first_name=user.first_name or None,
+            last_name=user.last_name or None,
+        )
+
+    @relay.mutation
+    async def request_password_reset(
+        self,
+        info: strawberry.Info,
+        input: RequestPasswordResetInput,
+    ) -> UpdateUserResponse:
+        """Email a one-click password-reset link. Generic success
+        regardless of whether the email matches (anti-enumeration)."""
+        email = (input.email or "").strip().lower()
+        generic = UpdateUserResponse(
+            success=True,
+            message="If the email exists, we sent a reset link.",
+            client_mutation_id=input.client_mutation_id,
+        )
+        if not email:
+            return UpdateUserResponse(
+                success=False, message="Email is required.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        user = await sync_to_async(
+            lambda: User.objects.filter(email__iexact=email).first()
+        )()
+        if not user:
+            return generic
+
+        token = signing.dumps(
+            {"u": user.id, "e": user.email, "k": "pwd"},
+            salt="spark.password-reset.v1",
+        )
+        base = getattr(settings, "ADMIN_FRONTEND_URL", "https://spark-new-admin.web.app").rstrip("/")
+        link = f"{base}/reset-password/{token}"
+
+        try:
+            mailer = PasswordResetLinkMailer(
+                user=user, link=link, expires_minutes=30,
+            )
+            await mailer.send_async_now()
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception(
+                "Password-reset email failed for %s", email,
+            )
+            return generic
+        return generic
+
+    @relay.mutation
+    async def confirm_password_reset(
+        self,
+        info: strawberry.Info,
+        input: ConfirmPasswordResetInput,
+    ) -> UpdateUserResponse:
+        """Validate a password-reset token + set a new password."""
+        if not input.password1 or len(input.password1) < 8:
+            return UpdateUserResponse(
+                success=False,
+                message="Password must be at least 8 characters.",
+                client_mutation_id=input.client_mutation_id,
+            )
+        if input.password1 != input.password2:
+            return UpdateUserResponse(
+                success=False,
+                message="Passwords don't match.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        try:
+            payload = signing.loads(
+                input.token,
+                salt="spark.password-reset.v1",
+                max_age=60 * 30,  # 30 min
+            )
+        except signing.SignatureExpired:
+            return UpdateUserResponse(
+                success=False,
+                message="Reset link expired. Request a new one.",
+                client_mutation_id=input.client_mutation_id,
+            )
+        except signing.BadSignature:
+            return UpdateUserResponse(
+                success=False,
+                message="Invalid reset link.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        user = await sync_to_async(
+            lambda: User.objects.filter(id=payload.get("u")).first()
+        )()
+        if not user or user.email != payload.get("e") or payload.get("k") != "pwd":
+            return UpdateUserResponse(
+                success=False,
+                message="Account not found.",
+                client_mutation_id=input.client_mutation_id,
+            )
+        if not user.is_active:
+            return UpdateUserResponse(
+                success=False,
+                message="Account is inactive.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        @sync_to_async
+        def _save():
+            user.set_password(input.password1)
+            user.save(update_fields=["password"])
+
+        await _save()
+        return UpdateUserResponse(
+            success=True,
+            message="Password updated.",
+            client_mutation_id=input.client_mutation_id,
+        )
+
+    @relay.mutation
+    async def invite_user(
+        self,
+        info: strawberry.Info,
+        input: InviteUserInput,
+    ) -> UpdateUserResponse:
+        """
+        Admin-triggered user creation. Maps the role name to role_id
+        (admin->2, client->3, ambassador->1), creates the user with
+        an unusable password, links to the requested tenant (or all
+        tenants for admin), then emails a magic-link so the user can
+        sign in and set their own password.
+
+        Idempotent: if a user with this email already exists, we
+        re-send the magic link without altering their role or tenants.
+        """
+        from .envelopes import MagicLinkMailer
+        from django.core import signing
+        import logging
+
+        role_slug = (input.role or "").strip().lower()
+        role_map = {"admin": 2, "spark-admin": 2, "client": 3, "ambassador": 1}
+        if role_slug not in role_map:
+            return UpdateUserResponse(
+                success=False,
+                message=f"Invalid role '{input.role}'. Must be admin, client, or ambassador.",
+                client_mutation_id=input.client_mutation_id,
+            )
+        role_id = role_map[role_slug]
+        email = (input.email or "").strip().lower()
+        if not email:
+            return UpdateUserResponse(
+                success=False,
+                message="Email is required.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        @sync_to_async
+        def _create_or_get() -> tuple:
+            from django.utils.crypto import get_random_string
+            from .models import TenantedUser
+
+            def _ensure_tenant_links(user, role_id):
+                """Make sure the user has at least one active tenant link.
+
+                Admins → all tenants. Client/BA → the inviter-specified
+                tenant (or no-op when one wasn't provided).
+
+                This runs for both new AND existing users so an admin
+                that was created via some other path (seed script,
+                manual SQL) without TenantedUser rows can still log in
+                after a re-invite. Without this, the existing-user
+                branch was a silent dead-end — user got the magic link,
+                clicked through, then hit "No companies associated."
+                """
+                if role_id == 2:
+                    tenants_qs = Tenant.objects.all()
+                elif input.tenant_id:
+                    tid = resolve_id_to_int(input.tenant_id)
+                    tenants_qs = Tenant.objects.filter(id=tid)
+                else:
+                    tenants_qs = Tenant.objects.none()
+                for t in tenants_qs:
+                    obj, was_created = TenantedUser.objects.get_or_create(
+                        user=user, tenant=t, defaults={"is_active": True},
+                    )
+                    # Re-activate any pre-existing soft-deleted link so
+                    # the user can log in again.
+                    if not was_created and not obj.is_active:
+                        obj.is_active = True
+                        obj.save(update_fields=["is_active"])
+
+            existing = User.objects.filter(email__iexact=email).first()
+            if existing:
+                # Idempotent re-invite: don't touch the user's role
+                # (that's intentional — a previously-set role isn't
+                # ours to overwrite from an admin button), but ALWAYS
+                # backfill tenant links so existing admins with zero
+                # TenantedUser rows aren't locked out.
+                #
+                # Reactivate the user account itself. delete_user soft-
+                # deletes by flipping is_active=False, and the magic-link
+                # login mutation hard-rejects inactive users with
+                # "Account is inactive". Without this, re-inviting a
+                # previously-removed user looked successful (email sent)
+                # but the magic link landed in a "you can't log in" wall.
+                if not existing.is_active:
+                    existing.is_active = True
+                    existing.save(update_fields=["is_active"])
+                _ensure_tenant_links(existing, existing.role_id or role_id)
+                return existing, False
+            # Match the seed script: unusable password marker so the
+            # user is forced through magic-link / password-reset to set
+            # their own creds.
+            user = User.objects.create(
+                username=email,
+                email=email,
+                first_name=input.first_name or "",
+                last_name=input.last_name or "",
+                password="!" + get_random_string(40),
+                is_active=True,
+                is_staff=False,
+                is_superuser=False,
+                role_id=role_id,
+            )
+            _ensure_tenant_links(user, role_id)
+            return user, True
+
+        try:
+            user, created = await _create_or_get()
+        except Exception as exc:
+            logging.getLogger(__name__).exception(
+                "inviteUser failed for %s", email,
+            )
+            return UpdateUserResponse(
+                success=False,
+                message=f"Couldn't create user: {exc}",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        # Email a magic-link so the new user can sign in immediately.
+        token = signing.dumps(
+            {"u": user.id, "e": user.email}, salt="spark.magic-link.v1",
+        )
+        base = getattr(
+            settings, "ADMIN_FRONTEND_URL", "https://spark-new-admin.web.app",
+        ).rstrip("/")
+        link = f"{base}/magic/{token}"
+        try:
+            mailer = MagicLinkMailer(user=user, link=link, expires_minutes=30)
+            await mailer.send_async_now()
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "Invite email failed for %s; link=%s", email, link,
+            )
+
+        return UpdateUserResponse(
+            success=True,
+            message=(
+                f"Invite sent — {email} will receive a sign-in link."
+                if created
+                else f"User exists — re-sent sign-in link to {email}."
+            ),
+            client_mutation_id=input.client_mutation_id,
+        )
+
+    @relay.mutation
+    async def delete_user(
+        self,
+        info: strawberry.Info,
+        input: DeleteUserInput,
+    ) -> UpdateUserResponse:
+        """Soft-delete by deactivating the user + clearing their tenant
+        links. We never hard-delete because foreign keys (requests,
+        events, recaps) reference the user; flipping is_active=false is
+        enough to revoke access immediately."""
+        uid = resolve_id_to_int(input.user_id)
+        actor = await sync_to_async(
+            lambda: getattr(info.context, "user", None)
+        )()
+        if actor and getattr(actor, "id", None) == uid:
+            return UpdateUserResponse(
+                success=False,
+                message="You can't deactivate yourself.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        @sync_to_async
+        def _deactivate():
+            target = User.objects.filter(id=uid).first()
+            if not target:
+                return None
+            target.is_active = False
+            target.save(update_fields=["is_active", "updated_at"])
+            # Mark tenant links inactive too — the existing tenant
+            # queryset filters on is_active so this hides them from
+            # invite lists immediately.
+            TenantedUser = __import__("tenants.models", fromlist=["TenantedUser"]).TenantedUser
+            TenantedUser.objects.filter(user_id=uid).update(is_active=False)
+            return target
+
+        target = await _deactivate()
+        if not target:
+            return UpdateUserResponse(
+                success=False,
+                message="User not found.",
+                client_mutation_id=input.client_mutation_id,
+            )
+        return UpdateUserResponse(
+            success=True,
+            message=f"Deactivated {target.email}.",
+            client_mutation_id=input.client_mutation_id,
+        )
+
     @relay.mutation
     async def forgot_password(
         self,
@@ -1057,6 +1532,16 @@ class UpdateTenantInput(SparkGraphQLInput):
     image: str | None = None
 
 
+@strawberry.input
+class SetLinkedSheetInput(SparkGraphQLInput):
+    """Set or clear the Master-Tracker-linked Google Sheet for a tenant."""
+
+    # Defaults to the active tenant when omitted.
+    tenant_id: strawberry.ID | None = None
+    # Empty string / null clears the link.
+    sheet_url: str | None = None
+
+
 @strawberry.type
 class UpdateTenantResponse:
     success: bool
@@ -1073,8 +1558,101 @@ class TenantThemeResponse:
     client_mutation_id: strawberry.ID | None = None
 
 
+# Tiny mixin so the linked-sheet mutation can be exposed on BOTH the spark
+# (admin) schema AND the clients schema. The current admin frontend talks to
+# the clients GraphQL endpoint, so without this split the mutation was
+# unreachable from the actual production UI ("Cannot query field setLinkedSheet
+# on type 'Mutation'"). Per-tenant scoping is already enforced inside the
+# resolver — auth check + tenant lookup happen on every call.
 @strawberry.type
-class SparkTenantMutations:
+class LinkedSheetMutations:
+    @relay.mutation
+    async def set_linked_sheet(
+        self,
+        info: strawberry.Info,
+        input: SetLinkedSheetInput,
+    ) -> UpdateTenantResponse:
+        """Set or clear the tenant's linked Master-Tracker Google Sheet.
+
+        Stored on Tenant.linked_sheet_url. Front-end LinkedSheetChip
+        and per-page deep-link buttons read it from the tenant query
+        instead of localStorage so every teammate sees the same link
+        from every device. Phase-2 sync workers also use this URL.
+
+        Auth: any signed-in user in the tenant can set/clear. Tenant
+        membership is verified via user.get_tenant() — a client user
+        can only update their own tenant's linked sheet.
+        """
+        user = info.context.request.user
+        if not user.is_authenticated:
+            return UpdateTenantResponse(
+                success=False,
+                message="User not authenticated.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        try:
+            if input.tenant_id:
+                tenant_id = resolve_id_to_int(input.tenant_id)
+            else:
+                bound = await sync_to_async(user.get_tenant)()
+                tenant_id = bound.id if bound else None
+            if not tenant_id:
+                return UpdateTenantResponse(
+                    success=False,
+                    message="No tenant in scope.",
+                    client_mutation_id=input.client_mutation_id,
+                )
+            tenant = await sync_to_async(Tenant.objects.get)(pk=tenant_id)
+        except (Tenant.DoesNotExist, GraphQLError, ValueError, TypeError):
+            return UpdateTenantResponse(
+                success=False,
+                message="Tenant not found.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        url = (input.sheet_url or "").strip()
+        if url and not url.startswith("https://"):
+            return UpdateTenantResponse(
+                success=False,
+                message="Sheet URL must start with https://.",
+                client_mutation_id=input.client_mutation_id,
+            )
+        if url and "docs.google.com" not in url:
+            return UpdateTenantResponse(
+                success=False,
+                message="That doesn't look like a Google Sheets URL.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        @sync_to_async
+        def save():
+            tenant.linked_sheet_url = url or None
+            tenant.updated_by = user
+            tenant.save(
+                update_fields=["linked_sheet_url", "updated_by", "updated_at"]
+            )
+            return tenant
+
+        try:
+            saved = await save()
+        except Exception as exc:
+            return UpdateTenantResponse(
+                success=False,
+                message=f"Could not save: {exc}",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        return UpdateTenantResponse(
+            success=True,
+            message="Linked sheet cleared." if not url else "Linked sheet saved.",
+            tenant=saved,
+            client_mutation_id=input.client_mutation_id,
+        )
+
+
+@strawberry.type
+class SparkTenantMutations(LinkedSheetMutations):
     @relay.mutation
     async def create_tenant(
         self,
@@ -1308,6 +1886,7 @@ class SparkTenantMutations:
                 message=f"Error updating tenant: {e}",
                 client_mutation_id=input.client_mutation_id,
             )
+
 
 
 @strawberry.type
