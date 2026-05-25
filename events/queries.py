@@ -1215,6 +1215,66 @@ class RequestQueries:
         except GraphQLError:
             raise GraphQLError
 
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def activity_logs(
+        self,
+        info: strawberry.Info,
+        first: int | None = 50,
+        kind: str | None = None,
+    ) -> list[types.RequestActivityLogEntry]:
+        """Tenant-wide audit feed.
+
+        Returns the most recent RequestActivityLog rows across every
+        request in the current tenant — sorted newest-first. Powers
+        the /audit admin page that surfaces "who did what when" for
+        support / compliance debugging. Capped at 200 to keep payload
+        sane; pagination not built yet (add when needed).
+
+        `kind`, when set, filters to a single KIND_* value (e.g.
+        'status_changed', 'recap_filed') for narrowing.
+        """
+        from events.models import RequestActivityLog
+        from asgiref.sync import sync_to_async
+
+        service = RequestQueriesService()
+        tenant_id = await service.resolve_tenant_id(info)
+        first_capped = max(1, min(first or 50, 200))
+
+        def fetch():
+            qs = (
+                RequestActivityLog.objects.select_related(
+                    "actor_user", "request"
+                )
+                .order_by("-created_at")
+            )
+            if tenant_id:
+                qs = qs.filter(tenant_id=tenant_id)
+            if kind:
+                qs = qs.filter(kind=kind)
+            rows = list(qs[:first_capped])
+            return [
+                types.RequestActivityLogEntry(
+                    uuid=str(row.uuid),
+                    kind=row.kind,
+                    summary=row.summary or "",
+                    metadata_json=__import__("json").dumps(row.metadata or {}),
+                    actor_email=getattr(row.actor_user, "email", None),
+                    actor_name=(
+                        " ".join(
+                            filter(None, [
+                                getattr(row.actor_user, "first_name", None),
+                                getattr(row.actor_user, "last_name", None),
+                            ])
+                        )
+                        or None
+                    ) if row.actor_user else None,
+                    created_at=row.created_at.isoformat(),
+                )
+                for row in rows
+            ]
+
+        return await sync_to_async(fetch)()
+
 
 @strawberry.type
 class RequestStoreManagerQueries:
