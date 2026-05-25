@@ -3872,12 +3872,24 @@ class RecapMutations:
             )
 
         if not parsed.raw_pairs:
+            # Diagnostic: show the first ~200 chars of what pypdf
+            # actually extracted, so the admin (and we, debugging
+            # later) can tell whether the PDF was empty, image-only,
+            # or just a layout the parser doesn't know yet.
+            total_text = "\n".join(parsed.page_texts)
+            preview = total_text[:200].replace("\n", " ⏎ ").strip()
+            text_len = len(total_text)
+            page_count = len(parsed.page_texts)
+            image_count = len(parsed.images)
             return build_mutation_response(
                 types.ImportConnecteamRecapPdfResponse,
                 success=False,
                 message=(
-                    "No labeled fields found in PDF. Check that this is a "
-                    "Connecteam recap export (look for 'Label::' pairs)."
+                    f"No labeled fields found in PDF "
+                    f"(pages={page_count}, text={text_len}c, "
+                    f"images={image_count}). The parser looks for "
+                    f"'Label::' or 'Label:' pairs. Extracted text "
+                    f"started with: {preview!r}"
                 ),
                 input_obj=input,
             )
