@@ -358,8 +358,17 @@ APPLE_OAUTH_ISSUER = env(
 GOOGLE_OAUTH_AUDIENCES = env.list(
     "GOOGLE_OAUTH_AUDIENCES",
     default=[
-        # Web client (existing).
+        # Web client (legacy admin app + Continue-with-Google on the
+        # web sign-in flow). Google id_tokens minted by these flows
+        # carry the WEB client as the `aud` claim.
         "490085168610-ork3r7pnev7e9ksmkf1osp7v6c34g851.apps.googleusercontent.com",
+        # iOS client (Spark BA mobile app, bundle id co.igniteproductions.spark).
+        # Google id_tokens minted by Sign-in-with-Google on iOS carry
+        # the iOS client as the `aud` claim. Without listing it here
+        # the backend rejects the token with:
+        #   Invalid Google id_token: Token has wrong audience <iOS>...
+        #   expected one of [<web>...]
+        "490085168610-q069fmbssqbli9a10fpgbc0selrm34pc.apps.googleusercontent.com",
     ],
 )
 
