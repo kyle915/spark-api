@@ -37,6 +37,11 @@ ACTIVATION_REMINDER_LEAD = datetime.timedelta(minutes=15)
 # short enough that the nudge still feels relevant.
 RECAP_NUDGE_DELAY = datetime.timedelta(hours=4)
 
+# How far before start_time we send the pre-shift checklist push.
+# Two hours gives BAs enough time to grab uniform + materials and head
+# out, but not so far ahead that they forget by the time they arrive.
+PRE_SHIFT_CHECKLIST_LEAD = datetime.timedelta(hours=2)
+
 
 @receiver(post_save, sender=Event)
 def sync_event_on_create_or_update(sender, instance: Event, created: bool, **kwargs):
@@ -129,6 +134,20 @@ def push_on_ambassador_event_change(
         # schedule the activation reminder + recap nudge. update_or_create
         # paths hit post_save with created=False, so we wire from both.
         if instance.is_approved and event.start_time:
+            # Pre-shift checklist: 2h before start. Nudges BAs to grab
+            # uniform + materials + check the briefing before they head
+            # out. Generic copy reusable across brands; per-tenant body
+            # text can come from event.notes once we wire that path.
+            schedule_push_at(
+                event.start_time - PRE_SHIFT_CHECKLIST_LEAD,
+                user.id,
+                title="Pre-shift checklist",
+                body=(
+                    f"Shift in 2h: {event_name}. "
+                    "Open the briefing and grab your uniform + materials."
+                ),
+                data={**reminder_data, "kind": "pre_shift_checklist"},
+            )
             schedule_push_at(
                 event.start_time - ACTIVATION_REMINDER_LEAD,
                 user.id,
