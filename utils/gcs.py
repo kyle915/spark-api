@@ -22,6 +22,55 @@ def get_gcs_client():
     return storage.Client(project=settings.GS_PROJECT_ID)
 
 
+def _iam_signer_for_default_credentials():
+    """Return (signer, service_account_email) usable for v4 signing
+    when running under Cloud Run's workload-identity credentials.
+
+    Workload-identity credentials carry only a token — no private key
+    — so `blob.generate_signed_url()` raises "you need a private key
+    to sign credentials". We work around that by routing signing
+    through the IAM Credentials API's signBlob endpoint. Requires
+    the Cloud Run service account to hold
+    roles/iam.serviceAccountTokenCreator on itself (which spark-api-
+    new-sa does).
+
+    Returns (None, None) on local dev where GS_CREDENTIALS JSON
+    provides a real key — the standard signing path works there.
+    """
+    if settings.GS_CREDENTIALS:
+        return None, None
+
+    from google.auth import default as auth_default
+    from google.auth import iam
+    from google.auth.transport import requests as g_requests
+
+    credentials, _ = auth_default()
+    auth_request = g_requests.Request()
+    credentials.refresh(auth_request)
+    sa_email = getattr(credentials, "service_account_email", None)
+    if not sa_email or sa_email == "default":
+        # Cloud Run's compute_engine Credentials sometimes report
+        # "default" instead of the real email — pull it from the
+        # metadata server in that case.
+        try:
+            import requests as _http
+
+            resp = _http.get(
+                "http://metadata.google.internal/computeMetadata/v1/"
+                "instance/service-accounts/default/email",
+                headers={"Metadata-Flavor": "Google"},
+                timeout=2,
+            )
+            if resp.ok:
+                sa_email = resp.text.strip()
+        except Exception:
+            return None, None
+    if not sa_email:
+        return None, None
+    signer = iam.Signer(auth_request, credentials, sa_email)
+    return signer, sa_email
+
+
 def generate_upload_url(
     blob_name: str,
     content_type: str = "application/octet-stream",
@@ -42,14 +91,27 @@ def generate_upload_url(
     bucket = client.bucket(settings.GS_BUCKET_NAME)
     blob = bucket.blob(blob_name)
 
-    url = blob.generate_signed_url(
+    signer, sa_email = _iam_signer_for_default_credentials()
+    if signer is not None and sa_email is not None:
+        # Cloud Run path — IAM Credentials API signs on behalf of
+        # the SA. No private key needed in the container.
+        return blob.generate_signed_url(
+            version="v4",
+            expiration=timedelta(minutes=expiration_minutes),
+            method="PUT",
+            content_type=content_type,
+            credentials=signer,
+            service_account_email=sa_email,
+        )
+
+    # Local dev / explicit service-account JSON path — the credentials
+    # already include the private key, standard signing works.
+    return blob.generate_signed_url(
         version="v4",
         expiration=timedelta(minutes=expiration_minutes),
         method="PUT",
         content_type=content_type,
     )
-
-    return url
 
 
 def generate_download_url(blob_name: str, expiration_minutes: int = 60) -> str:
@@ -67,13 +129,21 @@ def generate_download_url(blob_name: str, expiration_minutes: int = 60) -> str:
     bucket = client.bucket(settings.GS_BUCKET_NAME)
     blob = bucket.blob(blob_name)
 
-    url = blob.generate_signed_url(
+    signer, sa_email = _iam_signer_for_default_credentials()
+    if signer is not None and sa_email is not None:
+        return blob.generate_signed_url(
+            version="v4",
+            expiration=timedelta(minutes=expiration_minutes),
+            method="GET",
+            credentials=signer,
+            service_account_email=sa_email,
+        )
+
+    return blob.generate_signed_url(
         version="v4",
         expiration=timedelta(minutes=expiration_minutes),
         method="GET",
     )
-
-    return url
 
 
 def delete_blob(blob_name: str) -> bool:
