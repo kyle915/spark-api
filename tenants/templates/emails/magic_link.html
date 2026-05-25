@@ -37,7 +37,7 @@
             <tr>
               <td class="pad"
                   style="padding:24px 40px;background:#0a0d09;">
-                <img src="https://spark-new-admin.web.app/legal/spark-logo-white.png"
+                <img src="https://spark-new-admin.web.app/legal/spark-logo-full.png"
                      alt="Spark by Ignite"
                      width="180" height="auto"
                      style="display:block;height:auto;border:0;outline:none;
@@ -100,17 +100,29 @@
             {% if mobile_link %}
             <!-- Mobile app deep-link. Tap on a phone that has Spark BA
                  installed → app catches the spark:// URL via expo-linking
-                 and signs the user in directly. Web button above is the
-                 fallback for desktop and phones without the app. -->
+                 and signs the user in directly. Styled as a near-equal
+                 secondary CTA (not buried in body text) because most BAs
+                 read this email on their phone with the app installed,
+                 and the web button above lands them on the admin site —
+                 not where a BA wants to be. -->
             <tr>
-              <td class="pad" style="padding:0 40px 20px 40px;">
-                <p style="margin:0;font-size:13px;line-height:20px;color:#3b4034;">
-                  On your phone with the Spark BA app installed?
-                  <a href="{{ mobile_link }}"
-                     style="color:#ef5a2a;font-weight:700;text-decoration:none;">
-                    Open in app →
-                  </a>
-                </p>
+              <td class="pad" style="padding:0 40px 24px 40px;">
+                <table role="presentation" cellspacing="0" cellpadding="0"
+                       border="0" width="100%">
+                  <tr>
+                    <td align="center">
+                      <a href="{{ mobile_link }}"
+                         style="display:inline-block;padding:14px 28px;
+                                background:#0a0d09;color:#c5f546;
+                                border:1px solid #c5f546;border-radius:999px;
+                                font-family:Georgia,serif;font-weight:700;
+                                font-size:15px;text-decoration:none;
+                                line-height:1;">
+                        📱 On your phone? Open in the Spark BA app →
+                      </a>
+                    </td>
+                  </tr>
+                </table>
               </td>
             </tr>
             {% endif %}
@@ -181,12 +193,12 @@
                        width="100%">
                   <tr>
                     <td valign="top" width="140" style="padding-right:18px;">
-                      <img src="https://spark-new-admin.web.app/legal/ignite-logo.png"
+                      <img src="https://spark-new-admin.web.app/legal/ignite-full-white.png"
                            alt="Ignite Productions"
                            width="130" height="130"
                            style="display:block;width:130px;height:130px;
                                   border-radius:8px;border:0;outline:none;
-                                  text-decoration:none;object-fit:cover;" />
+                                  text-decoration:none;object-fit:cover;background:#0a0d09;" />
                     </td>
                     <td valign="top" style="font-size:14px;line-height:22px;color:#0a0d09;">
                       <p style="margin:0 0 4px 0;color:#ef5a2a;font-weight:700;font-size:16px;">
