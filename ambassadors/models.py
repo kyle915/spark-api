@@ -1047,3 +1047,88 @@ class LocationPing(models.Model):
 
     def __str__(self):
         return f"ping {self.ambassador_id}@{self.event_id} {self.recorded_at}"
+
+
+class AmbassadorRating(models.Model):
+    """A 1-5 star rating (with optional comment) for a BA's work on a gig.
+
+    Both Ignite admins and client users can rate. The `by_client` flag
+    is captured at create time from the rater's role and drives
+    visibility: client-authored ratings are surfaced only to Ignite
+    (admins see everything; a client sees only the ratings they wrote).
+    The `rateAmbassador` mutation recomputes the rounded mean of *all*
+    ratings into the denormalized `Ambassador.rating` after each write.
+
+    `event` is the gig the rating is about. Nullable so a general,
+    non-gig rating from the BA detail page is still possible; the
+    unique constraint keeps one rating per (ambassador, event, rater)
+    so re-rating updates rather than stacks.
+    """
+
+    SCORE_MIN = 1
+    SCORE_MAX = 5
+
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+
+    ambassador = models.ForeignKey(
+        Ambassador,
+        on_delete=models.CASCADE,
+        null=False,
+        related_name="ratings",
+    )
+    event = models.ForeignKey(
+        Event,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="ambassador_ratings",
+    )
+    tenant = models.ForeignKey(
+        Tenant,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="ambassador_ratings",
+    )
+
+    score = models.IntegerField()  # 1-5
+    comment = models.TextField(null=True, blank=True)
+    # True when the rater is a client (vs Ignite admin). Set at create
+    # time; never trust the client to flip it.
+    by_client = models.BooleanField(default=False)
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=False,
+        related_name="ambassador_ratings_created_by",
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="ambassador_ratings_updated_by",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            # One rating per rater per ambassador per gig. (Two NULL
+            # events from the same rater are allowed by Postgres, which
+            # is fine — a rater can leave at most one gig-less rating
+            # in practice and the UI upserts.)
+            models.UniqueConstraint(
+                fields=["ambassador", "event", "created_by"],
+                name="uniq_ambassador_rating_per_gig_per_rater",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["ambassador", "-created_at"]),
+            models.Index(fields=["event"]),
+            models.Index(fields=["tenant", "by_client"]),
+        ]
+
+    def __str__(self):
+        return f"rating {self.score}★ ba={self.ambassador_id} ev={self.event_id}"

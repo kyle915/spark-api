@@ -202,6 +202,55 @@ class DeleteAmbassadorReviewResponse:
     client_mutation_id: strawberry.ID | None = None
 
 
+@strawberry_django.type(models.AmbassadorRating)
+class AmbassadorRatingType(Node):
+    """A single 1-5 star rating left for a BA on a gig.
+
+    `by_client` distinguishes a client-submitted rating from an Ignite
+    admin one — the query layer uses it to hide client ratings from
+    other clients. `rater_name` is a convenience for the UI timeline.
+    """
+
+    uuid: str
+    score: int
+    comment: str | None
+    by_client: bool
+    ambassador_id: strawberry.ID
+    event_id: strawberry.ID | None
+    tenant_id: strawberry.ID | None
+    created_at: str
+    updated_at: str
+
+    @strawberry.field
+    async def rater_name(self) -> str:
+        """Display name of whoever left the rating (first+last, else email)."""
+
+        def _name(obj):
+            u = obj.created_by
+            if u is None:
+                return ""
+            full = " ".join(
+                filter(None, [getattr(u, "first_name", ""), getattr(u, "last_name", "")])
+            ).strip()
+            return full or getattr(u, "email", "") or ""
+
+        return await sync_to_async(_name)(self)
+
+
+@strawberry.type
+class RateAmbassadorResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    ambassador_rating: AmbassadorRatingType | None = None
+    # Recomputed BA-level aggregate so the UI can update the star
+    # average without a refetch. `ambassador_average` is the mean of
+    # all ratings (admin + client); `ambassador_rating_count` is the
+    # total number of ratings counted into it.
+    ambassador_average: float = 0.0
+    ambassador_rating_count: int = 0
+
+
 @strawberry_django.type(models.AmbassadorNote)
 class AmbassadorNoteType(Node):
     uuid: str

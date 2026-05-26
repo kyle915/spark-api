@@ -960,6 +960,42 @@ class AmbassadorReviewQueries:
         except (AmbassadorReview.DoesNotExist, ValueError, TypeError):
             return None
 
+    @strawberry.field(permission_classes=[IsClientOrSparkAdmin])
+    async def ambassador_ratings(
+        self,
+        info: strawberry.Info,
+        ambassador_id: strawberry.ID,
+    ) -> List[types.AmbassadorRatingType]:
+        """Star ratings left for one BA, newest first.
+
+        Visibility: Ignite (spark-admin) sees every rating; a client only
+        sees the ratings they themselves submitted. Client ratings stay
+        private to Ignite and are never shown to other clients.
+        """
+        user = info.context.request.user
+        try:
+            ba_id = resolve_id_to_int(ambassador_id)
+        except (TypeError, ValueError, GraphQLError):
+            raise GraphQLError("Invalid ambassador ID.")
+
+        @sync_to_async
+        def _role_slug() -> str:
+            return getattr(user.role, "slug", "").lower() if user.role else ""
+
+        slug = await _role_slug()
+
+        @sync_to_async
+        def fetch():
+            qs = models.AmbassadorRating.objects.select_related(
+                "created_by", "event", "tenant"
+            ).filter(ambassador_id=ba_id)
+            if slug != "spark-admin":
+                # Clients only ever see their own ratings.
+                qs = qs.filter(created_by=user)
+            return list(qs.order_by("-created_at"))
+
+        return await fetch()
+
 
 @strawberry.type
 class AmbassadorNoteQueries:

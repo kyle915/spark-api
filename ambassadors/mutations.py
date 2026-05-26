@@ -2,7 +2,7 @@ import strawberry
 from strawberry import relay
 from strawberry.types import Info
 from asgiref.sync import sync_to_async
-from django.db.models import Model
+from django.db.models import Model, Avg, Count
 from graphql import GraphQLError
 
 from jobs.models import (
@@ -23,6 +23,7 @@ from .models import (
     AttendanceStatus,
     Source,
     Attendance,
+    AmbassadorRating,
 )
 from .types import (
     AmbassadorEventType,
@@ -60,6 +61,7 @@ from .types import (
     RespondToShiftOfferResponse,
     InviteAmbassadorToShiftResponse,
     CancelShiftInviteResponse,
+    RateAmbassadorResponse,
 )
 from . import inputs
 from .services import (
@@ -386,6 +388,148 @@ class AmbassadorMutations:
             message="Invite cancelled.",
             client_mutation_id=input.client_mutation_id,
             ambassador_event_uuid=input.ambassador_event_uuid,
+        )
+
+    @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
+    async def rate_ambassador(
+        self,
+        info: strawberry.Info,
+        input: inputs.RateAmbassadorInput,
+    ) -> RateAmbassadorResponse:
+        """Leave (or update) a 1-5 star rating for a BA.
+
+        Both Ignite admins and clients can rate. The rating is tied to a
+        gig via `event_id` when supplied; omit it for a general profile
+        rating. Re-rating the same (ambassador, event) by the same user
+        overwrites the prior row rather than stacking duplicates.
+
+        `by_client` is derived server-side from the caller's role — never
+        trusted from the client — so the query layer can keep client
+        ratings out of other clients' view. After writing, the BA's
+        canonical `Ambassador.rating` (rounded mean of *all* ratings) is
+        recomputed, and the response echoes the average/count visible to
+        *this* caller so the UI can update without a refetch.
+        """
+        from tenants.models import TenantedUser
+
+        user = info.context.request.user
+
+        # --- validate score -------------------------------------------------
+        try:
+            score = int(input.score)
+        except (TypeError, ValueError):
+            return RateAmbassadorResponse(
+                success=False,
+                message="Score must be a whole number from 1 to 5.",
+                client_mutation_id=input.client_mutation_id,
+            )
+        if score < AmbassadorRating.SCORE_MIN or score > AmbassadorRating.SCORE_MAX:
+            return RateAmbassadorResponse(
+                success=False,
+                message="Score must be between 1 and 5 stars.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        # --- resolve ambassador ---------------------------------------------
+        try:
+            resolved_ambassador_id = resolve_id_to_int(input.ambassador_id)
+            ambassador = await Ambassador.objects.aget(id=resolved_ambassador_id)
+        except (Ambassador.DoesNotExist, ValueError, TypeError, GraphQLError):
+            return RateAmbassadorResponse(
+                success=False,
+                message="Ambassador not found.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        # --- resolve event (optional) + tenant ------------------------------
+        event = None
+        tenant = None
+        if input.event_id not in (None, ""):
+            try:
+                resolved_event_id = resolve_id_to_int(input.event_id)
+                event = await Event.objects.select_related("tenant").aget(
+                    id=resolved_event_id
+                )
+                tenant = event.tenant
+            except (Event.DoesNotExist, ValueError, TypeError, GraphQLError):
+                return RateAmbassadorResponse(
+                    success=False,
+                    message="Event not found.",
+                    client_mutation_id=input.client_mutation_id,
+                )
+
+        if tenant is None:
+            # Profile-level rating (no gig): fall back to the rater's own
+            # active tenant membership so the row is still tenant-scoped.
+            tu = await (
+                TenantedUser.objects.select_related("tenant")
+                .filter(user=user, is_active=True)
+                .afirst()
+            )
+            tenant = tu.tenant if tu is not None else None
+
+        if tenant is None:
+            return RateAmbassadorResponse(
+                success=False,
+                message="Could not determine a company for this rating. "
+                "Rate the BA from a specific gig instead.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        # --- role → by_client flag (server-trusted) -------------------------
+        @sync_to_async
+        def _role_slug() -> str:
+            return getattr(user.role, "slug", "").lower() if user.role else ""
+
+        by_client = (await _role_slug()) == "client"
+
+        # --- upsert the rating ----------------------------------------------
+        comment = (input.comment or "").strip() or None
+        try:
+            rating, _created = await AmbassadorRating.objects.aupdate_or_create(
+                ambassador=ambassador,
+                event=event,
+                created_by=user,
+                defaults={
+                    "score": score,
+                    "comment": comment,
+                    "tenant": tenant,
+                    "by_client": by_client,
+                    "updated_by": user,
+                },
+            )
+        except Exception as exc:  # noqa: BLE001
+            return RateAmbassadorResponse(
+                success=False,
+                message=f"Could not save rating: {exc}",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        # --- recompute canonical BA rating (mean of ALL ratings) ------------
+        overall = await AmbassadorRating.objects.filter(
+            ambassador=ambassador
+        ).aaggregate(avg=Avg("score"), count=Count("id"))
+        overall_avg = overall["avg"] or 0.0
+        ambassador.rating = round(overall_avg)
+        await ambassador.asave(update_fields=["rating"])
+
+        # --- aggregate visible to THIS caller -------------------------------
+        # Admins see every rating; a client only sees their own, so the
+        # number they see matches what `ambassadorRatings` returns for them.
+        if by_client:
+            visible = await AmbassadorRating.objects.filter(
+                ambassador=ambassador, created_by=user
+            ).aaggregate(avg=Avg("score"), count=Count("id"))
+        else:
+            visible = overall
+
+        return RateAmbassadorResponse(
+            success=True,
+            message="Rating saved.",
+            client_mutation_id=input.client_mutation_id,
+            ambassador_rating=rating,
+            ambassador_average=round(visible["avg"] or 0.0, 2),
+            ambassador_rating_count=visible["count"] or 0,
         )
 
     @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
