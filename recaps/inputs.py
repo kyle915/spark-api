@@ -136,6 +136,23 @@ class DeleteRecapFileInput(SparkGraphQLInput):
 
 
 @strawberry.input
+class AddRecapFileInput(SparkGraphQLInput):
+    """Attach a single already-uploaded blob to an existing recap.
+
+    Distinct from update_recap, which reconciles the *entire* file set
+    and unconditionally overwrites scalar fields (products_sold, etc.) —
+    using it just to add one photo would silently null those out. This
+    input does the minimal, safe thing: create one RecapFile row linked
+    to the recap, touching nothing else.
+    """
+
+    recap_id: strawberry.ID
+    file: str  # GCS blob name (e.g. "recaps/<uuid>/<stamp>-photo.jpg")
+    file_type_id: strawberry.ID | None = None
+    file_recap_category_id: strawberry.ID | None = None
+
+
+@strawberry.input
 class ApproveRecapInput(SparkGraphQLInput):
     id: strawberry.ID
     approved: bool
