@@ -19,7 +19,16 @@ if TYPE_CHECKING:
 
 
 def _serialize_dt(value, offset_minutes: int = 0):
-    """Serialize datetime applying explicit offset (minutes) and no server TZ conversion."""
+    """Serialize datetime applying explicit offset (minutes) and no server TZ conversion.
+
+    DEPRECATED for any caller that has access to a TimeZone row — use
+    `_serialize_dt_for_tz` instead. This signature only knows about a
+    fixed offset and therefore can't get DST right (the canonical case:
+    Pacific rows stored with offset -480 under-shift during PDT by 1 hour,
+    which is exactly the symptom Kyle reported on Liquid Death edits).
+    Kept for `date`-only fields where DST doesn't matter and for any
+    legacy resolvers we haven't migrated yet.
+    """
     if not value:
         return None
     # Normalize to UTC to remove server TZ influence
@@ -33,6 +42,20 @@ def _serialize_dt(value, offset_minutes: int = 0):
     return value.replace(tzinfo=None).isoformat()
 
 
+def _serialize_dt_for_tz(value, tz_row):
+    """DST-aware variant — converts a UTC datetime to a naive ISO string
+    in the request/event's local timezone. Use this for `start_time` /
+    `end_time` resolvers so PDT-vs-PST is computed against the actual
+    datetime, not a static `TimeZone.offset` int.
+    """
+    # Import inside the function to avoid a circular import when
+    # utils/tz.py is imported during Django startup before events.types
+    # has finished registering its strawberry types.
+    from utils.tz import naive_local_iso
+
+    return naive_local_iso(value, tz_row)
+
+
 def _get_field(instance, name: str):
     """Safely fetch a model field value, bypassing descriptor overrides."""
     try:
@@ -43,12 +66,25 @@ def _get_field(instance, name: str):
 
 
 def _get_offset_minutes_from_instance(instance) -> int:
-    """Return timezone offset in minutes without extra queries."""
+    """Return timezone offset in minutes without extra queries.
+
+    DEPRECATED in favor of resolving the full TimeZone row and using
+    `_serialize_dt_for_tz`. Kept so any callers we haven't migrated
+    yet keep working.
+    """
     try:
         tz = getattr(instance, "timezone", None)
         return int(tz.offset) if tz and tz.offset is not None else 0
     except Exception:
         return 0
+
+
+def _get_tz_row_from_instance(instance):
+    """Return the TimeZone instance attached to an event/request, or None."""
+    try:
+        return getattr(instance, "timezone", None)
+    except Exception:
+        return None
 
 
 @strawberry_django.type(models.EventType)
@@ -328,13 +364,18 @@ class Request(Node):
 
     @strawberry.field
     def start_time(self) -> str | None:
-        offset = _get_offset_minutes_from_instance(self)
-        return _serialize_dt(_get_field(self, "start_time"), offset_minutes=offset)
+        # Use the DST-aware path so a Pacific request renders 12:00 PM
+        # in May (PDT) and 12:00 PM in February (PST) without depending
+        # on a static -480/-420 minutes field. See utils/tz.py.
+        return _serialize_dt_for_tz(
+            _get_field(self, "start_time"), _get_tz_row_from_instance(self)
+        )
 
     @strawberry.field
     def end_time(self) -> str | None:
-        offset = _get_offset_minutes_from_instance(self)
-        return _serialize_dt(_get_field(self, "end_time"), offset_minutes=offset)
+        return _serialize_dt_for_tz(
+            _get_field(self, "end_time"), _get_tz_row_from_instance(self)
+        )
 
     address: str
     decline_reason: str | None = None
@@ -608,18 +649,22 @@ class Event(Node):
 
     @strawberry.field
     def start_time(self) -> str | None:
-        offset = _get_offset_minutes_from_instance(self)
-        return _serialize_dt(_get_field(self, "start_time"), offset_minutes=offset)
+        # DST-aware — see Request.start_time above.
+        return _serialize_dt_for_tz(
+            _get_field(self, "start_time"), _get_tz_row_from_instance(self)
+        )
 
     @strawberry.field
     def end_time(self) -> str | None:
-        offset = _get_offset_minutes_from_instance(self)
-        return _serialize_dt(_get_field(self, "end_time"), offset_minutes=offset)
+        return _serialize_dt_for_tz(
+            _get_field(self, "end_time"), _get_tz_row_from_instance(self)
+        )
 
     @strawberry.field
     def new_end_time(self) -> str | None:
-        offset = _get_offset_minutes_from_instance(self)
-        return _serialize_dt(_get_field(self, "new_end_time"), offset_minutes=offset)
+        return _serialize_dt_for_tz(
+            _get_field(self, "new_end_time"), _get_tz_row_from_instance(self)
+        )
 
     @strawberry.field
     async def recaps(
