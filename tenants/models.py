@@ -190,6 +190,12 @@ class User(AbstractUser):
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
     updated_at = models.DateTimeField(auto_now=True)
     is_active = models.BooleanField(default=True)
+    # Flipped True by admin-created flows (createAmbassadorWithUser
+    # with an admin-set temp password). Mobile uses this to force the
+    # user through ChangePasswordScreen on first sign-in instead of
+    # letting them into the app with a credential the admin chose for
+    # them. Cleared on successful changeUserPassword.
+    requires_password_change = models.BooleanField(default=False)
 
     objects = UserManager()
 

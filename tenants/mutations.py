@@ -1430,12 +1430,25 @@ class AmbassadorUserMutations:
                 client_mutation_id=input.client_mutation_id,
             )
 
+        if len(input.password1 or "") < 8:
+            return UpdateUserResponse(
+                success=False,
+                message="Password must be at least 8 characters.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
         try:
 
             @sync_to_async
             def persist_password():
                 requester.set_password(input.password1)
-                requester.save()
+                # Clear the force-change flag if it was set (admin-
+                # created BA flow). No-op for users who set their own
+                # password originally.
+                requester.requires_password_change = False
+                requester.save(
+                    update_fields=["password", "requires_password_change"],
+                )
 
             await persist_password()
 
