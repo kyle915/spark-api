@@ -24,6 +24,13 @@ env:
   GCP_PROJECT_ID: spark-479222
   GCP_REGION: us-central1
   CLOUD_RUN_SERVICE: spark-api-new
+  # Runtime service account the Cloud Run service runs as. Needs
+  # roles/iam.serviceAccountTokenCreator on itself so utils/gcs.py
+  # can call the IAM Credentials API's signBlob endpoint when it
+  # generates v4 signed URLs (Cloud Run's workload-identity
+  # credentials don't carry a private key — see the Ensure runtime
+  # SA can self-sign step at the end of this workflow).
+  CLOUD_RUN_RUNTIME_SA: spark-api-new-sa@spark-479222.iam.gserviceaccount.com
 
 jobs:
   deploy:
@@ -66,6 +73,37 @@ jobs:
             --source . \
             --region "$GCP_REGION" \
             --project "$GCP_PROJECT_ID" \
+            --quiet
+
+      # Self-heal the IAM binding that GCS signed-URL generation
+      # depends on. The runtime SA needs roles/iam.serviceAccount-
+      # TokenCreator ON ITSELF — that's how a SA without a local
+      # private key signs blobs via Google's IAM Credentials API.
+      #
+      # This binding was set up by hand once and then evaporated
+      # during a subsequent SA reshuffle, breaking ALL recap photo
+      # uploads in production until someone re-granted it through
+      # the IAM UI. add-iam-policy-binding is naturally idempotent
+      # (no-op if the binding already exists), so running it on
+      # every deploy costs nothing and prevents the bug from
+      # silently re-appearing.
+      #
+      # Requires the deploy SA (GCP_DEPLOY_SERVICE_ACCOUNT secret)
+      # to hold roles/iam.serviceAccountAdmin on CLOUD_RUN_RUNTIME_SA
+      # — or roles/resourcemanager.projectIamAdmin at the project
+      # level. If this step fails with "Permission 'iam.service-
+      # Accounts.setIamPolicy' denied" the deploy SA is missing
+      # that meta-permission and needs it granted once via the
+      # Console (Service Accounts → spark-api-new-sa → Permissions
+      # → Grant Access → role: Service Account Admin → principal:
+      # the deploy SA email).
+      - name: Ensure runtime SA can self-sign (GCS signed URLs)
+        run: |
+          gcloud iam service-accounts add-iam-policy-binding \
+            "$CLOUD_RUN_RUNTIME_SA" \
+            --member="serviceAccount:$CLOUD_RUN_RUNTIME_SA" \
+            --role="roles/iam.serviceAccountTokenCreator" \
+            --project="$GCP_PROJECT_ID" \
             --quiet
 
       # Smoke check after the deploy — assert the new revision is
