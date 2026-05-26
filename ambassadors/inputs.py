@@ -538,6 +538,22 @@ class InviteAmbassadorToShiftInput(SparkGraphQLInput):
 
 
 @strawberry.input
+class RateAmbassadorInput(SparkGraphQLInput):
+    """Submit (or update) a 1-5 star rating for a BA.
+
+    Both admins and clients can call this. `event_id` ties the rating
+    to a specific gig; omit it for a general BA-profile rating. Re-rating
+    the same (ambassador, event) by the same user updates the existing
+    row rather than stacking a duplicate.
+    """
+
+    ambassador_id: strawberry.ID
+    event_id: strawberry.ID | None = None
+    score: int  # 1-5
+    comment: str | None = None
+
+
+@strawberry.input
 class CancelShiftInviteInput(SparkGraphQLInput):
     """Admin retracts a pending shift invite (or removes an accepted
     BA from a shift). Deletes the AmbassadorEvent row.
