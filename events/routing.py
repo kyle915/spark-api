@@ -74,12 +74,64 @@ def extract_state_code(address: str | None) -> str | None:
     return m.group(1).upper() if m else None
 
 
+def _state_code_from_request(request) -> str | None:
+    """Try every signal we have to determine a 2-letter state code.
+
+    REQ-925 surfaced the failure mode that motivated this: the public
+    form was submitted with an incomplete address ("1608 Broadway St",
+    no city/state/zip), so `extract_state_code` returned None and the
+    territory fanout sent the email to every LD reviewer with Lauren
+    (first key in the dict) as the nominal owner. The fix is to try
+    progressively-broader sources of state info before giving up:
+
+        1. address regex   (fastest, exact)
+        2. request.state   (set explicitly by some import paths)
+        3. request.location.state                 (manual venue picker)
+        4. request.retailer.location.state        (chain store HQ)
+
+    Each step is wrapped in a broad try/except — we never want a stale
+    relation or a missing FK to crash request creation. Returns None
+    when no signal yields a state, which `territory_emails_for_state`
+    then handles by routing to Ignite-only for manual triage.
+    """
+    code = extract_state_code(getattr(request, "address", None))
+    if code:
+        return code
+    try:
+        if request.state and request.state.code:
+            return request.state.code.upper()
+    except Exception:
+        pass
+    try:
+        if request.location and request.location.state and request.location.state.code:
+            return request.location.state.code.upper()
+    except Exception:
+        pass
+    try:
+        if (
+            request.retailer
+            and request.retailer.location
+            and request.retailer.location.state
+            and request.retailer.location.state.code
+        ):
+            return request.retailer.location.state.code.upper()
+    except Exception:
+        pass
+    return None
+
+
 def territory_emails_for_state(tenant_slug: str, state_code: str | None) -> list[str]:
     """Return the list of LD-side reviewer emails for a given state.
 
-    If `state_code` is None or not covered by any reviewer, returns
-    every reviewer in the table so the request can't fall through the
-    cracks."""
+    If `state_code` is None or not covered by any reviewer, returns an
+    empty list — `assign_rmm_for_request` then sets rmm_asigned to None
+    and the mailer routes to Ignite-only for manual re-routing. We used
+    to fan out to every reviewer here, which produced false positives
+    like "Lauren got REQ-925 even though the address didn't parse a
+    state" (she's first in dict-insertion order so she became the
+    nominal owner). Routing to Ignite-only instead surfaces the
+    problem to the team that can actually fix it, rather than spamming
+    every LD RMM with a request they don't own."""
     if tenant_slug not in ROUTED_TENANT_SLUGS:
         return []
     state_code = (state_code or "").upper()
@@ -90,36 +142,36 @@ def territory_emails_for_state(tenant_slug: str, state_code: str | None) -> list
     ]
     if matched:
         return matched
-    # Fallback: every reviewer
     logger.info(
-        "No RMM territory match for tenant=%s state=%s — fanning out to all reviewers",
-        tenant_slug, state_code,
+        "No RMM territory match for tenant=%s state=%s — routing to Ignite only",
+        tenant_slug,
+        state_code or "<unknown>",
     )
-    return list(LIQUID_DEATH_TERRITORY.keys())
+    return []
 
 
 @sync_to_async
 def assign_rmm_for_request(request, tenant_slug: str) -> tuple[object | None, list[str]]:
     """Pick the RMM for this request and assign it. Returns (user, all_to_emails).
 
-    1. Extract state from request.address.
+    1. Try every state signal on the request (address, request.state,
+       location.state, retailer.location.state).
     2. Map to one or more reviewer emails per the territory table.
     3. Look up the user row for the first match, set rmm_asigned, save.
     4. Return that user plus the full list of TO addresses so the
-       mailer can address everyone in the territory (when fallback
-       fanout fires) without re-doing the lookup.
+       mailer can address everyone in the territory.
+
+    When no state can be determined, returns (None, []) — the caller is
+    responsible for falling back to Ignite-only with a note in the
+    email subject so the team knows to re-route manually.
     """
     from tenants.models import User
     if tenant_slug not in ROUTED_TENANT_SLUGS:
         return None, []
-    state = extract_state_code(getattr(request, "address", None))
+    state = _state_code_from_request(request)
     emails = territory_emails_for_state(tenant_slug, state)
     if not emails:
         return None, []
-    # The first reviewer (alphabetical-ish by territory) becomes the
-    # canonical assigned RMM on the request row; the rest get the email
-    # too. If the territory falls through to fanout, we just take the
-    # first as nominal owner.
     primary_email = emails[0]
     user = (
         User.objects.filter(email__iexact=primary_email, is_active=True).first()

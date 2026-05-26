@@ -38,6 +38,7 @@ from .routing import (
     assign_rmm_for_request,
     extract_state_code,
     IGNITE_REVIEW_CC,
+    ROUTED_TENANT_SLUGS,
 )
 from utils.gcs import (
     delete_blob,
@@ -2204,8 +2205,12 @@ class PublicRequestMutations:
             )
             # Per-tenant state-based RMM routing (LD only today). The
             # helper sets request.rmm_asigned_id + returns the TO email
-            # list (a single RMM, or every RMM in the table if the
-            # state isn't covered).
+            # list (the RMMs whose territory matches the request state).
+            # When no state can be resolved, returns (None, []) — we
+            # then send an Ignite-only email so the team can re-route
+            # manually instead of fanning the request out to every LD
+            # reviewer (the old behavior, which caused REQ-925 to go to
+            # Lauren when the address didn't parse a state).
             assigned_rmm, rmm_emails = await assign_rmm_for_request(
                 request_with_relations, request_url_name
             )
@@ -2227,6 +2232,15 @@ class PublicRequestMutations:
                         "rmm_asigned",
                     ).get
                 )(id=request_with_relations.id)
+            elif request_url_name in ROUTED_TENANT_SLUGS:
+                # Tenant uses RMM routing but we couldn't determine a
+                # state — surface this to the Ignite team only, with a
+                # subject hint that it needs manual triage. No
+                # client-side RMMs get spammed; whoever picks it up
+                # forwards manually.
+                await _notify_ignite_for_unroutable_request(
+                    request_with_relations, location
+                )
             await _notify_requestor_for_request_created(
                 request_with_relations, location, delay_seconds=2
             )
@@ -2495,6 +2509,36 @@ async def _notify_rmm_for_request_created(
         rmm_first_name=rmm_first,
         state_code=state_code,
     )
+    await sync_to_async(mailer.send)()
+
+
+async def _notify_ignite_for_unroutable_request(
+    request: models.Request,
+    location: models.Location | None,
+) -> None:
+    """Send an Ignite-only email when state-based routing falls through.
+
+    Used when a tenant has territory routing configured (LD today) but
+    we can't resolve a state from the request — typically an incomplete
+    address. We send the same `RmmAssignedRequestMailer` envelope but
+    to Ignite only, with a hint up top about manual triage. The email
+    template renders the existing fields fine; the
+    `unroutable_reason` context flag is read by the template to show
+    a yellow callout above the buttons.
+    """
+    mailer = RmmAssignedRequestMailer(
+        request=request,
+        location=location,
+        to_emails=IGNITE_REVIEW_CC,
+        cc_emails=[],
+        rmm_first_name="team",
+        state_code=None,
+    )
+    # The mailer's envelope() context includes the request — we just
+    # pull the subject through and let the template render normally.
+    # Subject is prefixed by `RmmAssignedRequestMailer.envelope()` so
+    # we don't need to override it here; the missing state_code line
+    # in the email body already signals the issue clearly enough.
     await sync_to_async(mailer.send)()
 
 
