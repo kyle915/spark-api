@@ -55,19 +55,36 @@ IGNITE_REVIEW_CC: list[str] = [
 # types in the public form URL: /spark-form/ighn-liquid-death.
 ROUTED_TENANT_SLUGS = {"ighn-liquid-death"}
 
+# Match a US state code at the end of an address, optionally followed by a
+# zip and an optional ", USA" suffix.
+#
+# The class between state and zip is intentionally permissive — `[,\s]*` —
+# because real addresses come from at least three sources, each with its
+# own punctuation style:
+#
+#   "Chino, CA 91710"               (Google Places, state SPACE zip)
+#   "EDMOND, OK, 73034"             (manual entry, state COMMA SPACE zip)
+#   "Sparks, NV 89436, USA"         (Google Places with country)
+#   "Brooklyn, NY"                  (no zip at all — defensible default)
+#
+# REQ-926 regressed because the previous regex required `\s*` (whitespace
+# only) between state and zip, so the comma form silently failed to parse
+# and the request fell through to Ignite-only routing.
 _STATE_AFTER_ZIP_RE = re.compile(
-    r"\b([A-Z]{2})\b\s*(?:\d{5}(?:-\d{4})?)?\s*(?:,\s*USA)?\s*$"
+    r"\b([A-Z]{2})\b[,\s]*(?:\d{5}(?:-\d{4})?)?\s*(?:,\s*USA)?\s*$"
 )
 
 
 def extract_state_code(address: str | None) -> str | None:
-    """Pull the 2-letter state code out of a Google-formatted address.
+    """Pull the 2-letter state code out of a US address string.
 
-        '1885 Halite Dr, Sparks, NV 89436, USA' → 'NV'
-
-    Falls back to None if we can't find one (international address,
-    parser miss, etc.) — callers should treat that as "route to
-    everyone."""
+    Accepts the common Google-Places format ("1885 Halite Dr, Sparks,
+    NV 89436, USA"), the manual-entry comma form ("EDMOND, OK,
+    73034"), and addresses without a zip ("Brooklyn, NY"). Returns
+    None for international addresses or parser misses — callers
+    should treat None as "route manually" (see
+    `_state_code_from_request` for the full fallback chain).
+    """
     if not address:
         return None
     m = _STATE_AFTER_ZIP_RE.search(address.strip())
