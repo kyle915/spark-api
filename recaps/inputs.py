@@ -380,6 +380,31 @@ class CreateCustomRecapTemplateInput(SparkGraphQLInput):
 
 
 @strawberry.input
+class RemoveCustomFieldInput(SparkGraphQLInput):
+    """Force-delete a CustomField row from a template.
+
+    The existing update_custom_recap_template / sync_fields path
+    refuses to remove a field once any recap has submitted a value
+    for it ("Cannot remove custom fields that already have submitted
+    values"). That's correct as a default — accidental delete would
+    nuke recap data.
+
+    But there are real situations where a field WAS a mistake and
+    needs to be removed retroactively (e.g. the Austin Psych Festival
+    template has a duplicate metric that's confusing reports). For
+    those, the admin sets ``delete_values=True`` and the mutation
+    cascades the CustomFieldValue rows.
+    """
+
+    id: strawberry.ID
+    # When True, also delete any CustomFieldValue rows tied to this
+    # field. When False (default), the mutation errors out if any
+    # value rows exist — same safety net as update_custom_recap_
+    # template, just exposed as a separate, focused entry point.
+    delete_values: bool = False
+
+
+@strawberry.input
 class UpdateCustomRecapTemplateInput(CreateCustomRecapTemplateInput):
     id: strawberry.ID
 
