@@ -98,6 +98,13 @@ jobs:
       # → Grant Access → role: Service Account Admin → principal:
       # the deploy SA email).
       - name: Ensure runtime SA can self-sign (GCS signed URLs)
+        # Non-fatal: if the deploy SA is missing the meta-permission
+        # (iam.serviceAccountAdmin on CLOUD_RUN_RUNTIME_SA) this
+        # step logs the error and moves on. The manually-applied
+        # binding from the IAM Console stays in place, so uploads
+        # keep working. Once the meta-permission is granted, future
+        # deploys self-heal automatically.
+        continue-on-error: true
         run: |
           gcloud iam service-accounts add-iam-policy-binding \
             "$CLOUD_RUN_RUNTIME_SA" \
