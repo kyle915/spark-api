@@ -22,17 +22,24 @@ def get_gcs_client():
     return storage.Client(project=settings.GS_PROJECT_ID)
 
 
-def _iam_signer_for_default_credentials():
-    """Return (signer, service_account_email) usable for v4 signing
-    when running under Cloud Run's workload-identity credentials.
+def _iam_signing_args_for_default_credentials():
+    """Return (service_account_email, access_token) suitable for
+    v4 signing via the GCS library's IAM-Credentials-API delegated
+    signing path.
 
-    Workload-identity credentials carry only a token — no private key
-    — so `blob.generate_signed_url()` raises "you need a private key
-    to sign credentials". We work around that by routing signing
-    through the IAM Credentials API's signBlob endpoint. Requires
-    the Cloud Run service account to hold
-    roles/iam.serviceAccountTokenCreator on itself (which spark-api-
-    new-sa does).
+    Workload-identity credentials on Cloud Run carry only a token —
+    no private key — so the standard ``blob.generate_signed_url()``
+    raises "you need a private key to sign credentials". The earlier
+    workaround built an ``iam.Signer`` and passed it as ``credentials``,
+    but newer google-cloud-storage versions reject that because a
+    Signer isn't Credentials — same error, different wording.
+
+    The fix is the library's first-class IAM-signing path: pass
+    ``service_account_email`` + ``access_token`` and *omit*
+    ``credentials``. The library hits the IAM Credentials API's
+    signBlob endpoint server-side. Requires the SA to hold
+    roles/iam.serviceAccountTokenCreator on itself (which spark-
+    api-new-sa does — set up in PR #547 / task #136).
 
     Returns (None, None) on local dev where GS_CREDENTIALS JSON
     provides a real key — the standard signing path works there.
@@ -41,7 +48,6 @@ def _iam_signer_for_default_credentials():
         return None, None
 
     from google.auth import default as auth_default
-    from google.auth import iam
     from google.auth.transport import requests as g_requests
 
     credentials, _ = auth_default()
@@ -67,8 +73,10 @@ def _iam_signer_for_default_credentials():
             return None, None
     if not sa_email:
         return None, None
-    signer = iam.Signer(auth_request, credentials, sa_email)
-    return signer, sa_email
+    token = getattr(credentials, "token", None)
+    if not token:
+        return None, None
+    return sa_email, token
 
 
 def generate_upload_url(
@@ -91,17 +99,18 @@ def generate_upload_url(
     bucket = client.bucket(settings.GS_BUCKET_NAME)
     blob = bucket.blob(blob_name)
 
-    signer, sa_email = _iam_signer_for_default_credentials()
-    if signer is not None and sa_email is not None:
-        # Cloud Run path — IAM Credentials API signs on behalf of
-        # the SA. No private key needed in the container.
+    sa_email, access_token = _iam_signing_args_for_default_credentials()
+    if sa_email is not None and access_token is not None:
+        # Cloud Run path — let the GCS library hit IAM Credentials
+        # API's signBlob endpoint server-side. No `credentials=` arg
+        # so the library uses the IAM-signing branch.
         return blob.generate_signed_url(
             version="v4",
             expiration=timedelta(minutes=expiration_minutes),
             method="PUT",
             content_type=content_type,
-            credentials=signer,
             service_account_email=sa_email,
+            access_token=access_token,
         )
 
     # Local dev / explicit service-account JSON path — the credentials
@@ -129,14 +138,14 @@ def generate_download_url(blob_name: str, expiration_minutes: int = 60) -> str:
     bucket = client.bucket(settings.GS_BUCKET_NAME)
     blob = bucket.blob(blob_name)
 
-    signer, sa_email = _iam_signer_for_default_credentials()
-    if signer is not None and sa_email is not None:
+    sa_email, access_token = _iam_signing_args_for_default_credentials()
+    if sa_email is not None and access_token is not None:
         return blob.generate_signed_url(
             version="v4",
             expiration=timedelta(minutes=expiration_minutes),
             method="GET",
-            credentials=signer,
             service_account_email=sa_email,
+            access_token=access_token,
         )
 
     return blob.generate_signed_url(
