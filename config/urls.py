@@ -59,6 +59,11 @@ urlpatterns = [
     # looking for GraphQL surface don't trip on it. See
     # `digest/cron_views.py` for the secret-validation flow.
     path("internal/cron/", include("digest.urls")),
+    # Public, token-authenticated endpoints (no JWT). These power the
+    # one-click "Review & approve" email flow — clients click a signed
+    # link and land on a page they can actually act on, even if they're
+    # not logged into Spark. See `events/views.py` for the contract.
+    path("api/public/", include("events.urls")),
 ]
 
 # Add RQ dashboard in DEBUG mode
