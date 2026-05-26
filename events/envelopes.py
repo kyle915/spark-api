@@ -9,9 +9,43 @@ from events import models
 def _apply_offset(
     value: datetime.datetime | None, offset_minutes: int
 ) -> datetime.datetime | None:
+    """DEPRECATED — see `_apply_request_tz` below.
+
+    Static offset arithmetic gets DST wrong (Pacific stored as -480
+    minutes under-shifts during PDT by 1 hour). Kept only because some
+    legacy callers still reach for the raw offset minutes.
+    """
     if not value:
         return None
     return value + datetime.timedelta(minutes=offset_minutes)
+
+
+def _apply_request_tz(
+    value: datetime.datetime | None, obj
+) -> datetime.datetime | None:
+    """DST-aware variant — converts `value` to naive-local in obj's TZ.
+
+    `obj` is an event or request that owns a `timezone` foreign key.
+    See `utils.tz.apply_dst_aware_offset` for the resolution order.
+    """
+    if not value:
+        return None
+    # Local import: utils.tz is dep-free but importing at module top
+    # creates a small import-time graph that the test harness has been
+    # known to evaluate before django settings are configured.
+    from utils.tz import apply_dst_aware_offset
+
+    tz_row = None
+    try:
+        tz_row = getattr(obj, "timezone", None)
+    except Exception:
+        tz_row = None
+    if tz_row is None and getattr(obj, "timezone_id", None):
+        try:
+            tz_row = models.TimeZone.objects.filter(id=obj.timezone_id).first()
+        except Exception:
+            tz_row = None
+    return apply_dst_aware_offset(value, tz_row)
 
 
 def _admin_request_url(request: models.Request | None) -> str:
@@ -34,34 +68,76 @@ def _admin_request_url(request: models.Request | None) -> str:
 
 
 def _get_timezone_offset_minutes(obj) -> int:
-    """Return timezone offset (minutes) for event/request, default 0."""
-    try:
-        tz = getattr(obj, "timezone", None)
-        if tz is not None and tz.offset is not None:
-            return int(tz.offset)
-    except Exception:
-        pass
+    """Return effective timezone offset (minutes) for event/request, DST-aware.
 
-    tz_id = getattr(obj, "timezone_id", None)
-    if tz_id:
-        try:
-            offset = (
-                models.TimeZone.objects.filter(id=tz_id)
-                .values_list("offset", flat=True)
-                .first()
-            )
-            return int(offset) if offset is not None else 0
-        except Exception:
-            return 0
-    return 0
+    Resolution order (matches `utils.tz.resolve_zoneinfo` so the GraphQL
+    serializers and the email mailers agree on what "Pacific" means):
+
+      1. If `obj.timezone` resolves to an IANA zone via the mapping in
+         `utils.tz._APP_TZ_TO_IANA`, use the offset that zone reports
+         for `obj.start_time` (or `date`, or now()). This is the path
+         that fixes the "12pm saved as 11am" bug — PDT vs PST is
+         computed against the actual shift datetime.
+      2. Otherwise fall back to the static `TimeZone.offset` field, with
+         the same hours-vs-minutes auto-detect used elsewhere.
+    """
+    from utils.tz import offset_minutes_for
+
+    # Prefer attached relation
+    tz_row = None
+    try:
+        tz_row = getattr(obj, "timezone", None)
+    except Exception:
+        tz_row = None
+    if tz_row is None:
+        tz_id = getattr(obj, "timezone_id", None)
+        if tz_id:
+            try:
+                tz_row = models.TimeZone.objects.filter(id=tz_id).first()
+            except Exception:
+                tz_row = None
+    if tz_row is None:
+        return 0
+
+    # Pick the most relevant datetime for the DST lookup — events have
+    # `start_time` (most precise), requests have `start_time` too, both
+    # have `date` as a fallback. If none are set, fall through to "now"
+    # inside `offset_minutes_for`, which is fine because the row's
+    # IANA mapping is what matters; the exact wall-clock only matters
+    # near a DST transition.
+    when = (
+        getattr(obj, "start_time", None)
+        or getattr(obj, "date", None)
+    )
+    return offset_minutes_for(tz_row, at=when)
 
 
 def _format_dt_no_tz(
-    value: datetime.datetime | None, fmt: str, offset_minutes: int = 0
+    value: datetime.datetime | None,
+    fmt: str,
+    offset_minutes: int = 0,
+    *,
+    obj=None,
 ) -> str:
+    """Format a datetime in an event/request's local timezone.
+
+    Prefer passing `obj=` (the event or request) — that path is
+    DST-aware via `_apply_request_tz`. The positional `offset_minutes`
+    arg is the legacy fallback; it stays so existing call-sites keep
+    compiling, but anything new should go through `obj=`.
+    """
     if not value:
         return ""
-    value = _apply_offset(value, offset_minutes) or value
+    if obj is not None:
+        shifted = _apply_request_tz(value, obj)
+        if shifted is not None:
+            value = shifted
+        else:
+            # Fallback to the legacy fixed-offset path if obj didn't
+            # resolve to a TZ row for some reason.
+            value = _apply_offset(value, offset_minutes) or value
+    else:
+        value = _apply_offset(value, offset_minutes) or value
     formatted = value.replace(tzinfo=None).strftime(fmt)
     if fmt.startswith("%I"):
         return formatted.lstrip("0")
