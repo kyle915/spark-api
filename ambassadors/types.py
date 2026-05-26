@@ -543,6 +543,15 @@ class ShiftOfferDetails:
     end_time: str | None
     state_code: str | None
     is_approved: bool
+    # [latitude, longitude] from Event.coordinates. None when the
+    # event hasn't been geocoded yet (admin can still see the address
+    # on the card; map view falls back to address-only). Mobile uses
+    # this on ShiftDetailScreen to drop a venue pin + launch the
+    # native maps app with directions. Defaulted so existing callsites
+    # (myPendingOffers, single shift-offer lookup) don't need to pass
+    # them — only my_upcoming_shifts populates them today.
+    latitude: float | None = None
+    longitude: float | None = None
 
 
 @strawberry.type
