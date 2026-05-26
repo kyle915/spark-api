@@ -461,10 +461,25 @@ class RmmAssignedRequestMailer(Mailer):
         admin_base = getattr(
             settings, "ADMIN_FRONTEND_URL", "https://spark-new-admin.web.app",
         ).rstrip("/")
-        review_link = (
-            self.review_link
-            or f"{admin_base}/approvals?request={self.request.id}"
-        )
+        # Mint a signed token bound to the first recipient. RMM emails
+        # are typically To: a single mapped client + CC: the Ignite team,
+        # so embedding the To:'s email in the token gives us an audit
+        # trail of who actually acted. (CCs still have the same link in
+        # their copy; if they click first we attribute the action to the
+        # To:'s email — acceptable noise for a v1 audit log.)
+        # Falls back to a tokenless internal /approvals URL only if no
+        # recipient is on the envelope, which shouldn't happen in prod
+        # but keeps the mailer robust for one-off internal sends.
+        from events.views import make_approval_token
+
+        primary_recipient = (self.to_emails[0] if self.to_emails else "") or ""
+        if self.review_link:
+            review_link = self.review_link
+        elif primary_recipient:
+            token = make_approval_token(self.request.id, primary_recipient)
+            review_link = f"{admin_base}/approve/{token}"
+        else:
+            review_link = f"{admin_base}/approvals?request={self.request.id}"
 
         return Envelope(
             subject=f"[{getattr(getattr(self.request, 'tenant', None), 'name', 'New')}] {account_name or 'Request'} — needs your approval",
