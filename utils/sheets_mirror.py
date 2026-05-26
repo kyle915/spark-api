@@ -61,18 +61,45 @@ def extract_sheet_id(url: str) -> str | None:
     return m.group(1) if m else None
 
 
+SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+
+
 def _credentials():
+    """Resolve Sheets API credentials.
+
+    Preference order:
+      1. An explicit service-account JSON in GOOGLE_CALENDAR_CREDENTIALS
+         / GS_CREDENTIALS (used in dev / local where ADC isn't the app SA).
+      2. Application Default Credentials — i.e. the Cloud Run runtime
+         service account (spark-api-new-sa@…). This matches how GCS auth
+         works in prod (no JSON key to manage). The runtime SA still needs
+         Editor access to each target Sheet, and the Sheets API must be
+         enabled on the project.
+
+    Returns None only if neither path yields usable creds, in which case
+    callers no-op (a Sheets miss must never break a Request save).
+    """
     info = getattr(settings, "GOOGLE_CALENDAR_CREDENTIALS", None) or getattr(
         settings, "GS_CREDENTIALS", None
     )
-    if not info:
-        return None
+    if info:
+        try:
+            return service_account.Credentials.from_service_account_info(
+                info, scopes=SCOPES
+            )
+        except Exception as e:
+            logger.warning(
+                "sheets_mirror: explicit SA creds invalid, trying ADC: %s", e
+            )
+
+    # Fall back to ADC / runtime service account.
     try:
-        return service_account.Credentials.from_service_account_info(
-            info, scopes=["https://www.googleapis.com/auth/spreadsheets"]
-        )
+        import google.auth
+
+        creds, _project = google.auth.default(scopes=SCOPES)
+        return creds
     except Exception as e:
-        logger.warning("sheets_mirror: failed to build creds: %s", e)
+        logger.warning("sheets_mirror: ADC credentials unavailable: %s", e)
         return None
 
 
