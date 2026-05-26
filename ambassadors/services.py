@@ -375,6 +375,17 @@ class PublicAmbassadorCreationService(BaseAmbassadorService):
                 is_active=True,
             )
 
+            # Admin-created BA with a temp password: force them to
+            # change it on first sign-in. Public self-signups picked
+            # their own password and don't need the prompt.
+            if is_admin_created:
+                @sync_to_async
+                def _flag_password_change():
+                    user.requires_password_change = True
+                    user.save(update_fields=["requires_password_change"])
+
+                await _flag_password_change()
+
             location = await cls.resolve_location(
                 location_id=getattr(input, "location_id", None),
             )

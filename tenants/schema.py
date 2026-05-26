@@ -46,6 +46,25 @@ class CustomUserType(Node):
     first_name: strawberry.auto
     last_name: strawberry.auto
     role: RoleType
+    # True iff requires_password_change is set on the User row —
+    # admin-created BA whose temp password must be replaced before
+    # they reach the app. Mobile routes into ChangePasswordScreen
+    # when this is True.
+    requires_password_change: strawberry.auto
+
+    @strawberry.field
+    def password_set(self) -> bool:
+        """True when the user has a usable Django password hash on
+        file. SSO-only signups (Apple, Google, magic-link-only) have
+        ``has_usable_password() is False`` because ``set_password``
+        was never called. Mobile uses this to decide whether to show
+        the 'Set a password' option in the account screen — only
+        relevant for users without one already.
+        """
+        try:
+            return bool(self.has_usable_password())
+        except Exception:
+            return False
 
     @strawberry.field(name="image")
     def image_url(self) -> str | None:
