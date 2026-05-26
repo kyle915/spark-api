@@ -136,6 +136,20 @@ class DeleteRecapFileInput(SparkGraphQLInput):
 
 
 @strawberry.input
+class RemoveRecapFileInput(SparkGraphQLInput):
+    """Detach + delete a single file from a recap.
+
+    Unlike DeleteRecapFileInput (which refuses to touch files still
+    linked to a recap), this is the explicit "remove this photo from
+    the recap" action — it deletes the RecapFile row and its GCS blob
+    even though it's linked. Returns the parent recap so the client can
+    refresh the file grid. Admin use only (mutation is auth-gated).
+    """
+
+    id: strawberry.ID  # the RecapFile id
+
+
+@strawberry.input
 class AddRecapFileInput(SparkGraphQLInput):
     """Attach a single already-uploaded blob to an existing recap.
 

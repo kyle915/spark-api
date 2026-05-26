@@ -2728,6 +2728,51 @@ class RecapMutationService(SparkGraphQLMixin):
 
         return await create_file()
 
+    async def remove_recap_file(self) -> models.Recap:
+        """Detach + delete one file from a recap, return the parent recap.
+
+        The explicit "remove this photo from the recap" action. Unlike
+        delete_recap_file (which guards against deleting recap-linked
+        files), this deletes the linked RecapFile row and its GCS blob,
+        then returns the parent recap so the client can re-render the
+        file grid from the mutation response (no refetch needed).
+        """
+        if not isinstance(self.input, inputs.RemoveRecapFileInput):
+            raise GraphQLError("Invalid input type.")
+
+        try:
+            recap_file_id = resolve_id_to_int(self.input.id)
+            recap_file = await sync_to_async(
+                models.RecapFile.objects.select_related("recap").get
+            )(id=recap_file_id)
+        except (models.RecapFile.DoesNotExist, TypeError, ValueError, GraphQLError):
+            raise GraphQLError("Recap file not found.")
+
+        recap_id = recap_file.recap_id
+        if not recap_id:
+            raise GraphQLError("This file isn't attached to a recap.")
+
+        @sync_to_async
+        def remove():
+            with transaction.atomic():
+                blob_name = extract_blob_name_from_url(str(recap_file.file))
+                recap_file.delete()
+                recap = models.Recap.objects.get(id=recap_id)
+                return recap, blob_name
+
+        recap, blob_name = await remove()
+        # Delete the GCS object outside the transaction — if it fails the
+        # DB row is already gone, which is the user-visible outcome they
+        # asked for; an orphaned blob is harmless and swept later.
+        if blob_name:
+            try:
+                delete_blob(blob_name)
+            except Exception:
+                logger.exception(
+                    "remove_recap_file: blob delete failed for %s", blob_name
+                )
+        return recap
+
     async def delete_recap_file(self) -> bool:
         """Delete a recap file and its blob from GCS."""
         if not isinstance(self.input, inputs.DeleteRecapFileInput):
@@ -4542,6 +4587,32 @@ class RecapMutations:
                 types.RecapDetailResponse,
                 success=True,
                 message="File attached to recap.",
+                input_obj=input,
+                recap=recap,
+            )
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.RecapDetailResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def remove_recap_file(
+        self,
+        info: strawberry.Info,
+        input: inputs.RemoveRecapFileInput,
+    ) -> types.RecapDetailResponse:
+        """Remove a photo/receipt from a recap (deletes file + blob)."""
+        try:
+            service = RecapMutationService.with_input(input)
+            await service.set_user(info)
+            recap = await service.remove_recap_file()
+            return build_mutation_response(
+                types.RecapDetailResponse,
+                success=True,
+                message="File removed from recap.",
                 input_obj=input,
                 recap=recap,
             )
