@@ -306,6 +306,12 @@ class AmbassadorEventQueries:
                     or getattr(getattr(ev, "retailer", None), "name", None)
                 )
                 state_code = getattr(getattr(ev, "state", None), "code", None)
+                # Event.coordinates is ArrayField(FloatField, size=2)
+                # storing [latitude, longitude]. May be None or [] when
+                # the venue hasn't been geocoded yet.
+                coords = getattr(ev, "coordinates", None) or []
+                lat = float(coords[0]) if len(coords) >= 1 else None
+                lng = float(coords[1]) if len(coords) >= 2 else None
                 out.append(
                     a_types.ShiftOfferDetails(
                         ambassador_event_uuid=strawberry.ID(str(ae.uuid)),
@@ -326,6 +332,8 @@ class AmbassadorEventQueries:
                         ),
                         state_code=state_code,
                         is_approved=True,
+                        latitude=lat,
+                        longitude=lng,
                     )
                 )
             return out
