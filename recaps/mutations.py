@@ -2438,6 +2438,54 @@ class RecapMutationService(SparkGraphQLMixin):
 
         return await create_custom_recap_template_transaction()
 
+    async def remove_custom_field(self) -> models.CustomField:
+        """Force-delete a CustomField from a template, optionally
+        cascading its submitted values.
+
+        Counterpart to the strict "Cannot remove custom fields that
+        already have submitted values" guard in
+        ``_sync_custom_recap_template_fields``. Used when an admin
+        needs to retroactively prune a template (e.g. a duplicate
+        metric that's distorting reports — Nevena's Austin Psych
+        Festival report).
+        """
+        if not isinstance(self.input, inputs.RemoveCustomFieldInput):
+            raise GraphQLError("Invalid input type.")
+
+        try:
+            custom_field_id = resolve_id_to_int(self.input.id)
+        except (TypeError, ValueError, GraphQLError):
+            raise GraphQLError(f"Invalid custom field ID: {self.input.id}")
+
+        try:
+            custom_field = await sync_to_async(
+                models.CustomField.objects.select_related(
+                    "custom_recap_template"
+                ).get
+            )(id=custom_field_id)
+        except models.CustomField.DoesNotExist:
+            raise GraphQLError("Custom field not found.")
+
+        @sync_to_async
+        def _delete():
+            value_qs = models.CustomFieldValue.objects.filter(
+                custom_field=custom_field
+            )
+            value_count = value_qs.count()
+            if value_count and not self.input.delete_values:
+                raise GraphQLError(
+                    f"Field has {value_count} submitted value(s). "
+                    "Pass deleteValues=true to remove the field and "
+                    "cascade its values."
+                )
+            with transaction.atomic():
+                if value_count:
+                    value_qs.delete()
+                custom_field.delete()
+            return custom_field
+
+        return await _delete()
+
     async def update_custom_recap_template(self) -> models.CustomRecapTemplate:
         """Update a custom recap template."""
         if not isinstance(self.input, inputs.UpdateCustomRecapTemplateInput):
@@ -4242,6 +4290,34 @@ class RecapMutations:
         except GraphQLError as e:
             return build_mutation_response(
                 types.CustomRecapTemplateDetailResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def remove_custom_field(
+        self,
+        info: strawberry.Info,
+        input: inputs.RemoveCustomFieldInput,
+    ) -> types.CustomFieldDetailResponse:
+        """Force-delete a custom field from a template (admin-only
+        cleanup path). Default: errors if the field has submitted
+        values. Pass deleteValues=true to cascade those rows."""
+        try:
+            service = RecapMutationService.with_input(input)
+            await service.set_user(info)
+            custom_field = await service.remove_custom_field()
+            return build_mutation_response(
+                types.CustomFieldDetailResponse,
+                success=True,
+                message="Custom field removed.",
+                input_obj=input,
+                custom_field=custom_field,
+            )
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.CustomFieldDetailResponse,
                 success=False,
                 message=str(e),
                 input_obj=input,
