@@ -698,7 +698,9 @@ def _parse_row(
     start_clock = _capture(_required_time, row, "start_time")
     end_clock = _capture(_required_time, row, "end_time")
     address = _capture(_required_str, row, "address")
-    store_number = _capture(_required_str, row, "store_number")
+    # store_number is optional — not every venue (bars, special events,
+    # pop-ups) has one. When blank, dedup falls back to address + datetime.
+    store_number = _optional_str(row.get("store_number"))
 
     scheduling_status_raw = _optional_str(row.get("scheduling_status"))
     scheduling_status = None
@@ -885,51 +887,46 @@ def _parse_row(
     distributor_name = _optional_str(row.get("distributor_name"))
     retailer_name = _optional_str(row.get("retailer_name"))
 
-    if distributor_name and not distributor_id:
-        if not location_id:
-            errors.append("city is required to match distributor_name.")
-        else:
-            distributor_qs = Distributor.objects.filter(
-                tenant_id=tenant_id,
-                location_id=location_id,
-                location__state_id=state_id,
-            ).order_by("id")
-            try:
-                matched_distributor = _find_best_name_match(
-                    queryset=distributor_qs,
-                    provided_name=distributor_name,
-                    entity_label="distributor",
-                )
-            except ValueError as exc:
-                errors.append(str(exc))
-                matched_distributor = None
-            if not matched_distributor:
-                errors.append("No distributor match found for distributor_name + city + state.")
-            else:
-                distributor_id = matched_distributor.id
+    # distributor_name / retailer_name are free text on the row. We link them
+    # to an existing account opportunistically — when there's a city and a
+    # confident unique match on name + city + state. A missing city, no match,
+    # or an ambiguous match is NOT a row error: the free-text name is still
+    # stored on the request/event and the FK is simply left null (it can be
+    # linked later). This keeps bulk imports from being blocked just because a
+    # tenant hasn't set up its distributor/retailer accounts yet.
+    if distributor_name and not distributor_id and location_id:
+        distributor_qs = Distributor.objects.filter(
+            tenant_id=tenant_id,
+            location_id=location_id,
+            location__state_id=state_id,
+        ).order_by("id")
+        try:
+            matched_distributor = _find_best_name_match(
+                queryset=distributor_qs,
+                provided_name=distributor_name,
+                entity_label="distributor",
+            )
+        except ValueError:
+            matched_distributor = None
+        if matched_distributor:
+            distributor_id = matched_distributor.id
 
-    if retailer_name and not retailer_id:
-        if not location_id:
-            errors.append("city is required to match retailer_name.")
-        else:
-            retailer_qs = Retailer.objects.filter(
-                tenant_id=tenant_id,
-                location_id=location_id,
-                location__state_id=state_id,
-            ).order_by("id")
-            try:
-                matched_retailer = _find_best_name_match(
-                    queryset=retailer_qs,
-                    provided_name=retailer_name,
-                    entity_label="retailer",
-                )
-            except ValueError as exc:
-                errors.append(str(exc))
-                matched_retailer = None
-            if not matched_retailer:
-                errors.append("No retailer match found for retailer_name + city + state.")
-            else:
-                retailer_id = matched_retailer.id
+    if retailer_name and not retailer_id and location_id:
+        retailer_qs = Retailer.objects.filter(
+            tenant_id=tenant_id,
+            location_id=location_id,
+            location__state_id=state_id,
+        ).order_by("id")
+        try:
+            matched_retailer = _find_best_name_match(
+                queryset=retailer_qs,
+                provided_name=retailer_name,
+                entity_label="retailer",
+            )
+        except ValueError:
+            matched_retailer = None
+        if matched_retailer:
+            retailer_id = matched_retailer.id
 
     retailer_name_for_request = retailer_name
     if not retailer_name_for_request and retailer_id:
