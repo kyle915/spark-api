@@ -191,7 +191,21 @@ def _do_approve(request_obj: models.Request, recipient_email: str) -> None:
     except Exception:
         prev_status_slug = ""
 
+    # Attribute the approval to the person the token was issued to (the RMM
+    # who clicked the link in their email). approved_by is a User FK, so it
+    # only sticks when that email maps to a Spark user — which the RMMs do.
+    # The approved-email mailer falls back to showing the raw email otherwise.
+    from tenants.models import User as _User
+
+    approver = (
+        _User.objects.filter(email__iexact=recipient_email).first()
+        if recipient_email
+        else None
+    )
+
     request_obj.status = approved
+    if approver:
+        request_obj.approved_by = approver
     request_obj.save()
 
     _log_public_action(
@@ -209,10 +223,23 @@ def _do_approve(request_obj: models.Request, recipient_email: str) -> None:
     )
     if existing is None:
         try:
+            # created_by is NOT NULL on Event — passing None raised
+            # IntegrityError (swallowed below), so token-approved requests
+            # never got an event (no Assign-BA / Post-to-board / job). Use
+            # the approver, else the assigned RMM, else the request creator.
+            event_creator = (
+                approver or request_obj.rmm_asigned or request_obj.created_by
+            )
             async_to_sync(models.Event.objects.from_request)(
                 request=request_obj,
-                created_by=None,
+                created_by=event_creator,
             )
+            # Event exists now → create its Pending Job. The Request
+            # post_save signal fired before the event existed, so do it
+            # explicitly here. Idempotent.
+            from events.signals import create_pending_jobs_for_request
+
+            create_pending_jobs_for_request(request_obj)
         except Exception:
             logger.exception(
                 "public_approval: Event.from_request failed for request_id=%s",
@@ -227,7 +254,9 @@ def _do_approve(request_obj: models.Request, recipient_email: str) -> None:
         async_to_sync(_notify_notification_group_users_for_request)(
             request_obj, location
         )
-        async_to_sync(_notify_requestor_for_request_approved)(request_obj, location)
+        async_to_sync(_notify_requestor_for_request_approved)(
+            request_obj, location, approver_email_fallback=recipient_email
+        )
         async_to_sync(_push_requestor_for_request_verdict)(request_obj, approved=True)
     except Exception:
         logger.exception(

@@ -2614,6 +2614,7 @@ async def _notify_requestor_for_request_approved(
     request: models.Request,
     location: models.Location | None,
     delay_seconds: int | float | None = None,
+    approver_email_fallback: str | None = None,
 ) -> None:
     requestor_email = await _resolve_requestor_email(request)
     if not requestor_email:
@@ -2649,6 +2650,7 @@ async def _notify_requestor_for_request_approved(
         location=location,
         to_emails=[requestor_email],
         cc_emails=copy_emails,
+        approver_email_fallback=approver_email_fallback,
     )
     await sync_to_async(mailer.send)(delay_seconds=delay_seconds)
 
