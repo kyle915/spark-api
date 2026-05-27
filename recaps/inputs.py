@@ -167,6 +167,23 @@ class AddRecapFileInput(SparkGraphQLInput):
 
 
 @strawberry.input
+class AddCustomRecapFileInput(SparkGraphQLInput):
+    """Attach a single already-uploaded blob to an existing custom recap.
+
+    The custom-template (Borjomi, Girl Beer, …) counterpart to
+    AddRecapFileInput. Distinct from update_custom_recap, which reconciles
+    the entire file set and rewrites field values — using it to add one
+    photo would risk clobbering recap data. This input does the minimal,
+    safe thing: create one CustomRecapFile row, touching nothing else.
+    """
+
+    custom_recap_id: strawberry.ID
+    file: str  # GCS blob name (e.g. "recap_files/<uuid>/<stamp>-photo.jpg")
+    file_type_id: strawberry.ID | None = None
+    file_recap_category_id: strawberry.ID | None = None
+
+
+@strawberry.input
 class ApproveRecapInput(SparkGraphQLInput):
     id: strawberry.ID
     approved: bool
