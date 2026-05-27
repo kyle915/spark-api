@@ -1,6 +1,8 @@
 import datetime
 import logging
 import mimetypes
+import re
+from html import unescape
 from typing import Any
 from pathlib import Path
 from email import encoders
@@ -22,6 +24,46 @@ from utils.queues import Queues
 resend.api_key = settings.RESEND_API_KEY
 
 logger = logging.getLogger(__name__)
+
+
+def html_to_text(html: str) -> str:
+    """Best-effort plain-text rendering of an HTML email body.
+
+    Mailbox providers (Gmail especially) treat HTML-only messages with no
+    text/plain alternative as a spam signal. We don't ship hand-written
+    text templates, so derive a readable text part from the rendered HTML:
+    drop script/style, keep link URLs inline as "label (url)", turn block
+    tags into newlines, strip the rest, and tidy whitespace. Dependency-free.
+    """
+    if not html:
+        return ""
+    text = html
+    # Remove style/script blocks (incl. their contents).
+    text = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", "", text)
+
+    # Preserve link targets: <a href="X">label</a> -> "label (X)".
+    def _link(match: "re.Match[str]") -> str:
+        href = (match.group(1) or "").strip()
+        label = re.sub(r"(?is)<[^>]+>", "", match.group(2) or "").strip()
+        if not href or href.startswith("mailto:") or href == label:
+            return label
+        return f"{label} ({href})" if label else href
+
+    text = re.sub(
+        r'(?is)<a\b[^>]*\bhref=["\']([^"\']*)["\'][^>]*>(.*?)</a>', _link, text
+    )
+    # List items -> bulleted lines.
+    text = re.sub(r"(?is)<li\b[^>]*>", "\n- ", text)
+    # Block-level closers / breaks -> newlines.
+    text = re.sub(r"(?is)<(br|/p|/div|/tr|/li|/h[1-6]|/table)\s*/?>", "\n", text)
+    # Strip any remaining tags.
+    text = re.sub(r"(?is)<[^>]+>", "", text)
+    # Decode HTML entities.
+    text = unescape(text)
+    # Tidy: trim each line, collapse 3+ blank lines to one blank line.
+    text = "\n".join(line.strip() for line in text.splitlines())
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    return text
 
 
 class Envelope:
@@ -79,6 +121,27 @@ class Envelope:
         context.setdefault("EMAIL_LOGO_CID", settings.EMAIL_LOGO_CID)
         context.setdefault("EMAIL_LOGO_URL", settings.EMAIL_LOGO_URL)
         return template.render(context)
+
+    def render_text(self) -> str:
+        """Plain-text alternative derived from the rendered HTML body."""
+        return html_to_text(self.render_template())
+
+    def delivery_headers(self) -> dict:
+        """Headers plus deliverability defaults.
+
+        Adds a List-Unsubscribe header (unless the caller already set one)
+        so Gmail/Yahoo see a clean opt-out path — recipients use that
+        instead of hitting "report spam", which protects sender reputation.
+        Mailto-only (no RFC 8058 one-click) since there's no HTTPS
+        unsubscribe endpoint to POST to yet.
+        """
+        headers = dict(self.headers or {})
+        if not any(k.lower() == "list-unsubscribe" for k in headers):
+            mailto = getattr(
+                settings, "LIST_UNSUBSCRIBE_MAILTO", "events@igniteproductions.co"
+            )
+            headers["List-Unsubscribe"] = f"<mailto:{mailto}?subject=Unsubscribe>"
+        return headers
 
     def compile(self) -> dict:
         """
@@ -141,7 +204,10 @@ class ResendMailDriver(MailDriver):
             "to": envelope.to_emails,
             "subject": envelope.subject,
             "html": envelope.render_template(),
-            "headers": envelope.headers,
+            # Plain-text alternative — multipart/alternative is friendlier to
+            # spam filters than HTML-only.
+            "text": envelope.render_text(),
+            "headers": envelope.delivery_headers(),
         }
         if envelope.cc_emails:
             params["cc"] = envelope.cc_emails
@@ -168,11 +234,12 @@ class MailpitMailDriver(MailDriver):
         html_content = envelope.render_template()
         email = EmailMultiAlternatives(
             subject=envelope.subject,
-            body=html_content,
+            # body is the text/plain part; HTML is attached as the alternative.
+            body=envelope.render_text(),
             from_email=envelope.from_email,
             to=envelope.to_emails,
             cc=envelope.cc_emails,
-            headers=envelope.headers,
+            headers=envelope.delivery_headers(),
         )
         email.attach_alternative(html_content, "text/html")
         for attachment in envelope.attachments or []:

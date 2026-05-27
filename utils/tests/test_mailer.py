@@ -204,7 +204,13 @@ class TestMailDrivers:
                 "cc": ["copy@example.com"],
                 "subject": "Test Subject",
                 "html": "<html>Rendered</html>",
-                "headers": {"X-Custom": "value"},
+                "text": "Rendered",
+                "headers": {
+                    "X-Custom": "value",
+                    "List-Unsubscribe": (
+                        "<mailto:events@igniteproductions.co?subject=Unsubscribe>"
+                    ),
+                },
             })
 
     @patch('utils.mailer.EmailMultiAlternatives')
@@ -225,11 +231,16 @@ class TestMailDrivers:
             driver.send(envelope)
             mock_email_class.assert_called_once_with(
                 subject="Test Subject",
-                body="<html>Rendered</html>",
+                body="Rendered",
                 from_email="from@example.com",
                 to=["to@example.com"],
                 cc=["copy@example.com"],
-                headers={"X-Custom": "value"},
+                headers={
+                    "X-Custom": "value",
+                    "List-Unsubscribe": (
+                        "<mailto:events@igniteproductions.co?subject=Unsubscribe>"
+                    ),
+                },
             )
             mock_email_instance.attach_alternative.assert_called_once_with(
                 "<html>Rendered</html>", "text/html"
