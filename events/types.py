@@ -603,6 +603,21 @@ class RequestListResponse:
     requests: List[Request]
 
 
+@strawberry.type
+class EventAmbassador:
+    """A single BA assigned to an event, for the roster panel.
+
+    Flattens an AmbassadorEvent row down to what the /event/view
+    roster UI needs: who they are (name/email) and whether they've
+    confirmed (`is_approved=True`) versus are still just invited.
+    """
+
+    uuid: strawberry.ID
+    name: str
+    email: str
+    is_approved: bool
+
+
 @strawberry_django.type(models.Event)
 class Event(Node):
     uuid: str
@@ -719,6 +734,48 @@ class Event(Node):
         return await sync_to_async(
             self.ambassadors_events.filter(is_approved=True).count
         )()
+
+    @strawberry.field
+    async def ambassadors(self) -> List[EventAmbassador]:
+        """Full BA roster for this event — powers the /event/view panel.
+
+        Each entry is one AmbassadorEvent flattened to name/email plus
+        `is_approved` so the UI can split confirmed BAs from still-invited
+        ones. Reuses the `ambassadors_events` prefetch when present (the
+        list resolver primes it); otherwise issues one select_related
+        query. All ORM access — including walking ambassador__user — is
+        done inside a single sync_to_async block so a non-prefetched
+        relation can't trip SynchronousOnlyOperation.
+        """
+        cached = getattr(self, "_prefetched_objects_cache", {}).get(
+            "ambassadors_events"
+        )
+
+        def _build() -> List[EventAmbassador]:
+            if cached is not None:
+                rows = list(cached)
+            else:
+                rows = list(
+                    self.ambassadors_events.select_related(
+                        "ambassador__user"
+                    ).all()
+                )
+            roster: List[EventAmbassador] = []
+            for ae in rows:
+                user = getattr(ae.ambassador, "user", None)
+                full_name = (user.get_full_name() if user else "") or ""
+                email = (user.email if user else "") or ""
+                roster.append(
+                    EventAmbassador(
+                        uuid=str(ae.uuid),
+                        name=full_name or email,
+                        email=email,
+                        is_approved=ae.is_approved,
+                    )
+                )
+            return roster
+
+        return await sync_to_async(_build)()
 
     @strawberry.field
     async def custom_recaps(
