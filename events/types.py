@@ -687,6 +687,40 @@ class Event(Node):
         return await sync_to_async(list)(self.recaps.order_by("-created_at"))
 
     @strawberry.field
+    async def assigned_ambassadors_count(self) -> int:
+        """Total BAs assigned to this event (invited + confirmed).
+
+        Counts every AmbassadorEvent row for the event regardless of
+        approval state. Powers the Master Tracker "BA assigned"
+        indicator. Reuses the `event_set__ambassadors_events` prefetch
+        on the requests resolver (no extra query per row); falls back to
+        a single COUNT when the relation wasn't prefetched.
+        """
+        cached = getattr(self, "_prefetched_objects_cache", {}).get(
+            "ambassadors_events"
+        )
+        if cached is not None:
+            return len(cached)
+        return await sync_to_async(self.ambassadors_events.count)()
+
+    @strawberry.field
+    async def confirmed_ambassadors_count(self) -> int:
+        """BAs confirmed (is_approved=True) for this event.
+
+        Subset of assignedAmbassadorsCount. Same prefetch-reuse strategy:
+        counts in python off the prefetched list when available, else a
+        single filtered COUNT.
+        """
+        cached = getattr(self, "_prefetched_objects_cache", {}).get(
+            "ambassadors_events"
+        )
+        if cached is not None:
+            return sum(1 for ae in cached if ae.is_approved)
+        return await sync_to_async(
+            self.ambassadors_events.filter(is_approved=True).count
+        )()
+
+    @strawberry.field
     async def custom_recaps(
         self,
     ) -> List[Annotated["CustomRecap", strawberry.lazy("recaps.types")]]:

@@ -1043,6 +1043,14 @@ class RequestQueriesService(BaseEventQueriesService):
                 # Limit to id-only fields on Recap since neither
                 # consumer needs the full recap detail at list time.
                 "event_set__recaps",
+                # Master Tracker "BA assigned" indicator traverses
+                # Request → events → ambassadors_events to count
+                # assigned/confirmed BAs per event. Without this prefetch
+                # Event.assignedAmbassadorsCount /
+                # confirmedAmbassadorsCount would each fire a COUNT query
+                # per event (N+1). The count resolvers read from this
+                # prefetched list when present.
+                "event_set__ambassadors_events",
             )
         )
 
