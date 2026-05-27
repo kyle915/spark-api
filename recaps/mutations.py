@@ -3083,97 +3083,143 @@ class RecapMutationService(SparkGraphQLMixin):
                 "Campaign report is limited to 50 recaps per export."
             )
 
-        resolved_ids: list[int] = []
+        # Recaps can be legacy (Recap) OR custom (CustomRecap) — two tables
+        # whose PKs collide, so we decode the Relay global-id TYPE (never the
+        # bare int) to route each id to the right table. Selecting a custom
+        # recap used to resolve to nothing here → "None of the supplied
+        # recap ids were found".
+        import base64 as _b64
+
+        decoded: list[tuple[str, int]] = []
         for raw in raw_ids:
-            try:
-                resolved_ids.append(resolve_id_to_int(raw))
-            except (TypeError, ValueError, GraphQLError):
-                raise GraphQLError(f"Invalid recap id: {raw!r}")
+            kind = "Recap"
+            pk: int | None = None
+            if isinstance(raw, int):
+                pk = raw
+            elif isinstance(raw, str) and raw.isdigit():
+                pk = int(raw)
+            else:
+                try:
+                    tname, sid = (
+                        _b64.b64decode(str(raw).encode()).decode().split(":", 1)
+                    )
+                    if "customrecap" in tname.lower():
+                        kind = "CustomRecap"
+                    pk = int(sid)
+                except Exception:
+                    raise GraphQLError(f"Invalid recap id: {raw!r}")
+            decoded.append((kind, pk))
 
         @sync_to_async
         def fetch_recaps():
-            qs = (
-                models.Recap.objects.select_related(
-                    "event",
-                    "event__tenant",
-                    "event__event_type",
-                    "job",
-                    "retailer",
-                    "ambassador",
-                    "ambassador__user",
-                )
-                .prefetch_related(
-                    Prefetch(
-                        "recap_files",
-                        queryset=models.RecapFile.objects.select_related(
-                            "file_type",
-                            "file_recap_category",
-                        ),
-                    ),
-                    "consumer_engagements",
-                    Prefetch(
-                        "product_samples",
-                        queryset=models.ProductSamples.objects.select_related(
-                            "product"
-                        ),
-                    ),
-                    Prefetch(
-                        "sales_performance",
-                        queryset=models.SalesPerformance.objects.select_related(
-                            "product",
-                            "type_of_good",
-                        ),
-                    ),
-                    "consumer_feedback",
-                    "account_feedback",
-                )
-                .filter(id__in=resolved_ids)
-            )
-            recaps_by_id = {r.id: r for r in qs}
-            return [recaps_by_id[i] for i in resolved_ids if i in recaps_by_id]
+            legacy_pks = [pk for (k, pk) in decoded if k == "Recap"]
+            custom_pks = [pk for (k, pk) in decoded if k == "CustomRecap"]
 
-        recaps = await fetch_recaps()
-        if not recaps:
+            legacy_by_id: dict[int, object] = {}
+            if legacy_pks:
+                legacy_by_id = {
+                    r.id: r
+                    for r in models.Recap.objects.select_related(
+                        "event",
+                        "event__tenant",
+                        "event__event_type",
+                        "job",
+                        "retailer",
+                        "ambassador",
+                        "ambassador__user",
+                    )
+                    .prefetch_related(
+                        Prefetch(
+                            "recap_files",
+                            queryset=models.RecapFile.objects.select_related(
+                                "file_type",
+                                "file_recap_category",
+                            ),
+                        ),
+                        "consumer_engagements",
+                        Prefetch(
+                            "product_samples",
+                            queryset=models.ProductSamples.objects.select_related(
+                                "product"
+                            ),
+                        ),
+                        Prefetch(
+                            "sales_performance",
+                            queryset=models.SalesPerformance.objects.select_related(
+                                "product",
+                                "type_of_good",
+                            ),
+                        ),
+                        "consumer_feedback",
+                        "account_feedback",
+                    )
+                    .filter(id__in=legacy_pks)
+                }
+
+            custom_by_id: dict[int, object] = {}
+            if custom_pks:
+                custom_by_id = {
+                    r.id: r
+                    for r in models.CustomRecap.objects.select_related(
+                        "event", "event__tenant"
+                    )
+                    .prefetch_related("custom_recap_files")
+                    .filter(id__in=custom_pks)
+                }
+
+            ordered: list[tuple[str, object]] = []
+            for (k, pk) in decoded:
+                obj = (custom_by_id if k == "CustomRecap" else legacy_by_id).get(pk)
+                if obj is not None:
+                    ordered.append((k, obj))
+            return ordered
+
+        ordered = await fetch_recaps()
+        if not ordered:
             raise GraphQLError("None of the supplied recap ids were found.")
+        recaps = [obj for (_k, obj) in ordered]
 
-        # Campaign reports bundle N recaps × M files each. Sequential
-        # blob fetches turned that into a multi-minute wall-clock task.
-        # Build one flat candidate list (recap_idx, file, blob), fetch
-        # them all in parallel, then re-bucket by recap.
+        # Campaign reports bundle N recaps × M files each. Build one flat
+        # candidate list (recap_idx, file, blob), fetch them all in parallel,
+        # then re-bucket. Branch the file relation by recap type: legacy uses
+        # recap_files/.file, custom uses custom_recap_files/.url.
         import concurrent.futures as _cf
 
         candidates: list[tuple[int, object, str]] = []
-        for idx, recap in enumerate(recaps):
-            for recap_file in recap.recap_files.all():
-                if not should_embed_recap_file(recap_file):
+        for idx, (kind, recap) in enumerate(ordered):
+            files = (
+                recap.custom_recap_files.all()
+                if kind == "CustomRecap"
+                else recap.recap_files.all()
+            )
+            for rf in files:
+                if not should_embed_recap_file(rf):
                     continue
-                blob_name = extract_blob_name_from_url(str(recap_file.file))
+                raw_url = rf.url if kind == "CustomRecap" else rf.file
+                blob_name = extract_blob_name_from_url(str(raw_url))
                 if not blob_name:
                     continue
-                candidates.append((idx, recap_file, blob_name))
+                candidates.append((idx, rf, blob_name))
 
         def _fetch(item):
-            idx, recap_file, blob_name = item
+            idx, rf, blob_name = item
             try:
                 data = download_blob_bytes(blob_name)
             except Exception:
                 return None
             if not data or not is_image_bytes(data):
                 return None
+            cat = getattr(rf, "file_recap_category", None)
             return (
                 idx,
                 {
-                    "name": recap_file.name,
+                    "name": getattr(rf, "name", None),
                     "bytes": data,
-                    "category": (
-                        recap_file.file_recap_category.name
-                        if recap_file.file_recap_category
-                        else "Uncategorized"
-                    ),
+                    "category": cat.name if cat else "Uncategorized",
                 },
             )
 
-        per_recap: dict[int, list[dict]] = {i: [] for i in range(len(recaps))}
+        per_recap: dict[int, list[dict]] = {i: [] for i in range(len(ordered))}
         if candidates:
             with _cf.ThreadPoolExecutor(max_workers=16) as pool:
                 for result in pool.map(_fetch, candidates):
@@ -3184,14 +3230,20 @@ class RecapMutationService(SparkGraphQLMixin):
         recaps_with_images: list = []
         total_consumers = 0
         any_consumer_data = False
-        for idx, recap in enumerate(recaps):
+        for idx, (kind, recap) in enumerate(ordered):
             recaps_with_images.append((recap, per_recap[idx]))
-            for eng in recap.consumer_engagements.all():
-                tc = getattr(eng, "total_consumer", None)
-                if isinstance(tc, (int, float)):
-                    total_consumers += int(tc)
+            if kind == "CustomRecap":
+                te = getattr(recap, "total_engagements", None)
+                if isinstance(te, (int, float)) and te:
+                    total_consumers += int(te)
                     any_consumer_data = True
-                break  # only the first row
+            else:
+                for eng in recap.consumer_engagements.all():
+                    tc = getattr(eng, "total_consumer", None)
+                    if isinstance(tc, (int, float)):
+                        total_consumers += int(tc)
+                        any_consumer_data = True
+                    break  # only the first row
 
         # Title / subtitle defaults
         resolved_title = (title or "").strip() or "Campaign Report"
@@ -3202,7 +3254,10 @@ class RecapMutationService(SparkGraphQLMixin):
             tenant_name or "Sampling Campaign"
         )
 
-        pdf_bytes = build_campaign_report_pdf(
+        # Wrapped in sync_to_async: the renderer (build_recap_pdf_html) lazily
+        # reads recap relations, and custom recaps aren't fully prefetched
+        # above — running it in a sync thread avoids SynchronousOnlyOperation.
+        pdf_bytes = await sync_to_async(build_campaign_report_pdf)(
             title=resolved_title,
             subtitle=resolved_subtitle,
             recaps_with_images=recaps_with_images,
@@ -3233,144 +3288,22 @@ class RecapMutationService(SparkGraphQLMixin):
         if not isinstance(self.input, inputs.GenerateCampaignReportPdfInput):
             raise GraphQLError("Invalid input type.")
 
-        raw_ids = self.input.recap_ids or []
-        if not raw_ids:
-            raise GraphQLError("At least one recap is required.")
-        if len(raw_ids) > 50:
-            # WeasyPrint render time scales roughly linearly with recap
-            # count; 50 keeps the request well under Cloud Run's 60s
-            # request-timeout budget for the typical recap (10 photos).
-            raise GraphQLError(
-                "Campaign report is limited to 50 recaps per export."
-            )
-
-        resolved_ids: list[int] = []
-        for raw in raw_ids:
-            try:
-                resolved_ids.append(resolve_id_to_int(raw))
-            except (TypeError, ValueError, GraphQLError):
-                raise GraphQLError(f"Invalid recap id: {raw!r}")
-
-        @sync_to_async
-        def fetch_recaps():
-            # Same prefetch profile as the single-recap PDF so the
-            # campaign builder has access to engagements / samples /
-            # sales / feedback rows without N+1 queries.
-            qs = (
-                models.Recap.objects.select_related(
-                    "event",
-                    "event__tenant",
-                    "event__event_type",
-                    "job",
-                    "retailer",
-                    "ambassador",
-                    "ambassador__user",
-                )
-                .prefetch_related(
-                    Prefetch(
-                        "recap_files",
-                        queryset=models.RecapFile.objects.select_related(
-                            "file_type",
-                            "file_recap_category",
-                        ),
-                    ),
-                    "consumer_engagements",
-                    Prefetch(
-                        "product_samples",
-                        queryset=models.ProductSamples.objects.select_related(
-                            "product"
-                        ),
-                    ),
-                    Prefetch(
-                        "sales_performance",
-                        queryset=models.SalesPerformance.objects.select_related(
-                            "product",
-                            "type_of_good",
-                        ),
-                    ),
-                    "consumer_feedback",
-                    "account_feedback",
-                )
-                .filter(id__in=resolved_ids)
-            )
-            # Preserve caller-supplied order so the cover-page order
-            # matches what they multi-selected in the UI.
-            recaps_by_id = {r.id: r for r in qs}
-            return [recaps_by_id[i] for i in resolved_ids if i in recaps_by_id]
-
-        recaps = await fetch_recaps()
-        if not recaps:
-            raise GraphQLError("None of the supplied recap ids were found.")
-
-        # Parallel blob fetch (16-worker pool) — same approach as the
-        # single-recap path. Sequential was killing campaign reports
-        # with 5+ recaps × 30+ files each. Pre-filter by extension so
-        # we don't round-trip a non-image just to drop it.
-        import concurrent.futures as _cf
-
-        candidates: list[tuple[int, object, str]] = []
-        for idx, recap in enumerate(recaps):
-            for recap_file in recap.recap_files.all():
-                if not should_embed_recap_file(recap_file):
-                    continue
-                blob_name = extract_blob_name_from_url(str(recap_file.file))
-                if not blob_name:
-                    continue
-                candidates.append((idx, recap_file, blob_name))
-
-        def _fetch(item):
-            idx, recap_file, blob_name = item
-            try:
-                data = download_blob_bytes(blob_name)
-            except Exception:
-                return None
-            if not data or not is_image_bytes(data):
-                return None
-            return (
-                idx,
-                {
-                    "name": recap_file.name,
-                    "bytes": data,
-                    "category": (
-                        recap_file.file_recap_category.name
-                        if recap_file.file_recap_category
-                        else "Uncategorized"
-                    ),
-                },
-            )
-
-        per_recap: dict[int, list[dict]] = {i: [] for i in range(len(recaps))}
-        if candidates:
-            with _cf.ThreadPoolExecutor(max_workers=16) as pool:
-                for r in pool.map(_fetch, candidates):
-                    if r is not None:
-                        idx, entry = r
-                        per_recap[idx].append(entry)
-
-        recaps_with_images: list = [
-            (recap, per_recap[i]) for i, recap in enumerate(recaps)
-        ]
-
-        # Cover-page strings — caller-supplied or fall back to tenant /
-        # event name so the PDF still has reasonable defaults.
-        title = (self.input.title or "").strip() or "Campaign Report"
-        if not (self.input.subtitle or "").strip():
-            first_event = getattr(recaps[0], "event", None)
-            tenant = getattr(first_event, "tenant", None) if first_event else None
-            subtitle = (
-                getattr(tenant, "name", None) or "Sampling Campaign"
-            )
-        else:
-            subtitle = self.input.subtitle.strip()
-
-        pdf_bytes = build_campaign_report_pdf(
-            title=title,
-            subtitle=subtitle,
-            recaps_with_images=recaps_with_images,
+        # Delegate to the shared builder (handles legacy + custom recaps),
+        # then upload the bytes and return the public URL. This used to
+        # duplicate a legacy-only fetch, so selecting a custom recap failed
+        # with "None of the supplied recap ids were found".
+        (
+            pdf_bytes,
+            recap_count,
+            *_rest,
+        ) = await self.build_campaign_report_pdf_with_meta(
+            recap_ids=self.input.recap_ids or [],
+            title=self.input.title,
+            subtitle=self.input.subtitle,
         )
 
         timestamp = django_timezone.now().strftime("%Y%m%d%H%M%S")
-        blob_name = f"campaign-reports/{timestamp}-{len(recaps)}-recaps.pdf"
+        blob_name = f"campaign-reports/{timestamp}-{recap_count}-recaps.pdf"
         upload_bytes(blob_name, pdf_bytes, content_type="application/pdf")
         return public_url(blob_name)
 
