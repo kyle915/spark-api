@@ -517,6 +517,9 @@ class CreateRequestWithDependenciesInput(BaseNameableInput):
     location_id: strawberry.ID | None = None
     state_id: strawberry.ID | None = None
     requestor_email: str | None = None
+    # "already_scheduled" | "needs_scheduling" — required in the public
+    # form; auto-mapped onto Request.scheduling_status by the service.
+    scheduling_status: str | None = None
     store_number: str | None = None
     client_name: str
     client_email: str
