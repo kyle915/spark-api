@@ -169,6 +169,43 @@ def _chunks(seq, n):
         yield seq[i : i + n]
 
 
+def _tz_offset_minutes(request) -> int:
+    """The request's timezone offset in minutes (e.g. PDT = -420). Used to
+    render date/time columns in the event's LOCAL time instead of raw UTC."""
+    tz = getattr(request, "timezone", None)
+    off = getattr(tz, "offset", None)
+    return int(off) if isinstance(off, (int, float)) else 0
+
+
+def _local(dt, offset_min: int):
+    if dt is None:
+        return None
+    from datetime import timedelta
+
+    try:
+        return dt + timedelta(minutes=offset_min)
+    except Exception:
+        return dt
+
+
+def _fmt_date(dt, offset_min: int) -> str:
+    """Local calendar date, e.g. '5/30/2026'."""
+    loc = _local(dt, offset_min)
+    return loc.strftime("%-m/%-d/%Y") if loc else ""
+
+
+def _fmt_time(dt, offset_min: int) -> str:
+    """Local clock time, e.g. '4:00 PM'."""
+    loc = _local(dt, offset_min)
+    return loc.strftime("%-I:%M %p") if loc else ""
+
+
+def _fmt_dt(dt, offset_min: int) -> str:
+    """Local date + time, e.g. '5/26/2026 8:18 PM'."""
+    loc = _local(dt, offset_min)
+    return loc.strftime("%-m/%-d/%Y %-I:%M %p") if loc else ""
+
+
 def _row_for_request(request) -> list | None:
     """Build the 15-column sheet row for a Request. Returns None when the
     request has no tenant (nothing to key the Brand column on). Shared by
@@ -179,6 +216,8 @@ def _row_for_request(request) -> list | None:
 
     def s(v):
         return "" if v is None else str(v)
+
+    off = _tz_offset_minutes(request)
 
     status_name = ""
     try:
@@ -243,18 +282,18 @@ def _row_for_request(request) -> list | None:
     return [
         s(request.uuid),
         status_name,
-        s(getattr(request, "date", "")),
+        _fmt_date(getattr(request, "date", None), off),
         s(getattr(tenant, "name", "")),
         request_type_name,
         retailer_name,
         distributor_name,
         s(getattr(request, "address", "")),
         state_code,
-        s(getattr(request, "start_time", "")),
-        s(getattr(request, "end_time", "")),
+        _fmt_time(getattr(request, "start_time", None), off),
+        _fmt_time(getattr(request, "end_time", None), off),
         rmm_label,
-        s(getattr(request, "created_at", "")),
-        s(getattr(request, "updated_at", "")),
+        _fmt_dt(getattr(request, "created_at", None), off),
+        _fmt_dt(getattr(request, "updated_at", None), off),
         spark_link,
     ]
 
