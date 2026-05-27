@@ -344,9 +344,66 @@ class DashboardQueries:
                 )
             )()
 
-            consumers_sampled = consumer_data['total_consumers'] or 0
-            total_brand_aware = consumer_data['total_brand_aware'] or 0
-            total_willing_to_purchase = consumer_data['total_willing_to_purchase'] or 0
+            # Borjomi / Girl Beer use CUSTOM recaps; their numeric answers
+            # live in CustomFieldValue (text) and are ignored by the legacy
+            # ConsumerEngagements / Recap aggregates above, so their KPIs
+            # read 0. Fold the custom-recap field values into the same
+            # metrics, matched by field label. Scoped to base_queryset (all
+            # events in the window) — NOT events_with_recaps, which is
+            # legacy-recap-only and would exclude custom-recap events.
+            # Best-effort + add-only: failure leaves the legacy numbers
+            # intact, and tenants without custom recaps add 0.
+            custom_consumers = custom_brand_aware_n = custom_willing_n = 0
+            custom_single_cans = custom_packs = 0
+            try:
+                def _sum_custom_recap_metrics():
+                    import re as _re
+                    sums = {"consumers": 0, "brand": 0,
+                            "willing": 0, "cans": 0, "packs": 0}
+                    rows = recap_models.CustomFieldValue.objects.filter(
+                        custom_recap__event__in=base_queryset
+                    ).values_list("custom_field__name", "value")
+                    for name, value in rows:
+                        low = (name or "").lower()
+                        digits = _re.sub(r"[^\d-]", "", str(value or ""))
+                        if not digits or digits == "-":
+                            continue
+                        try:
+                            num = int(digits)
+                        except ValueError:
+                            continue
+                        if "consumers sampled" in low:
+                            sums["consumers"] += num
+                        elif "knew about" in low:
+                            sums["brand"] += num
+                        elif "willing to purchase" in low and "not" not in low:
+                            sums["willing"] += num
+                        elif "single can" in low:
+                            sums["cans"] += num
+                        elif "pack" in low:
+                            sums["packs"] += num
+                    return sums
+
+                _cm = await sync_to_async(_sum_custom_recap_metrics)()
+                custom_consumers = _cm["consumers"]
+                custom_brand_aware_n = _cm["brand"]
+                custom_willing_n = _cm["willing"]
+                custom_single_cans = _cm["cans"]
+                custom_packs = _cm["packs"]
+            except Exception:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "event_dashboard: custom-recap metric fold-in failed",
+                    exc_info=True,
+                )
+
+            consumers_sampled = (
+                consumer_data['total_consumers'] or 0) + custom_consumers
+            total_brand_aware = (
+                consumer_data['total_brand_aware'] or 0) + custom_brand_aware_n
+            total_willing_to_purchase = (
+                consumer_data['total_willing_to_purchase'] or 0
+            ) + custom_willing_n
 
             # Calculate percentages (always clamp to 0-100)
             brand_awareness = clamp_percentage(
@@ -604,6 +661,14 @@ class DashboardQueries:
                     multi_packs_sold=Sum('total_packs_sold', default=0),
                 )
             )()
+            # Fold custom-recap cans/packs into the global KPIs (legacy
+            # Recap aggregate above misses custom-recap tenants like Borjomi).
+            global_kpis_data['single_cans_sold'] = (
+                global_kpis_data.get('single_cans_sold') or 0
+            ) + custom_single_cans
+            global_kpis_data['multi_packs_sold'] = (
+                global_kpis_data.get('multi_packs_sold') or 0
+            ) + custom_packs
 
             global_by_rmm_data = await sync_to_async(list)(
                 recap_queryset.select_related('event__rmm_asigned')
