@@ -380,6 +380,7 @@ class Request(Node):
     address: str
     decline_reason: str | None = None
     reviewed: bool
+    scheduling_status: str | None = None
     store_number: str | None = None
     notes: str | None = None
     coordinates: List[float]

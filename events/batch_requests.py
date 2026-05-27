@@ -28,12 +28,28 @@ from events.models import (
     RequestStoreManager,
     RequestType,
     Retailer,
+    SchedulingStatus,
     State,
     Tenant,
     TimeZone,
 )
 
 User = get_user_model()
+
+# Accept either the stored slug or the friendly label (case-insensitive),
+# plus a couple of obvious shorthands, so the column is forgiving to fill in.
+_SCHEDULING_ALIASES = {
+    "already_scheduled": SchedulingStatus.ALREADY_SCHEDULED,
+    "already scheduled with the account": SchedulingStatus.ALREADY_SCHEDULED,
+    "already scheduled": SchedulingStatus.ALREADY_SCHEDULED,
+    "scheduled": SchedulingStatus.ALREADY_SCHEDULED,
+    "yes": SchedulingStatus.ALREADY_SCHEDULED,
+    "needs_scheduling": SchedulingStatus.NEEDS_SCHEDULING,
+    "needs scheduling by ignite": SchedulingStatus.NEEDS_SCHEDULING,
+    "needs scheduling": SchedulingStatus.NEEDS_SCHEDULING,
+    "needs scheduled": SchedulingStatus.NEEDS_SCHEDULING,
+    "no": SchedulingStatus.NEEDS_SCHEDULING,
+}
 
 TEMPLATE_COLUMNS = [
     "name",
@@ -42,6 +58,7 @@ TEMPLATE_COLUMNS = [
     "end_time",
     "address",
     "store_number",
+    "scheduling_status",
     "latitude",
     "longitude",
     "notes",
@@ -67,6 +84,7 @@ REQUIRED_COLUMNS = [
     "end_time",
     "address",
     "store_number",
+    "scheduling_status",
 ]
 
 
@@ -104,6 +122,7 @@ def build_request_batch_template_xlsx(tenant_id: int | None = None) -> bytes:
         "end_time": "14:00",
         "address": "123 Main St",
         "store_number": "102",
+        "scheduling_status": "already_scheduled",
         "latitude": 40.7128,
         "longitude": -74.006,
         "notes": "Product demo and sampling",
@@ -129,6 +148,11 @@ def build_request_batch_template_xlsx(tenant_id: int | None = None) -> bytes:
     ws_requests.title = "Requests"
     ws_requests.append(TEMPLATE_COLUMNS)
     ws_requests.append([sample.get(col) for col in TEMPLATE_COLUMNS])
+
+    ws_scheduling = wb.create_sheet("SchedulingStatus")
+    ws_scheduling.append(["value", "meaning"])
+    for value, label in SchedulingStatus.choices:
+        ws_scheduling.append([value, label])
 
     ws_timezones = wb.create_sheet("TimeZones")
     ws_timezones.append(["id", "name", "code"])
@@ -406,6 +430,7 @@ def _import_requests_from_rows(
                     end_time=parsed["end_time"],
                     address=parsed["address"],
                     store_number=parsed["store_number"],
+                    scheduling_status=parsed["scheduling_status"],
                     notes=parsed["notes"],
                     coordinates=parsed["coordinates_request"],
                     requestor_email=parsed["requestor_email"],
@@ -549,6 +574,24 @@ def _parse_row(
     end_clock = _capture(_required_time, row, "end_time")
     address = _capture(_required_str, row, "address")
     store_number = _capture(_required_str, row, "store_number")
+
+    scheduling_status_raw = _optional_str(row.get("scheduling_status"))
+    scheduling_status = None
+    if not scheduling_status_raw:
+        errors.append(
+            "scheduling_status is required "
+            "(already_scheduled or needs_scheduling)."
+        )
+    else:
+        scheduling_status = _SCHEDULING_ALIASES.get(
+            scheduling_status_raw.strip().lower()
+        )
+        if scheduling_status is None:
+            errors.append(
+                "scheduling_status must be 'already_scheduled' or "
+                f"'needs_scheduling' (got '{scheduling_status_raw}')."
+            )
+
     latitude = _capture(_optional_float, row.get("latitude"), "latitude")
     longitude = _capture(_optional_float, row.get("longitude"), "longitude")
 
@@ -801,6 +844,7 @@ def _parse_row(
         "end_time": end_time,
         "address": address,
         "store_number": store_number,
+        "scheduling_status": scheduling_status,
         "coordinates_request": coordinates_request,
         "coordinates_event": coordinates_event,
         "notes": _optional_str(row.get("notes")),
