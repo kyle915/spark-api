@@ -449,6 +449,39 @@ def _existing_duplicate_uuid(tenant_id: int, parsed: dict[str, Any]) -> str | No
     return str(found) if found else None
 
 
+def _ensure_retailer_account(
+    tenant_id: int,
+    name: str | None,
+    location_id: int | None,
+    created_by: User,
+) -> int | None:
+    """Find or create the Retailer ('account') for this tenant by name so bulk
+    rows link to a real account record and become reportable by account.
+
+    Matches case-insensitively on (tenant, name) only — NOT on location — so
+    every row for the same banner (e.g. all "Frys" rows) shares one account
+    instead of fragmenting per store. Only called on a real (non-dry-run)
+    import, never during validation.
+    """
+    clean = (name or "").strip()
+    if not clean:
+        return None
+    existing = (
+        Retailer.objects.filter(tenant_id=tenant_id, name__iexact=clean)
+        .order_by("id")
+        .values_list("id", flat=True)
+        .first()
+    )
+    if existing:
+        return existing
+    return Retailer.objects.create(
+        tenant_id=tenant_id,
+        name=clean,
+        location_id=location_id,
+        created_by=created_by,
+    ).id
+
+
 def _import_requests_from_rows(
     *,
     headers: list[str],
@@ -574,6 +607,16 @@ def _import_requests_from_rows(
                 )
 
                 if not dry_run:
+                    # Link (or create) the Retailer account so the event is
+                    # reportable by account. Only on a real import — never in
+                    # the dry-run, which must stay read-only.
+                    if not request.retailer_id and parsed["retailer_name"]:
+                        request.retailer_id = _ensure_retailer_account(
+                            tenant_id,
+                            parsed["retailer_name"],
+                            parsed["location_id"],
+                            created_by,
+                        )
                     request.save()
 
                     if parsed["store_manager_id"]:
@@ -616,7 +659,7 @@ def _import_requests_from_rows(
                         address=parsed["address"],
                         notes=parsed["notes"],
                         coordinates=parsed["coordinates_event"],
-                        retailer_id=parsed["retailer_id"],
+                        retailer_id=request.retailer_id,
                         distributor_id=parsed["distributor_id"],
                         location_id=parsed["location_id"],
                         state_id=parsed["state_id"],
