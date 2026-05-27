@@ -444,6 +444,10 @@ class CreateRequestInput(BaseNameableInput):
     store_manager_id: strawberry.ID | None = None
     rmm_asigned_id: strawberry.ID | None = None
     requestor_email: str | None = None
+    # When an admin creates a request on a client's behalf, optionally email
+    # the requestor an auto-approved confirmation. Default off (silent create).
+    # Not a Request model field — excluded from the params dict in the service.
+    notify_requestor: bool | None = None
     reviewed: bool | None = None
     # "already_scheduled" | "needs_scheduling" — required in the UI; the
     # service maps it straight onto Request.scheduling_status.
