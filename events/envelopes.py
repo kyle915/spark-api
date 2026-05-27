@@ -218,11 +218,17 @@ class RequestorRequestApprovedMailer(Mailer):
         location: models.Location | None,
         to_emails: list[str],
         cc_emails: list[str] | None = None,
+        approver_email_fallback: str | None = None,
     ) -> None:
         self.request = request
         self.location = location
         self.to_emails = to_emails
         self.cc_emails = cc_emails or []
+        # Used when the request has no approved_by User on it — e.g. the
+        # public token-approval path where the RMM clicked the email link
+        # but isn't (or can't be resolved to) a Spark user. Lets the email
+        # still name who approved instead of showing a bare "-".
+        self.approver_email_fallback = approver_email_fallback
 
     def envelope(self) -> Envelope:
         offset = _get_timezone_offset_minutes(self.request)
@@ -252,6 +258,11 @@ class RequestorRequestApprovedMailer(Mailer):
                 or "-"
             )
             approved_by_email = self.request.approved_by.email or "-"
+        elif self.approver_email_fallback:
+            # No User on the request (token approval by a non-user RMM) —
+            # still show who clicked approve, from the token's recipient.
+            approved_by_email = self.approver_email_fallback
+            approved_by_name = self.approver_email_fallback
 
         bas_requested = self.request.request_details.count()
         requestor_name = (
