@@ -347,6 +347,15 @@ class BillingEntity(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
 
+class SchedulingStatus(models.TextChoices):
+    """Whether the demo is already booked with the store, or Ignite still
+    needs to schedule it. Captured per request (incl. bulk imports) so the
+    routed RMM knows which activations still need a booking call."""
+
+    ALREADY_SCHEDULED = "already_scheduled", "Already scheduled with the account"
+    NEEDS_SCHEDULING = "needs_scheduling", "Needs scheduling by Ignite"
+
+
 class Request(models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
@@ -365,6 +374,15 @@ class Request(models.Model):
     requestor_email = models.CharField(max_length=254, null=True)
     notes = models.TextField(null=True)
     reviewed = models.BooleanField(default=False)
+    # Already booked with the store vs. Ignite still needs to schedule it.
+    # Required on new submissions (enforced in the form + bulk importer);
+    # nullable at the DB level so legacy rows aren't broken.
+    scheduling_status = models.CharField(
+        max_length=32,
+        choices=SchedulingStatus.choices,
+        null=True,
+        blank=True,
+    )
     store_number = models.CharField(max_length=254, null=True)
     coordinates = ArrayField(
         models.FloatField(),

@@ -445,6 +445,9 @@ class CreateRequestInput(BaseNameableInput):
     rmm_asigned_id: strawberry.ID | None = None
     requestor_email: str | None = None
     reviewed: bool | None = None
+    # "already_scheduled" | "needs_scheduling" — required in the UI; the
+    # service maps it straight onto Request.scheduling_status.
+    scheduling_status: str | None = None
     store_number: str | None = None
     client_name: str | None = None
     client_email: str | None = None
