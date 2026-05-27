@@ -25,43 +25,69 @@ HEIF_BRANDS = {
 }
 
 
+def _normalize_ext(ext: str | None) -> str | None:
+    """Lowercase + dot-prefix an extension token, or None if empty."""
+    if not ext:
+        return None
+    n = str(ext).lower().strip()
+    if not n:
+        return None
+    return n if n.startswith(".") else f".{n}"
+
+
 def should_embed_recap_file(recap_file) -> bool:
     """
     Determine if a recap file should be embedded as an image in the PDF.
+
+    The real filename extension is the source of truth. Custom-recap
+    files carry a FileType whose `extension` is a category label like
+    "img" (not a real extension) — trusting that turned every custom
+    recap photo into ".img", which isn't an image extension, so the PDF
+    embedded nothing. We now check the actual file/url extension first,
+    fall back to the FileType.extension, then to the FileType name.
     """
-    extension = None
-    if getattr(recap_file, "file_type", None) and recap_file.file_type.extension:
-        extension = recap_file.file_type.extension
-    else:
-        file_value = getattr(recap_file, "file", None) or getattr(recap_file, "url", None)
-        if file_value:
-            file_name = str(file_value)
-            if "." in file_name:
-                extension = file_name.rsplit(".", 1)[-1]
+    file_type = getattr(recap_file, "file_type", None)
 
-    if not extension:
-        if getattr(recap_file, "file_type", None) and recap_file.file_type.name:
-            name = recap_file.file_type.name.lower()
-            if any(
-                token in name
-                for token in (
-                    "image",
-                    "photo",
-                    "picture",
-                    "jpeg",
-                    "jpg",
-                    "png",
-                    "heic",
-                    "heif",
-                )
-            ):
-                return True
-        return False
+    # 1. Real filename extension (strip any query/fragment first).
+    file_value = getattr(recap_file, "file", None) or getattr(
+        recap_file, "url", None
+    )
+    url_ext = None
+    if file_value:
+        clean = str(file_value).split("?", 1)[0].split("#", 1)[0]
+        if "." in clean:
+            url_ext = clean.rsplit(".", 1)[-1]
 
-    normalized = extension.lower()
-    if not normalized.startswith("."):
-        normalized = f".{normalized}"
-    return normalized in IMAGE_EXTENSIONS
+    # 2. FileType.extension as a secondary signal (often bogus, e.g. "img").
+    type_ext = file_type.extension if (file_type and file_type.extension) else None
+
+    if _normalize_ext(url_ext) in IMAGE_EXTENSIONS:
+        return True
+    if _normalize_ext(type_ext) in IMAGE_EXTENSIONS:
+        return True
+
+    # 3. Fall back to the FileType name ("image", "photo", …). This also
+    #    catches images whose filename has no extension at all.
+    if file_type and file_type.name:
+        name = file_type.name.lower()
+        # An explicit non-image type (e.g. "pdf") must NOT slip through.
+        if "pdf" not in name and any(
+            token in name
+            for token in (
+                "image",
+                "photo",
+                "picture",
+                "jpeg",
+                "jpg",
+                "png",
+                "heic",
+                "heif",
+                "webp",
+            )
+        ):
+            return True
+
+    return False
 
 
 def _related_items(obj, attr: str) -> list:
@@ -634,10 +660,53 @@ def _extract_body(single_html: str) -> str:
     return match.group("body") if match else single_html
 
 
+def _leading_int(value) -> int | None:
+    """Pull a non-negative integer out of a free-text field value
+    ('70', '70 cans', '  68 '). None when there's no number."""
+    if value is None:
+        return None
+    m = re.search(r"\d+", str(value))
+    return int(m.group()) if m else None
+
+
+def _custom_engagement_totals(recap) -> dict[str, int]:
+    """Map a custom recap's free-text engagement fields onto the four
+    cover metrics by label. Mirrors the dashboard's label matching so the
+    campaign report and dashboard report the same numbers. Borjomi/Girl
+    Beer store these as CustomFieldValue rows, not consumer_engagements.
+    """
+    out = {
+        "total_consumer": 0,
+        "first_time_consumers": 0,
+        "brand_aware_consumers": 0,
+        "willing_to_purchase_consumers": 0,
+    }
+    for cfv in _related_items(recap, "custom_field_value"):
+        cf = getattr(cfv, "custom_field", None)
+        label = (getattr(cf, "name", "") or "").lower()
+        val = _leading_int(getattr(cfv, "value", None))
+        if val is None:
+            continue
+        if "consumers sampled" in label:
+            out["total_consumer"] += val
+        elif "first time" in label:
+            out["first_time_consumers"] += val
+        elif "knew about" in label:
+            out["brand_aware_consumers"] += val
+        elif "willing to purchase" in label and "not" not in label:
+            # excludes "would NOT be willing to purchase"
+            out["willing_to_purchase_consumers"] += val
+    return out
+
+
 def _aggregate_engagements(recaps: Iterable) -> dict[str, int]:
     """Sum the consumer-engagement numbers across recaps for the cover
     page. Returns zeros for any field that's missing on every recap so
     the template doesn't have to guard each cell.
+
+    Legacy recaps carry a consumer_engagements row; custom recaps
+    (Borjomi/Girl Beer) keep the same numbers as free-text custom fields
+    — without folding those in, the cover read 0 for every custom recap.
     """
     totals = {
         "total_consumer": 0,
@@ -647,13 +716,17 @@ def _aggregate_engagements(recaps: Iterable) -> dict[str, int]:
     }
     for recap in recaps:
         engagements = _related_items(recap, "consumer_engagements")
-        if not engagements:
+        if engagements:
+            eng = engagements[0]
+            for key in totals.keys():
+                val = getattr(eng, key, None)
+                if isinstance(val, (int, float)):
+                    totals[key] += int(val)
             continue
-        eng = engagements[0]
+        # No legacy engagement row → try custom-field engagement values.
+        custom = _custom_engagement_totals(recap)
         for key in totals.keys():
-            val = getattr(eng, key, None)
-            if isinstance(val, (int, float)):
-                totals[key] += int(val)
+            totals[key] += custom[key]
     return totals
 
 

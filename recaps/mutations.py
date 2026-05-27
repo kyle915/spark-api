@@ -3251,7 +3251,14 @@ class RecapMutationService(SparkGraphQLMixin):
                                 "file_type",
                                 "file_recap_category",
                             ),
-                        )
+                        ),
+                        Prefetch(
+                            "custom_field_value",
+                            queryset=models.CustomFieldValue.objects.select_related(
+                                "custom_field",
+                                "custom_field__recap_section",
+                            ),
+                        ),
                     )
                     .filter(id__in=custom_pks)
                 }
