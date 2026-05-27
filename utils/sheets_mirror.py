@@ -164,6 +164,101 @@ def _find_row_for_uuid(svc, sheet_id: str, uuid: str) -> int | None:
         return None
 
 
+def _chunks(seq, n):
+    for i in range(0, len(seq), n):
+        yield seq[i : i + n]
+
+
+def _row_for_request(request) -> list | None:
+    """Build the 15-column sheet row for a Request. Returns None when the
+    request has no tenant (nothing to key the Brand column on). Shared by
+    the live per-row upsert and the batched backfill."""
+    tenant = getattr(request, "tenant", None)
+    if tenant is None:
+        return None
+
+    def s(v):
+        return "" if v is None else str(v)
+
+    status_name = ""
+    try:
+        status_name = (request.status.name or "").strip() if request.status_id else ""
+    except Exception:
+        pass
+
+    rmm_label = ""
+    try:
+        rmm = getattr(request, "rmm_asigned", None)
+        if rmm:
+            rmm_label = (
+                " ".join(
+                    filter(
+                        None,
+                        [
+                            getattr(rmm, "first_name", "") or "",
+                            getattr(rmm, "last_name", "") or "",
+                        ],
+                    )
+                ).strip()
+                or getattr(rmm, "email", None)
+                or ""
+            )
+    except Exception:
+        pass
+
+    retailer_name = ""
+    try:
+        retailer_name = getattr(getattr(request, "retailer", None), "name", "") or ""
+    except Exception:
+        pass
+
+    distributor_name = ""
+    try:
+        distributor_name = (
+            getattr(getattr(request, "distributor", None), "name", "") or ""
+        )
+    except Exception:
+        pass
+
+    state_code = ""
+    try:
+        state_code = getattr(getattr(request, "state", None), "code", "") or ""
+    except Exception:
+        pass
+
+    request_type_name = ""
+    try:
+        request_type_name = (
+            getattr(getattr(request, "request_type", None), "name", "") or ""
+        )
+    except Exception:
+        pass
+
+    admin_base = (
+        getattr(settings, "ADMIN_FRONTEND_URL", "")
+        or "https://admin.igniteproductions.co"
+    )
+    spark_link = f"{admin_base}/request/view/{request.uuid}"
+
+    return [
+        s(request.uuid),
+        status_name,
+        s(getattr(request, "date", "")),
+        s(getattr(tenant, "name", "")),
+        request_type_name,
+        retailer_name,
+        distributor_name,
+        s(getattr(request, "address", "")),
+        state_code,
+        s(getattr(request, "start_time", "")),
+        s(getattr(request, "end_time", "")),
+        rmm_label,
+        s(getattr(request, "created_at", "")),
+        s(getattr(request, "updated_at", "")),
+        spark_link,
+    ]
+
+
 def upsert_request_row(request) -> bool:
     """Sync one Request row into its tenant's linked Sheet.
 
@@ -183,93 +278,11 @@ def upsert_request_row(request) -> bool:
         if not svc:
             return False
 
+        row = _row_for_request(request)
+        if row is None:
+            return False
+
         _ensure_header(svc, sheet_id)
-
-        # Build the row. Use empty strings (not None) so the Sheets API
-        # doesn't choke on type variance. Strings are forgiving across
-        # the API surface.
-        def s(v):
-            if v is None:
-                return ""
-            return str(v)
-
-        status_name = ""
-        try:
-            status_name = (request.status.name or "").strip() if request.status_id else ""
-        except Exception:
-            pass
-
-        rmm_label = ""
-        try:
-            rmm = getattr(request, "rmm_asigned", None)
-            if rmm:
-                rmm_label = (
-                    " ".join(
-                        filter(
-                            None,
-                            [
-                                getattr(rmm, "first_name", "") or "",
-                                getattr(rmm, "last_name", "") or "",
-                            ],
-                        )
-                    ).strip()
-                    or getattr(rmm, "email", None)
-                    or ""
-                )
-        except Exception:
-            pass
-
-        retailer_name = ""
-        try:
-            retailer_name = getattr(getattr(request, "retailer", None), "name", "") or ""
-        except Exception:
-            pass
-
-        distributor_name = ""
-        try:
-            distributor_name = (
-                getattr(getattr(request, "distributor", None), "name", "") or ""
-            )
-        except Exception:
-            pass
-
-        state_code = ""
-        try:
-            state_code = getattr(getattr(request, "state", None), "code", "") or ""
-        except Exception:
-            pass
-
-        request_type_name = ""
-        try:
-            request_type_name = (
-                getattr(getattr(request, "request_type", None), "name", "") or ""
-            )
-        except Exception:
-            pass
-
-        admin_base = (
-            getattr(settings, "ADMIN_FRONTEND_URL", "")
-            or "https://admin.igniteproductions.co"
-        )
-        spark_link = f"{admin_base}/request/view/{request.uuid}"
-
-        row = [
-            s(request.uuid),
-            status_name,
-            s(getattr(request, "date", "")),
-            s(getattr(tenant, "name", "")),
-            request_type_name,
-            retailer_name,
-            distributor_name,
-            s(getattr(request, "address", "")),
-            state_code,
-            s(getattr(request, "start_time", "")),
-            s(getattr(request, "end_time", "")),
-            rmm_label,
-            s(getattr(request, "created_at", "")),
-            s(getattr(request, "updated_at", "")),
-            spark_link,
-        ]
 
         existing_row = _find_row_for_uuid(svc, sheet_id, str(request.uuid))
         end_col = _col_letter(len(row))
@@ -306,8 +319,93 @@ def upsert_request_row(request) -> bool:
         return False
 
 
+def bulk_sync_requests(requests) -> int:
+    """Batched backfill for many Requests that share ONE tenant/sheet.
+
+    The per-row upsert makes ~3 Sheets API calls (header check + UUID
+    lookup + write). At hundreds of rows that blows past the Sheets quota
+    (60 read & 60 write requests / min / user) and 429s. This does the
+    whole tenant in a small constant number of calls instead:
+
+        1 header ensure + 1 column-A read
+        + ⌈new/500⌉ append calls + ⌈existing/500⌉ batchUpdate calls.
+
+    Assumes every request belongs to the same tenant (the management
+    command groups by tenant). Returns the number of rows written.
+    """
+    requests = list(requests)
+    if not requests:
+        return 0
+
+    tenant = getattr(requests[0], "tenant", None)
+    sheet_url = getattr(tenant, "linked_sheet_url", None) if tenant else None
+    sheet_id = extract_sheet_id(sheet_url or "")
+    if not sheet_id:
+        return 0
+    svc = _service()
+    if not svc:
+        return 0
+
+    _ensure_header(svc, sheet_id)
+
+    # One read of column A → {uuid: 1-based row index} so we can tell
+    # appends from in-place updates without a per-row lookup.
+    existing: dict[str, int] = {}
+    try:
+        resp = (
+            svc.spreadsheets()
+            .values()
+            .get(spreadsheetId=sheet_id, range="A2:A100000")
+            .execute()
+        )
+        for i, r in enumerate(resp.get("values") or [], start=2):
+            if r and str(r[0]).strip():
+                existing[str(r[0]).strip()] = i
+    except HttpError as e:
+        logger.warning("sheets_mirror: bulk column-A read failed: %s", e)
+        return 0
+
+    end_col = _col_letter(len(HEADER))
+    appends: list[list] = []
+    updates: list[dict] = []
+    for req in requests:
+        row = _row_for_request(req)
+        if row is None:
+            continue
+        idx = existing.get(str(req.uuid))
+        if idx:
+            updates.append({"range": f"A{idx}:{end_col}{idx}", "values": [row]})
+        else:
+            appends.append(row)
+
+    written = 0
+    try:
+        for chunk in _chunks(appends, 500):
+            svc.spreadsheets().values().append(
+                spreadsheetId=sheet_id,
+                range=f"A2:{end_col}",
+                valueInputOption="RAW",
+                insertDataOption="INSERT_ROWS",
+                body={"values": chunk},
+            ).execute()
+            written += len(chunk)
+        for chunk in _chunks(updates, 500):
+            svc.spreadsheets().values().batchUpdate(
+                spreadsheetId=sheet_id,
+                body={"valueInputOption": "RAW", "data": chunk},
+            ).execute()
+            written += len(chunk)
+    except HttpError as e:
+        logger.warning(
+            "sheets_mirror: bulk write failed after %s rows: %s", written, e
+        )
+
+    return written
+
+
 def upsert_many(requests: Iterable) -> int:
-    """Bulk variant for the backfill / cron path. Returns count synced."""
+    """Per-row variant, kept for compatibility. Prefer bulk_sync_requests
+    for backfills — it batches to respect the Sheets API quota."""
     n = 0
     for r in requests:
         if upsert_request_row(r):

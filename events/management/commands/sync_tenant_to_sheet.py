@@ -17,13 +17,11 @@ Usage:
     # All tenants that have a linked_sheet_url set
     python manage.py sync_tenant_to_sheet --all-linked --apply
 """
-import time
-
 from django.core.management.base import BaseCommand, CommandError
 
 from events.models import Request
 from tenants.models import Tenant
-from utils.sheets_mirror import upsert_request_row
+from utils.sheets_mirror import bulk_sync_requests
 
 
 class Command(BaseCommand):
@@ -80,7 +78,6 @@ class Command(BaseCommand):
             )
 
         apply = opts["apply"]
-        throttle = max(0, int(opts["throttle_ms"])) / 1000.0
         limit = opts.get("limit")
 
         if not apply:
@@ -117,28 +114,15 @@ class Command(BaseCommand):
             if not apply:
                 continue
 
-            ok = 0
-            failed: list[int] = []
-            for i, req in enumerate(qs.iterator(chunk_size=200), start=1):
-                if upsert_request_row(req):
-                    ok += 1
-                else:
-                    failed.append(req.id)
-                if throttle:
-                    time.sleep(throttle)
-                if i % 25 == 0:
-                    self.stdout.write(f"  · {i}/{count} synced…")
-
+            # Batched write — a handful of API calls for the whole tenant,
+            # vs. ~3/row, so we stay well under the Sheets 60-req/min quota.
+            ok = bulk_sync_requests(list(qs))
             grand_total_ok += ok
-            self.stdout.write(
-                self.style.SUCCESS(f"  ✓ synced {ok}/{count}")
-            )
-            if failed:
-                preview = ", ".join(str(x) for x in failed[:10])
-                more = "" if len(failed) <= 10 else f" (+{len(failed)-10} more)"
+            self.stdout.write(self.style.SUCCESS(f"  ✓ synced {ok}/{count}"))
+            if ok < count:
                 self.stdout.write(
                     self.style.WARNING(
-                        f"  ! {len(failed)} failed — ids: {preview}{more}"
+                        f"  ! {count - ok} row(s) not written — see logs."
                     )
                 )
 
