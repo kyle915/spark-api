@@ -95,6 +95,10 @@ class BatchRequestRowResult:
     message: str
     request_id: int | None = None
     request_uuid: str | None = None
+    # True when the row was a duplicate (of an existing request OR an
+    # earlier row in the same file) and intentionally NOT created. Skipped
+    # rows are not failures — they don't trigger a rollback.
+    skipped: bool = False
 
 
 @dataclass
@@ -104,6 +108,7 @@ class BatchRequestImportResult:
     failed_count: int
     rows: list[BatchRequestRowResult]
     rolled_back: bool = False
+    skipped_count: int = 0
 
 
 def export_request_batch_template(output_path: str) -> Path:
@@ -408,6 +413,42 @@ def _read_rows_from_workbook(
     return union_headers, rows
 
 
+def _dedup_key(parsed: dict[str, Any]) -> tuple[str, str] | None:
+    """Identity used to spot duplicates: store number (or, if absent, the
+    address) + the exact start datetime. Two activations at the same store
+    on the same day but different times are NOT duplicates. Returns None
+    when there's nothing reliable to key on."""
+    st = parsed.get("start_time")
+    if st is None:
+        return None
+    store = (parsed.get("store_number") or "").strip().lower()
+    where = store or (parsed.get("address") or "").strip().lower()
+    if not where:
+        return None
+    return (where, st.isoformat())
+
+
+def _existing_duplicate_uuid(tenant_id: int, parsed: dict[str, Any]) -> str | None:
+    """Return the UUID of a live (non-deleted) request already in Spark that
+    matches this row's store/address + exact start time, else None."""
+    st = parsed.get("start_time")
+    if st is None:
+        return None
+    qs = Request.objects.filter(
+        tenant_id=tenant_id, start_time=st, deleted_at__isnull=True
+    )
+    store = (parsed.get("store_number") or "").strip()
+    if store:
+        qs = qs.filter(store_number__iexact=store)
+    else:
+        addr = (parsed.get("address") or "").strip()
+        if not addr:
+            return None
+        qs = qs.filter(address__iexact=addr)
+    found = qs.values_list("uuid", flat=True).first()
+    return str(found) if found else None
+
+
 def _import_requests_from_rows(
     *,
     headers: list[str],
@@ -451,6 +492,8 @@ def _import_requests_from_rows(
     success_count = 0
     failed_count = 0
 
+    seen_keys: set[tuple[str, str]] = set()
+
     def _process() -> None:
         nonlocal success_count, failed_count, results
 
@@ -464,6 +507,38 @@ def _import_requests_from_rows(
                     default_timezone_id=default_timezone_id,
                     default_request_type_id=default_request_type_id,
                 )
+
+                # Duplicate guard. Skip rows that repeat an earlier row in
+                # this file, or that already exist in Spark (same store/
+                # address + exact start time). Skipped rows are NOT created
+                # and do NOT count as failures, so they never trigger a
+                # rollback of the good rows.
+                key = _dedup_key(parsed)
+                if key is not None and key in seen_keys:
+                    results.append(
+                        BatchRequestRowResult(
+                            row_number=row_number,
+                            success=False,
+                            skipped=True,
+                            message="Skipped — duplicate of an earlier row in this file.",
+                        )
+                    )
+                    continue
+                existing_uuid = _existing_duplicate_uuid(tenant_id, parsed)
+                if existing_uuid:
+                    if key is not None:
+                        seen_keys.add(key)
+                    results.append(
+                        BatchRequestRowResult(
+                            row_number=row_number,
+                            success=False,
+                            skipped=True,
+                            message=f"Skipped — already in Spark (request {existing_uuid}).",
+                        )
+                    )
+                    continue
+                if key is not None:
+                    seen_keys.add(key)
 
                 request = Request(
                     tenant_id=tenant_id,
@@ -580,13 +655,17 @@ def _import_requests_from_rows(
 
     if rolled_back:
         success_count = 0
-        failed_count = len(results)
         for row in results:
             if row.success:
                 row.success = False
                 row.request_id = None
                 row.request_uuid = None
                 row.message = "Rolled back because another row failed."
+        # Recount failures from real failures only — skipped duplicates
+        # were never created, so they aren't "failed".
+        failed_count = sum(1 for r in results if not r.success and not r.skipped)
+
+    skipped_count = sum(1 for r in results if r.skipped)
 
     return BatchRequestImportResult(
         total_rows=len(rows),
@@ -594,6 +673,7 @@ def _import_requests_from_rows(
         failed_count=failed_count,
         rows=results,
         rolled_back=rolled_back,
+        skipped_count=skipped_count,
     )
 
 
