@@ -208,8 +208,12 @@ def create_pending_jobs_for_request(request: Request) -> int:
         if slug != "approved":
             return 0
 
-        from jobs.models import Job, STATUS_PENDING
-        from jobs.models import JobTitle, Rate
+        # STATUS_PENDING lives on the Job model as a class attribute
+        # (Job.STATUS_PENDING = "pending"), NOT a module-level export —
+        # importing it directly raised ImportError, which (being caught
+        # below) is a big reason the auto-job never actually created
+        # anything. Reference it via the class instead.
+        from jobs.models import Job, JobTitle, Rate
 
         # Reverse accessor for Event.request is `event_set` (the FK has no
         # related_name). The old code used `instance.events`, which raised
@@ -258,7 +262,7 @@ def create_pending_jobs_for_request(request: Request) -> int:
                     end_date=ev.end_time,
                     job_title=default_title,
                     rate=default_rate,
-                    lifecycle_status=STATUS_PENDING,
+                    lifecycle_status=Job.STATUS_PENDING,
                     favorites_only=True,
                     public=False,
                     closed=False,
