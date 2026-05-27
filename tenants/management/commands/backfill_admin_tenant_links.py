@@ -95,15 +95,25 @@ class Command(BaseCommand):
                     u.save(update_fields=["is_active"])
                     users_reactivated += 1
                 for t in missing:
-                    obj, created = TenantedUser.objects.get_or_create(
-                        user=u, tenant=t, defaults={"is_active": True},
+                    # Duplicate-safe: some (user, tenant) pairs have more than
+                    # one row (no unique constraint), so get_or_create's
+                    # internal .get() blows up with MultipleObjectsReturned and
+                    # aborts the whole backfill. Reactivate the first existing
+                    # row, else create one.
+                    existing = list(
+                        TenantedUser.objects.filter(user=u, tenant=t)
                     )
-                    if created:
+                    if existing:
+                        row = existing[0]
+                        if not row.is_active:
+                            row.is_active = True
+                            row.save(update_fields=["is_active"])
+                            total_reactivated += 1
+                    else:
+                        TenantedUser.objects.create(
+                            user=u, tenant=t, is_active=True
+                        )
                         total_created += 1
-                    elif not obj.is_active:
-                        obj.is_active = True
-                        obj.save(update_fields=["is_active"])
-                        total_reactivated += 1
 
         msg = (
             f"Done. users_affected={affected_users} "
