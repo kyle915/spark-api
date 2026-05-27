@@ -1783,6 +1783,137 @@ class JobLifecycleMutations:
         return _build_lifecycle_response(job is not None, msg, job=job, input_obj=input)
 
     @relay.mutation(permission_classes=[_StrictIsAuth])
+    async def post_event_to_board(
+        self,
+        info: strawberry.Info,
+        input: inputs.PostEventToBoardInput,
+    ) -> types.JobLifecycleResponse:
+        """Master Tracker "Post to board": find-or-create the event's
+        Job and post it to the public BA job board, open to all.
+
+        Works even when the event has no Job yet (bulk / born-approved
+        events skip the auto-create signal) and when the tenant lacks a
+        default JobTitle / Rate (the gap that currently skips Girl Beer)
+        — in that case we create sensible defaults so the post never
+        silently no-ops.
+        """
+        try:
+            event_pk = _resolve_id(input.event_id)
+        except (TypeError, ValueError, GraphQLError):
+            return _build_lifecycle_response(
+                False, "Invalid event id.", input_obj=input
+            )
+
+        actor = info.context.request.user
+
+        def _post_event():
+            from events.models import Event as _Event
+            # Mirror the signal's imports exactly.
+            from jobs.models import Job, STATUS_PENDING, JobTitle, Rate
+            from jobs.models import RateType
+
+            try:
+                event = _Event.objects.select_related("tenant").get(pk=event_pk)
+            except _Event.DoesNotExist:
+                return None, "Event not found."
+
+            tenant_id = event.tenant_id
+            actor_id = actor.id if getattr(actor, "id", None) else None
+
+            job = Job.objects.filter(event_id=event.id).first()
+
+            if job is None:
+                # No Job yet — create a pending one mirroring
+                # auto_create_pending_job_on_request_approval in
+                # events/signals.py. Same _first_for default picker.
+                def _first_for(model, tid):
+                    try:
+                        row = model.objects.filter(tenant_id=tid).order_by("id").first()
+                        if row:
+                            return row
+                    except Exception:
+                        pass
+                    try:
+                        return model.objects.order_by("id").first()
+                    except Exception:
+                        return None
+
+                default_title = _first_for(JobTitle, tenant_id)
+                default_rate = _first_for(Rate, tenant_id)
+
+                # Fill the gap that currently skips Girl Beer: if the
+                # tenant has no JobTitle / Rate at all, create sensible
+                # defaults instead of bailing like the signal does.
+                if default_title is None:
+                    default_title = JobTitle.objects.create(
+                        tenant_id=tenant_id,
+                        name="Brand Ambassador",
+                        created_by_id=actor_id,
+                        updated_by_id=actor_id,
+                    )
+                if default_rate is None:
+                    rate_type = (
+                        RateType.objects.filter(tenant_id=tenant_id)
+                        .order_by("id")
+                        .first()
+                    )
+                    if rate_type is None:
+                        rate_type = RateType.objects.create(
+                            tenant_id=tenant_id,
+                            name="Hourly",
+                            created_by_id=actor_id,
+                            updated_by_id=actor_id,
+                        )
+                    default_rate = Rate.objects.create(
+                        tenant_id=tenant_id,
+                        rate_type=rate_type,
+                        amount=input.hourly_rate,
+                        created_by_id=actor_id,
+                        updated_by_id=actor_id,
+                    )
+
+                job = Job.objects.create(
+                    tenant_id=tenant_id,
+                    event_id=event.id,
+                    name=(event.name or "Activation")[:200],
+                    address=event.address or "",
+                    start_date=event.start_time,
+                    end_date=event.end_time,
+                    job_title=default_title,
+                    rate=default_rate,
+                    lifecycle_status=STATUS_PENDING,
+                    favorites_only=True,
+                    public=False,
+                    closed=False,
+                    national=False,
+                    ongoing=False,
+                    created_by_id=actor_id,
+                    updated_by_id=actor_id,
+                )
+
+            # Post it — mirror post_job's field writes exactly, but
+            # always open to all (favorites_only=False).
+            job.total_hours = input.total_hours
+            job.hourly_rate = input.hourly_rate
+            if input.uniform_notes is not None:
+                job.uniform_notes = input.uniform_notes
+            job.favorites_only = False
+            job.lifecycle_status = Job.STATUS_POSTED
+            job.posted_at = _django_tz.now()
+            job.public = True
+            job.save(update_fields=[
+                "total_hours", "hourly_rate", "uniform_notes",
+                "favorites_only", "lifecycle_status", "posted_at",
+                "public", "updated_at",
+            ])
+            return job, "Event posted to the job board, open to all BAs."
+
+        job, msg = await sync_to_async(_post_event)()
+        return _build_lifecycle_response(
+            job is not None, msg, job=job, input_obj=input
+        )
+
+    @relay.mutation(permission_classes=[_StrictIsAuth])
     async def open_job_to_all(
         self,
         info: strawberry.Info,

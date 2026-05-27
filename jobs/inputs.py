@@ -384,6 +384,22 @@ class PostJobInput(SparkGraphQLInput):
 
 
 @strawberry.input
+class PostEventToBoardInput(SparkGraphQLInput):
+    """Master Tracker "Post to board" — post an event's Job straight to
+    the public BA job board, open to all.
+
+    Finds-or-creates the event's Job (bulk/born-approved events never
+    get an auto-created job), then transitions it to posted exactly like
+    PostJobInput/post_job does — but always open to all (favorites_only
+    is forced False). Mirrors PostJobInput's hours/pay/uniform fields.
+    """
+    event_id: strawberry.ID
+    total_hours: float
+    hourly_rate: float
+    uniform_notes: str | None = None
+
+
+@strawberry.input
 class OpenJobToAllInput(SparkGraphQLInput):
     """Admin clicks "Open to all BAs" on a favorites-gated posted job."""
     id: strawberry.ID
