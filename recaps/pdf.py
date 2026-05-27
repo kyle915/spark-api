@@ -779,6 +779,7 @@ def build_campaign_report_pdf(
       <p class="cover-eyebrow">{safe(subtitle)}</p>
       <h1 class="cover-title">{safe(title)}</h1>
       <p class="cover-date">{safe(date_range)} · {count} recap{'s' if count != 1 else ''}</p>
+      <div class="cover-accent"></div>
 
       <div class="cover-stats">
         <div>
@@ -845,20 +846,28 @@ def build_campaign_report_pdf(
             font-size: 36px;
         }
         .cover-date {
-            margin: 0 0 32px 0;
+            margin: 0 0 20px 0;
             font-size: 13px;
             color: #52606d;
+        }
+        .cover-accent {
+            width: 48px;
+            height: 4px;
+            background: #c5f546;
+            border-radius: 2px;
+            margin: 0 auto 32px auto;
         }
         .cover-stats {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
-            gap: 18px;
+            gap: 16px;
             margin-top: 18px;
         }
         .cover-stats div {
             background: #f5f6f8;
-            border-radius: 10px;
-            padding: 14px 10px;
+            border-radius: 12px;
+            border-top: 3px solid #c5f546;
+            padding: 18px 10px;
         }
         .cover-stats span {
             display: block;
@@ -866,10 +875,11 @@ def build_campaign_report_pdf(
             color: #6b7280;
             text-transform: uppercase;
             letter-spacing: 0.10em;
-            margin-bottom: 6px;
+            margin-bottom: 8px;
         }
         .cover-stats strong {
-            font-size: 18px;
+            font-size: 26px;
+            font-weight: 700;
             color: #111827;
         }
         .recap-detail .header h1 {

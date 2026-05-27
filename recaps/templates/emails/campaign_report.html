@@ -2,7 +2,7 @@
 {% block content %}
 <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
   <tr>
-    <td style="padding-bottom: 18px;">
+    <td style="padding-bottom: 4px;">
       <p style="margin: 0; font-size: 11px; letter-spacing: 0.18em; color: #888888; text-transform: uppercase;">
         SPARK · CAMPAIGN REPORT
       </p>
@@ -12,6 +12,8 @@
       <p style="margin: 6px 0 0 0; font-size: 14px; color: #555555;">
         {{ campaign_subtitle }}
       </p>
+      <!-- brand accent rule -->
+      <div style="width: 44px; height: 3px; background: #c5f546; border-radius: 2px; margin: 16px 0 0 0;"></div>
     </td>
   </tr>
 
@@ -23,7 +25,7 @@
   {% endcomment %}
   {% if cover_message %}
   <tr>
-    <td style="padding: 18px 0;">
+    <td style="padding: 20px 0 4px 0;">
       <p style="margin: 0; font-size: 14px; line-height: 1.55; color: #1a1a1a;">
         {{ cover_message|linebreaksbr }}
       </p>
@@ -31,30 +33,42 @@
   </tr>
   {% endif %}
 
+  <!-- Headline stats -->
   <tr>
-    <td style="padding: 8px 0 24px 0;">
-      <p style="margin: 0; font-size: 12px; color: #555555;">
-        Attached: a {{ recap_count }}-recap PDF rollup with field-level photos and
-        consumer-engagement numbers. Reply with any questions — we have the
-        BA-level raw data on file if you need it broken down.
+    <td style="padding: 24px 0 8px 0;">
+      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background: #f5f6f8; border-radius: 12px;">
+        <tr>
+          <td width="50%" align="center" style="padding: 22px 12px; border-right: 1px solid #e5e7eb;">
+            <div style="font-size: 30px; font-weight: 700; color: #111827; line-height: 1;">{{ recap_count }}</div>
+            <div style="font-size: 11px; letter-spacing: 0.10em; color: #6b7280; text-transform: uppercase; margin-top: 7px;">
+              Recap{{ recap_count|pluralize }}
+            </div>
+          </td>
+          <td width="50%" align="center" style="padding: 22px 12px;">
+            <div style="font-size: 30px; font-weight: 700; color: #111827; line-height: 1;">{{ total_consumers|default:"—" }}</div>
+            <div style="font-size: 11px; letter-spacing: 0.10em; color: #6b7280; text-transform: uppercase; margin-top: 7px;">
+              Consumers reached
+            </div>
+          </td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+
+  <!-- Attachment note -->
+  <tr>
+    <td style="padding: 12px 0 4px 0;">
+      <p style="margin: 0; font-size: 13px; line-height: 1.55; color: #555555;">
+        📎 Attached: a {{ recap_count }}-recap PDF with field-level photos and
+        consumer-engagement numbers. Reply with any questions — we keep the
+        BA-level raw data on file if you'd like it broken down further.
       </p>
     </td>
   </tr>
 
+  <!-- Sign-off -->
   <tr>
-    <td style="background: #f5f5f5; border-radius: 8px; padding: 14px 18px;">
-      <p style="margin: 0; font-size: 11px; letter-spacing: 0.12em; color: #888888; text-transform: uppercase;">
-        Summary
-      </p>
-      <p style="margin: 6px 0 0 0; font-size: 13px; color: #1a1a1a;">
-        <strong>{{ recap_count }}</strong> recap{{ recap_count|pluralize }} ·
-        <strong>{{ total_consumers|default:"—" }}</strong> total consumers reached
-      </p>
-    </td>
-  </tr>
-
-  <tr>
-    <td style="padding-top: 28px;">
+    <td style="padding-top: 26px;">
       <p style="margin: 0; font-size: 13px; color: #555555;">
         — The {{ sender_tenant_name|default:"Spark" }} team
       </p>
