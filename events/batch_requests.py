@@ -326,27 +326,14 @@ def import_requests_from_excel_bytes(
     )
 
 
-def _read_rows_from_workbook(
-    wb,
-    sheet_name: str | int,
-) -> tuple[list[str], list[dict[str, Any]]]:
-    if isinstance(sheet_name, int):
-        if sheet_name < 0 or sheet_name >= len(wb.worksheets):
-            raise ValueError(f"sheet_name index out of range: {sheet_name}")
-        ws = wb.worksheets[sheet_name]
-    else:
-        if sheet_name not in wb.sheetnames:
-            raise ValueError(f"sheet_name not found: {sheet_name}")
-        ws = wb[sheet_name]
+def _sheet_headers(ws) -> list[str]:
+    cells = next(ws.iter_rows(min_row=1, max_row=1, values_only=True), None)
+    if not cells:
+        return []
+    return [str(c).strip().lower() if c is not None else "" for c in cells]
 
-    header_cells = next(ws.iter_rows(min_row=1, max_row=1, values_only=True), None)
-    if not header_cells:
-        raise ValueError("Excel sheet has no header row.")
 
-    headers = [str(cell).strip().lower() if cell is not None else "" for cell in header_cells]
-    if all(not h for h in headers):
-        raise ValueError("Excel sheet header is empty.")
-
+def _data_rows_from_sheet(ws, headers: list[str]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for row_values in ws.iter_rows(min_row=2, values_only=True):
         if row_values is None:
@@ -359,8 +346,66 @@ def _read_rows_from_workbook(
                 continue
             row_dict[header] = row_values[i] if i < len(row_values) else None
         rows.append(row_dict)
+    return rows
 
-    return headers, rows
+
+def _read_rows_from_workbook(
+    wb,
+    sheet_name: str | int,
+) -> tuple[list[str], list[dict[str, Any]]]:
+    """Pull request rows from the workbook, robust to how the file is laid out.
+
+    Rather than trusting a single sheet index/name (which silently yielded
+    "0 rows parsed" when a user kept their activations on a differently-named
+    tab — e.g. one tab per month), we scan EVERY worksheet and aggregate rows
+    from each sheet whose header row carries the required columns. The
+    template's reference sheets (TimeZones, Cities, Products, …) are excluded
+    automatically because their headers don't contain the request columns.
+
+    Raises a clear, actionable error — listing each tab and its row count —
+    when no tab has the required columns, or when the columns exist but no
+    rows are filled in. That turns the old silent "0 rows" into a message
+    the user can act on.
+    """
+    required = set(REQUIRED_COLUMNS)
+
+    data_sheets: list[tuple[Any, list[str]]] = []
+    summary: list[str] = []
+    for ws in wb.worksheets:
+        hdr = _sheet_headers(ws)
+        present = {h for h in hdr if h}
+        has_cols = required.issubset(present)
+        n = len(_data_rows_from_sheet(ws, hdr)) if has_cols else 0
+        summary.append(f"'{ws.title}' ({'matches' if has_cols else 'skipped'}, {n} rows)")
+        if has_cols:
+            data_sheets.append((ws, hdr))
+
+    if not data_sheets:
+        raise ValueError(
+            "No tab has the required columns ("
+            + ", ".join(REQUIRED_COLUMNS)
+            + "). Put your activations under the template's column headers. "
+            "Tabs seen: " + "; ".join(summary) + "."
+        )
+
+    union_headers: list[str] = []
+    for _ws, hdr in data_sheets:
+        for h in hdr:
+            if h and h not in union_headers:
+                union_headers.append(h)
+
+    rows: list[dict[str, Any]] = []
+    for ws, hdr in data_sheets:
+        rows.extend(_data_rows_from_sheet(ws, hdr))
+
+    if not rows:
+        raise ValueError(
+            "Found the activation columns but no filled-in rows beneath them. "
+            "Add one row per activation under the headers. "
+            "Tabs seen: " + "; ".join(summary) + "."
+        )
+
+    return union_headers, rows
 
 
 def _import_requests_from_rows(
