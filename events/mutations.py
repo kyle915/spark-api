@@ -2370,7 +2370,8 @@ class RequestWithDependenciesMutationService(BaseMutationService):
 
         # set the parameters
         params: dict[str, Any] = self.input.to_dict(
-            ["tenant_id", "id", "details", "products"]
+            # notify_requestor is a create-time option, not a Request field.
+            ["tenant_id", "id", "details", "products", "notify_requestor"]
         )
         params = self._normalize_id_fields(params)
 
@@ -3106,6 +3107,21 @@ class RequestMutations:
                     # Don't fail the whole create if approval steps
                     # blow up — admin can still approve manually.
                     pass
+
+            # When the admin ticked "email the client" on the create form,
+            # send the same auto-approved confirmation the client self-serve
+            # flow sends. Default is silent (admin creates on their behalf).
+            if not is_client and getattr(input, "notify_requestor", None):
+                try:
+                    location = await _resolve_request_location(
+                        request_with_relations
+                    )
+                    await _notify_requestor_for_request_auto_approved(
+                        request_with_relations, location, delay_seconds=1
+                    )
+                except Exception:
+                    pass
+
             return build_mutation_response(
                 types.RequestDetailResponse,
                 success=True,
