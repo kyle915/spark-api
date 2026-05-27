@@ -2940,6 +2940,7 @@ class RequestMutations:
                     message=row.message,
                     request_id=str(row.request_id) if row.request_id else None,
                     request_uuid=row.request_uuid,
+                    skipped=row.skipped,
                 )
                 for row in result.rows
             ]
@@ -2947,6 +2948,7 @@ class RequestMutations:
                 f"row {row.row_number}: {error_part.strip()}"
                 for row in result.rows
                 if (not row.success)
+                and not row.skipped
                 and row.message != "Rolled back because another row failed."
                 for error_part in str(row.message).split("|")
                 if error_part.strip()
@@ -2955,7 +2957,7 @@ class RequestMutations:
                 errors = [
                     f"row {row.row_number}: {row.message}"
                     for row in result.rows
-                    if not row.success
+                    if not row.success and not row.skipped
                 ]
 
             return build_mutation_response(
@@ -2979,6 +2981,7 @@ class RequestMutations:
                 rolled_back=result.rolled_back,
                 errors=errors,
                 rows=rows,
+                skipped_count=result.skipped_count,
             )
         except (GraphQLError, ValueError) as e:
             return build_mutation_response(

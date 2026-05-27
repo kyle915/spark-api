@@ -562,6 +562,9 @@ class RequestBatchRowResult:
     message: str
     request_id: strawberry.ID | None = None
     request_uuid: str | None = None
+    # True when the row was a duplicate and intentionally skipped (not
+    # created, not a failure).
+    skipped: bool = False
 
 
 @strawberry.type
@@ -575,6 +578,7 @@ class RequestBatchImportResponse:
     rolled_back: bool
     errors: List[str]
     rows: List[RequestBatchRowResult]
+    skipped_count: int = 0
 
 
 @strawberry.type
