@@ -3108,6 +3108,26 @@ class RequestMutations:
                                 "request_id=%s",
                                 request_with_relations.id,
                             )
+                        # Now that the Event exists, create the Pending
+                        # Job(s) for it so the activation lands in the Jobs
+                        # queue and the tracker shows Assign-BA / Post-to-
+                        # board. The Request post_save signal fired on the
+                        # save above — before the event existed — so it was
+                        # a no-op; do it explicitly here. Idempotent.
+                        try:
+                            from .signals import (
+                                create_pending_jobs_for_request,
+                            )
+                            await sync_to_async(
+                                create_pending_jobs_for_request
+                            )(request_with_relations)
+                        except Exception:
+                            import logging
+                            logging.getLogger(__name__).exception(
+                                "log-event: failed to create pending job "
+                                "for request_id=%s",
+                                request_with_relations.id,
+                            )
                 except Exception:
                     # Don't fail the whole create if approval steps
                     # blow up — admin can still approve manually.
@@ -3499,6 +3519,19 @@ class RequestMutations:
                         exc,
                     )
                     event = None
+
+            # Materialize the Pending Job(s) now that the event exists. The
+            # Request post_save signal fired on the approve save above —
+            # before the event was created — so it was a no-op; do it
+            # explicitly here. Idempotent + best-effort.
+            try:
+                from .signals import create_pending_jobs_for_request
+                await sync_to_async(create_pending_jobs_for_request)(request)
+            except Exception:
+                logger.exception(
+                    "approve_request: failed to create pending job for request_id=%s",
+                    request.id,
+                )
 
             location = await _resolve_request_location(request)
             await _notify_notification_group_users_for_request(request, location)

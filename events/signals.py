@@ -186,25 +186,38 @@ def push_on_ambassador_event_change(
 # Idempotent: skips events that already have a Job. Best-effort: a
 # Job creation failure logs and continues — the approval itself
 # already shipped, we don't want to roll it back.
-@receiver(post_save, sender=Request)
-def auto_create_pending_job_on_request_approval(
-    sender, instance: Request, created: bool, **kwargs
-):
+def create_pending_jobs_for_request(request: Request) -> int:
+    """Create a Pending Job for every Event under an approved request.
+
+    Idempotent (skips events that already have a Job) and best-effort
+    (per-event failures are logged, never raised). Returns the count of
+    jobs created.
+
+    Why this is a standalone function and not only the post_save signal:
+    the Request post_save fires BEFORE the resolver materializes the
+    Event — approve_request / create_request both save the request, THEN
+    call ``Event.objects.from_request``. At signal time the request has
+    no events yet, so the signal alone never creates anything. Resolvers
+    call this explicitly right after creating the event; the signal also
+    delegates here for any path that re-saves an already-evented request.
+    """
+    created_count = 0
     try:
-        status = getattr(instance, "status", None)
+        status = getattr(request, "status", None)
         slug = (getattr(status, "slug", None) or "").lower()
         if slug != "approved":
-            return
+            return 0
 
         from jobs.models import Job, STATUS_PENDING
         from jobs.models import JobTitle, Rate
 
-        # Fetch every event tied to this request. .all() forces a query
-        # but lets us iterate; the event count per request is small
-        # (typically 1, sometimes 2-3) so this is cheap.
-        events = list(instance.events.all())
+        # Reverse accessor for Event.request is `event_set` (the FK has no
+        # related_name). The old code used `instance.events`, which raised
+        # AttributeError and was swallowed — so the auto-job never fired on
+        # any path. Use event_set. Count per request is small (1-3 events).
+        events = list(request.event_set.all())
         if not events:
-            return
+            return 0
 
         # Default JobTitle + Rate for the tenant. We just need *a*
         # pointer to populate the non-null FKs; the admin edits these
@@ -223,24 +236,24 @@ def auto_create_pending_job_on_request_approval(
             except Exception:
                 return None
 
-        default_title = _first_for(JobTitle, instance.tenant_id)
-        default_rate = _first_for(Rate, instance.tenant_id)
+        default_title = _first_for(JobTitle, request.tenant_id)
+        default_rate = _first_for(Rate, request.tenant_id)
         if not default_title or not default_rate:
             logger.warning(
                 "auto_create_job: tenant %s missing JobTitle or Rate — skipping",
-                instance.tenant_id,
+                request.tenant_id,
             )
-            return
+            return 0
 
         for ev in events:
             try:
                 if Job.objects.filter(event_id=ev.id).exists():
                     continue
                 Job.objects.create(
-                    tenant_id=instance.tenant_id,
+                    tenant_id=request.tenant_id,
                     event_id=ev.id,
-                    name=(ev.name or instance.name or "Activation")[:200],
-                    address=ev.address or instance.address or "",
+                    name=(ev.name or request.name or "Activation")[:200],
+                    address=ev.address or request.address or "",
                     start_date=ev.start_time,
                     end_date=ev.end_time,
                     job_title=default_title,
@@ -251,11 +264,12 @@ def auto_create_pending_job_on_request_approval(
                     closed=False,
                     national=False,
                     ongoing=False,
-                    created_by_id=getattr(instance, "approved_by_id", None)
-                    or instance.created_by_id,
-                    updated_by_id=getattr(instance, "approved_by_id", None)
-                    or instance.created_by_id,
+                    created_by_id=getattr(request, "approved_by_id", None)
+                    or request.created_by_id,
+                    updated_by_id=getattr(request, "approved_by_id", None)
+                    or request.created_by_id,
                 )
+                created_count += 1
             except Exception as exc:
                 logger.warning(
                     "auto_create_job: failed for event=%s: %s",
@@ -265,9 +279,21 @@ def auto_create_pending_job_on_request_approval(
     except Exception as exc:
         logger.warning(
             "auto_create_job: unexpected failure for request=%s: %s",
-            getattr(instance, "id", None),
+            getattr(request, "id", None),
             exc,
         )
+    return created_count
+
+
+@receiver(post_save, sender=Request)
+def auto_create_pending_job_on_request_approval(
+    sender, instance: Request, created: bool, **kwargs
+):
+    # Thin wrapper around create_pending_jobs_for_request. Note this fires
+    # before the resolver materializes the Event, so on the create/approve
+    # paths it's a no-op (no events yet) and the resolver calls the helper
+    # directly. Kept for any path that re-saves an already-evented request.
+    create_pending_jobs_for_request(instance)
 
 
 # ----------------------------------------------------------------------

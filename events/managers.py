@@ -94,7 +94,28 @@ class EventManager(models.Manager):
         ) -> models.Model:
             if model:
                 return model
-            return await sync_to_async(model_class.objects.get_default)(tenant_id=tenant_id)
+            # Prefer the tenant's flagged default. Onboarding frequently
+            # forgets to flag one (is_default=True) — which used to make
+            # event creation hard-fail on the `if not status` guard below,
+            # so an approved request silently never got an Event (and thus
+            # no Assign-BA / Post-to-board / auto-job). Fall back to ANY
+            # row for the tenant, then any global row, so an Event always
+            # materializes. Mirrors the auto-job signal's default-or-first.
+            obj = await sync_to_async(model_class.objects.get_default)(
+                tenant_id=tenant_id
+            )
+            if obj:
+                return obj
+            obj = await sync_to_async(
+                lambda: model_class.objects.filter(tenant_id=tenant_id)
+                .order_by("id")
+                .first()
+            )()
+            if obj:
+                return obj
+            return await sync_to_async(
+                lambda: model_class.objects.order_by("id").first()
+            )()
 
         event_type = await get_object_or_default(EventType, request.tenant_id, event_type)
         status = await get_object_or_default(EventStatus, request.tenant_id, status)
