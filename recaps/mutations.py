@@ -2728,6 +2728,87 @@ class RecapMutationService(SparkGraphQLMixin):
 
         return await create_file()
 
+    async def add_custom_recap_file(self) -> models.CustomRecap:
+        """Attach one already-uploaded blob to an existing custom recap.
+
+        Custom-template counterpart to add_recap_file. Creates a single
+        CustomRecapFile row (url=blob) linked to the custom recap; does
+        not touch field values or the rest of the file set, so adding a
+        photo can't wipe recap data the way a partial update_custom_recap
+        would.
+        """
+        if not isinstance(self.input, inputs.AddCustomRecapFileInput):
+            raise GraphQLError("Invalid input type.")
+
+        try:
+            custom_recap_id = resolve_id_to_int(self.input.custom_recap_id)
+            custom_recap = await sync_to_async(models.CustomRecap.objects.get)(
+                id=custom_recap_id
+            )
+        except (
+            models.CustomRecap.DoesNotExist,
+            TypeError,
+            ValueError,
+            GraphQLError,
+        ):
+            raise GraphQLError("Custom recap not found.")
+
+        blob_name = extract_blob_name_from_url(self.input.file)
+        if not blob_name:
+            raise GraphQLError("Invalid recap file path.")
+
+        @sync_to_async
+        def create_file():
+            with transaction.atomic():
+                file_type = None
+                if self.input.file_type_id not in (None, ""):
+                    try:
+                        file_type = FileType.objects.get(
+                            id=resolve_id_to_int(self.input.file_type_id)
+                        )
+                    except (
+                        FileType.DoesNotExist,
+                        TypeError,
+                        ValueError,
+                        GraphQLError,
+                    ):
+                        raise GraphQLError("File type not found.")
+                # Default to the first FileType — mirrors create_custom_recap
+                # so a caller that omits the id still works.
+                if not file_type:
+                    file_type = FileType.objects.first()
+                if not file_type:
+                    raise GraphQLError(
+                        "No file type available. Please create a file type first."
+                    )
+
+                file_recap_category = None
+                if self.input.file_recap_category_id not in (None, ""):
+                    try:
+                        file_recap_category = models.FileRecapCategory.objects.get(
+                            id=resolve_id_to_int(self.input.file_recap_category_id)
+                        )
+                    except (
+                        models.FileRecapCategory.DoesNotExist,
+                        TypeError,
+                        ValueError,
+                        GraphQLError,
+                    ):
+                        raise GraphQLError("File recap category not found.")
+
+                models.CustomRecapFile.objects.create(
+                    name=f"Custom recap file for {custom_recap.name}",
+                    url=blob_name,
+                    file_type=file_type,
+                    file_recap_category=file_recap_category,
+                    custom_recap=custom_recap,
+                    approved=False,
+                    created_by=self.user,
+                )
+                return custom_recap
+
+        return await create_file()
+
     async def remove_recap_file(self) -> models.Recap:
         """Detach + delete one file from a recap, return the parent recap.
 
@@ -4526,6 +4607,32 @@ class RecapMutations:
         except GraphQLError as e:
             return build_mutation_response(
                 types.RecapDetailResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def add_custom_recap_file(
+        self,
+        info: strawberry.Info,
+        input: inputs.AddCustomRecapFileInput,
+    ) -> types.CustomRecapDetailResponse:
+        """Attach an already-uploaded blob to an existing custom recap."""
+        try:
+            service = RecapMutationService.with_input(input)
+            await service.set_user(info)
+            custom_recap = await service.add_custom_recap_file()
+            return build_mutation_response(
+                types.CustomRecapDetailResponse,
+                success=True,
+                message="File attached to recap.",
+                input_obj=input,
+                custom_recap=custom_recap,
+            )
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.CustomRecapDetailResponse,
                 success=False,
                 message=str(e),
                 input_obj=input,
