@@ -4,6 +4,9 @@ Django signals for dashboard cache invalidation.
 This module handles automatic cache invalidation when models change
 that affect dashboard queries.
 """
+import logging
+
+from django.contrib.auth import get_user_model
 from django.db.models.signals import post_save, post_delete
 from django.dispatch import receiver
 from django.core.cache import cache
@@ -11,6 +14,9 @@ from django.core.cache import cache
 from events import models as event_models
 from jobs import models as job_models
 from ambassadors import models as ambassador_models
+from tenants import models as tenant_models
+
+logger = logging.getLogger(__name__)
 
 
 def _invalidate_dashboard_cache(tenant_id: int, query_names: list[str]):
@@ -106,4 +112,49 @@ def invalidate_cache_on_event_status_change(sender, instance, **kwargs):
         'events_stats',
         'events_time_series',
     ])
+
+
+@receiver(post_save, sender=tenant_models.Tenant)
+def link_admins_to_new_tenant(sender, instance, created, raw=False, **kwargs):
+    """Grant every spark-admin access to a newly-created tenant.
+
+    Ignite admins are scoped by TenantedUser membership, so a brand-new
+    client (e.g. Girl Beer) used to be invisible to existing admins until
+    someone re-ran the backfill command — which is how Nevena ended up
+    missing Girl Beer. This auto-links all spark-admins the moment a tenant
+    is created, so "all admins see all clients" stays true without manual
+    steps. Duplicate-safe and best-effort: a failure here must never block
+    tenant creation.
+    """
+    if not created or raw:
+        return
+    try:
+        User = get_user_model()
+        admins = User.objects.filter(role__slug=tenant_models.Role.SPARK_ADMIN_SLUG)
+        created_count = 0
+        for admin in admins:
+            existing = tenant_models.TenantedUser.objects.filter(
+                user=admin, tenant=instance
+            )
+            if existing.exists():
+                # Reactivate if a stale inactive link exists; never .get()
+                # (some (user, tenant) pairs are duplicated in the data).
+                existing.filter(is_active=False).update(is_active=True)
+            else:
+                tenant_models.TenantedUser.objects.create(
+                    user=admin, tenant=instance, is_active=True
+                )
+                created_count += 1
+        if created_count:
+            logger.info(
+                "Auto-linked %s admin(s) to new tenant %s (id=%s)",
+                created_count,
+                getattr(instance, "name", "?"),
+                instance.pk,
+            )
+    except Exception:
+        # Convenience link-up must never break tenant creation.
+        logger.exception(
+            "Failed to auto-link admins to new tenant id=%s", instance.pk
+        )
 
