@@ -479,7 +479,25 @@ class AmbassadorMutations:
         # --- role → by_client flag (server-trusted) -------------------------
         @sync_to_async
         def _role_slug() -> str:
-            return getattr(user.role, "slug", "").lower() if user.role else ""
+            # Authoritative by PK — request.user.role doesn't reliably hydrate
+            # in the async path (would mis-attribute a client rating).
+            pk = getattr(user, "pk", None)
+            if pk is None:
+                return ""
+            try:
+                from django.contrib.auth import get_user_model
+
+                db_user = (
+                    get_user_model()
+                    .objects.select_related("role")
+                    .filter(pk=pk)
+                    .first()
+                )
+                return (
+                    getattr(getattr(db_user, "role", None), "slug", "") or ""
+                ).lower()
+            except Exception:
+                return ""
 
         by_client = (await _role_slug()) == "client"
 
