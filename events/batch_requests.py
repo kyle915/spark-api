@@ -938,20 +938,27 @@ def _parse_row(
         distributor = Distributor.objects.filter(id=distributor_id).only("name").first()
         distributor_name_for_request = distributor.name if distributor else None
 
-    request_name = None
+    # Compose a human-readable name from whatever identifying fields exist.
+    # The file's "name" column is a prefix/type; store_number is optional, so
+    # we never gate the whole name on it (doing so left name=None for rows with
+    # no store number, which violates the NOT NULL constraint at save time —
+    # something the dry-run can't catch because it never writes). The result is
+    # always non-empty.
     request_name_prefix = _optional_str(row.get("name")) or "Request"
     name_retailer = retailer_name_for_request or distributor_name_for_request
-    if event_date and store_number:
-        name_parts = [request_name_prefix]
-        if name_retailer:
-            name_parts.append(name_retailer)
-        name_parts.extend([event_date.strftime('%m/%d/%Y'), store_number])
-        request_name = "-".join(name_parts)
-        if len(request_name) > Request._meta.get_field("name").max_length:
-            errors.append(
-                "Generated request name exceeds the maximum allowed length. "
-                "Use shorter name, retailer/distributor name, or store number."
-            )
+    name_parts = [request_name_prefix]
+    if name_retailer:
+        name_parts.append(name_retailer)
+    if event_date:
+        name_parts.append(event_date.strftime("%m/%d/%Y"))
+    if store_number:
+        name_parts.append(store_number)
+    request_name = "-".join(name_parts)
+    if len(request_name) > Request._meta.get_field("name").max_length:
+        errors.append(
+            "Generated request name exceeds the maximum allowed length. "
+            "Use a shorter name, retailer/distributor name, or store number."
+        )
 
     if errors:
         raise ValueError(" | ".join(errors))
