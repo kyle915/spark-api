@@ -15,9 +15,12 @@
     </td>
   </tr>
 
-  {# Optional cover-letter message — surfaced verbatim above the
-     stats so clients see the human framing first. Linebreaks
-     auto-escaped via the |linebreaksbr filter. #}
+  {% comment %}
+    Optional cover-letter message — surfaced verbatim above the stats so
+    clients see the human framing first. Linebreaks auto-escaped via the
+    |linebreaksbr filter. (Django {# #} comments are single-line only; a
+    multi-line one renders literally — which is the bug this replaces.)
+  {% endcomment %}
   {% if cover_message %}
   <tr>
     <td style="padding: 18px 0;">
