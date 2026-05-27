@@ -25,6 +25,17 @@ class Tenant(Asyncable, models.Model):
     # same link from any device, and Phase 2 sync workers know which
     # sheet to write back to.
     linked_sheet_url = models.URLField(max_length=512, null=True, blank=True)
+    # When set, ALL external (public-form) requests for this tenant route
+    # to this user as the assigned RMM/approver, overriding territory
+    # logic. Chosen on the Team page. SET_NULL so removing the user from
+    # the tenant doesn't break request creation.
+    default_external_rmm = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="default_external_rmm_for_tenants",
+    )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,

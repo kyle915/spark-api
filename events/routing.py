@@ -182,7 +182,25 @@ def assign_rmm_for_request(request, tenant_slug: str) -> tuple[object | None, li
     responsible for falling back to Ignite-only with a note in the
     email subject so the team knows to re-route manually.
     """
-    from tenants.models import User
+    from tenants.models import User, Tenant
+
+    # Tenant-level override: when an admin has set a "default recipient for
+    # external requests" on the Team page, route EVERY public-form request
+    # to that user regardless of territory. `tenant_slug` is the
+    # request_url_name from the public form URL (fall back to slug).
+    tenant = (
+        Tenant.objects.filter(
+            Q(request_url_name=tenant_slug) | Q(slug=tenant_slug)
+        )
+        .select_related("default_external_rmm")
+        .first()
+    )
+    if tenant and tenant.default_external_rmm_id and tenant.default_external_rmm:
+        rmm = tenant.default_external_rmm
+        request.rmm_asigned_id = rmm.id
+        request.save(update_fields=["rmm_asigned_id", "updated_at"])
+        return rmm, ([rmm.email] if rmm.email else [])
+
     if tenant_slug not in ROUTED_TENANT_SLUGS:
         return None, []
     state = _state_code_from_request(request)

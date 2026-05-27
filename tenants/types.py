@@ -21,6 +21,12 @@ class TenantType(Node):
     request_url_name: strawberry.auto
     linked_sheet_url: strawberry.auto
 
+    @strawberry.field
+    async def default_external_rmm(self) -> "SparkUserType | None":
+        """The user all external (public-form) requests route to, if set
+        on the Team page. None = fall back to territory/Ignite routing."""
+        return await sync_to_async(lambda obj: obj.default_external_rmm)(self)
+
     @strawberry.field(name="image")
     def image_url(self) -> str | None:
         """Return the public URL for the tenant image if one exists.

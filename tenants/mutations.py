@@ -1555,6 +1555,17 @@ class SetLinkedSheetInput(SparkGraphQLInput):
     sheet_url: str | None = None
 
 
+@strawberry.input
+class SetDefaultExternalRmmInput(SparkGraphQLInput):
+    """Set or clear the user that ALL external (public-form) requests for
+    a tenant route to. Overrides territory routing while set."""
+
+    # Defaults to the active tenant when omitted.
+    tenant_id: strawberry.ID | None = None
+    # The recipient. Null / empty clears it (back to territory routing).
+    user_id: strawberry.ID | None = None
+
+
 @strawberry.type
 class UpdateTenantResponse:
     success: bool
@@ -1659,6 +1670,104 @@ class LinkedSheetMutations:
         return UpdateTenantResponse(
             success=True,
             message="Linked sheet cleared." if not url else "Linked sheet saved.",
+            tenant=saved,
+            client_mutation_id=input.client_mutation_id,
+        )
+
+    @relay.mutation
+    async def set_default_external_rmm(
+        self,
+        info: strawberry.Info,
+        input: SetDefaultExternalRmmInput,
+    ) -> UpdateTenantResponse:
+        """Set / clear the user all external (public-form) requests route to.
+
+        When set, `assign_rmm_for_request` assigns this user as the RMM on
+        every public-form request for the tenant, overriding territory
+        logic. Null user_id clears it. Exposed on the clients schema (the
+        admin UI's endpoint); tenant membership verified via get_tenant.
+        """
+        from tenants.models import TenantedUser
+
+        user = info.context.request.user
+        if not user.is_authenticated:
+            return UpdateTenantResponse(
+                success=False,
+                message="User not authenticated.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        try:
+            if input.tenant_id:
+                tenant_id = resolve_id_to_int(input.tenant_id)
+            else:
+                bound = await sync_to_async(user.get_tenant)()
+                tenant_id = bound.id if bound else None
+            if not tenant_id:
+                return UpdateTenantResponse(
+                    success=False,
+                    message="No tenant in scope.",
+                    client_mutation_id=input.client_mutation_id,
+                )
+            tenant = await sync_to_async(Tenant.objects.get)(pk=tenant_id)
+        except (Tenant.DoesNotExist, GraphQLError, ValueError, TypeError):
+            return UpdateTenantResponse(
+                success=False,
+                message="Tenant not found.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        target_id: int | None = None
+        if input.user_id not in (None, ""):
+            try:
+                target_id = resolve_id_to_int(input.user_id)
+            except (GraphQLError, ValueError, TypeError):
+                return UpdateTenantResponse(
+                    success=False,
+                    message="Invalid user id.",
+                    client_mutation_id=input.client_mutation_id,
+                )
+            is_member = await sync_to_async(
+                lambda: TenantedUser.objects.filter(
+                    tenant_id=tenant_id, user_id=target_id, is_active=True
+                ).exists()
+            )()
+            if not is_member:
+                return UpdateTenantResponse(
+                    success=False,
+                    message="That user isn't an active member of this tenant.",
+                    client_mutation_id=input.client_mutation_id,
+                )
+
+        @sync_to_async
+        def save():
+            tenant.default_external_rmm_id = target_id
+            tenant.updated_by = user
+            tenant.save(
+                update_fields=[
+                    "default_external_rmm_id",
+                    "updated_by",
+                    "updated_at",
+                ]
+            )
+            return tenant
+
+        try:
+            saved = await save()
+        except Exception as exc:
+            return UpdateTenantResponse(
+                success=False,
+                message=f"Could not save: {exc}",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        return UpdateTenantResponse(
+            success=True,
+            message=(
+                "External-request routing cleared."
+                if target_id is None
+                else "External-request routing updated."
+            ),
             tenant=saved,
             client_mutation_id=input.client_mutation_id,
         )
