@@ -3244,7 +3244,15 @@ class RecapMutationService(SparkGraphQLMixin):
                     for r in models.CustomRecap.objects.select_related(
                         "event", "event__tenant"
                     )
-                    .prefetch_related("custom_recap_files")
+                    .prefetch_related(
+                        Prefetch(
+                            "custom_recap_files",
+                            queryset=models.CustomRecapFile.objects.select_related(
+                                "file_type",
+                                "file_recap_category",
+                            ),
+                        )
+                    )
                     .filter(id__in=custom_pks)
                 }
 
@@ -3258,100 +3266,114 @@ class RecapMutationService(SparkGraphQLMixin):
         ordered = await fetch_recaps()
         if not ordered:
             raise GraphQLError("None of the supplied recap ids were found.")
-        recaps = [obj for (_k, obj) in ordered]
 
-        # Campaign reports bundle N recaps × M files each. Build one flat
-        # candidate list (recap_idx, file, blob), fetch them all in parallel,
-        # then re-bucket. Branch the file relation by recap type: legacy uses
-        # recap_files/.file, custom uses custom_recap_files/.url.
-        import concurrent.futures as _cf
+        # Everything below reads recap relations (files, file_type,
+        # consumer_engagements, event__tenant) and renders the PDF. ALL of
+        # it must run in a sync thread: a single missed prefetch (e.g.
+        # should_embed_recap_file reading file_type) on the async event loop
+        # raises SynchronousOnlyOperation — which is exactly what broke
+        # download + email for selections containing custom recaps. Mirrors
+        # the single-recap generate_custom_recap_pdf pattern.
+        @sync_to_async
+        def render_campaign_pdf():
+            recaps = [obj for (_k, obj) in ordered]
 
-        candidates: list[tuple[int, object, str]] = []
-        for idx, (kind, recap) in enumerate(ordered):
-            files = (
-                recap.custom_recap_files.all()
-                if kind == "CustomRecap"
-                else recap.recap_files.all()
-            )
-            for rf in files:
-                if not should_embed_recap_file(rf):
-                    continue
-                raw_url = rf.url if kind == "CustomRecap" else rf.file
-                blob_name = extract_blob_name_from_url(str(raw_url))
-                if not blob_name:
-                    continue
-                candidates.append((idx, rf, blob_name))
+            # Campaign reports bundle N recaps × M files each. Build one flat
+            # candidate list (recap_idx, file, blob), fetch them all in
+            # parallel, then re-bucket. Branch the file relation by recap
+            # type: legacy uses recap_files/.file, custom uses
+            # custom_recap_files/.url.
+            import concurrent.futures as _cf
 
-        def _fetch(item):
-            idx, rf, blob_name = item
-            try:
-                data = download_blob_bytes(blob_name)
-            except Exception:
-                return None
-            if not data or not is_image_bytes(data):
-                return None
-            cat = getattr(rf, "file_recap_category", None)
-            return (
-                idx,
-                {
-                    "name": getattr(rf, "name", None),
-                    "bytes": data,
-                    "category": cat.name if cat else "Uncategorized",
-                },
-            )
+            candidates: list[tuple[int, object, str]] = []
+            for idx, (kind, recap) in enumerate(ordered):
+                files = (
+                    recap.custom_recap_files.all()
+                    if kind == "CustomRecap"
+                    else recap.recap_files.all()
+                )
+                for rf in files:
+                    if not should_embed_recap_file(rf):
+                        continue
+                    raw_url = rf.url if kind == "CustomRecap" else rf.file
+                    blob_name = extract_blob_name_from_url(str(raw_url))
+                    if not blob_name:
+                        continue
+                    candidates.append((idx, rf, blob_name))
 
-        per_recap: dict[int, list[dict]] = {i: [] for i in range(len(ordered))}
-        if candidates:
-            with _cf.ThreadPoolExecutor(max_workers=16) as pool:
-                for result in pool.map(_fetch, candidates):
-                    if result is not None:
-                        idx, entry = result
-                        per_recap[idx].append(entry)
+            def _fetch(item):
+                idx, rf, blob_name = item
+                try:
+                    data = download_blob_bytes(blob_name)
+                except Exception:
+                    return None
+                if not data or not is_image_bytes(data):
+                    return None
+                cat = getattr(rf, "file_recap_category", None)
+                return (
+                    idx,
+                    {
+                        "name": getattr(rf, "name", None),
+                        "bytes": data,
+                        "category": cat.name if cat else "Uncategorized",
+                    },
+                )
 
-        recaps_with_images: list = []
-        total_consumers = 0
-        any_consumer_data = False
-        for idx, (kind, recap) in enumerate(ordered):
-            recaps_with_images.append((recap, per_recap[idx]))
-            if kind == "CustomRecap":
-                te = getattr(recap, "total_engagements", None)
-                if isinstance(te, (int, float)) and te:
-                    total_consumers += int(te)
-                    any_consumer_data = True
-            else:
-                for eng in recap.consumer_engagements.all():
-                    tc = getattr(eng, "total_consumer", None)
-                    if isinstance(tc, (int, float)):
-                        total_consumers += int(tc)
+            per_recap: dict[int, list[dict]] = {
+                i: [] for i in range(len(ordered))
+            }
+            if candidates:
+                with _cf.ThreadPoolExecutor(max_workers=16) as pool:
+                    for result in pool.map(_fetch, candidates):
+                        if result is not None:
+                            idx, entry = result
+                            per_recap[idx].append(entry)
+
+            recaps_with_images: list = []
+            total_consumers = 0
+            any_consumer_data = False
+            for idx, (kind, recap) in enumerate(ordered):
+                recaps_with_images.append((recap, per_recap[idx]))
+                if kind == "CustomRecap":
+                    te = getattr(recap, "total_engagements", None)
+                    if isinstance(te, (int, float)) and te:
+                        total_consumers += int(te)
                         any_consumer_data = True
-                    break  # only the first row
+                else:
+                    for eng in recap.consumer_engagements.all():
+                        tc = getattr(eng, "total_consumer", None)
+                        if isinstance(tc, (int, float)):
+                            total_consumers += int(tc)
+                            any_consumer_data = True
+                        break  # only the first row
 
-        # Title / subtitle defaults
-        resolved_title = (title or "").strip() or "Campaign Report"
-        first_event = getattr(recaps[0], "event", None)
-        tenant = getattr(first_event, "tenant", None) if first_event else None
-        tenant_name = getattr(tenant, "name", None) or ""
-        resolved_subtitle = (subtitle or "").strip() or (
-            tenant_name or "Sampling Campaign"
-        )
+            # Title / subtitle defaults
+            resolved_title = (title or "").strip() or "Campaign Report"
+            first_event = getattr(recaps[0], "event", None)
+            tenant = (
+                getattr(first_event, "tenant", None) if first_event else None
+            )
+            tenant_name = getattr(tenant, "name", None) or ""
+            resolved_subtitle = (subtitle or "").strip() or (
+                tenant_name or "Sampling Campaign"
+            )
 
-        # Wrapped in sync_to_async: the renderer (build_recap_pdf_html) lazily
-        # reads recap relations, and custom recaps aren't fully prefetched
-        # above — running it in a sync thread avoids SynchronousOnlyOperation.
-        pdf_bytes = await sync_to_async(build_campaign_report_pdf)(
-            title=resolved_title,
-            subtitle=resolved_subtitle,
-            recaps_with_images=recaps_with_images,
-        )
+            pdf_bytes = build_campaign_report_pdf(
+                title=resolved_title,
+                subtitle=resolved_subtitle,
+                recaps_with_images=recaps_with_images,
+            )
 
-        return (
-            pdf_bytes,
-            len(recaps),
-            total_consumers if any_consumer_data else None,
-            resolved_title,
-            resolved_subtitle,
-            tenant_name,
-        )
+            return (
+                pdf_bytes,
+                len(recaps),
+                total_consumers if any_consumer_data else None,
+                resolved_title,
+                resolved_subtitle,
+                tenant_name,
+            )
+
+        return await render_campaign_pdf()
 
     async def generate_campaign_report_pdf(self) -> str:
         """Combine N recaps into one client-deliverable PDF.
