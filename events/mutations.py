@@ -39,6 +39,7 @@ from .routing import (
     extract_state_code,
     IGNITE_REVIEW_CC,
     ROUTED_TENANT_SLUGS,
+    suppress_cc,
 )
 from utils.gcs import (
     delete_blob,
@@ -2626,19 +2627,21 @@ async def _notify_requestor_for_request_approved(
     # one CC's themselves.
     admin_emails = await _get_spark_admin_emails_async()
     normalized_exclude = requestor_email.strip().lower()
-    copy_emails = list(
-        dict.fromkeys(
-            _get_request_review_copy_emails(exclude_email=requestor_email)
-            + [
-                e
-                for e in IGNITE_REVIEW_CC
-                if (e or "").strip().lower() != normalized_exclude
-            ]
-            + [
-                e
-                for e in admin_emails
-                if (e or "").strip().lower() != normalized_exclude
-            ]
+    copy_emails = suppress_cc(
+        list(
+            dict.fromkeys(
+                _get_request_review_copy_emails(exclude_email=requestor_email)
+                + [
+                    e
+                    for e in IGNITE_REVIEW_CC
+                    if (e or "").strip().lower() != normalized_exclude
+                ]
+                + [
+                    e
+                    for e in admin_emails
+                    if (e or "").strip().lower() != normalized_exclude
+                ]
+            )
         )
     )
     mailer = RequestorRequestApprovedMailer(
@@ -2662,7 +2665,9 @@ async def _notify_requestor_for_request_declined(
         return
 
     request.requestor_email = requestor_email
-    copy_emails = _get_request_review_copy_emails(exclude_email=requestor_email)
+    copy_emails = suppress_cc(
+        _get_request_review_copy_emails(exclude_email=requestor_email)
+    )
     mailer = RequestorRequestDeclinedMailer(
         request=request,
         location=location,

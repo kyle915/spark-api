@@ -47,9 +47,30 @@ IGNITE_REVIEW_CC: list[str] = [
     "events@igniteproductions.co",
     "myriant@igniteproductions.co",
     "kyle@igniteproductions.co",
-    "nevena@igniteproductions.co",
     "madison@igniteproductions.co",
 ]
+
+# Addresses to strip from EVERY composed CC list, no matter where they
+# came from (static IGNITE_REVIEW_CC, settings REQUEST_REVIEW_COPY_EMAILS,
+# or the dynamic active-Spark-admin roll-up). Kyle asked to stop CC'ing
+# Nevena on request/approval confirmations; she's also an active Spark
+# admin, so dropping her from the static list above isn't enough — the
+# approval path folds in admin_emails. Both spellings on file are listed
+# defensively. Lower-cased for case-insensitive matching.
+CC_SUPPRESS_EMAILS: set[str] = {
+    "nevena@igniteproductions.co",
+    "nevina@igniteproductions.co",
+}
+
+
+def suppress_cc(emails: list[str]) -> list[str]:
+    """Drop any suppressed address from a composed CC list (case-insensitive),
+    preserving order and the original casing of the kept entries."""
+    return [
+        e
+        for e in emails
+        if (e or "").strip().lower() not in CC_SUPPRESS_EMAILS
+    ]
 
 # Tenants where we apply the territory map. The slug is what the BA
 # types in the public form URL: /spark-form/ighn-liquid-death.
