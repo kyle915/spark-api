@@ -10,7 +10,10 @@ from strawberry_django.permissions import IsAuthenticated
 from django.db.models import Q
 from asgiref.sync import sync_to_async
 from utils.gcs import extract_blob_name_from_url, public_url
-from utils.graphql.permissions import StrictIsAuthenticated
+from utils.graphql.permissions import (
+    StrictIsAuthenticated,
+    resolve_request_user_access,
+)
 from strawberry.relay import Node
 
 from .models import Role, Tenant, TenantTheme, TenantedUser
@@ -247,32 +250,16 @@ class QuerySpark(GoogleCalendarQueries, TenantThemingQuery):
     ) -> CustomUserType:
         requester = info.context.request.user
 
-        @sync_to_async
-        def _resolve_requester_perms():
-            # Re-read role by PK in a sync thread — the async request.user
-            # doesn't reliably hydrate its role FK, which denied real
-            # spark-admins. Honor is_staff/is_superuser too.
-            is_staff = bool(getattr(requester, "is_staff", False))
-            is_super = bool(getattr(requester, "is_superuser", False))
-            role_slug = None
-            pk = getattr(requester, "pk", None)
-            if pk is not None:
-                try:
-                    db_user = (
-                        User.objects.select_related("role").filter(pk=pk).first()
-                    )
-                    if db_user and db_user.role:
-                        role_slug = db_user.role.slug
-                except Exception:
-                    role_slug = None
-            return role_slug, is_staff, is_super
-
-        role_slug, is_staff, is_super = await _resolve_requester_perms()
-        is_spark_admin = role_slug == Role.SPARK_ADMIN_SLUG
+        role_slug, is_staff, is_super, email = await resolve_request_user_access(
+            requester
+        )
         is_client = role_slug == Role.CLIENT_SLUG
-        is_platform_admin = is_staff or is_super
+        is_platform_admin = bool(
+            is_staff or is_super or (email or "").endswith("@igniteproductions.co")
+        )
+        is_spark_admin = role_slug == Role.SPARK_ADMIN_SLUG or is_platform_admin
 
-        if not (is_spark_admin or is_client or is_platform_admin):
+        if not (is_spark_admin or is_client):
             raise GraphQLError("You do not have permission to perform this action.")
 
         if not id and not uuid:
@@ -340,35 +327,20 @@ class QuerySpark(GoogleCalendarQueries, TenantThemingQuery):
     ) -> CountableConnection[CustomUserType]:
         user = info.context.request.user
 
-        @sync_to_async
-        def _resolve_permissions():
-            # The JWT request.user doesn't reliably hydrate its role FK inside
-            # this async resolver — user.role came back falsy, so genuine
-            # spark-admins (incl. Kyle) were denied with "You do not have
-            # permission" and the admin tracker black-screened. Re-read the
-            # role by PK in a sync thread so it's authoritative, and honor
-            # is_staff/is_superuser like the sibling `tenants` resolver.
-            is_staff = bool(getattr(user, "is_staff", False))
-            is_super = bool(getattr(user, "is_superuser", False))
-            role_slug = None
-            pk = getattr(user, "pk", None)
-            if pk is not None:
-                try:
-                    db_user = (
-                        User.objects.select_related("role").filter(pk=pk).first()
-                    )
-                    if db_user and db_user.role:
-                        role_slug = db_user.role.slug
-                except Exception:
-                    role_slug = None
-            return role_slug, is_staff, is_super
-
-        role_slug, is_staff, is_super = await _resolve_permissions()
-        is_spark_admin = role_slug == Role.SPARK_ADMIN_SLUG
+        # Authoritative role read (re-queries by PK/email, honors is_staff/
+        # superuser, and treats any @igniteproductions.co email as an admin).
+        # Reading user.role off the JWT request.user directly was unreliable
+        # and denied genuine spark-admins — the tracker / client-view blanks.
+        role_slug, is_staff, is_super, email = await resolve_request_user_access(
+            user
+        )
         is_client = role_slug == Role.CLIENT_SLUG
-        # Spark-admins and platform admins (is_staff / superuser) see every
-        # user; clients are scoped to their own tenants below.
-        see_all = is_spark_admin or is_staff or is_super
+        see_all = bool(
+            is_staff
+            or is_super
+            or role_slug == Role.SPARK_ADMIN_SLUG
+            or (email or "").endswith("@igniteproductions.co")
+        )
 
         if not (see_all or is_client):
             raise GraphQLError("You do not have permission to perform this action.")
@@ -550,32 +522,16 @@ class QueryClients(GoogleCalendarQueries, TenantThemingQuery):
     ) -> CustomUserType:
         requester = info.context.request.user
 
-        @sync_to_async
-        def _resolve_requester_perms():
-            # Re-read role by PK in a sync thread — the async request.user
-            # doesn't reliably hydrate its role FK, which denied real
-            # spark-admins. Honor is_staff/is_superuser too.
-            is_staff = bool(getattr(requester, "is_staff", False))
-            is_super = bool(getattr(requester, "is_superuser", False))
-            role_slug = None
-            pk = getattr(requester, "pk", None)
-            if pk is not None:
-                try:
-                    db_user = (
-                        User.objects.select_related("role").filter(pk=pk).first()
-                    )
-                    if db_user and db_user.role:
-                        role_slug = db_user.role.slug
-                except Exception:
-                    role_slug = None
-            return role_slug, is_staff, is_super
-
-        role_slug, is_staff, is_super = await _resolve_requester_perms()
-        is_spark_admin = role_slug == Role.SPARK_ADMIN_SLUG
+        role_slug, is_staff, is_super, email = await resolve_request_user_access(
+            requester
+        )
         is_client = role_slug == Role.CLIENT_SLUG
-        is_platform_admin = is_staff or is_super
+        is_platform_admin = bool(
+            is_staff or is_super or (email or "").endswith("@igniteproductions.co")
+        )
+        is_spark_admin = role_slug == Role.SPARK_ADMIN_SLUG or is_platform_admin
 
-        if not (is_spark_admin or is_client or is_platform_admin):
+        if not (is_spark_admin or is_client):
             raise GraphQLError("You do not have permission to perform this action.")
 
         if not id and not uuid:
@@ -645,35 +601,20 @@ class QueryClients(GoogleCalendarQueries, TenantThemingQuery):
     ) -> CountableConnection[CustomUserType]:
         user = info.context.request.user
 
-        @sync_to_async
-        def _resolve_permissions():
-            # The JWT request.user doesn't reliably hydrate its role FK inside
-            # this async resolver — user.role came back falsy, so genuine
-            # spark-admins (incl. Kyle) were denied with "You do not have
-            # permission" and the admin tracker black-screened. Re-read the
-            # role by PK in a sync thread so it's authoritative, and honor
-            # is_staff/is_superuser like the sibling `tenants` resolver.
-            is_staff = bool(getattr(user, "is_staff", False))
-            is_super = bool(getattr(user, "is_superuser", False))
-            role_slug = None
-            pk = getattr(user, "pk", None)
-            if pk is not None:
-                try:
-                    db_user = (
-                        User.objects.select_related("role").filter(pk=pk).first()
-                    )
-                    if db_user and db_user.role:
-                        role_slug = db_user.role.slug
-                except Exception:
-                    role_slug = None
-            return role_slug, is_staff, is_super
-
-        role_slug, is_staff, is_super = await _resolve_permissions()
-        is_spark_admin = role_slug == Role.SPARK_ADMIN_SLUG
+        # Authoritative role read (re-queries by PK/email, honors is_staff/
+        # superuser, and treats any @igniteproductions.co email as an admin).
+        # Reading user.role off the JWT request.user directly was unreliable
+        # and denied genuine spark-admins — the tracker / client-view blanks.
+        role_slug, is_staff, is_super, email = await resolve_request_user_access(
+            user
+        )
         is_client = role_slug == Role.CLIENT_SLUG
-        # Spark-admins and platform admins (is_staff / superuser) see every
-        # user; clients are scoped to their own tenants below.
-        see_all = is_spark_admin or is_staff or is_super
+        see_all = bool(
+            is_staff
+            or is_super
+            or role_slug == Role.SPARK_ADMIN_SLUG
+            or (email or "").endswith("@igniteproductions.co")
+        )
 
         if not (see_all or is_client):
             raise GraphQLError("You do not have permission to perform this action.")
