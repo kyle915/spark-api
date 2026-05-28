@@ -16,7 +16,11 @@ from recaps.inputs import (
     RecapFiltersInput,
     TypeOfGoodFiltersInput,
 )
-from utils.graphql.permissions import StrictIsAuthenticated
+from utils.graphql.permissions import (
+    StrictIsAuthenticated,
+    resolve_request_user_access,
+    IGNITE_EMAIL_DOMAIN,
+)
 from utils.graphql.mixins import SparkGraphQLMixin, resolve_id_to_int
 from utils.graphql.relay import (
     CountableConnection,
@@ -1082,6 +1086,50 @@ async def _enforce_client_tenant(
     return filters_tenant_id
 
 
+# ---------------------------------------------------------------------------
+# Client visibility gate for unapproved recaps.
+#
+# Clients (the tenant-side users — Liquid Death, Girl Beer, Borjomi, etc.)
+# should not see recaps until an Ignite admin has approved them. This avoids
+# the client seeing half-filled drafts, BA typos, or in-flight reconciliation
+# work. Admins (spark-admin / is_staff / is_super / any @igniteproductions.co
+# email) always see everything.
+#
+# We resolve role authoritatively via resolve_request_user_access — the JWT
+# user.role FK is often unhydrated inside async resolvers, so a naive
+# `get_role_slug(user) == "client"` check returns "" for real clients and the
+# gate would silently no-op. Re-reading the user row from the DB closes that
+# gap (same fix pattern used by IsClientOrSparkAdmin and the tenants/users
+# resolvers).
+# ---------------------------------------------------------------------------
+async def _is_client_only_user(info: strawberry.Info) -> bool:
+    """True for tenant-role users with no admin escalation.
+
+    A user counts as "client-only" iff:
+      - role_slug is "client", AND
+      - is_staff is False, AND
+      - is_superuser is False, AND
+      - email does NOT end in @igniteproductions.co
+
+    Anything that grants admin access (per _is_admin_access in
+    utils/graphql/permissions.py) flips this to False so admins get the
+    unrestricted view. Unauthenticated requests bottom out as False —
+    StrictIsAuthenticated rejects them upstream.
+    """
+    request = getattr(info.context, "request", None)
+    user = getattr(request, "user", None) if request else None
+    if user is None or not getattr(user, "is_authenticated", False):
+        return False
+    role_slug, is_staff, is_super, email = await resolve_request_user_access(
+        user
+    )
+    if is_staff or is_super:
+        return False
+    if (email or "").lower().endswith(IGNITE_EMAIL_DOMAIN):
+        return False
+    return role_slug == "client"
+
+
 @strawberry.type
 class RecapQueries:
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
@@ -1150,6 +1198,10 @@ class RecapQueries:
         end_date = filters.end_date if filters else None
         event_address = filters.event_address if filters else None
         approved = filters.approved if filters else None
+        # Force approved=True for client users — they never see drafts.
+        # Overrides whatever the client (or a stale frontend filter) sent.
+        if await _is_client_only_user(info):
+            approved = True
         queryset = service.get_ordered_queryset(
             tenant_id=tenant_id,
             event_id=event_id,
@@ -1213,6 +1265,12 @@ class RecapQueries:
                 # tenant_id is a direct FK on Recap — no extra query needed.
                 user_tenant = await service.get_user_tenant(info)
                 if recap.tenant_id != user_tenant.id:
+                    return None
+            # Client-only users never see unapproved drafts. Return None
+            # rather than raising — same posture as the tenant mismatch
+            # above, so we don't leak the existence of in-flight work.
+            if await _is_client_only_user(info):
+                if not getattr(recap, "approved", False):
                     return None
             return recap
         except GraphQLError:
@@ -1292,6 +1350,10 @@ class RecapQueries:
         approved = filters.approved if filters else None
         edited = filters.edited if filters else None
 
+        # Force approved=True for client users on custom recaps too.
+        if await _is_client_only_user(info):
+            approved = True
+
         queryset = service.get_ordered_queryset(
             tenant_id=resolved_tenant_id,
             event_id=resolved_event_id,
@@ -1360,6 +1422,11 @@ class RecapQueries:
             if service.get_role_slug(user) == "client":
                 user_tenant = await service.get_user_tenant(info)
                 if record.tenant_id != user_tenant.id:
+                    return None
+            # Hide unapproved drafts from client-only users — same
+            # posture as the legacy Recap resolver above.
+            if await _is_client_only_user(info):
+                if not getattr(record, "approved", False):
                     return None
             return record
         except GraphQLError:
