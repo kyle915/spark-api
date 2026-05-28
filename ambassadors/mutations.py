@@ -402,6 +402,21 @@ class AmbassadorMutations:
                 client_mutation_id=input.client_mutation_id,
             )
 
+        # Snapshot fields we need for the push BEFORE delete — the
+        # adelete() voids the in-memory references to ambassador/event.
+        was_approved = bool(getattr(ae, "is_approved", False))
+        ba_user_id = (
+            getattr(getattr(ae, "ambassador", None), "user_id", None)
+        )
+        event_obj = getattr(ae, "event", None)
+        event_name = getattr(event_obj, "name", None) or "your shift"
+        event_uuid = (
+            str(getattr(event_obj, "uuid", "")) if event_obj else ""
+        )
+        event_date = getattr(event_obj, "date", None) or getattr(
+            event_obj, "start_time", None
+        )
+
         try:
             await ae.adelete()
         except Exception as exc:  # noqa: BLE001
@@ -410,6 +425,44 @@ class AmbassadorMutations:
                 message=f"Could not cancel invite: {exc}",
                 client_mutation_id=input.client_mutation_id,
             )
+
+        # Push to the BA. Two flavors of "cancelled" but a single push
+        # tone — what the BA needs to know is "you're no longer on
+        # this shift, don't show up." was_approved tells them whether
+        # they were already counting on it (more urgent wording) vs.
+        # just an in-flight invite getting retracted.
+        if ba_user_id:
+            try:
+                from ambassadors.push import send_push_to_user
+
+                date_str = ""
+                if event_date is not None:
+                    try:
+                        date_str = f" on {event_date.strftime('%a %b %-d')}"
+                    except Exception:
+                        date_str = ""
+                title = (
+                    "Shift cancelled" if was_approved else "Invite retracted"
+                )
+                body = (
+                    f"You've been removed from {event_name}{date_str}."
+                    if was_approved
+                    else f"The invite for {event_name}{date_str} was retracted."
+                )
+                await send_push_to_user(
+                    ba_user_id,
+                    title=title,
+                    body=body,
+                    data={
+                        "type": "shift_cancelled",
+                        "kind": "shift_cancelled",
+                        "eventUuid": event_uuid,
+                        "wasApproved": "1" if was_approved else "0",
+                    },
+                )
+            except Exception:
+                # Best-effort — never block the cancel on a push miss.
+                pass
 
         return CancelShiftInviteResponse(
             success=True,
