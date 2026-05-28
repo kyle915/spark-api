@@ -375,6 +375,89 @@ class SendRecapRemindersView(View):
         return JsonResponse({"ok": True, "endpoint": "send-recap-reminders"})
 
 
+@method_decorator(csrf_exempt, name="dispatch")
+class SendPaymentNotificationsView(View):
+    """POST `/internal/cron/send-payment-notifications`.
+
+    Fires `notify_payments_sent` — polls Wingspan for newly-sent payments
+    and pushes the BA a "you've been paid" notification (deduped).
+
+    Body / query params (all optional):
+      - limit: int (default 100) — max payments to pull
+      - since_days: int (default 10) — suppress pushes for older dated payments
+      - dry_run: "1" / "true" / "yes"
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _bool(name: str, default: bool = False) -> bool:
+            raw = (request.GET.get(name) or request.POST.get(name) or "").lower()
+            if not raw:
+                return default
+            return raw in ("1", "true", "yes", "on")
+
+        def _int(name: str, default: int) -> int | None:
+            raw = request.GET.get(name) or request.POST.get(name)
+            if raw is None or raw == "":
+                return default
+            try:
+                return int(raw)
+            except ValueError:
+                return None
+
+        limit = _int("limit", 100)
+        since_days = _int("since_days", 10)
+        if limit is None or since_days is None:
+            return JsonResponse(
+                {"ok": False, "error": "limit/since_days must be integers"},
+                status=400,
+            )
+        dry_run = _bool("dry_run", default=False)
+
+        cmd_args: list[str] = [
+            "--limit", str(limit),
+            "--since-days", str(since_days),
+        ]
+        if dry_run:
+            cmd_args.append("--dry-run")
+
+        out = io.StringIO()
+        try:
+            call_command("notify_payments_sent", *cmd_args, stdout=out)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("Payment notifications cron failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "log": out.getvalue(),
+                },
+                status=500,
+            )
+
+        return JsonResponse(
+            {
+                "ok": True,
+                "limit": limit,
+                "since_days": since_days,
+                "dry_run": dry_run,
+                "log": out.getvalue(),
+            }
+        )
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        return JsonResponse(
+            {"ok": True, "endpoint": "send-payment-notifications"}
+        )
+
+
 def _registered_views() -> dict[str, Any]:
     """Map URL path → view class. Lets `digest/urls.py` mount these
     without each one being re-exported explicitly.
@@ -384,4 +467,5 @@ def _registered_views() -> dict[str, Any]:
         "send-executive-summary": SendExecutiveSummaryView,
         "send-new-gig-digest": SendNewGigDigestView,
         "send-recap-reminders": SendRecapRemindersView,
+        "send-payment-notifications": SendPaymentNotificationsView,
     }

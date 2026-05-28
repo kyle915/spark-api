@@ -1,0 +1,63 @@
+name: Daily payment notifications
+
+# Fires `/internal/cron/send-payment-notifications` on Cloud Run once a
+# day. Polls Wingspan for newly-sent payments and pushes each BA a
+# "you've been paid" notification (deduped via NotifiedWingspanPayment).
+# See wingspan/management/commands/notify_payments_sent.py.
+#
+# Secret-gated via `X-Cron-Secret` (shared INTERNAL_CRON_SECRET) — see
+# the daily-admin-digest workflow for the full setup notes.
+#
+# Schedule: 17:00 UTC = 10:00 PT (DST) / 09:00 PST — late morning, so
+# BAs see "you've been paid" alongside their day. 30-past would be
+# tidier but the on-hour load here is fine for a once-daily poll.
+
+on:
+  schedule:
+    - cron: "0 17 * * *"
+  workflow_dispatch:
+    inputs:
+      since_days:
+        description: "Suppress pushes for payments dated older than this"
+        required: false
+        default: "10"
+      dry_run:
+        description: "Log what would be pushed, but send/ledger nothing"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+jobs:
+  fire-payment-notifications:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire payment notifications cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/send-payment-notifications
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          SINCE_DAYS: ${{ github.event.inputs.since_days || '10' }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            echo "Generate one with: openssl rand -hex 32"
+            echo "Then set it as INTERNAL_CRON_SECRET in both the repo secrets"
+            echo "and the Cloud Run service env (must match)."
+            exit 1
+          fi
+
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL?since_days=$SINCE_DAYS&dry_run=$DRY_RUN" \
+            -H "X-Cron-Secret: $CRON_SECRET")
+
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS — see body above."
+            exit 1
+          fi
