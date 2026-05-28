@@ -29,6 +29,32 @@ def _apply_job_date_filters(queryset: QuerySet, filters: JobFiltersInput) -> Que
     return queryset
 
 
+def _apply_ba_board_filters(queryset: QuerySet, filters) -> QuerySet:
+    """Marketplace filters for the BA job board (my_available_jobs) and
+    the new-gig digest matcher: state code, date range, and minimum
+    hourly rate. All optional — a null/empty `filters` is a no-op.
+
+    State matches `Job.event.state.code` case-insensitively. Min pay
+    compares against `Job.hourly_rate`; jobs with a null rate are kept
+    (we don't hide a gig just because pay isn't filled in yet)."""
+    if filters is None:
+        return queryset
+    if getattr(filters, "start_date", None) or getattr(filters, "end_date", None):
+        queryset = _apply_job_date_filters(queryset, filters)
+    state_code = (getattr(filters, "state_code", None) or "").strip()
+    if state_code:
+        queryset = queryset.filter(event__state__code__iexact=state_code)
+    min_rate = getattr(filters, "min_hourly_rate", None)
+    if min_rate is not None:
+        from decimal import Decimal
+        from django.db.models import Q
+        queryset = queryset.filter(
+            Q(hourly_rate__gte=Decimal(str(min_rate)))
+            | Q(hourly_rate__isnull=True)
+        )
+    return queryset
+
+
 def _apply_available_job_filters(queryset: QuerySet, filters: JobFiltersInput) -> QuerySet:
     """Apply optional filters specific to available jobs."""
     if filters.location_id:
@@ -1681,6 +1707,7 @@ class JobApplicationQueries:
     async def my_available_jobs(
         self,
         info: strawberry.Info,
+        filters: JobFiltersInput | None = None,
     ) -> list[types.Job]:
         """Posted jobs the calling BA can apply to.
 
@@ -1690,6 +1717,8 @@ class JobApplicationQueries:
             TenantFavoriteAmbassador roster
           - BA can't see jobs they've already applied to (any status)
             so the board doesn't show their own past applications
+          - Optional marketplace filters (state, date range, min pay)
+            from `filters` let the BA narrow the board.
 
         Newest posted first so today's drops are at the top.
         """
@@ -1722,11 +1751,14 @@ class JobApplicationQueries:
 
             qs = (
                 models.Job.objects
-                .select_related("event", "event__tenant", "job_title")
+                .select_related(
+                    "event", "event__tenant", "event__state", "job_title"
+                )
                 .filter(lifecycle_status=models.Job.STATUS_POSTED)
                 .exclude(id__in=applied_job_ids)
                 .order_by("-posted_at", "-id")
             )
+            qs = _apply_ba_board_filters(qs, filters)
 
             visible = []
             for job in qs[:200]:
@@ -1736,6 +1768,35 @@ class JobApplicationQueries:
             return visible
 
         return await sync_to_async(_list)()
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def my_job_preferences(
+        self,
+        info: strawberry.Info,
+    ) -> types.AmbassadorJobPreference:
+        """The calling BA's job-board preferences. Returns defaults
+        (notify on, no state filter, no min rate) when none are saved
+        yet — the client never has to handle a null/unset case."""
+        actor = getattr(info.context.request, "user", None)
+
+        def _get():
+            from ambassadors.models import Ambassador
+            if not actor or not getattr(actor, "id", None):
+                return types.AmbassadorJobPreference.defaults()
+            try:
+                amb = Ambassador.objects.get(user_id=actor.id)
+            except Ambassador.DoesNotExist:
+                return types.AmbassadorJobPreference.defaults()
+            pref = (
+                models.AmbassadorJobPreference.objects
+                .filter(ambassador=amb)
+                .first()
+            )
+            if pref is None:
+                return types.AmbassadorJobPreference.defaults()
+            return types.AmbassadorJobPreference.from_model(pref)
+
+        return await sync_to_async(_get)()
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def job_applications(

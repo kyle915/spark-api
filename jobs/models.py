@@ -1122,3 +1122,52 @@ class JobBriefingAttachment(models.Model):
 
     class Meta:
         ordering = ("id",)
+
+
+class AmbassadorJobPreference(models.Model):
+    """Per-BA job-board preferences.
+
+    Drives two things:
+      1. The marketplace filters' defaults on the mobile job board.
+      2. The daily new-gig digest push — who gets nudged about new
+         postings, and which gigs count as a "match" for them.
+
+    A BA has at most one row (OneToOne). Rows are created lazily:
+    `my_job_preferences` returns sensible defaults when none exists,
+    and `update_job_preferences` upserts.
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+
+    ambassador = models.OneToOneField(
+        Ambassador,
+        on_delete=models.CASCADE,
+        related_name="job_preference",
+    )
+
+    # Master switch for the daily new-gig digest push. Off = never nudge
+    # this BA about new postings (they can still browse the board).
+    notify_new_gigs = models.BooleanField(default=True)
+
+    # Preferred US state codes (e.g. ["CA", "TX"]). Empty = all states.
+    # Matched against Job.event.state.code in the digest + board filter.
+    preferred_state_codes = ArrayField(
+        models.CharField(max_length=10),
+        default=list,
+        blank=True,
+    )
+
+    # Minimum hourly rate the BA wants to hear about. Null = no minimum.
+    min_hourly_rate = models.DecimalField(
+        max_digits=8, decimal_places=2, null=True, blank=True,
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("id",)
+
+    def __str__(self) -> str:
+        return f"AmbassadorJobPreference(ambassador={self.ambassador_id})"

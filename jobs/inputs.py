@@ -165,6 +165,25 @@ class JobFiltersInput(BaseTenantInput):
     end_date: str | None = None
     coordinates: CoordinatesFilterInput | None = None
     edited: bool | None = None
+    # BA-board marketplace filters (also reused by the new-gig digest):
+    #   state_code — 2-letter US state, matched on Job.event.state.code
+    #   min_hourly_rate — hide gigs paying less than this
+    state_code: str | None = None
+    min_hourly_rate: float | None = None
+
+
+@strawberry.input
+class UpdateJobPreferencesInput(SparkGraphQLInput):
+    """Upsert the calling BA's job-board preferences. Every field is
+    optional — omitted fields keep their current value (partial update).
+    Pass an empty list for preferred_state_codes to clear it (= all
+    states). Pass clear_min_hourly_rate=true to remove the minimum
+    (since min_hourly_rate=null means "leave unchanged")."""
+
+    notify_new_gigs: bool | None = None
+    preferred_state_codes: list[str] | None = None
+    min_hourly_rate: float | None = None
+    clear_min_hourly_rate: bool = False
 
 
 @strawberry.input
