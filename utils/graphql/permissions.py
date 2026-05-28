@@ -83,7 +83,27 @@ async def resolve_request_user_access(user):
             req_email.lower(),
         )
 
-    return await _resolve()
+    result = await _resolve()
+    role_slug, is_staff, is_super, email = result
+    # Diagnostic: if an authenticated user is about to be denied, log the
+    # resolved identity so we can see WHY (e.g. token bound to a non-admin
+    # pk). Temporary, low volume (only fires on a would-be denial).
+    if not (
+        _is_admin_access(role_slug, is_staff, is_super, email)
+        or role_slug == "client"
+    ):
+        logger.warning(
+            "ACCESS-DENY-DIAG: authed user not granted — "
+            "req(pk=%r email=%r type=%s) resolved(role=%r staff=%s super=%s email=%r)",
+            getattr(user, "pk", None),
+            getattr(user, "email", None),
+            type(user).__name__,
+            role_slug,
+            is_staff,
+            is_super,
+            email,
+        )
+    return result
 
 
 class StrictIsAuthenticated(BasePermission):
