@@ -576,6 +576,46 @@ class JobApplicationResponse:
 
 
 @strawberry.type
+class AmbassadorJobPreference:
+    """A BA's job-board preferences (what gigs they want notified about
+    + the marketplace filter defaults). Returned by myJobPreferences and
+    updateJobPreferences. Sensible defaults are returned when the BA
+    hasn't saved any yet — there's no separate "unset" state to handle
+    on the client."""
+
+    notify_new_gigs: bool
+    preferred_state_codes: list[str]
+    min_hourly_rate: float | None = None
+
+    @staticmethod
+    def from_model(pref) -> "AmbassadorJobPreference":
+        rate = getattr(pref, "min_hourly_rate", None)
+        return AmbassadorJobPreference(
+            notify_new_gigs=bool(getattr(pref, "notify_new_gigs", True)),
+            preferred_state_codes=list(
+                getattr(pref, "preferred_state_codes", None) or []
+            ),
+            min_hourly_rate=(float(rate) if rate is not None else None),
+        )
+
+    @staticmethod
+    def defaults() -> "AmbassadorJobPreference":
+        return AmbassadorJobPreference(
+            notify_new_gigs=True,
+            preferred_state_codes=[],
+            min_hourly_rate=None,
+        )
+
+
+@strawberry.type
+class AmbassadorJobPreferenceResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    preference: AmbassadorJobPreference | None = None
+
+
+@strawberry.type
 class FavoriteAmbassadorResponse:
     success: bool
     message: str

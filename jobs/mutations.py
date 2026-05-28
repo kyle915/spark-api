@@ -2184,6 +2184,61 @@ class JobApplicationMutations:
             application_uuid=str(app.uuid) if app else None,
         )
 
+    @relay.mutation(permission_classes=[_StrictIsAuth])
+    async def update_job_preferences(
+        self,
+        info: strawberry.Info,
+        input: inputs.UpdateJobPreferencesInput,
+    ) -> types.AmbassadorJobPreferenceResponse:
+        """Upsert the calling BA's job-board preferences. Partial update:
+        only fields present in the input are changed."""
+        actor = info.context.request.user
+
+        def _save():
+            try:
+                amb = _Ambassador.objects.get(user=actor)
+            except _Ambassador.DoesNotExist:
+                return None, "Only ambassadors have job preferences."
+
+            pref, _created = models.AmbassadorJobPreference.objects.get_or_create(
+                ambassador=amb,
+            )
+
+            changed: list[str] = []
+            if input.notify_new_gigs is not None:
+                pref.notify_new_gigs = bool(input.notify_new_gigs)
+                changed.append("notify_new_gigs")
+            if input.preferred_state_codes is not None:
+                # Normalize to upper-case 2-letter-ish codes, dropping blanks.
+                pref.preferred_state_codes = [
+                    c.strip().upper()
+                    for c in input.preferred_state_codes
+                    if c and c.strip()
+                ]
+                changed.append("preferred_state_codes")
+            if input.clear_min_hourly_rate:
+                pref.min_hourly_rate = None
+                changed.append("min_hourly_rate")
+            elif input.min_hourly_rate is not None:
+                from decimal import Decimal
+                pref.min_hourly_rate = Decimal(str(input.min_hourly_rate))
+                changed.append("min_hourly_rate")
+
+            if changed:
+                changed.append("updated_at")
+                pref.save(update_fields=changed)
+            return pref, "Preferences saved."
+
+        pref, msg = await sync_to_async(_save)()
+        return types.AmbassadorJobPreferenceResponse(
+            success=pref is not None,
+            message=msg,
+            client_mutation_id=input.client_mutation_id,
+            preference=(
+                types.AmbassadorJobPreference.from_model(pref) if pref else None
+            ),
+        )
+
 
 @strawberry.type
 class FavoriteAmbassadorMutations:
