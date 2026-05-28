@@ -10,14 +10,15 @@ from tenants.dashboard.mutations import DashboardMutations
 from jobs.schema import SparkJobMutations, SparkJobQueries
 from academy.schema import AcademyQuerySpark, AcademyMutationsSpark
 from wingspan.schema import WingspanQuerySpark
+from chats.schema import ChatQuerySpark, ChatMutationsSpark
 from utils.utils import BlockIntrospectionForAnonymous
 from utils.graphql.gcs_schema import GCSQuery
 
 # Spark Schemas
 QuerySpark = merge_types(
-    "Query", (EventQuerySpark, RecapQuerySpark, AmbassadorQuerySpark, QuerySpark, SparkJobQueries, DashboardQueries, GCSQuery, AcademyQuerySpark, WingspanQuerySpark))
+    "Query", (EventQuerySpark, RecapQuerySpark, AmbassadorQuerySpark, QuerySpark, SparkJobQueries, DashboardQueries, GCSQuery, AcademyQuerySpark, WingspanQuerySpark, ChatQuerySpark))
 MutationSpark = merge_types(
-    "Mutation", (EventMutationsSpark, RecapMutationsSpark, MutationSpark, SparkJobMutations, AmbassadorMutationsSpark, DashboardMutations, AcademyMutationsSpark))
+    "Mutation", (EventMutationsSpark, RecapMutationsSpark, MutationSpark, SparkJobMutations, AmbassadorMutationsSpark, DashboardMutations, AcademyMutationsSpark, ChatMutationsSpark))
 
 schema_spark = JwtSchema(
     query=QuerySpark,
