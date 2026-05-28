@@ -1959,11 +1959,11 @@ class JobLifecycleMutations:
                 job = models.Job.objects.get(pk=job_pk)
                 amb = _Ambassador.objects.get(pk=ba_pk)
             except (models.Job.DoesNotExist, _Ambassador.DoesNotExist):
-                return None, "Job or ambassador not found."
+                return None, "Job or ambassador not found.", []
             if job.lifecycle_status not in (
                 models.Job.STATUS_PENDING, models.Job.STATUS_POSTED
             ):
-                return None, f"Job is {job.lifecycle_status}; can't reassign."
+                return None, f"Job is {job.lifecycle_status}; can't reassign.", []
 
             now = _django_tz.now()
             app, created = models.JobApplication.objects.get_or_create(
@@ -1982,6 +1982,23 @@ class JobLifecycleMutations:
                 app.decided_by = actor if getattr(actor, "id", None) else None
                 app.save(update_fields=["status", "decided_at", "decided_by", "updated_at"])
 
+            # Snapshot user_ids of every applicant we're about to
+            # auto-decline so the resolver can fan out "your application
+            # was declined" pushes after the sync helper returns. Done
+            # before the bulk-update because once the rows are flipped
+            # we lose the ability to scope the query cleanly. Excludes
+            # the accepted BA (their user gets the "you got it" push
+            # below, not a decline push).
+            declined_user_ids = list(
+                models.JobApplication.objects.filter(
+                    job=job, status=models.JobApplication.STATUS_APPLIED,
+                )
+                .exclude(pk=app.pk)
+                .select_related("ambassador")
+                .values_list("ambassador__user_id", flat=True)
+                .distinct()
+            )
+
             # Decline all other Applied rows for this job.
             models.JobApplication.objects.filter(
                 job=job, status=models.JobApplication.STATUS_APPLIED,
@@ -1993,9 +2010,13 @@ class JobLifecycleMutations:
             job.lifecycle_status = models.Job.STATUS_FILLED
             job.closed = True
             job.save(update_fields=["lifecycle_status", "closed", "updated_at"])
-            return job, f"{amb.user.get_full_name() if amb.user else 'BA'} assigned to the job."
+            return (
+                job,
+                f"{amb.user.get_full_name() if amb.user else 'BA'} assigned to the job.",
+                declined_user_ids,
+            )
 
-        job, msg = await sync_to_async(_assign)()
+        job, msg, declined_user_ids = await sync_to_async(_assign)()
         # Push the assignment to the BA — admin moved their applied row
         # to accepted (or assigned them outright). Without this the BA
         # has no idea they got the gig until they re-open the app.
@@ -2021,6 +2042,33 @@ class JobLifecycleMutations:
             except Exception:
                 # Push is best-effort — don't fail the assignment.
                 pass
+            # Fan-out "your application wasn't selected this time" pushes
+            # to the BAs whose applications got auto-declined when this
+            # accept fired. Without this they sit in the pending queue
+            # silently with no signal that the gig went to someone else
+            # — which makes the marketplace feel unresponsive.
+            for declined_user_id in declined_user_ids:
+                if not declined_user_id or declined_user_id == ba_user_id:
+                    continue
+                try:
+                    from ambassadors.push import enqueue_push as _enqueue_push
+
+                    _enqueue_push(
+                        declined_user_id,
+                        title="Application update",
+                        body=(
+                            f"Another BA was selected for {job.name}. "
+                            "Keep an eye out — new gigs post regularly."
+                        ),
+                        data={
+                            "kind": "application_declined",
+                            "jobUuid": str(job.uuid),
+                        },
+                    )
+                except Exception:
+                    # Best-effort per-recipient — keep going on a dead
+                    # PushDevice for one user.
+                    pass
         return _build_lifecycle_response(job is not None, msg, job=job, input_obj=input)
 
 
