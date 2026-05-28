@@ -536,6 +536,9 @@ class JobApplication:
     note: str
     applied_at: str
     decided_at: str | None
+    # Ambassador PK as an ID — lets the admin applicant-review UI pass it
+    # straight into assignAmbassadorToJob to accept a specific applicant.
+    ambassador_id: strawberry.ID
 
     @strawberry.field
     def ambassador_first_name(self) -> str:
