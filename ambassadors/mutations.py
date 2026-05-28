@@ -970,6 +970,27 @@ class ClockOutOfShiftInput:
     client_mutation_id: strawberry.ID | None = None
 
 
+@strawberry.input
+class ReportShiftStatusInput:
+    """BA flags they're running late or can't make a shift — fires an
+    immediate push to the assigned RMM + the location's notification-group
+    admins so they can backfill before it becomes a no-show."""
+    ambassador_event_uuid: strawberry.ID | None = None
+    event_uuid: strawberry.ID | None = None
+    status: str  # "running_late" | "cant_make_it"
+    eta_minutes: int | None = None
+    note: str | None = None
+    client_mutation_id: strawberry.ID | None = None
+
+
+@strawberry.type
+class ReportShiftStatusResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    notified_count: int = 0
+
+
 @strawberry.type
 class ShiftAttendanceResponse:
     success: bool
@@ -1062,6 +1083,114 @@ class ShiftAttendanceMutations:
     ) -> ShiftAttendanceResponse:
         """End the activation timer."""
         return await _do_attendance(info, input, kind="clock_out")
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def report_shift_status(
+        self, info: strawberry.Info, input: ReportShiftStatusInput,
+    ) -> ReportShiftStatusResponse:
+        """BA reports running-late / can't-make-it → push the RMM + admins."""
+        actor = info.context.request.user
+        status = (input.status or "").strip().lower()
+        if status not in ("running_late", "cant_make_it"):
+            return ReportShiftStatusResponse(
+                success=False,
+                message="status must be running_late or cant_make_it.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        def _go():
+            amb_event = None
+            if getattr(input, "ambassador_event_uuid", None):
+                amb_event = _resolve_amb_event_by_uuid(str(input.ambassador_event_uuid))
+            elif getattr(input, "event_uuid", None):
+                amb_event = _resolve_amb_event_for_actor_by_event(
+                    str(input.event_uuid), actor
+                )
+            if not amb_event:
+                return None, "Shift not found.", 0
+            own_user_id = (
+                amb_event.ambassador.user_id if amb_event.ambassador else None
+            )
+            if own_user_id and getattr(actor, "id", None) != own_user_id:
+                return None, "Not your shift.", 0
+
+            event = amb_event.event
+            ba = amb_event.ambassador
+            ba_user = getattr(ba, "user", None)
+            ba_name = (
+                f"{getattr(ba_user, 'first_name', '') or ''} "
+                f"{getattr(ba_user, 'last_name', '') or ''}"
+            ).strip() or "A BA"
+            venue = getattr(event, "name", None) or "their shift"
+
+            if status == "cant_make_it":
+                title = "⚠️ BA can't make a shift"
+                body = f"{ba_name} can't make {venue}."
+            else:
+                eta = f" (~{input.eta_minutes} min late)" if input.eta_minutes else ""
+                title = "⏱ BA running late"
+                body = f"{ba_name} is running late to {venue}{eta}."
+            if input.note:
+                body += f" — “{input.note[:120]}”"
+
+            watcher_ids = _event_watcher_user_ids(event)
+            sent = 0
+            for uid in watcher_ids:
+                try:
+                    _send_push_to_user_sync(
+                        uid, title=title, body=body,
+                        data={"screen": "tracker", "eventUuid": str(getattr(event, "uuid", ""))},
+                    )
+                    sent += 1
+                except Exception:
+                    logging.getLogger(__name__).exception(
+                        "shift-status push failed user=%s", uid,
+                    )
+            return amb_event, "Your team has been notified.", sent
+
+        amb_event, msg, sent = await sync_to_async(_go)()
+        return ReportShiftStatusResponse(
+            success=amb_event is not None,
+            message=msg,
+            client_mutation_id=input.client_mutation_id,
+            notified_count=sent,
+        )
+
+
+def _event_watcher_user_ids(event) -> list[int]:
+    """User ids to notify about a shift event: the request's assigned RMM
+    plus the location's notification-group admins (scoped to the tenant)."""
+    from events.models import NotificationGroupLocation, NotificationGroupUser
+
+    ids: set[int] = set()
+    req = getattr(event, "request", None)
+    if req and getattr(req, "rmm_asigned_id", None):
+        ids.add(req.rmm_asigned_id)
+    loc = getattr(event, "location", None) or (
+        getattr(req, "location", None) if req else None
+    )
+    if loc is not None:
+        group_ids = list(
+            NotificationGroupLocation.objects.filter(
+                location_id=loc.id, notification_group__state=False,
+            ).values_list("notification_group_id", flat=True)
+        )
+        if getattr(loc, "state_id", None):
+            group_ids += list(
+                NotificationGroupLocation.objects.filter(
+                    state_id=loc.state_id, notification_group__state=True,
+                ).values_list("notification_group_id", flat=True)
+            )
+        if group_ids:
+            ids.update(
+                NotificationGroupUser.objects.filter(
+                    notification_group_id__in=group_ids,
+                    user__is_active=True,
+                    user__tenanted_users__tenant_id=event.tenant_id,
+                    user__tenanted_users__is_active=True,
+                ).values_list("user_id", flat=True)
+            )
+    return [i for i in ids if i]
 
 
 async def _do_attendance(info, input, *, kind: str) -> "ShiftAttendanceResponse":
