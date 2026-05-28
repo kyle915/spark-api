@@ -87,6 +87,14 @@ class RequestFiltersInput(BaseTenantInput):
     distributor_state_id: strawberry.ID | None = None
     store_number: str | None = None
     date: str | None = None
+    # Inclusive event-date range (YYYY-MM-DD). Powers the Master Tracker
+    # quick-filter chips (This week / Upcoming / Past). `date` (exact)
+    # still wins if both are sent.
+    start_date: str | None = None
+    end_date: str | None = None
+    # Event-date sort direction for the tracker's clickable Date column.
+    # "asc" = soonest first, "desc" (default) = furthest-future first.
+    date_sort: str | None = None
     created_within_hours: int | None = None
     edited: bool | None = None
     reviewed: bool | None = None
