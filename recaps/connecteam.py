@@ -318,3 +318,144 @@ def match_fields(
         ))
 
     return results
+
+
+# --------------------------------------------------------------------------
+# Legacy-form mapping
+#
+# The CustomRecapTemplate path (match_fields, above) maps a PDF onto a
+# tenant's custom field schema. The STANDARD recap form (SparkRecapCreate
+# on the admin web) is a fixed grid of well-known fields instead —
+# samples, first-time, brand-aware, willing/not-willing, cans, packs,
+# products sold, account spend, plus free-text traffic / competitive /
+# quotes / feedback. `map_legacy_fields` does a best-effort label match
+# onto THOSE fields so the admin can drop a Connecteam PDF on the create
+# form and have the numbers pre-filled for review.
+#
+# This is intentionally heuristic and forgiving: the caller always
+# returns the raw label/value pairs too, the admin reviews every value
+# before submitting, and nothing is written to the DB by the parse step.
+# Unrecognized labels are simply left for the admin to enter by hand.
+# --------------------------------------------------------------------------
+
+# Legacy fields whose value is a count (summed across matching rows, so a
+# PDF that lists cans per-SKU still totals correctly). Everything else is
+# either money (account_spend) or free text.
+_LEGACY_NUMERIC_KEYS = frozenset({
+    "total_consumer",
+    "first_time",
+    "brand_aware",
+    "willing",
+    "not_willing",
+    "products_sold",
+    "total_cans_sold",
+    "total_packs_sold",
+})
+
+# Money — keep the decimal, don't sum (account spend is a single figure).
+_LEGACY_MONEY_KEY = "account_spend"
+
+_MONEY_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
+
+
+def _leading_money(value) -> str | None:
+    """Pull the first money-ish number out of a value, stripping commas.
+    '$1,250.50' -> '1250.50', '40' -> '40'. None when there's no number."""
+    if value is None:
+        return None
+    m = _MONEY_RE.search(str(value))
+    return m.group().replace(",", "") if m else None
+
+
+def _classify_legacy_label(label: str) -> str | None:
+    """Map a (lower-cased) Connecteam label onto a legacy recap form key,
+    or None if nothing reasonable matches. Order matters — the most
+    specific tests come first (e.g. 'not willing' before 'willing',
+    'pack' before the generic 'products sold')."""
+    # --- consumer engagement ---
+    if "consumers sampled" in label or ("sampled" in label and "consumer" in label):
+        return "total_consumer"
+    if "first time" in label or "first-time" in label:
+        return "first_time"
+    if "knew about" in label or "brand aware" in label or "aware of" in label:
+        return "brand_aware"
+    if "willing to purchase" in label or "willing to buy" in label:
+        # "would NOT be willing to purchase" -> not_willing
+        return "not_willing" if "not" in label else "willing"
+
+    # --- sales (check pack/cans before the generic 'products sold') ---
+    if "multipack" in label or "multi-pack" in label or "multi pack" in label or "pack" in label:
+        return "total_packs_sold"
+    if "cans" in label or "can sold" in label:
+        return "total_cans_sold"
+    if "products sold" in label or "product sold" in label or "total sold" in label or "units sold" in label:
+        return "products_sold"
+
+    # --- money ---
+    if "account spend" in label or "amount spent" in label or "spend" in label or "total spend" in label:
+        return "account_spend"
+
+    # --- free text ---
+    if "traffic" in label:
+        return "traffic_description"
+    if "competit" in label:
+        return "competitive_presence"
+    if "quote" in label:
+        return "quotes"
+    if "demographic" in label:
+        return "demographics"
+    if "positive" in label or "success story" in label:
+        return "positive_stories"
+    if "decline" in label or "objection" in label or ("reason" in label and "not" in label):
+        return "reasons_to_decline"
+    if "differently" in label or "improve" in label or "next time" in label:
+        return "do_differently"
+    if "feedback" in label:
+        return "feedback"
+    if "comment" in label or "additional" in label or "note" in label:
+        return "account_notes"
+    return None
+
+
+def map_legacy_fields(parsed: "ParsedRecap") -> tuple[dict[str, str], int]:
+    """Best-effort map of a parsed Connecteam recap onto the standard
+    recap form's fields. Returns (fields, matched_count) where `fields`
+    is {legacy_key: str_value} ready to drop into the create form.
+
+    Numeric fields are summed across matching rows; free-text fields are
+    joined with newlines; account spend takes the last money value seen.
+    Empty values and unrecognized labels are skipped."""
+    out: dict[str, str] = {}
+    matched = 0
+    for label_raw, value in parsed.raw_pairs.items():
+        if value is None or str(value).strip() == "":
+            continue
+        key = _classify_legacy_label(label_raw.lower().strip())
+        if key is None:
+            continue
+        if key in _LEGACY_NUMERIC_KEYS:
+            n = _leading_int(value)
+            if n is None:
+                continue
+            prev = int(out.get(key) or 0)
+            out[key] = str(prev + n)
+        elif key == _LEGACY_MONEY_KEY:
+            money = _leading_money(value)
+            if money is None:
+                continue
+            out[key] = money
+        else:  # free text
+            text = str(value).strip()
+            out[key] = (out[key] + "\n" + text) if key in out else text
+        matched += 1
+    return out, matched
+
+
+def _leading_int(value) -> int | None:
+    """Pull a non-negative integer out of a value ('70', '70 cans',
+    '  68 '). None when there's no number. (Mirrors recaps.pdf so the
+    legacy mapping doesn't depend on importing the PDF module.)"""
+    if value is None:
+        return None
+    m = re.search(r"\d+", str(value))
+    return int(m.group()) if m else None

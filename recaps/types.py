@@ -594,6 +594,56 @@ class ImportConnecteamRecapPdfResponse:
 
 
 @strawberry.type
+class ConnecteamRawPair:
+    """One raw label/value pair lifted straight from the PDF — returned
+    alongside the mapped fields so the admin can eyeball anything the
+    auto-mapper didn't recognize and copy it in by hand."""
+
+    label: str
+    value: str
+
+
+@strawberry.type
+class ParseConnecteamRecapPdfResponse:
+    """Read-only parse of a Connecteam PDF for the standard recap form.
+    Every mapped field is a string so the frontend can drop it straight
+    into the create form's inputs. Null = the parser found nothing for
+    that field. Nothing here is persisted — the admin reviews, edits, and
+    submits via createRecap."""
+
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+
+    # Consumer-engagement numbers (strings, ready for the form inputs).
+    total_consumer: str | None = None
+    first_time: str | None = None
+    brand_aware: str | None = None
+    willing: str | None = None
+    not_willing: str | None = None
+    # Sales.
+    products_sold: str | None = None
+    total_cans_sold: str | None = None
+    total_packs_sold: str | None = None
+    account_spend: str | None = None
+    # Free-text sections.
+    traffic_description: str | None = None
+    competitive_presence: str | None = None
+    quotes: str | None = None
+    feedback: str | None = None
+    demographics: str | None = None
+    positive_stories: str | None = None
+    reasons_to_decline: str | None = None
+    do_differently: str | None = None
+    account_notes: str | None = None
+
+    matched_count: int = 0
+    raw_pairs: list[ConnecteamRawPair] = strawberry.field(
+        default_factory=list,
+    )
+
+
+@strawberry.type
 class CustomRecapFileDetailResponse:
     success: bool
     message: str

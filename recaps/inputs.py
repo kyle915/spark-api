@@ -496,3 +496,17 @@ class ImportConnecteamRecapPdfInput(SparkGraphQLInput):
     pdf_base64: str
     # Optional override name; if blank we derive "Imported · <date>".
     name: str | None = None
+
+
+@strawberry.input
+class ParseConnecteamRecapPdfInput(SparkGraphQLInput):
+    """Parse a Connecteam recap PDF WITHOUT creating anything — used by
+    the standard admin recap-build form to pre-fill the numbers grid from
+    a PDF, which the admin then reviews and submits via createRecap.
+
+    Distinct from ImportConnecteamRecapPdfInput (which drafts a
+    CustomRecap against a template). This path is read-only: decode,
+    parse, map labels onto the legacy form fields, return the values."""
+
+    # Base64-encoded PDF bytes (same transport as the import flow).
+    pdf_base64: str
