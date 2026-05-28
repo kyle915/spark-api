@@ -231,6 +231,150 @@ class SendExecutiveSummaryView(View):
         return JsonResponse({"ok": True, "endpoint": "send-executive-summary"})
 
 
+@method_decorator(csrf_exempt, name="dispatch")
+class SendNewGigDigestView(View):
+    """POST `/internal/cron/send-new-gig-digest`.
+
+    Fires the `send_new_gig_digest` command — one digest push per BA of
+    the gigs posted in the last N hours that match their preferences.
+
+    Body / query params (all optional):
+      - hours: int (default 24) — look-back window
+      - dry_run: "1" / "true" / "yes"
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _bool(name: str, default: bool = False) -> bool:
+            raw = (request.GET.get(name) or request.POST.get(name) or "").lower()
+            if not raw:
+                return default
+            return raw in ("1", "true", "yes", "on")
+
+        try:
+            hours = int(
+                request.GET.get("hours") or request.POST.get("hours") or 24
+            )
+        except ValueError:
+            return JsonResponse(
+                {"ok": False, "error": "hours must be an integer"}, status=400
+            )
+
+        dry_run = _bool("dry_run", default=False)
+        cmd_args: list[str] = ["--hours", str(hours)]
+        if dry_run:
+            cmd_args.append("--dry-run")
+
+        out = io.StringIO()
+        try:
+            call_command("send_new_gig_digest", *cmd_args, stdout=out)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("New-gig digest cron failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "log": out.getvalue(),
+                },
+                status=500,
+            )
+
+        return JsonResponse(
+            {"ok": True, "hours": hours, "dry_run": dry_run, "log": out.getvalue()}
+        )
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        return JsonResponse({"ok": True, "endpoint": "send-new-gig-digest"})
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class SendRecapRemindersView(View):
+    """POST `/internal/cron/send-recap-reminders`.
+
+    Fires the `send_recap_reminders` command — the aggressive daily sweep
+    that re-nudges BAs with outstanding recaps for recently-ended shifts.
+
+    Body / query params (all optional):
+      - max_age_days: int (default 7)
+      - grace_hours: int (default 2)
+      - dry_run: "1" / "true" / "yes"
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _bool(name: str, default: bool = False) -> bool:
+            raw = (request.GET.get(name) or request.POST.get(name) or "").lower()
+            if not raw:
+                return default
+            return raw in ("1", "true", "yes", "on")
+
+        def _int(name: str, default: int) -> int | None:
+            raw = request.GET.get(name) or request.POST.get(name)
+            if raw is None or raw == "":
+                return default
+            try:
+                return int(raw)
+            except ValueError:
+                return None
+
+        max_age_days = _int("max_age_days", 7)
+        grace_hours = _int("grace_hours", 2)
+        if max_age_days is None or grace_hours is None:
+            return JsonResponse(
+                {"ok": False, "error": "max_age_days/grace_hours must be integers"},
+                status=400,
+            )
+        dry_run = _bool("dry_run", default=False)
+
+        cmd_args: list[str] = [
+            "--max-age-days", str(max_age_days),
+            "--grace-hours", str(grace_hours),
+        ]
+        if dry_run:
+            cmd_args.append("--dry-run")
+
+        out = io.StringIO()
+        try:
+            call_command("send_recap_reminders", *cmd_args, stdout=out)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("Recap reminders cron failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "log": out.getvalue(),
+                },
+                status=500,
+            )
+
+        return JsonResponse(
+            {
+                "ok": True,
+                "max_age_days": max_age_days,
+                "grace_hours": grace_hours,
+                "dry_run": dry_run,
+                "log": out.getvalue(),
+            }
+        )
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        return JsonResponse({"ok": True, "endpoint": "send-recap-reminders"})
+
+
 def _registered_views() -> dict[str, Any]:
     """Map URL path → view class. Lets `digest/urls.py` mount these
     without each one being re-exported explicitly.
@@ -238,4 +382,6 @@ def _registered_views() -> dict[str, Any]:
     return {
         "send-admin-digest": SendAdminDigestView,
         "send-executive-summary": SendExecutiveSummaryView,
+        "send-new-gig-digest": SendNewGigDigestView,
+        "send-recap-reminders": SendRecapRemindersView,
     }
