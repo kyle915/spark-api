@@ -251,34 +251,17 @@ async def _check_client_or_spark_admin(request_user):
     if not request_user.is_authenticated:
         return False, False, False, "User not authenticated."
 
-    @sync_to_async
-    def _resolve():
-        # Authoritative role read by PK — request_user.role doesn't reliably
-        # hydrate in the async path, which denied genuine spark-admins.
-        # Platform admins (is_staff/superuser) get spark-admin-level scope.
-        is_platform_admin = bool(
-            getattr(request_user, "is_staff", False)
-            or getattr(request_user, "is_superuser", False)
-        )
-        role_slug = None
-        pk = getattr(request_user, "pk", None)
-        if pk is not None:
-            try:
-                from django.contrib.auth import get_user_model
+    # Shared, email-aware resolver — re-reads role by PK/email and treats any
+    # @igniteproductions.co user (and is_staff/superuser) as a platform admin.
+    from utils.graphql.permissions import (
+        resolve_request_user_access,
+        _is_admin_access,
+    )
 
-                db_user = (
-                    get_user_model()
-                    .objects.select_related("role")
-                    .filter(pk=pk)
-                    .first()
-                )
-                if db_user and db_user.role:
-                    role_slug = db_user.role.slug
-            except Exception:
-                role_slug = None
-        return role_slug, is_platform_admin
-
-    role_slug, is_platform_admin = await _resolve()
+    role_slug, _is_staff, _is_super, _email = await resolve_request_user_access(
+        request_user
+    )
+    is_platform_admin = _is_admin_access(role_slug, _is_staff, _is_super, _email)
     is_spark_admin = role_slug == Role.SPARK_ADMIN_SLUG or is_platform_admin
     is_client = role_slug == Role.CLIENT_SLUG
 
