@@ -4,7 +4,7 @@
   <tr>
     <td style="padding-bottom: 4px;">
       <p style="margin: 0; font-size: 11px; letter-spacing: 0.18em; color: #888888; text-transform: uppercase;">
-        SPARK · CAMPAIGN REPORT
+        SPARK · CAMPAIGN REPORT{% if client_name %} · {{ client_name }}{% endif %}
       </p>
       <h1 style="margin: 8px 0 0 0; font-size: 26px; font-weight: 700; color: #1a1a1a; letter-spacing: -0.02em;">
         {{ campaign_title }}
@@ -18,10 +18,11 @@
   </tr>
 
   {% comment %}
-    Optional cover-letter message — surfaced verbatim above the stats so
-    clients see the human framing first. Linebreaks auto-escaped via the
-    |linebreaksbr filter. (Django {# #} comments are single-line only; a
-    multi-line one renders literally — which is the bug this replaces.)
+    Optional cover-letter message — surfaced verbatim above the event-meta
+    panel so clients see the human framing first. Linebreaks auto-escaped
+    via the |linebreaksbr filter. (Django {# #} comments are single-line
+    only; a multi-line one renders literally — which is the bug this
+    replaces.)
   {% endcomment %}
   {% if cover_message %}
   <tr>
@@ -33,9 +34,65 @@
   </tr>
   {% endif %}
 
+  {% comment %}
+    Event-meta panel — pulled live from the recaps' parent Events so the
+    client sees campaign context (event name · date · state · store)
+    before they open the PDF. Rows render only if their value is non-null
+    so single-event sends don't waste space on empty fields, and multi-
+    event campaigns auto-collapse to ranges / counts.
+  {% endcomment %}
+  {% if event_label or date_label or state_label or location_label %}
+  <tr>
+    <td style="padding: 22px 0 4px 0;">
+      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="border: 1px solid #e5e7eb; border-radius: 12px;">
+        {% if event_label %}
+        <tr>
+          <td width="110" style="padding: 12px 14px; font-size: 11px; letter-spacing: 0.10em; color: #6b7280; text-transform: uppercase; vertical-align: top; border-bottom: 1px solid #f1f2f4;">
+            Event{% if event_count > 1 %}s{% endif %}
+          </td>
+          <td style="padding: 12px 14px; font-size: 14px; color: #1a1a1a; line-height: 1.4; border-bottom: 1px solid #f1f2f4;">
+            {{ event_label }}
+          </td>
+        </tr>
+        {% endif %}
+        {% if date_label %}
+        <tr>
+          <td width="110" style="padding: 12px 14px; font-size: 11px; letter-spacing: 0.10em; color: #6b7280; text-transform: uppercase; vertical-align: top; border-bottom: 1px solid #f1f2f4;">
+            Date
+          </td>
+          <td style="padding: 12px 14px; font-size: 14px; color: #1a1a1a; line-height: 1.4; border-bottom: 1px solid #f1f2f4;">
+            {{ date_label }}
+          </td>
+        </tr>
+        {% endif %}
+        {% if state_label %}
+        <tr>
+          <td width="110" style="padding: 12px 14px; font-size: 11px; letter-spacing: 0.10em; color: #6b7280; text-transform: uppercase; vertical-align: top; border-bottom: 1px solid #f1f2f4;">
+            State
+          </td>
+          <td style="padding: 12px 14px; font-size: 14px; color: #1a1a1a; line-height: 1.4; border-bottom: 1px solid #f1f2f4;">
+            {{ state_label }}
+          </td>
+        </tr>
+        {% endif %}
+        {% if location_label %}
+        <tr>
+          <td width="110" style="padding: 12px 14px; font-size: 11px; letter-spacing: 0.10em; color: #6b7280; text-transform: uppercase; vertical-align: top;">
+            Location
+          </td>
+          <td style="padding: 12px 14px; font-size: 14px; color: #1a1a1a; line-height: 1.4;">
+            {{ location_label }}
+          </td>
+        </tr>
+        {% endif %}
+      </table>
+    </td>
+  </tr>
+  {% endif %}
+
   <!-- Headline stats -->
   <tr>
-    <td style="padding: 24px 0 8px 0;">
+    <td style="padding: 18px 0 8px 0;">
       <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background: #f5f6f8; border-radius: 12px;">
         <tr>
           <td width="50%" align="center" style="padding: 22px 12px; border-right: 1px solid #e5e7eb;">
@@ -66,12 +123,52 @@
     </td>
   </tr>
 
-  <!-- Sign-off -->
+  <!-- Sign-off + Ignite signature block -->
   <tr>
     <td style="padding-top: 26px;">
-      <p style="margin: 0; font-size: 13px; color: #555555;">
-        — The {{ sender_tenant_name|default:"Spark" }} team
+      <p style="margin: 0 0 18px 0; font-size: 13px; color: #555555;">
+        — The Ignite Productions Team
       </p>
+      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="border-top: 1px solid #eeeeee;">
+        <tr>
+          <td style="padding-top: 16px;">
+            <table role="presentation" cellspacing="0" cellpadding="0" border="0">
+              <tr>
+                <td style="vertical-align: middle; padding-right: 14px;">
+                  {% if EMAIL_LOGO_CID %}
+                    <img
+                      src="cid:{{ EMAIL_LOGO_CID }}"
+                      alt="Ignite Productions"
+                      width="96"
+                      style="display: block; height: auto; border: 0; outline: none; text-decoration: none;"
+                    />
+                  {% elif EMAIL_LOGO_URL %}
+                    <img
+                      src="{{ EMAIL_LOGO_URL }}"
+                      alt="Ignite Productions"
+                      width="96"
+                      style="display: block; height: auto; border: 0; outline: none; text-decoration: none;"
+                    />
+                  {% endif %}
+                </td>
+                <td style="vertical-align: middle; border-left: 2px solid #c5f546; padding-left: 14px;">
+                  <p style="margin: 0; font-size: 14px; font-weight: 700; color: #1a1a1a; letter-spacing: -0.01em;">
+                    Ignite Productions
+                  </p>
+                  <p style="margin: 2px 0 0 0; font-size: 12px; color: #6b7280; line-height: 1.45;">
+                    Veteran-owned field marketing &amp; experiential agency
+                  </p>
+                  <p style="margin: 6px 0 0 0; font-size: 12px; color: #6b7280; line-height: 1.45;">
+                    <a href="https://igniteproductions.co" style="color: #1a1a1a; text-decoration: none;">igniteproductions.co</a>
+                    &nbsp;·&nbsp;
+                    <a href="mailto:hello@igniteproductions.co" style="color: #1a1a1a; text-decoration: none;">hello@igniteproductions.co</a>
+                  </p>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+      </table>
     </td>
   </tr>
 </table>
