@@ -343,6 +343,34 @@ class AmbassadorMutations:
         except Exception:
             pass
 
+        # Push the "New shift offered" notification to the BA's device(s).
+        # Best-effort — never block the invite on push delivery. (The
+        # AmbassadorEvent post_save signal only does calendar sync; the
+        # shift-offer push was never actually wired, so invited BAs got no
+        # notification. This is that wire-up.) Delivers only if the BA has
+        # an active PushDevice (i.e. has signed into the app + allowed
+        # notifications); otherwise it's a no-op.
+        try:
+            from ambassadors.push import send_push_to_user
+
+            event_label = getattr(event, "name", None) or "a shift"
+            await send_push_to_user(
+                ambassador.user_id,
+                title="New shift offered",
+                body=f"You've been invited to {event_label}. Tap to accept or decline.",
+                data={
+                    "type": "shift_offer",
+                    "ambassadorEventUuid": str(ae.uuid),
+                    "eventUuid": str(event.uuid),
+                },
+            )
+        except Exception:
+            import logging
+
+            logging.getLogger(__name__).exception(
+                "shift-offer push failed for ambassador_event=%s", ae.uuid
+            )
+
         return InviteAmbassadorToShiftResponse(
             success=True,
             message="Invite sent. The BA has been notified.",
