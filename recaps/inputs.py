@@ -112,7 +112,12 @@ class CreateRecapInput(SparkGraphQLInput):
     location_id: strawberry.ID | None = None
     state_id: strawberry.ID | None = None
     ambassador_id: strawberry.ID | None = None
-    
+    # Free-text BA name for reconciliation when the actual worker isn't
+    # in Spark yet (sub-contractors, one-off helpers, not-yet-onboarded
+    # BAs). Set alongside ambassador_id=null to record an "external" BA.
+    # If both are sent, ambassador_id wins server-side.
+    external_ba_name: str | None = None
+
     consumer_engagements: ConsumerEngagementsInput | None = None
     product_samples: List[ProductSampleInput] | None = None
     sales_performance: List[SalesPerformanceInput] | None = None

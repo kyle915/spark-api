@@ -272,6 +272,7 @@ class Recap(Node):
     event: event_types.Event
     event_id: strawberry.ID
     ambassador: ambassador_types.Ambassador | None
+    external_ba_name: str | None
     job_id: strawberry.ID | None
     job: job_types.Job | None
     retailer_id: strawberry.ID | None
