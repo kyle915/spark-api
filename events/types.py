@@ -689,17 +689,37 @@ class Event(Node):
     @strawberry.field
     async def recaps(
         self,
+        info: strawberry.Info,
     ) -> List[Annotated["Recap", strawberry.lazy("recaps.types")]]:
         """All recaps filed against this event, newest first.
 
         Used by the front-end Field Reports panel on /request/view to
         surface what BAs reported in for the activation. Empty list
         is normal — recap is filed post-event.
+
+        Client-only users (tenant-side, no Ignite escalation) see only
+        approved recaps. Drafts / unapproved recaps would otherwise
+        leak through here even though /recap/list filters them — a
+        client viewing a Request page could read raw BA submissions
+        before they're approved.
         """
+        # Local import to avoid circular import at module load time
+        # (events.types ⇄ recaps.queries pull in each other).
+        from recaps.queries import _is_client_only_user
+
+        is_client_only = await _is_client_only_user(info)
+
         cached = getattr(self, "_prefetched_objects_cache", {}).get("recaps")
         if cached is not None:
-            return list(cached)
-        return await sync_to_async(list)(self.recaps.order_by("-created_at"))
+            recaps = list(cached)
+            if is_client_only:
+                recaps = [r for r in recaps if getattr(r, "approved", False)]
+            return recaps
+
+        qs = self.recaps.order_by("-created_at")
+        if is_client_only:
+            qs = qs.filter(approved=True)
+        return await sync_to_async(list)(qs)
 
     @strawberry.field
     async def assigned_ambassadors_count(self) -> int:
