@@ -1178,6 +1178,14 @@ class RequestQueries:
                 queryset = queryset.filter(store_number__icontains=filters.store_number)
             if filters.date:
                 queryset = queryset.filter(date__date=filters.date)
+            else:
+                # Inclusive event-date range — only applied when an exact
+                # `date` wasn't given. Powers the tracker's quick-filter
+                # chips (This week / Upcoming / Past).
+                if filters.start_date:
+                    queryset = queryset.filter(date__date__gte=filters.start_date)
+                if filters.end_date:
+                    queryset = queryset.filter(date__date__lte=filters.end_date)
             if filters.created_within_hours is not None:
                 if filters.created_within_hours <= 0:
                     raise GraphQLError(
@@ -1192,7 +1200,12 @@ class RequestQueries:
             if filters.reviewed is not None:
                 queryset = queryset.filter(reviewed=filters.reviewed)
 
-        queryset = queryset.order_by("-date").distinct()
+        # Event-date sort direction for the tracker's clickable Date
+        # column. Default stays "-date" (furthest-future first) so the
+        # landing view is unchanged; "asc" flips to soonest-first.
+        date_sort = (getattr(filters, "date_sort", None) or "desc").lower() if filters else "desc"
+        order_field = "date" if date_sort == "asc" else "-date"
+        queryset = queryset.order_by(order_field).distinct()
 
         return await service.get_connection(
             tenant_id=resolved_tenant_id,
