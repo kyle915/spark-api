@@ -939,9 +939,14 @@ class AmbassadorMobileMutations:
 # Attendance row keyed to the BA's ambassador_event uuid; admin sees
 # the timestamps + GPS in the shift replay panel.
 
+# Either ambassador_event_uuid (when the caller has the roster row, e.g. a
+# shift-offer push) OR event_uuid (the Shifts tab lists todayEvents, which
+# carry the Event uuid, not the AmbassadorEvent uuid) identifies the shift.
+# event_uuid is resolved to the caller's own AmbassadorEvent server-side.
 @strawberry.input
 class ArriveAtShiftInput:
-    ambassador_event_uuid: strawberry.ID
+    ambassador_event_uuid: strawberry.ID | None = None
+    event_uuid: strawberry.ID | None = None
     latitude: float | None = None
     longitude: float | None = None
     client_mutation_id: strawberry.ID | None = None
@@ -949,7 +954,8 @@ class ArriveAtShiftInput:
 
 @strawberry.input
 class ClockInToShiftInput:
-    ambassador_event_uuid: strawberry.ID
+    ambassador_event_uuid: strawberry.ID | None = None
+    event_uuid: strawberry.ID | None = None
     latitude: float | None = None
     longitude: float | None = None
     client_mutation_id: strawberry.ID | None = None
@@ -957,7 +963,8 @@ class ClockInToShiftInput:
 
 @strawberry.input
 class ClockOutOfShiftInput:
-    ambassador_event_uuid: strawberry.ID
+    ambassador_event_uuid: strawberry.ID | None = None
+    event_uuid: strawberry.ID | None = None
     latitude: float | None = None
     longitude: float | None = None
     client_mutation_id: strawberry.ID | None = None
@@ -981,6 +988,27 @@ def _resolve_amb_event_by_uuid(uuid: str):
         ).get(uuid=uuid)
     except AmbassadorEvent.DoesNotExist:
         return None
+
+
+def _resolve_amb_event_for_actor_by_event(event_uuid: str, actor):
+    """Find the calling BA's AmbassadorEvent for a given Event uuid.
+
+    Powers clock-in from the Shifts tab, which lists `todayEvents`
+    (Event uuids) rather than AmbassadorEvent uuids. Scoped to the
+    actor so a BA can only resolve their own roster row.
+    """
+    from ambassadors.models import AmbassadorEvent
+    actor_id = getattr(actor, "id", None)
+    if not actor_id:
+        return None
+    return (
+        AmbassadorEvent.objects.select_related(
+            "ambassador", "ambassador__user", "event"
+        )
+        .filter(event__uuid=event_uuid, ambassador__user_id=actor_id)
+        .order_by("-id")
+        .first()
+    )
 
 
 def _ensure_source(name: str):
@@ -1040,7 +1068,13 @@ async def _do_attendance(info, input, *, kind: str) -> "ShiftAttendanceResponse"
     actor = info.context.request.user
 
     def _go():
-        amb_event = _resolve_amb_event_by_uuid(str(input.ambassador_event_uuid))
+        amb_event = None
+        if getattr(input, "ambassador_event_uuid", None):
+            amb_event = _resolve_amb_event_by_uuid(str(input.ambassador_event_uuid))
+        elif getattr(input, "event_uuid", None):
+            amb_event = _resolve_amb_event_for_actor_by_event(
+                str(input.event_uuid), actor
+            )
         if not amb_event:
             return None, "Shift not found."
         # Authz — BA can only clock themselves
