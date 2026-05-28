@@ -978,29 +978,21 @@ class AmbassadorReviewQueries:
         except (TypeError, ValueError, GraphQLError):
             raise GraphQLError("Invalid ambassador ID.")
 
-        @sync_to_async
-        def _role_slug() -> str:
-            # Authoritative by PK — request.user.role doesn't reliably hydrate
-            # in the async path, which mis-scoped spark-admins to no ratings.
-            pk = getattr(user, "pk", None)
-            if pk is None:
-                return ""
-            try:
-                from django.contrib.auth import get_user_model
+        # Effective role via the shared, email-aware resolver: any Ignite
+        # admin (staff / superuser / spark-admin / @igniteproductions.co) is
+        # treated as spark-admin so they see every rating; otherwise fall
+        # through to the real role (clients see only their own, below).
+        from utils.graphql.permissions import (
+            resolve_request_user_access,
+            _is_admin_access,
+        )
 
-                db_user = (
-                    get_user_model()
-                    .objects.select_related("role")
-                    .filter(pk=pk)
-                    .first()
-                )
-                return (
-                    getattr(getattr(db_user, "role", None), "slug", "") or ""
-                ).lower()
-            except Exception:
-                return ""
-
-        slug = await _role_slug()
+        _rs, _st, _su, _em = await resolve_request_user_access(user)
+        slug = (
+            "spark-admin"
+            if _is_admin_access(_rs, _st, _su, _em)
+            else ("client" if _rs == "client" else "")
+        )
 
         @sync_to_async
         def fetch():
