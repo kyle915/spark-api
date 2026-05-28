@@ -1,0 +1,64 @@
+name: Daily new-gig digest
+
+# Fires `/internal/cron/send-new-gig-digest` on Cloud Run once a day.
+# Sends each BA a push summarizing the gigs posted in the last 24h that
+# match their job preferences (see jobs/management/commands/
+# send_new_gig_digest.py + the AmbassadorJobPreference model).
+#
+# Secret-gated via `X-Cron-Secret` (same INTERNAL_CRON_SECRET shared by
+# the receiver env var on Cloud Run and the GitHub repo secret) — see
+# the daily-admin-digest workflow for the full setup notes.
+#
+# Schedule: 16:30 UTC = 09:30 PT (DST) / 08:30 PST — morning, an hour
+# after the admin digest, so BAs see new gigs when they pick up the phone.
+# 30-past avoids GHA's on-the-hour cron jitter.
+
+on:
+  schedule:
+    - cron: "30 16 * * *"
+  workflow_dispatch:
+    inputs:
+      hours:
+        description: "Look-back window in hours for newly posted jobs"
+        required: false
+        default: "24"
+      dry_run:
+        description: "Compute matches + log, but send no pushes"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+jobs:
+  fire-new-gig-digest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire new-gig digest cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/send-new-gig-digest
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          HOURS: ${{ github.event.inputs.hours || '24' }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            echo "Generate one with: openssl rand -hex 32"
+            echo "Then set it as INTERNAL_CRON_SECRET in both the repo secrets"
+            echo "and the Cloud Run service env (must match)."
+            exit 1
+          fi
+
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL?hours=$HOURS&dry_run=$DRY_RUN" \
+            -H "X-Cron-Secret: $CRON_SECRET")
+
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS — see body above."
+            exit 1
+          fi
