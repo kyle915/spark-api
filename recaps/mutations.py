@@ -4412,6 +4412,102 @@ class RecapMutations:
         )
 
     @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def parse_connecteam_recap_pdf(
+        self,
+        info: strawberry.Info,
+        input: inputs.ParseConnecteamRecapPdfInput,
+    ) -> types.ParseConnecteamRecapPdfResponse:
+        """Parse a Connecteam recap PDF and return its values mapped onto
+        the STANDARD recap form's fields — WITHOUT creating anything.
+
+        Powers the "Import from Connecteam PDF" pre-fill on the admin
+        recap-build form (SparkRecapCreate): the admin drops a PDF, we
+        scrape the numbers, the form fills in, and they review + edit
+        before submitting via createRecap. Read-only: no DB writes, no
+        event/template needed. (The CustomRecap import flow lives in
+        import_connecteam_recap_pdf.)
+        """
+        import base64
+
+        from recaps.connecteam import parse_pdf_bytes, map_legacy_fields
+
+        try:
+            pdf_bytes = base64.b64decode(input.pdf_base64, validate=True)
+        except Exception:
+            return build_mutation_response(
+                types.ParseConnecteamRecapPdfResponse,
+                success=False,
+                message="pdf_base64 is not valid base64.",
+                input_obj=input,
+            )
+
+        try:
+            parsed = await sync_to_async(parse_pdf_bytes)(pdf_bytes)
+        except Exception as e:
+            logging.getLogger(__name__).exception(
+                "connecteam-parse: PDF parse failed",
+            )
+            return build_mutation_response(
+                types.ParseConnecteamRecapPdfResponse,
+                success=False,
+                message=f"Couldn't read PDF: {e}",
+                input_obj=input,
+            )
+
+        if not parsed.raw_pairs:
+            total_text = "\n".join(parsed.page_texts)
+            preview = total_text[:200].replace("\n", " ⏎ ").strip()
+            return build_mutation_response(
+                types.ParseConnecteamRecapPdfResponse,
+                success=False,
+                message=(
+                    f"No labeled fields found in PDF "
+                    f"(pages={len(parsed.page_texts)}, "
+                    f"text={len(total_text)}c). The parser looks for "
+                    f"'Label::' or 'Label:' pairs. Extracted text "
+                    f"started with: {preview!r}"
+                ),
+                input_obj=input,
+            )
+
+        fields, matched = map_legacy_fields(parsed)
+        raw_pairs = [
+            types.ConnecteamRawPair(label=label, value=str(value))
+            for label, value in parsed.raw_pairs.items()
+        ]
+
+        return build_mutation_response(
+            types.ParseConnecteamRecapPdfResponse,
+            success=True,
+            message=(
+                f"Parsed PDF: {matched} field(s) recognized "
+                f"out of {len(parsed.raw_pairs)} found. Review the "
+                f"pre-filled values before submitting."
+            ),
+            input_obj=input,
+            matched_count=matched,
+            raw_pairs=raw_pairs,
+            total_consumer=fields.get("total_consumer"),
+            first_time=fields.get("first_time"),
+            brand_aware=fields.get("brand_aware"),
+            willing=fields.get("willing"),
+            not_willing=fields.get("not_willing"),
+            products_sold=fields.get("products_sold"),
+            total_cans_sold=fields.get("total_cans_sold"),
+            total_packs_sold=fields.get("total_packs_sold"),
+            account_spend=fields.get("account_spend"),
+            traffic_description=fields.get("traffic_description"),
+            competitive_presence=fields.get("competitive_presence"),
+            quotes=fields.get("quotes"),
+            feedback=fields.get("feedback"),
+            demographics=fields.get("demographics"),
+            positive_stories=fields.get("positive_stories"),
+            reasons_to_decline=fields.get("reasons_to_decline"),
+            do_differently=fields.get("do_differently"),
+            account_notes=fields.get("account_notes"),
+        )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
     async def create_custom_recap_mobile(
         self,
         info: strawberry.Info,
