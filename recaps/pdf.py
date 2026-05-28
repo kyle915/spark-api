@@ -229,6 +229,16 @@ def build_recap_pdf_html(recap, images: Iterable[dict[str, bytes]]) -> str:
         ambassador_user = recap.ambassador.user
     ambassador_name = format_user_name(ambassador_user)
     ambassador_email = format_user_email(ambassador_user)
+    # External-BA fallback: when the recap was attributed to a worker
+    # who isn't in Spark yet (sub-contractor, not-yet-onboarded BA),
+    # the linked Ambassador FK is null but recap.external_ba_name has
+    # the typed name. Surface that with an "(external)" tag so the PDF
+    # actually credits them instead of rendering "N/A". Email is left
+    # blank — external BAs don't have a Spark account by definition.
+    external_ba_name = (getattr(recap, "external_ba_name", None) or "").strip()
+    if ambassador_user is None and external_ba_name:
+        ambassador_name = f"{external_ba_name} (external)"
+        ambassador_email = ""
 
     engagements = _related_items(recap, "consumer_engagements")
     engagement = engagements[0] if engagements else None
