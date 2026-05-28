@@ -3204,6 +3204,8 @@ class RecapMutationService(SparkGraphQLMixin):
                         "event",
                         "event__tenant",
                         "event__event_type",
+                        "event__retailer",
+                        "event__state",
                         "job",
                         "retailer",
                         "ambassador",
@@ -3242,7 +3244,10 @@ class RecapMutationService(SparkGraphQLMixin):
                 custom_by_id = {
                     r.id: r
                     for r in models.CustomRecap.objects.select_related(
-                        "event", "event__tenant"
+                        "event",
+                        "event__tenant",
+                        "event__retailer",
+                        "event__state",
                     )
                     .prefetch_related(
                         Prefetch(
@@ -3365,6 +3370,126 @@ class RecapMutationService(SparkGraphQLMixin):
                 tenant_name or "Sampling Campaign"
             )
 
+            # ─── Event metadata block for the email body ─────────────────
+            # We surface the event name(s), date(s), state(s), and store
+            # name(s) above the KPI panel so the recipient sees campaign
+            # context without opening the PDF. All collapsing logic is
+            # defensive — events with no date/state/retailer just drop out
+            # of the label instead of rendering "None".
+            from datetime import datetime as _dt
+
+            def _fmt_date(dt):
+                if not dt:
+                    return None
+                try:
+                    return dt.strftime("%b %-d, %Y")
+                except Exception:
+                    return None
+
+            events_seen = []
+            event_names: list[str] = []
+            event_dates: list = []
+            state_codes: list[str] = []
+            retailer_names: list[str] = []
+            store_addresses: list[str] = []
+            for recap in recaps:
+                ev = getattr(recap, "event", None)
+                if ev is None or ev.id in {e.id for e in events_seen}:
+                    continue
+                events_seen.append(ev)
+                if ev.name:
+                    event_names.append(ev.name)
+                d = getattr(ev, "date", None) or getattr(ev, "start_time", None)
+                if d:
+                    event_dates.append(d)
+                st = getattr(ev, "state", None)
+                if st and getattr(st, "code", None):
+                    state_codes.append(st.code)
+                ret = getattr(ev, "retailer", None)
+                if ret and getattr(ret, "name", None):
+                    retailer_names.append(ret.name)
+                addr = (getattr(ev, "address", None) or "").strip()
+                if addr:
+                    store_addresses.append(addr)
+
+            event_count = len(events_seen)
+
+            # Event name: single name, or "<first> + N more"
+            if not event_names:
+                event_label = None
+            elif len(event_names) == 1:
+                event_label = event_names[0]
+            else:
+                event_label = (
+                    f"{event_names[0]} + {len(event_names) - 1} more"
+                )
+
+            # Date / date range: single date, identical dates, or range.
+            date_label = None
+            if event_dates:
+                days = sorted({d.date() for d in event_dates if d})
+                if len(days) == 1:
+                    date_label = days[0].strftime("%b %-d, %Y")
+                elif days:
+                    same_year = days[0].year == days[-1].year
+                    start_fmt = "%b %-d" if same_year else "%b %-d, %Y"
+                    date_label = (
+                        f"{days[0].strftime(start_fmt)} – "
+                        f"{days[-1].strftime('%b %-d, %Y')}"
+                    )
+
+            # State: unique codes, comma-joined; cap at 3.
+            unique_states = sorted(set(state_codes))
+            if not unique_states:
+                state_label = None
+            elif len(unique_states) <= 3:
+                state_label = ", ".join(unique_states)
+            else:
+                state_label = (
+                    f"{', '.join(unique_states[:3])} + "
+                    f"{len(unique_states) - 3} more"
+                )
+
+            # Location: single retailer name + address if both present;
+            # otherwise dedup retailer names or store count.
+            location_label = None
+            unique_retailers = []
+            seen_r = set()
+            for n in retailer_names:
+                if n.lower() not in seen_r:
+                    seen_r.add(n.lower())
+                    unique_retailers.append(n)
+            if len(events_seen) == 1:
+                # Single-event: combine retailer + address on one line.
+                bits: list[str] = []
+                if unique_retailers:
+                    bits.append(unique_retailers[0])
+                if store_addresses:
+                    bits.append(store_addresses[0])
+                if bits:
+                    location_label = " · ".join(bits)
+            elif unique_retailers:
+                if len(unique_retailers) == 1:
+                    location_label = (
+                        f"{unique_retailers[0]} ({event_count} stores)"
+                    )
+                elif len(unique_retailers) <= 3:
+                    location_label = ", ".join(unique_retailers)
+                else:
+                    location_label = (
+                        f"{', '.join(unique_retailers[:3])} + "
+                        f"{len(unique_retailers) - 3} more"
+                    )
+
+            event_meta = {
+                "event_count": event_count,
+                "event_label": event_label,
+                "date_label": date_label,
+                "state_label": state_label,
+                "location_label": location_label,
+                "client_name": tenant_name or None,
+            }
+
             pdf_bytes = build_campaign_report_pdf(
                 title=resolved_title,
                 subtitle=resolved_subtitle,
@@ -3378,6 +3503,7 @@ class RecapMutationService(SparkGraphQLMixin):
                 resolved_title,
                 resolved_subtitle,
                 tenant_name,
+                event_meta,
             )
 
         return await render_campaign_pdf()
@@ -4868,12 +4994,18 @@ class RecapMutations:
 
             # Build the PDF first — if there are no recaps or the
             # render fails we bail before composing the email.
-            pdf_bytes, recap_count, total_consumers, title, subtitle, tenant_name = (
-                await service.build_campaign_report_pdf_with_meta(
-                    recap_ids=input.recap_ids,
-                    title=input.title,
-                    subtitle=input.subtitle,
-                )
+            (
+                pdf_bytes,
+                recap_count,
+                total_consumers,
+                title,
+                subtitle,
+                tenant_name,
+                event_meta,
+            ) = await service.build_campaign_report_pdf_with_meta(
+                recap_ids=input.recap_ids,
+                title=input.title,
+                subtitle=input.subtitle,
             )
 
             from django.utils import timezone as django_timezone
@@ -4894,6 +5026,7 @@ class RecapMutations:
                 recap_count=recap_count,
                 total_consumers=total_consumers,
                 sender_tenant_name=tenant_name,
+                event_meta=event_meta,
                 pdf_bytes=pdf_bytes,
                 pdf_filename=pdf_filename,
             )

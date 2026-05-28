@@ -287,6 +287,7 @@ class CampaignReportMailer(Mailer):
         sender_tenant_name: str | None,
         pdf_bytes: bytes,
         pdf_filename: str,
+        event_meta: dict | None = None,
     ) -> None:
         # De-dup recipients case-insensitively + strip whitespace.
         # Single-address case works trivially; multi-recipient
@@ -309,6 +310,7 @@ class CampaignReportMailer(Mailer):
         self.recap_count = recap_count
         self.total_consumers = total_consumers
         self.sender_tenant_name = (sender_tenant_name or "").strip() or None
+        self.event_meta = event_meta or {}
         self.pdf_bytes = pdf_bytes
         self.pdf_filename = pdf_filename
 
@@ -333,6 +335,13 @@ class CampaignReportMailer(Mailer):
                 "recap_count": self.recap_count,
                 "total_consumers": self.total_consumers,
                 "sender_tenant_name": self.sender_tenant_name,
+                "client_name": self.event_meta.get("client_name")
+                or self.sender_tenant_name,
+                "event_count": self.event_meta.get("event_count") or 0,
+                "event_label": self.event_meta.get("event_label"),
+                "date_label": self.event_meta.get("date_label"),
+                "state_label": self.event_meta.get("state_label"),
+                "location_label": self.event_meta.get("location_label"),
             },
             attachments=[
                 {
