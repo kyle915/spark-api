@@ -602,27 +602,27 @@ class AmbassadorEventQueries:
                 raise GraphQLError("Invalid tenant id.")
 
         def _fetch() -> List[strawberry.ID]:
-            qs = a_models.AmbassadorEvent.objects.select_related(
-                "ambassador", "event"
-            ).filter(event__date=target_date)
+            # Only the ambassador FK id is needed, and it's a LOCAL column on
+            # AmbassadorEvent — read it directly with values_list. (The old
+            # code paired select_related("event") with .only("ambassador__id"),
+            # which defers `event` while traversing it → Django raises
+            # "cannot be both deferred and traversed using select_related".)
+            # event__date / event__tenant_id are WHERE-clause joins, no
+            # select_related required.
+            qs = a_models.AmbassadorEvent.objects.filter(event__date=target_date)
             if resolved_tenant_id is not None:
                 qs = qs.filter(event__tenant_id=resolved_tenant_id)
-            # We want the relay-encoded Ambassador.id (what the
-            # InviteBAModal's row.id holds), not the int pk.
             seen: set[str] = set()
             out: list[strawberry.ID] = []
-            for ae in qs.only("ambassador__id"):
-                if not ae.ambassador_id:
+            # The front-end's row.id comparison matches the int pk (as a
+            # string); return distinct ambassador ids in encounter order.
+            for amb_id in qs.values_list("ambassador_id", flat=True):
+                if not amb_id:
                     continue
-                key = str(ae.ambassador_id)
+                key = str(amb_id)
                 if key in seen:
                     continue
                 seen.add(key)
-                # The Ambassador type uses relay encoding via Strawberry
-                # — the int pk is what `resolve_id_to_int` round-trips
-                # against, so the front-end's row.id comparison just
-                # needs to match the int. Return as string so the
-                # GraphQL ID scalar accepts it cleanly.
                 out.append(strawberry.ID(key))
             return out
 
