@@ -1195,6 +1195,15 @@ class RecapMutationService(SparkGraphQLMixin):
                     recap.retailer = retailer
                 if self.input.ambassador_id is not None:
                     recap.ambassador = ambassador
+                # external_ba_name: only touch when explicitly provided
+                # (None means "leave it alone"; pass an empty string to
+                # clear). When a real ambassador is picked we also clear
+                # any prior external name so the two never disagree.
+                if self.input.external_ba_name is not None:
+                    val = self.input.external_ba_name.strip()
+                    recap.external_ba_name = val or None
+                if self.input.ambassador_id is not None and ambassador is not None:
+                    recap.external_ba_name = None
                 if self.input.location_id is not None:
                     recap.location = location
                 if self.input.state_id is not None:

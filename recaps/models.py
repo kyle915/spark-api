@@ -71,6 +71,16 @@ class Recap(models.Model):
         related_name="recaps",
     )
 
+    # Free-text BA name for reconciliation cases where the person who
+    # actually worked the shift isn't in Spark yet (sub-contractors,
+    # one-off helpers, BAs not yet onboarded). When `ambassador` is null
+    # and this is set, the UI surfaces the typed name with an
+    # "(external)" badge so credit / reconciliation is visible without
+    # polluting the Ambassador table with stub User accounts.
+    # Set together with ambassador=null; if both are set the FK wins on
+    # display (a real Spark BA takes precedence).
+    external_ba_name = models.CharField(max_length=255, null=True, blank=True)
+
     job = models.ForeignKey(
         Job,
         on_delete=models.RESTRICT,
