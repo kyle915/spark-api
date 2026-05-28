@@ -1,0 +1,68 @@
+name: Daily recap reminders
+
+# Fires `/internal/cron/send-recap-reminders` on Cloud Run once a day.
+# Re-nudges every BA who worked a shift in the last few days and still
+# hasn't filed its recap, escalating by how overdue it is (see
+# recaps/management/commands/send_recap_reminders.py).
+#
+# Secret-gated via `X-Cron-Secret` (shared INTERNAL_CRON_SECRET) — see
+# the daily-admin-digest workflow for the full setup notes.
+#
+# Schedule: 02:30 UTC = 18:30 PST / 19:30 PDT — evening, so same-day
+# afternoon shifts (which ended before the 2h grace window) get caught
+# the same night. 30-past avoids GHA on-the-hour cron jitter.
+
+on:
+  schedule:
+    - cron: "30 2 * * *"
+  workflow_dispatch:
+    inputs:
+      max_age_days:
+        description: "Stop nagging once a shift is older than this many days"
+        required: false
+        default: "7"
+      grace_hours:
+        description: "Don't nag until this many hours after shift end"
+        required: false
+        default: "2"
+      dry_run:
+        description: "Log who would be nudged, but send nothing"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+jobs:
+  fire-recap-reminders:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire recap reminders cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/send-recap-reminders
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          MAX_AGE_DAYS: ${{ github.event.inputs.max_age_days || '7' }}
+          GRACE_HOURS: ${{ github.event.inputs.grace_hours || '2' }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            echo "Generate one with: openssl rand -hex 32"
+            echo "Then set it as INTERNAL_CRON_SECRET in both the repo secrets"
+            echo "and the Cloud Run service env (must match)."
+            exit 1
+          fi
+
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL?max_age_days=$MAX_AGE_DAYS&grace_hours=$GRACE_HOURS&dry_run=$DRY_RUN" \
+            -H "X-Cron-Secret: $CRON_SECRET")
+
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS — see body above."
+            exit 1
+          fi
