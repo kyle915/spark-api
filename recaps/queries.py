@@ -8,6 +8,7 @@ from django.db.models import QuerySet, Model, Prefetch, Q
 
 from recaps import types
 from recaps import models
+from events import types as event_types
 from ambassadors import models as ambassador_models
 from recaps.inputs import (
     CustomRecapFiltersInput,
@@ -1901,6 +1902,90 @@ class RecapQueries:
             return rows
 
         return await sync_to_async(_fetch, thread_sensitive=True)()
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def recap_event_options(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID | None = None,
+        tenant_uuid: strawberry.ID | None = None,
+        q: str | None = None,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+    ) -> CountableConnection[event_types.Event]:
+        """Events selectable when FILING A RECAP — STRICTLY tenant-scoped.
+
+        This is the picker behind "NEW RECAP → Tell us how it went →
+        search events". Unlike the general `events` query (which is an
+        all-tenants admin surface and intentionally returns every
+        tenant's events for Ignite staff), this resolver is dedicated to
+        the recap-build form and MUST NEVER surface another client's
+        events: you can only file a recap against an event in the tenant
+        you're currently acting in.
+
+        The general `events` resolver leaks cross-tenant rows for
+        unrestricted roles (staff / superuser / spark-admin) whenever the
+        caller omits a tenant filter — the old picker relied on the
+        client always passing `filters.tenantId`, a frontend-only guard
+        (#343) that re-broke here. This resolver closes that hole on the
+        server: it resolves the active tenant and refuses to return
+        anything unless one is in scope, so no client mistake can ever
+        leak another brand's events into the recap picker.
+
+        Tenant resolution mirrors the other *Client resolvers:
+          - staff/spark-admin acting inside a tenant pass `tenantId`
+            (their currently-selected dashboard tenant) → scoped to it,
+            no membership check (same staff-bypass as PR #531);
+          - a client/tenant user resolves to their own membership tenant
+            even if they pass nothing;
+          - if NO tenant can be resolved we return an EMPTY page rather
+            than every tenant's events.
+        """
+        from events.queries import EventQueriesService
+
+        service = EventQueriesService()
+        resolved_tenant_id: int | None = None
+        try:
+            resolved_tenant_id = await service.resolve_tenant_id(
+                info,
+                tenant_id=tenant_id,
+                tenant_uuid=tenant_uuid,
+            )
+        except GraphQLError:
+            resolved_tenant_id = None
+
+        # Hard stop: a recap picker without a tenant in scope returns
+        # nothing. This is the line that makes cross-tenant leakage
+        # impossible regardless of what the client passes.
+        if not resolved_tenant_id:
+            empty = service.get_model().objects.none()
+            return await connection_from_queryset_async(
+                empty,
+                first=first,
+                after=after,
+                last=last,
+                before=before,
+                default_limit=30,
+                max_limit=100,
+            )
+
+        queryset = service.get_ordered_queryset(
+            tenant_id=resolved_tenant_id, q=q
+        ).order_by("-date").distinct()
+
+        return await service.get_connection(
+            tenant_id=resolved_tenant_id,
+            q=q,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+            queryset=queryset,
+            default_limit=30,
+            max_limit=100,
+        )
 
 
 @strawberry.type
