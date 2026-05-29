@@ -134,28 +134,56 @@ class ChatThread:
         return strawberry.ID(str(self.uuid))
 
     @strawberry.field
-    def ambassador_uuid(self) -> str:
-        return str(self.ambassador.uuid) if self.ambassador_id else ""
-
-    @strawberry.field
-    def ambassador_name(self) -> str:
-        amb = getattr(self, "ambassador", None)
-        u = getattr(amb, "user", None) if amb else None
-        if u is None:
+    async def ambassador_uuid(self) -> str:
+        if not getattr(self, "ambassador_id", None):
             return ""
-        full = " ".join(
-            x for x in [getattr(u, "first_name", "") or "", getattr(u, "last_name", "") or ""] if x
-        ).strip()
-        return full or (getattr(u, "email", "") or "")
+
+        @sync_to_async
+        def _get():
+            return str(self.ambassador.uuid)
+
+        return await _get()
 
     @strawberry.field
-    def job_uuid(self) -> Optional[str]:
-        return str(self.job.uuid) if getattr(self, "job_id", None) else None
+    async def ambassador_name(self) -> str:
+        if not getattr(self, "ambassador_id", None):
+            return ""
+
+        @sync_to_async
+        def _get():
+            amb = getattr(self, "ambassador", None)
+            u = getattr(amb, "user", None) if amb else None
+            if u is None:
+                return ""
+            full = " ".join(
+                x for x in [getattr(u, "first_name", "") or "", getattr(u, "last_name", "") or ""] if x
+            ).strip()
+            return full or (getattr(u, "email", "") or "")
+
+        return await _get()
 
     @strawberry.field
-    def job_name(self) -> Optional[str]:
-        j = getattr(self, "job", None)
-        return getattr(j, "name", None) if j else None
+    async def job_uuid(self) -> Optional[str]:
+        if not getattr(self, "job_id", None):
+            return None
+
+        @sync_to_async
+        def _get():
+            return str(self.job.uuid)
+
+        return await _get()
+
+    @strawberry.field
+    async def job_name(self) -> Optional[str]:
+        if not getattr(self, "job_id", None):
+            return None
+
+        @sync_to_async
+        def _get():
+            j = getattr(self, "job", None)
+            return getattr(j, "name", None) if j else None
+
+        return await _get()
 
     @strawberry.field
     async def unread_for_admin(self) -> int:
