@@ -13,7 +13,7 @@ from tenants import types as tenant_types
 from . import models
 from asgiref.sync import sync_to_async
 from utils.gcs import public_url, extract_blob_name_from_url
-from .heic_conversion import display_blob_name
+from .heic_conversion import display_blob_name, is_heic_blob
 
 
 @strawberry_django.type(models.RecapFile)
@@ -98,6 +98,13 @@ class RecapFile(Node):
         except Exception:
             blob = str(field_file)
         blob_name = extract_blob_name_from_url(blob)
+        # Hot-path guard: only HEIC needs the blob_exists() HEAD. Non-HEIC
+        # files (the vast majority) return synchronously with no thread hop,
+        # so the recaps list — which serializes thousands of file rows per
+        # request — doesn't fan out into thousands of GCS round-trips and
+        # time out ("Failed to fetch").
+        if not is_heic_blob(blob_name):
+            return public_url(blob_name)
         display_blob = await sync_to_async(display_blob_name)(blob_name)
         return public_url(display_blob)
 
@@ -825,6 +832,13 @@ class CustomRecapFile(Node):
         except Exception:
             blob = str(field_file)
         blob_name = extract_blob_name_from_url(blob)
+        # Hot-path guard: only HEIC needs the blob_exists() HEAD. Non-HEIC
+        # files (the vast majority) return synchronously with no thread hop,
+        # so the recaps list — which serializes thousands of file rows per
+        # request — doesn't fan out into thousands of GCS round-trips and
+        # time out ("Failed to fetch").
+        if not is_heic_blob(blob_name):
+            return public_url(blob_name)
         display_blob = await sync_to_async(display_blob_name)(blob_name)
         return public_url(display_blob)
 
