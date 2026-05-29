@@ -1001,6 +1001,36 @@ class ShiftAttendanceResponse:
     kind: str | None = None  # "arrived" | "clock_in" | "clock_out"
 
 
+@strawberry.input
+class RequestExtensionInput:
+    """BA asks for more activation time mid-shift. event_uuid (Shifts tab)
+    or ambassador_event_uuid (roster row) identifies the shift; the
+    server resolves it to the caller's own AmbassadorEvent."""
+    ambassador_event_uuid: strawberry.ID | None = None
+    event_uuid: strawberry.ID | None = None
+    minutes_requested: int = 0
+    reason: str | None = None
+    requested_at: str | None = None  # ISO 8601 from the device
+    client_mutation_id: strawberry.ID | None = None
+
+
+@strawberry.type
+class ShiftExtensionType:
+    id: strawberry.ID
+    event_id: str | None = None
+    minutes_requested: int = 0
+    status: str = "pending"
+    approved_minutes: int | None = None
+
+
+@strawberry.type
+class RequestExtensionResponse:
+    success: bool
+    message: str
+    extension: ShiftExtensionType | None = None
+    client_mutation_id: strawberry.ID | None = None
+
+
 def _resolve_amb_event_by_uuid(uuid: str):
     from ambassadors.models import AmbassadorEvent
     try:
@@ -1156,6 +1186,119 @@ class ShiftAttendanceMutations:
             notified_count=sent,
         )
 
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def request_extension(
+        self, info: strawberry.Info, input: RequestExtensionInput,
+    ) -> RequestExtensionResponse:
+        """BA requests more activation time mid-shift. Records the request,
+        pushes the assigned RMM + location admins (the dashboard flag), and
+        emails every Spark admin for approval."""
+        actor = info.context.request.user
+        minutes = int(input.minutes_requested or 0)
+        if minutes <= 0:
+            return RequestExtensionResponse(
+                success=False,
+                message="Pick how much more time you need.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        def _go():
+            from ambassadors.models import ShiftExtensionRequest
+            from django.utils import timezone as _tz
+            from django.utils.dateparse import parse_datetime
+
+            amb_event = None
+            if getattr(input, "ambassador_event_uuid", None):
+                amb_event = _resolve_amb_event_by_uuid(
+                    str(input.ambassador_event_uuid)
+                )
+            elif getattr(input, "event_uuid", None):
+                amb_event = _resolve_amb_event_for_actor_by_event(
+                    str(input.event_uuid), actor
+                )
+            if not amb_event:
+                return None, "Shift not found.", None
+            own_user_id = (
+                amb_event.ambassador.user_id if amb_event.ambassador else None
+            )
+            if own_user_id and getattr(actor, "id", None) != own_user_id:
+                return None, "Not your shift.", None
+
+            event = amb_event.event
+            ba = amb_event.ambassador
+            req_at = parse_datetime(input.requested_at) if input.requested_at else None
+            ext = ShiftExtensionRequest.objects.create(
+                event=event,
+                ambassador=ba,
+                minutes_requested=minutes,
+                reason=(input.reason or "")[:2000],
+                status=ShiftExtensionRequest.STATUS_PENDING,
+                requested_at=req_at or _tz.now(),
+                created_by=actor if getattr(actor, "id", None) else None,
+            )
+
+            ba_user = getattr(ba, "user", None)
+            ba_name = (
+                f"{getattr(ba_user, 'first_name', '') or ''} "
+                f"{getattr(ba_user, 'last_name', '') or ''}"
+            ).strip() or "A BA"
+            venue = getattr(event, "name", None) or "their shift"
+
+            # 1) Dashboard flag — push the assigned RMM + location admins.
+            title = "⏱ Extension requested"
+            body = f"{ba_name} is requesting +{minutes} min at {venue}."
+            if input.reason:
+                body += f" — “{input.reason[:120]}”"
+            for uid in _event_watcher_user_ids(event):
+                try:
+                    _send_push_to_user_sync(
+                        uid, title=title, body=body,
+                        data={
+                            "screen": "tracker",
+                            "eventUuid": str(getattr(event, "uuid", "")),
+                        },
+                    )
+                except Exception:
+                    logging.getLogger(__name__).exception(
+                        "extension push failed user=%s", uid,
+                    )
+
+            # 2) Email every Spark admin (best-effort — never blocks).
+            try:
+                _email_admins_extension_request(
+                    ba_name=ba_name,
+                    venue=venue,
+                    minutes=minutes,
+                    reason=input.reason or "",
+                    event_uuid=str(getattr(event, "uuid", "")),
+                )
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "extension admin email failed",
+                )
+
+            return ext, "Your team has been notified.", event
+
+        ext, msg, event = await sync_to_async(_go)()
+        if ext is None:
+            return RequestExtensionResponse(
+                success=False,
+                message=msg,
+                client_mutation_id=input.client_mutation_id,
+            )
+        return RequestExtensionResponse(
+            success=True,
+            message=msg,
+            extension=ShiftExtensionType(
+                id=str(ext.uuid),
+                event_id=str(getattr(event, "uuid", "")),
+                minutes_requested=ext.minutes_requested,
+                status=ext.status,
+                approved_minutes=ext.approved_minutes,
+            ),
+            client_mutation_id=input.client_mutation_id,
+        )
+
 
 def _event_watcher_user_ids(event) -> list[int]:
     """User ids to notify about a shift event: the request's assigned RMM
@@ -1191,6 +1334,52 @@ def _event_watcher_user_ids(event) -> list[int]:
                 ).values_list("user_id", flat=True)
             )
     return [i for i in ids if i]
+
+
+def _email_admins_extension_request(
+    *, ba_name: str, venue: str, minutes: int, reason: str, event_uuid: str,
+) -> None:
+    """Email every active Spark admin that a BA requested an extension.
+
+    Synchronous (send_now) so it fires in-request rather than depending on
+    an RQ worker. All interpolated values are HTML-escaped. Best-effort:
+    the caller wraps this in try/except so a mail failure never blocks the
+    extension request itself."""
+    from html import escape as _esc
+    from events.mutations import _get_spark_admin_emails
+    from utils.mailer import Envelope, Mailer
+
+    admins = _get_spark_admin_emails()
+    if not admins:
+        return
+    ba_e, venue_e = _esc(ba_name or "A BA"), _esc(venue or "their shift")
+    reason_html = (
+        f"<p style='margin:8px 0 0;color:#444'>“{_esc(reason[:500])}”</p>"
+        if reason
+        else ""
+    )
+    html = (
+        '<div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;'
+        'color:#111;line-height:1.5">'
+        f"<p style='margin:0 0 8px'><strong>{ba_e}</strong> is requesting a "
+        "shift extension.</p>"
+        f"<p style='margin:0'><strong>Venue:</strong> {venue_e}<br>"
+        f"<strong>Extra time requested:</strong> {int(minutes)} minutes</p>"
+        f"{reason_html}"
+        "<p style='margin:16px 0 0;color:#666;font-size:13px'>Review &amp; "
+        "approve in the Spark dashboard — the BA keeps working until you "
+        "decide.</p></div>"
+    )
+
+    class _ExtMailer(Mailer):
+        def envelope(self) -> "Envelope":
+            return Envelope(
+                subject=f"⏱ Extension requested — {ba_name} @ {venue}",
+                html=html,
+                to_emails=admins,
+            )
+
+    _ExtMailer().send_now()
 
 
 async def _do_attendance(info, input, *, kind: str) -> "ShiftAttendanceResponse":

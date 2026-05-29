@@ -1132,3 +1132,63 @@ class AmbassadorRating(models.Model):
 
     def __str__(self):
         return f"rating {self.score}★ ba={self.ambassador_id} ev={self.event_id}"
+
+
+class ShiftExtensionRequest(models.Model):
+    """A BA's in-shift request for more activation time.
+
+    Created from the mobile app mid-shift (`requestExtension`). On
+    create we push + email the assigned RMM and Spark admins so they can
+    approve/deny; the mobile app reads `status` / `approved_minutes`
+    back. Tenant is reached via `event.tenant` (no denormalized FK).
+    """
+
+    STATUS_PENDING = "pending"
+    STATUS_APPROVED = "approved"
+    STATUS_DENIED = "denied"
+
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+
+    event = models.ForeignKey(
+        Event,
+        on_delete=models.CASCADE,
+        null=True,
+        related_name="extension_requests",
+    )
+    ambassador = models.ForeignKey(
+        Ambassador,
+        on_delete=models.CASCADE,
+        null=True,
+        related_name="extension_requests",
+    )
+
+    minutes_requested = models.PositiveIntegerField(default=0)
+    reason = models.TextField(blank=True, default="")
+    status = models.CharField(max_length=16, default=STATUS_PENDING)
+    approved_minutes = models.PositiveIntegerField(null=True, blank=True)
+    # When the BA hit "send" on their device (may differ from created_at
+    # if the request was queued offline).
+    requested_at = models.DateTimeField(null=True, blank=True)
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="extension_requests_created_by",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["event", "status"]),
+            models.Index(fields=["status", "-created_at"]),
+        ]
+
+    def __str__(self):
+        return (
+            f"extension {self.minutes_requested}min "
+            f"ba={self.ambassador_id} ev={self.event_id} [{self.status}]"
+        )
