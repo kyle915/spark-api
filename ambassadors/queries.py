@@ -12,6 +12,7 @@ from ambassadors import models
 from ambassadors import inputs
 from jobs import models as job_models
 from utils.graphql.permissions import StrictIsAuthenticated, IsClientOrSparkAdmin
+from utils.gcs import public_url, extract_blob_name_from_url
 from events import models as event_models
 from events import types as event_types
 from utils.graphql.mixins import SparkGraphQLMixin, resolve_id_to_int
@@ -483,6 +484,109 @@ class AmbassadorEventQueries:
                     )
                 )
             return out
+
+        return await sync_to_async(_fetch, thread_sensitive=True)()
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def shift_context(
+        self,
+        info: strawberry.Info,
+        event_uuid: strawberry.ID,
+    ) -> types.ShiftContext | None:
+        """Brand / project / product context for a single shift, keyed by
+        the parent event's UUID — the same identifier the mobile app
+        already holds on the shift-detail screen (where it also fetches
+        jobBriefingForEvent).
+
+        Purely additive read-only display that complements the pre-shift
+        briefing (#191): everything comes from the event's parent Request
+        (Request.client / client_name, Request.notes, and
+        RequestProduct -> Product -> image). Admins keep editing brand +
+        products in the existing request flows; this only surfaces them.
+
+        Scoping mirrors jobBriefingForEvent: any authenticated BA can read
+        context for an event by UUID (BAs receive shift offers keyed by
+        event UUID and don't see internal IDs). We don't widen visibility
+        beyond what the existing event-by-uuid mobile reads already allow.
+
+        Returns a populated ShiftContext with null fields + an empty
+        products list when the event has no request attached, and None
+        only when the event UUID doesn't resolve at all.
+        """
+
+        def _fetch() -> "types.ShiftContext | None":
+            try:
+                event_uuid_str = str(event_uuid)
+            except Exception:
+                return None
+
+            event = (
+                event_models.Event.objects.select_related(
+                    "request",
+                    "request__client",
+                )
+                .filter(uuid=event_uuid_str)
+                .first()
+            )
+            if event is None:
+                return None
+
+            request = getattr(event, "request", None)
+            if request is None:
+                # Event with no parent Request — nothing to surface, but
+                # the card is still a valid (empty) context.
+                return types.ShiftContext(
+                    brand_name=None,
+                    products=[],
+                    project_notes=None,
+                )
+
+            # Brand: prefer the linked Client's name, fall back to the
+            # free-text client_name snapshot stored on the Request.
+            client = getattr(request, "client", None)
+            brand_name = (
+                getattr(client, "name", None)
+                or getattr(request, "client_name", None)
+                or None
+            )
+
+            project_notes = getattr(request, "notes", None) or None
+
+            products: List[types.ShiftProduct] = []
+            rp_qs = (
+                event_models.RequestProduct.objects.select_related("product")
+                .filter(request=request)
+                .order_by("id")
+            )
+            for rp in rp_qs:
+                product = getattr(rp, "product", None)
+                if product is None:
+                    continue
+                name = getattr(product, "name", None)
+                if not name:
+                    continue
+
+                image_url = None
+                # Match the web Product type's image resolution: pull the
+                # FieldFile's blob name and run it through public_url
+                # (non-signed; the bucket grants public object read).
+                field_file = getattr(product, "image", None)
+                if field_file:
+                    try:
+                        blob = field_file.name
+                    except Exception:
+                        blob = str(field_file)
+                    image_url = public_url(extract_blob_name_from_url(blob))
+
+                products.append(
+                    types.ShiftProduct(name=name, image_url=image_url)
+                )
+
+            return types.ShiftContext(
+                brand_name=brand_name,
+                products=products,
+                project_notes=project_notes,
+            )
 
         return await sync_to_async(_fetch, thread_sensitive=True)()
 
