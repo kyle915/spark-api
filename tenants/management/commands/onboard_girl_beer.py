@@ -19,6 +19,14 @@ recapping Girl Beer retail sampling activations:
      "Table setup pictures" and "Sampling pictures" added under Photos
      per Kyle's note.
 
+Field labels here mirror the real Connecteam "Retail Sampling Recap"
+export EXACTLY so recaps.connecteam.match_fields lands them on import
+(Brand Ambassador / Date / Store-Location are event-level and are NOT
+template fields). If you change a label, change it in the parser's
+expectations too — and run `repair_girl_beer_template` against any
+environment whose template was seeded from an older version of this
+list.
+
 Idempotent — re-running won't duplicate anything. Client user creation
 is deferred until Kyle has the contact email.
 
@@ -74,6 +82,13 @@ FT_IMAGE = "image"
 FT_LONGTEXT = "longtext"  # falls back to "text" if not registered yet
 
 # (Section label, [ (field name, field type, required) ])
+#
+# Labels MUST match the Connecteam "Retail Sampling Recap" export verbatim
+# so recaps.connecteam.match_fields hits them on import. The ~41 source
+# fields below expand to 45 CustomField rows (each age-bracket / (Total)
+# cell is its own field). This list is the single source of truth shared
+# by `onboard_girl_beer` (fresh provision) and `repair_girl_beer_template`
+# (bring an existing template up to spec). Keep them in sync.
 SECTIONS: list[tuple[str, list[tuple[str, str, bool]]]] = [
     (
         "Visit Details",
@@ -98,8 +113,18 @@ SECTIONS: list[tuple[str, list[tuple[str, str, bool]]]] = [
     (
         "Customer Interaction",
         [
-            ("Foot Traffic (people walking by per hour)", FT_NUMBER, False),
-            ("Number of Customers Engaged", FT_NUMBER, True),
+            # Exact PDF wording — the older "(people walking by per hour)"
+            # label drifted and missed on import.
+            (
+                "Foot Traffic (number of people walking by demo table per hour)",
+                FT_NUMBER,
+                False,
+            ),
+            (
+                "Number of Customers Engaged (talked to or sampled product)",
+                FT_NUMBER,
+                True,
+            ),
         ],
     ),
     (
@@ -108,9 +133,11 @@ SECTIONS: list[tuple[str, list[tuple[str, str, bool]]]] = [
             ("Men who bought (21-29)", FT_NUMBER, False),
             ("Men who bought (30-39)", FT_NUMBER, False),
             ("Men who bought (40+)", FT_NUMBER, False),
+            ("Men who bought (Total)", FT_NUMBER, False),
             ("Women who bought (21-29)", FT_NUMBER, False),
             ("Women who bought (30-39)", FT_NUMBER, False),
             ("Women who bought (40+)", FT_NUMBER, False),
+            ("Women who bought (Total)", FT_NUMBER, False),
         ],
     ),
     (
@@ -119,9 +146,17 @@ SECTIONS: list[tuple[str, list[tuple[str, str, bool]]]] = [
             ("Men who sampled (21-29)", FT_NUMBER, False),
             ("Men who sampled (30-39)", FT_NUMBER, False),
             ("Men who sampled (40+)", FT_NUMBER, False),
+            ("Men who sampled (Total)", FT_NUMBER, False),
             ("Women who sampled (21-29)", FT_NUMBER, False),
             ("Women who sampled (30-39)", FT_NUMBER, False),
             ("Women who sampled (40+)", FT_NUMBER, False),
+            ("Women who sampled (Total)", FT_NUMBER, False),
+            # Roll-up row across both genders — the whole group was
+            # missing from the original seed.
+            ("Total sampled (21-29)", FT_NUMBER, False),
+            ("Total sampled (30-39)", FT_NUMBER, False),
+            ("Total sampled (40+)", FT_NUMBER, False),
+            ("Total sampled (Total)", FT_NUMBER, False),
         ],
     ),
     (
@@ -146,8 +181,10 @@ SECTIONS: list[tuple[str, list[tuple[str, str, bool]]]] = [
             ("How was the setup?", FT_LONGTEXT, False),
             ("Did the demo influence the store to place a reorder?", FT_LONGTEXT, False),
             ("Anything that could make future demos better?", FT_LONGTEXT, False),
-            ("Account Spend Amount ($)", FT_NUMBER, False),
-            ("Product purchase receipt", FT_IMAGE, False),
+            # Label intentionally without "($)" — the parser drops it on
+            # normalize anyway, and the bare label reads cleaner.
+            ("Account Spend Amount", FT_NUMBER, False),
+            ("Product purchase receipt (image)", FT_IMAGE, False),
         ],
     ),
     (
@@ -155,7 +192,7 @@ SECTIONS: list[tuple[str, list[tuple[str, str, bool]]]] = [
         [
             # Per Kyle: add table setup + sampling photos.
             ("Table setup pictures", FT_IMAGE, True),
-            ("Sampling pictures", FT_IMAGE, True),
+            ("Sampling pictures (photos)", FT_IMAGE, True),
         ],
     ),
 ]
