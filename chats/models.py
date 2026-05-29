@@ -143,7 +143,11 @@ class ChatMessage(models.Model):
         related_name="messages",
     )
 
-    body = models.TextField()
+    # Body is optional when the message carries at least one attachment
+    # (an admin can send a photo or PDF with no caption). The "must have
+    # body OR attachment" rule is enforced in the service/resolver layer
+    # — it can't be a clean model-level check across the related table.
+    body = models.TextField(blank=True, default="")
 
     sender = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -167,9 +171,78 @@ class ChatMessage(models.Model):
         indexes = [
             # Powers per-thread paginated load (newest-first lists hop
             # back through this ordering with ORDER BY DESC LIMIT).
-            models.Index(fields=["thread", "created_at"]),
+            # Names pinned to the values migration 0003 created so adding
+            # ChatMessageAttachment doesn't churn these into renames.
+            models.Index(
+                fields=["thread", "created_at"],
+                name="chats_chatm_thread__af1c2c_idx",
+            ),
             # Powers unread-count badges:
             #   admin unread = sender_is_ambassador=True AND read_by_admin_at IS NULL
             #   BA unread    = sender_is_ambassador=False AND read_by_ambassador_at IS NULL
-            models.Index(fields=["thread", "sender_is_ambassador"]),
+            models.Index(
+                fields=["thread", "sender_is_ambassador"],
+                name="chats_chatm_thread__7b1f4d_idx",
+            ),
+        ]
+
+
+class ChatMessageAttachment(models.Model):
+    """A file (image or PDF) attached to a ChatMessage.
+
+    Bytes are stored in GCS via the SAME flow recap photos use: the
+    client gets a signed upload URL (`getUploadUrl`), PUTs the file
+    straight to the bucket, then hands the resulting blob path back to
+    `sendChatMessage` / `broadcastChatMessage`. We persist only the blob
+    name in `file` and expose a NON-signed public URL through
+    `utils.gcs.public_url` (the recap-photo serving path) — this avoids
+    the "you need a private key to sign credentials" failure that
+    `generate_signed_url()` hits on Cloud Run workload-identity SAs.
+
+    `kind` is a coarse render hint (image renders inline, pdf/file render
+    as a tappable chip). `content_type`, `original_filename`, and
+    `byte_size` are captured at send-time so the client can label /
+    size-cap the chip without re-reading the blob.
+    """
+
+    KIND_IMAGE = "image"
+    KIND_PDF = "pdf"
+    KIND_FILE = "file"
+    KIND_CHOICES = (
+        (KIND_IMAGE, "Image"),
+        (KIND_PDF, "PDF"),
+        (KIND_FILE, "Other file"),
+    )
+
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+
+    message = models.ForeignKey(
+        ChatMessage,
+        on_delete=models.CASCADE,
+        null=False,
+        related_name="attachments",
+    )
+
+    # GCS blob path (NOT a signed URL). Mirrors RecapFile.file — the
+    # public URL is derived on read via utils.gcs.public_url.
+    file = models.FileField(upload_to="chat_attachments/", max_length=1024)
+
+    kind = models.CharField(
+        max_length=16, choices=KIND_CHOICES, default=KIND_FILE
+    )
+    original_filename = models.CharField(max_length=512, null=True, blank=True)
+    content_type = models.CharField(max_length=255, null=True, blank=True)
+    byte_size = models.BigIntegerField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+
+    class Meta:
+        ordering = ("id",)
+        indexes = [
+            # Fetch a message's attachments in one keyed lookup when
+            # serializing the thread.
+            models.Index(
+                fields=["message"], name="chats_attach_message_idx"
+            ),
         ]

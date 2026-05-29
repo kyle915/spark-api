@@ -128,10 +128,16 @@ class ChatMutations:
     async def send_chat_message(
         self, info: strawberry.Info, input: inputs.SendChatMessageInput
     ) -> types.ChatMessage:
-        """Write a message into an existing thread."""
+        """Write a message into an existing thread.
+
+        Body is optional when at least one attachment is supplied (send a
+        photo/PDF with no caption); otherwise a non-empty body is
+        required.
+        """
         body = (input.body or "").strip()
-        if not body:
-            raise GraphQLError("Message body can't be empty.")
+        attachment_rows = services._normalize_attachment_inputs(input.attachments)
+        if not body and not attachment_rows:
+            raise GraphQLError("Message must have a body or an attachment.")
         if len(body) > 5000:
             raise GraphQLError("Message body too long (max 5000 chars).")
 
@@ -177,6 +183,7 @@ class ChatMutations:
             sender_id=user.pk,
             sender_is_ambassador=sender_is_ambassador,
             body=body,
+            attachment_rows=attachment_rows,
         )
         # Push delivery to the recipient — best-effort, doesn't roll
         # back. Lives in a separate module so we can ship the chat
@@ -187,12 +194,124 @@ class ChatMutations:
             await notify_chat_recipient(
                 thread_id=thread.id,
                 msg_uuid=str(msg.uuid),
-                body=body,
+                body=body or services._preview_for(body, attachment_rows),
                 sender_is_ambassador=sender_is_ambassador,
             )
         except Exception as e:  # pragma: no cover — never block the write
             logger.warning("chat push failed for thread %s: %s", thread.id, e)
         return msg
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def broadcast_chat_message(
+        self, info: strawberry.Info, input: inputs.BroadcastChatMessageInput
+    ) -> types.BroadcastChatMessageResult:
+        """Admin → many BAs. Send a single message (+ optional
+        attachments) to the 1:1 general thread of every targeted BA.
+
+        Targets are the UNION of explicit `ambassador_uuids` and the
+        members of each `group_uuids` AmbassadorGroup. EVERYTHING is
+        STRICTLY scoped to the active tenant: cross-tenant BAs/groups are
+        ignored, so a caller can't reach another brand's ambassadors no
+        matter what uuids they pass. The active tenant is resolved the
+        same way the recap pickers do (`EventQueriesService.
+        resolve_tenant_id`) — staff/spark-admins pass `tenantId`, a
+        client user resolves to their own membership.
+
+        Single-recipient send is just a broadcast of one. Idempotent
+        thread creation — re-broadcasting reuses existing threads.
+        """
+        user, amb, is_ba, is_admin, _ = await services.resolve_caller_context(info)
+        if user is None:
+            raise GraphQLError("Authentication required.")
+        # Broadcasting is an admin-only capability (admin → BA). BAs can
+        # only ever write to their own 1:1 thread via sendChatMessage.
+        if not is_admin:
+            raise GraphQLError("Only admins can broadcast messages.")
+
+        body = (input.body or "").strip()
+        attachment_rows = services._normalize_attachment_inputs(input.attachments)
+        if not body and not attachment_rows:
+            raise GraphQLError("Message must have a body or an attachment.")
+        if len(body) > 5000:
+            raise GraphQLError("Message body too long (max 5000 chars).")
+
+        if not (input.ambassador_uuids or input.group_uuids):
+            raise GraphQLError(
+                "Pick at least one ambassador or group to message."
+            )
+
+        # Resolve the active tenant exactly like recapEventOptions: a
+        # hard stop with no tenant in scope, so nothing can leak/fan out
+        # cross-tenant.
+        from events.queries import EventQueriesService
+
+        service = EventQueriesService()
+        try:
+            tenant_id = await service.resolve_tenant_id(
+                info,
+                tenant_id=input.tenant_id,
+                tenant_uuid=input.tenant_uuid,
+            )
+        except GraphQLError:
+            tenant_id = None
+        if not tenant_id:
+            return types.BroadcastChatMessageResult(
+                success=False,
+                message="No tenant in scope to broadcast under.",
+                recipient_count=0,
+                thread_uuids=[],
+            )
+
+        ambassador_ids = await services.resolve_broadcast_target_ambassador_ids(
+            tenant_id=tenant_id,
+            ambassador_uuids=input.ambassador_uuids,
+            group_uuids=input.group_uuids,
+        )
+        if not ambassador_ids:
+            return types.BroadcastChatMessageResult(
+                success=False,
+                message="No ambassadors in this tenant matched the selection.",
+                recipient_count=0,
+                thread_uuids=[],
+            )
+
+        sent = await services.fan_out_broadcast(
+            tenant_id=tenant_id,
+            ambassador_ids=ambassador_ids,
+            sender_id=user.pk,
+            body=body,
+            attachment_rows=attachment_rows,
+        )
+
+        # Best-effort push per delivered thread. Never blocks the result.
+        push_body = body or services._preview_for(body, attachment_rows)
+        try:
+            from chats.push import notify_chat_recipient
+
+            for _amb_id, thread_id in sent:
+                try:
+                    await notify_chat_recipient(
+                        thread_id=thread_id,
+                        msg_uuid="",
+                        body=push_body,
+                        sender_is_ambassador=False,
+                    )
+                except Exception as e:  # pragma: no cover
+                    logger.warning(
+                        "broadcast push failed thread=%s: %s", thread_id, e
+                    )
+        except Exception as e:  # pragma: no cover
+            logger.warning("broadcast push module unavailable: %s", e)
+
+        thread_uuids = await services.thread_uuids_for_ids(
+            [t for _a, t in sent]
+        )
+        return types.BroadcastChatMessageResult(
+            success=True,
+            message=f"Sent to {len(sent)} ambassador(s).",
+            recipient_count=len(sent),
+            thread_uuids=thread_uuids,
+        )
 
     @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
     async def mark_chat_thread_read(
