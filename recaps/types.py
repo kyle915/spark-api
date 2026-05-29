@@ -448,6 +448,7 @@ class CustomRecap(Node):
     event: event_types.Event
     ambassador_id: strawberry.ID | None
     ambassador: ambassador_types.Ambassador | None
+    external_ba_name: str | None
     job_id: strawberry.ID | None
     job: job_types.Job | None
     retailer_id: strawberry.ID | None

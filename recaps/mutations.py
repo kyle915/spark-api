@@ -1608,6 +1608,18 @@ class RecapMutationService(SparkGraphQLMixin):
                     custom_recap.approved = self.input.approved
                 if self.input.used_corpo_card is not None:
                     custom_recap.used_corpo_card = self.input.used_corpo_card
+                # Free-text "external" BA name (web input only; mobile
+                # always resolves a real Ambassador from auth.user).
+                # Persist when explicitly provided, but a resolved
+                # ambassador FK always wins — clear the write-in so a real
+                # Spark BA takes precedence on display. Mirrors the legacy
+                # Recap external_ba_name handling in update_recap.
+                external_ba_name = getattr(self.input, "external_ba_name", None)
+                if external_ba_name is not None:
+                    val = external_ba_name.strip()
+                    custom_recap.external_ba_name = val or None
+                if ambassador is not None:
+                    custom_recap.external_ba_name = None
                 custom_recap.save()
 
                 if self.input.custom_field_values is not None:
@@ -1897,6 +1909,17 @@ class RecapMutationService(SparkGraphQLMixin):
                     custom_recap.approved = self.input.approved
                 if self.input.used_corpo_card is not None:
                     custom_recap.used_corpo_card = self.input.used_corpo_card
+                # external_ba_name: only touch when explicitly provided.
+                # A resolved ambassador FK set in this same update wins —
+                # clear the write-in so a real Spark BA takes precedence.
+                external_ba_name = getattr(self.input, "external_ba_name", None)
+                if external_ba_name is not None:
+                    val = external_ba_name.strip()
+                    custom_recap.external_ba_name = val or None
+                if (
+                    input_ambassador_id is not None or is_mobile_input
+                ) and ambassador is not None:
+                    custom_recap.external_ba_name = None
 
                 custom_recap.save()
 
