@@ -35,5 +35,16 @@ if [ "${RUN_GIRL_BEER_REPAIR_ON_BOOT:-1}" = "1" ]; then
   echo ">>> entrypoint: Girl Beer template repair done"
 fi
 
+# Backfill JPG siblings for existing HEIC recap files so the recap views render a
+# real photo instead of the in-browser-converter fallback tile. New uploads convert
+# at upload time; this catches files that predate that. Idempotent (skips files that
+# already have a .jpg sibling) and run in the BACKGROUND so it never delays boot or
+# risks the startup health check — hypercorn starts immediately and files "light up"
+# as each sibling lands. Set RUN_HEIC_BACKFILL_ON_BOOT=0 to disable once confirmed.
+if [ "${RUN_HEIC_BACKFILL_ON_BOOT:-1}" = "1" ]; then
+  echo ">>> entrypoint: backfilling HEIC->JPG siblings in background (idempotent)"
+  ( uv run python manage.py backfill_heic_jpg_siblings --apply || true ) &
+fi
+
 echo ">>> entrypoint: starting hypercorn"
 exec uv run hypercorn config.asgi:application --bind "0.0.0.0:${PORT:-8000}"
