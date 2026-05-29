@@ -19,14 +19,23 @@ What it does — all idempotent and NON-DESTRUCTIVE:
     1. RENAME drifted labels in place (keeps the CustomField row, so its
        CustomFieldValues — historical recap answers — ride along; no data
        is dropped).
-    2. ADD any CustomField from the spec that's missing, in the right
+    2. RETYPE any existing field whose `custom_field_type` drifted from
+       the spec (e.g. "Product purchase receipt (image)" created as TEXT
+       but spec'd as IMAGE) — flip the FK to the spec type in place. The
+       field row and its CustomFieldValues are kept. Special case
+       TEXT→IMAGE: a value that holds a non-blob text string would render
+       as a broken <img>, so if a present value isn't a plausible GCS
+       blob path we CLEAR it (set empty); empty/blob values are left
+       alone.
+    3. ADD any CustomField from the spec that's missing, in the right
        section + with the right field type (creating the RecapSection
        and registering the field type if needed).
-    3. Keep the template's `layout.sections` JSON in sync so the BA
+    4. Keep the template's `layout.sections` JSON in sync so the BA
        renderer shows new sections in order.
 
     It NEVER deletes a CustomField, never deletes a RecapSection, never
-    touches a CustomFieldValue, and never renames a field onto a name that
+    deletes a CustomFieldValue (TEXT→IMAGE only blanks a stale non-blob
+    value, keeping the row), and never renames a field onto a name that
     already exists on the template (that would orphan data). Safe to
     re-run; a clean template produces zero changes.
 
@@ -50,6 +59,7 @@ from django.db import connection, transaction
 
 from recaps.models import (
     CustomField,
+    CustomFieldValue,
     CustomRecapFieldType,
     CustomRecapTemplate,
     RecapSection,
@@ -84,6 +94,47 @@ def _normalize(name: str) -> str:
     """
     cleaned = re.sub(r"[^a-z0-9\s]+", " ", name.lower())
     return re.sub(r"\s+", " ", cleaned).strip()
+
+
+# Image-ish extensions an IMAGE custom field's value (a GCS blob path or
+# public URL) would end in. CustomRecapFile.url stores the same shape.
+_IMAGE_EXT_RE = re.compile(r"\.(png|jpe?g|gif|webp|heic|heif)(\?|#|$)", re.IGNORECASE)
+
+
+def _is_plausible_blob_path(value: str) -> bool:
+    """True when `value` looks like a GCS blob path / URL that an IMAGE
+    field could actually render, so a TEXT→IMAGE retype should KEEP it.
+
+    An IMAGE field's value is the uploaded blob — either a relative path
+    the frontend prepends the bucket onto ("recaps/<uuid>/123-foo.jpg")
+    or a full "https://storage.googleapis.com/<bucket>/...jpg" URL. A
+    field that was mistakenly TEXT instead might instead hold junk like
+    "42", "yes", or "see attached" — which would render as a broken
+    <img> once the field is IMAGE — so we treat anything that isn't a
+    plausible blob/URL as clearable.
+
+    Heuristic (conservative — only KEEP when confident it's an image):
+      * a gs:// or https URL pointing at storage.googleapis.com, OR
+      * a path ending in a known image extension (optionally with a
+        query/fragment from a signed URL), OR
+      * a recaps/-prefixed path (our upload namespace).
+    Empty/whitespace is handled by the caller (nothing to clear).
+    """
+    v = (value or "").strip()
+    if not v:
+        return False
+    low = v.lower()
+    if low.startswith("gs://"):
+        return True
+    if "storage.googleapis.com/" in low:
+        return True
+    if _IMAGE_EXT_RE.search(v):
+        return True
+    # Our blob namespace — recaps/<uuid>/... or recaps/receipts/...
+    # (covers extension-less keys that still point at a real upload).
+    if low.startswith("recaps/") or low.startswith("/recaps/"):
+        return True
+    return False
 
 
 # Known label drifts: {spec_label: [old_labels_to_rename_from, ...]}.
@@ -208,7 +259,13 @@ class Command(BaseCommand):
             else:
                 field_types = self._ensure_field_types(owner)
 
-            totals = {"renamed": 0, "added": 0, "sections_added": 0}
+            totals = {
+                "renamed": 0,
+                "retyped": 0,
+                "cleared_values": 0,
+                "added": 0,
+                "sections_added": 0,
+            }
             for template in templates:
                 self.stdout.write(self.style.HTTP_INFO(
                     f"\n  Template id={template.id} '{template.name}'"
@@ -231,15 +288,21 @@ class Command(BaseCommand):
 
         verb = "Would apply" if dry_run else "Applied"
         self.stdout.write(self.style.SUCCESS(
-            f"\n{verb}: {totals['renamed']} rename(s), {totals['added']} "
-            f"field(s) added, {totals['sections_added']} section(s) added "
-            f"across {len(templates)} template(s)."
+            f"\n{verb}: {totals['renamed']} rename(s), {totals['retyped']} "
+            f"retype(s) ({totals['cleared_values']} stale value(s) cleared), "
+            f"{totals['added']} field(s) added, {totals['sections_added']} "
+            f"section(s) added across {len(templates)} template(s)."
         ))
-        if not dry_run and (totals["renamed"] or totals["added"]):
+        if not dry_run and (
+            totals["renamed"]
+            or totals["retyped"]
+            or totals["added"]
+        ):
             logger.info(
-                "repair_girl_beer_template: tenant=%s renamed=%s added=%s "
-                "sections_added=%s",
-                tenant.slug, totals["renamed"], totals["added"],
+                "repair_girl_beer_template: tenant=%s renamed=%s retyped=%s "
+                "cleared_values=%s added=%s sections_added=%s",
+                tenant.slug, totals["renamed"], totals["retyped"],
+                totals["cleared_values"], totals["added"],
                 totals["sections_added"],
             )
 
@@ -329,7 +392,79 @@ class Command(BaseCommand):
                 totals["renamed"] += 1
                 break  # one old-label match per spec label is enough
 
-        # 2) Adds — every spec field missing from the template, in the
+        # 2) Retypes — for every spec field that EXISTS on the template
+        #    (post-rename) but whose custom_field_type drifted from the
+        #    spec, flip the FK to the spec type IN PLACE. This is the fix
+        #    for "Product purchase receipt (image)" living as FT_TEXT: the
+        #    onboard spec says FT_IMAGE, so the live field gets corrected
+        #    to IMAGE on the next deploy/repair. The CustomField row and
+        #    its CustomFieldValues are kept.
+        #
+        #    Special case TEXT→IMAGE: a value that's a non-blob text
+        #    string ("42", "yes") would render as a broken <img> once the
+        #    field is IMAGE, so we CLEAR such values (set ""). A value
+        #    that already looks like a GCS blob path / URL is a real image
+        #    and is left intact; empty values are left intact too.
+        #    We never delete the CustomFieldValue row.
+        spec_type_by_norm: dict[str, str] = {}
+        for _section_name, fields in SECTIONS:
+            for field_name, type_name, _required in fields:
+                spec_type_by_norm.setdefault(_normalize(field_name), type_name)
+
+        for norm, row in list(by_norm.items()):
+            spec_type_name = spec_type_by_norm.get(norm)
+            if spec_type_name is None:
+                # Field isn't in the spec (a tenant-added extra) — never
+                # touch its type.
+                continue
+            current_type_name = (
+                row.custom_field_type.name if row.custom_field_type_id else None
+            )
+            if current_type_name == spec_type_name:
+                continue  # already correct
+
+            # Report against the authoritative spec name (not a possibly
+            # fallback-resolved type) so dry-run output is always honest.
+            self.stdout.write(
+                f"    ~ retype '{row.name}' [{current_type_name}]"
+                f" -> [{spec_type_name}]"
+            )
+
+            # TEXT→IMAGE stale-value handling: blank any present value
+            # that isn't a plausible image blob so nothing renders broken.
+            # Driven off the spec type so it's correct even on dry-run.
+            if spec_type_name == FT_IMAGE:
+                for cfv in CustomFieldValue.objects.filter(custom_field=row):
+                    if not (cfv.value or "").strip():
+                        continue  # already blank — nothing to render
+                    if _is_plausible_blob_path(cfv.value):
+                        continue  # real image blob/URL — keep it
+                    self.stdout.write(
+                        f"      · clear stale non-blob value "
+                        f"(recap={cfv.custom_recap_id}): "
+                        f"{cfv.value[:40]!r}"
+                    )
+                    if not dry_run:
+                        cfv.value = ""
+                        cfv.updated_by = owner
+                        cfv.save(update_fields=["value", "updated_by"])
+                    totals["cleared_values"] += 1
+
+            if not dry_run:
+                target_ft = self._resolve_field_type(
+                    field_types, spec_type_name, owner, dry_run
+                )
+                # _resolve_field_type only returns None on dry-run; in a
+                # real run it creates the type if missing. Guard anyway.
+                if target_ft is not None:
+                    row.custom_field_type = target_ft
+                    row.updated_by = owner
+                    row.save(
+                        update_fields=["custom_field_type", "updated_by"]
+                    )
+            totals["retyped"] += 1
+
+        # 3) Adds — every spec field missing from the template, in the
         #    right section. Section is created if absent. Because there's
         #    no explicit order column, new fields append after existing
         #    ones; the template `layout.sections` carries section order.

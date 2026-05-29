@@ -47,6 +47,8 @@ class TestRepairGirlBeerTemplate(AmbassadorsGraphQLTestCase):
                 name=ft_name, defaults={"created_by": self.system_user}
             )
         self.number_ft = recap_models.CustomRecapFieldType.objects.get(name="number")
+        self.text_ft = recap_models.CustomRecapFieldType.objects.get(name="text")
+        self.image_ft = recap_models.CustomRecapFieldType.objects.get(name="image")
 
         self.template = recap_models.CustomRecapTemplate.objects.create(
             name="Girl Beer · Retail Sampling Recap",
@@ -92,6 +94,40 @@ class TestRepairGirlBeerTemplate(AmbassadorsGraphQLTestCase):
         self.value = recap_models.CustomFieldValue.objects.create(
             custom_recap=self.recap, custom_field=self.drifted_field,
             value="42", created_by=self.system_user,
+        )
+
+        # A field that exists with the spec LABEL already but the WRONG
+        # type: "Product purchase receipt (image)" created as TEXT. This
+        # is the exact prod drift — repair must RETYPE it to IMAGE
+        # in place (keeping the row + its values). It lives in the
+        # "Staff & Demo Experience" section per the spec.
+        self.staff_section = recap_models.RecapSection.objects.create(
+            tenant=self.tenant, name="Staff & Demo Experience",
+            created_by=self.system_user,
+        )
+        self.receipt_field = recap_models.CustomField.objects.create(
+            custom_recap_template=self.template,
+            recap_section=self.staff_section,
+            name="Product purchase receipt (image)",
+            custom_field_type=self.text_ft,  # WRONG — spec is image
+            created_by=self.system_user,
+        )
+        # A stale non-blob value that would render as a broken <img>
+        # once the field is IMAGE — repair must CLEAR it (keep the row).
+        self.stale_receipt_value = recap_models.CustomFieldValue.objects.create(
+            custom_recap=self.recap, custom_field=self.receipt_field,
+            value="see attached receipt", created_by=self.system_user,
+        )
+        # A second recap whose receipt value IS a plausible blob path —
+        # repair must LEAVE it intact.
+        self.recap2 = recap_models.CustomRecap.objects.create(
+            name="historical-2", event=self.event, tenant=self.tenant,
+            custom_recap_template=self.template, created_by=self.system_user,
+        )
+        self.blob_receipt_value = recap_models.CustomFieldValue.objects.create(
+            custom_recap=self.recap2, custom_field=self.receipt_field,
+            value="recaps/receipts/abc-123/1700000000-receipt.jpg",
+            created_by=self.system_user,
         )
 
     def _run(self) -> str:
@@ -164,7 +200,7 @@ class TestRepairGirlBeerTemplate(AmbassadorsGraphQLTestCase):
             custom_recap_template=self.template
         ).count()
         assert count_after_second == count_after_first
-        assert "0 rename(s), 0 field(s) added" in log2, log2
+        assert "0 rename(s)" in log2 and "0 field(s) added" in log2, log2
 
     def test_ensures_longtext_field_type_and_layout_sections(self):
         self._run()
@@ -177,3 +213,103 @@ class TestRepairGirlBeerTemplate(AmbassadorsGraphQLTestCase):
         assert spec_sections.issubset(
             set(self.template.layout.get("sections", []))
         )
+
+    # ─── Retype (TEXT → IMAGE) coverage ──────────────────────────────
+
+    def test_retypes_text_field_to_image_in_place(self):
+        """The mis-typed "Product purchase receipt (image)" field (TEXT)
+        is flipped to IMAGE on the SAME row — not deleted/re-added."""
+        before_id = self.receipt_field.id
+        log = self._run()
+
+        self.receipt_field.refresh_from_db()
+        assert self.receipt_field.id == before_id, "row must be reused"
+        assert self.receipt_field.custom_field_type.name == "image", log
+        assert "retype" in log
+
+        # Still exactly one receipt field on the template (no duplicate).
+        assert (
+            recap_models.CustomField.objects.filter(
+                custom_recap_template=self.template,
+                name="Product purchase receipt (image)",
+            ).count()
+            == 1
+        )
+
+    def test_retype_clears_stale_non_blob_value_keeps_row(self):
+        """A TEXT→IMAGE retype blanks a non-blob value (so nothing
+        renders as a broken image) WITHOUT deleting the value row."""
+        before_value_id = self.stale_receipt_value.id
+        self._run()
+
+        self.stale_receipt_value.refresh_from_db()
+        # Row preserved, value blanked.
+        assert self.stale_receipt_value.id == before_value_id
+        assert self.stale_receipt_value.value == ""
+        # The row still points at the same field/recap.
+        assert self.stale_receipt_value.custom_field_id == self.receipt_field.id
+
+    def test_retype_keeps_plausible_blob_value(self):
+        """A value that already looks like a GCS blob path is a real
+        image and must survive the TEXT→IMAGE retype untouched."""
+        self._run()
+        self.blob_receipt_value.refresh_from_db()
+        assert (
+            self.blob_receipt_value.value
+            == "recaps/receipts/abc-123/1700000000-receipt.jpg"
+        )
+
+    def test_retype_is_idempotent(self):
+        """Second run leaves the (now IMAGE) field alone — 0 retypes."""
+        self._run()
+        self.receipt_field.refresh_from_db()
+        assert self.receipt_field.custom_field_type.name == "image"
+
+        log2 = self._run()
+        # No further retypes / clears on a clean template.
+        assert "0 retype(s) (0 stale value(s) cleared)" in log2, log2
+        self.receipt_field.refresh_from_db()
+        assert self.receipt_field.custom_field_type.name == "image"
+
+    def test_retype_never_drops_the_field_or_its_values(self):
+        """Whole-row + value survival guarantee across the retype."""
+        field_ids_before = set(
+            recap_models.CustomField.objects.filter(
+                custom_recap_template=self.template
+            ).values_list("id", flat=True)
+        )
+        value_ids_before = set(
+            recap_models.CustomFieldValue.objects.filter(
+                custom_field=self.receipt_field
+            ).values_list("id", flat=True)
+        )
+        self._run()
+        field_ids_after = set(
+            recap_models.CustomField.objects.filter(
+                custom_recap_template=self.template
+            ).values_list("id", flat=True)
+        )
+        value_ids_after = set(
+            recap_models.CustomFieldValue.objects.filter(
+                custom_field=self.receipt_field
+            ).values_list("id", flat=True)
+        )
+        # Every field id survived (retype keeps the row).
+        assert field_ids_before.issubset(field_ids_after)
+        # Both receipt value rows survived (one blanked, one kept).
+        assert value_ids_before == value_ids_after
+
+    def test_dry_run_reports_retype_without_writing(self):
+        """--dry-run reports the retype but doesn't touch the DB."""
+        out = StringIO()
+        call_command(
+            "repair_girl_beer_template", "--owner-email", self.owner.email,
+            "--dry-run", stdout=out,
+        )
+        log = out.getvalue()
+        assert "retype" in log
+        # Nothing written: field still TEXT, stale value still present.
+        self.receipt_field.refresh_from_db()
+        assert self.receipt_field.custom_field_type.name == "text"
+        self.stale_receipt_value.refresh_from_db()
+        assert self.stale_receipt_value.value == "see attached receipt"
