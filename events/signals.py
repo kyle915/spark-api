@@ -19,6 +19,7 @@ import logging
 
 from django.db.models.signals import post_save
 from django.dispatch import receiver
+from django.utils import timezone as django_timezone
 
 from events.models import Event, Request
 from ambassadors.models import AmbassadorEvent
@@ -175,23 +176,44 @@ def push_on_ambassador_event_change(
 
 
 # ----------------------------------------------------------------------
-# Auto-create Pending Job on Request approval
+# Auto-post jobs to the BA board on Request approval
 # ----------------------------------------------------------------------
 #
-# When admin flips a request to "approved", we want every Event under
-# that request to land in the admin Jobs page Pending queue. The Job
-# lifecycle (Pending → Posted → Filled) ships separately; this hook
-# just bridges the request approval to the job creation.
+# When admin flips a request to "approved", we want every open-gig Event
+# under that request to land LIVE on the BA job board (my_available_jobs),
+# which only surfaces jobs with lifecycle_status == 'posted'. Previously
+# the auto-created Job sat in 'pending' and never reached the board, so an
+# admin had to manually re-post each one. Kyle asked for auto-post.
+#
+# Open gig vs. pre-assigned: a request whose scheduling_status is
+# "already_scheduled" is already booked with the store — there's no open
+# slot to staff, so we leave that Job 'pending' (admin can still post it
+# by hand). Anything else (needs_scheduling, or unknown/legacy null) is
+# treated as an open gig and posted to the board.
+#
+# Posting mirrors the post_job / post_event_to_board mutations exactly:
+# lifecycle_status='posted', posted_at=now(), public=True. We keep
+# favorites_only=True (the model's default posted state — gated to the
+# tenant's favorites until an admin clicks "Open to all"). The daily
+# new-gig digest (send_new_gig_digest) picks these up via posted_at; it's
+# a batched once-a-day cron, not a per-save push, so posting here does not
+# double-notify.
 #
 # Idempotent: skips events that already have a Job. Best-effort: a
 # Job creation failure logs and continues — the approval itself
 # already shipped, we don't want to roll it back.
 def create_pending_jobs_for_request(request: Request) -> int:
-    """Create a Pending Job for every Event under an approved request.
+    """Auto-create + post a Job for every open-gig Event under an
+    approved request.
 
-    Idempotent (skips events that already have a Job) and best-effort
-    (per-event failures are logged, never raised). Returns the count of
-    jobs created.
+    Returns the count of jobs created. Idempotent (skips events that
+    already have a Job) and best-effort (per-event failures are logged,
+    never raised).
+
+    Open-gig Events are created directly in the 'posted' lifecycle state
+    so they appear on the BA job board immediately. Requests already
+    booked with the store (scheduling_status == "already_scheduled")
+    skip auto-post and keep their Job 'pending' for manual handling.
 
     Why this is a standalone function and not only the post_save signal:
     the Request post_save fires BEFORE the resolver materializes the
@@ -208,11 +230,22 @@ def create_pending_jobs_for_request(request: Request) -> int:
         if slug != "approved":
             return 0
 
-        # STATUS_PENDING lives on the Job model as a class attribute
-        # (Job.STATUS_PENDING = "pending"), NOT a module-level export —
-        # importing it directly raised ImportError, which (being caught
-        # below) is a big reason the auto-job never actually created
-        # anything. Reference it via the class instead.
+        # Open gig vs. pre-assigned. "already_scheduled" means the demo is
+        # already booked with the store — no open slot to staff, so don't
+        # auto-post it to the board. Everything else (needs_scheduling, or
+        # a legacy/unknown null) is an open gig we want on the board.
+        from events.models import SchedulingStatus
+
+        is_open_gig = (
+            getattr(request, "scheduling_status", None)
+            != SchedulingStatus.ALREADY_SCHEDULED
+        )
+
+        # STATUS_PENDING / STATUS_POSTED live on the Job model as class
+        # attributes (Job.STATUS_POSTED = "posted"), NOT module-level
+        # exports — importing them directly raised ImportError, which
+        # (being caught below) is a big reason the auto-job never actually
+        # created anything. Reference them via the class instead.
         from jobs.models import Job, JobTitle, Rate
 
         # Reverse accessor for Event.request is `event_set` (the FK has no
@@ -249,6 +282,21 @@ def create_pending_jobs_for_request(request: Request) -> int:
             )
             return 0
 
+        # Open gigs go straight to 'posted' so they appear on the BA job
+        # board (my_available_jobs gates on lifecycle_status == 'posted').
+        # Pre-assigned (already_scheduled) requests stay 'pending'. When
+        # posting, mirror post_job / post_event_to_board: set posted_at and
+        # public=True. favorites_only stays True (default posted state —
+        # gated to favorites until an admin "Open to all"s it).
+        if is_open_gig:
+            lifecycle_status = Job.STATUS_POSTED
+            posted_at = django_timezone.now()
+            public = True
+        else:
+            lifecycle_status = Job.STATUS_PENDING
+            posted_at = None
+            public = False
+
         for ev in events:
             try:
                 if Job.objects.filter(event_id=ev.id).exists():
@@ -262,9 +310,10 @@ def create_pending_jobs_for_request(request: Request) -> int:
                     end_date=ev.end_time,
                     job_title=default_title,
                     rate=default_rate,
-                    lifecycle_status=Job.STATUS_PENDING,
+                    lifecycle_status=lifecycle_status,
+                    posted_at=posted_at,
                     favorites_only=True,
-                    public=False,
+                    public=public,
                     closed=False,
                     national=False,
                     ongoing=False,

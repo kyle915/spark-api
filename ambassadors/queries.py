@@ -48,6 +48,55 @@ def _resolve_filter_id_list(values: list[strawberry.ID], label: str) -> list[int
         raise GraphQLError(f"Invalid {label} ID.") from exc
 
 
+def _shift_time_labels(event) -> tuple[str | None, str | None, str | None]:
+    """Pre-format (date_label, start_label, end_label) for a shift in the
+    EVENT's timezone so the mobile client displays them verbatim.
+
+    The mobile app was rendering raw datetimes against the DEVICE clock,
+    so a NY 10:30 PM shift showed as 5:30 AM on a CA phone. We format
+    here against the venue's tz instead.
+
+    Uses utils.tz.apply_dst_aware_offset — the same DST-aware helper the
+    email / recap formatters use (it resolves event.timezone to a real
+    IANA zone via ZoneInfo, falling back to the TimeZone.offset field, and
+    finally to a 0-minute shift i.e. server/UTC wall-clock when the event
+    has no resolvable timezone). Never raises; returns None for any label
+    whose source datetime is missing.
+
+    Label formats (strftime, with the leading-zero stripped so we get
+    "10:15 PM" not "10:15 PM" with a padded hour, and "May 28" not
+    "May 08"):
+        date_label  → "Tue, May 28"
+        start_label → "10:15 PM"
+        end_label   → "10:30 PM"
+    """
+    from utils.tz import apply_dst_aware_offset
+
+    tz_row = getattr(event, "timezone", None)
+    start = getattr(event, "start_time", None)
+    end = getattr(event, "end_time", None)
+
+    def _fmt(value, fmt: str) -> str | None:
+        local = apply_dst_aware_offset(value, tz_row)
+        if local is None:
+            return None
+        # %-d / %-I are POSIX (Linux/macOS, our deploy target) — strip the
+        # leading zero. Guard with a replace fallback just in case.
+        try:
+            return local.strftime(fmt)
+        except ValueError:
+            return local.strftime(fmt.replace("%-", "%")).lstrip("0")
+
+    # date_label is derived from the venue-local start_time so it agrees
+    # with start_label across a midnight/DST boundary; fall back to the
+    # event's end_time if start is missing.
+    date_source = start or end
+    date_label = _fmt(date_source, "%a, %b %-d")
+    start_label = _fmt(start, "%-I:%M %p")
+    end_label = _fmt(end, "%-I:%M %p")
+    return date_label, start_label, end_label
+
+
 @strawberry.input
 class AmbassadorEventsFiltersInput:
     """Filters for ambassador-scoped events."""
@@ -289,6 +338,7 @@ class AmbassadorEventQueries:
                     "event",
                     "event__retailer",
                     "event__state",
+                    "event__timezone",
                 )
                 .filter(
                     ambassador=ambassador,
@@ -312,6 +362,7 @@ class AmbassadorEventQueries:
                 coords = getattr(ev, "coordinates", None) or []
                 lat = float(coords[0]) if len(coords) >= 1 else None
                 lng = float(coords[1]) if len(coords) >= 2 else None
+                date_label, start_label, end_label = _shift_time_labels(ev)
                 out.append(
                     a_types.ShiftOfferDetails(
                         ambassador_event_uuid=strawberry.ID(str(ae.uuid)),
@@ -334,6 +385,9 @@ class AmbassadorEventQueries:
                         is_approved=True,
                         latitude=lat,
                         longitude=lng,
+                        date_label=date_label,
+                        start_label=start_label,
+                        end_label=end_label,
                     )
                 )
             return out
@@ -380,6 +434,7 @@ class AmbassadorEventQueries:
                     "event",
                     "event__retailer",
                     "event__state",
+                    "event__timezone",
                 )
                 .filter(
                     Q(event__start_time__date=today) | Q(event__date=today),
@@ -399,6 +454,7 @@ class AmbassadorEventQueries:
                 coords = getattr(ev, "coordinates", None) or []
                 lat = float(coords[0]) if len(coords) >= 1 else None
                 lng = float(coords[1]) if len(coords) >= 2 else None
+                date_label, start_label, end_label = _shift_time_labels(ev)
                 out.append(
                     a_types.ShiftOfferDetails(
                         ambassador_event_uuid=strawberry.ID(str(ae.uuid)),
@@ -421,6 +477,9 @@ class AmbassadorEventQueries:
                         is_approved=True,
                         latitude=lat,
                         longitude=lng,
+                        date_label=date_label,
+                        start_label=start_label,
+                        end_label=end_label,
                     )
                 )
             return out

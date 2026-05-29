@@ -690,6 +690,22 @@ class ShiftOfferDetails:
     # them — only my_upcoming_shifts populates them today.
     latitude: float | None = None
     longitude: float | None = None
+    # Pre-formatted, human-readable date/time labels in the EVENT's
+    # timezone (the venue's local time), so the mobile client renders
+    # them verbatim instead of converting the raw datetimes against the
+    # device clock — which showed a NY 10:30 PM shift as 5:30 AM on a CA
+    # phone. Formatting is DST-aware via utils.tz.apply_dst_aware_offset
+    # (same helper the email/recap formatters use); falls back to
+    # server/local time when the event has no resolvable timezone.
+    # Emitted as camelCase: dateLabel / startLabel / endLabel. Examples:
+    #   date_label  → "Tue, May 28"
+    #   start_label → "10:15 PM"
+    #   end_label   → "10:30 PM"
+    # Defaulted so existing callsites (shift_offer, my_pending_offers)
+    # that don't populate them keep working unchanged.
+    date_label: str | None = None
+    start_label: str | None = None
+    end_label: str | None = None
 
 
 @strawberry.type
