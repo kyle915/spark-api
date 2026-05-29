@@ -113,6 +113,26 @@ def _is_image_url(url: str | None) -> bool:
     return bool(url and _IMAGE_URL_RE.search(url))
 
 
+def _prefetched(instance, attr_name: str):
+    """Return the prefetched related objects for ``attr_name`` as a list
+    when they were prefetched on ``instance``, else None.
+
+    Reading ``_prefetched_objects_cache`` is pure in-memory (no DB I/O), so
+    a resolver can use it synchronously inside the async request loop with
+    no ``sync_to_async`` thread hop and without tripping Django's async
+    guard. The recaps LIST serializes up to ~2000 rows; per-row thread hops
+    (custom aggregates) or, worse, per-row ORM queries (legacy hero_file /
+    recap_files_count went through ``RecapFile.objects.filter(recap=self)``,
+    bypassing the prefetch → an N+1) cost 45-71s per page load. The list
+    resolvers already prefetch these relations, so the cache is populated;
+    the sync_to_async path below is only the non-prefetched fallback (e.g.
+    a single-object fetch that didn't prefetch)."""
+    cache = getattr(instance, "_prefetched_objects_cache", None)
+    if cache and attr_name in cache:
+        return list(cache[attr_name])
+    return None
+
+
 @strawberry_django.type(models.RecapFile)
 class RecapFile(Node):
     uuid: str
@@ -484,9 +504,12 @@ class Recap(Node):
 
     @strawberry.field
     async def recap_files_count(self) -> int:
-        """Count of files linked to this recap. Cheap COUNT(*) instead
-        of returning the full array — the recap list card only needs
-        the number for the "◉ N FILES" chip, not the per-file metadata."""
+        """Count of files linked to this recap. On the list these are
+        prefetched, so read the cache (no query); the per-row COUNT is
+        only the non-prefetched fallback (was an N+1 before)."""
+        cached = _prefetched(self, "recap_files")
+        if cached is not None:
+            return len(cached)
         return await sync_to_async(
             lambda: models.RecapFile.objects.filter(recap=self).count(),
             thread_sensitive=True,
@@ -511,10 +534,9 @@ class Recap(Node):
         HEIC_EXTS = (".heic", ".heif")
         SKIP_EXTS = (".pdf", ".mp4", ".mov", ".webm", ".doc", ".docx", ".xlsx")
 
-        def _pick():
-            qs = models.RecapFile.objects.filter(recap=self).order_by("id")
+        def _pick(files):
             heic_fallback = None
-            for f in qs:
+            for f in files:
                 path = (getattr(f, "file", None) or "")
                 if not path:
                     continue
@@ -531,7 +553,17 @@ class Recap(Node):
                     heic_fallback = f
             return heic_fallback
 
-        return await sync_to_async(_pick, thread_sensitive=True)()
+        # List path: files are prefetched — pick in-memory (no per-row query).
+        cached = _prefetched(self, "recap_files")
+        if cached is not None:
+            return _pick(sorted(cached, key=lambda f: f.id))
+        qs = await sync_to_async(
+            lambda: list(
+                models.RecapFile.objects.filter(recap=self).order_by("id")
+            ),
+            thread_sensitive=True,
+        )()
+        return _pick(qs)
 
     @strawberry.field(deprecation_reason="Use ambassador instead.")
     def ambassadors(self) -> List[ambassador_types.Ambassador]:
@@ -659,14 +691,20 @@ class CustomRecap(Node):
         parseInt). None when the template has no such field (so non-unit
         templates render "—", not a misleading 0)."""
 
-        def _compute():
+        def _compute(values):
             pairs = [
                 (getattr(v.custom_field, "name", None), v.value)
-                for v in self.custom_field_value.all()
+                for v in values
             ]
             return _sold_units_from_fields(pairs)
 
-        return await sync_to_async(_compute, thread_sensitive=True)()
+        cached = _prefetched(self, "custom_field_value")
+        if cached is not None:
+            return _compute(cached)
+        return await sync_to_async(
+            lambda: _compute(self.custom_field_value.all()),
+            thread_sensitive=True,
+        )()
 
     @strawberry.field
     async def consumers_sampled(self) -> int | None:
@@ -675,14 +713,20 @@ class CustomRecap(Node):
         Replicates the frontend's customConsumersSampled: first field NAME
         matching /consumers?\\s+sampled/i, value parsed the same way."""
 
-        def _compute():
+        def _compute(values):
             pairs = [
                 (getattr(v.custom_field, "name", None), v.value)
-                for v in self.custom_field_value.all()
+                for v in values
             ]
             return _consumers_sampled_from_fields(pairs)
 
-        return await sync_to_async(_compute, thread_sensitive=True)()
+        cached = _prefetched(self, "custom_field_value")
+        if cached is not None:
+            return _compute(cached)
+        return await sync_to_async(
+            lambda: _compute(self.custom_field_value.all()),
+            thread_sensitive=True,
+        )()
 
     @strawberry.field
     async def hero_image_url(self) -> str | None:
@@ -697,8 +741,8 @@ class CustomRecap(Node):
         the HEIC sibling check avoids any GCS round-trip. None when no
         image file exists."""
 
-        def _compute():
-            for f in self.custom_recap_files.all():
+        def _compute(files):
+            for f in files:
                 field_file = f.__dict__.get("url")
                 if not field_file:
                     continue
@@ -711,7 +755,13 @@ class CustomRecap(Node):
                     return url
             return None
 
-        return await sync_to_async(_compute, thread_sensitive=True)()
+        cached = _prefetched(self, "custom_recap_files")
+        if cached is not None:
+            return _compute(cached)
+        return await sync_to_async(
+            lambda: _compute(self.custom_recap_files.all()),
+            thread_sensitive=True,
+        )()
 
     @strawberry.field
     async def custom_recap_files_count(self) -> int:
@@ -720,10 +770,13 @@ class CustomRecap(Node):
         Read from the prefetched `custom_recap_files` so the list card's
         "N files" chip needs neither the file array nor a per-row COUNT."""
 
-        def _compute():
-            return len(self.custom_recap_files.all())
-
-        return await sync_to_async(_compute, thread_sensitive=True)()
+        cached = _prefetched(self, "custom_recap_files")
+        if cached is not None:
+            return len(cached)
+        return await sync_to_async(
+            lambda: self.custom_recap_files.count(),
+            thread_sensitive=True,
+        )()
 
     # ---- Linked-event location (for the recap "Information" panel) ----
     #
