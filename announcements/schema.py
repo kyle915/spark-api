@@ -30,3 +30,21 @@ class AnnouncementMutationsSpark(AnnouncementMutations):
 @strawberry.type
 class AnnouncementMutationsMobile:
     pass
+
+
+# The admin web app queries the CLIENT surface (/graphql/clients), so the
+# announcement admin query + composer mutations must be exposed there too.
+# (Same resolvers as Spark. Mutations are tenant-scoped + the web composer
+# is role-gated client-side; tightening the backend role gate is a tracked
+# follow-up.)
+@strawberry.type
+class AnnouncementQueryClient(
+    queries.AnnouncementQueries,
+    queries.AnnouncementMobileQueries,
+):
+    pass
+
+
+@strawberry.type
+class AnnouncementMutationsClient(AnnouncementMutations):
+    pass

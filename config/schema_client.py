@@ -10,6 +10,8 @@ from tenants.dashboard.mutations import DashboardMutations
 from jobs.schema import ClientJobMutations, ClientJobQueries
 from academy.schema import AcademyQueryClient, AcademyMutationsClient
 from wingspan.schema import WingspanQueryClient
+from chats.schema import ChatQueryClient, ChatMutationsClient
+from announcements.schema import AnnouncementQueryClient, AnnouncementMutationsClient
 from utils.utils import BlockIntrospectionForAnonymous
 from utils.graphql.gcs_schema import GCSQuery
 
@@ -26,6 +28,8 @@ QueryClients = merge_types(
         GCSQuery,
         AcademyQueryClient,
         WingspanQueryClient,
+        ChatQueryClient,
+        AnnouncementQueryClient,
     ),
 )
 MutationClients = merge_types(
@@ -38,6 +42,8 @@ MutationClients = merge_types(
         AmbassadorMutationsClient,
         DashboardMutations,
         AcademyMutationsClient,
+        ChatMutationsClient,
+        AnnouncementMutationsClient,
     ),
 )
 
