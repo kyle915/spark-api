@@ -489,6 +489,193 @@ class CustomRecap(Node):
             fields.append(custom_field)
         return fields
 
+    # ---- Linked-event location (for the recap "Information" panel) ----
+    #
+    # The recap card surfaces only the event NAME, and the recap's own
+    # retailer/location/state FKs are usually null on custom recaps (they
+    # live on the linked Event and its Request instead) — so a client
+    # opening the recap sees "Retailer -" with no address/city/state and
+    # can't tell where the event actually happened. These resolvers walk
+    # the recap → event → (retailer / location / state / request) chain
+    # and expose a flat, client-readable location block.
+    #
+    # Each resolver is `async def` with an inner `@sync_to_async` helper
+    # that touches the lazy FK chain: Strawberry runs resolvers in the
+    # request's async loop, and on a freshly-fetched recap these FKs are
+    # NOT select_related'd, so a bare `self.event.retailer` access raises
+    # SynchronousOnlyOperation. This mirrors the FK-access pattern already
+    # used by ChatThread.ambassador_name / job_name in chats/types.py and
+    # the file resolvers above. All paths are null-safe — a recap with no
+    # linked event (or an event with no retailer/location/state/request)
+    # returns None rather than raising.
+
+    @strawberry.field
+    async def event_date(self) -> str | None:
+        """Date of the linked event (the day the activation happened)."""
+        if not getattr(self, "event_id", None):
+            return None
+
+        @sync_to_async
+        def _get():
+            ev = getattr(self, "event", None)
+            d = getattr(ev, "date", None) if ev else None
+            return d.isoformat() if d else None
+
+        return await _get()
+
+    @strawberry.field
+    async def event_address(self) -> str | None:
+        """Street address where the event happened.
+
+        Preference: the event's own address (most specific to the
+        activation) → the linked retailer's address → the parent
+        request's retailer address → the request's address.
+        """
+        if not getattr(self, "event_id", None):
+            return None
+
+        @sync_to_async
+        def _get():
+            ev = getattr(self, "event", None)
+            if ev is None:
+                return None
+            addr = (getattr(ev, "address", None) or "").strip()
+            if addr:
+                return addr
+            retailer = getattr(ev, "retailer", None)
+            r_addr = (getattr(retailer, "address", None) or "").strip() if retailer else ""
+            if r_addr:
+                return r_addr
+            req = getattr(ev, "request", None)
+            if req is not None:
+                req_retailer_addr = (getattr(req, "retailer_address", None) or "").strip()
+                if req_retailer_addr:
+                    return req_retailer_addr
+                req_addr = (getattr(req, "address", None) or "").strip()
+                if req_addr:
+                    return req_addr
+            return None
+
+        return await _get()
+
+    @strawberry.field
+    async def event_venue(self) -> str | None:
+        """Venue / store name for the event — the physical place a client
+        would look for. Pulls the linked retailer's name, falling back to
+        the request's retailer name."""
+        if not getattr(self, "event_id", None):
+            return None
+
+        @sync_to_async
+        def _get():
+            ev = getattr(self, "event", None)
+            if ev is None:
+                return None
+            retailer = getattr(ev, "retailer", None)
+            name = (getattr(retailer, "name", None) or "").strip() if retailer else ""
+            if name:
+                return name
+            req = getattr(ev, "request", None)
+            req_name = (getattr(req, "retailer_name", None) or "").strip() if req else ""
+            return req_name or None
+
+        return await _get()
+
+    @strawberry.field
+    async def event_retailer(self) -> str | None:
+        """Retailer name for the linked event.
+
+        Walks the event chain (event.retailer → request.retailer →
+        request.retailer_name) so the panel shows a real retailer even
+        when the recap's own `retailer` FK is null — which it usually is
+        on custom recaps, producing the "Retailer -" the client sees.
+        """
+        if not getattr(self, "event_id", None):
+            return None
+
+        @sync_to_async
+        def _get():
+            ev = getattr(self, "event", None)
+            if ev is None:
+                return None
+            retailer = getattr(ev, "retailer", None)
+            name = (getattr(retailer, "name", None) or "").strip() if retailer else ""
+            if name:
+                return name
+            req = getattr(ev, "request", None)
+            if req is not None:
+                req_retailer = getattr(req, "retailer", None)
+                req_retailer_name = (
+                    (getattr(req_retailer, "name", None) or "").strip()
+                    if req_retailer
+                    else ""
+                )
+                if req_retailer_name:
+                    return req_retailer_name
+                req_name = (getattr(req, "retailer_name", None) or "").strip()
+                if req_name:
+                    return req_name
+            return None
+
+        return await _get()
+
+    @strawberry.field
+    async def event_city(self) -> str | None:
+        """City of the event — the linked Location's name (falling back to
+        the retailer's location)."""
+        if not getattr(self, "event_id", None):
+            return None
+
+        @sync_to_async
+        def _get():
+            ev = getattr(self, "event", None)
+            if ev is None:
+                return None
+            loc = getattr(ev, "location", None)
+            name = (getattr(loc, "name", None) or "").strip() if loc else ""
+            if name:
+                return name
+            retailer = getattr(ev, "retailer", None)
+            r_loc = getattr(retailer, "location", None) if retailer else None
+            r_loc_name = (getattr(r_loc, "name", None) or "").strip() if r_loc else ""
+            return r_loc_name or None
+
+        return await _get()
+
+    @strawberry.field
+    async def event_state(self) -> str | None:
+        """State of the event. Prefers the event's State FK, falling back
+        to the event location's state, then the retailer location's
+        state."""
+        if not getattr(self, "event_id", None):
+            return None
+
+        @sync_to_async
+        def _get():
+            ev = getattr(self, "event", None)
+            if ev is None:
+                return None
+            st = getattr(ev, "state", None)
+            name = (getattr(st, "name", None) or "").strip() if st else ""
+            if name:
+                return name
+            loc = getattr(ev, "location", None)
+            loc_state = getattr(loc, "state", None) if loc else None
+            loc_state_name = (
+                (getattr(loc_state, "name", None) or "").strip() if loc_state else ""
+            )
+            if loc_state_name:
+                return loc_state_name
+            retailer = getattr(ev, "retailer", None)
+            r_loc = getattr(retailer, "location", None) if retailer else None
+            r_state = getattr(r_loc, "state", None) if r_loc else None
+            r_state_name = (
+                (getattr(r_state, "name", None) or "").strip() if r_state else ""
+            )
+            return r_state_name or None
+
+        return await _get()
+
 
 @strawberry_django.type(models.CustomFieldValue)
 class CustomFieldValue(Node):
