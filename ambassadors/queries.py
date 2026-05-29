@@ -341,6 +341,93 @@ class AmbassadorEventQueries:
         return await sync_to_async(_fetch, thread_sensitive=True)()
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def my_active_shifts(
+        self,
+        info: strawberry.Info,
+    ) -> List[types.ShiftOfferDetails]:
+        """The current BA's accepted (is_approved=True) AmbassadorEvent rows
+        scheduled for TODAY — powers the "Active" section on the mobile
+        Shifts tab.
+
+        This replaces the old tenant-wide `todayEvents` for that section:
+        because every row here is one of the caller's OWN AmbassadorEvents,
+        clock-in / extend / heads-up can resolve the shift reliably via
+        `ambassadorEventUuid` (the previous `todayEvents` showed every
+        tenant event, so acting on one the BA wasn't rostered on returned
+        "Shift not found"). Unlike my_upcoming_shifts (future-dated), this
+        includes shifts whose start time has already passed today so an
+        in-progress shift can still be clocked in. BA-scoped via
+        Ambassador→user; empty for non-ambassador users.
+        """
+        from django.utils import timezone
+        from django.db.models import Q
+
+        user = info.context.request.user
+        if not getattr(user, "is_authenticated", False):
+            return []
+
+        from ambassadors import models as a_models
+        from ambassadors import types as a_types
+
+        def _fetch() -> List:
+            try:
+                ambassador = a_models.Ambassador.objects.get(user=user)
+            except a_models.Ambassador.DoesNotExist:
+                return []
+            today = timezone.localdate()
+            qs = (
+                a_models.AmbassadorEvent.objects.select_related(
+                    "event",
+                    "event__retailer",
+                    "event__state",
+                )
+                .filter(
+                    Q(event__start_time__date=today) | Q(event__date=today),
+                    ambassador=ambassador,
+                    is_approved=True,
+                )
+                .order_by("event__start_time")
+            )
+            out: List = []
+            for ae in qs:
+                ev = ae.event
+                venue = (
+                    getattr(ev, "name", None)
+                    or getattr(getattr(ev, "retailer", None), "name", None)
+                )
+                state_code = getattr(getattr(ev, "state", None), "code", None)
+                coords = getattr(ev, "coordinates", None) or []
+                lat = float(coords[0]) if len(coords) >= 1 else None
+                lng = float(coords[1]) if len(coords) >= 2 else None
+                out.append(
+                    a_types.ShiftOfferDetails(
+                        ambassador_event_uuid=strawberry.ID(str(ae.uuid)),
+                        event_uuid=strawberry.ID(str(ev.uuid)),
+                        event_name=venue or "(shift)",
+                        venue=venue,
+                        address=getattr(ev, "address", None),
+                        date=ev.date.isoformat() if getattr(ev, "date", None) else None,
+                        start_time=(
+                            ev.start_time.isoformat()
+                            if getattr(ev, "start_time", None)
+                            else None
+                        ),
+                        end_time=(
+                            ev.end_time.isoformat()
+                            if getattr(ev, "end_time", None)
+                            else None
+                        ),
+                        state_code=state_code,
+                        is_approved=True,
+                        latitude=lat,
+                        longitude=lng,
+                    )
+                )
+            return out
+
+        return await sync_to_async(_fetch, thread_sensitive=True)()
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def shift_offer(
         self,
         info: strawberry.Info,
