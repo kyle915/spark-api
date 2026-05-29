@@ -166,6 +166,21 @@ class RemoveRecapFileInput(SparkGraphQLInput):
 
 
 @strawberry.input
+class DeleteCustomRecapFileInput(SparkGraphQLInput):
+    """Remove a single file from a CustomRecap's Evidences gallery.
+
+    Custom-template counterpart to RemoveRecapFileInput. Lets an admin
+    delete a misfiled image/PDF (e.g. a receipt that landed under "Table
+    setup") from the recap. Hard-deletes the CustomRecapFile row but
+    leaves the GCS blob in place (audit / recoverability). Tenant-scoped
+    + admin-only, gated server-side. Returns the parent custom recap so
+    the client can re-render the gallery from the refreshed file list.
+    """
+
+    id: strawberry.ID  # the CustomRecapFile id
+
+
+@strawberry.input
 class AddRecapFileInput(SparkGraphQLInput):
     """Attach a single already-uploaded blob to an existing recap.
 
