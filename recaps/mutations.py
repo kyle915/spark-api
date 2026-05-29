@@ -3005,6 +3005,50 @@ class RecapMutationService(SparkGraphQLMixin):
                 )
         return recap
 
+    async def delete_custom_recap_file(self) -> models.CustomRecap:
+        """Remove one file from a CustomRecap's Evidences gallery.
+
+        Custom-template counterpart to remove_recap_file. Hard-deletes the
+        CustomRecapFile row so a misfiled image (e.g. a receipt that landed
+        under "Table setup") can be removed, then returns the parent custom
+        recap so the client re-renders the gallery from the response.
+
+        Unlike remove_recap_file, the GCS blob is LEFT in place (audit /
+        recoverability) — only the DB row is removed. Auth mirrors
+        delete_custom_recap: ambassadors blocked, spark-admin anywhere,
+        other roles only inside their own tenant.
+        """
+        if not isinstance(self.input, inputs.DeleteCustomRecapFileInput):
+            raise GraphQLError("Invalid input type.")
+
+        try:
+            recap_file_id = resolve_id_to_int(self.input.id)
+            recap_file = await sync_to_async(
+                models.CustomRecapFile.objects.select_related("custom_recap").get
+            )(id=recap_file_id)
+        except (
+            models.CustomRecapFile.DoesNotExist,
+            TypeError,
+            ValueError,
+            GraphQLError,
+        ):
+            raise GraphQLError("Recap file not found.")
+
+        custom_recap = recap_file.custom_recap
+        if custom_recap is None:
+            raise GraphQLError("This file isn't attached to a custom recap.")
+
+        # CustomRecap carries its own denormalized tenant_id — scope off it.
+        await self._assert_can_delete_recap(custom_recap.tenant_id)
+
+        @sync_to_async
+        def remove():
+            with transaction.atomic():
+                recap_file.delete()
+            return models.CustomRecap.objects.get(id=custom_recap.id)
+
+        return await remove()
+
     async def delete_recap_file(self) -> bool:
         """Delete a recap file and its blob from GCS."""
         if not isinstance(self.input, inputs.DeleteRecapFileInput):
@@ -5127,6 +5171,37 @@ class RecapMutations:
         except GraphQLError as e:
             return build_mutation_response(
                 types.RecapDetailResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def delete_custom_recap_file(
+        self,
+        info: strawberry.Info,
+        input: inputs.DeleteCustomRecapFileInput,
+    ) -> types.CustomRecapDetailResponse:
+        """Remove a file from a custom recap's Evidences gallery.
+
+        Hard-deletes the CustomRecapFile row (leaves the GCS blob) and
+        returns the parent custom recap so the gallery re-renders from the
+        refreshed file list. Tenant-scoped + admin-only.
+        """
+        try:
+            service = RecapMutationService.with_input(input)
+            await service.set_user(info)
+            custom_recap = await service.delete_custom_recap_file()
+            return build_mutation_response(
+                types.CustomRecapDetailResponse,
+                success=True,
+                message="File removed from recap.",
+                input_obj=input,
+                custom_recap=custom_recap,
+            )
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.CustomRecapDetailResponse,
                 success=False,
                 message=str(e),
                 input_obj=input,
