@@ -136,6 +136,17 @@ class DeleteRecapInput(SparkGraphQLInput):
 
 
 @strawberry.input
+class DeleteCustomRecapInput(SparkGraphQLInput):
+    """Delete a single CustomRecap (tenant-scoped, admin-only).
+
+    Counterpart to DeleteRecapInput for the custom-template recap
+    model. `id` is the CustomRecap's Relay-encoded global id.
+    """
+
+    id: strawberry.ID
+
+
+@strawberry.input
 class DeleteRecapFileInput(SparkGraphQLInput):
     id: strawberry.ID
 

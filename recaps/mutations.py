@@ -30,7 +30,7 @@ from utils.graphql.inputs import SparkGraphQLInput
 from utils.graphql.permissions import StrictIsAuthenticated
 from utils.graphql.relay import ensure_relay_mutation
 from utils.graphql.mixins import SparkGraphQLMixin, resolve_id_to_int
-from utils.utils import build_mutation_response
+from utils.utils import ROLE_ID, build_mutation_response
 from utils.gcs import (
     public_url,
     extract_blob_name_from_url,
@@ -2656,27 +2656,130 @@ class RecapMutationService(SparkGraphQLMixin):
 
         return await update_recap_section_transaction()
 
-    async def delete_recap(self) -> bool:
-        """Delete a recap."""
+    async def _assert_can_delete_recap(self, tenant_id: int) -> None:
+        """Authorize the current user to delete a recap in `tenant_id`.
+
+        Mirrors the `delete_request` precedent (events.mutations):
+          - Ambassadors are blocked outright (role_id == 1).
+          - spark-admin (unrestricted) may delete in any tenant.
+          - any other role (client / RMM) may only delete inside a
+            tenant they belong to.
+        Raises GraphQLError when not allowed.
+        """
+        user = self.user
+        if user is None:
+            raise GraphQLError("Authentication required.")
+        if getattr(user, "role_id", None) == ROLE_ID.Ambassadors:
+            raise GraphQLError("You are not authorized to delete recaps.")
+        is_spark_admin = await user.role.is_spark_admin
+        if is_spark_admin:
+            return
+        try:
+            await sync_to_async(user.get_tenant)(tenant_id=tenant_id)
+        except Exception:
+            raise GraphQLError(
+                "You are not authorized to delete recaps for this tenant."
+            )
+
+    async def delete_recap(self) -> models.Recap:
+        """Delete a legacy Recap (tenant-scoped, admin-only).
+
+        Returns the deleted recap instance (detached from the DB) so the
+        caller can surface its uuid for a Relay store prune. Auth follows
+        the `delete_request` precedent: ambassadors blocked, spark-admin
+        anywhere, other roles only inside their own tenant.
+
+        A real delete (not soft) — Recap has no archived_at column, and
+        the user explicitly wants bad test recaps gone AND the event
+        freed for a fresh recap. Child rows that FK to the recap with
+        on_delete=RESTRICT (ConsumerEngagements, ProductSamples,
+        SalesPerformance, ConsumerFeedback, AccountFeedback) are removed
+        first so the parent delete doesn't trip the RESTRICT guard;
+        RecapFile rows are detached (recap=None) to preserve the blobs.
+        """
         if not isinstance(self.input, inputs.DeleteRecapInput):
             raise GraphQLError("Invalid input type.")
 
         try:
             recap_id = resolve_id_to_int(self.input.id)
-            recap = await sync_to_async(models.Recap.objects.get)(id=recap_id)
+            recap = await sync_to_async(
+                models.Recap.objects.select_related("event").get
+            )(id=recap_id)
         except (models.Recap.DoesNotExist, TypeError, ValueError, GraphQLError):
             raise GraphQLError("Recap not found.")
+
+        # `event` is select_related above so reading event.tenant_id here
+        # doesn't trigger a synchronous DB fetch in the async context.
+        await self._assert_can_delete_recap(recap.event.tenant_id)
 
         @sync_to_async
         def delete_recap_with_files():
             with transaction.atomic():
-                # Detach recap files before deleting recap
+                # Drop child rows whose FK to Recap is on_delete=RESTRICT;
+                # a bare recap.delete() would otherwise raise.
+                models.ConsumerEngagements.objects.filter(recap=recap).delete()
+                models.ProductSamples.objects.filter(recap=recap).delete()
+                models.SalesPerformance.objects.filter(recap=recap).delete()
+                models.ConsumerFeedback.objects.filter(recap=recap).delete()
+                models.AccountFeedback.objects.filter(recap=recap).delete()
+                # Detach recap files before deleting recap (keep the blobs).
                 models.RecapFile.objects.filter(recap=recap).update(recap=None)
                 # Delete the recap
                 recap.delete()
-            return True
+            return recap
 
         return await delete_recap_with_files()
+
+    async def delete_custom_recap(self) -> models.CustomRecap:
+        """Delete a CustomRecap (tenant-scoped, admin-only).
+
+        Custom-template counterpart to delete_recap. Returns the deleted
+        instance so the caller can surface its uuid. Auth is identical
+        (delete_request precedent). All child rows that FK to CustomRecap
+        with on_delete=RESTRICT (CustomFieldValue, CustomRecapProductSample,
+        CustomRecapSalePerformance) are removed first; CustomRecapFile rows
+        are detached (custom_recap=None) so the GCS blobs survive.
+        """
+        if not isinstance(self.input, inputs.DeleteCustomRecapInput):
+            raise GraphQLError("Invalid input type.")
+
+        try:
+            recap_id = resolve_id_to_int(self.input.id)
+            recap = await sync_to_async(models.CustomRecap.objects.get)(
+                id=recap_id
+            )
+        except (
+            models.CustomRecap.DoesNotExist,
+            TypeError,
+            ValueError,
+            GraphQLError,
+        ):
+            raise GraphQLError("Recap not found.")
+
+        # CustomRecap carries its own tenant_id column (denormalized at
+        # create time), so scope off that directly.
+        await self._assert_can_delete_recap(recap.tenant_id)
+
+        @sync_to_async
+        def delete_custom_recap_with_children():
+            with transaction.atomic():
+                models.CustomFieldValue.objects.filter(
+                    custom_recap=recap
+                ).delete()
+                models.CustomRecapProductSample.objects.filter(
+                    custom_recap=recap
+                ).delete()
+                models.CustomRecapSalePerformance.objects.filter(
+                    custom_recap=recap
+                ).delete()
+                # Detach files (keep the blobs in GCS for audit).
+                models.CustomRecapFile.objects.filter(
+                    custom_recap=recap
+                ).update(custom_recap=None)
+                recap.delete()
+            return recap
+
+        return await delete_custom_recap_with_children()
 
     async def add_recap_file(self) -> models.Recap:
         """Attach one already-uploaded blob to an existing recap.
@@ -4842,21 +4945,58 @@ class RecapMutations:
         self,
         info: strawberry.Info,
         input: inputs.DeleteRecapInput,
-    ) -> types.RecapDetailResponse:
-        """Delete a recap."""
+    ) -> types.DeleteRecapResponse:
+        """Delete a legacy Recap (tenant-scoped, admin-only).
+
+        Frees the event for a fresh recap and removes the row from every
+        list. Returns the deleted uuid so the web client can prune the
+        Relay store without a refetch.
+        """
         try:
             service = RecapMutationService.with_input(input)
             await service.set_user(info)
-            await service.delete_recap()
+            recap = await service.delete_recap()
             return build_mutation_response(
-                types.RecapDetailResponse,
+                types.DeleteRecapResponse,
                 success=True,
                 message="Recap deleted successfully.",
                 input_obj=input,
+                deleted_recap_uuid=str(recap.uuid),
             )
         except GraphQLError as e:
             return build_mutation_response(
-                types.RecapDetailResponse,
+                types.DeleteRecapResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def delete_custom_recap(
+        self,
+        info: strawberry.Info,
+        input: inputs.DeleteCustomRecapInput,
+    ) -> types.DeleteCustomRecapResponse:
+        """Delete a CustomRecap (tenant-scoped, admin-only).
+
+        Custom-template counterpart to deleteRecap. Frees the event for a
+        new recap and drops the row from the recaps list. Returns the
+        deleted uuid for a Relay store prune.
+        """
+        try:
+            service = RecapMutationService.with_input(input)
+            await service.set_user(info)
+            recap = await service.delete_custom_recap()
+            return build_mutation_response(
+                types.DeleteCustomRecapResponse,
+                success=True,
+                message="Recap deleted successfully.",
+                input_obj=input,
+                deleted_custom_recap_uuid=str(recap.uuid),
+            )
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.DeleteCustomRecapResponse,
                 success=False,
                 message=str(e),
                 input_obj=input,
