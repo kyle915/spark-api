@@ -29,6 +29,21 @@ from utils.graphql.relay import (
 )
 
 
+# Page ceiling for the web "Your recaps" LIST resolvers (`recaps` +
+# `customRecaps` on the clients schema). The web admin loads the whole
+# tenant in one page and does date-range / search / status / retailer /
+# state filtering CLIENT-SIDE over the returned rows, so the default 50-row
+# cap meant only the newest ~50 recaps were ever reachable while totalCount
+# correctly reported the full set (Liquid Death: 830 total, paging stuck at
+# ~50, date-search blind to anything older). Lifting the ceiling lets a
+# single large `first` page through the complete tenant set so every
+# client-side filter operates over all of it. Same lever as the Master
+# Tracker `requests` resolver (#633, max_limit=2000). default_limit is left
+# at the service default, so callers that pass no `first` still get a small
+# page.
+RECAPS_LIST_MAX_LIMIT = 2000
+
+
 class BaseRecapQueriesService(SparkGraphQLMixin):
     """Service for recap queries."""
 
@@ -1177,6 +1192,10 @@ class RecapQueries:
                 after=after,
                 last=last,
                 before=before,
+                # Match the populated branch's ceiling so the empty page
+                # validates `first` the same way (no behavior change — the
+                # queryset is empty — but keeps the two paths consistent).
+                max_limit=RECAPS_LIST_MAX_LIMIT,
                 queryset=empty,
             )
         event_id: int | None = (
@@ -1261,6 +1280,16 @@ class RecapQueries:
             after=after,
             last=last,
             before=before,
+            # Lift the page ceiling for the "Your recaps" LIST so the web
+            # admin can pull the whole tenant in one page. The list applies
+            # date-range / search / status / retailer / state filters
+            # CLIENT-SIDE over the rows it received, so a 50-row cap meant
+            # only the newest ~50 recaps were ever reachable (Liquid Death:
+            # totalCount=830 but paging stuck at ~50 and date-search found
+            # nothing older). Same class of fix as the Master Tracker
+            # `requests` resolver (#633). default_limit is unchanged, so
+            # callers that pass no `first` still get the small default page.
+            max_limit=RECAPS_LIST_MAX_LIMIT,
             queryset=queryset,
         )
 
@@ -1336,6 +1365,9 @@ class RecapQueries:
                 after=after,
                 last=last,
                 before=before,
+                # Mirror the populated branch's ceiling (no behavior change
+                # on an empty queryset; keeps the two paths consistent).
+                max_limit=RECAPS_LIST_MAX_LIMIT,
                 queryset=empty,
             )
         resolved_event_id = (
@@ -1429,6 +1461,11 @@ class RecapQueries:
             after=after,
             last=last,
             before=before,
+            # Same ceiling lift as the legacy `recaps` resolver above —
+            # the "Your recaps" page merges legacy + custom and filters
+            # both client-side, so the custom half needs the full tenant
+            # set returnable too. default_limit unchanged.
+            max_limit=RECAPS_LIST_MAX_LIMIT,
             queryset=queryset,
         )
 
