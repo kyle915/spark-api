@@ -159,7 +159,7 @@ class ChatQueries:
         )
         return [
             types.ChatRecipient(
-                uuid=r["uuid"], name=r["name"], email=r["email"]
+                id=r["id"], uuid=r["uuid"], name=r["name"], email=r["email"]
             )
             for r in rows
         ]

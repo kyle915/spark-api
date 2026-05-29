@@ -360,9 +360,13 @@ def list_recipient_ambassadors_for_tenant(
     up. Mirrors recapEventOptions: strictly tenant-scoped, returns
     nothing without a tenant in scope (the resolver enforces that).
 
-    Returns lightweight dicts (uuid, name, email) so the picker doesn't
-    drag the full Ambassador type's own FK resolvers through the list.
+    Returns lightweight dicts (id, uuid, name, email) so the picker
+    doesn't drag the full Ambassador type's own FK resolvers through the
+    list. `id` is the Ambassador's Relay global id so the same roster can
+    feed an `ambassadorId` mutation arg (e.g. the custom-recap picker).
     """
+    from strawberry.relay import to_base64
+
     from ambassadors.models import Ambassador, AmbassadorEvent
 
     amb_ids = list(
@@ -395,6 +399,7 @@ def list_recipient_ambassadors_for_tenant(
         name = " ".join(x for x in [first, last] if x).strip() or email
         rows.append(
             {
+                "id": to_base64("Ambassador", amb.id),
                 "uuid": str(amb.uuid),
                 "name": name,
                 "email": email,

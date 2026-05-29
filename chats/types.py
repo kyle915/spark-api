@@ -135,8 +135,17 @@ class ChatRecipient:
     for the "New / group message" composer's recipient picker. Scoped by
     event history in the tenant (same reachability rule the broadcast
     enforces), so the picker can only ever list BAs a broadcast could
-    actually reach. Deliberately lightweight (uuid + name + email)."""
+    actually reach. Deliberately lightweight (id + uuid + name + email).
 
+    `id` is the Ambassador's Relay global id (base64 "Ambassador:<pk>"),
+    so this roster can also feed any mutation that takes an `ambassadorId`
+    — e.g. the custom-recap "FILLING FOR A BA?" picker, which had been
+    wired to the brand-member-scoped `activeAmbassadors`/`ambassadors`
+    query (empty for BAs, who join a brand by event history not a
+    TenantedUser row). The chat composer keys off `uuid` and simply
+    ignores this field."""
+
+    id: strawberry.ID
     uuid: str
     name: str
     email: str
