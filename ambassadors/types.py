@@ -153,6 +153,43 @@ class MyRatingSummary:
 
 
 @strawberry.type
+class ShiftProduct:
+    """One product the BA will be repping on a shift, surfaced on the
+    mobile shift-detail "BRAND & PRODUCTS" card. Sourced from
+    RequestProduct -> Product on the event's parent Request. Read-only:
+    admins manage products in the existing request flows.
+    """
+
+    name: str
+    # Public (non-signed) URL for the product image, via utils.gcs
+    # public_url — same resolution the web Product type uses. None when
+    # the product has no image uploaded.
+    image_url: str | None = None
+
+
+@strawberry.type
+class ShiftContext:
+    """Brand / project / product context for a single shift, shown on the
+    mobile shift-detail screen next to the pre-shift briefing (#191).
+
+    Purely additive read-only display: every field is derived from the
+    event's parent Request (Request.client / client_name, Request.notes,
+    and RequestProduct -> Product). The editable surfaces stay where they
+    already are — admins edit brand + products in the request flows, and
+    the free-form shift text is the existing briefing builder. Resolves
+    gracefully to null fields + an empty product list when the event has
+    no request attached.
+    """
+
+    # Request.client.name, falling back to Request.client_name. None when
+    # neither is set.
+    brand_name: str | None = None
+    products: list[ShiftProduct] = strawberry.field(default_factory=list)
+    # Request.notes — free-form project notes. None / empty when unset.
+    project_notes: str | None = None
+
+
+@strawberry.type
 class FileTypeDetailResponse:
     success: bool
     message: str
