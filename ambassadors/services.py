@@ -1839,10 +1839,22 @@ class AmbassadorQueriesService(SparkGraphQLMixin):
                 # Search by address
                 if filters.address:
                     queryset = queryset.filter(address__icontains=filters.address)
+                # City lives inside the free-text address — match it there
+                # and AND it with `address` when both are supplied so an
+                # admin can narrow an address down by city.
+                if getattr(filters, "city", None):
+                    queryset = queryset.filter(address__icontains=filters.city)
+                # College filter (partial match).
+                if getattr(filters, "college", None):
+                    queryset = queryset.filter(college__icontains=filters.college)
+                # "In college only" flag — list currently-attending students.
+                if getattr(filters, "in_college", None) is not None:
+                    queryset = queryset.filter(in_college=filters.in_college)
                 if filters.about_me:
                     queryset = queryset.filter(about_me__icontains=filters.about_me)
 
-                # General search across email, name, address and about_me
+                # General search across email, name, address, about_me, bio
+                # and college.
                 if filters.search:
                     queryset = queryset.filter(
                         Q(user__email__icontains=filters.search)
@@ -1850,6 +1862,8 @@ class AmbassadorQueriesService(SparkGraphQLMixin):
                         | Q(user__last_name__icontains=filters.search)
                         | Q(address__icontains=filters.search)
                         | Q(about_me__icontains=filters.search)
+                        | Q(bio__icontains=filters.search)
+                        | Q(college__icontains=filters.search)
                     )
 
             if q:

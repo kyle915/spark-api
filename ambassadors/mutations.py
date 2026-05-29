@@ -19,6 +19,7 @@ from utils.graphql.mixins import BaseMutationService, resolve_id_to_int
 from .models import (
     Ambassador,
     AmbassadorEvent,
+    AmbassadorPhoto,
     AttendanceType,
     AttendanceStatus,
     Source,
@@ -62,6 +63,8 @@ from .types import (
     InviteAmbassadorToShiftResponse,
     CancelShiftInviteResponse,
     RateAmbassadorResponse,
+    UpdateBaProfileResponse,
+    BaSelfProfileType,
 )
 from . import inputs
 from .services import (
@@ -895,6 +898,133 @@ class AmbassadorMobileMutations:
         input: inputs.RegisterPushTokenInput,
     ) -> RegisterPushTokenResponse:
         return await RegisterPushTokenService.register(input, info)
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def update_ba_profile(
+        self,
+        info: strawberry.Info,
+        input: inputs.UpdateBaProfileInput,
+    ) -> UpdateBaProfileResponse:
+        """BA self-edit of their own TALENT profile.
+
+        Strictly scoped to the authenticated BA: resolves the Ambassador
+        from the JWT user and writes only that row. Updates bio /
+        college / in_college and attaches headshot / résumé / event-photo
+        blobs (paths from the getUploadUrl→GCS flow). Every field is
+        optional — any subset can be PATCHed. `acceptances` is tolerated
+        and ignored (no legal ledger yet).
+        """
+        user = info.context.request.user
+
+        @sync_to_async
+        def _apply() -> tuple[bool, str, object | None]:
+            try:
+                ambassador = Ambassador.objects.select_related(
+                    "user", "location", "location__state"
+                ).get(user=user)
+            except Ambassador.DoesNotExist:
+                return (False, "Ambassador profile not found.", None)
+
+            user_dirty = False
+            if input.first_name is not None:
+                ambassador.user.first_name = input.first_name.strip()
+                user_dirty = True
+            if input.last_name is not None:
+                ambassador.user.last_name = input.last_name.strip()
+                user_dirty = True
+            if user_dirty:
+                ambassador.user.save(update_fields=["first_name", "last_name"])
+
+            update_fields: list[str] = []
+            if input.phone is not None:
+                ambassador.phone = input.phone.strip() or None
+                update_fields.append("phone")
+            # Prefer an explicit address; otherwise synthesize one from
+            # city/state/zip if those came in and no address exists yet.
+            if input.address is not None:
+                ambassador.address = input.address.strip() or None
+                update_fields.append("address")
+            elif (
+                not ambassador.address
+                and (input.city or input.state or input.zip)
+            ):
+                ambassador.address = ", ".join(
+                    p for p in [
+                        (input.city or "").strip(),
+                        (input.state or "").strip(),
+                        (input.zip or "").strip(),
+                    ] if p
+                ) or None
+                update_fields.append("address")
+            if input.shirt_size is not None:
+                ambassador.t_shirt_size = input.shirt_size.strip() or None
+                update_fields.append("t_shirt_size")
+            # bio (with `about` as an alias; bio wins). Mirror to about_me
+            # so legacy surfaces stay populated.
+            new_bio = input.bio if input.bio is not None else input.about
+            if new_bio is not None:
+                ambassador.bio = new_bio.strip()
+                ambassador.about_me = ambassador.bio
+                update_fields.extend(["bio", "about_me"])
+            if input.college is not None:
+                ambassador.college = input.college.strip()
+                update_fields.append("college")
+            if input.in_college is not None:
+                ambassador.in_college = bool(input.in_college)
+                update_fields.append("in_college")
+            if input.headshot is not None:
+                from utils.gcs import extract_blob_name_from_url
+
+                ambassador.headshot = (
+                    extract_blob_name_from_url(input.headshot) or ""
+                )
+                update_fields.append("headshot")
+            if input.resume is not None:
+                from utils.gcs import extract_blob_name_from_url
+
+                ambassador.resume = (
+                    extract_blob_name_from_url(input.resume) or ""
+                )
+                update_fields.append("resume")
+            if update_fields:
+                ambassador.updated_by = user
+                ambassador.save(update_fields=list(set(update_fields)) + ["updated_at"])
+
+            # Event photos — replace-the-set semantics when provided.
+            if input.event_photos is not None:
+                from utils.gcs import extract_blob_name_from_url
+
+                AmbassadorPhoto.objects.filter(ambassador=ambassador).delete()
+                for raw in input.event_photos:
+                    blob = extract_blob_name_from_url(raw)
+                    if not blob:
+                        continue
+                    AmbassadorPhoto.objects.create(
+                        ambassador=ambassador,
+                        image=blob,
+                        created_by=user,
+                    )
+
+            photos = list(
+                AmbassadorPhoto.objects.filter(ambassador=ambassador)
+            )
+            return (True, "Profile updated.", (ambassador, photos))
+
+        ok, message, payload = await _apply()
+        if not ok or payload is None:
+            return UpdateBaProfileResponse(
+                success=ok,
+                message=message,
+                client_mutation_id=input.client_mutation_id,
+                ambassador=None,
+            )
+        ambassador, photos = payload
+        return UpdateBaProfileResponse(
+            success=True,
+            message=message,
+            client_mutation_id=input.client_mutation_id,
+            ambassador=BaSelfProfileType.from_ambassador(ambassador, photos),
+        )
 
     # NB: no permission class — sign-in is the path to becoming
     # authenticated, so requiring auth would be a chicken-and-egg.

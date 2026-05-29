@@ -1462,6 +1462,298 @@ class AmbassadorProfileQueries:
         )
 
 
+# ---------------------------------------------------------------------------
+# Gig-history aggregation + admin TALENT profile detail.
+#
+# These two resolvers are the "ambassador-events aggregation" the web
+# "Search talent" page was waiting on, plus the openable admin profile
+# pop-up. Both are clients-schema surfaces (IsClientOrSparkAdmin).
+# ---------------------------------------------------------------------------
+def _gig_rows_for_ambassador(ambassador_id: int, tenant_id: int | None) -> list:
+    """Build the gig-history rows for a BA from AmbassadorEvent -> Event.
+
+    Mirrors the EarningsShiftRow aggregation precedent. When `tenant_id`
+    is given the history is scoped to that tenant's gigs (the admin view);
+    when None it spans all of the BA's gigs (used by self-serve mobile if
+    wired later). Synchronous — call via sync_to_async.
+    """
+    from datetime import datetime, timezone as _tz
+
+    qs = (
+        models.AmbassadorEvent.objects.select_related(
+            "event",
+            "event__retailer",
+            "event__state",
+            "event__request",
+            "event__request__client",
+        )
+        .filter(ambassador_id=ambassador_id)
+    )
+    if tenant_id is not None:
+        qs = qs.filter(event__tenant_id=tenant_id)
+    qs = qs.order_by("-event__date")
+
+    now = datetime.now(_tz.utc)
+    rows: list[types.GigHistoryRow] = []
+    for ae in qs:
+        ev = ae.event
+        retailer = getattr(ev, "retailer", None)
+        request = getattr(ev, "request", None)
+        client = getattr(request, "client", None) if request else None
+        brand_name = (
+            (getattr(client, "name", None) if client else None)
+            or (getattr(request, "client_name", None) if request else None)
+            or (getattr(retailer, "name", None) if retailer else None)
+        )
+        venue = (
+            getattr(ev, "name", None)
+            or (getattr(retailer, "name", None) if retailer else None)
+        )
+        state_obj = getattr(ev, "state", None)
+        state_code = getattr(state_obj, "code", None) if state_obj else None
+        ev_date = getattr(ev, "date", None)
+        is_approved = bool(getattr(ae, "is_approved", False))
+        if not is_approved:
+            status = "pending"
+        elif ev_date is not None and ev_date < now:
+            status = "worked"
+        else:
+            status = "upcoming"
+        rows.append(
+            types.GigHistoryRow(
+                ambassador_event_uuid=strawberry.ID(str(ae.uuid)),
+                event_uuid=strawberry.ID(str(ev.uuid)),
+                brand_name=brand_name,
+                venue=venue,
+                city=None,
+                state_code=state_code,
+                date=ev_date.isoformat() if ev_date else None,
+                is_approved=is_approved,
+                status=status,
+            )
+        )
+    return rows
+
+
+def _ba_stats(ambassador_id: int, tenant_id: int | None) -> dict:
+    """Compute rating avg/count, all-time approved jobs count, and the
+    on-time rate for a BA. Synchronous — call via sync_to_async.
+
+    on_time_rate mirrors the mobile reliability math: a completed shift
+    (event.start_time in the past) counts as on-time when the BA's
+    earliest clock-in for that event is <= start_time + 10-minute grace.
+    Scoped to the tenant's gigs when tenant_id is supplied.
+    """
+    from datetime import datetime, timedelta, timezone as _tz
+
+    # ---- ratings (mean of all ratings, tenant-scoped when applicable) ----
+    rating_qs = models.AmbassadorRating.objects.filter(ambassador_id=ambassador_id)
+    if tenant_id is not None:
+        rating_qs = rating_qs.filter(tenant_id=tenant_id)
+    scores = list(rating_qs.values_list("score", flat=True))
+    rating_count = len(scores)
+    rating_average = round(sum(scores) / rating_count, 1) if rating_count else 0.0
+
+    # ---- jobs: approved AmbassadorEvent rows (all-time) ----
+    jobs_qs = models.AmbassadorEvent.objects.filter(
+        ambassador_id=ambassador_id, is_approved=True
+    )
+    if tenant_id is not None:
+        jobs_qs = jobs_qs.filter(event__tenant_id=tenant_id)
+    jobs_count = jobs_qs.count()
+
+    # ---- on-time rate over completed shifts ----
+    now = datetime.now(_tz.utc)
+    completed = (
+        models.AmbassadorEvent.objects.select_related("event")
+        .filter(
+            ambassador_id=ambassador_id,
+            is_approved=True,
+            event__start_time__lt=now,
+        )
+    )
+    if tenant_id is not None:
+        completed = completed.filter(event__tenant_id=tenant_id)
+    completed_events = {ae.event_id: ae.event for ae in completed if ae.event_id}
+    on_time_rate: float | None = None
+    if completed_events:
+        # Earliest clock-in per event for this BA. Mirror the mobile
+        # rating-summary precedent: a clock-in Attendance is identified
+        # by source__name == "clock_in".
+        earliest: dict[int, object] = {}
+        for row in models.Attendance.objects.filter(
+            ambassador_id=ambassador_id,
+            event_id__in=list(completed_events.keys()),
+            source__name="clock_in",
+        ).values("event_id", "clock_time"):
+            eid = row["event_id"]
+            ct = row["clock_time"]
+            if ct is None:
+                continue
+            if eid not in earliest or ct < earliest[eid]:
+                earliest[eid] = ct
+        on_time = 0
+        measured = 0
+        grace = timedelta(minutes=10)
+        for eid, ev in completed_events.items():
+            start = getattr(ev, "start_time", None)
+            ci = earliest.get(eid)
+            if start is None or ci is None:
+                continue
+            measured += 1
+            if ci <= start + grace:
+                on_time += 1
+        if measured:
+            on_time_rate = round((on_time / measured) * 100.0, 1)
+
+    return {
+        "rating_average": rating_average,
+        "rating_count": rating_count,
+        "jobs_count": jobs_count,
+        "on_time_rate": on_time_rate,
+    }
+
+
+@strawberry.type
+class AmbassadorGigHistoryQueries:
+    """The ambassador-events aggregation — a BA's gig history."""
+
+    @strawberry.field(permission_classes=[IsClientOrSparkAdmin])
+    async def ambassador_gig_history(
+        self,
+        info: strawberry.Info,
+        ambassador_uuid: strawberry.ID,
+        tenant_id: strawberry.ID | None = None,
+        tenant_uuid: strawberry.ID | None = None,
+    ) -> list[types.GigHistoryRow]:
+        """Aggregate a BA's AmbassadorEvent history into gig rows.
+
+        Tenant-scoped exactly like recapEventOptions: resolve the active
+        tenant, return an EMPTY list when none is in scope, never
+        all-tenants. Clients resolve to their own tenant.
+        """
+        from events.queries import EventQueriesService
+
+        service = EventQueriesService()
+        try:
+            resolved_tenant_id = await service.resolve_tenant_id(
+                info, tenant_id=tenant_id, tenant_uuid=tenant_uuid
+            )
+        except GraphQLError:
+            resolved_tenant_id = None
+        if not resolved_tenant_id:
+            return []
+
+        try:
+            ambassador = await models.Ambassador.objects.aget(uuid=ambassador_uuid)
+        except models.Ambassador.DoesNotExist:
+            return []
+
+        # Only expose a BA reachable in this tenant (worked/assigned a
+        # gig here) — same rule the chat recipient list uses.
+        reachable = await models.AmbassadorEvent.objects.filter(
+            ambassador_id=ambassador.id, event__tenant_id=resolved_tenant_id
+        ).aexists()
+        if not reachable:
+            return []
+
+        return await sync_to_async(_gig_rows_for_ambassador)(
+            ambassador.id, resolved_tenant_id
+        )
+
+
+@strawberry.type
+class TalentProfileDetailQueries:
+    """Openable admin/client TALENT profile pop-up (clients schema)."""
+
+    @strawberry.field(permission_classes=[IsClientOrSparkAdmin])
+    async def ambassador_profile_detail(
+        self,
+        info: strawberry.Info,
+        ambassador_uuid: strawberry.ID,
+        tenant_id: strawberry.ID | None = None,
+        tenant_uuid: strawberry.ID | None = None,
+    ) -> types.AmbassadorProfileDetail | None:
+        """Full BA profile for the admin pop-up: headshot, bio,
+        college/in_college, email + phone, event photos, résumé, gig
+        history, and rating/on-time/jobs stats.
+
+        Tenant-scoped like recapEventOptions — resolve the active tenant,
+        return None when none is in scope, and only surface a BA reachable
+        in that tenant (worked/assigned a gig there).
+        """
+        from events.queries import EventQueriesService
+
+        service = EventQueriesService()
+        try:
+            resolved_tenant_id = await service.resolve_tenant_id(
+                info, tenant_id=tenant_id, tenant_uuid=tenant_uuid
+            )
+        except GraphQLError:
+            resolved_tenant_id = None
+        if not resolved_tenant_id:
+            return None
+
+        try:
+            ambassador = await models.Ambassador.objects.select_related(
+                "user", "location", "location__state"
+            ).aget(uuid=ambassador_uuid)
+        except models.Ambassador.DoesNotExist:
+            return None
+
+        reachable = await models.AmbassadorEvent.objects.filter(
+            ambassador_id=ambassador.id, event__tenant_id=resolved_tenant_id
+        ).aexists()
+        if not reachable:
+            return None
+
+        async def fetch_photos():
+            return await sync_to_async(list)(
+                models.AmbassadorPhoto.objects.filter(ambassador_id=ambassador.id)
+            )
+
+        photos, gig_history, stats = await asyncio.gather(
+            fetch_photos(),
+            sync_to_async(_gig_rows_for_ambassador)(
+                ambassador.id, resolved_tenant_id
+            ),
+            sync_to_async(_ba_stats)(ambassador.id, resolved_tenant_id),
+        )
+
+        user = ambassador.user
+        full_name = " ".join(
+            filter(
+                None,
+                [
+                    getattr(user, "first_name", "") if user else "",
+                    getattr(user, "last_name", "") if user else "",
+                ],
+            )
+        ).strip() or (getattr(user, "email", "") if user else "") or ""
+
+        return types.AmbassadorProfileDetail(
+            ambassador=ambassador,
+            full_name=full_name,
+            email=(getattr(user, "email", None) if user else None),
+            phone=ambassador.phone,
+            bio=ambassador.bio or (ambassador.about_me or ""),
+            college=ambassador.college or "",
+            in_college=bool(ambassador.in_college),
+            headshot_url=public_url(ambassador.headshot)
+            if ambassador.headshot
+            else None,
+            resume_url=public_url(ambassador.resume)
+            if ambassador.resume
+            else None,
+            photos=photos,
+            gig_history=gig_history,
+            rating_average=stats["rating_average"],
+            rating_count=stats["rating_count"],
+            jobs_count=stats["jobs_count"],
+            on_time_rate=stats["on_time_rate"],
+        )
+
+
 @strawberry.type
 class AmbassadorReviewQueries:
     """Queries for ambassador reviews."""

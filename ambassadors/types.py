@@ -6,6 +6,7 @@ from asgiref.sync import sync_to_async
 from . import models
 from tenants.types import SparkUserType
 from events.types import Event, Location
+from utils.gcs import public_url
 
 
 @strawberry_django.type(models.FileType)
@@ -24,6 +25,9 @@ class Ambassador(Node):
     address: str | None
     phone: str | None
     about_me: str | None
+    bio: str
+    college: str
+    in_college: bool
     coordinates: list[float]
     is_active: bool
     location: Location | None
@@ -31,6 +35,49 @@ class Ambassador(Node):
     user: SparkUserType
     created_at: str
     updated_at: str
+
+    @strawberry.field
+    def headshot_url(self) -> str | None:
+        """Public (non-signed) URL for the BA headshot blob, or None."""
+        blob = self.__dict__.get("headshot")
+        if blob is None:
+            try:
+                blob = getattr(self, "headshot", None)
+            except Exception:
+                return None
+        return public_url(blob) if blob else None
+
+    @strawberry.field
+    def resume_url(self) -> str | None:
+        """Public (non-signed) URL for the BA résumé blob, or None."""
+        blob = self.__dict__.get("resume")
+        if blob is None:
+            try:
+                blob = getattr(self, "resume", None)
+            except Exception:
+                return None
+        return public_url(blob) if blob else None
+
+
+@strawberry_django.type(models.AmbassadorPhoto)
+class AmbassadorPhotoType(Node):
+    """One event/work photo in a BA's TALENT profile gallery."""
+
+    uuid: str
+    caption: str
+    ambassador_id: strawberry.ID
+    created_at: str
+
+    @strawberry.field
+    def image_url(self) -> str | None:
+        """Public (non-signed) URL for the photo blob."""
+        blob = self.__dict__.get("image")
+        if blob is None:
+            try:
+                blob = getattr(self, "image", None)
+            except Exception:
+                return None
+        return public_url(blob) if blob else None
 
 
 @strawberry_django.type(models.AmbassadorEvent)
@@ -517,6 +564,146 @@ class UpsertAmbassadorProfileResponse:
     message: str
     client_mutation_id: strawberry.ID | None = None
     profile: AmbassadorProfile | None = None
+
+
+@strawberry.type
+class BaSelfProfileType:
+    """The authenticated BA's own profile, as the mobile app reads/writes
+    it (me { ambassador { ... } } and updateBaProfile.ambassador).
+
+    Field names are the camelCase contract the mobile client already
+    speaks. city/state/zip are resolved from the BA's Location where one
+    exists (state.code, location.zip); city has no column so it's None
+    unless the app stored it elsewhere. `about` mirrors `bio`.
+    """
+
+    id: strawberry.ID
+    first_name: str | None = None
+    last_name: str | None = None
+    phone: str | None = None
+    address: str | None = None
+    city: str | None = None
+    state: str | None = None
+    zip: str | None = None
+    shirt_size: str | None = None
+    about: str | None = None
+    bio: str = ""
+    college: str = ""
+    in_college: bool = False
+    headshot_url: str | None = None
+    resume_url: str | None = None
+    photos: list[AmbassadorPhotoType] = strawberry.field(default_factory=list)
+    # True once the BA has the essentials filled (name + phone + address
+    # + a bio). Drives the "finish setup" nudge on the mobile profile.
+    profile_complete: bool = False
+
+    @classmethod
+    def from_ambassador(cls, ambassador, photos=None) -> "BaSelfProfileType":
+        user = getattr(ambassador, "user", None)
+        location = getattr(ambassador, "location", None)
+        state_obj = getattr(location, "state", None) if location else None
+        bio = ambassador.bio or (ambassador.about_me or "")
+        first = (getattr(user, "first_name", None) if user else None) or None
+        last = (getattr(user, "last_name", None) if user else None) or None
+        phone = ambassador.phone or None
+        address = ambassador.address or None
+        complete = bool(first and phone and address and bio)
+        return cls(
+            id=strawberry.ID(str(ambassador.id)),
+            first_name=first,
+            last_name=last,
+            phone=phone,
+            address=address,
+            city=None,
+            state=getattr(state_obj, "code", None) if state_obj else None,
+            zip=getattr(location, "zip", None) if location else None,
+            shirt_size=ambassador.t_shirt_size or None,
+            about=bio or None,
+            bio=bio,
+            college=ambassador.college or "",
+            in_college=bool(ambassador.in_college),
+            headshot_url=public_url(ambassador.headshot)
+            if ambassador.headshot
+            else None,
+            resume_url=public_url(ambassador.resume)
+            if ambassador.resume
+            else None,
+            photos=photos or [],
+            profile_complete=complete,
+        )
+
+
+@strawberry.type
+class UpdateBaProfileResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    ambassador: BaSelfProfileType | None = None
+
+
+@strawberry.type
+class GigHistoryRow:
+    """One past/assigned gig in a BA's history, aggregated from
+    AmbassadorEvent -> Event (+ Request/Retailer/State). This is the
+    "ambassador-events aggregation" the web talent page was waiting on.
+
+    Read-only display shape — every field derives from data the system
+    already owns. Mirrors the EarningsShiftRow aggregation precedent.
+    """
+
+    ambassador_event_uuid: strawberry.ID
+    event_uuid: strawberry.ID
+    # Brand / client the gig was for: Request.client.name, falling back
+    # to Request.client_name, then the event's retailer name. None when
+    # none resolves.
+    brand_name: str | None = None
+    # Human venue label: Event.name, falling back to the retailer name.
+    venue: str | None = None
+    city: str | None = None
+    state_code: str | None = None
+    # ISO date of the gig (Event.date), e.g. "2026-05-20".
+    date: str | None = None
+    # Whether the BA's roster row was approved (assigned/worked) vs a
+    # pending application.
+    is_approved: bool = False
+    # "worked" when the gig date is in the past and approved; otherwise
+    # "upcoming" (approved, future) or "pending" (not approved).
+    status: str = "pending"
+
+
+@strawberry.type
+class AmbassadorProfileDetail:
+    """Full BA profile for the admin/client pop-up (clients schema).
+
+    Tenant-scoped at the resolver: an admin only opens BAs reachable in
+    their active tenant. Carries the contact PII (email + phone) the
+    admin needs to reach the BA — this is the tenant's own roster, an
+    expected disclosure. Stats (rating / on-time / jobs) are computed
+    live, reusing the same reliability math as the mobile rating card.
+    """
+
+    ambassador: Ambassador
+    # ---- identity / contact ----
+    full_name: str
+    email: str | None = None
+    phone: str | None = None
+    # ---- profile content ----
+    bio: str = ""
+    college: str = ""
+    in_college: bool = False
+    headshot_url: str | None = None
+    resume_url: str | None = None
+    photos: list[AmbassadorPhotoType] = strawberry.field(default_factory=list)
+    gig_history: list[GigHistoryRow] = strawberry.field(default_factory=list)
+    # ---- stats ----
+    # Mean of ALL ratings (admin + client), 1dp; 0.0 when none.
+    rating_average: float = 0.0
+    rating_count: int = 0
+    # Total approved gigs (all-time) — the "JOBS" stat on the card.
+    jobs_count: int = 0
+    # Share of completed shifts with an on-time clock-in, 0-100; None
+    # when the BA has no completed shifts to measure.
+    on_time_rate: float | None = None
 
 
 @strawberry_django.type(models.AttendanceType)
