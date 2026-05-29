@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import re
+
 import strawberry_django
 import strawberry
 from strawberry.relay import Node
-from typing import List
+from typing import Iterable, List
 from strawberry.scalars import JSON
 
 from events import types as event_types
@@ -14,6 +16,101 @@ from . import models
 from asgiref.sync import sync_to_async
 from utils.gcs import public_url, extract_blob_name_from_url
 from .heic_conversion import display_blob_name, is_heic_blob
+
+
+# ---------------------------------------------------------------------------
+# Pure derivation helpers for the CustomRecap list-card scalars.
+#
+# These replicate, byte-for-byte, the client-side logic in
+# spark-front-client `SparkRecapsList.tsx` (customSoldUnits /
+# customConsumersSampled / isImage) so that moving the math server-side
+# does NOT change the numbers/thumbnail the cards already display. The
+# logic lives in module-level functions (not inline in the resolvers) so
+# the unit tests can exercise the exact regex/parse rules without a DB.
+# ---------------------------------------------------------------------------
+
+# Matches the whole word can(s) or pack(s) in a field NAME — e.g. "Single
+# Cans", "Packs Sold" — while excluding "willing to purchase"-style fields.
+# Mirrors SOLD_FIELD_RE = /\b(cans?|packs?)\b/i.
+_SOLD_FIELD_RE = re.compile(r"\b(cans?|packs?)\b", re.IGNORECASE)
+
+# First field whose NAME contains "consumer(s) sampled". Mirrors
+# /consumers?\s+sampled/i.
+_CONSUMERS_SAMPLED_RE = re.compile(r"consumers?\s+sampled", re.IGNORECASE)
+
+# A resolved public URL is treated as a renderable hero image only when it
+# ends in one of these extensions (optionally followed by a query string).
+# Mirrors the frontend isImage = /\.(jpe?g|png|webp|gif)(\?|$)/i — note it
+# deliberately does NOT include heic/heif, matching the frontend, whose
+# list card requests the raw `url` (HEIC there falls back to a separate
+# decoder and is never chosen as the <img> hero).
+_IMAGE_URL_RE = re.compile(r"\.(jpe?g|png|webp|gif)(\?|$)", re.IGNORECASE)
+
+
+def _parse_recap_int(value: str | None) -> int | None:
+    r"""Parse a custom-field value the way the frontend does.
+
+    Mirrors `parseInt(String(value ?? "").replace(/[^\d-]/g, ""), 10)`
+    followed by a `Number.isFinite` check:
+      1. Coerce to str, strip every char that isn't a digit or '-'.
+      2. parseInt-style: an optional single leading '-' then the run of
+         leading digits; parsing stops at the first non-digit (so
+         "12-34" -> 12, "-5" -> -5).
+      3. Return None when no integer can be parsed (frontend's NaN, which
+         fails Number.isFinite and is skipped).
+    """
+    if value is None:
+        return None
+    cleaned = re.sub(r"[^\d-]", "", str(value))
+    match = re.match(r"-?\d+", cleaned)
+    if not match:
+        return None
+    return int(match.group(0))
+
+
+def _sold_units_from_fields(
+    fields: Iterable[tuple[str | None, str | None]],
+) -> int | None:
+    """Sum the parsed values of every field whose NAME matches cans/packs.
+
+    `fields` is an iterable of (name, value) pairs. Returns the running
+    total only if at least one cans/packs field parsed to a finite int;
+    otherwise None — so non-unit templates show "—" rather than a
+    misleading 0. Mirrors customSoldUnits.
+    """
+    total = 0
+    matched = False
+    for name, value in fields:
+        if not name or not _SOLD_FIELD_RE.search(name):
+            continue
+        parsed = _parse_recap_int(value)
+        if parsed is not None:
+            total += parsed
+            matched = True
+    return total if matched else None
+
+
+def _consumers_sampled_from_fields(
+    fields: Iterable[tuple[str | None, str | None]],
+) -> int | None:
+    """Parsed value of the FIRST 'consumers sampled' field, else None.
+
+    Mirrors customConsumersSampled — returns the first finite parse and
+    stops; None when no such field has a numeric value.
+    """
+    for name, value in fields:
+        if not name or not _CONSUMERS_SAMPLED_RE.search(name):
+            continue
+        parsed = _parse_recap_int(value)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _is_image_url(url: str | None) -> bool:
+    """True when the resolved URL ends in a browser-renderable image
+    extension (jpg/jpeg/png/webp/gif). Mirrors the frontend isImage."""
+    return bool(url and _IMAGE_URL_RE.search(url))
 
 
 @strawberry_django.type(models.RecapFile)
@@ -530,6 +627,103 @@ class CustomRecap(Node):
             )
             fields.append(custom_field)
         return fields
+
+    # ---- Lightweight list-card aggregates -----------------------------
+    #
+    # The web recaps LIST renders small cards. It used to over-fetch the
+    # whole customField array + the full customRecapFiles array per row
+    # (thousands of rows for big tenants) just to derive a few numbers
+    # client-side. These resolvers move those derivations server-side as
+    # scalars so the list query can drop those arrays.
+    #
+    # No N+1: the list resolver (`custom_recaps` in recaps/queries.py)
+    # builds its queryset via CustomRecapQueriesService.get_queryset(),
+    # which explicitly prefetch_related()s `custom_field_value` (with its
+    # `custom_field`) and `custom_recap_files`. The connection is then
+    # materialized by utils.graphql.relay.connection_from_queryset_async,
+    # a hand-rolled builder that runs the queryset through plain Django
+    # ORM (count()/list()) — it does NOT route through the strawberry-
+    # django optimizer, so those prefetches survive even when the GraphQL
+    # query no longer SELECTs the arrays. Each resolver therefore reads
+    # straight from the prefetch cache (`.all()` on the reverse manager),
+    # issuing zero per-row queries. The `.all()` access is wrapped in
+    # sync_to_async only because Strawberry runs resolvers in the
+    # request's async loop; on a populated prefetch cache it does no I/O.
+
+    @strawberry.field
+    async def sold_units(self) -> int | None:
+        """SOLD = sum of every cans/packs custom field's integer value.
+
+        Replicates the frontend's customSoldUnits: match field NAMEs on
+        /\\b(cans?|packs?)\\b/i, parse each value (strip non [0-9-], then
+        parseInt). None when the template has no such field (so non-unit
+        templates render "—", not a misleading 0)."""
+
+        def _compute():
+            pairs = [
+                (getattr(v.custom_field, "name", None), v.value)
+                for v in self.custom_field_value.all()
+            ]
+            return _sold_units_from_fields(pairs)
+
+        return await sync_to_async(_compute, thread_sensitive=True)()
+
+    @strawberry.field
+    async def consumers_sampled(self) -> int | None:
+        """Value of the FIRST 'consumers sampled' custom field, else None.
+
+        Replicates the frontend's customConsumersSampled: first field NAME
+        matching /consumers?\\s+sampled/i, value parsed the same way."""
+
+        def _compute():
+            pairs = [
+                (getattr(v.custom_field, "name", None), v.value)
+                for v in self.custom_field_value.all()
+            ]
+            return _consumers_sampled_from_fields(pairs)
+
+        return await sync_to_async(_compute, thread_sensitive=True)()
+
+    @strawberry.field
+    async def hero_image_url(self) -> str | None:
+        """Public URL of the first image-typed custom recap file.
+
+        Replicates the frontend hero pick: take customRecapFiles in order,
+        resolve each file's public `url` (same logic as CustomRecapFile.url
+        — blob name -> public_url), and return the first whose URL matches
+        isImage (jpg/jpeg/png/webp/gif). Returns the raw public_url (not
+        displayUrl): the matched file is already a browser-renderable
+        image, so its displayUrl would equal its url anyway, and skipping
+        the HEIC sibling check avoids any GCS round-trip. None when no
+        image file exists."""
+
+        def _compute():
+            for f in self.custom_recap_files.all():
+                field_file = f.__dict__.get("url")
+                if not field_file:
+                    continue
+                try:
+                    blob = field_file.name
+                except Exception:
+                    blob = str(field_file)
+                url = public_url(extract_blob_name_from_url(blob))
+                if _is_image_url(url):
+                    return url
+            return None
+
+        return await sync_to_async(_compute, thread_sensitive=True)()
+
+    @strawberry.field
+    async def custom_recap_files_count(self) -> int:
+        """Total number of files attached to this custom recap.
+
+        Read from the prefetched `custom_recap_files` so the list card's
+        "N files" chip needs neither the file array nor a per-row COUNT."""
+
+        def _compute():
+            return len(self.custom_recap_files.all())
+
+        return await sync_to_async(_compute, thread_sensitive=True)()
 
     # ---- Linked-event location (for the recap "Information" panel) ----
     #
