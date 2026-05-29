@@ -89,3 +89,17 @@ class OpenChatThreadInput(SparkGraphQLInput):
 @strawberry.input
 class MarkChatThreadReadInput(SparkGraphQLInput):
     thread_uuid: str
+
+
+@strawberry.input
+class ArchiveChatThreadInput(SparkGraphQLInput):
+    """Admin-only soft delete of a chat thread.
+
+    Sets `archived_at` so the thread drops out of the default chat list
+    (chatThreads filters archived_at IS NULL) WITHOUT hard-purging the
+    thread or its messages — it stays recoverable. `archived` toggles the
+    state: True archives (the "delete"/trash action), False restores.
+    """
+
+    thread_uuid: str
+    archived: bool = True
