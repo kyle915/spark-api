@@ -48,6 +48,24 @@ class Ambassador(Asyncable, models.Model):
     address = models.TextField(null=True)
     phone = models.CharField(max_length=100, null=True)
     about_me = models.TextField(null=True)
+    # BA TALENT profile fields (#talent). `bio` is the BA-authored
+    # free-text blurb shown on the admin profile pop-up + mobile "You"
+    # screen. It coexists with the legacy `about_me`: the BA self-edit
+    # mutation keeps both in sync (writes to bio, mirrors to about_me)
+    # so older surfaces that still read about_me don't go blank.
+    bio = models.TextField(blank=True, default="")
+    # School the BA attends / attended. Indexed because the talent
+    # search filters on it (college=__icontains) for campus staffing.
+    college = models.CharField(max_length=255, blank=True, default="", db_index=True)
+    # "Currently attending" — the searchable flag admins use to pull
+    # the in-college student pool for campus activations.
+    in_college = models.BooleanField(default=False)
+    # GCS blob PATH (not a signed URL) for the BA's headshot — single,
+    # uploaded via the getUploadUrl→PUT flow then stored here. Served
+    # via utils.gcs.public_url. Mirrors documents.AmbassadorDocument.file.
+    headshot = models.CharField(max_length=1024, blank=True, default="")
+    # GCS blob PATH for the BA's résumé (PDF), single. Same convention.
+    resume = models.CharField(max_length=1024, blank=True, default="")
     coordinates = ArrayField(
         models.FloatField(),
         size=2,
@@ -309,6 +327,50 @@ class AmbassadorFile(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
     updated_at = models.DateTimeField(auto_now=True)
+
+
+class AmbassadorPhoto(models.Model):
+    """An event/work photo a BA adds to their TALENT profile gallery.
+
+    Multiple per ambassador (unlike the single `Ambassador.headshot`).
+    `image` stores the GCS blob PATH — same getUploadUrl→PUT convention
+    as the headshot/résumé and documents.AmbassadorDocument.file —
+    served to admins/clients via utils.gcs.public_url. Uploaded by the
+    BA from the mobile "You" screen; shown in the web profile pop-up
+    gallery.
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+
+    ambassador = models.ForeignKey(
+        Ambassador,
+        on_delete=models.CASCADE,
+        null=False,
+        related_name="photos",
+    )
+    # GCS blob path (not a signed URL).
+    image = models.CharField(max_length=1024, null=False)
+    caption = models.CharField(max_length=255, blank=True, default="")
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="ambassador_photos_created_by",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["ambassador", "-created_at"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"photo {self.ambassador_id} {self.image[:32]}"
 
 
 class AmbassadorTrait(models.Model):

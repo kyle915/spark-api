@@ -30,6 +30,65 @@ class CreateAmbassadorWithUserInput(CreatePublicAmbassadorInput):
 
 
 @strawberry.input
+class LegalAcceptanceInput:
+    """A single legal-document acceptance the mobile onboarding flow
+    sends alongside the profile. Spark does not yet persist a legal
+    acceptance ledger, so these are accepted and ignored (no-op) to keep
+    the existing CreateProfileScreen call compatible — wiring a real
+    acceptance model is out of scope for the TALENT profile work.
+    """
+
+    kind: str
+    version: str | None = None
+    accepted_at: str | None = None
+
+
+@strawberry.input
+class UpdateBaProfileInput(SparkGraphQLInput):
+    """BA self-edit of their own TALENT profile (mobile schema).
+
+    Every field is optional so the mobile app can PATCH any subset
+    (e.g. just the bio, or just a new headshot blob). Scoped to the
+    authenticated BA server-side — there is no ambassador_id, the BA
+    only ever edits their own row.
+
+    File fields (`headshot`, `resume`, `event_photos`) carry GCS blob
+    PATHS already uploaded via the getUploadUrl→PUT flow, NOT signed
+    URLs. `about` and `bio` are aliases for the same blurb (bio wins);
+    both are written so legacy surfaces reading about_me stay populated.
+    """
+
+    # identity (written to the User row)
+    first_name: str | None = None
+    last_name: str | None = None
+    # contact / locale
+    phone: str | None = None
+    address: str | None = None
+    # city/state/zip have no dedicated Ambassador column today; accepted
+    # for forward-compat with the onboarding screen and folded into the
+    # address string when address itself isn't supplied. Never error.
+    city: str | None = None
+    state: str | None = None
+    zip: str | None = None
+    shirt_size: str | None = None
+    # profile content
+    bio: str | None = None
+    about: str | None = None  # alias of bio
+    college: str | None = None
+    in_college: bool | None = None
+    # file blobs (paths from getUploadUrl)
+    headshot: str | None = None
+    resume: str | None = None
+    # Replace-the-set semantics: when provided (even empty), the BA's
+    # event-photo gallery is reset to exactly these blob paths. None =
+    # leave the gallery untouched.
+    event_photos: List[str] | None = None
+    # Tolerated + ignored — see LegalAcceptanceInput.
+    acceptances: List[LegalAcceptanceInput] | None = None
+    client_mutation_id: strawberry.ID | None = None
+
+
+@strawberry.input
 class CreateAmbassadorInvitationInput(BaseTenantInput):
     """Input for creating ambassador invitation."""
 
@@ -102,6 +161,16 @@ class AmbassadorFiltersInput:
     email: str | None = None  # Search by user email (partial match)
     name: str | None = None  # Search by user first_name or last_name
     address: str | None = None  # Search by address (partial match)
+    # City filter. There's no dedicated city column — city lives inside
+    # the free-text `address`, so this matches address__icontains and is
+    # ANDed with `address` when both are supplied (narrow an address by
+    # city). Talent search exposes it as its own field.
+    city: str | None = None
+    # College filter (partial match on Ambassador.college).
+    college: str | None = None
+    # "In college only" — when True, restrict to currently-attending
+    # students (Ambassador.in_college=True). None = no constraint.
+    in_college: bool | None = None
     about_me: str | None = None  # Search by about_me (partial match)
     search: str | None = None  # General search across email, name, address
 

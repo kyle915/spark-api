@@ -18,6 +18,10 @@ from strawberry.relay import Node
 
 from .models import Role, Tenant, TenantTheme, TenantedUser
 from .types import RoleType, TenantType, TenantThemeType
+# BA self-profile type for the `me { ambassador { ... } }` resolver.
+# Safe import: ambassadors.types imports tenants.types (not tenants.schema),
+# so there is no import cycle.
+from ambassadors.types import BaSelfProfileType
 from .inputs import ColorSchemeEnum, TenantFiltersInput, UserFiltersInput
 from .mutations import (
     AmbassadorsCustomRegister,
@@ -92,6 +96,27 @@ class CustomUserType(Node):
             blob = str(field_file)
         blob_name = extract_blob_name_from_url(blob)
         return public_url(blob_name)
+
+    @strawberry.field
+    async def ambassador(self) -> BaSelfProfileType | None:
+        """The authenticated user's own BA TALENT profile, if they have
+        one. Backs the mobile `me { ambassador { ... } }` query. Returns
+        None for non-BA users (admins/clients have no Ambassador row).
+        """
+        from ambassadors.models import Ambassador as AmbassadorModel
+        from ambassadors.models import AmbassadorPhoto
+
+        def _load():
+            try:
+                amb = AmbassadorModel.objects.select_related(
+                    "user", "location", "location__state"
+                ).get(user_id=self.pk)
+            except AmbassadorModel.DoesNotExist:
+                return None
+            photos = list(AmbassadorPhoto.objects.filter(ambassador=amb))
+            return BaSelfProfileType.from_ambassador(amb, photos)
+
+        return await sync_to_async(_load)()
 
 
 @strawberry.type
