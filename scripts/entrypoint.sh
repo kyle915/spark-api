@@ -23,5 +23,17 @@ else
   echo ">>> entrypoint: RUN_MIGRATIONS_ON_BOOT=0, skipping migrate"
 fi
 
+# One-time, idempotent repair of the Girl Beer recap template so it matches the
+# Connecteam export (adds the missing fields + renames the drifted labels).
+# Safe to re-run — a clean template is a no-op — and a no-op in envs without the
+# tenant (|| true swallows "no tenant"). A pg advisory lock inside the command
+# serializes parallel cold starts. Set RUN_GIRL_BEER_REPAIR_ON_BOOT=0 to disable
+# once it's confirmed applied in prod.
+if [ "${RUN_GIRL_BEER_REPAIR_ON_BOOT:-1}" = "1" ]; then
+  echo ">>> entrypoint: repairing Girl Beer recap template (idempotent)"
+  uv run python manage.py repair_girl_beer_template --tenant-slug girl-beer || true
+  echo ">>> entrypoint: Girl Beer template repair done"
+fi
+
 echo ">>> entrypoint: starting hypercorn"
 exec uv run hypercorn config.asgi:application --bind "0.0.0.0:${PORT:-8000}"

@@ -46,7 +46,7 @@ import re
 
 from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand, CommandError
-from django.db import transaction
+from django.db import connection, transaction
 
 from recaps.models import (
     CustomField,
@@ -123,8 +123,13 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument(
             "--owner-email",
-            required=True,
-            help="Email of the Spark admin to attribute created_by/updated_by to.",
+            required=False,
+            default=None,
+            help=(
+                "Email of the Spark admin to attribute created_by/updated_by to. "
+                "If omitted, derived from the template's existing creator (or a "
+                "superuser) so the deploy can run this by --tenant-slug alone."
+            ),
         )
         parser.add_argument(
             "--tenant-slug",
@@ -138,14 +143,9 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **opts):
-        owner_email: str = opts["owner_email"]
+        owner_email = opts["owner_email"]
         tenant_slug: str = opts["tenant_slug"]
         dry_run: bool = opts["dry_run"]
-
-        try:
-            owner = User.objects.get(email__iexact=owner_email)
-        except User.DoesNotExist:
-            raise CommandError(f"No user with email {owner_email}")
 
         try:
             tenant = Tenant.objects.get(slug=tenant_slug)
@@ -164,6 +164,26 @@ class Command(BaseCommand):
                 f"CustomRecapTemplate to repair. Run onboard_girl_beer first."
             )
 
+        # Attribution user: explicit --owner-email wins; otherwise derive one
+        # (existing template creator → any superuser) so the deploy can invoke
+        # this by --tenant-slug alone without hardcoding an email.
+        if owner_email:
+            try:
+                owner = User.objects.get(email__iexact=owner_email)
+            except User.DoesNotExist:
+                raise CommandError(f"No user with email {owner_email}")
+        else:
+            owner = (
+                getattr(templates[0], "created_by", None)
+                or getattr(templates[0], "updated_by", None)
+                or User.objects.filter(is_superuser=True).order_by("id").first()
+            )
+            if owner is None:
+                raise CommandError(
+                    "Could not derive an owner (no template creator and no "
+                    "superuser found). Pass --owner-email explicitly."
+                )
+
         self.stdout.write(self.style.MIGRATE_HEADING(
             f"\nRepairing Girl Beer template(s) · tenant='{tenant.name}' "
             f"(id={tenant.id}) · owner={owner.email}"
@@ -171,25 +191,42 @@ class Command(BaseCommand):
         if dry_run:
             self.stdout.write(self.style.NOTICE("DRY RUN — no DB writes.\n"))
 
-        # Build the field types once (or stage them for dry-run).
-        if dry_run:
-            field_types = self._peek_field_types()
-        else:
-            field_types = self._ensure_field_types(owner)
+        # Serialize concurrent boot-time runs (parallel Cloud Run cold starts)
+        # so two containers can't race find-then-add and double-insert a field.
+        # Skipped for --dry-run (read-only).
+        lock_key = 728_193_002
+        locked = False
+        if not dry_run:
+            with connection.cursor() as cur:
+                cur.execute("SELECT pg_advisory_lock(%s)", [lock_key])
+            locked = True
 
-        totals = {"renamed": 0, "added": 0, "sections_added": 0}
-        for template in templates:
-            self.stdout.write(self.style.HTTP_INFO(
-                f"\n  Template id={template.id} '{template.name}'"
-            ))
+        try:
+            # Build the field types once (or stage them for dry-run).
             if dry_run:
-                self._repair_template(
-                    template, tenant, field_types, owner, totals, dry_run=True
-                )
+                field_types = self._peek_field_types()
             else:
-                with transaction.atomic():
+                field_types = self._ensure_field_types(owner)
+
+            totals = {"renamed": 0, "added": 0, "sections_added": 0}
+            for template in templates:
+                self.stdout.write(self.style.HTTP_INFO(
+                    f"\n  Template id={template.id} '{template.name}'"
+                ))
+                if dry_run:
                     self._repair_template(
-                        template, tenant, field_types, owner, totals, dry_run=False
+                        template, tenant, field_types, owner, totals, dry_run=True
+                    )
+                else:
+                    with transaction.atomic():
+                        self._repair_template(
+                            template, tenant, field_types, owner, totals, dry_run=False
+                        )
+        finally:
+            if locked:
+                with connection.cursor() as cur:
+                    cur.execute(
+                        "SELECT pg_advisory_unlock(%s)", [lock_key]
                     )
 
         verb = "Would apply" if dry_run else "Applied"
