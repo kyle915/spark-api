@@ -1207,6 +1207,17 @@ class RequestQueries:
         order_field = "date" if date_sort == "asc" else "-date"
         queryset = queryset.order_by(order_field).distinct()
 
+        # The Master Tracker loads the whole tenant in one page (it does
+        # status bucketing, counts and date grouping client-side), so it
+        # asks for `first: 1000`. The shared service default caps a page
+        # at 100; without lifting it here the connection silently
+        # truncated to the 100 newest requests and dropped the oldest
+        # past events — including every event still owing a recap, which
+        # are by definition in the past. That made ~18 overdue-recap
+        # events that ARE counted in totalCount (118) invisible in the
+        # tracker even on the ALL filter. Lift the ceiling so a request
+        # for the full tenant pages through everything; default page size
+        # is unchanged for callers that don't pass `first`.
         return await service.get_connection(
             tenant_id=resolved_tenant_id,
             q=q,
@@ -1215,6 +1226,8 @@ class RequestQueries:
             last=last,
             before=before,
             queryset=queryset,
+            default_limit=100,
+            max_limit=2000,
         )
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
