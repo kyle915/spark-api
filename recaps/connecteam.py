@@ -375,6 +375,44 @@ def match_fields(
     return results
 
 
+def route_single_label_images(image_blobs, image_fields) -> dict:
+    """Route a Connecteam-imported image to an IMAGE CustomField's VALUE — but
+    ONLY when exactly one image's preceding label exactly-normalizes to that
+    field's name.
+
+    Deliberately narrow: it handles the single-image "Product purchase
+    receipt" case and nothing riskier. The receipt's "Product purchase
+    receipt::" PDF label normalizes to the "Product purchase receipt (image)"
+    field (the descriptive "(image)" parenthetical is peeled by `_normalize`),
+    a clean 1:1. Multi-image fields (sampling / table-setup photos) either
+    don't match a field name exactly or have more than one matching image, so
+    the exactly-one rule skips them — they stay in the flat CustomRecapFile
+    gallery (no data loss, no regression of the flat-gallery behavior).
+
+    Exact-normalized (not fuzzy) on purpose, to avoid cross-field mis-routing
+    from the fragile preceding-label signal.
+
+    Args:
+        image_blobs: list of (ParsedImage, stored_blob_path) for attached imgs.
+        image_fields: CustomField rows whose type is IMAGE.
+    Returns:
+        {custom_field_id: blob_path} for fields with exactly one label match.
+    """
+    routing: dict = {}
+    for field in image_fields:
+        fnorm = _normalize(getattr(field, "name", "") or "")
+        if not fnorm:
+            continue
+        matches = [
+            blob
+            for (img, blob) in image_blobs
+            if img.preceding_label and _normalize(img.preceding_label) == fnorm
+        ]
+        if len(matches) == 1:
+            routing[int(field.id)] = matches[0]
+    return routing
+
+
 # --------------------------------------------------------------------------
 # Legacy-form mapping
 #

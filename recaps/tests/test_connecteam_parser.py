@@ -24,7 +24,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from recaps.connecteam import ParsedRecap, _normalize, match_fields
+from recaps.connecteam import (
+    ParsedImage,
+    ParsedRecap,
+    _normalize,
+    match_fields,
+    route_single_label_images,
+)
 from tenants.management.commands.onboard_girl_beer import SECTIONS
 
 
@@ -259,3 +265,71 @@ class TestGirlBeerTemplateMatching:
             if r.field_id is not None
         ]
         assert len(full) > len(recognized)
+
+
+def _img(label: str | None) -> ParsedImage:
+    """A full-size (>1KB) embedded image carrying the given preceding label."""
+    return ParsedImage(
+        bytes_=b"x" * 2048,
+        extension=".jpg",
+        page_index=0,
+        image_index=0,
+        preceding_label=label,
+    )
+
+
+class TestRouteSingleLabelImages:
+    """`route_single_label_images` — the narrow Connecteam image→IMAGE-field
+    routing. An image routes onto a field's value ONLY when its preceding
+    label exactly-normalizes to that field's name AND it's the only such
+    image. Multi-image fields (sampling / table photos) and label-less
+    images stay in the flat CustomRecapFile gallery."""
+
+    IMAGE_FIELDS = [
+        _FakeField(id=1, name="Product purchase receipt (image)"),
+        _FakeField(id=2, name="Table setup pictures"),
+        _FakeField(id=3, name="Sampling pictures (photos)"),
+    ]
+
+    def test_single_receipt_routes_to_its_field(self):
+        routing = route_single_label_images(
+            [(_img("Product purchase receipt"), "blob/receipt.jpg")],
+            self.IMAGE_FIELDS,
+        )
+        assert routing == {1: "blob/receipt.jpg"}
+
+    def test_multiple_same_label_images_do_not_route(self):
+        # Two sampling photos share the label → not exactly-one → skip.
+        routing = route_single_label_images(
+            [
+                (_img("Sampling pictures"), "blob/s1.jpg"),
+                (_img("Sampling pictures"), "blob/s2.jpg"),
+            ],
+            self.IMAGE_FIELDS,
+        )
+        assert routing == {}
+
+    def test_label_less_images_do_not_route(self):
+        routing = route_single_label_images(
+            [(_img(None), "blob/x.jpg")], self.IMAGE_FIELDS,
+        )
+        assert routing == {}
+
+    def test_unmatched_label_does_not_route(self):
+        routing = route_single_label_images(
+            [(_img("Some random caption"), "blob/r.jpg")], self.IMAGE_FIELDS,
+        )
+        assert routing == {}
+
+    def test_receipt_routes_while_sampling_photos_stay_flat(self):
+        # Realistic H-E-B import: 1 receipt + 2 sampling photos. Only the
+        # receipt lands on its field; the sampling pair stays in the gallery.
+        routing = route_single_label_images(
+            [
+                (_img("Product purchase receipt"), "blob/receipt.jpg"),
+                (_img("Sampling pictures"), "blob/s1.jpg"),
+                (_img("Sampling pictures"), "blob/s2.jpg"),
+            ],
+            self.IMAGE_FIELDS,
+        )
+        assert routing == {1: "blob/receipt.jpg"}
