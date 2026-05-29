@@ -228,14 +228,60 @@ def _ext_from_image(image_obj) -> str:
     return ".png"
 
 
+# A trailing "(...)" with no nested parens. We peel these off a label
+# BEFORE alphanumeric stripping, but ONLY when the parenthetical is
+# purely descriptive noise — never when it carries a token that
+# distinguishes one sibling field from another.
+_TRAILING_PAREN = re.compile(r"\s*\(([^()]*)\)\s*$")
+
+
+def _is_discriminating_paren(inner: str) -> bool:
+    """True when a trailing parenthetical distinguishes sibling fields and
+    therefore MUST be preserved through normalization.
+
+    The Girl Beer recap has families of near-identical labels that differ
+    only by what's in the parentheses — age brackets and a roll-up row:
+
+        "Men who bought (21-29)" / "(30-39)" / "(40+)" / "(Total)"
+
+    If we dropped these we'd collapse the whole family to "men who bought"
+    and the four values would fight over one field. So we keep any
+    parenthetical that contains a digit (age brackets like 21-29 / 40+)
+    or the word "total" (the roll-up row). Everything else — "(image)",
+    "(photos)", "(talked to or sampled product)", "(people walking by per
+    hour)" — is descriptive flavor text that only causes label drift, so
+    it gets stripped to maximize exact-match hits.
+    """
+    low = inner.lower()
+    return bool(re.search(r"\d", low)) or "total" in low
+
+
 def _normalize(name: str) -> str:
-    """Lowercase, drop punctuation, collapse whitespace.
+    """Lowercase, drop descriptive parenthetical noise, drop punctuation,
+    collapse whitespace.
 
     Used for fuzzy-matching between PDF labels and CustomField.name —
     "# of PURPLE Variety Packs sold" → "of purple variety packs sold".
+
+    Trailing descriptive parentheticals are peeled first so minor label
+    drift between the PDF and the template still lands an EXACT match:
+    "Sampling pictures (photos)" and a "Sampling pictures" field both
+    normalize to "sampling pictures"; "Foot Traffic (number of people
+    walking by demo table per hour)" and "Foot Traffic (people walking by
+    per hour)" both collapse to "foot traffic". Discriminating
+    parentheticals (age brackets, "(Total)") are kept so sibling
+    demographic rows never collide — see `_is_discriminating_paren`.
     """
+    s = name.strip()
+    # Peel trailing descriptive parentheticals (possibly several), but
+    # stop the moment we hit one that distinguishes sibling fields.
+    while True:
+        m = _TRAILING_PAREN.search(s)
+        if not m or _is_discriminating_paren(m.group(1)):
+            break
+        s = s[: m.start()]
     # Drop everything that isn't alphanumeric or whitespace.
-    cleaned = re.sub(r"[^a-z0-9\s]+", " ", name.lower())
+    cleaned = re.sub(r"[^a-z0-9\s]+", " ", s.lower())
     return re.sub(r"\s+", " ", cleaned).strip()
 
 
@@ -254,13 +300,22 @@ class MatchResult:
 def match_fields(
     parsed: ParsedRecap,
     custom_fields: list,  # list of CustomField rows
-    fuzzy_cutoff: float = 0.85,
+    fuzzy_cutoff: float = 0.80,
 ) -> list[MatchResult]:
     """Pair each parsed (label, value) with the closest CustomField.
 
     Returns one MatchResult per PDF row, in the order they appeared in
     the PDF. Rows with empty values are still returned (skipped_reason
     set) so the caller can show the admin what was blank in the source.
+
+    `fuzzy_cutoff` defaults to 0.80 (was 0.85): the normalization above
+    already absorbs the common drift (descriptive parentheticals), so
+    the remaining fuzzy budget is spent on small wording differences
+    ("6-packs" vs "6 packs", a stray typo). The discriminating-token
+    rule in `_normalize` keeps the age-bracket / "(Total)" sibling rows
+    far enough apart that this lower cutoff doesn't cross-match them
+    when the matching field is present (the normal case once the
+    template covers every PDF label).
     """
     # Build the name→field lookup once. Normalize keys for matching.
     by_norm: dict[str, list] = {}
