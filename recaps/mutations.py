@@ -51,6 +51,46 @@ from recaps.excel import build_recaps_xlsx
 
 ensure_relay_mutation()
 
+
+def _resolve_file_recap_category(raw_id, *, tenant_id):
+    """Resolve a FileRecapCategory for an uploaded recap file — tenant-scoped
+    and graceful.
+
+    FileRecapCategory rows are PER-TENANT, but clients (mobile + web) send a
+    stable positional id — "1" = photos, "2" = receipts — that only lines up
+    with whichever tenant was seeded first. Resolving that id globally tagged
+    a tenant's receipts with another tenant's category (so they never showed
+    under the tenant's own "Receipts" group), and an id with no global row at
+    all raised and rolled back the ENTIRE recap — which is why receipts
+    "didn't stick."
+
+    Resolution order: the category the recap's tenant actually owns (exact id,
+    then the same name as the global row), then the global row, then None.
+    Never raises — a stray category id must not lose the recap or its files.
+    """
+    if raw_id in (None, ""):
+        return None
+    try:
+        category_id = resolve_id_to_int(raw_id)
+    except (TypeError, ValueError, GraphQLError):
+        return None
+    if category_id is None:
+        return None
+    global_cat = models.FileRecapCategory.objects.filter(id=category_id).first()
+    if tenant_id is not None:
+        own = models.FileRecapCategory.objects.filter(
+            tenant_id=tenant_id, id=category_id
+        ).first()
+        if own is not None:
+            return own
+        if global_cat is not None:
+            same_name = models.FileRecapCategory.objects.filter(
+                tenant_id=tenant_id, name__iexact=global_cat.name
+            ).first()
+            if same_name is not None:
+                return same_name
+    return global_cat
+
 User = get_user_model()
 logger = logging.getLogger(__name__)
 
@@ -822,22 +862,10 @@ class RecapMutationService(SparkGraphQLMixin):
                             "No file type available. Please create a file type first."
                         )
 
-                    file_recap_category = None
-                    if file_input.file_recap_category_id not in (None, ""):
-                        try:
-                            category_id = resolve_id_to_int(
-                                file_input.file_recap_category_id
-                            )
-                            file_recap_category = models.FileRecapCategory.objects.get(
-                                id=category_id
-                            )
-                        except (
-                            models.FileRecapCategory.DoesNotExist,
-                            TypeError,
-                            ValueError,
-                            GraphQLError,
-                        ):
-                            raise GraphQLError("File recap category not found.")
+                    file_recap_category = _resolve_file_recap_category(
+                        file_input.file_recap_category_id,
+                        tenant_id=getattr(event, "tenant_id", None),
+                    )
 
                     recap_file = models.RecapFile(
                         name=f"Recap file for {self.input.name}",
@@ -1670,22 +1698,10 @@ class RecapMutationService(SparkGraphQLMixin):
                         if not file_type:
                             raise GraphQLError("No file type available.")
 
-                        file_recap_category = None
-                        if file_input.file_recap_category_id not in (None, ""):
-                            try:
-                                category_id = resolve_id_to_int(
-                                    file_input.file_recap_category_id
-                                )
-                                file_recap_category = (
-                                    models.FileRecapCategory.objects.get(id=category_id)
-                                )
-                            except (
-                                models.FileRecapCategory.DoesNotExist,
-                                TypeError,
-                                ValueError,
-                                GraphQLError,
-                            ):
-                                raise GraphQLError("File recap category not found.")
+                        file_recap_category = _resolve_file_recap_category(
+                            file_input.file_recap_category_id,
+                            tenant_id=getattr(event, "tenant_id", None),
+                        )
 
                         models.CustomRecapFile.objects.create(
                             name=f"Custom recap file for {self.input.name}",
