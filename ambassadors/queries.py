@@ -502,6 +502,306 @@ class AmbassadorEventQueries:
         )
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def my_earnings_breakdown(
+        self,
+        info: strawberry.Info,
+        within_days: int = 30,
+    ) -> types.MyEarningsBreakdown:
+        """Per-shift earnings breakdown for the current BA over the last
+        `withinDays` days (1-365, default 30).
+
+        Each row is a completed (is_approved=True, event.date in window)
+        AmbassadorEvent with its venue, date, hours, and a block proxy.
+
+        HONESTY CONTRACT: Spark does not own payroll. Wingspan holds the
+        money and links payments to BAs by email only — there is no
+        payment->shift join — so `gross` is None and `payment_status` is
+        "not_available" on every row, and `payments_available` is False.
+        These fields are typed/forward-compatible: when a real payment
+        correlation lands, populate them with NO schema change. We never
+        fabricate a dollar figure here.
+        """
+        from datetime import datetime, timedelta, timezone as _tz
+        from math import ceil
+
+        user = info.context.request.user
+        if not getattr(user, "is_authenticated", False):
+            return types.MyEarningsBreakdown(
+                within_days=max(1, min(int(within_days), 365)),
+                shifts_count=0,
+                hours_total=None,
+                payments_available=False,
+                rows=[],
+            )
+
+        days = max(1, min(int(within_days), 365))
+        now = datetime.now(_tz.utc)
+        cutoff = now - timedelta(days=days)
+
+        def _hours(start, end) -> float | None:
+            # Mirror my_earnings_stats: treat start/end via their clock
+            # components and roll a negative delta over midnight (+24h).
+            # Works whether the ORM hands back time or datetime objects.
+            if not start or not end:
+                return None
+            s = (start.hour * 3600) + (start.minute * 60) + start.second
+            e = (end.hour * 3600) + (end.minute * 60) + end.second
+            delta = e - s
+            if delta < 0:
+                delta += 24 * 3600
+            return round(delta / 3600.0, 2)
+
+        def _fetch() -> types.MyEarningsBreakdown:
+            try:
+                ambassador = models.Ambassador.objects.get(user=user)
+            except models.Ambassador.DoesNotExist:
+                return types.MyEarningsBreakdown(
+                    within_days=days,
+                    shifts_count=0,
+                    hours_total=None,
+                    payments_available=False,
+                    rows=[],
+                )
+
+            qs = (
+                models.AmbassadorEvent.objects.select_related(
+                    "event",
+                    "event__retailer",
+                    "event__state",
+                )
+                .filter(
+                    ambassador=ambassador,
+                    is_approved=True,
+                    event__date__gte=cutoff,
+                    event__date__lte=now,
+                )
+                .order_by("-event__date")
+            )
+
+            rows: list[types.EarningsShiftRow] = []
+            total_hours = 0.0
+            any_hours = False
+            for ae in qs:
+                ev = ae.event
+                venue = (
+                    getattr(ev, "name", None)
+                    or getattr(getattr(ev, "retailer", None), "name", None)
+                    or "(shift)"
+                )
+                state_code = getattr(getattr(ev, "state", None), "code", None)
+                hrs = _hours(
+                    getattr(ev, "start_time", None),
+                    getattr(ev, "end_time", None),
+                )
+                blocks = None
+                if hrs is not None:
+                    any_hours = True
+                    total_hours += hrs
+                    blocks = max(1, ceil(hrs / 4.0)) if hrs > 0 else 0
+                rows.append(
+                    types.EarningsShiftRow(
+                        ambassador_event_uuid=strawberry.ID(str(ae.uuid)),
+                        event_uuid=strawberry.ID(str(ev.uuid)),
+                        venue=venue,
+                        date=(
+                            ev.date.isoformat()
+                            if getattr(ev, "date", None)
+                            else None
+                        ),
+                        start_time=(
+                            ev.start_time.isoformat()
+                            if getattr(ev, "start_time", None)
+                            else None
+                        ),
+                        end_time=(
+                            ev.end_time.isoformat()
+                            if getattr(ev, "end_time", None)
+                            else None
+                        ),
+                        state_code=state_code,
+                        hours=hrs,
+                        blocks=blocks,
+                        gross=None,  # honest: no per-shift $ source exists
+                        payment_status="not_available",
+                    )
+                )
+
+            return types.MyEarningsBreakdown(
+                within_days=days,
+                shifts_count=len(rows),
+                hours_total=round(total_hours, 2) if any_hours else None,
+                payments_available=False,
+                rows=rows,
+            )
+
+        return await sync_to_async(_fetch, thread_sensitive=True)()
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def my_rating_summary(
+        self,
+        info: strawberry.Info,
+    ) -> types.MyRatingSummary:
+        """BA-facing ratings + reliability streak (#197).
+
+        Ratings: average + count over ALL of this BA's AmbassadorRating
+        rows, plus the newest 5. Streak: consecutive most-recent
+        completed shifts (event.start_time in the past) that have BOTH
+        an on-time clock-in (Attendance.source='clock_in' with
+        clock_time <= start_time + 10m grace) AND a filed Recap.
+        """
+        from datetime import datetime, timedelta, timezone as _tz
+
+        service = AmbassadorEventQueriesService()
+        user = await service.get_user(info)
+
+        GRACE = timedelta(minutes=10)
+        BEST_SCAN_LIMIT = 180  # bound the history walk
+        RECENT_LIMIT = 5
+        now = datetime.now(_tz.utc)
+
+        def _compute():
+            from ambassadors.models import Ambassador, Attendance, AmbassadorRating
+            from recaps.models import Recap
+            from django.db.models import Avg, Count
+
+            ba = (
+                Ambassador.objects.filter(user=user)
+                .only("id")
+                .first()
+            )
+            if ba is None:
+                return types.MyRatingSummary(
+                    average=0.0,
+                    count=0,
+                    recent=[],
+                    current_streak=0,
+                    best_streak=0,
+                    last_shift_on_time=None,
+                )
+
+            ba_id = ba.id
+
+            # ---- ratings aggregate ----
+            agg = AmbassadorRating.objects.filter(ambassador_id=ba_id).aggregate(
+                avg=Avg("score"), cnt=Count("id")
+            )
+            avg = round(float(agg["avg"]), 1) if agg["avg"] is not None else 0.0
+            cnt = int(agg["cnt"] or 0)
+
+            recent_rows = list(
+                AmbassadorRating.objects.filter(ambassador_id=ba_id)
+                .select_related("event")
+                .order_by("-created_at")[:RECENT_LIMIT]
+            )
+            recent = [
+                types.MyRatingRecent(
+                    score=int(r.score),
+                    comment=(r.comment or None),
+                    created_at=r.created_at.isoformat() if r.created_at else "",
+                    event_name=(getattr(r.event, "name", None) if r.event_id else None),
+                )
+                for r in recent_rows
+            ]
+
+            # ---- reliability streak ----
+            # Completed shifts for this BA, newest first, bounded.
+            # event.start_time in the past = "completed" (matches the
+            # my_earnings_stats convention of date < now without
+            # requiring an attendance row).
+            ae_rows = list(
+                models.AmbassadorEvent.objects.filter(
+                    ambassador_id=ba_id,
+                    event__start_time__isnull=False,
+                    event__start_time__lte=now,
+                )
+                .select_related("event")
+                .order_by("-event__start_time")[:BEST_SCAN_LIMIT]
+            )
+            if not ae_rows:
+                return types.MyRatingSummary(
+                    average=avg,
+                    count=cnt,
+                    recent=recent,
+                    current_streak=0,
+                    best_streak=0,
+                    last_shift_on_time=None,
+                )
+
+            event_ids = [ae.event_id for ae in ae_rows]
+
+            # On-time clock-in set: event_ids where a clock_in Attendance
+            # exists for this BA with clock_time <= start_time + grace.
+            # Pull the earliest clock_in per event, compare in python so
+            # the grace add is straightforward and tz-safe.
+            clockins = (
+                Attendance.objects.filter(
+                    ambassador_id=ba_id,
+                    event_id__in=event_ids,
+                    source__name="clock_in",
+                )
+                .select_related("event")
+                .values("event_id", "clock_time", "event__start_time")
+            )
+            on_time_event_ids = set()
+            earliest_ci = {}  # event_id -> earliest clock_time
+            start_by_event = {}
+            for row in clockins:
+                eid = row["event_id"]
+                ct = row["clock_time"]
+                st = row["event__start_time"]
+                start_by_event[eid] = st
+                if eid not in earliest_ci or (ct and ct < earliest_ci[eid]):
+                    earliest_ci[eid] = ct
+            for eid, ct in earliest_ci.items():
+                st = start_by_event.get(eid)
+                if ct is not None and st is not None and ct <= st + GRACE:
+                    on_time_event_ids.add(eid)
+
+            # Filed-recap set: event_ids with a submitted recap by this BA.
+            recap_event_ids = set(
+                Recap.objects.filter(
+                    ambassador_id=ba_id,
+                    event_id__in=event_ids,
+                    submited_at__isnull=False,
+                ).values_list("event_id", flat=True)
+            )
+
+            def _ok(eid: int) -> bool:
+                return eid in on_time_event_ids and eid in recap_event_ids
+
+            # current streak: walk newest->oldest, stop at first failure.
+            current = 0
+            for ae in ae_rows:
+                if _ok(ae.event_id):
+                    current += 1
+                else:
+                    break
+
+            # best streak: longest run across the scanned window.
+            best = 0
+            run = 0
+            for ae in ae_rows:
+                if _ok(ae.event_id):
+                    run += 1
+                    if run > best:
+                        best = run
+                else:
+                    run = 0
+
+            last_on_time = ae_rows[0].event_id in on_time_event_ids
+
+            return types.MyRatingSummary(
+                average=avg,
+                count=cnt,
+                recent=recent,
+                current_streak=current,
+                best_streak=best,
+                last_shift_on_time=last_on_time,
+            )
+
+        return await sync_to_async(_compute, thread_sensitive=True)()
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def ambassador_events(
         self,
         info: strawberry.Info,

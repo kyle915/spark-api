@@ -458,6 +458,63 @@ class SendPaymentNotificationsView(View):
         )
 
 
+@method_decorator(csrf_exempt, name="dispatch")
+class SendDocumentExpiryRemindersView(View):
+    """POST `/internal/cron/send-document-expiry-reminders`.
+
+    Fires `send_document_expiry_reminders` — pushes each BA a reminder for
+    documents expiring within N days, and marks already-expired docs.
+
+    Body / query params (all optional):
+      - days: int (default 14) — look-ahead window
+      - dry_run: "1" / "true" / "yes"
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _bool(name: str, default: bool = False) -> bool:
+            raw = (request.GET.get(name) or request.POST.get(name) or "").lower()
+            if not raw:
+                return default
+            return raw in ("1", "true", "yes", "on")
+
+        try:
+            days = int(request.GET.get("days") or request.POST.get("days") or 14)
+        except ValueError:
+            return JsonResponse(
+                {"ok": False, "error": "days must be an integer"}, status=400
+            )
+        dry_run = _bool("dry_run", default=False)
+
+        cmd_args: list[str] = ["--days", str(days)]
+        if dry_run:
+            cmd_args.append("--dry-run")
+
+        out = io.StringIO()
+        try:
+            call_command("send_document_expiry_reminders", *cmd_args, stdout=out)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Document expiry reminders cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc),
+                 "log": out.getvalue()},
+                status=500,
+            )
+
+        return JsonResponse(
+            {"ok": True, "days": days, "dry_run": dry_run, "log": out.getvalue()}
+        )
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        return JsonResponse({"ok": True, "endpoint": "send-document-expiry-reminders"})
+
+
 def _registered_views() -> dict[str, Any]:
     """Map URL path → view class. Lets `digest/urls.py` mount these
     without each one being re-exported explicitly.
@@ -468,4 +525,5 @@ def _registered_views() -> dict[str, Any]:
         "send-new-gig-digest": SendNewGigDigestView,
         "send-recap-reminders": SendRecapRemindersView,
         "send-payment-notifications": SendPaymentNotificationsView,
+        "send-document-expiry-reminders": SendDocumentExpiryRemindersView,
     }

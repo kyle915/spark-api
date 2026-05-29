@@ -64,6 +64,9 @@ INSTALLED_APPS = [
     "academy",
     "digest",
     "wingspan",
+    "availability",
+    "documents",
+    "announcements",
 ]
 
 AUTH_USER_MODEL = "tenants.User"

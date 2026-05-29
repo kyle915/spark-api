@@ -64,6 +64,95 @@ class MyEarningsStats:
 
 
 @strawberry.type
+class EarningsShiftRow:
+    """One completed shift in the BA's earnings breakdown (#194).
+
+    Sourced entirely from AmbassadorEvent + Event — data the BA already
+    owns. Deliberately carries NO fabricated dollars: Spark does not own
+    payroll (Wingspan does, keyed only by contractor email with no link
+    back to a specific shift), so `gross` is always None and
+    `payment_status` is always "not_available" until a real payment->shift
+    join exists. The mobile UI renders hours/blocks (real) and a neutral
+    "Paid via Wingspan" status pill instead of inventing a number.
+    """
+
+    # Stable id for React keys / future payment correlation.
+    ambassador_event_uuid: strawberry.ID
+    event_uuid: strawberry.ID
+    # Human label: Event.name, falling back to retailer name.
+    venue: str
+    # ISO date of the shift (Event.date), e.g. "2026-05-20".
+    date: str | None
+    start_time: str | None  # ISO datetime
+    end_time: str | None    # ISO datetime
+    state_code: str | None
+    # Decimal hours for THIS shift (end - start). None if either bound
+    # is missing. Same math as myEarningsStats, per-row.
+    hours: float | None
+    # Whole-block proxy used in field-marketing scheduling: ceil(hours/4),
+    # min 1 when hours>0. None when hours is None. Pure presentation.
+    blocks: int | None
+    # ALWAYS None today — see class docstring. Typed so the field can be
+    # populated later without a schema change.
+    gross: float | None
+    # ALWAYS "not_available" today. Enum-ish string the UI maps to a pill:
+    # not_available | pending | paid. Kept forward-compatible.
+    payment_status: str
+
+
+@strawberry.type
+class MyEarningsBreakdown:
+    """Per-shift earnings breakdown for the mobile Earnings tab (#194).
+
+    Header totals (shift count, hours) intentionally mirror
+    MyEarningsStats so the screen can show one consistent summary, then
+    list the rows that make it up.
+    """
+
+    within_days: int
+    shifts_count: int
+    hours_total: float | None
+    # True the moment Spark can show a real per-shift dollar figure /
+    # payment status. False today so the UI shows the honest Wingspan
+    # explainer instead of empty money columns.
+    payments_available: bool
+    rows: list[EarningsShiftRow]
+
+
+@strawberry.type
+class MyRatingRecent:
+    """One recent star rating, BA-facing (#197). `event_name` is the gig
+    the rating was about (null for a general, non-gig rating)."""
+
+    score: int
+    comment: str | None
+    created_at: str
+    event_name: str | None
+
+
+@strawberry.type
+class MyRatingSummary:
+    """BA-facing ratings + reliability snapshot for the mobile Profile
+    card (#197). Read-only; computed live off AmbassadorRating +
+    Attendance(clock_in) + Recap. No dollar / PII leakage.
+    """
+
+    # ---- ratings ----
+    average: float            # mean of ALL ratings (admin + client), 1dp; 0.0 when none
+    count: int                # total number of ratings counted into `average`
+    recent: list[MyRatingRecent]   # newest 5
+
+    # ---- reliability streak ----
+    # Consecutive most-recent completed shifts with an on-time clock-in
+    # (clock_time <= start_time + 10m grace) AND a filed recap.
+    current_streak: int
+    best_streak: int          # longest such run in history (scan-bounded)
+    # Did the single most recent completed shift pass the on-time test?
+    # None when the BA has no completed shifts yet.
+    last_shift_on_time: bool | None
+
+
+@strawberry.type
 class FileTypeDetailResponse:
     success: bool
     message: str

@@ -9,6 +9,9 @@ from recaps.schema import RecapQueryMobile, RecapMutationsMobile
 from jobs.schema import MobileJobMutations, MobileJobQueries
 from academy.schema import AcademyQueryMobile
 from chats.schema import ChatQueryMobile, ChatMutationsMobile
+from availability.schema import AvailabilityQueryMobile, AvailabilityMutationsMobile
+from documents.schema import DocumentQueryMobile, DocumentMutationsMobile
+from announcements.schema import AnnouncementQueryMobile
 from utils.graphql.gcs_schema import GCSQuery
 
 QueryMobile = merge_types(
@@ -22,6 +25,9 @@ QueryMobile = merge_types(
         GCSQuery,
         AcademyQueryMobile,
         ChatQueryMobile,
+        AvailabilityQueryMobile,
+        DocumentQueryMobile,
+        AnnouncementQueryMobile,
     ),
 )
 MutationMobile = merge_types(
@@ -33,6 +39,8 @@ MutationMobile = merge_types(
         MobileJobMutations,
         RecapMutationsMobile,
         ChatMutationsMobile,
+        AvailabilityMutationsMobile,
+        DocumentMutationsMobile,
     ),
 )
 
