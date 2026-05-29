@@ -1159,6 +1159,26 @@ class RecapQueries:
         tenant_id = await _enforce_client_tenant(
             service, info, filters_tenant_id_raw
         )
+        # Hard tenant scope for the recaps LIST (clients schema). Every
+        # web consumer of this resolver is a per-tenant surface and always
+        # passes the active tenant; the ONLY way `tenant_id` is None here
+        # is an unrestricted role (staff / superuser / spark-admin) that
+        # sent no tenant — in which case the old resolver returned EVERY
+        # tenant's recaps, leaking cross-tenant rows into the "Your
+        # recaps" list (the live Girl Beer bug: an LD recap and an
+        # inflated count). Mirror `recapEventOptions`: with no tenant in
+        # scope return an EMPTY page rather than all tenants. Clients are
+        # already pinned to their own tenant by _enforce_client_tenant
+        # above, so this only closes the admin-side, no-tenant footgun.
+        if not tenant_id:
+            empty = service.get_model().objects.none()
+            return await service.get_connection(
+                first=first,
+                after=after,
+                last=last,
+                before=before,
+                queryset=empty,
+            )
         event_id: int | None = (
             resolve_id_to_int(filters.event_id)
             if filters and filters.event_id
@@ -1304,6 +1324,20 @@ class RecapQueries:
         resolved_tenant_id = await _enforce_client_tenant(
             service, info, filters_tenant_id_raw
         )
+        # Same hard tenant scope as the legacy `recaps` resolver: custom
+        # recaps share the "Your recaps" list, so an unrestricted role
+        # with no tenant in scope must get an EMPTY page, not every
+        # tenant's custom recaps. Clients are already pinned by
+        # _enforce_client_tenant above.
+        if not resolved_tenant_id:
+            empty = service.get_model().objects.none()
+            return await service.get_connection(
+                first=first,
+                after=after,
+                last=last,
+                before=before,
+                queryset=empty,
+            )
         resolved_event_id = (
             resolve_id_to_int(filters.event_id)
             if filters and filters.event_id not in (None, "")
@@ -1541,24 +1575,58 @@ class RecapQueries:
         tenant_id: strawberry.ID | None = None,
         event_type_id: strawberry.ID | None = None,
     ) -> types.CustomRecapTemplate | None:
-        """Return a single CustomRecapTemplate including custom fields."""
+        """Return a single CustomRecapTemplate — tenant-scoped.
+
+        Same leak surface as `customRecapTemplates`: the recap form can
+        load a single template by event_type/tenant, and without scoping a
+        cross-tenant lookup would hand back another client's template
+        (wrong fields rendered). We resolve the active tenant the same way
+        as the list resolver and verify the returned record belongs to it,
+        returning None on a tenant mismatch — same "indistinguishable from
+        not-found" posture as the single `recap`/`customRecap` resolvers,
+        so we never leak the existence of another tenant's template.
+        """
+        from events.queries import EventQueriesService
+
         try:
             service = CustomRecapTemplateQueriesService()
             await service.get_user(info)
-            resolved_tenant_id = (
-                resolve_id_to_int(tenant_id) if tenant_id not in (None, "") else None
+            explicit_tenant_id = (
+                tenant_id if tenant_id not in (None, "") else None
             )
             resolved_event_type_id = (
                 resolve_id_to_int(event_type_id)
                 if event_type_id not in (None, "")
                 else None
             )
+
+            resolved_tenant_id: int | None = None
+            try:
+                resolved_tenant_id = (
+                    await EventQueriesService().resolve_tenant_id(
+                        info,
+                        tenant_id=explicit_tenant_id,
+                    )
+                )
+            except GraphQLError:
+                resolved_tenant_id = None
+
             record = await service.get_record(
                 id=resolve_id_to_int(id) if id not in (None, "") else None,
                 uuid=str(uuid) if uuid not in (None, "") else None,
                 tenant_id=resolved_tenant_id,
                 event_type_id=resolved_event_type_id,
             )
+            if record is None:
+                return None
+            # Defence in depth: when a tenant is in scope, a record from a
+            # different tenant (e.g. fetched by raw id/uuid) is treated as
+            # not found. When no tenant is in scope (unrestricted role,
+            # no selection) we don't widen access here — get_record still
+            # required some lookup key — but we refuse to hand back a
+            # record we can't tie to the active tenant.
+            if resolved_tenant_id and record.tenant_id != resolved_tenant_id:
+                return None
             return record
         except GraphQLError:
             return None
@@ -1573,11 +1641,37 @@ class RecapQueries:
         before: str | None = None,
         filters: CustomRecapTemplateFiltersInput | None = None,
     ) -> CountableConnection[types.CustomRecapTemplate]:
-        """Return CustomRecapTemplate records filtered by tenant or event type."""
+        """Return CustomRecapTemplate records — STRICTLY tenant-scoped.
+
+        This is what the recap-build form reads to pick the ACTIVE custom
+        recap template for the tenant (the "NEW RECAP" form / Connecteam
+        importer auto-populate from it). The template DEFINES which fields
+        the form renders, so a cross-tenant leak here means the form draws
+        the WRONG client's template — e.g. Girl Beer's form rendering
+        Liquid Death's fields (the live bug Kyle hit).
+
+        The old resolver passed `filters.tenant_id` straight through and
+        applied NO tenant scoping when it was absent, so for an
+        unrestricted role (staff / superuser / spark-admin) an empty
+        tenant filter returned EVERY tenant's templates — and the frontend
+        was the only thing keeping the picker on the active tenant, a
+        guard that re-broke (same class as the #343 events leak).
+
+        Fix mirrors `recapEventOptions`: resolve the active tenant on the
+        SERVER (staff pass their selected dashboard tenant via
+        `filters.tenant_id`; a client/tenant user resolves to their own
+        membership tenant even with no filter) and return an EMPTY page
+        when NO tenant is in scope, rather than every tenant's templates.
+        The picker can no longer load another client's template no matter
+        what the client sends.
+        """
+        from events.queries import EventQueriesService
+
         service = CustomRecapTemplateQueriesService()
         await service.get_user(info)
-        resolved_tenant_id = (
-            resolve_id_to_int(filters.tenant_id)
+
+        explicit_tenant_id = (
+            filters.tenant_id
             if filters and filters.tenant_id not in (None, "")
             else None
         )
@@ -1586,6 +1680,37 @@ class RecapQueries:
             if filters and filters.event_type_id not in (None, "")
             else None
         )
+
+        # Resolve the active tenant exactly like the recap event picker:
+        # staff/spark-admin acting inside a tenant pass it explicitly and
+        # bypass the membership check; tenant users resolve to their own
+        # membership; unrestricted roles with NO explicit tenant resolve
+        # to None (the hard stop below).
+        resolved_tenant_id: int | None = None
+        try:
+            resolved_tenant_id = await EventQueriesService().resolve_tenant_id(
+                info,
+                tenant_id=explicit_tenant_id,
+            )
+        except GraphQLError:
+            resolved_tenant_id = None
+
+        # Hard stop: a template picker without a tenant in scope returns
+        # nothing — never every tenant's templates. This is the line that
+        # stops the recap form from ever loading another client's
+        # template fields.
+        if not resolved_tenant_id:
+            empty = service.get_model().objects.none()
+            return await service.get_connection(
+                tenant_id=None,
+                event_type_id=resolved_event_type_id,
+                first=first,
+                after=after,
+                last=last,
+                before=before,
+                queryset=empty,
+            )
+
         queryset = service.get_ordered_queryset(
             tenant_id=resolved_tenant_id,
             event_type_id=resolved_event_type_id,
