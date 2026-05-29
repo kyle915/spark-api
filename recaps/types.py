@@ -416,6 +416,21 @@ class RecapDetailResponse:
     recap: Recap | None = None
 
 
+@strawberry.type
+class DeleteRecapResponse:
+    """Result of deleting a legacy Recap.
+
+    Returns the deleted recap's uuid so the client can drop the row
+    from Relay's store / the recaps list without a full refetch.
+    Mirrors events.types.DeleteRequestResponse.
+    """
+
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    deleted_recap_uuid: str | None = None
+
+
 @strawberry_django.type(models.CustomRecap)
 class CustomRecap(Node):
     uuid: str
@@ -565,6 +580,21 @@ class CustomRecapDetailResponse:
     message: str
     client_mutation_id: strawberry.ID | None = None
     custom_recap: CustomRecap | None = None
+
+
+@strawberry.type
+class DeleteCustomRecapResponse:
+    """Result of deleting a CustomRecap.
+
+    Returns the deleted recap's uuid so the client can prune it from
+    Relay's store / the recaps list without a full refetch. Mirrors
+    DeleteRecapResponse / events.types.DeleteRequestResponse.
+    """
+
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    deleted_custom_recap_uuid: str | None = None
 
 
 @strawberry.type
