@@ -29,3 +29,16 @@ class ChatMutationsSpark(mutations.ChatMutations):
 @strawberry.type
 class ChatMutationsMobile(mutations.ChatMutations):
     pass
+
+
+# The admin web app queries the CLIENT surface (/graphql/clients), so chat
+# must be exposed there too — same resolvers, role-shaped per caller by
+# services.resolve_caller_context.
+@strawberry.type
+class ChatQueryClient(queries.ChatQueries):
+    pass
+
+
+@strawberry.type
+class ChatMutationsClient(mutations.ChatMutations):
+    pass
