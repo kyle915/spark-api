@@ -4270,7 +4270,11 @@ class RecapMutations:
         """
         import base64
 
-        from recaps.connecteam import parse_pdf_bytes, match_fields
+        from recaps.connecteam import (
+            parse_pdf_bytes,
+            match_fields,
+            route_single_label_images,
+        )
 
         user = info.context.request.user
 
@@ -4448,6 +4452,7 @@ class RecapMutations:
                     image_filetype, _ = FileType.objects.get_or_create(
                         name="image",
                     )
+                    attached_images: list = []
                     for parsed_img in parsed.images:
                         # Skip obvious zero-byte / placeholder entries.
                         if not parsed_img.bytes_:
@@ -4482,6 +4487,30 @@ class RecapMutations:
                             save=False,
                         )
                         file_row.save()
+                        attached_images.append(
+                            (parsed_img, file_row.url.name)
+                        )
+
+                    # Route a single, unambiguously-labeled image (the
+                    # receipt) onto its IMAGE field's VALUE so it renders in
+                    # place, not just the flat gallery. Narrow by design
+                    # (exactly-one exact-label match — see
+                    # route_single_label_images), so multi-image sampling /
+                    # table photos stay flat. The image stays in the gallery
+                    # too; this only ALSO sets the field value.
+                    image_fields = [
+                        cf
+                        for cf in custom_fields
+                        if getattr(cf.custom_field_type, "name", "") == "image"
+                    ]
+                    for fid, blob in route_single_label_images(
+                        attached_images, image_fields
+                    ).items():
+                        models.CustomFieldValue.objects.get_or_create(
+                            custom_recap=recap,
+                            custom_field_id=fid,
+                            defaults={"value": blob, "created_by": user},
+                        )
                 except Exception:
                     logging.getLogger(__name__).exception(
                         "connecteam-import: image attach failed "
