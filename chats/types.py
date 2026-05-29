@@ -94,17 +94,52 @@ class ChatMessage:
         return await _fetch()
 
     @strawberry.field
-    def sender_name(self) -> str:
+    async def sender_name(self) -> str:
         """Display name for the sender — for admin-side rendering of
         the BA's name on incoming messages and admin's name on
-        outgoing. Falls back to email if no first/last on the User."""
-        u = getattr(self, "sender", None)
-        if u is None:
-            return ""
-        full = " ".join(
-            x for x in [getattr(u, "first_name", "") or "", getattr(u, "last_name", "") or ""] if x
-        ).strip()
-        return full or (getattr(u, "email", "") or "")
+        outgoing. Falls back to email if no first/last on the User.
+
+        ASYNC + sync_to_async because `self.sender` is a lazy FK: the
+        object Strawberry hands us from sendChatMessage /
+        broadcastChatMessage is a freshly `.create()`'d ChatMessage with
+        NO select_related("sender"), so touching `self.sender` here
+        evaluates the FK with a synchronous DB query. Inside Strawberry's
+        async executor that raises SynchronousOnlyOperation ("You cannot
+        call this from an async context") and fails the whole mutation
+        even though the row already persisted. Wrapping the access in
+        sync_to_async matches the pattern the other FK/relation resolvers
+        on this type (attachments) and on ChatThread (ambassador/job)
+        already use. The read path (messages()) DOES select_related the
+        sender, so there it's a cheap cache hit, not a query."""
+        @sync_to_async
+        def _name() -> str:
+            u = getattr(self, "sender", None)
+            if u is None:
+                return ""
+            full = " ".join(
+                x
+                for x in [
+                    getattr(u, "first_name", "") or "",
+                    getattr(u, "last_name", "") or "",
+                ]
+                if x
+            ).strip()
+            return full or (getattr(u, "email", "") or "")
+
+        return await _name()
+
+
+@strawberry.type
+class ChatRecipient:
+    """A BA the admin can message in the active tenant — the source rows
+    for the "New / group message" composer's recipient picker. Scoped by
+    event history in the tenant (same reachability rule the broadcast
+    enforces), so the picker can only ever list BAs a broadcast could
+    actually reach. Deliberately lightweight (uuid + name + email)."""
+
+    uuid: str
+    name: str
+    email: str
 
 
 @strawberry.type

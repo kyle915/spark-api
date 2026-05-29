@@ -264,6 +264,17 @@ def mark_thread_read(
 
 
 @sync_to_async
+def set_thread_archived(*, thread_id: int, archived: bool) -> None:
+    """Soft-archive (or restore) a thread by stamping / clearing
+    `archived_at`. Idempotent — archiving an already-archived thread is a
+    no-op on state. Messages are never touched, so the thread is fully
+    recoverable by passing archived=False."""
+    models.ChatThread.objects.filter(id=thread_id).update(
+        archived_at=timezone.now() if archived else None
+    )
+
+
+@sync_to_async
 def resolve_broadcast_target_ambassador_ids(
     *,
     tenant_id: int,
@@ -330,6 +341,66 @@ def resolve_broadcast_target_ambassador_ids(
             target_ids |= member_amb_ids
 
     return sorted(target_ids)
+
+
+@sync_to_async
+def list_recipient_ambassadors_for_tenant(
+    *, tenant_id: int, q: Optional[str] = None, limit: int = 500
+) -> list[dict]:
+    """The BAs an admin can message in `tenant_id`, optionally filtered
+    by a name/email search term.
+
+    Scoped by the SAME mechanism broadcastChatMessage uses to decide who
+    a message can reach — Ambassador event history in this tenant
+    (`AmbassadorEvent.event__tenant_id`) — NOT TenantedUser membership.
+    This is the fix for "No ambassadors found": the composer previously
+    used the generic `ambassadors` query, which scopes by TenantedUser
+    (the admin/client-user join), so BAs — who are linked to a brand
+    through their worked events, not a TenantedUser row — never showed
+    up. Mirrors recapEventOptions: strictly tenant-scoped, returns
+    nothing without a tenant in scope (the resolver enforces that).
+
+    Returns lightweight dicts (uuid, name, email) so the picker doesn't
+    drag the full Ambassador type's own FK resolvers through the list.
+    """
+    from ambassadors.models import Ambassador, AmbassadorEvent
+
+    amb_ids = list(
+        AmbassadorEvent.objects.filter(event__tenant_id=tenant_id)
+        .values_list("ambassador_id", flat=True)
+        .distinct()
+    )
+    if not amb_ids:
+        return []
+
+    qs = Ambassador.objects.select_related("user").filter(
+        id__in=amb_ids, is_active=True
+    )
+    term = (q or "").strip()
+    if term:
+        from django.db.models import Q
+
+        qs = qs.filter(
+            Q(user__first_name__icontains=term)
+            | Q(user__last_name__icontains=term)
+            | Q(user__email__icontains=term)
+        )
+
+    rows: list[dict] = []
+    for amb in qs.order_by("user__first_name", "user__last_name", "id")[:limit]:
+        u = amb.user
+        first = (getattr(u, "first_name", "") or "") if u else ""
+        last = (getattr(u, "last_name", "") or "") if u else ""
+        email = (getattr(u, "email", "") or "") if u else ""
+        name = " ".join(x for x in [first, last] if x).strip() or email
+        rows.append(
+            {
+                "uuid": str(amb.uuid),
+                "name": name,
+                "email": email,
+            }
+        )
+    return rows
 
 
 @sync_to_async

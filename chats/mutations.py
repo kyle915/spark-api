@@ -314,6 +314,69 @@ class ChatMutations:
         )
 
     @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def archive_chat_thread(
+        self, info: strawberry.Info, input: inputs.ArchiveChatThreadInput
+    ) -> types.ChatThread:
+        """Admin-only SOFT delete of a chat thread (the trash action on a
+        thread row). Sets `archived_at` so the thread leaves the default
+        chat list without hard-purging it or its messages — recoverable
+        by re-running with archived=False.
+
+        Tenant-scoped: an admin can only archive threads in tenants they
+        belong to (same membership gate sendChatMessage uses). BAs can't
+        archive at all. Returns the updated thread so the client can
+        confirm + drop the row optimistically.
+        """
+        user, amb, is_ba, is_admin, _ = await services.resolve_caller_context(info)
+        if user is None:
+            raise GraphQLError("Authentication required.")
+        if not is_admin:
+            raise GraphQLError("Only admins can delete chat threads.")
+
+        @sync_to_async
+        def _load_thread():
+            return models.ChatThread.objects.filter(
+                uuid=str(input.thread_uuid)
+            ).first()
+
+        thread = await _load_thread()
+        if thread is None:
+            raise GraphQLError("Thread not found.")
+
+        # Confirm the admin belongs to the thread's tenant before
+        # mutating it — no cross-tenant archive.
+        @sync_to_async
+        def _tenant_ids():
+            from tenants.models import TenantedUser
+
+            return list(
+                TenantedUser.objects.filter(
+                    user_id=user.pk, is_active=True
+                ).values_list("tenant_id", flat=True)
+            )
+
+        tenant_ids = await _tenant_ids()
+        if thread.tenant_id not in tenant_ids:
+            raise GraphQLError("Not your tenant's thread.")
+
+        await services.set_thread_archived(
+            thread_id=thread.id, archived=input.archived
+        )
+        # Return a freshly-loaded thread so archived_at reflects the
+        # update and the FK resolvers have their relations available.
+        @sync_to_async
+        def _reload():
+            return (
+                models.ChatThread.objects.select_related(
+                    "ambassador", "ambassador__user", "job", "tenant"
+                )
+                .filter(id=thread.id)
+                .first()
+            )
+
+        return await _reload()
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
     async def mark_chat_thread_read(
         self, info: strawberry.Info, input: inputs.MarkChatThreadReadInput
     ) -> int:

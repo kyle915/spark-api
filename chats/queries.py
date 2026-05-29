@@ -112,6 +112,59 @@ class ChatQueries:
         return await _load()
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def chat_recipient_ambassadors(
+        self,
+        info: strawberry.Info,
+        tenant_id: Optional[strawberry.ID] = None,
+        tenant_uuid: Optional[strawberry.ID] = None,
+        q: Optional[str] = None,
+    ) -> List[types.ChatRecipient]:
+        """BAs the admin can message in the active tenant — the recipient
+        picker source for the "New / group message" composer.
+
+        Fixes the composer's "No ambassadors found": it previously used
+        the generic `ambassadors` query, which scopes BAs by TenantedUser
+        membership. BAs are linked to a brand by their worked events, not
+        a TenantedUser row, so that query returned nothing. This resolver
+        scopes by AmbassadorEvent history in the tenant — the SAME
+        reachability rule broadcastChatMessage enforces — so the picker
+        lists exactly the BAs a broadcast can actually reach.
+
+        Admin-only (it's the admin composer). Tenant resolution mirrors
+        recapEventOptions / broadcastChatMessage: staff/spark-admins pass
+        `tenantId`, a client user resolves to their own membership, and
+        with NO tenant in scope we return an EMPTY list rather than
+        leaking another brand's BAs. `q` filters by name/email.
+        """
+        user, amb, is_ba, is_admin, _ = await resolve_caller_context(info)
+        if user is None or not is_admin:
+            return []
+
+        from events.queries import EventQueriesService
+
+        service = EventQueriesService()
+        try:
+            resolved_tenant_id = await service.resolve_tenant_id(
+                info, tenant_id=tenant_id, tenant_uuid=tenant_uuid
+            )
+        except GraphQLError:
+            resolved_tenant_id = None
+        if not resolved_tenant_id:
+            return []
+
+        from chats.services import list_recipient_ambassadors_for_tenant
+
+        rows = await list_recipient_ambassadors_for_tenant(
+            tenant_id=resolved_tenant_id, q=q
+        )
+        return [
+            types.ChatRecipient(
+                uuid=r["uuid"], name=r["name"], email=r["email"]
+            )
+            for r in rows
+        ]
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def chat_unread_count(self, info: strawberry.Info) -> int:
         """Total unread messages across all of the caller's threads.
         Powers the nav badge on both mobile and admin web. Admins see
