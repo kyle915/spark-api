@@ -213,6 +213,27 @@ def download_blob_bytes(blob_name: str) -> Optional[bytes]:
         return None
 
 
+def blob_exists(blob_name: str | None) -> bool:
+    """
+    Return True if a blob exists in the configured GCS bucket.
+
+    Cheap HEAD-style existence check (`blob.exists()`) — used by the
+    recap-file `displayUrl` resolver to decide whether a converted
+    `.jpg` sibling is available for a `.heic` original before pointing
+    the frontend at it. Returns False (never raises) on any GCS error
+    so a transient bucket hiccup degrades to "serve the original",
+    not a 500.
+    """
+    if not blob_name:
+        return False
+    try:
+        client = get_gcs_client()
+        bucket = client.bucket(settings.GS_BUCKET_NAME)
+        return bucket.blob(blob_name).exists()
+    except Exception:
+        return False
+
+
 def public_url(blob_name: str | None) -> str | None:
     """
     Return a non-signed, publicly-loadable URL for a blob.
