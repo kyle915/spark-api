@@ -13,6 +13,7 @@ from tenants import types as tenant_types
 from . import models
 from asgiref.sync import sync_to_async
 from utils.gcs import public_url, extract_blob_name_from_url
+from .heic_conversion import display_blob_name
 
 
 @strawberry_django.type(models.RecapFile)
@@ -66,6 +67,39 @@ class RecapFile(Node):
             blob = str(field_file)
         blob_name = extract_blob_name_from_url(blob)
         return public_url(blob_name)
+
+    @strawberry.field(name="displayUrl")
+    async def display_url(self) -> str | None:
+        """Browser-renderable URL for this file.
+
+        For HEIC uploads we serve the server-converted `.jpg` sibling
+        (when it exists in GCS) so the frontend can use a plain <img>
+        with no in-browser HEIC decode / bucket-CORS dependency. For
+        every other file — and for a HEIC that has no sibling yet — this
+        returns the same URL as `file`. Mirrors `file_url`'s async-safe
+        two-step column load; the HEIC→JPG rewrite + existence check run
+        inside `sync_to_async` because `blob_exists` does network I/O.
+        """
+        field_file = self.__dict__.get("file")
+        if field_file is None:
+            def _reload():
+                self.refresh_from_db(fields=["file"])
+                return self.__dict__.get("file")
+            try:
+                field_file = await sync_to_async(
+                    _reload, thread_sensitive=True
+                )()
+            except Exception:
+                return None
+        if not field_file:
+            return None
+        try:
+            blob = field_file.name
+        except Exception:
+            blob = str(field_file)
+        blob_name = extract_blob_name_from_url(blob)
+        display_blob = await sync_to_async(display_blob_name)(blob_name)
+        return public_url(display_blob)
 
 
 @strawberry.type
@@ -760,6 +794,39 @@ class CustomRecapFile(Node):
             blob = str(field_file)
         blob_name = extract_blob_name_from_url(blob)
         return public_url(blob_name)
+
+    @strawberry.field(name="displayUrl")
+    async def display_url(self) -> str | None:
+        """Browser-renderable URL for this custom-recap file.
+
+        HEIC originals resolve to their server-converted `.jpg` sibling
+        (when present in GCS) so the gallery can render a plain <img>
+        without the in-browser libheif decode / bucket-CORS dependency.
+        Everything else — and a HEIC with no sibling yet — returns the
+        same URL as `url`. Async-safe: mirrors `url_str`'s deferred-column
+        load, and the HEIC rewrite + existence check run in
+        `sync_to_async` (network I/O).
+        """
+        field_file = self.__dict__.get("url")
+        if field_file is None:
+            def _reload():
+                self.refresh_from_db(fields=["url"])
+                return self.__dict__.get("url")
+            try:
+                field_file = await sync_to_async(
+                    _reload, thread_sensitive=True
+                )()
+            except Exception:
+                return None
+        if not field_file:
+            return None
+        try:
+            blob = field_file.name
+        except Exception:
+            blob = str(field_file)
+        blob_name = extract_blob_name_from_url(blob)
+        display_blob = await sync_to_async(display_blob_name)(blob_name)
+        return public_url(display_blob)
 
 
 @strawberry.type

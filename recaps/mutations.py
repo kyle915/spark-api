@@ -1724,6 +1724,10 @@ class RecapMutationService(SparkGraphQLMixin):
                             approved=False,
                             created_by=self.user,
                         )
+                        # HEIC → JPG sibling blob so the gallery serves a
+                        # plain <img> (displayUrl rewrites .heic→.jpg).
+                        if heic_conversion.is_heic_blob(blob_name):
+                            heic_conversion.ensure_jpg_sibling_blob(blob_name)
                 return custom_recap
 
         custom_recap = await create_custom_recap_transaction()
@@ -2192,6 +2196,8 @@ class RecapMutationService(SparkGraphQLMixin):
                                 approved=False,
                                 created_by=self.user,
                             )
+                            if heic_conversion.is_heic_blob(blob_name):
+                                heic_conversion.ensure_jpg_sibling_blob(blob_name)
                     else:
                         blob_to_file = {
                             extract_blob_name_from_url(str(file.url)): file
@@ -2309,6 +2315,8 @@ class RecapMutationService(SparkGraphQLMixin):
                                 approved=False,
                                 created_by=self.user,
                             )
+                            if heic_conversion.is_heic_blob(blob_name):
+                                heic_conversion.ensure_jpg_sibling_blob(blob_name)
                             final_files.append(custom_recap_file)
 
                         removed_files = list(blob_to_file.values())
@@ -2875,6 +2883,20 @@ class RecapMutationService(SparkGraphQLMixin):
                     created_by=self.user,
                 )
                 recap_file.save()
+
+                # HEIC sibling generation (mirrors create_recap): if the
+                # attached blob is .heic/.heif, server-convert it to a
+                # .jpg sibling RecapFile row so the recap-list hero picker
+                # and Files grid render it without the in-browser libheif
+                # fallback. Best-effort — failures log + keep the HEIC.
+                if heic_conversion.is_heic_blob(blob_name):
+                    heic_conversion.ensure_jpg_sibling(
+                        heic_blob_name=blob_name,
+                        recap_id=recap.id,
+                        file_type=file_type,
+                        file_recap_category=file_recap_category,
+                        created_by=self.user,
+                    )
                 return recap
 
         return await create_file()
@@ -2956,6 +2978,10 @@ class RecapMutationService(SparkGraphQLMixin):
                     approved=False,
                     created_by=self.user,
                 )
+                # HEIC → JPG sibling blob so the gallery renders a plain
+                # <img> (displayUrl rewrites .heic→.jpg when present).
+                if heic_conversion.is_heic_blob(blob_name):
+                    heic_conversion.ensure_jpg_sibling_blob(blob_name)
                 return custom_recap
 
         return await create_file()

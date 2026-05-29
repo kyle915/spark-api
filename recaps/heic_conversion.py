@@ -32,7 +32,7 @@ from typing import Optional
 
 from django.conf import settings  # noqa: F401  (kept for future quality knobs)
 
-from utils.gcs import download_blob_bytes, upload_bytes, public_url
+from utils.gcs import download_blob_bytes, upload_bytes, public_url, blob_exists
 
 logger = logging.getLogger(__name__)
 
@@ -168,6 +168,53 @@ def ensure_jpg_sibling(
     return sibling
 
 
+def ensure_jpg_sibling_blob(heic_blob_name: str) -> Optional[str]:
+    """Convert a HEIC blob into a JPG sibling *blob in GCS only* (no DB row).
+
+    Returns the JPG blob path on success (or if it already exists), else
+    None. Idempotent: if the sibling blob is already present we skip the
+    download/decode/upload and just return its path.
+
+    This is the model-agnostic counterpart to ``ensure_jpg_sibling``.
+    The legacy ``RecapFile`` flow wants a *sibling DB row* (the front-end
+    hero picker scans for a renderable `.jpg` file row). ``CustomRecapFile``
+    has no such picker — its ``displayUrl`` resolver just rewrites a
+    `.heic` blob path to the `.jpg` sibling and serves it — so all that
+    path needs is the converted blob sitting next to the original. Best-
+    effort: any failure logs + returns None, never raises into the caller.
+    """
+    if not _HEIC_SUPPORT:
+        return None
+    if not is_heic_blob(heic_blob_name):
+        return None
+
+    jpg_blob = jpg_blob_name_for(heic_blob_name)
+
+    # Idempotency — sibling blob already uploaded (e.g. re-run backfill,
+    # or an edit that re-attaches the same HEIC). Skip the round-trip.
+    if blob_exists(jpg_blob):
+        return jpg_blob
+
+    heic_bytes = download_blob_bytes(heic_blob_name)
+    if not heic_bytes:
+        logger.warning(
+            "HEIC sibling blob: source unreadable, skipping: %s", heic_blob_name
+        )
+        return None
+
+    jpg_bytes = convert_heic_bytes_to_jpg(heic_bytes)
+    if not jpg_bytes:
+        return None
+
+    try:
+        upload_bytes(jpg_blob, jpg_bytes, content_type="image/jpeg")
+    except Exception as exc:
+        logger.warning("HEIC sibling blob upload failed (%s): %s", jpg_blob, exc)
+        return None
+
+    return jpg_blob
+
+
 def jpg_sibling_url_for_heic(heic_blob_name: str) -> Optional[str]:
     """Convenience for templates / inline render — returns the public URL
     of a JPG sibling if it exists, else None. (Not currently used by the
@@ -175,3 +222,25 @@ def jpg_sibling_url_for_heic(heic_blob_name: str) -> Optional[str]:
     if not is_heic_blob(heic_blob_name):
         return None
     return public_url(jpg_blob_name_for(heic_blob_name))
+
+
+def display_blob_name(blob_name: Optional[str]) -> Optional[str]:
+    """Resolve the *viewable* blob for a recap file.
+
+    - Non-HEIC blob → returned unchanged (already browser-renderable).
+    - HEIC blob with a converted `.jpg` sibling present in GCS → the
+      sibling path (so the frontend gets a plain, CORS-free <img>).
+    - HEIC blob with no sibling yet → the original `.heic` path, so the
+      frontend can still fall back to in-browser decoding.
+
+    Pure path logic + one cheap `blob_exists` HEAD check; safe to call
+    from a (sync) resolver body wrapped in ``sync_to_async``.
+    """
+    if not blob_name:
+        return blob_name
+    if not is_heic_blob(blob_name):
+        return blob_name
+    jpg_blob = jpg_blob_name_for(blob_name)
+    if blob_exists(jpg_blob):
+        return jpg_blob
+    return blob_name
