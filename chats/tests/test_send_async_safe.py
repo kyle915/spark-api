@@ -99,6 +99,19 @@ query Recipients($tenantId: ID, $q: String) {
 }
 """
 
+# Same roster, now also selecting the Relay `id` — the recap
+# "FILLING FOR A BA?" picker reuses this roster and feeds the id to
+# createCustomRecap's ambassadorId, so the id must decode to the BA pk.
+CHAT_RECIPIENTS_WITH_ID_QUERY = """
+query RecipientsWithId($tenantId: ID, $q: String) {
+  chatRecipientAmbassadors(tenantId: $tenantId, q: $q) {
+    id
+    uuid
+    name
+  }
+}
+"""
+
 # Task 3: archive (soft delete) a thread.
 ARCHIVE_MUTATION = """
 mutation Archive($input: ArchiveChatThreadInput!) {
@@ -397,6 +410,27 @@ class TestSendAsyncSafe(AmbassadorsGraphQLTestCase):
         recips = result.data["chatRecipientAmbassadors"]
         names = [r["name"] for r in recips]
         assert "Dana Scully" in names, recips
+
+    @pytest.mark.asyncio
+    async def test_recipient_picker_exposes_decodable_relay_id(self):
+        """Each roster row carries the Ambassador's Relay global id, and it
+        decodes back to the BA's pk — this is what lets the recap
+        "FILLING FOR A BA?" picker reuse this roster as an ambassadorId
+        source (resolve_id_to_int rejects raw uuids)."""
+        from utils.graphql.mixins import decode_global_id
+
+        self.schema = self._client_schema
+        result = await self._execute_query_authenticated(
+            CHAT_RECIPIENTS_WITH_ID_QUERY,
+            {"tenantId": str(self.tenant.id)},
+            self.admin,
+            self.client_endpoint,
+        )
+        assert result.errors is None, f"errored: {result.errors}"
+        rows = result.data["chatRecipientAmbassadors"]
+        dana = next(r for r in rows if r["name"] == "Dana Scully")
+        assert dana["id"], dana
+        assert decode_global_id(dana["id"]) == self.ba.id
 
     @pytest.mark.asyncio
     async def test_recipient_picker_search_matches_name(self):
