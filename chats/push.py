@@ -112,6 +112,12 @@ async def notify_chat_recipient(
                 body=body_short,
                 data={
                     "type": "chat",
+                    # `kind`/`screen` are what the mobile push-tap router
+                    # reads (TAB_FOR_KIND / TAB_FOR_SCREEN). Without them a
+                    # tapped chat notification routed nowhere. "chat" maps to
+                    # the Chat tab; ChatListScreen then opens threadUuid.
+                    "kind": "chat",
+                    "screen": "chat",
                     "threadUuid": thread_uuid,
                     "messageUuid": msg_uuid,
                 },
