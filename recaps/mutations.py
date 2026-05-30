@@ -46,6 +46,7 @@ from recaps.pdf import (
     build_campaign_report_pdf,
     should_embed_recap_file,
     is_image_bytes,
+    IMAGE_EXTENSIONS,
 )
 from recaps.excel import build_recaps_xlsx
 
@@ -3870,7 +3871,61 @@ class RecapMutationService(SparkGraphQLMixin):
                     for entry in pool.map(_fetch, candidates):
                         if entry is not None:
                             image_entries.append(entry)
-            return build_recap_pdf(custom_recap, image_entries)
+
+            # Image-type custom FIELDS (e.g. "Product Purchase Receipt
+            # (Image)") store the GCS blob path as their CustomFieldValue
+            # .value. Those aren't custom_recap_files, so the loop above
+            # never fetched them — they rendered as raw path text in the
+            # PDF. Collect any field value that looks like an image blob
+            # (non-empty string whose path ends in a known image
+            # extension) and fetch it through the SAME parallel pool. We
+            # store raw bytes keyed by the original blob path; the HTML
+            # builder calls bytes_to_data_uri, which performs the same
+            # HEIC→JPG conversion the attachments path relies on (so a
+            # .heic receipt still renders — WeasyPrint can't decode HEIC).
+            field_candidates: list[tuple[str, str]] = []
+            seen_field_blobs: set[str] = set()
+            for cfv in custom_recap.custom_field_value.all():
+                raw_value = cfv.value
+                if not isinstance(raw_value, str) or not raw_value.strip():
+                    continue
+                path = raw_value.split("?", 1)[0].split("#", 1)[0]
+                _, _, ext = path.rpartition(".")
+                if not ext or f".{ext.lower()}" not in IMAGE_EXTENSIONS:
+                    continue
+                if raw_value in seen_field_blobs:
+                    continue
+                blob_name = extract_blob_name_from_url(raw_value)
+                if not blob_name:
+                    continue
+                seen_field_blobs.add(raw_value)
+                # Carry the original value as the key so the renderer can
+                # match it against CustomFieldValue.value.
+                field_candidates.append((raw_value, blob_name))
+
+            def _fetch_field(item):
+                value_key, blob_name = item
+                try:
+                    data = download_blob_bytes(blob_name)
+                except Exception:
+                    return None
+                if not data or not is_image_bytes(data):
+                    return None
+                return (value_key, data)
+
+            custom_field_images: dict[str, bytes] = {}
+            if field_candidates:
+                with _cf.ThreadPoolExecutor(max_workers=16) as pool:
+                    for result in pool.map(_fetch_field, field_candidates):
+                        if result is not None:
+                            value_key, data = result
+                            custom_field_images[value_key] = data
+
+            return build_recap_pdf(
+                custom_recap,
+                image_entries,
+                custom_field_images=custom_field_images,
+            )
 
         pdf_bytes = await build_custom_recap_pdf_bytes()
         timestamp = django_timezone.now().strftime("%Y%m%d%H%M%S")

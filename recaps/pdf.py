@@ -223,7 +223,18 @@ def _build_images_html(image_groups: dict[str, list[dict[str, str]]]) -> str:
     )
 
 
-def build_recap_pdf_html(recap, images: Iterable[dict[str, bytes]]) -> str:
+def build_recap_pdf_html(
+    recap,
+    images: Iterable[dict[str, bytes]],
+    custom_field_images: dict[str, bytes] | None = None,
+) -> str:
+    # Image-type custom fields (e.g. "Product Purchase Receipt (Image)")
+    # store a GCS blob path as their value. The resolver pre-fetches those
+    # blobs into `custom_field_images` ({blob_path: image_bytes}); when a
+    # field's value matches a key here we embed the image instead of
+    # printing the raw path. Legacy / campaign callers don't pass this, so
+    # default to an empty map (those flows have no image custom fields).
+    custom_field_images = custom_field_images or {}
     ambassador_user = None
     if getattr(recap, "ambassador", None) and getattr(recap.ambassador, "user", None):
         ambassador_user = recap.ambassador.user
@@ -266,6 +277,23 @@ def build_recap_pdf_html(recap, images: Iterable[dict[str, bytes]]) -> str:
     account_feedback = _related_items(recap, "account_feedback")
     account_entry = account_feedback[0] if account_feedback else None
     custom_field_sections = _custom_field_sections(recap)
+
+    def _render_custom_field(field_name: str, value) -> str:
+        # Image-type field: value is a blob path we pre-fetched bytes for.
+        # Embed the image (reusing the gallery figure/img styling) rather
+        # than printing the raw blob path. bytes_to_data_uri handles the
+        # HEIC→JPG conversion, same as the attachments path.
+        if isinstance(value, str) and value in custom_field_images:
+            data_uri = bytes_to_data_uri(custom_field_images[value])
+            if data_uri:
+                return (
+                    '<div><span>{label}</span>'
+                    '<figure><img src="{src}" />'
+                    "<figcaption>{label}</figcaption></figure></div>"
+                ).format(label=safe(field_name), src=data_uri)
+        # Non-image field (or image bytes that failed to decode): text.
+        return f"<div><span>{safe(field_name)}</span><p>{safe(value)}</p></div>"
+
     custom_fields_html = ""
     if custom_field_sections:
         custom_fields_html = "".join(
@@ -273,7 +301,7 @@ def build_recap_pdf_html(recap, images: Iterable[dict[str, bytes]]) -> str:
     <section class="card">
       <h2>{safe(section_name)}</h2>
       <div class="stack">
-        {"".join(f"<div><span>{safe(field_name)}</span><p>{safe(value)}</p></div>" for field_name, value in fields)}
+        {"".join(_render_custom_field(field_name, value) for field_name, value in fields)}
       </div>
     </section>
 """
@@ -511,10 +539,14 @@ _PDF_BASE_CSS = """
         }"""
 
 
-def build_recap_pdf(recap, images: Iterable[dict[str, bytes]]) -> bytes:
+def build_recap_pdf(
+    recap,
+    images: Iterable[dict[str, bytes]],
+    custom_field_images: dict[str, bytes] | None = None,
+) -> bytes:
     from weasyprint import HTML, CSS
 
-    html = build_recap_pdf_html(recap, images)
+    html = build_recap_pdf_html(recap, images, custom_field_images=custom_field_images)
 
     css = CSS(
         string=_PDF_BASE_CSS + """
@@ -593,6 +625,25 @@ def build_recap_pdf(recap, images: Iterable[dict[str, bytes]]) -> bytes:
             margin: 0;
             font-size: 11px;
             color: #111827;
+        }
+        .stack figure {
+            margin: 4px 0 0 0;
+            background: #f3f4f6;
+            border-radius: 10px;
+            padding: 8px;
+            text-align: center;
+            max-width: 320px;
+        }
+        .stack figure img {
+            max-width: 100%;
+            max-height: 220px;
+            object-fit: contain;
+            border-radius: 6px;
+        }
+        .stack figcaption {
+            margin-top: 6px;
+            font-size: 9px;
+            color: #6b7280;
         }
         .gallery {
             display: grid;
@@ -959,6 +1010,21 @@ def build_campaign_report_pdf(
             margin-bottom: 4px;
         }
         .stack p { margin: 0; font-size: 11px; color: #111827; }
+        .stack figure {
+            margin: 4px 0 0 0;
+            background: #f3f4f6;
+            border-radius: 10px;
+            padding: 8px;
+            text-align: center;
+            max-width: 320px;
+        }
+        .stack figure img {
+            max-width: 100%;
+            max-height: 220px;
+            object-fit: contain;
+            border-radius: 6px;
+        }
+        .stack figcaption { margin-top: 6px; font-size: 9px; color: #6b7280; }
         .gallery {
             display: grid;
             grid-template-columns: repeat(2, 1fr);
