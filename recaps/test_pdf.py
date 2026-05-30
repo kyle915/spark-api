@@ -250,3 +250,114 @@ def test_build_recap_pdf_html_groups_custom_fields_by_recap_section():
     assert "Updated At" not in html
     assert "Product Samples" not in html
     assert "Sales Performance" not in html
+
+
+# Tiny but valid JPEG: detect_image_type() only sniffs the SOI marker
+# (\xff\xd8\xff) and bytes_to_data_uri() base64-encodes JPEG bytes as-is
+# (no PIL decode), so this is enough to exercise the embed path.
+JPEG_SAMPLE_BYTES = b"\xff\xd8\xff\xe0\x00\x10JFIF"
+JPEG_SAMPLE_DATA_URI = "data:image/jpeg;base64,/9j/4AAQSkZJRg=="
+
+
+def test_build_recap_pdf_html_embeds_image_custom_field_value():
+    """An image-type custom field renders its photo inline, not the blob
+    path. Regression for receipts showing as `recaps/receipts/<uuid>.jpg`
+    text instead of the actual image."""
+    receipts_section = SimpleNamespace(name="Receipts")
+    notes_section = SimpleNamespace(name="Notes")
+    receipt_blob_path = "recaps/receipts/abc-123.jpg"
+    recap = SimpleNamespace(
+        name="Custom Recap Name",
+        approved=True,
+        ambassador=None,
+        location=SimpleNamespace(name="Miami"),
+        state=SimpleNamespace(name="State Name"),
+        retailer=SimpleNamespace(name="Retailer Name"),
+        timezone=SimpleNamespace(name="Central"),
+        total_engagements=10,
+        used_corpo_card=True,
+        custom_recap_template=SimpleNamespace(name="Template Name"),
+        event=SimpleNamespace(
+            name="Store Event",
+            date=datetime(2026, 4, 8, 9, 0),
+            tenant=SimpleNamespace(slug="liquid-death"),
+        ),
+        custom_recap_product_sample=RelatedList([]),
+        custom_recap_sale_performance=RelatedList([]),
+        custom_field_value=RelatedList(
+            [
+                SimpleNamespace(
+                    value=receipt_blob_path,
+                    custom_field=SimpleNamespace(
+                        name="Product Purchase Receipt (Image)",
+                        recap_section=receipts_section,
+                    ),
+                ),
+                SimpleNamespace(
+                    value="Sampled 200 cans",
+                    custom_field=SimpleNamespace(
+                        name="Summary",
+                        recap_section=notes_section,
+                    ),
+                ),
+            ]
+        ),
+    )
+
+    html = build_recap_pdf_html(
+        recap,
+        images=[],
+        custom_field_images={receipt_blob_path: JPEG_SAMPLE_BYTES},
+    )
+
+    # Image field: embedded as an <img> data URI, label kept as caption.
+    assert JPEG_SAMPLE_DATA_URI in html
+    assert "Product Purchase Receipt (Image)" in html
+    assert f'<img src="{JPEG_SAMPLE_DATA_URI}"' in html
+    # The raw blob path must never appear as visible text.
+    assert receipt_blob_path not in html
+    # Non-image field still renders as plain text.
+    assert "<p>Sampled 200 cans</p>" in html
+
+
+def test_build_recap_pdf_html_image_field_falls_back_to_text_when_unfetched():
+    """If a blob couldn't be fetched (not in custom_field_images), the
+    field renders as text rather than crashing or dropping silently."""
+    section = SimpleNamespace(name="Receipts")
+    blob_path = "recaps/receipts/missing.jpg"
+    recap = SimpleNamespace(
+        name="Custom Recap Name",
+        approved=True,
+        ambassador=None,
+        location=SimpleNamespace(name="Miami"),
+        state=SimpleNamespace(name="State Name"),
+        retailer=SimpleNamespace(name="Retailer Name"),
+        timezone=SimpleNamespace(name="Central"),
+        total_engagements=10,
+        used_corpo_card=True,
+        custom_recap_template=SimpleNamespace(name="Template Name"),
+        event=SimpleNamespace(
+            name="Store Event",
+            date=datetime(2026, 4, 8, 9, 0),
+            tenant=SimpleNamespace(slug="liquid-death"),
+        ),
+        custom_recap_product_sample=RelatedList([]),
+        custom_recap_sale_performance=RelatedList([]),
+        custom_field_value=RelatedList(
+            [
+                SimpleNamespace(
+                    value=blob_path,
+                    custom_field=SimpleNamespace(
+                        name="Receipt (Image)",
+                        recap_section=section,
+                    ),
+                ),
+            ]
+        ),
+    )
+
+    # No custom_field_images passed → legacy behavior (text).
+    html = build_recap_pdf_html(recap, images=[])
+
+    assert "<img" not in html
+    assert blob_path in html
