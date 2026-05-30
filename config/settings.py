@@ -60,6 +60,7 @@ INSTALLED_APPS = [
     "ambassadors",
     "jobs",
     "recaps",
+    "receipts",
     "chats",
     "academy",
     "digest",
