@@ -64,6 +64,10 @@ urlpatterns = [
     # link and land on a page they can actually act on, even if they're
     # not logged into Spark. See `events/views.py` for the contract.
     path("api/public/", include("events.urls")),
+    # Public, token-authenticated consumer receipt upload (no JWT). Shoppers
+    # scan a per-event QR / open a link and upload a purchase receipt; the
+    # token resolves to the event + tenant. See `receipts/views.py`.
+    path("api/public/", include("receipts.urls")),
 ]
 
 # Add RQ dashboard in DEBUG mode
