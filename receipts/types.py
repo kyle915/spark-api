@@ -21,6 +21,7 @@ just opens Venmo for the admin to send (and then mark paid).
 from __future__ import annotations
 
 import urllib.parse
+from decimal import Decimal
 
 import strawberry
 import strawberry_django
@@ -38,6 +39,12 @@ def _anno_int(instance, key: str) -> int:
     """Read an aggregate annotation off a model instance (0 when absent)."""
     value = instance.__dict__.get(key, None)
     return int(value) if value is not None else 0
+
+
+def _anno_decimal(instance, key: str) -> Decimal:
+    """Read a Decimal aggregate annotation off an instance (0 when absent)."""
+    value = instance.__dict__.get(key, None)
+    return value if value is not None else Decimal("0")
 
 
 @strawberry_django.type(models.ReceiptCampaign)
@@ -83,6 +90,34 @@ class ReceiptCampaignType(Node):
     def paid_count(self) -> int:
         return _anno_int(self, "paid_count")
 
+    @strawberry.field
+    def budget_cap(self) -> str | None:
+        """Total payout ceiling as a string, or null when uncapped."""
+        value = self.__dict__.get("budget_cap", None)
+        if value is None:
+            value = getattr(self, "budget_cap", None)
+        return f"{value:.2f}" if value is not None else None
+
+    @strawberry.field
+    def total_paid(self) -> str:
+        """Sum of rewards already paid out (annotated by receiptCampaigns)."""
+        return f"{_anno_decimal(self, 'total_paid'):.2f}"
+
+    @strawberry.field
+    def total_committed(self) -> str:
+        """Sum of validated-but-unpaid rewards (annotated)."""
+        return f"{_anno_decimal(self, 'total_committed'):.2f}"
+
+    @strawberry.field
+    def budget_remaining(self) -> str | None:
+        """Cap minus paid, as a string; null when uncapped."""
+        cap = self.__dict__.get("budget_cap", None)
+        if cap is None:
+            cap = getattr(self, "budget_cap", None)
+        if cap is None:
+            return None
+        return f"{(cap - _anno_decimal(self, 'total_paid')):.2f}"
+
 
 @strawberry_django.type(models.ConsumerReceipt)
 class ConsumerReceiptType(Node):
@@ -108,6 +143,15 @@ class ConsumerReceiptType(Node):
     payout_method: str | None
     payout_handle: str | None
     paid_at: str | None
+
+    # Fraud / duplicate flag + OCR auto-read. Declared nullable to match the
+    # SDL contract even though the underlying columns are non-null-with-default.
+    is_flagged: bool
+    flag_reason: str | None
+    ocr_store: str | None
+    ocr_date: str | None
+    ocr_text: str | None
+    ocr_ran_at: str | None
 
     # Review audit.
     review_note: str | None
@@ -170,6 +214,14 @@ class ConsumerReceiptType(Node):
         value = self.__dict__.get("reward_amount", None)
         if value is None:
             value = getattr(self, "reward_amount", None)
+        return str(value) if value is not None else None
+
+    @strawberry.field
+    def ocr_amount(self) -> str | None:
+        """OCR-extracted purchase amount as a string."""
+        value = self.__dict__.get("ocr_amount", None)
+        if value is None:
+            value = getattr(self, "ocr_amount", None)
         return str(value) if value is not None else None
 
     @strawberry.field(name="publicUrl")

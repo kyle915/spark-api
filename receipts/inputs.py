@@ -63,6 +63,8 @@ class CreateReceiptCampaignInput(SparkGraphQLInput):
     description: str | None = None
     product: str | None = None
     reward_amount: float | None = None
+    # Optional total payout ceiling. Omit/null = no cap.
+    budget_cap: float | None = None
     payout_note: str | None = None
     is_active: bool | None = None
     slug: str | None = None
@@ -78,6 +80,8 @@ class UpdateReceiptCampaignInput(SparkGraphQLInput):
     description: str | None = None
     product: str | None = None
     reward_amount: float | None = None
+    # Optional total payout ceiling. None = no change; <= 0 clears the cap.
+    budget_cap: float | None = None
     payout_note: str | None = None
     is_active: bool | None = None
     slug: str | None = None
@@ -95,3 +99,18 @@ class MarkReceiptPaidInput(SparkGraphQLInput):
     id: strawberry.ID
     amount: float | None = None
     payout_handle: str | None = None
+
+
+@strawberry.input
+class DeleteReceiptCampaignInput(SparkGraphQLInput):
+    """Input for `deleteReceiptCampaign`. Empty campaign → hard delete;
+    a campaign with receipts → soft-archive (data preserved)."""
+
+    id: strawberry.ID
+
+
+@strawberry.input
+class RunReceiptOcrInput(SparkGraphQLInput):
+    """Input for `runReceiptOcr` — admin-triggered OCR of one receipt."""
+
+    id: strawberry.ID

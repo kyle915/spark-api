@@ -17,12 +17,13 @@ from decimal import ROUND_HALF_UP, Decimal
 from django.utils import timezone
 from django.utils.text import slugify
 
-from receipts import inputs, models, types
+from receipts import inputs, models, ocr, types
 from receipts.queries import (
     ConsumerReceiptQueriesService,
     _enforce_client_tenant,
     _require_admin_or_client,
 )
+from utils.gcs import download_blob_bytes, extract_blob_name_from_url
 from utils.graphql.mixins import SparkGraphQLMixin, resolve_id_to_int
 from utils.graphql.permissions import StrictIsAuthenticated
 from utils.graphql.relay import ensure_relay_mutation
@@ -49,6 +50,16 @@ def _to_decimal(value, *, default: Decimal | None = Decimal("0")) -> Decimal | N
         )
     except Exception:
         return default
+
+
+def _budget_cap(value) -> Decimal | None:
+    """A positive 2dp Decimal cap, or None for 'no cap' (value None or <= 0)."""
+    if value is None:
+        return None
+    dec = _to_decimal(value, default=None)
+    if dec is None or dec <= 0:
+        return None
+    return dec
 
 
 @strawberry.type
@@ -182,6 +193,7 @@ class ReceiptMutations:
                     description=(input.description or "").strip(),
                     product=(input.product or "").strip(),
                     reward_amount=reward,
+                    budget_cap=_budget_cap(input.budget_cap),
                     payout_note=(input.payout_note or "").strip(),
                     is_active=(
                         True if input.is_active is None else bool(input.is_active)
@@ -255,6 +267,10 @@ class ReceiptMutations:
             if input.reward_amount is not None:
                 campaign.reward_amount = _to_decimal(input.reward_amount)
                 update_fields.append("reward_amount")
+            if input.budget_cap is not None:
+                # <= 0 clears the cap (NULL); > 0 sets it.
+                campaign.budget_cap = _budget_cap(input.budget_cap)
+                update_fields.append("budget_cap")
             if input.is_active is not None:
                 campaign.is_active = bool(input.is_active)
                 update_fields.append("is_active")
@@ -362,6 +378,167 @@ class ReceiptMutations:
                 types.ReviewReceiptResponse,
                 success=True,
                 message="Receipt marked paid.",
+                input_obj=input,
+                receipt=receipt,
+            )
+        except GraphQLError as exc:
+            return build_mutation_response(
+                types.ReviewReceiptResponse,
+                success=False,
+                message=str(exc),
+                input_obj=input,
+            )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def delete_receipt_campaign(
+        self,
+        info: strawberry.Info,
+        input: inputs.DeleteReceiptCampaignInput,
+    ) -> types.ReceiptCampaignResponse:
+        """Delete a campaign — hard-delete when empty, soft-archive otherwise.
+
+        An empty campaign (no receipts) is removed outright. A campaign that
+        already has submitted receipts is archived (deleted_at set, paused)
+        so the proof-of-purchase rows + payout history survive; it just
+        disappears from the dashboard + public page.
+        """
+        try:
+            await _require_admin_or_client(info)
+            try:
+                campaign_id = resolve_id_to_int(input.id)
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError(f"Invalid ID: {input.id}")
+
+            service = ConsumerReceiptQueriesService()
+            user = await service.get_user(info)
+
+            try:
+                campaign = await sync_to_async(
+                    models.ReceiptCampaign.objects.select_related("tenant").get
+                )(id=campaign_id, deleted_at__isnull=True)
+            except models.ReceiptCampaign.DoesNotExist:
+                raise GraphQLError("Campaign not found.")
+
+            if service.get_role_slug(user) == "client":
+                user_tenant = await service.get_user_tenant(info)
+                if campaign.tenant_id != user_tenant.id:
+                    raise GraphQLError("Campaign not found.")
+
+            def _delete() -> str:
+                has_receipts = models.ConsumerReceipt.objects.filter(
+                    campaign_id=campaign.id
+                ).exists()
+                if has_receipts:
+                    campaign.deleted_at = timezone.now()
+                    campaign.is_active = False
+                    campaign.updated_by = user
+                    campaign.save(
+                        update_fields=[
+                            "deleted_at",
+                            "is_active",
+                            "updated_by",
+                            "updated_at",
+                        ]
+                    )
+                    return (
+                        "Campaign archived — it has submitted receipts, so its "
+                        "data is preserved and it's hidden from the dashboard."
+                    )
+                campaign.delete()
+                return "Campaign deleted."
+
+            message = await sync_to_async(_delete, thread_sensitive=True)()
+            return build_mutation_response(
+                types.ReceiptCampaignResponse,
+                success=True,
+                message=message,
+                input_obj=input,
+            )
+        except GraphQLError as exc:
+            return build_mutation_response(
+                types.ReceiptCampaignResponse,
+                success=False,
+                message=str(exc),
+                input_obj=input,
+            )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def run_receipt_ocr(
+        self,
+        info: strawberry.Info,
+        input: inputs.RunReceiptOcrInput,
+    ) -> types.ReviewReceiptResponse:
+        """Admin-triggered OCR — best-effort auto-read of store/amount/date.
+
+        Reads the stored receipt image, runs Google Cloud Vision, and saves
+        the parsed store/amount/date onto the receipt for the admin to verify.
+        Degrades gracefully: if Vision is unavailable the receipt is unchanged
+        besides ocr_ran_at and the response reports why.
+        """
+        try:
+            await _require_admin_or_client(info)
+            try:
+                receipt_id = resolve_id_to_int(input.id)
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError(f"Invalid ID: {input.id}")
+
+            service = ConsumerReceiptQueriesService()
+            user = await service.get_user(info)
+
+            try:
+                receipt = await sync_to_async(
+                    models.ConsumerReceipt.objects.select_related(
+                        "event", "campaign", "tenant", "reviewed_by"
+                    ).get
+                )(id=receipt_id)
+            except models.ConsumerReceipt.DoesNotExist:
+                raise GraphQLError("Receipt not found.")
+
+            if service.get_role_slug(user) == "client":
+                user_tenant = await service.get_user_tenant(info)
+                if receipt.tenant_id != user_tenant.id:
+                    raise GraphQLError("Receipt not found.")
+
+            blob_name = (
+                extract_blob_name_from_url(receipt.image) or receipt.image
+            )
+
+            def _run_and_save() -> tuple[bool, str]:
+                image_bytes = download_blob_bytes(blob_name)
+                if not image_bytes:
+                    return False, "Could not read the receipt image."
+                result = ocr.run_ocr(image_bytes)
+                receipt.ocr_ran_at = timezone.now()
+                receipt.ocr_text = result.text or ""
+                receipt.ocr_store = result.store or ""
+                receipt.ocr_amount = result.amount
+                receipt.ocr_date = result.purchase_date
+                receipt.save(
+                    update_fields=[
+                        "ocr_ran_at",
+                        "ocr_text",
+                        "ocr_store",
+                        "ocr_amount",
+                        "ocr_date",
+                        "updated_at",
+                    ]
+                )
+                if not result.ok:
+                    return False, result.reason or "OCR failed."
+                return True, "Receipt read."
+
+            ok, message = await sync_to_async(
+                _run_and_save, thread_sensitive=True
+            )()
+
+            receipt = await sync_to_async(
+                ConsumerReceiptQueriesService().get_queryset().get
+            )(id=receipt.id)
+
+            return build_mutation_response(
+                types.ReviewReceiptResponse,
+                success=ok,
+                message=message,
                 input_obj=input,
                 receipt=receipt,
             )

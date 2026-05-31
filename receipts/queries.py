@@ -17,7 +17,7 @@ from asgiref.sync import sync_to_async
 from graphql import GraphQLError
 
 from django.conf import settings
-from django.db.models import Count, Model, Q, QuerySet
+from django.db.models import Count, Model, Q, QuerySet, Sum
 
 from events.models import Event
 from receipts import models, types
@@ -233,7 +233,10 @@ class ReceiptQueries:
         is_active = filters.is_active if filters else None
 
         def _load() -> list[models.ReceiptCampaign]:
-            qs = models.ReceiptCampaign.objects.filter(tenant_id=tenant_id)
+            # Soft-deleted (archived) campaigns are hidden from the dashboard.
+            qs = models.ReceiptCampaign.objects.filter(
+                tenant_id=tenant_id, deleted_at__isnull=True
+            )
             if is_active is not None:
                 qs = qs.filter(is_active=is_active)
             qs = qs.annotate(
@@ -255,6 +258,19 @@ class ReceiptQueries:
                     "receipts",
                     filter=Q(receipts__paid_at__isnull=False),
                     distinct=True,
+                ),
+                # Payout totals for the budget-cap display (NULL rewards are
+                # ignored by Sum; a single join to `receipts` keeps this exact).
+                total_paid=Sum(
+                    "receipts__reward_amount",
+                    filter=Q(receipts__paid_at__isnull=False),
+                ),
+                total_committed=Sum(
+                    "receipts__reward_amount",
+                    filter=Q(
+                        receipts__status="validated",
+                        receipts__paid_at__isnull=True,
+                    ),
                 ),
             ).order_by("-created_at")
             return list(qs)
