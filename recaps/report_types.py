@@ -26,9 +26,14 @@ from django.utils import timezone
 
 from recaps import report_service
 from recaps.report_tokens import make_report_token
+from recaps.tenant_overview import build_tenant_overview
 from utils.ai_text import AiUnavailable, generate_summary
-from utils.graphql.mixins import SparkGraphQLMixin
-from utils.graphql.permissions import StrictIsAuthenticated
+from utils.graphql.mixins import SparkGraphQLMixin, resolve_id_to_int
+from utils.graphql.permissions import (
+    StrictIsAuthenticated,
+    _is_admin_access,
+    resolve_request_user_access,
+)
 
 # System prompt for the executive-summary generator. Pins the persona +
 # the hard constraint that the model must only use the numbers we hand it
@@ -59,6 +64,20 @@ _AI_ANSWER_SYSTEM_PROMPT = (
 # Hard cap on the inbound question length — keeps the prompt bounded and
 # blocks a pathologically long question from blowing up the request.
 _AI_ANSWER_MAX_QUESTION_CHARS = 1000
+
+# System prompt for the TENANT-WIDE freeform Q&A generator — the
+# client-level sibling of ``_AI_ANSWER_SYSTEM_PROMPT``. Pins the model to
+# the single client's aggregated program data only (no invented or
+# estimated numbers) and to a concise answer, with an explicit escape
+# hatch when the data can't answer the question.
+_AI_TENANT_ANSWER_SYSTEM_PROMPT = (
+    "You answer questions about ONE field-marketing client's program using "
+    "ONLY the provided data, which aggregates all of that client's "
+    "campaigns, events, and recaps. Be concise (2-5 sentences). Never "
+    "invent or estimate numbers that are not present in the data. If the "
+    "data does not contain the answer, say plainly that it cannot be "
+    "determined from this client's data."
+)
 
 
 @strawberry.type
@@ -147,6 +166,26 @@ class CampaignReportAiAnswer:
     caller must branch on. When ``true``, ``answer`` holds the generated
     response and ``reason`` is null; when ``false`` (no question, request
     out of scope, AI unconfigured, or the upstream call failed),
+    ``answer`` is ``""`` and ``reason`` carries a short, human-readable
+    explanation. The resolver never raises — degradation is always a
+    value, never a GraphQL error.
+    """
+
+    ok: bool
+    answer: str
+    reason: str | None = None
+
+
+@strawberry.type
+class TenantAiAnswer:
+    """Result of an on-demand freeform Q&A over ONE client's whole dataset.
+
+    The client-level sibling of :class:`CampaignReportAiAnswer`: instead of
+    one campaign, the answer draws on the tenant's aggregated activity
+    (every campaign, event, and recap). ``ok`` is the only field a caller
+    must branch on. When ``true``, ``answer`` holds the generated response
+    and ``reason`` is null; when ``false`` (no question, tenant out of
+    scope / not found, AI unconfigured, or the upstream call failed),
     ``answer`` is ``""`` and ``reason`` carries a short, human-readable
     explanation. The resolver never raises — degradation is always a
     value, never a GraphQL error.
@@ -260,6 +299,47 @@ class _CampaignReportService(SparkGraphQLMixin):
             tenant = await self.get_user_tenant(info)
             return tenant.id
         return None
+
+    async def resolve_target_tenant_id(
+        self, info: strawberry.Info, requested_tenant_id
+    ) -> int | None:
+        """Resolve the CONCRETE tenant id to aggregate over, or None.
+
+        Unlike :meth:`resolve_scope_tenant_id` (single-record lookups,
+        where None means "no restriction"), the tenant overview needs one
+        explicit tenant to roll up. Scoping per the spec:
+
+        * **Client role** — always pinned to their OWN tenant; the
+          ``requested_tenant_id`` argument is ignored/overridden so a
+          client can never aggregate another brand's data.
+        * **Admins** (spark-admin / staff / superuser /
+          ``@igniteproductions.co``) — may target ANY tenant via
+          ``requested_tenant_id``.
+
+        Returns None when the caller is an admin who passed no usable
+        tenant id (the resolver turns that into a degradation reason),
+        rather than raising.
+        """
+        user = await self.get_user(info)
+        role_slug, is_staff, is_super, email = await resolve_request_user_access(
+            user
+        )
+
+        if not _is_admin_access(role_slug, is_staff, is_super, email):
+            # Non-admins (clients) are pinned to their own tenant, full stop.
+            tenant = await self.get_user_tenant(info)
+            return tenant.id
+
+        # Admin: honor the requested tenant id (global id or int).
+        if requested_tenant_id is None:
+            return None
+        raw = str(requested_tenant_id).strip()
+        if not raw:
+            return None
+        try:
+            return resolve_id_to_int(raw)
+        except Exception:
+            return None
 
 
 @strawberry.type
@@ -450,3 +530,77 @@ class CampaignReportQueries:
             )
 
         return CampaignReportAiAnswer(ok=True, answer=answer, reason=None)
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def tenant_ai_answer(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID,
+        question: str,
+    ) -> TenantAiAnswer:
+        """On-demand freeform Q&A over ONE client's aggregated activity.
+
+        The tenant-wide sibling of :meth:`campaign_report_ai_answer`:
+        instead of one Request, it builds a compact overview of the whole
+        tenant's program (every campaign, event, and recap via
+        :func:`recaps.tenant_overview.build_tenant_overview`), appends the
+        caller's ``question``, and calls Gemini.
+
+        Tenant scoping (see :meth:`_CampaignReportService.resolve_target_tenant_id`):
+        client-role users may ONLY ask about their own tenant — the
+        ``tenant_id`` argument is ignored/overridden to their own; admins
+        (spark-admin / staff / superuser / ``@igniteproductions.co``) may
+        target any tenant via ``tenant_id``.
+
+        Never raises: an empty question, a missing/out-of-scope tenant, an
+        unconfigured ``GEMINI_API_KEY``, or any upstream failure all
+        resolve to ``ok=false`` + ``answer=""`` + a human-readable
+        ``reason``.
+        """
+        question = (question or "").strip()
+        if not question:
+            return TenantAiAnswer(
+                ok=False, answer="", reason="A question is required."
+            )
+        question = question[:_AI_ANSWER_MAX_QUESTION_CHARS]
+
+        service = _CampaignReportService()
+        target_tenant_id = await service.resolve_target_tenant_id(info, tenant_id)
+        if target_tenant_id is None:
+            return TenantAiAnswer(
+                ok=False,
+                answer="",
+                reason="A valid tenant id is required.",
+            )
+
+        def _build():
+            return build_tenant_overview(target_tenant_id)
+
+        try:
+            overview = await sync_to_async(_build, thread_sensitive=True)()
+        except Exception:
+            # Missing tenant (Tenant.DoesNotExist) or any aggregation error.
+            return TenantAiAnswer(
+                ok=False,
+                answer="",
+                reason="Tenant not found or not accessible.",
+            )
+
+        user_prompt = overview + "\n\nQuestion: " + question
+        try:
+            answer = await sync_to_async(generate_summary, thread_sensitive=True)(
+                _AI_TENANT_ANSWER_SYSTEM_PROMPT, user_prompt
+            )
+        except AiUnavailable as exc:
+            return TenantAiAnswer(ok=False, answer="", reason=str(exc))
+        except Exception:
+            # Belt-and-suspenders: generate_summary already funnels every
+            # failure through AiUnavailable, but never let an unexpected
+            # error escape the resolver.
+            return TenantAiAnswer(
+                ok=False,
+                answer="",
+                reason="The answer could not be generated.",
+            )
+
+        return TenantAiAnswer(ok=True, answer=answer, reason=None)
