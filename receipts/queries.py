@@ -17,11 +17,14 @@ from asgiref.sync import sync_to_async
 from graphql import GraphQLError
 
 from django.conf import settings
-from django.db.models import Model, QuerySet
+from django.db.models import Count, Model, Q, QuerySet
 
 from events.models import Event
 from receipts import models, types
-from receipts.inputs import ConsumerReceiptFiltersInput
+from receipts.inputs import (
+    ConsumerReceiptFiltersInput,
+    ReceiptCampaignFiltersInput,
+)
 from receipts.tokens import make_event_receipt_token
 from utils.graphql.mixins import SparkGraphQLMixin, resolve_id_to_int
 from utils.graphql.permissions import (
@@ -99,6 +102,7 @@ class ConsumerReceiptQueriesService(SparkGraphQLMixin):
         """
         return models.ConsumerReceipt.objects.select_related(
             "event",
+            "campaign",
             "tenant",
             "reviewed_by",
         )
@@ -108,13 +112,21 @@ class ConsumerReceiptQueriesService(SparkGraphQLMixin):
         *,
         tenant_id: int,
         event_id: int | None = None,
+        campaign_id: int | None = None,
         status: str | None = None,
+        paid: bool | None = None,
     ) -> QuerySet:
         queryset = self.get_queryset().filter(tenant_id=tenant_id)
         if event_id is not None:
             queryset = queryset.filter(event_id=event_id)
+        if campaign_id is not None:
+            queryset = queryset.filter(campaign_id=campaign_id)
         if status:
             queryset = queryset.filter(status=status)
+        if paid is True:
+            queryset = queryset.filter(paid_at__isnull=False)
+        elif paid is False:
+            queryset = queryset.filter(paid_at__isnull=True)
         # Newest submissions first — matches the model Meta ordering and the
         # composite (tenant, status, -submitted_at) index.
         return queryset.order_by("-submitted_at")
@@ -164,14 +176,22 @@ class ReceiptQueries:
             if filters and filters.event_id not in (None, "")
             else None
         )
+        campaign_id: int | None = (
+            resolve_id_to_int(filters.campaign_id)
+            if filters and filters.campaign_id not in (None, "")
+            else None
+        )
         status: str | None = (
             filters.status if filters and filters.status else None
         )
+        paid: bool | None = filters.paid if filters else None
 
         queryset = service.get_ordered_queryset(
             tenant_id=tenant_id,
             event_id=event_id,
+            campaign_id=campaign_id,
             status=status,
+            paid=paid,
         )
         return await connection_from_queryset_async(
             queryset,
@@ -181,6 +201,65 @@ class ReceiptQueries:
             before=before,
             max_limit=RECEIPTS_LIST_MAX_LIMIT,
         )
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def receipt_campaigns(
+        self,
+        info: strawberry.Info,
+        filters: ReceiptCampaignFiltersInput | None = None,
+    ) -> list[types.ReceiptCampaignType]:
+        """Tenant-scoped list of consumer rebate campaigns + their counts.
+
+        Counts (receipts / pending / validated-awaiting-payout / paid) are
+        annotated in a single query so the dashboard cards render with no
+        N+1. Same tenant scoping as `receipts`: clients pinned to their own
+        tenant; an unrestricted role with no tenant in scope gets [].
+        """
+        await _require_admin_or_client(info)
+        service = ConsumerReceiptQueriesService()
+        await service.get_user(info)
+
+        filters_tenant_id_raw: int | None = (
+            resolve_id_to_int(filters.tenant_id)
+            if filters and filters.tenant_id not in (None, "")
+            else None
+        )
+        tenant_id = await _enforce_client_tenant(
+            service, info, filters_tenant_id_raw
+        )
+        if not tenant_id:
+            return []
+
+        is_active = filters.is_active if filters else None
+
+        def _load() -> list[models.ReceiptCampaign]:
+            qs = models.ReceiptCampaign.objects.filter(tenant_id=tenant_id)
+            if is_active is not None:
+                qs = qs.filter(is_active=is_active)
+            qs = qs.annotate(
+                receipts_count=Count("receipts", distinct=True),
+                pending_count=Count(
+                    "receipts",
+                    filter=Q(receipts__status="pending"),
+                    distinct=True,
+                ),
+                validated_count=Count(
+                    "receipts",
+                    filter=Q(
+                        receipts__status="validated",
+                        receipts__paid_at__isnull=True,
+                    ),
+                    distinct=True,
+                ),
+                paid_count=Count(
+                    "receipts",
+                    filter=Q(receipts__paid_at__isnull=False),
+                    distinct=True,
+                ),
+            ).order_by("-created_at")
+            return list(qs)
+
+        return await sync_to_async(_load, thread_sensitive=True)()
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def event_receipt_upload_link(

@@ -2,18 +2,25 @@
 
 `ConsumerReceiptType` is a `strawberry_django.type` whose nodes are loaded
 `ConsumerReceipt` model instances — exactly like `recaps.types.Recap`. The
-related objects (`event`, `reviewed_by`) are declared as *typed auto
-fields* so the active `DjangoOptimizerExtension` select_relateds them when
-queried (no N+1, no per-row `sync_to_async` over a list — the discipline the
-recaps resolvers adopted after a 71s prod incident).
+related objects (`event`, `campaign`, `reviewed_by`) are declared as *typed
+auto fields* so the active `DjangoOptimizerExtension` select_relateds them
+when queried (no N+1, no per-row `sync_to_async` over a list — the discipline
+the recaps resolvers adopted after a 71s prod incident).
 
-The derived scalars (`publicUrl`, `amount`, `eventName`) use the async-safe
-`__dict__`-first read with a `sync_to_async` fallback — the same shape as
-`RecapFile.file_url` — so a column the optimizer deferred degrades to a
-single safe reload rather than raising SynchronousOnlyOperation.
+The derived scalars (`publicUrl`, `amount`, `rewardAmount`, `eventName`,
+`campaignName`, `payoutLink`) use the async-safe `__dict__`-first read with a
+`sync_to_async` fallback — the same shape as `RecapFile.file_url` — so a
+column the optimizer deferred degrades to a single safe reload rather than
+raising SynchronousOnlyOperation.
+
+`payoutLink` is a Venmo web deep-link pre-filled with the consumer's handle,
+the reward amount, and the campaign note. Spark never moves money — the link
+just opens Venmo for the admin to send (and then mark paid).
 """
 
 from __future__ import annotations
+
+import urllib.parse
 
 import strawberry
 import strawberry_django
@@ -25,6 +32,56 @@ from tenants import types as tenant_types
 from utils.gcs import extract_blob_name_from_url, public_url
 
 from . import models
+
+
+def _anno_int(instance, key: str) -> int:
+    """Read an aggregate annotation off a model instance (0 when absent)."""
+    value = instance.__dict__.get(key, None)
+    return int(value) if value is not None else 0
+
+
+@strawberry_django.type(models.ReceiptCampaign)
+class ReceiptCampaignType(Node):
+    """A per-tenant consumer rebate campaign (GoToAisle-style)."""
+
+    uuid: str
+    name: str
+    slug: str
+    headline: str | None
+    description: str | None
+    product: str | None
+    payout_note: str | None
+    is_active: bool
+    created_at: str
+    updated_at: str
+
+    @strawberry.field
+    def reward_amount(self) -> str:
+        """Fixed reward per validated receipt, as a string (e.g. "5.00")."""
+        value = self.__dict__.get("reward_amount", None)
+        if value is None:
+            value = getattr(self, "reward_amount", None)
+        return str(value) if value is not None else "0"
+
+    # Aggregate counts for the dashboard cards. Populated by the
+    # `receiptCampaigns` resolver's `.annotate()`; default to 0 when the
+    # campaign is loaded as a relation (e.g. ConsumerReceipt.campaign) without
+    # them.
+    @strawberry.field
+    def receipts_count(self) -> int:
+        return _anno_int(self, "receipts_count")
+
+    @strawberry.field
+    def pending_count(self) -> int:
+        return _anno_int(self, "pending_count")
+
+    @strawberry.field
+    def validated_count(self) -> int:
+        return _anno_int(self, "validated_count")
+
+    @strawberry.field
+    def paid_count(self) -> int:
+        return _anno_int(self, "paid_count")
 
 
 @strawberry_django.type(models.ConsumerReceipt)
@@ -47,13 +104,20 @@ class ConsumerReceiptType(Node):
     purchase_date: str | None
     product: str | None
 
+    # Consumer payout details (v1: Venmo).
+    payout_method: str | None
+    payout_handle: str | None
+    paid_at: str | None
+
     # Review audit.
     review_note: str | None
     reviewed_at: str | None
 
     # Typed relations — the optimizer select_relateds these when queried, so
-    # `event { name }` and `reviewedBy { email }` resolve with no N+1.
+    # `event { name }`, `campaign { name }`, and `reviewedBy { email }` resolve
+    # with no N+1.
     event: event_types.Event | None
+    campaign: ReceiptCampaignType | None
     reviewed_by: tenant_types.SparkUserType | None
 
     @strawberry.field
@@ -78,11 +142,34 @@ class ConsumerReceiptType(Node):
         return getattr(event, "name", None) if event is not None else None
 
     @strawberry.field
+    async def campaign_name(self) -> str | None:
+        """Name of the campaign this receipt was submitted against."""
+        if not getattr(self, "campaign_id", None):
+            return None
+        campaign = self.__dict__.get("campaign")
+        if campaign is None:
+            def _reload():
+                try:
+                    return self.campaign
+                except Exception:
+                    return None
+            campaign = await sync_to_async(_reload, thread_sensitive=True)()
+        return getattr(campaign, "name", None) if campaign is not None else None
+
+    @strawberry.field
     def amount(self) -> str | None:
         """Purchase amount as a string (Decimal serialized losslessly)."""
         value = self.__dict__.get("amount", None)
         if value is None:
             value = getattr(self, "amount", None)
+        return str(value) if value is not None else None
+
+    @strawberry.field
+    def reward_amount(self) -> str | None:
+        """Reward locked onto this receipt at validation/payout (string)."""
+        value = self.__dict__.get("reward_amount", None)
+        if value is None:
+            value = getattr(self, "reward_amount", None)
         return str(value) if value is not None else None
 
     @strawberry.field(name="publicUrl")
@@ -100,10 +187,63 @@ class ConsumerReceiptType(Node):
             return None
         return public_url(extract_blob_name_from_url(blob))
 
+    @strawberry.field
+    async def payout_link(self) -> str | None:
+        """A Venmo web deep-link pre-filled to pay this consumer.
+
+        Spark never moves money — this just opens Venmo with the recipient
+        handle, reward amount, and campaign note pre-filled, so the admin can
+        send the payment and then mark the receipt paid. Null when the
+        consumer left no payout handle.
+        """
+        handle = str(
+            self.__dict__.get("payout_handle")
+            or getattr(self, "payout_handle", "")
+            or ""
+        ).strip().lstrip("@")
+        if not handle:
+            return None
+
+        amt = self.__dict__.get("reward_amount", None)
+        if amt is None:
+            amt = getattr(self, "reward_amount", None)
+
+        note = ""
+        campaign = self.__dict__.get("campaign")
+        if campaign is None and getattr(self, "campaign_id", None):
+            def _reload():
+                try:
+                    return self.campaign
+                except Exception:
+                    return None
+            campaign = await sync_to_async(_reload, thread_sensitive=True)()
+        if campaign is not None:
+            if amt is None:
+                amt = getattr(campaign, "reward_amount", None)
+            note = (
+                getattr(campaign, "payout_note", "")
+                or getattr(campaign, "name", "")
+                or ""
+            )
+
+        params: dict[str, str] = {"txn": "pay"}
+        if amt is not None:
+            try:
+                params["amount"] = f"{amt:.2f}"
+            except (TypeError, ValueError):
+                params["amount"] = str(amt)
+        if note:
+            params["note"] = note
+        return f"https://venmo.com/{handle}?{urllib.parse.urlencode(params)}"
+
 
 @strawberry.type
 class EventReceiptUploadLinkType:
-    """The public upload link + token for an event's receipts QR."""
+    """The public upload link + token for an event's receipts QR.
+
+    Legacy per-event surface — superseded by per-campaign public pages
+    (`/c/<slug>`). Kept so existing minted links keep resolving.
+    """
 
     event_id: strawberry.ID
     token: str
@@ -112,9 +252,19 @@ class EventReceiptUploadLinkType:
 
 @strawberry.type
 class ReviewReceiptResponse:
-    """Mutation response for `reviewReceipt`."""
+    """Mutation response for `reviewReceipt` and `markReceiptPaid`."""
 
     success: bool
     message: str
     client_mutation_id: strawberry.ID | None = None
     receipt: ConsumerReceiptType | None = None
+
+
+@strawberry.type
+class ReceiptCampaignResponse:
+    """Mutation response for `createReceiptCampaign` / `updateReceiptCampaign`."""
+
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    campaign: ReceiptCampaignType | None = None
