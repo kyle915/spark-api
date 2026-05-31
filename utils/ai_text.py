@@ -80,7 +80,10 @@ def generate_summary(system: str, user: str, *, max_tokens: int = 500) -> str:
 
     try:
         genai.configure(api_key=api_key)
-        model_name = _resolve_model_name(genai)
+    except Exception as exc:
+        raise AiUnavailable(f"AI service error: {_safe_reason(exc)}") from exc
+
+    def _run(model_name: str) -> str:
         model = genai.GenerativeModel(
             model_name, system_instruction=system or None
         )
@@ -92,46 +95,73 @@ def generate_summary(system: str, user: str, *, max_tokens: int = 500) -> str:
             },
             request_options={"timeout": DEFAULT_TIMEOUT_SECONDS},
         )
+        return _extract_text(response)
+
+    configured = (
+        getattr(settings, "GEMINI_MODEL", "") or ""
+    ).strip() or DEFAULT_GEMINI_MODEL
+
+    # Happy path: the configured / pinned model — one call, no discovery.
+    try:
+        return _run(configured)
     except AiUnavailable:
+        # The model responded but had no usable text (safety block / empty).
+        # That's not a "wrong model" problem, so don't hop to another model.
         raise
-    except Exception as exc:
-        # Never surface the raw exception (could embed request details);
-        # keep it short and key-safe.
-        raise AiUnavailable(f"AI service error: {_safe_reason(exc)}") from exc
+    except Exception as primary_exc:
+        # Configured model unavailable — e.g. a not-yet-live id (a brand-new
+        # "flash" release) or a typo. Fall back to the newest "flash" the API
+        # actually offers, then any gemini, then the hardcoded default, so a
+        # stale pin degrades to a working model instead of breaking the call.
+        for fallback in _discover_models(genai, exclude=configured):
+            try:
+                return _run(fallback)
+            except AiUnavailable:
+                raise
+            except Exception:
+                continue
+        raise AiUnavailable(
+            f"AI service error: {_safe_reason(primary_exc)}"
+        ) from primary_exc
 
-    return _extract_text(response)
 
+def _discover_models(genai, *, exclude: str = "") -> list[str]:
+    """Fallback model list (best-first) for when the configured model fails.
 
-def _resolve_model_name(genai) -> str:
-    """Pick the Gemini model to call.
-
-    A pinned ``settings.GEMINI_MODEL`` wins outright. Otherwise discover a
-    model that supports ``generateContent`` (preferring a fast "flash"
-    variant), guarding against model-name churn the same way
-    ``tenants.insights.service`` does. Falls back to
-    :data:`DEFAULT_GEMINI_MODEL` when discovery is unavailable.
+    Queries the API for models that support ``generateContent`` and returns
+    them newest-"flash"-first (a reverse name sort puts e.g. ``2.5-flash``
+    ahead of ``1.5-flash``), then any other gemini model, then the hardcoded
+    :data:`DEFAULT_GEMINI_MODEL`. ``exclude`` drops the already-tried
+    configured model so we don't retry it.
     """
-    pinned = (getattr(settings, "GEMINI_MODEL", "") or "").strip()
-    if pinned:
-        return pinned
-
     try:
         usable = [
-            m
+            m.name
             for m in genai.list_models()
             if "generateContent"
             in getattr(m, "supported_generation_methods", [])
         ]
     except Exception:
-        return DEFAULT_GEMINI_MODEL
+        usable = []
 
-    for m in usable:  # prefer a fast/cheap flash model
-        if "flash" in m.name.lower():
-            return m.name
-    for m in usable:  # else any gemini model
-        if "gemini" in m.name.lower():
-            return m.name
-    return usable[0].name if usable else DEFAULT_GEMINI_MODEL
+    out: list[str] = []
+    seen = {(exclude or "").strip().lower()}
+
+    def add(name: str | None) -> None:
+        n = (name or "").strip()
+        if n and n.lower() not in seen:
+            seen.add(n.lower())
+            out.append(n)
+
+    for name in sorted(
+        (n for n in usable if "flash" in n.lower()), reverse=True
+    ):
+        add(name)
+    for name in usable:
+        if "gemini" in name.lower():
+            add(name)
+    add(DEFAULT_GEMINI_MODEL)
+    return out
 
 
 def _extract_text(response) -> str:

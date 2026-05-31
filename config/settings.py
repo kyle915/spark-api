@@ -451,14 +451,13 @@ GOOGLE_OAUTH_AUDIENCES = list(
 # Gemini AI Configuration
 GEMINI_API_KEY = env("GEMINI_API_KEY", default="")
 
-# Optional override for the Gemini model used by utils/ai_text.py (the
-# on-demand AI campaign-report executive summary). Left empty by default
-# so the client auto-discovers a current model that supports
-# generateContent (mirrors tenants.insights.service); set this (e.g.
-# "gemini-1.5-flash") to pin a model and skip the discovery call. The
-# summary reuses GEMINI_API_KEY above and degrades gracefully (ok=false)
-# when it's unset.
-GEMINI_MODEL = env("GEMINI_MODEL", default="")
+# Gemini model for utils/ai_text.py (the Ask-AI Q&A + report summaries).
+# Defaults to gemini-3.5-flash; override per-environment with the
+# GEMINI_MODEL env var. If the configured id isn't available (e.g. a
+# not-yet-live release or a typo), ai_text auto-falls-back to the newest
+# available "flash" model the API offers, so a stale id can't break the
+# feature. Reuses GEMINI_API_KEY above.
+GEMINI_MODEL = env("GEMINI_MODEL", default="gemini-3.5-flash")
 
 _job_extension_rate_default = env("JOB_EXTENSION_RATE_DEFAULT", default=8)
 if _job_extension_rate_default in (None, ""):
