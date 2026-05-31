@@ -55,10 +55,13 @@ _AI_SUMMARY_MAX_QUOTES = 5
 # the question.
 _AI_ANSWER_SYSTEM_PROMPT = (
     "You answer questions about a single field-marketing campaign using "
-    "ONLY the provided campaign data. Be concise (2-4 sentences). Never "
-    "invent or estimate numbers that are not present in the data. If the "
-    "data does not contain the answer, say plainly that it cannot be "
-    "determined from this campaign's data."
+    "ONLY the provided campaign data. Give a complete, well-structured "
+    "answer: lead with a direct response, then back it with the specific "
+    "numbers, products, and consumer quotes from the data. Use short "
+    "paragraphs or bullet points when they aid clarity. Be thorough but do "
+    "not pad or repeat. Never invent or estimate numbers that are not "
+    "present in the data. If the data does not contain the answer, say "
+    "plainly that it cannot be determined from this campaign's data."
 )
 
 # Hard cap on the inbound question length — keeps the prompt bounded and
@@ -73,10 +76,14 @@ _AI_ANSWER_MAX_QUESTION_CHARS = 1000
 _AI_TENANT_ANSWER_SYSTEM_PROMPT = (
     "You answer questions about ONE field-marketing client's program using "
     "ONLY the provided data, which aggregates all of that client's "
-    "campaigns, events, and recaps. Be concise (2-5 sentences). Never "
-    "invent or estimate numbers that are not present in the data. If the "
-    "data does not contain the answer, say plainly that it cannot be "
-    "determined from this client's data."
+    "campaigns, events, and recaps. Give a complete, well-structured "
+    "answer: lead with a direct response, then support it with the "
+    "specific numbers, trends, products, and consumer quotes from the "
+    "data. Use short paragraphs or bullet points when they aid clarity. Be "
+    "thorough but do not pad or repeat. Never invent or estimate numbers "
+    "that are not present in the data. If the data does not contain the "
+    "answer, say plainly that it cannot be determined from this client's "
+    "data."
 )
 
 
@@ -515,7 +522,7 @@ class CampaignReportQueries:
         user_prompt = _compose_ai_summary_prompt(data) + "\n\nQuestion: " + question
         try:
             answer = await sync_to_async(generate_summary, thread_sensitive=True)(
-                _AI_ANSWER_SYSTEM_PROMPT, user_prompt
+                _AI_ANSWER_SYSTEM_PROMPT, user_prompt, max_tokens=1024
             )
         except AiUnavailable as exc:
             return CampaignReportAiAnswer(ok=False, answer="", reason=str(exc))
@@ -589,7 +596,7 @@ class CampaignReportQueries:
         user_prompt = overview + "\n\nQuestion: " + question
         try:
             answer = await sync_to_async(generate_summary, thread_sensitive=True)(
-                _AI_TENANT_ANSWER_SYSTEM_PROMPT, user_prompt
+                _AI_TENANT_ANSWER_SYSTEM_PROMPT, user_prompt, max_tokens=1024
             )
         except AiUnavailable as exc:
             return TenantAiAnswer(ok=False, answer="", reason=str(exc))
