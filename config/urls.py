@@ -68,6 +68,10 @@ urlpatterns = [
     # scan a per-event QR / open a link and upload a purchase receipt; the
     # token resolves to the event + tenant. See `receipts/views.py`.
     path("api/public/", include("receipts.urls")),
+    # Public, token-authenticated Client Campaign Report (no JWT). A signed
+    # share token resolves to a request's aggregate report (JSON) and the
+    # branded report PDF. See `recaps/report_views.py`.
+    path("api/public/", include("recaps.report_urls")),
 ]
 
 # Add RQ dashboard in DEBUG mode
