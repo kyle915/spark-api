@@ -5,6 +5,7 @@ from events.schema import EventQueryClient, EventMutationsClient
 from recaps.schema import RecapQueryClient, RecapMutationsClient
 from recaps.report_types import CampaignReportQueries
 from receipts.schema import ReceiptQueryClient, ReceiptMutationsClient
+from billing.schema import BillingQueryClient, BillingMutationsClient
 from ambassadors.schema import AmbassadorQueryClient, AmbassadorMutationsClient
 from tenants.schema import QueryClients, MutationClients
 from tenants.dashboard.schema import DashboardQueries
@@ -34,6 +35,7 @@ QueryClients = merge_types(
         ChatQueryClient,
         AnnouncementQueryClient,
         ReceiptQueryClient,
+        BillingQueryClient,
     ),
 )
 MutationClients = merge_types(
@@ -49,6 +51,7 @@ MutationClients = merge_types(
         ChatMutationsClient,
         AnnouncementMutationsClient,
         ReceiptMutationsClient,
+        BillingMutationsClient,
     ),
 )
 
