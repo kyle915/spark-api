@@ -22,6 +22,14 @@ class TenantType(Node):
     linked_sheet_url: strawberry.auto
 
     @strawberry.field
+    def recap_recipient_emails(self) -> str:
+        """Raw stored list of extra recap-approval recipient emails for
+        this brand (comma/newline/semicolon-separated as the admin entered
+        it). "" when none are configured. Parsed at send time alongside the
+        RMM, client-role users, and requestor."""
+        return self.recap_recipient_emails or ""
+
+    @strawberry.field
     async def default_external_rmm(self) -> "SparkUserType | None":
         """The user all external (public-form) requests route to, if set
         on the Team page. None = fall back to territory/Ignite routing."""

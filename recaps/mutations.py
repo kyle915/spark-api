@@ -5,6 +5,7 @@ from asgiref.sync import sync_to_async
 from typing import Any
 from decimal import Decimal
 import logging
+import re
 
 from django.contrib.auth import get_user_model
 from django.db.models import Model, Prefetch, Q
@@ -228,6 +229,21 @@ async def _notify_recap_approved_to_rmm_or_clients(
     )
     for row in client_rows:
         _push(row.get("user__email"), row.get("user__first_name"))
+
+    # Add the tenant's explicitly-configured recap recipients. Brands
+    # without a client-role user still need the approved recap to reach
+    # a human, so staff can list addresses on Tenant.recap_recipient_emails
+    # (comma/newline/semicolon-separated). Parsed best-effort and deduped
+    # through the same _push() as the RMM/client/requestor rows.
+    configured = await sync_to_async(
+        lambda: Tenant.objects.filter(id=event.tenant_id)
+        .values_list("recap_recipient_emails", flat=True)
+        .first()
+    )()
+    for token in re.split(r"[,\n;]+", configured or ""):
+        candidate = token.strip()
+        if "@" in candidate and "." in candidate:
+            _push(candidate, None)
 
     # Add the original requestor — same activation owner the admin
     # CC's on the request approval email. Closes the loop: requestor

@@ -18,6 +18,7 @@ from django.db import transaction
 from utils.graphql.inputs import SparkGraphQLInput
 from utils.graphql.relay import ensure_relay_mutation
 from utils.graphql.mixins import resolve_id_to_int
+from utils.graphql.permissions import StrictIsAuthenticated
 from utils.utils import ROLE_ID
 from utils.gcs import delete_blob, extract_blob_name_from_url
 from .models import Role, TenantedUser, Tenant, TenantTheme, PasswordResetCode
@@ -1778,6 +1779,70 @@ class LinkedSheetMutations:
             tenant=saved,
             client_mutation_id=input.client_mutation_id,
         )
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def set_tenant_recap_recipient_emails(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID,
+        emails: str,
+    ) -> TenantType | None:
+        """Set the brand's explicit recap-approval recipient list.
+
+        Stored verbatim on Tenant.recap_recipient_emails (free text:
+        comma/newline/semicolon-separated). When a recap is approved,
+        recaps.mutations parses this list and emails each address on top
+        of the RMM, the tenant's client-role users, and the requestor —
+        so brands without a client-role user still receive their recaps.
+        Pass "" to clear. Returns the updated Tenant.
+
+        Auth: platform admins (staff/superuser/spark-admin/
+        @igniteproductions.co) may set ANY tenant; a client-role user may
+        set ONLY a tenant they actively belong to. Mirrors the posture of
+        the other tenant mutations on the clients schema.
+        """
+        request_user = info.context.request.user
+        (
+            allowed,
+            is_spark_admin,
+            is_client,
+            error_message,
+        ) = await _check_client_or_spark_admin(request_user)
+        if not allowed:
+            raise GraphQLError(error_message)
+
+        try:
+            resolved_tenant_id = resolve_id_to_int(tenant_id)
+        except (GraphQLError, ValueError, TypeError):
+            raise GraphQLError("Invalid tenant ID.")
+
+        # Clients are confined to their own tenant(s); platform admins are not.
+        if is_client and not is_spark_admin:
+            tenant_ids = await _get_active_tenant_ids(request_user)
+            if resolved_tenant_id not in tenant_ids:
+                raise GraphQLError(
+                    "You do not have permission to update this tenant."
+                )
+
+        try:
+            tenant = await sync_to_async(Tenant.objects.get)(pk=resolved_tenant_id)
+        except Tenant.DoesNotExist:
+            raise GraphQLError("Tenant not found.")
+
+        @sync_to_async
+        def save():
+            tenant.recap_recipient_emails = emails or ""
+            tenant.updated_by = request_user
+            tenant.save(
+                update_fields=[
+                    "recap_recipient_emails",
+                    "updated_by",
+                    "updated_at",
+                ]
+            )
+            return tenant
+
+        return await save()
 
 
 @strawberry.type
