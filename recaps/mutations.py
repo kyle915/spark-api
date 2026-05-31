@@ -42,6 +42,7 @@ from utils.gcs import (
     get_gcs_client,
 )
 from utils.onesignal import OneSignalError, one_signal_client
+from utils.cloud_tasks import enqueue
 from recaps.pdf import (
     build_recap_pdf,
     build_campaign_report_pdf,
@@ -3203,7 +3204,16 @@ class RecapMutationService(SparkGraphQLMixin):
                 ).get
             )(id=recap.id)
             try:
-                await _notify_recap_approved_to_rmm_or_clients(recap)
+                # Offload the slow client/RMM email + PDF to Cloud Tasks when
+                # the feature is configured so this mutation returns fast. When
+                # it's off (the default), enqueue() returns False and we run the
+                # exact same notify inline — behavior unchanged from before.
+                enqueued = await sync_to_async(enqueue)(
+                    "/api/tasks/recap-approved-notify",
+                    {"recap_id": recap.id, "recap_kind": "legacy"},
+                )
+                if not enqueued:
+                    await _notify_recap_approved_to_rmm_or_clients(recap)
             except Exception:
                 logger.exception(
                     "recap-approved notification failed for recap=%s", recap.id
@@ -3249,7 +3259,16 @@ class RecapMutationService(SparkGraphQLMixin):
                 ).get
             )(id=custom_recap.id)
             try:
-                await _notify_recap_approved_to_rmm_or_clients(custom_recap)
+                # Offload the slow client/RMM email + PDF to Cloud Tasks when
+                # the feature is configured so this mutation returns fast. When
+                # it's off (the default), enqueue() returns False and we run the
+                # exact same notify inline — behavior unchanged from before.
+                enqueued = await sync_to_async(enqueue)(
+                    "/api/tasks/recap-approved-notify",
+                    {"recap_id": custom_recap.id, "recap_kind": "custom"},
+                )
+                if not enqueued:
+                    await _notify_recap_approved_to_rmm_or_clients(custom_recap)
             except Exception:
                 logger.exception(
                     "recap-approved notification failed for custom_recap=%s",
