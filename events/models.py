@@ -491,6 +491,26 @@ class Request(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
     updated_at = models.DateTimeField(auto_now=True)
 
+    class Meta:
+        indexes = [
+            # Master Tracker `requests` resolver (events/queries.py
+            # `RequestQueriesService.get_queryset` + the `requests` field):
+            #   Request.objects.filter(deleted_at__isnull=True)        # base qs
+            #                  .filter(tenant_id=…)                    # tenant scope
+            #                  .order_by("date" | "-date")             # Date column sort
+            # The hot path is "all live requests for one tenant, sorted by
+            # event date". A composite on (tenant, deleted_at, date) serves
+            # the equality on tenant + the IS NULL on deleted_at and feeds the
+            # date sort in order, so the tracker's single big page is an index
+            # range scan rather than a tenant-wide scan + filesort. deleted_at
+            # already has a standalone db_index, but that lone index can't
+            # cover the tenant predicate or the date ordering.
+            models.Index(
+                fields=["tenant", "deleted_at", "date"],
+                name="ev_request_t_del_date_idx",
+            ),
+        ]
+
     def save(self, *args, **kwargs):
         if not self.status:
             self.status = RequestStatus.objects.get_default(self.tenant)
@@ -792,6 +812,22 @@ class Event(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     objects = EventManager()
+
+    class Meta:
+        indexes = [
+            # Recap lists (recaps/queries.py — both the legacy
+            # `RecapQueriesService` and the `CustomRecapQueriesService`)
+            # scope by tenant *through* the event join
+            # (`event__tenant_id=…`) and filter the event date range
+            # (`event__date__date__gte/__lte`, plus the clickable Date sort
+            # on the Master Tracker `requests` view which orders Event-linked
+            # rows by `date`). A composite on (tenant, date) lets Postgres
+            # satisfy the tenant predicate and the date range/sort from one
+            # index instead of scanning the whole tenant's events. `date` is
+            # nullable but that's fine — NULLs sort together and the leading
+            # tenant column still narrows the scan.
+            models.Index(fields=["tenant", "date"], name="ev_event_tenant_date_idx"),
+        ]
 
 
 class GoogleCalendarEvent(models.Model):

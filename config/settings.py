@@ -49,6 +49,11 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    # Required by the AddIndexConcurrently operation used in
+    # events/recaps migrations (postgres-only, non-locking index build).
+    # The project already relies on postgres-specific fields (ArrayField),
+    # so this only formalizes the dependency.
+    "django.contrib.postgres",
     "strawberry_django",
     "corsheaders",
     "storages",
@@ -132,7 +137,32 @@ WSGI_APPLICATION = "config.wsgi.application"
 DATABASES = {
     "default": env.db(),
 }
-DATABASES["default"]["CONN_MAX_AGE"] = 60
+
+# Persistent DB connections (connection reuse).
+#
+# On Cloud Run we open a fresh Postgres connection on every request by
+# default, and the TCP + TLS + auth handshake to Cloud SQL adds latency to
+# each one. CONN_MAX_AGE keeps a connection open and reuses it across
+# requests for up to this many seconds (default 60s), which removes that
+# per-request connect cost for the common case.
+#
+# Trade-off / how to disable: persistent connections are held PER Cloud Run
+# instance, so total open connections scale with instance count × workers.
+# If Cloud SQL ever reports "too many connections" or "remaining connection
+# slots are reserved", set DB_CONN_MAX_AGE=0 in the environment to revert to
+# connect-per-request immediately (no code change / redeploy of logic
+# needed), and/or put a pooler (e.g. PgBouncer) in front. The value is read
+# from env precisely so this lever exists.
+DATABASES["default"]["CONN_MAX_AGE"] = env.int("DB_CONN_MAX_AGE", default=60)
+
+# Recycle stale persistent connections (Django 4.1+). With CONN_MAX_AGE > 0 a
+# pooled connection can be silently dropped by Cloud SQL / the proxy between
+# requests; without health checks Django would hand that dead connection to
+# the next request and it would fail with an OperationalError. When enabled,
+# Django pings the connection at the start of each request and transparently
+# reconnects if it's broken — important on Cloud Run where instances idle
+# between bursts.
+CONN_HEALTH_CHECKS = True
 
 
 # Password validation
