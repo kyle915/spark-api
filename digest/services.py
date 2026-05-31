@@ -29,19 +29,14 @@ PENDING_AGE_HOURS = 24
 UNFILED_RECAP_GRACE_HOURS = 4
 UPCOMING_WINDOW_DAYS = 7
 
-# Ops retires a dead client by renaming the tenant with an "[ARCHIVED]"
-# prefix — there's no boolean flag on the Tenant model, the rename IS the
-# convention. Archived tenants must never receive scheduled digest or
-# executive-summary emails, otherwise a retired client keeps spamming the
-# admin inbox. Both cron entrypoints route through active_tenants() so the
-# rule lives in exactly one place. An explicit --tenant-id still targets
-# any tenant on purpose (e.g. a deliberate one-off resend).
-ARCHIVED_NAME_PREFIX = "[ARCHIVED]"
-
-
+# Both digest cron entrypoints route through active_tenants() so a retired
+# client (archived by renaming the tenant with an "[ARCHIVED]" prefix) never
+# gets digest / exec-summary email. The convention lives on the model now —
+# see Tenant.active(). An explicit --tenant-id still targets any tenant on
+# purpose (e.g. a deliberate one-off resend).
 def active_tenants():
-    """Tenants that haven't been archived-by-convention (name prefix)."""
-    return Tenant.objects.exclude(name__istartswith=ARCHIVED_NAME_PREFIX)
+    """Tenants that haven't been archived-by-convention. See Tenant.active()."""
+    return Tenant.active()
 
 
 @dataclass

@@ -11,6 +11,14 @@ from utils.models import Asyncable
 from utils.utils import default_tenant_theme
 
 
+# Ops retires a client by renaming its tenant with an "[ARCHIVED]" prefix —
+# there is no boolean flag on the model, the rename IS the convention.
+# Tenant.active() applies it everywhere (tenant pickers, client lists, digest
+# crons) so a dead client stops appearing in the UI and stops getting email.
+# Reversible: rename the tenant back to un-archive it.
+ARCHIVED_NAME_PREFIX = "[ARCHIVED]"
+
+
 class Tenant(Asyncable, models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
@@ -53,6 +61,23 @@ class Tenant(Asyncable, models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     objects = TenantManager()
+
+    @classmethod
+    def active(cls):
+        """Tenants that haven't been archived-by-convention.
+
+        Excludes any tenant whose name starts with the "[ARCHIVED]" prefix.
+        Use this anywhere a dead client should not surface (tenant pickers,
+        client lists, scheduled digests). Call Tenant.objects to include
+        archived tenants on purpose (Django admin, explicit single-tenant
+        operations).
+        """
+        return cls.objects.exclude(name__istartswith=ARCHIVED_NAME_PREFIX)
+
+    @property
+    def is_archived(self) -> bool:
+        """True when this tenant was archived by the "[ARCHIVED]" rename."""
+        return (self.name or "").upper().startswith(ARCHIVED_NAME_PREFIX)
 
 
 class TenantTheme(models.Model):
