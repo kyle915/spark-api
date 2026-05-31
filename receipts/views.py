@@ -31,6 +31,7 @@ import binascii
 import json
 import logging
 import uuid
+from decimal import Decimal
 from typing import Any
 
 from asgiref.sync import sync_to_async
@@ -267,6 +268,16 @@ def _build_receipt_fields(request: HttpRequest) -> dict[str, Any]:
         "product": _clean_str(pick("product"), 10000),
     }
 
+    # Consumer payout details. payout_handle is the consumer's Venmo username
+    # (a public identifier, NOT a credential); strip a leading "@".
+    # payout_method defaults to "venmo". Harmless on the legacy event flow,
+    # which simply never sends these.
+    handle = _clean_str(pick("payoutHandle", "payout_handle"), 255)
+    if handle:
+        fields["payout_handle"] = handle.lstrip("@")
+    method = _clean_str(pick("payoutMethod", "payout_method"), 16)
+    fields["payout_method"] = method or "venmo"
+
     # purchase_date — accept an ISO date string; ignore anything unparseable
     # rather than 400 (the field is optional, best-effort).
     purchase_date = pick("purchaseDate", "purchase_date")
@@ -355,6 +366,126 @@ def public_receipt_submit_view(request: HttpRequest, token: str) -> HttpResponse
     return JsonResponse({"ok": True})
 
 
+# ---------------------------------------------------------------------------
+# Campaign public surface (GoToAisle-style). A campaign is addressed by its
+# slug (no token — the link is meant to be public / QR'd / printed on signage)
+# and is gated only by `is_active`. New consumer submissions attach to the
+# campaign and capture the consumer's Venmo handle for later payout.
+# ---------------------------------------------------------------------------
+def _load_campaign_or_404(slug: str):
+    """Return an ACTIVE ReceiptCampaign for the slug, or a 4xx JsonResponse."""
+    try:
+        campaign = models.ReceiptCampaign.objects.select_related("tenant").get(
+            slug=slug
+        )
+    except models.ReceiptCampaign.DoesNotExist:
+        return JsonResponse(
+            {"error": "not_found", "message": "Campaign not found."},
+            status=404,
+        )
+    if not campaign.is_active:
+        # Don't leak that an inactive campaign exists — same shape as missing.
+        return JsonResponse(
+            {
+                "error": "not_found",
+                "message": "This campaign is not currently active.",
+            },
+            status=404,
+        )
+    return campaign
+
+
+def _campaign_display_payload(campaign) -> dict[str, Any]:
+    """The subset of campaign/brand info the public upload page renders."""
+    reward = campaign.reward_amount or Decimal("0")
+    brand = ""
+    if getattr(campaign, "tenant_id", None):
+        brand = getattr(campaign.tenant, "name", "") or ""
+    return {
+        "name": campaign.name or "",
+        "brandName": brand,
+        "headline": campaign.headline or "",
+        "description": campaign.description or "",
+        "product": campaign.product or "",
+        "rewardAmount": f"{reward:.2f}",
+        "rewardLabel": f"${reward:.2f}",
+        "isActive": campaign.is_active,
+    }
+
+
+@csrf_exempt
+@require_http_methods(["GET"])
+def public_campaign_view(request: HttpRequest, slug: str) -> HttpResponse:
+    """GET — resolve a campaign slug to its public display info."""
+    loaded = _load_campaign_or_404(slug)
+    if isinstance(loaded, HttpResponse):
+        return loaded
+    return JsonResponse({"campaign": _campaign_display_payload(loaded)})
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def public_campaign_submit_view(
+    request: HttpRequest, slug: str
+) -> HttpResponse:
+    """POST — store the receipt image to GCS + create a pending receipt."""
+    loaded = _load_campaign_or_404(slug)
+    if isinstance(loaded, HttpResponse):
+        return loaded
+    campaign = loaded
+
+    extracted = _extract_image(request)
+    if isinstance(extracted, HttpResponse):
+        return extracted
+    image_bytes, content_type = extracted
+
+    extension = _EXTENSION_BY_CONTENT_TYPE.get(content_type, "jpg")
+    blob_name = (
+        f"consumer-receipts/{campaign.tenant_id}/campaign-{campaign.id}/"
+        f"{uuid.uuid4().hex}.{extension}"
+    )
+
+    try:
+        upload_bytes(blob_name, image_bytes, content_type=content_type)
+    except Exception:
+        logger.exception(
+            "public_campaign_submit: GCS upload failed for campaign_id=%s",
+            campaign.id,
+        )
+        return JsonResponse(
+            {
+                "error": "upload_failed",
+                "message": "We couldn't store your receipt. Please try again.",
+            },
+            status=502,
+        )
+
+    fields = _build_receipt_fields(request)
+
+    try:
+        models.ConsumerReceipt.objects.create(
+            tenant=campaign.tenant,
+            campaign=campaign,
+            image=blob_name,
+            status=models.ConsumerReceipt.STATUS_PENDING,
+            **fields,
+        )
+    except Exception:
+        logger.exception(
+            "public_campaign_submit: receipt create failed for campaign_id=%s",
+            campaign.id,
+        )
+        return JsonResponse(
+            {
+                "error": "create_failed",
+                "message": "We couldn't record your receipt. Please try again.",
+            },
+            status=500,
+        )
+
+    return JsonResponse({"ok": True})
+
+
 # Async wrappers — config/urls.py wires the public surface into an ASGI app
 # alongside async GraphQL views. Django runs sync views in a threadpool
 # under ASGI, but the events public views are plain sync; we keep these
@@ -363,4 +494,6 @@ def public_receipt_submit_view(request: HttpRequest, token: str) -> HttpResponse
 __all__ = [
     "public_receipt_event_view",
     "public_receipt_submit_view",
+    "public_campaign_view",
+    "public_campaign_submit_view",
 ]

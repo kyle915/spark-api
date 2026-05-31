@@ -11,13 +11,18 @@ class ConsumerReceiptFiltersInput(SparkGraphQLInput):
 
     `tenant_id` is honored for admins (spark-admin / staff / Ignite) but
     forced to the caller's own tenant for client-role users — same scoping
-    posture as the recaps list (see `receipts/queries.py`).
+    posture as the recaps list (see `receipts/queries.py`). `campaign_id`
+    scopes to a single campaign's submissions; `paid` splits validated
+    receipts into "awaiting payout" (False) vs "paid" (True).
     """
 
     tenant_id: strawberry.ID | None = None
     event_id: strawberry.ID | None = None
+    campaign_id: strawberry.ID | None = None
     # One of ConsumerReceipt.STATUS_* ("pending" / "validated" / "rejected").
     status: str | None = None
+    # True → only paid (paid_at set); False → only unpaid; None → either.
+    paid: bool | None = None
 
 
 @strawberry.input
@@ -33,3 +38,60 @@ class ReviewReceiptInput(SparkGraphQLInput):
     id: strawberry.ID
     status: str
     note: str | None = None
+
+
+@strawberry.input
+class ReceiptCampaignFiltersInput(SparkGraphQLInput):
+    """Filters for the tenant-scoped `receiptCampaigns` query."""
+
+    tenant_id: strawberry.ID | None = None
+    is_active: bool | None = None
+
+
+@strawberry.input
+class CreateReceiptCampaignInput(SparkGraphQLInput):
+    """Input for `createReceiptCampaign`.
+
+    `tenant_id` is honored for admins; client-role users are pinned to their
+    own tenant. `slug` is optional — when blank the name is slugified and
+    de-duped. `reward_amount` is the fixed payout per validated receipt.
+    """
+
+    name: str
+    tenant_id: strawberry.ID | None = None
+    headline: str | None = None
+    description: str | None = None
+    product: str | None = None
+    reward_amount: float | None = None
+    payout_note: str | None = None
+    is_active: bool | None = None
+    slug: str | None = None
+
+
+@strawberry.input
+class UpdateReceiptCampaignInput(SparkGraphQLInput):
+    """Input for `updateReceiptCampaign`. Only provided fields are changed."""
+
+    id: strawberry.ID
+    name: str | None = None
+    headline: str | None = None
+    description: str | None = None
+    product: str | None = None
+    reward_amount: float | None = None
+    payout_note: str | None = None
+    is_active: bool | None = None
+    slug: str | None = None
+
+
+@strawberry.input
+class MarkReceiptPaidInput(SparkGraphQLInput):
+    """Input for `markReceiptPaid`.
+
+    Stamps the payout audit on a *validated* receipt. `amount` optionally
+    overrides the reward (else the receipt's snapshot, else the campaign
+    reward); `payout_handle` optionally corrects the consumer's Venmo handle.
+    """
+
+    id: strawberry.ID
+    amount: float | None = None
+    payout_handle: str | None = None
