@@ -125,6 +125,19 @@ class Recap(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
     updated_at = models.DateTimeField(auto_now=True)
 
+    class Meta:
+        indexes = [
+            # Legacy "Your recaps" list (recaps/queries.py
+            # `RecapQueriesService`): rows are scoped by tenant *through* the
+            # event (`event__tenant_id=…` — Recap has no direct tenant FK) and
+            # always ordered by `-created_at` (the service `ordering`). The
+            # tenant scope + date range is served by the Event(tenant, date)
+            # index on the joined side; this index on created_at backs the
+            # ORDER BY so the final sort is an index scan rather than a
+            # filesort over the (capped, up to 2000-row) result set.
+            models.Index(fields=["-created_at"], name="rc_recap_created_idx"),
+        ]
+
 
 class RecapFile(models.Model):
     id = models.BigAutoField(primary_key=True)
@@ -486,6 +499,21 @@ class CustomRecap(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
     updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            # Custom "Your recaps" list (recaps/queries.py
+            # `CustomRecapQueriesService`): unlike legacy Recap, CustomRecap
+            # has a *direct* tenant FK and the list filters on it
+            # (`tenant_id=…`) then orders by `-created_at`. A composite on
+            # (tenant, -created_at) satisfies the tenant equality and the
+            # ORDER BY from a single index — the leading tenant column narrows
+            # to the client's rows and created_at gives the sort for free.
+            models.Index(
+                fields=["tenant", "-created_at"],
+                name="rc_customrecap_t_created_idx",
+            ),
+        ]
 
 
 class CustomRecapFieldType(models.Model):
