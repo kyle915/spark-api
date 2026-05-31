@@ -290,29 +290,63 @@ async def _notify_recap_ready_for_review_to_admins(
         .first()
     )()
     role_slug = (role_slug or "").strip()
-    if role_slug != Role.AMBASSADOR_SLUG:
-        return
 
-    recipients = [
-        email.strip()
-        for email in getattr(settings, "RECAP_REVIEW_COPY_EMAILS", [])
-        if (email or "").strip()
-    ]
+    if role_slug == Role.AMBASSADOR_SLUG:
+        # BA filed it from the app → notify the admin review list (the
+        # original behavior). Recipients come from RECAP_REVIEW_COPY_EMAILS.
+        recipients = [
+            email.strip()
+            for email in getattr(settings, "RECAP_REVIEW_COPY_EMAILS", [])
+            if (email or "").strip()
+        ]
+    else:
+        # An admin filed the recap on a BA's behalf. The review list doesn't
+        # need a "ready for review" alert (an admin already handled it), but
+        # the admin who filed it still expects a confirmation. Scope the
+        # email to that filer ONLY — never a team broadcast — so this can't
+        # flood the review list on imports / multi-recap entry.
+        filer_email = (getattr(created_by, "email", "") or "").strip()
+        recipients = [filer_email] if filer_email else []
+
     if not recipients:
         return
 
-    ambassador_name = (
-        created_by.get_full_name().strip()
-        if hasattr(created_by, "get_full_name")
-        else ""
-    ) or created_by.email
+    # Name shown in the email is the BA the recap is FOR (linked ambassador
+    # or write-in external BA), falling back to the creator's own name.
+    def _ba_label() -> str:
+        try:
+            amb = getattr(recap, "ambassador", None)
+            user = getattr(amb, "user", None) if amb else None
+            if user:
+                full = (user.get_full_name() or "").strip()
+                if full:
+                    return full
+        except Exception:
+            pass
+        return (getattr(recap, "external_ba_name", "") or "").strip()
+
+    ba_name = await sync_to_async(_ba_label)()
+    if not ba_name:
+        ba_name = (
+            created_by.get_full_name().strip()
+            if hasattr(created_by, "get_full_name")
+            else ""
+        ) or created_by.email
 
     mailer = RecapReadyForReviewAdminMailer(
         recap=recap,
         to_emails=recipients,
-        ambassador_name=ambassador_name,
+        ambassador_name=ba_name,
     )
-    await sync_to_async(mailer.send)()
+    # Best-effort: a mail failure must never break recap creation/approval.
+    try:
+        await sync_to_async(mailer.send)()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "recap ready-for-review email failed for recap %s: %s",
+            getattr(recap, "id", None),
+            exc,
+        )
 
 
 class RecapMutationService(SparkGraphQLMixin):
