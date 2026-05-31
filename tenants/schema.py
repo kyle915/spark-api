@@ -434,7 +434,7 @@ class QuerySpark(GoogleCalendarQueries, TenantThemingQuery):
         last: int | None = None,
         before: str | None = None,
     ) -> CountableConnection[TenantType]:
-        queryset = Tenant.objects.all()
+        queryset = Tenant.active()
         if user_uuid:
             queryset = queryset.filter(
                 tenanted_users__is_active=True,
@@ -717,7 +717,7 @@ class QueryClients(GoogleCalendarQueries, TenantThemingQuery):
         # account" even though they manage all of them. Non-staff users
         # are still scoped by tenanted_users membership.
         if user.is_staff or user.is_superuser:
-            queryset = Tenant.objects.all()
+            queryset = Tenant.active()
         else:
             filter_dict = {
                 "tenanted_users__is_active": True,
@@ -727,7 +727,7 @@ class QueryClients(GoogleCalendarQueries, TenantThemingQuery):
             else:
                 filter_dict["tenanted_users__user"] = user
 
-            queryset = Tenant.objects.filter(**filter_dict)
+            queryset = Tenant.active().filter(**filter_dict)
 
         if filters:
             if filters.name:
@@ -796,7 +796,7 @@ class QueryMobile(TenantThemingQuery):
         last: int | None = None,
         before: str | None = None,
     ) -> CountableConnection[TenantType]:
-        queryset = Tenant.objects.all()
+        queryset = Tenant.active()
         if user_uuid:
             queryset = queryset.filter(
                 tenanted_users__is_active=True,
