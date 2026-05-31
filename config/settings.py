@@ -451,13 +451,14 @@ GOOGLE_OAUTH_AUDIENCES = list(
 # Gemini AI Configuration
 GEMINI_API_KEY = env("GEMINI_API_KEY", default="")
 
-# Gemini model for utils/ai_text.py (the Ask-AI Q&A + report summaries).
-# Defaults to gemini-3.5-flash; override per-environment with the
-# GEMINI_MODEL env var. If the configured id isn't available (e.g. a
-# not-yet-live release or a typo), ai_text auto-falls-back to the newest
-# available "flash" model the API offers, so a stale id can't break the
-# feature. Reuses GEMINI_API_KEY above.
-GEMINI_MODEL = env("GEMINI_MODEL", default="gemini-3.5-flash")
+# OpenAI config for utils/ai_text.py (the Ask-AI Q&A + report summaries).
+# OPENAI_API_KEY defaults to "" so the app boots without it; when unset the
+# AI resolvers degrade gracefully (ok=false). OPENAI_MODEL is overridable
+# per-environment (e.g. "gpt-4o", "gpt-4.1") and defaults to the cheap,
+# capable gpt-4o-mini. NOTE: GEMINI_API_KEY above is still used by the
+# separate tenant-insights feature (tenants/insights), which is unchanged.
+OPENAI_API_KEY = env("OPENAI_API_KEY", default="")
+OPENAI_MODEL = env("OPENAI_MODEL", default="gpt-4o-mini")
 
 _job_extension_rate_default = env("JOB_EXTENSION_RATE_DEFAULT", default=8)
 if _job_extension_rate_default in (None, ""):
