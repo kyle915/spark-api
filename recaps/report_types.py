@@ -504,10 +504,10 @@ class CampaignReportQueries:
 
         Tenant-scoped exactly like :meth:`campaign_report` (uuid or pk,
         clients pinned to their own tenant, admins pass through). Builds
-        the aggregate report, composes a prompt, and calls Gemini.
+        the aggregate report, composes a prompt, and calls OpenAI.
 
         Never raises: an out-of-scope/missing request, an unconfigured
-        ``GEMINI_API_KEY``, or any upstream failure all resolve to
+        ``OPENAI_API_KEY``, or any upstream failure all resolve to
         ``ok=false`` + ``summary=""`` + a human-readable ``reason``.
         """
         identifier = str(request_id).strip()
@@ -577,10 +577,10 @@ class CampaignReportQueries:
         Tenant-scoped exactly like :meth:`campaign_report_ai_summary` (uuid
         or pk, clients pinned to their own tenant, admins pass through).
         Builds the aggregate report, appends the caller's ``question`` to
-        the same compact report prompt, and calls Gemini.
+        the same compact report prompt, and calls OpenAI.
 
         Never raises: an empty question, an out-of-scope/missing request,
-        an unconfigured ``GEMINI_API_KEY``, or any upstream failure all
+        an unconfigured ``OPENAI_API_KEY``, or any upstream failure all
         resolve to ``ok=false`` + ``answer=""`` + a human-readable
         ``reason``.
         """
@@ -659,7 +659,7 @@ class CampaignReportQueries:
         instead of one Request, it builds a compact overview of the whole
         tenant's program (every campaign, event, and recap via
         :func:`recaps.tenant_overview.build_tenant_overview`), appends the
-        caller's ``question``, and calls Gemini.
+        caller's ``question``, and calls OpenAI.
 
         Tenant scoping (see :meth:`_CampaignReportService.resolve_target_tenant_id`):
         client-role users may ONLY ask about their own tenant — the
@@ -668,7 +668,7 @@ class CampaignReportQueries:
         target any tenant via ``tenant_id``.
 
         Never raises: an empty question, a missing/out-of-scope tenant, an
-        unconfigured ``GEMINI_API_KEY``, or any upstream failure all
+        unconfigured ``OPENAI_API_KEY``, or any upstream failure all
         resolve to ``ok=false`` + ``answer=""`` + a human-readable
         ``reason``.
         """
