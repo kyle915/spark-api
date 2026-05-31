@@ -22,6 +22,7 @@ from django.core.management.base import BaseCommand
 
 from digest.envelopes import AdminDigestMailer
 from digest.services import (
+    active_tenants,
     admin_recipients_for_tenant,
     build_tenant_digest,
 )
@@ -83,9 +84,12 @@ class Command(BaseCommand):
         dry_run = opts.get("dry_run", False)
         to_override = opts.get("to")
 
-        tenants_qs = Tenant.objects.all()
         if tenant_id:
-            tenants_qs = tenants_qs.filter(id=tenant_id)
+            # Explicit single-tenant run targets any tenant, even archived.
+            tenants_qs = Tenant.objects.filter(id=tenant_id)
+        else:
+            # Scheduled run: never email tenants archived by rename.
+            tenants_qs = active_tenants()
 
         mailers = []
         sent = 0
