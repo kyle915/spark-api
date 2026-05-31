@@ -34,6 +34,7 @@ the call in ``sync_to_async``.
 from __future__ import annotations
 
 import re
+import uuid
 from dataclasses import dataclass, field
 
 from events.models import Request
@@ -531,17 +532,29 @@ def report_request_queryset():
     )
 
 
-def get_report_request(request_id: int, tenant_id: int | None = None):
+def get_report_request(request_id, tenant_id: int | None = None):
     """Fetch one Request for the report, optionally tenant-scoped.
 
-    Returns ``None`` when the request doesn't exist or is out of the
-    caller's tenant scope (``tenant_id`` set + mismatch) — the resolver
-    and the public surfaces both translate that to a not-found response.
+    ``request_id`` may be the request's UUID (the handle the web app routes
+    by — what the admin report view passes) OR its numeric pk (what the
+    signed share token carries). Returns ``None`` when the request doesn't
+    exist or is out of the caller's tenant scope (``tenant_id`` set +
+    mismatch) — the resolver and public surfaces translate that to a
+    not-found response.
     """
     qs = report_request_queryset()
     if tenant_id is not None:
         qs = qs.filter(tenant_id=tenant_id)
-    return qs.filter(id=request_id).first()
+    raw = str(request_id).strip()
+    try:
+        uuid.UUID(raw)
+    except (ValueError, AttributeError, TypeError):
+        # Not a uuid → treat it as a numeric pk.
+        try:
+            return qs.filter(id=int(raw)).first()
+        except (ValueError, TypeError):
+            return None
+    return qs.filter(uuid=raw).first()
 
 
 def build_campaign_report(

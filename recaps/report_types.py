@@ -26,7 +26,7 @@ from django.utils import timezone
 
 from recaps import report_service
 from recaps.report_tokens import make_report_token
-from utils.graphql.mixins import SparkGraphQLMixin, resolve_id_to_int
+from utils.graphql.mixins import SparkGraphQLMixin
 from utils.graphql.permissions import StrictIsAuthenticated
 
 
@@ -174,9 +174,8 @@ class CampaignReportQueries:
         requests; admins see any. Returns ``null`` when the request
         doesn't exist or is out of scope.
         """
-        try:
-            resolved_id = resolve_id_to_int(request_id)
-        except Exception:
+        identifier = str(request_id).strip()
+        if not identifier:
             return None
 
         service = _CampaignReportService()
@@ -185,7 +184,7 @@ class CampaignReportQueries:
 
         def _build():
             request_obj = report_service.get_report_request(
-                resolved_id, tenant_id=scope_tenant_id
+                identifier, tenant_id=scope_tenant_id
             )
             if request_obj is None:
                 return None
