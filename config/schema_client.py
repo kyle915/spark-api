@@ -3,6 +3,7 @@ from strawberry_django.optimizer import DjangoOptimizerExtension
 from gqlauth.core.middlewares import JwtSchema
 from events.schema import EventQueryClient, EventMutationsClient
 from recaps.schema import RecapQueryClient, RecapMutationsClient
+from recaps.report_types import CampaignReportQueries
 from receipts.schema import ReceiptQueryClient, ReceiptMutationsClient
 from ambassadors.schema import AmbassadorQueryClient, AmbassadorMutationsClient
 from tenants.schema import QueryClients, MutationClients
@@ -22,6 +23,7 @@ QueryClients = merge_types(
     (
         EventQueryClient,
         RecapQueryClient,
+        CampaignReportQueries,
         AmbassadorQueryClient,
         QueryClients,
         ClientJobQueries,
