@@ -44,6 +44,17 @@ class Tenant(Asyncable, models.Model):
         blank=True,
         related_name="default_external_rmm_for_tenants",
     )
+    # Explicit email addresses that should receive recap-approval emails
+    # for this brand, on top of the RMM, the tenant's client-role users,
+    # and the original requestor. Lets staff route approved recaps to a
+    # brand contact even when that brand has no client-role user set up.
+    # Free text (comma/newline/semicolon-separated) — parsed at send time
+    # in recaps.mutations._notify_recap_approved_to_rmm_or_clients.
+    recap_recipient_emails = models.TextField(
+        blank=True,
+        default="",
+        help_text="Extra email addresses (comma/newline/semicolon-separated) that receive recap-approval emails for this brand, in addition to the RMM, client-role users, and requestor.",
+    )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
