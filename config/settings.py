@@ -454,11 +454,12 @@ GEMINI_API_KEY = env("GEMINI_API_KEY", default="")
 # OpenAI config for utils/ai_text.py (the Ask-AI Q&A + report summaries).
 # OPENAI_API_KEY defaults to "" so the app boots without it; when unset the
 # AI resolvers degrade gracefully (ok=false). OPENAI_MODEL is overridable
-# per-environment (e.g. "gpt-4o", "gpt-4.1") and defaults to the cheap,
-# capable gpt-4o-mini. NOTE: GEMINI_API_KEY above is still used by the
-# separate tenant-insights feature (tenants/insights), which is unchanged.
+# per-environment (e.g. "gpt-4o", "gpt-4.1") and defaults to gpt-5-mini;
+# ai_text auto-falls-back to gpt-4o-mini if that id isn't available on the
+# account. NOTE: GEMINI_API_KEY above is still used by the separate
+# tenant-insights feature (tenants/insights), which is unchanged.
 OPENAI_API_KEY = env("OPENAI_API_KEY", default="")
-OPENAI_MODEL = env("OPENAI_MODEL", default="gpt-4o-mini")
+OPENAI_MODEL = env("OPENAI_MODEL", default="gpt-5-mini")
 
 _job_extension_rate_default = env("JOB_EXTENSION_RATE_DEFAULT", default=8)
 if _job_extension_rate_default in (None, ""):
