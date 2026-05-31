@@ -893,6 +893,23 @@ class RespondToShiftOfferResponse:
 
 
 @strawberry.type
+class BulkInviteResponse:
+    """Result of a bulk shift-invite.
+
+    `invited` counts BAs for whom a fresh AmbassadorEvent was created
+    (and the offer push fired); `skipped` counts those that were already
+    invited or hit a per-BA error. `success` is True when at least one
+    BA was newly invited.
+    """
+
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    invited: int = 0
+    skipped: int = 0
+
+
+@strawberry.type
 class ShiftOfferDetails:
     """Slim shape for the mobile ShiftOfferScreen — just what the
     BA needs to decide. Avoids pulling the full AmbassadorEvent /
