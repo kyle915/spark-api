@@ -198,9 +198,10 @@ async def _notify_recap_approved_to_rmm_or_clients(
         getattr(rmm_user, "email", None) or ""
     ).strip() or fallback_reply_to
 
-    # Build recipient list: RMM (or fallback to client tenanted users)
-    # + the original requestor (request.created_by + requestor_email).
-    # Per-row dedupe so a requestor who's also the RMM gets one email.
+    # Build recipient list: the event's RMM (if assigned) + the tenant's
+    # client contacts (always) + the original requestor (request.created_by
+    # + requestor_email). Per-row dedupe so an address matching more than
+    # one role still gets a single email.
     recipients: list[tuple[str, str]] = []
     seen: set[str] = set()
 
@@ -213,16 +214,20 @@ async def _notify_recap_approved_to_rmm_or_clients(
 
     if rmm_user and rmm_user.email:
         _push(rmm_user.email, rmm_user.first_name)
-    else:
-        rows = await sync_to_async(list)(
-            TenantedUser.objects.filter(
-                tenant_id=event.tenant_id,
-                is_active=True,
-                user__role__slug=Role.CLIENT_SLUG,
-            ).values("user__email", "user__first_name")
-        )
-        for row in rows:
-            _push(row.get("user__email"), row.get("user__first_name"))
+
+    # Always include the tenant's client contacts (the brand) — not only as
+    # an RMM fallback. The client should receive the approved recap whether
+    # or not an RMM is assigned, and regardless of how the BA/recap was
+    # created (e.g. an admin manually filing for an externally-staffed BA).
+    client_rows = await sync_to_async(list)(
+        TenantedUser.objects.filter(
+            tenant_id=event.tenant_id,
+            is_active=True,
+            user__role__slug=Role.CLIENT_SLUG,
+        ).values("user__email", "user__first_name")
+    )
+    for row in client_rows:
+        _push(row.get("user__email"), row.get("user__first_name"))
 
     # Add the original requestor — same activation owner the admin
     # CC's on the request approval email. Closes the loop: requestor
@@ -244,7 +249,14 @@ async def _notify_recap_approved_to_rmm_or_clients(
             reply_to_email=reply_to_email,
             attachments=attachments,
         )
-        await sync_to_async(mailer.send)()
+        try:
+            await sync_to_async(mailer.send)()
+        except Exception:
+            logger.exception(
+                "Failed to send recap-approved email to %s for recap=%s",
+                email,
+                getattr(recap, "id", None),
+            )
 
 
 async def _notify_recap_approved_to_ambassador_by_push(
@@ -3174,7 +3186,12 @@ class RecapMutationService(SparkGraphQLMixin):
                     "ambassador__user",
                 ).get
             )(id=recap.id)
-            await _notify_recap_approved_to_rmm_or_clients(recap)
+            try:
+                await _notify_recap_approved_to_rmm_or_clients(recap)
+            except Exception:
+                logger.exception(
+                    "recap-approved notification failed for recap=%s", recap.id
+                )
             await _notify_recap_approved_to_ambassador_by_push(recap)
 
         return recap
@@ -3215,7 +3232,13 @@ class RecapMutationService(SparkGraphQLMixin):
                     "ambassador__user",
                 ).get
             )(id=custom_recap.id)
-            await _notify_recap_approved_to_rmm_or_clients(custom_recap)
+            try:
+                await _notify_recap_approved_to_rmm_or_clients(custom_recap)
+            except Exception:
+                logger.exception(
+                    "recap-approved notification failed for custom_recap=%s",
+                    custom_recap.id,
+                )
 
         return custom_recap
 
