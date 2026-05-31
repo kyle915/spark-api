@@ -44,6 +44,22 @@ _AI_SUMMARY_SYSTEM_PROMPT = (
 # sample, not the whole highlight reel, keeps the prompt small.
 _AI_SUMMARY_MAX_QUOTES = 5
 
+# System prompt for the freeform Q&A generator. Pins the model to the
+# provided campaign data only (no invented or estimated numbers) and to a
+# concise answer, with an explicit escape hatch when the data can't answer
+# the question.
+_AI_ANSWER_SYSTEM_PROMPT = (
+    "You answer questions about a single field-marketing campaign using "
+    "ONLY the provided campaign data. Be concise (2-4 sentences). Never "
+    "invent or estimate numbers that are not present in the data. If the "
+    "data does not contain the answer, say plainly that it cannot be "
+    "determined from this campaign's data."
+)
+
+# Hard cap on the inbound question length — keeps the prompt bounded and
+# blocks a pathologically long question from blowing up the request.
+_AI_ANSWER_MAX_QUESTION_CHARS = 1000
+
 
 @strawberry.type
 class CampaignReportKpis:
@@ -120,6 +136,24 @@ class CampaignReportAiSummary:
 
     ok: bool
     summary: str
+    reason: str | None = None
+
+
+@strawberry.type
+class CampaignReportAiAnswer:
+    """Result of an on-demand freeform Q&A over one campaign's report.
+
+    Mirrors :class:`CampaignReportAiSummary`: ``ok`` is the only field a
+    caller must branch on. When ``true``, ``answer`` holds the generated
+    response and ``reason`` is null; when ``false`` (no question, request
+    out of scope, AI unconfigured, or the upstream call failed),
+    ``answer`` is ``""`` and ``reason`` carries a short, human-readable
+    explanation. The resolver never raises — degradation is always a
+    value, never a GraphQL error.
+    """
+
+    ok: bool
+    answer: str
     reason: str | None = None
 
 
@@ -335,3 +369,84 @@ class CampaignReportQueries:
             )
 
         return CampaignReportAiSummary(ok=True, summary=summary, reason=None)
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def campaign_report_ai_answer(
+        self,
+        info: strawberry.Info,
+        request_id: strawberry.ID,
+        question: str,
+    ) -> CampaignReportAiAnswer:
+        """On-demand freeform Q&A over one Request's campaign report.
+
+        Tenant-scoped exactly like :meth:`campaign_report_ai_summary` (uuid
+        or pk, clients pinned to their own tenant, admins pass through).
+        Builds the aggregate report, appends the caller's ``question`` to
+        the same compact report prompt, and calls Gemini.
+
+        Never raises: an empty question, an out-of-scope/missing request,
+        an unconfigured ``GEMINI_API_KEY``, or any upstream failure all
+        resolve to ``ok=false`` + ``answer=""`` + a human-readable
+        ``reason``.
+        """
+        identifier = str(request_id).strip()
+        if not identifier:
+            return CampaignReportAiAnswer(
+                ok=False, answer="", reason="A request id is required."
+            )
+
+        question = (question or "").strip()
+        if not question:
+            return CampaignReportAiAnswer(
+                ok=False, answer="", reason="A question is required."
+            )
+        question = question[:_AI_ANSWER_MAX_QUESTION_CHARS]
+
+        service = _CampaignReportService()
+        scope_tenant_id = await service.resolve_scope_tenant_id(info)
+        generated_at = timezone.now().isoformat()
+
+        def _build():
+            request_obj = report_service.get_report_request(
+                identifier, tenant_id=scope_tenant_id
+            )
+            if request_obj is None:
+                return None
+            return report_service.build_campaign_report(
+                request_obj, generated_at=generated_at
+            )
+
+        try:
+            data = await sync_to_async(_build, thread_sensitive=True)()
+        except Exception:
+            return CampaignReportAiAnswer(
+                ok=False,
+                answer="",
+                reason="Could not load the campaign report.",
+            )
+
+        if data is None:
+            return CampaignReportAiAnswer(
+                ok=False,
+                answer="",
+                reason="Report not found or not accessible.",
+            )
+
+        user_prompt = _compose_ai_summary_prompt(data) + "\n\nQuestion: " + question
+        try:
+            answer = await sync_to_async(generate_summary, thread_sensitive=True)(
+                _AI_ANSWER_SYSTEM_PROMPT, user_prompt
+            )
+        except AiUnavailable as exc:
+            return CampaignReportAiAnswer(ok=False, answer="", reason=str(exc))
+        except Exception:
+            # Belt-and-suspenders: generate_summary already funnels every
+            # failure through AiUnavailable, but never let an unexpected
+            # error escape the resolver.
+            return CampaignReportAiAnswer(
+                ok=False,
+                answer="",
+                reason="The answer could not be generated.",
+            )
+
+        return CampaignReportAiAnswer(ok=True, answer=answer, reason=None)
