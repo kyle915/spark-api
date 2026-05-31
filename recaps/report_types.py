@@ -26,8 +26,23 @@ from django.utils import timezone
 
 from recaps import report_service
 from recaps.report_tokens import make_report_token
+from utils.ai_text import AiUnavailable, generate_summary
 from utils.graphql.mixins import SparkGraphQLMixin
 from utils.graphql.permissions import StrictIsAuthenticated
+
+# System prompt for the executive-summary generator. Pins the persona +
+# the hard constraint that the model must only use the numbers we hand it
+# (so it can't hallucinate KPIs the campaign didn't hit).
+_AI_SUMMARY_SYSTEM_PROMPT = (
+    "You are a field-marketing analyst writing a concise, upbeat but "
+    "factual executive summary of a sampling campaign for the brand "
+    "client. 2-3 short paragraphs. Use only the numbers provided; do not "
+    "invent figures."
+)
+
+# Cap the number of consumer quotes we feed the model — a representative
+# sample, not the whole highlight reel, keeps the prompt small.
+_AI_SUMMARY_MAX_QUOTES = 5
 
 
 @strawberry.type
@@ -89,6 +104,59 @@ class CampaignReport:
     photos: list[CampaignReportPhoto]
     ambassadors: list[CampaignReportBa]
     highlights: list[CampaignReportQuote]
+
+
+@strawberry.type
+class CampaignReportAiSummary:
+    """Result of the on-demand AI executive summary.
+
+    ``ok`` is the only field a caller must branch on: when ``true``,
+    ``summary`` holds the generated copy and ``reason`` is null; when
+    ``false`` (request out of scope, OpenAI unconfigured, or the upstream
+    call failed), ``summary`` is ``""`` and ``reason`` carries a short,
+    human-readable explanation. The resolver never raises — degradation
+    is always a value, never a GraphQL error.
+    """
+
+    ok: bool
+    summary: str
+    reason: str | None = None
+
+
+def _compose_ai_summary_prompt(data: report_service.CampaignReportData) -> str:
+    """Render a compact, plain-text view of the report for the LLM.
+
+    Keeps the prompt small — headline identity, the date range, the KPI
+    block, the event count, and up to ``_AI_SUMMARY_MAX_QUOTES`` consumer
+    quotes. The system prompt forbids inventing figures, so this is the
+    only source of numbers the model gets.
+    """
+    k = data.kpis
+    lines = [
+        f"Brand: {data.brand_name or 'N/A'}",
+        f"Campaign: {data.title or 'N/A'}",
+        f"Date range: {data.date_range or 'N/A'}",
+        f"Events: {k.events}",
+        "",
+        "KPIs:",
+        f"- Consumers reached: {k.consumers_reached}",
+        f"- Samples distributed: {k.samples_distributed}",
+        f"- Products sold: {k.products_sold}",
+        f"- Cans sold: {k.cans_sold}",
+        f"- Packs sold: {k.packs_sold}",
+        f"- Total engagements: {k.total_engagements}",
+        f"- First-time consumers: {k.first_time_consumers}",
+        f"- Brand-aware consumers: {k.brand_aware_consumers}",
+        f"- Willing to purchase: {k.willing_to_purchase}",
+    ]
+
+    quotes = [q.text for q in data.highlights if q.text][:_AI_SUMMARY_MAX_QUOTES]
+    if quotes:
+        lines.append("")
+        lines.append("Consumer quotes:")
+        lines.extend(f'- "{text}"' for text in quotes)
+
+    return "\n".join(lines)
 
 
 def _to_graphql(data: report_service.CampaignReportData) -> CampaignReport:
@@ -196,3 +264,74 @@ class CampaignReportQueries:
         if data is None:
             return None
         return _to_graphql(data)
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def campaign_report_ai_summary(
+        self,
+        info: strawberry.Info,
+        request_id: strawberry.ID,
+    ) -> CampaignReportAiSummary:
+        """On-demand AI executive summary for one Request's campaign report.
+
+        Tenant-scoped exactly like :meth:`campaign_report` (uuid or pk,
+        clients pinned to their own tenant, admins pass through). Builds
+        the aggregate report, composes a prompt, and calls OpenAI.
+
+        Never raises: an out-of-scope/missing request, an unconfigured
+        ``OPENAI_API_KEY``, or any upstream failure all resolve to
+        ``ok=false`` + ``summary=""`` + a human-readable ``reason``.
+        """
+        identifier = str(request_id).strip()
+        if not identifier:
+            return CampaignReportAiSummary(
+                ok=False, summary="", reason="A request id is required."
+            )
+
+        service = _CampaignReportService()
+        scope_tenant_id = await service.resolve_scope_tenant_id(info)
+        generated_at = timezone.now().isoformat()
+
+        def _build():
+            request_obj = report_service.get_report_request(
+                identifier, tenant_id=scope_tenant_id
+            )
+            if request_obj is None:
+                return None
+            return report_service.build_campaign_report(
+                request_obj, generated_at=generated_at
+            )
+
+        try:
+            data = await sync_to_async(_build, thread_sensitive=True)()
+        except Exception:
+            return CampaignReportAiSummary(
+                ok=False,
+                summary="",
+                reason="Could not load the campaign report.",
+            )
+
+        if data is None:
+            return CampaignReportAiSummary(
+                ok=False,
+                summary="",
+                reason="Report not found or not accessible.",
+            )
+
+        user_prompt = _compose_ai_summary_prompt(data)
+        try:
+            summary = await sync_to_async(generate_summary, thread_sensitive=True)(
+                _AI_SUMMARY_SYSTEM_PROMPT, user_prompt
+            )
+        except AiUnavailable as exc:
+            return CampaignReportAiSummary(ok=False, summary="", reason=str(exc))
+        except Exception:
+            # Belt-and-suspenders: generate_summary already funnels every
+            # failure through AiUnavailable, but never let an unexpected
+            # error escape the resolver.
+            return CampaignReportAiSummary(
+                ok=False,
+                summary="",
+                reason="The AI summary could not be generated.",
+            )
+
+        return CampaignReportAiSummary(ok=True, summary=summary, reason=None)

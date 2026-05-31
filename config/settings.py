@@ -419,6 +419,13 @@ GOOGLE_OAUTH_AUDIENCES = list(
 # Gemini AI Configuration
 GEMINI_API_KEY = env("GEMINI_API_KEY", default="")
 
+# OpenAI Configuration — powers the on-demand AI campaign-report
+# executive summary (see utils/ai_text.py + recaps.report_types). The
+# key default is "" so the app boots fine without it; when unset the
+# summary resolver degrades gracefully (ok=false) instead of erroring.
+OPENAI_API_KEY = env("OPENAI_API_KEY", default="")
+OPENAI_MODEL = env("OPENAI_MODEL", default="gpt-4o-mini")
+
 _job_extension_rate_default = env("JOB_EXTENSION_RATE_DEFAULT", default=8)
 if _job_extension_rate_default in (None, ""):
     JOB_EXTENSION_RATE_DEFAULT = None
