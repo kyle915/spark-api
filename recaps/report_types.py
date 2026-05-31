@@ -26,7 +26,12 @@ from django.utils import timezone
 
 from recaps import report_service
 from recaps.report_tokens import make_report_token
-from recaps.tenant_overview import build_tenant_overview
+from recaps.tenant_overview import (
+    build_tenant_overview,
+    tenant_event_recap_counts,
+    tenant_kpi_totals,
+    tenant_monthly_trend,
+)
 from utils.ai_text import AiUnavailable, generate_summary
 from utils.graphql.mixins import SparkGraphQLMixin, resolve_id_to_int
 from utils.graphql.permissions import (
@@ -201,6 +206,109 @@ class TenantAiAnswer:
     ok: bool
     answer: str
     reason: str | None = None
+
+
+@strawberry.type
+class TenantKpiMonth:
+    """One calendar month of a tenant's activity for the dashboard trend.
+
+    The structured, chart-friendly companion to a single point on the
+    ``tenantKpis.monthlyTrend`` line. ``month`` is ``"YYYY-MM"``; the three
+    metrics are database aggregates over that month across both recap
+    shapes (see :func:`recaps.tenant_overview.tenant_monthly_trend`).
+    """
+
+    month: str
+    recaps: int
+    engagements: int
+    samples: int
+
+
+@strawberry.type
+class TenantKpis:
+    """Structured per-tenant KPI roll-up — the visual companion to
+    :class:`TenantAiAnswer` (which answers the same tenant's data as text).
+
+    ``events`` / ``recaps`` are headline counts; the nine summable KPIs
+    mirror the per-campaign :class:`CampaignReportKpis` field-for-field but
+    aggregated across the WHOLE tenant (every campaign, event, and recap,
+    both legacy and custom shapes). ``monthly_trend`` is the last twelve
+    calendar months of activity, oldest → newest, for the dashboard/pop-up
+    line chart. All numbers come from the same
+    :func:`recaps.tenant_overview.tenant_kpi_totals` source of truth the
+    text overview uses, so the chart and the prose can never disagree.
+    """
+
+    events: int
+    recaps: int
+    consumers_reached: int
+    samples_distributed: int
+    products_sold: int
+    cans_sold: int
+    packs_sold: int
+    total_engagements: int
+    first_time_consumers: int
+    brand_aware_consumers: int
+    willing_to_purchase: int
+    monthly_trend: list[TenantKpiMonth]
+
+
+def _zeroed_tenant_kpis() -> TenantKpis:
+    """An all-zero :class:`TenantKpis` with an empty trend.
+
+    The degradation value the ``tenantKpis`` resolver returns when the
+    tenant is missing or out of scope — the resolver NEVER raises, matching
+    the rest of the report surface.
+    """
+    return TenantKpis(
+        events=0,
+        recaps=0,
+        consumers_reached=0,
+        samples_distributed=0,
+        products_sold=0,
+        cans_sold=0,
+        packs_sold=0,
+        total_engagements=0,
+        first_time_consumers=0,
+        brand_aware_consumers=0,
+        willing_to_purchase=0,
+        monthly_trend=[],
+    )
+
+
+def _build_tenant_kpis(tenant_id: int) -> TenantKpis:
+    """Assemble the structured :class:`TenantKpis` for one tenant.
+
+    Synchronous Django ORM (the resolver wraps it in ``sync_to_async``).
+    Pulls the headline counts, the nine summable KPIs, and the monthly
+    trend from the shared helpers in :mod:`recaps.tenant_overview` so the
+    figures match the plaintext overview exactly.
+    """
+    event_count, recap_count = tenant_event_recap_counts(tenant_id)
+    totals = tenant_kpi_totals(tenant_id)
+    trend = tenant_monthly_trend(tenant_id)
+    return TenantKpis(
+        events=event_count,
+        recaps=recap_count,
+        consumers_reached=totals.consumers_reached,
+        samples_distributed=totals.samples_distributed,
+        products_sold=totals.products_sold,
+        cans_sold=totals.cans_sold,
+        packs_sold=totals.packs_sold,
+        total_engagements=totals.total_engagements,
+        first_time_consumers=totals.first_time_consumers,
+        brand_aware_consumers=totals.brand_aware_consumers,
+        willing_to_purchase=totals.willing_to_purchase,
+        monthly_trend=[
+            TenantKpiMonth(
+                month=m.month,
+                recaps=m.recaps,
+                engagements=m.engagements,
+                samples=m.samples,
+            )
+            for m in trend
+        ],
+    )
 
 
 def _compose_ai_summary_prompt(data: report_service.CampaignReportData) -> str:
@@ -611,3 +719,52 @@ class CampaignReportQueries:
             )
 
         return TenantAiAnswer(ok=True, answer=answer, reason=None)
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def tenant_kpis(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID,
+    ) -> TenantKpis:
+        """Structured per-tenant KPI roll-up for dashboard / pop-up charts.
+
+        The visual companion to :meth:`tenant_ai_answer`: same tenant data,
+        but returned as numbers (headline counts, the nine summable KPIs,
+        and a twelve-month activity trend) instead of an AI prose answer.
+        Numbers come from the shared
+        :func:`recaps.tenant_overview.tenant_kpi_totals` source of truth, so
+        they match the text overview exactly.
+
+        Tenant scoping is identical to :meth:`tenant_ai_answer`
+        (:meth:`_CampaignReportService.resolve_target_tenant_id`):
+        client-role users may ONLY read their own tenant — the ``tenant_id``
+        argument is overridden to their own; admins (spark-admin / staff /
+        superuser / ``@igniteproductions.co``) may target any tenant.
+
+        Never raises: a missing or out-of-scope tenant, or any aggregation
+        error, resolves to a zeroed :class:`TenantKpis` (empty
+        ``monthly_trend``) rather than a GraphQL error.
+        """
+        service = _CampaignReportService()
+        target_tenant_id = await service.resolve_target_tenant_id(info, tenant_id)
+        if target_tenant_id is None:
+            return _zeroed_tenant_kpis()
+
+        def _build():
+            # Guard the tenant's existence the same way build_tenant_overview
+            # does (Tenant.objects.get), so an admin passing an unknown id
+            # degrades to zeros instead of returning counts over no rows.
+            from tenants.models import Tenant
+
+            if not Tenant.objects.filter(id=target_tenant_id).exists():
+                return None
+            return _build_tenant_kpis(target_tenant_id)
+
+        try:
+            data = await sync_to_async(_build, thread_sensitive=True)()
+        except Exception:
+            return _zeroed_tenant_kpis()
+
+        if data is None:
+            return _zeroed_tenant_kpis()
+        return data
