@@ -67,28 +67,46 @@ def generate_summary(system: str, user: str, *, max_tokens: int = 500) -> str:
     if not api_key:
         raise AiUnavailable("OpenAI is not configured (set OPENAI_API_KEY).")
 
-    model = getattr(settings, "OPENAI_MODEL", "gpt-4o-mini") or "gpt-4o-mini"
-    payload = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        "temperature": 0.4,
-        "max_tokens": max_tokens,
-    }
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
 
-    body = _post_json(
-        OPENAI_CHAT_COMPLETIONS_URL,
-        payload,
-        headers,
-        timeout=DEFAULT_TIMEOUT_SECONDS,
-    )
-    return _extract_message_text(body)
+    def _ask(model_name: str) -> str:
+        # Use ``max_completion_tokens`` (not the deprecated ``max_tokens``)
+        # and omit ``temperature`` so the SAME call works for both standard
+        # chat models (gpt-4o-mini) and the newer GPT-5 / reasoning family,
+        # which reject ``max_tokens`` and any non-default temperature.
+        payload = {
+            "model": model_name,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "max_completion_tokens": max_tokens,
+        }
+        body = _post_json(
+            OPENAI_CHAT_COMPLETIONS_URL,
+            payload,
+            headers,
+            timeout=DEFAULT_TIMEOUT_SECONDS,
+        )
+        return _extract_message_text(body)
+
+    configured = (
+        getattr(settings, "OPENAI_MODEL", "") or ""
+    ).strip() or "gpt-4o-mini"
+
+    try:
+        return _ask(configured)
+    except AiUnavailable:
+        # Configured model unavailable on this account (e.g. a not-yet-
+        # enabled id) or it returned nothing usable — fall back to a
+        # known-good default so the feature degrades to a working model
+        # instead of breaking entirely.
+        if configured == "gpt-4o-mini":
+            raise
+        return _ask("gpt-4o-mini")
 
 
 def _extract_message_text(body: dict) -> str:
