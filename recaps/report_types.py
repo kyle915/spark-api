@@ -112,7 +112,7 @@ class CampaignReportAiSummary:
 
     ``ok`` is the only field a caller must branch on: when ``true``,
     ``summary`` holds the generated copy and ``reason`` is null; when
-    ``false`` (request out of scope, OpenAI unconfigured, or the upstream
+    ``false`` (request out of scope, AI unconfigured, or the upstream
     call failed), ``summary`` is ``""`` and ``reason`` carries a short,
     human-readable explanation. The resolver never raises — degradation
     is always a value, never a GraphQL error.
@@ -275,10 +275,10 @@ class CampaignReportQueries:
 
         Tenant-scoped exactly like :meth:`campaign_report` (uuid or pk,
         clients pinned to their own tenant, admins pass through). Builds
-        the aggregate report, composes a prompt, and calls OpenAI.
+        the aggregate report, composes a prompt, and calls Gemini.
 
         Never raises: an out-of-scope/missing request, an unconfigured
-        ``OPENAI_API_KEY``, or any upstream failure all resolve to
+        ``GEMINI_API_KEY``, or any upstream failure all resolve to
         ``ok=false`` + ``summary=""`` + a human-readable ``reason``.
         """
         identifier = str(request_id).strip()

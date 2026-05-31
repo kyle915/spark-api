@@ -1,9 +1,9 @@
-"""Thin OpenAI Chat Completions client for short generated copy.
+"""Thin Gemini client for short generated copy.
 
-A single helper — :func:`generate_summary` — that POSTs a system+user
-prompt to the OpenAI Chat Completions REST endpoint and returns the
-assistant's text. It is deliberately tiny: no streaming, no function
-calling, no SDK. The only consumer today is the on-demand campaign-report
+A single helper — :func:`generate_summary` — that sends a system + user
+prompt to Google's Gemini (Generative Language) API and returns the
+model's text. It is deliberately tiny: no streaming, no tools, no
+multi-turn. The only consumer today is the on-demand campaign-report
 executive summary (``recaps.report_types.campaignReportAiSummary``), but
 the signature is generic so other "write me a paragraph" features can
 reuse it.
@@ -11,15 +11,18 @@ reuse it.
 Design rules:
 
 * **Env-keyed, never hardcoded.** The API key comes from
-  ``settings.OPENAI_API_KEY`` (default ``""``). When it's empty we raise
-  :class:`AiUnavailable` *before* making any network call, so the feature
-  degrades to a clear "not configured" state instead of a 401.
-* **No new dependency.** Uses ``requests`` (already vendored as a
-  transitive dependency, present in ``uv.lock``). If it ever stops being
-  importable we fall back to the stdlib ``urllib.request`` automatically.
-* **Never leak the key or a stack trace.** Every HTTP / parse failure is
-  caught and re-raised as :class:`AiUnavailable` with a short,
-  human-readable reason. The Authorization header is never echoed back.
+  ``settings.GEMINI_API_KEY`` (default ``""``) — the same key the tenant
+  insights feature already uses. When it's empty we raise
+  :class:`AiUnavailable` *before* any network call, so the feature
+  degrades to a clear "not configured" state instead of an auth error.
+* **Reuses the installed SDK.** Uses ``google.generativeai`` (already a
+  dependency, used by ``tenants.insights.service``), imported lazily so a
+  missing library degrades gracefully instead of breaking module import.
+* **Resilient to model churn.** When ``GEMINI_MODEL`` isn't pinned we
+  discover a current model that supports ``generateContent`` (preferring
+  a fast "flash" variant), the same guard the insights service uses.
+* **Never leak the key or a stack trace.** Every failure is caught and
+  re-raised as :class:`AiUnavailable` with a short, user-safe reason.
 
 The resolver that calls this catches :class:`AiUnavailable` (and any
 other ``Exception``) and turns it into ``ok=false`` + ``reason=…`` rather
@@ -28,14 +31,14 @@ than letting it bubble out of GraphQL.
 
 from __future__ import annotations
 
-import json
-
 from django.conf import settings
 
-OPENAI_CHAT_COMPLETIONS_URL = "https://api.openai.com/v1/chat/completions"
+# Used only if discovery is skipped (``GEMINI_MODEL`` pinned) or the
+# discovery call fails — a broadly available, fast, cheap default.
+DEFAULT_GEMINI_MODEL = "gemini-1.5-flash"
 
-# Generous enough for the model to "think" + return 2–3 short paragraphs,
-# tight enough that a hung upstream can't wedge the request loop.
+# Generous enough for 2–3 short paragraphs, tight enough that a hung
+# upstream can't wedge the request loop.
 DEFAULT_TIMEOUT_SECONDS = 30.0
 
 
@@ -51,156 +54,119 @@ def generate_summary(system: str, user: str, *, max_tokens: int = 500) -> str:
     """Generate a short piece of text from a system + user prompt.
 
     Args:
-        system: The system prompt (role/persona + constraints).
+        system: The system prompt (role/persona + constraints). Sent as
+            Gemini's ``system_instruction``.
         user: The user prompt (the actual content to summarize).
-        max_tokens: Cap on the completion length.
+        max_tokens: Cap on the generated length (Gemini
+            ``max_output_tokens``).
 
     Returns:
-        The assistant message text (stripped).
+        The model's text (stripped).
 
     Raises:
-        AiUnavailable: If ``OPENAI_API_KEY`` is unset, or the HTTP call /
-            response parsing fails for any reason. The message is always
-            safe to show a user — it never contains the API key.
+        AiUnavailable: If ``GEMINI_API_KEY`` is unset, the SDK isn't
+            importable, or the call / response fails for any reason. The
+            message is always safe to show a user — it never contains the
+            API key.
     """
-    api_key = (getattr(settings, "OPENAI_API_KEY", "") or "").strip()
+    api_key = (getattr(settings, "GEMINI_API_KEY", "") or "").strip()
     if not api_key:
-        raise AiUnavailable("OpenAI is not configured (set OPENAI_API_KEY).")
+        raise AiUnavailable("AI is not configured (set GEMINI_API_KEY).")
 
-    model = getattr(settings, "OPENAI_MODEL", "gpt-4o-mini") or "gpt-4o-mini"
-    payload = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        "temperature": 0.4,
-        "max_tokens": max_tokens,
-    }
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
+    try:
+        import google.generativeai as genai  # noqa: PLC0415 — lazy import
+    except ImportError as exc:
+        raise AiUnavailable("AI client library is not available.") from exc
 
-    body = _post_json(
-        OPENAI_CHAT_COMPLETIONS_URL,
-        payload,
-        headers,
-        timeout=DEFAULT_TIMEOUT_SECONDS,
-    )
-    return _extract_message_text(body)
+    try:
+        genai.configure(api_key=api_key)
+        model_name = _resolve_model_name(genai)
+        model = genai.GenerativeModel(
+            model_name, system_instruction=system or None
+        )
+        response = model.generate_content(
+            user,
+            generation_config={
+                "temperature": 0.4,
+                "max_output_tokens": max_tokens,
+            },
+            request_options={"timeout": DEFAULT_TIMEOUT_SECONDS},
+        )
+    except AiUnavailable:
+        raise
+    except Exception as exc:
+        # Never surface the raw exception (could embed request details);
+        # keep it short and key-safe.
+        raise AiUnavailable(f"AI service error: {_safe_reason(exc)}") from exc
+
+    return _extract_text(response)
 
 
-def _extract_message_text(body: dict) -> str:
-    """Pull ``choices[0].message.content`` out of an OpenAI response.
+def _resolve_model_name(genai) -> str:
+    """Pick the Gemini model to call.
 
-    Raises :class:`AiUnavailable` if the shape isn't what we expect (e.g.
-    OpenAI returned an ``error`` object, or an empty completion).
+    A pinned ``settings.GEMINI_MODEL`` wins outright. Otherwise discover a
+    model that supports ``generateContent`` (preferring a fast "flash"
+    variant), guarding against model-name churn the same way
+    ``tenants.insights.service`` does. Falls back to
+    :data:`DEFAULT_GEMINI_MODEL` when discovery is unavailable.
     """
-    if not isinstance(body, dict):
-        raise AiUnavailable("AI service returned an unexpected response.")
+    pinned = (getattr(settings, "GEMINI_MODEL", "") or "").strip()
+    if pinned:
+        return pinned
 
-    # OpenAI surfaces problems as a top-level ``error`` object. Lift its
-    # message (which is safe — it describes the request, not the key).
-    err = body.get("error")
-    if err:
-        message = err.get("message") if isinstance(err, dict) else str(err)
-        raise AiUnavailable(f"AI service error: {message or 'unknown error'}")
+    try:
+        usable = [
+            m
+            for m in genai.list_models()
+            if "generateContent"
+            in getattr(m, "supported_generation_methods", [])
+        ]
+    except Exception:
+        return DEFAULT_GEMINI_MODEL
 
-    choices = body.get("choices")
-    if not isinstance(choices, list) or not choices:
-        raise AiUnavailable("AI service returned no completion.")
+    for m in usable:  # prefer a fast/cheap flash model
+        if "flash" in m.name.lower():
+            return m.name
+    for m in usable:  # else any gemini model
+        if "gemini" in m.name.lower():
+            return m.name
+    return usable[0].name if usable else DEFAULT_GEMINI_MODEL
 
-    message = choices[0].get("message") if isinstance(choices[0], dict) else None
-    content = message.get("content") if isinstance(message, dict) else None
-    if not isinstance(content, str) or not content.strip():
+
+def _extract_text(response) -> str:
+    """Pull the generated text out of a Gemini response.
+
+    Raises :class:`AiUnavailable` if the response carried no usable text
+    (e.g. it was blocked by a safety filter or came back empty).
+    """
+    # ``response.text`` is the happy-path accessor but raises when a
+    # candidate has no text parts (safety block / empty). Guard it, then
+    # fall back to walking candidates before giving up.
+    text = None
+    try:
+        text = response.text
+    except Exception:
+        text = None
+
+    if not (text and text.strip()):
+        collected = []
+        for cand in getattr(response, "candidates", None) or []:
+            content = getattr(cand, "content", None)
+            for part in getattr(content, "parts", None) or []:
+                piece = getattr(part, "text", None)
+                if piece:
+                    collected.append(piece)
+        text = "".join(collected)
+
+    if not (text and text.strip()):
         raise AiUnavailable("AI service returned an empty completion.")
-
-    return content.strip()
-
-
-def _post_json(url: str, payload: dict, headers: dict, *, timeout: float) -> dict:
-    """POST ``payload`` as JSON and return the decoded JSON response.
-
-    Prefers ``requests`` (already an installed transitive dependency);
-    falls back to the stdlib ``urllib.request`` if it isn't importable so
-    we never add a hard dependency. Any transport / decode error is
-    re-raised as :class:`AiUnavailable` with a short reason — the raw
-    exception (which could embed request details) is never surfaced.
-    """
-    try:
-        import requests  # noqa: PLC0415 — optional, prefer-if-present
-    except ImportError:
-        return _post_json_urllib(url, payload, headers, timeout=timeout)
-
-    try:
-        response = requests.post(
-            url, json=payload, headers=headers, timeout=timeout
-        )
-    except requests.exceptions.Timeout as exc:
-        raise AiUnavailable("AI service timed out.") from exc
-    except requests.exceptions.RequestException as exc:
-        raise AiUnavailable("AI service request failed.") from exc
-
-    if response.status_code >= 400:
-        raise AiUnavailable(
-            _http_error_reason(response.status_code, response.text)
-        )
-
-    try:
-        return response.json()
-    except ValueError as exc:
-        raise AiUnavailable("AI service returned invalid JSON.") from exc
+    return text.strip()
 
 
-def _post_json_urllib(
-    url: str, payload: dict, headers: dict, *, timeout: float
-) -> dict:
-    """Stdlib fallback for :func:`_post_json` (no ``requests`` available)."""
-    import urllib.error
-    import urllib.request
-
-    data = json.dumps(payload).encode("utf-8")
-    request = urllib.request.Request(
-        url, data=data, headers=headers, method="POST"
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as resp:
-            raw = resp.read().decode("utf-8")
-    except urllib.error.HTTPError as exc:
-        try:
-            detail = exc.read().decode("utf-8")
-        except Exception:
-            detail = ""
-        raise AiUnavailable(_http_error_reason(exc.code, detail)) from exc
-    except urllib.error.URLError as exc:
-        # Covers timeouts (reason is a socket.timeout) and DNS/connection
-        # failures. Don't echo the reason verbatim — keep it generic.
-        raise AiUnavailable("AI service request failed.") from exc
-
-    try:
-        return json.loads(raw)
-    except ValueError as exc:
-        raise AiUnavailable("AI service returned invalid JSON.") from exc
-
-
-def _http_error_reason(status_code: int, raw_body: str) -> str:
-    """Build a short, key-safe reason string from an HTTP error response.
-
-    Tries to lift OpenAI's ``error.message`` (which describes the request,
-    not the credential) out of the JSON body; falls back to the bare
-    status code. Never includes request headers, so the key can't leak.
-    """
-    message = ""
-    try:
-        body = json.loads(raw_body) if raw_body else {}
-        err = body.get("error") if isinstance(body, dict) else None
-        if isinstance(err, dict):
-            message = err.get("message") or ""
-        elif isinstance(err, str):
-            message = err
-    except ValueError:
-        message = ""
-    if message:
-        return f"AI service error (HTTP {status_code}): {message}"
-    return f"AI service error (HTTP {status_code})."
+def _safe_reason(exc: Exception) -> str:
+    """Short, key-safe one-liner describing an upstream failure."""
+    reason = (str(exc) or "").strip()
+    if not reason:
+        return "request failed"
+    return reason.splitlines()[0][:200]
