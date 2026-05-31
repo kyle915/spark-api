@@ -66,6 +66,18 @@ class ReceiptCampaign(models.Model):
     # Only active campaigns accept public submissions + render publicly.
     is_active = models.BooleanField(default=True, db_index=True)
 
+    # Optional total payout ceiling. When set, public submissions stop once
+    # the total paid-out reward reaches the cap. NULL = no cap (unlimited).
+    budget_cap = models.DecimalField(
+        max_digits=12, decimal_places=2, null=True, blank=True
+    )
+
+    # Soft-delete marker. A campaign WITH submitted receipts is archived
+    # (deleted_at set) rather than hard-deleted, so the proof-of-purchase rows
+    # + payout history survive; an empty campaign is hard-deleted outright.
+    # Archived campaigns are hidden from the dashboard + the public page.
+    deleted_at = models.DateTimeField(null=True, blank=True, db_index=True)
+
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -152,6 +164,11 @@ class ConsumerReceipt(models.Model):
     # utils.gcs.public_url in the GraphQL type. Mirrors how recap files
     # store the blob path and resolve a public URL at read time.
     image = models.CharField(max_length=1024, null=False)
+    # SHA-256 of the uploaded image bytes — used to flag duplicate submissions
+    # (the same receipt photo uploaded twice). Indexed for the at-submit lookup.
+    image_sha256 = models.CharField(
+        max_length=64, blank=True, default="", db_index=True
+    )
 
     submitted_at = models.DateTimeField(auto_now_add=True, db_index=True)
 
@@ -183,6 +200,23 @@ class ConsumerReceipt(models.Model):
         null=True,
         blank=True,
     )
+
+    # Fraud / duplicate flagging. Set at submit when the same image hash (or
+    # same consumer + amount + purchase date) already exists for the campaign.
+    # Surfaced as a "possible duplicate" badge for the admin; never auto-rejects.
+    is_flagged = models.BooleanField(default=False, db_index=True)
+    flag_reason = models.TextField(blank=True, default="")
+
+    # OCR-extracted fields (Google Cloud Vision, admin-triggered). Best-effort
+    # auto-read of the receipt so the admin can compare against what the
+    # consumer typed. ocr_text holds the raw recognized text (truncated).
+    ocr_store = models.CharField(max_length=255, blank=True, default="")
+    ocr_amount = models.DecimalField(
+        max_digits=10, decimal_places=2, null=True, blank=True
+    )
+    ocr_date = models.DateField(null=True, blank=True)
+    ocr_text = models.TextField(blank=True, default="")
+    ocr_ran_at = models.DateTimeField(null=True, blank=True)
 
     status = models.CharField(
         max_length=16,

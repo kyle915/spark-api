@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import json
 import logging
 import uuid
@@ -35,6 +36,7 @@ from decimal import Decimal
 from typing import Any
 
 from asgiref.sync import sync_to_async
+from django.db.models import Sum
 from django.http import HttpRequest, HttpResponse, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
@@ -376,7 +378,7 @@ def _load_campaign_or_404(slug: str):
     """Return an ACTIVE ReceiptCampaign for the slug, or a 4xx JsonResponse."""
     try:
         campaign = models.ReceiptCampaign.objects.select_related("tenant").get(
-            slug=slug
+            slug=slug, deleted_at__isnull=True
         )
     except models.ReceiptCampaign.DoesNotExist:
         return JsonResponse(
@@ -413,6 +415,48 @@ def _campaign_display_payload(campaign) -> dict[str, Any]:
     }
 
 
+def _campaign_budget_exhausted(campaign) -> bool:
+    """True when a budget-capped campaign has paid out >= its cap."""
+    cap = campaign.budget_cap
+    if cap is None:
+        return False
+    paid = (
+        models.ConsumerReceipt.objects.filter(
+            campaign=campaign, paid_at__isnull=False
+        ).aggregate(total=Sum("reward_amount"))["total"]
+        or Decimal("0")
+    )
+    return paid >= cap
+
+
+def _duplicate_flag(campaign, image_sha256: str, fields: dict) -> tuple[bool, str]:
+    """Detect a likely duplicate submission within the campaign.
+
+    Flags (never auto-rejects) when the exact image was already submitted, or
+    when the same consumer email + amount + purchase date repeats. The admin
+    decides — this just surfaces a "possible duplicate" badge.
+    """
+    if image_sha256:
+        dup = models.ConsumerReceipt.objects.filter(
+            campaign=campaign, image_sha256=image_sha256
+        ).first()
+        if dup is not None:
+            return True, f"Same receipt image as submission #{dup.id}."
+    email = (fields.get("consumer_email") or "").strip().lower()
+    amount = fields.get("amount")
+    pdate = fields.get("purchase_date")
+    if email and amount is not None and pdate is not None:
+        dup = models.ConsumerReceipt.objects.filter(
+            campaign=campaign,
+            consumer_email__iexact=email,
+            amount=amount,
+            purchase_date=pdate,
+        ).first()
+        if dup is not None:
+            return True, f"Same email + amount + date as submission #{dup.id}."
+    return False, ""
+
+
 @csrf_exempt
 @require_http_methods(["GET"])
 def public_campaign_view(request: HttpRequest, slug: str) -> HttpResponse:
@@ -434,10 +478,21 @@ def public_campaign_submit_view(
         return loaded
     campaign = loaded
 
+    # Stop accepting submissions once a budget-capped campaign is exhausted.
+    if _campaign_budget_exhausted(campaign):
+        return JsonResponse(
+            {
+                "error": "budget_reached",
+                "message": "This rebate has reached its limit and is no longer accepting receipts.",
+            },
+            status=409,
+        )
+
     extracted = _extract_image(request)
     if isinstance(extracted, HttpResponse):
         return extracted
     image_bytes, content_type = extracted
+    image_sha256 = hashlib.sha256(image_bytes).hexdigest()
 
     extension = _EXTENSION_BY_CONTENT_TYPE.get(content_type, "jpg")
     blob_name = (
@@ -461,13 +516,17 @@ def public_campaign_submit_view(
         )
 
     fields = _build_receipt_fields(request)
+    flagged, flag_reason = _duplicate_flag(campaign, image_sha256, fields)
 
     try:
         models.ConsumerReceipt.objects.create(
             tenant=campaign.tenant,
             campaign=campaign,
             image=blob_name,
+            image_sha256=image_sha256,
             status=models.ConsumerReceipt.STATUS_PENDING,
+            is_flagged=flagged,
+            flag_reason=flag_reason,
             **fields,
         )
     except Exception:
