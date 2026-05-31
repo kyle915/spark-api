@@ -74,6 +74,9 @@ INSTALLED_APPS = [
     "availability",
     "documents",
     "announcements",
+    # Cloud Tasks handler endpoints (no models). Registered so its app label
+    # resolves; the routes are mounted under `api/tasks/` in config/urls.py.
+    "tasks",
 ]
 
 AUTH_USER_MODEL = "tenants.User"
@@ -361,6 +364,35 @@ EXPO_PUSH_TIMEOUT_SECONDS = env.float("EXPO_PUSH_TIMEOUT_SECONDS", default=10.0)
 # endpoint fails closed with 503 when unset rather than running
 # unauthed.
 INTERNAL_CRON_SECRET = env("INTERNAL_CRON_SECRET", default="")
+
+# Cloud Tasks async offload for the slow part of recap approval — the
+# client/RMM notification email + recap-PDF generation. When configured,
+# `approve_recap` / `approve_custom_recap` enqueue a Cloud Task and return
+# immediately; the task hits the secret-protected handler
+# `POST /api/tasks/recap-approved-notify` which runs the same notify work
+# in the background. See `utils/cloud_tasks.py` and `tasks/views.py`.
+#
+# FEATURE FLAG: this path is OFF unless ALL FOUR of the vars below are set
+# (non-empty). When OFF, `enqueue()` returns False and approval falls back
+# to the exact inline notify behavior — byte-for-byte unchanged from before
+# this feature existed. The GCP project comes from the existing
+# GS_PROJECT_ID. No new Python dependency: we call the Cloud Tasks REST API
+# with Application Default Credentials (same auth as receipts/ocr.py).
+#
+#   CLOUD_TASKS_QUEUE            — queue id (e.g. "recap-approved-notify")
+#   CLOUD_TASKS_LOCATION         — queue region (e.g. "us-central1")
+#   CLOUD_TASKS_HANDLER_BASE_URL — public base URL of THIS service, no
+#                                  trailing slash (e.g.
+#                                  "https://spark-api-xxxx.run.app"); the
+#                                  task POSTs to BASE_URL + the handler path
+#   CLOUD_TASKS_SECRET           — shared secret echoed by the task in the
+#                                  `X-Tasks-Secret` header; the handler
+#                                  rejects (403) any request that doesn't
+#                                  match it with a constant-time compare
+CLOUD_TASKS_QUEUE = env("CLOUD_TASKS_QUEUE", default="")
+CLOUD_TASKS_LOCATION = env("CLOUD_TASKS_LOCATION", default="")
+CLOUD_TASKS_HANDLER_BASE_URL = env("CLOUD_TASKS_HANDLER_BASE_URL", default="")
+CLOUD_TASKS_SECRET = env("CLOUD_TASKS_SECRET", default="")
 
 # Wingspan integration — admin UI for Payroll · Hours + Payments.
 # Set WINGSPAN_API_KEY on Cloud Run to enable; otherwise the front-

@@ -76,6 +76,12 @@ urlpatterns = [
     # token resolves to one invoice (camelCase JSON) and the branded invoice
     # PDF. See `billing/views.py`.
     path("api/public/", include("billing.urls")),
+    # Cloud Tasks handler endpoints (no JWT, `X-Tasks-Secret` shared-secret
+    # gated). The feature-flagged async path for recap approval enqueues a
+    # task that POSTs here to run the client/RMM email + PDF in the
+    # background. Fails closed (403) when the secret is unset. See
+    # `tasks/views.py`.
+    path("api/tasks/", include("tasks.urls")),
 ]
 
 # Add RQ dashboard in DEBUG mode
