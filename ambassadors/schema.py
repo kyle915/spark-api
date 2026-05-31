@@ -1,6 +1,7 @@
 import strawberry
 
 from ambassadors import queries, mutations
+from ambassadors.staffing import StaffingQueries
 
 
 @strawberry.type
@@ -37,6 +38,7 @@ class AmbassadorQueryClient(
     queries.AttendanceQueries,
     queries.GroupTypeQueries,
     queries.AmbassadorGroupQueries,
+    StaffingQueries,
 ):
     pass
 

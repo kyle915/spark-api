@@ -636,6 +636,22 @@ class CancelShiftInviteInput(SparkGraphQLInput):
 
 
 @strawberry.input
+class BulkInviteToShiftInput(SparkGraphQLInput):
+    """Admin invites several BAs to one event in a single call.
+
+    Thin batch wrapper over the single-invite path: the bulk mutation
+    loops `ambassador_ids` and reuses `invite_ambassador_to_shift` per
+    BA, so each invite fires the same AmbassadorEvent create + dedupe +
+    "New shift offered" push + activity-log entry. Counts invited vs
+    skipped (already-invited / per-BA error) so the admin UI can report
+    "Invited N, skipped M" without N round-trips.
+    """
+
+    event_id: strawberry.ID
+    ambassador_ids: List[strawberry.ID]
+
+
+@strawberry.input
 class RespondToShiftOfferInput(SparkGraphQLInput):
     """BA's response to a shift invitation pushed from the admin app.
 

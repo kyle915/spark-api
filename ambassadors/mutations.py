@@ -14,7 +14,11 @@ from jobs.types import AmbassadorJob as AmbassadorJobType
 
 from events.models import Event
 from utils.graphql.permissions import StrictIsAuthenticated, IsClientOrSparkAdmin
-from utils.graphql.mixins import BaseMutationService, resolve_id_to_int
+from utils.graphql.mixins import (
+    BaseMutationService,
+    SparkGraphQLMixin,
+    resolve_id_to_int,
+)
 
 from .models import (
     Ambassador,
@@ -62,6 +66,7 @@ from .types import (
     RespondToShiftOfferResponse,
     InviteAmbassadorToShiftResponse,
     CancelShiftInviteResponse,
+    BulkInviteResponse,
     RateAmbassadorResponse,
     UpdateBaProfileResponse,
     BaSelfProfileType,
@@ -472,6 +477,142 @@ class AmbassadorMutations:
             message="Invite cancelled.",
             client_mutation_id=input.client_mutation_id,
             ambassador_event_uuid=input.ambassador_event_uuid,
+        )
+
+    @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
+    async def bulk_invite_ambassadors_to_shift(
+        self,
+        info: strawberry.Info,
+        input: inputs.BulkInviteToShiftInput,
+    ) -> BulkInviteResponse:
+        """Invite many BAs to one event in a single round-trip.
+
+        Loops `ambassador_ids` and reuses the existing single-invite
+        resolver (`invite_ambassador_to_shift`) per BA so every invite
+        goes through the SAME path: AmbassadorEvent create, the
+        (ambassador, event) dedupe, the request activity-log entry, and
+        the "New shift offered" push. We never reimplement those
+        side-effects here — this is purely a batch wrapper.
+
+        Counting: a BA whose single-invite returns success=True is
+        counted as `invited`; anyone the single-invite skipped
+        (already-invited) or that raised is counted as `skipped`.
+        Tenant-gated: clients can only invite into their own tenant's
+        event; admins into any.
+        """
+        # Tenant gate. Mirror the receipts/recaps posture: a client-role
+        # caller is pinned to their own tenant and may only target an
+        # event in that tenant; admins (spark-admin / staff / super /
+        # @igniteproductions.co) pass through to any tenant's event.
+        user = info.context.request.user
+        try:
+            resolved_event_id = resolve_id_to_int(input.event_id)
+        except (ValueError, TypeError, GraphQLError):
+            return BulkInviteResponse(
+                success=False,
+                message="Event not found.",
+                client_mutation_id=input.client_mutation_id,
+                invited=0,
+                skipped=len(input.ambassador_ids or []),
+            )
+
+        from utils.graphql.permissions import (
+            IGNITE_EMAIL_DOMAIN,
+            resolve_request_user_access,
+        )
+
+        role_slug, is_staff, is_super, email = await resolve_request_user_access(user)
+        is_admin = (
+            is_staff
+            or is_super
+            or role_slug == "spark-admin"
+            or (email or "").lower().endswith(IGNITE_EMAIL_DOMAIN)
+        )
+
+        try:
+            event = await Event.objects.select_related("tenant").aget(
+                id=resolved_event_id
+            )
+        except Event.DoesNotExist:
+            return BulkInviteResponse(
+                success=False,
+                message="Event not found.",
+                client_mutation_id=input.client_mutation_id,
+                invited=0,
+                skipped=len(input.ambassador_ids or []),
+            )
+
+        if not is_admin:
+            # Client-role: confirm the event belongs to the caller's tenant.
+            mixin = SparkGraphQLMixin()
+            try:
+                tenant = await mixin.get_user_tenant(info, user=user)
+            except GraphQLError:
+                tenant = None
+            if tenant is None or tenant.id != event.tenant_id:
+                return BulkInviteResponse(
+                    success=False,
+                    message="You do not have permission to invite BAs to this event.",
+                    client_mutation_id=input.client_mutation_id,
+                    invited=0,
+                    skipped=len(input.ambassador_ids or []),
+                )
+
+        invited = 0
+        skipped = 0
+        # De-dupe the incoming id list so a repeated id can't double-count.
+        seen: set[str] = set()
+        for ambassador_id in input.ambassador_ids or []:
+            key = str(ambassador_id)
+            if key in seen:
+                skipped += 1
+                continue
+            seen.add(key)
+
+            single_input = inputs.InviteAmbassadorToShiftInput(
+                ambassador_id=ambassador_id,
+                event_id=input.event_id,
+            )
+            try:
+                # Reuse the EXACT single-invite path (create + dedupe +
+                # push + activity log). The decorated resolver is a plain
+                # coroutine function at the attribute level, so calling it
+                # directly runs the same body.
+                result = await self.invite_ambassador_to_shift(info, single_input)
+            except Exception:  # noqa: BLE001
+                import logging
+
+                logging.getLogger(__name__).exception(
+                    "bulk invite: single-invite failed ba=%s event=%s",
+                    ambassador_id,
+                    input.event_id,
+                )
+                skipped += 1
+                continue
+
+            if getattr(result, "success", False):
+                invited += 1
+            else:
+                skipped += 1
+
+        if invited and skipped:
+            message = f"Invited {invited} BA(s); skipped {skipped}."
+        elif invited:
+            message = f"Invited {invited} BA(s)."
+        elif skipped:
+            message = (
+                f"No new invites sent; {skipped} BA(s) were already "
+                "invited or could not be invited."
+            )
+        else:
+            message = "No ambassadors provided."
+
+        return BulkInviteResponse(
+            success=invited > 0,
+            message=message,
+            client_mutation_id=input.client_mutation_id,
+            invited=invited,
+            skipped=skipped,
         )
 
     @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
