@@ -630,7 +630,7 @@ class CampaignReportQueries:
         user_prompt = _compose_ai_summary_prompt(data) + "\n\nQuestion: " + question
         try:
             answer = await sync_to_async(generate_summary, thread_sensitive=True)(
-                _AI_ANSWER_SYSTEM_PROMPT, user_prompt, max_tokens=4000
+                _AI_ANSWER_SYSTEM_PROMPT, user_prompt, max_tokens=8000
             )
         except AiUnavailable as exc:
             return CampaignReportAiAnswer(ok=False, answer="", reason=str(exc))
@@ -704,7 +704,7 @@ class CampaignReportQueries:
         user_prompt = overview + "\n\nQuestion: " + question
         try:
             answer = await sync_to_async(generate_summary, thread_sensitive=True)(
-                _AI_TENANT_ANSWER_SYSTEM_PROMPT, user_prompt, max_tokens=4000
+                _AI_TENANT_ANSWER_SYSTEM_PROMPT, user_prompt, max_tokens=8000
             )
         except AiUnavailable as exc:
             return TenantAiAnswer(ok=False, answer="", reason=str(exc))
