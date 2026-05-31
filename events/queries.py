@@ -1043,6 +1043,13 @@ class RequestQueriesService(BaseEventQueriesService):
                 # Limit to id-only fields on Recap since neither
                 # consumer needs the full recap detail at list time.
                 "event_set__recaps",
+                # Custom-template recaps live in a separate table. The
+                # Master Tracker RECAP chip counts an event as "filed" when
+                # EITHER recaps OR custom_recap is non-empty (same rule as
+                # /recaps/missing). Prefetch this too so Event.customRecaps
+                # reads the cache instead of an N+1 per row — and so a filed
+                # custom recap actually clears the DUE chip.
+                "event_set__custom_recap",
                 # Master Tracker "BA assigned" indicator traverses
                 # Request → events → ambassadors_events to count
                 # assigned/confirmed BAs per event. Without this prefetch
