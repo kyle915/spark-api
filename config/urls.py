@@ -72,6 +72,10 @@ urlpatterns = [
     # share token resolves to a request's aggregate report (JSON) and the
     # branded report PDF. See `recaps/report_views.py`.
     path("api/public/", include("recaps.report_urls")),
+    # Public, token-authenticated client invoice (no JWT). A signed share
+    # token resolves to one invoice (camelCase JSON) and the branded invoice
+    # PDF. See `billing/views.py`.
+    path("api/public/", include("billing.urls")),
 ]
 
 # Add RQ dashboard in DEBUG mode

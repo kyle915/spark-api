@@ -61,6 +61,7 @@ INSTALLED_APPS = [
     "jobs",
     "recaps",
     "receipts",
+    "billing",
     "chats",
     "academy",
     "digest",
