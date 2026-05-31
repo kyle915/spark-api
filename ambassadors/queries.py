@@ -579,7 +579,11 @@ class AmbassadorEventQueries:
                     image_url = public_url(extract_blob_name_from_url(blob))
 
                 products.append(
-                    types.ShiftProduct(name=name, image_url=image_url)
+                    types.ShiftProduct(
+                        id=strawberry.ID(str(product.id)),
+                        name=name,
+                        image_url=image_url,
+                    )
                 )
 
             return types.ShiftContext(

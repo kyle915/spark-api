@@ -207,6 +207,9 @@ class ShiftProduct:
     admins manage products in the existing request flows.
     """
 
+    # The events.Product id — used as `productId` when the BA submits
+    # per-SKU sampled quantities (recap productSamples).
+    id: strawberry.ID
     name: str
     # Public (non-signed) URL for the product image, via utils.gcs
     # public_url — same resolution the web Product type uses. None when
