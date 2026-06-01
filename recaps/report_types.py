@@ -26,6 +26,7 @@ from django.utils import timezone
 
 from recaps import report_service
 from recaps.report_tokens import make_report_token
+from recaps.tenant_insights import get_or_refresh_tenant_insights
 from recaps.tenant_overview import (
     build_tenant_overview,
     tenant_event_recap_counts,
@@ -427,6 +428,87 @@ def _build_tenant_kpis(tenant_id: int) -> TenantKpis:
             )
             for m in trend
         ],
+    )
+
+
+@strawberry.type
+class TenantInsightItem:
+    """One proactive "what's notable" insight for a client's dashboard.
+
+    ``title`` is a short headline and ``detail`` a single-sentence
+    explanation. ``sentiment`` is one of ``"positive"`` / ``"neutral"`` /
+    ``"attention"`` (good / neutral / needs-attention), letting the frontend
+    pick a badge colour. ``metric`` is an OPTIONAL short figure the model
+    lifted from the data (e.g. ``"+42% MoM"``), null when no single figure
+    fits.
+    """
+
+    title: str
+    detail: str
+    sentiment: str
+    metric: str | None = None
+
+
+@strawberry.type
+class TenantInsights:
+    """Cached, auto-generated proactive insights for ONE client's program.
+
+    Surfaced on the dashboard WITHOUT the user asking: a short list of
+    headline observations (wins, trends, standouts, things needing attention)
+    generated from the same aggregated numbers as :class:`TenantKpis`, cached
+    server-side, and refreshed on read when stale (see
+    :func:`recaps.tenant_insights.get_or_refresh_tenant_insights`).
+
+    ``generated_at`` is the ISO-8601 timestamp of the served snapshot, or null
+    when there are no insights to show. ``items`` is the (possibly empty) list
+    of insights. The resolver NEVER raises — a missing/out-of-scope tenant, an
+    unconfigured AI key, or any failure resolves to
+    ``TenantInsights(generated_at=None, items=[])``.
+    """
+
+    generated_at: str | None
+    items: list[TenantInsightItem]
+
+
+def _empty_tenant_insights() -> TenantInsights:
+    """The degradation value: no timestamp, no items, never an error."""
+    return TenantInsights(generated_at=None, items=[])
+
+
+def _build_tenant_insights_type(
+    items: list[dict], generated_at
+) -> TenantInsights:
+    """Map the cached insight dicts + timestamp onto the Strawberry type.
+
+    Defensive: each item is only surfaced when it has a string ``title`` and
+    ``detail`` (the cache stores cleaned dicts, but we never trust the shape
+    blindly). ``generated_at`` is rendered as ISO-8601, or null when absent.
+    """
+    out: list[TenantInsightItem] = []
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        title = item.get("title")
+        detail = item.get("detail")
+        if not isinstance(title, str) or not isinstance(detail, str):
+            continue
+        sentiment = item.get("sentiment")
+        if not isinstance(sentiment, str):
+            sentiment = "neutral"
+        metric = item.get("metric")
+        if not isinstance(metric, str):
+            metric = None
+        out.append(
+            TenantInsightItem(
+                title=title,
+                detail=detail,
+                sentiment=sentiment,
+                metric=metric,
+            )
+        )
+    return TenantInsights(
+        generated_at=generated_at.isoformat() if generated_at else None,
+        items=out,
     )
 
 
@@ -895,3 +977,54 @@ class CampaignReportQueries:
         if data is None:
             return _zeroed_tenant_kpis()
         return data
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def tenant_insights(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID,
+    ) -> TenantInsights:
+        """Proactive "what's notable" insights for a client's dashboard.
+
+        Auto-generated headline observations about the tenant's whole program
+        (wins, trends, standouts, things needing attention), cached
+        server-side and surfaced WITHOUT the user asking. Served from the
+        latest fresh :class:`tenants.models.TenantInsightSnapshot`, regenerated
+        on read when stale (see
+        :func:`recaps.tenant_insights.get_or_refresh_tenant_insights`); a daily
+        cron precomputes them so dashboard reads stay fast.
+
+        Tenant scoping is identical to :meth:`tenant_kpis`
+        (:meth:`_CampaignReportService.resolve_target_tenant_id`):
+        client-role users may ONLY read their own tenant — the ``tenant_id``
+        argument is overridden to their own; admins (spark-admin / staff /
+        superuser / ``@igniteproductions.co``) may target any tenant.
+
+        Never raises: a missing or out-of-scope tenant, an unconfigured AI
+        key, or any failure resolves to ``TenantInsights(generated_at=None,
+        items=[])`` rather than a GraphQL error.
+        """
+        service = _CampaignReportService()
+        target_tenant_id = await service.resolve_target_tenant_id(info, tenant_id)
+        if target_tenant_id is None:
+            return _empty_tenant_insights()
+
+        def _build():
+            # Guard the tenant's existence so an admin passing an unknown id
+            # degrades to empty rather than caching insights for no tenant.
+            from tenants.models import Tenant
+
+            if not Tenant.objects.filter(id=target_tenant_id).exists():
+                return None
+            return get_or_refresh_tenant_insights(target_tenant_id)
+
+        try:
+            result = await sync_to_async(_build, thread_sensitive=True)()
+        except Exception:
+            return _empty_tenant_insights()
+
+        if result is None:
+            return _empty_tenant_insights()
+
+        items, generated_at = result
+        return _build_tenant_insights_type(items, generated_at)
