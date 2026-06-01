@@ -637,6 +637,63 @@ class Goal(models.Model):
         return f"Goals {self.year} for user {self.user_id} @ tenant {self.tenant_id}"
 
 
+class UserPreference(models.Model):
+    """Per-user Settings preferences, persisted server-side.
+
+    Backs the web Settings page (``SparkSettings.tsx``), which previously
+    kept these UI prefs only in ``localStorage`` (under ``@spark.settings.*``)
+    so they did not follow the user across devices/browsers. One row per
+    user.
+
+    ``prefs`` is a free-form JSON blob (not typed columns) so adding a new
+    Settings toggle later needs no migration — the GraphQL layer owns the
+    shape. The keys we mirror today (see ``DEFAULT_PREFS``):
+
+    * ``timezone``    — IANA tz string (default ``"America/Chicago"``).
+    * ``currency``    — display currency label (default ``"USD ($)"``).
+    * ``activations`` — map of activation-type id -> enabled bool
+      (default ``{"retail": True, "onprem": True, "event": True}``).
+
+    Reads merge stored values over ``DEFAULT_PREFS`` so a user who has never
+    saved — or who is missing a newly added key — still gets sane defaults.
+    """
+
+    # Source-of-truth defaults, mirrored from SparkSettings.tsx's
+    # localStorage fallbacks. Kept here so both the GraphQL resolver and any
+    # future server-side reader agree on the baseline.
+    DEFAULT_PREFS: dict = {
+        "timezone": "America/Chicago",
+        "currency": "USD ($)",
+        "activations": {"retail": True, "onprem": True, "event": True},
+    }
+
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="preference",
+    )
+    prefs = models.JSONField(default=dict, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self) -> str:
+        return f"Preferences for user {self.user_id}"
+
+    def merged(self) -> dict:
+        """Stored prefs layered over :attr:`DEFAULT_PREFS`.
+
+        Defaults fill any key the user has never saved (or that was added
+        after they last saved), so reads always return a complete object.
+        """
+        base = dict(self.DEFAULT_PREFS)
+        if isinstance(self.prefs, dict):
+            base.update(self.prefs)
+        return base
+
+
 class TenantGoal(models.Model):
     """Per-CLIENT (tenant-level), per-year KPI targets for the headline KPIs.
 
