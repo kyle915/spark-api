@@ -86,3 +86,73 @@ class JobScope(SparkGraphQLMixin):
             )
 
         return await _ids()
+
+    async def can_read_event_briefing(
+        self, info: strawberry.Info, event_tenant_id: int | None, event_id: int | None
+    ) -> bool:
+        """Caller-aware gate for reading a job briefing keyed by EVENT.
+
+        The ``jobBriefingForEvent`` query is the BA-mobile shift-offer entry
+        point — a BA, a client/tenant member, OR an admin can all legitimately
+        reach it — so a blunt tenant filter (like the sibling pk-addressed
+        ``jobBriefing``) would lock out a BA who's been offered a shift but
+        doesn't belong to the event's tenant. This resolves the caller's role
+        and answers "may THIS caller read the briefing for THIS event":
+
+        * **admin** (spark-admin / staff / superuser / ``@igniteproductions.co``)
+          -> any event.
+        * **tenant member** (client / spark user) -> only when the event's
+          tenant is one they belong to (same membership set as
+          ``accessible_tenant_ids``).
+        * **BA (ambassador)** -> only when their ambassador is linked to the
+          event via an ``AmbassadorEvent`` row — which covers a shift they've
+          been OFFERED (``is_approved=False``) as well as one they've accepted
+          / are rostered on (``is_approved=True``), so the mobile shift-offer
+          flow keeps working.
+        * **otherwise** -> denied.
+
+        Gates a caller who already passed ``StrictIsAuthenticated`` and never
+        raises — the resolver turns ``False`` into a ``null`` payload.
+        """
+        if event_id is None:
+            return False
+
+        user = await self.get_user(info)
+        role_slug, is_staff, is_super, email = await resolve_request_user_access(
+            user
+        )
+
+        # Admins: any event.
+        if _is_admin_access(role_slug, is_staff, is_super, email):
+            return True
+
+        @sync_to_async
+        def _allowed() -> bool:
+            # Tenant member: the event's tenant must be one they belong to.
+            if event_tenant_id is not None:
+                tenant_ids = set(
+                    user.tenanted_users.filter(is_active=True).values_list(
+                        "tenant_id", flat=True
+                    )
+                )
+                if event_tenant_id in tenant_ids:
+                    return True
+
+            # BA: their ambassador must be linked to the event (offered,
+            # assigned, or on-roster) via AmbassadorEvent — the shift-offer
+            # linkage. is_approved is intentionally NOT required so a BA who's
+            # been offered but hasn't accepted still sees the briefing.
+            from ambassadors.models import Ambassador, AmbassadorEvent
+
+            ambassador_id = (
+                Ambassador.objects.filter(user=user)
+                .values_list("id", flat=True)
+                .first()
+            )
+            if ambassador_id is None:
+                return False
+            return AmbassadorEvent.objects.filter(
+                ambassador_id=ambassador_id, event_id=event_id
+            ).exists()
+
+        return await _allowed()
