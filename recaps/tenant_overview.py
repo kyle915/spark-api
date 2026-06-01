@@ -119,19 +119,66 @@ def _sum(queryset, field: str) -> int:
     return int(total or 0)
 
 
-def _legacy_kpis(tenant_id: int) -> dict[str, int]:
+def _year_bounds(year: int) -> tuple:
+    """Half-open, timezone-aware ``[start, end)`` for calendar ``year``.
+
+    ``start`` is Jan 1 00:00 of ``year`` and ``end`` is Jan 1 00:00 of the
+    NEXT year, both in the active timezone (built off ``timezone.now()`` so
+    they carry the same tzinfo the rest of this module uses). Half-open so a
+    ``created_at`` exactly at the year boundary lands in exactly one year
+    (``__gte start`` / ``__lt end``).
+    """
+    anchor = timezone.now().replace(
+        month=1, day=1, hour=0, minute=0, second=0, microsecond=0
+    )
+    start = anchor.replace(year=year)
+    end = anchor.replace(year=year + 1)
+    return start, end
+
+
+def _filter_year(queryset, date_field: str, year: int | None):
+    """Narrow ``queryset`` to ``date_field`` within calendar ``year``.
+
+    ``year=None`` is the all-time path: the queryset is returned UNTOUCHED
+    (no extra ``WHERE`` clause), so callers that pass no year keep their
+    exact previous SQL — this is what preserves the byte-for-byte all-time
+    behavior the Ask-AI and Insights callers depend on. When a year is
+    given, apply the half-open :func:`_year_bounds` window on ``date_field``.
+    """
+    if year is None:
+        return queryset
+    start, end = _year_bounds(year)
+    return queryset.filter(
+        **{f"{date_field}__gte": start, f"{date_field}__lt": end}
+    )
+
+
+def _legacy_kpis(tenant_id: int, year: int | None = None) -> dict[str, int]:
     """Sum the legacy :class:`recaps.models.Recap` KPIs for one tenant.
 
     Recap has no direct tenant FK, so every queryset is scoped through the
     event (``…__event__tenant_id`` / ``event__tenant_id``) — the same join
     ``tenants.insights`` and the recap lists use. Each line is a single
     aggregate query; no Recap row is loaded into Python.
+
+    When ``year`` is given, each queryset is additionally narrowed to its
+    own ``created_at`` within that calendar year (the same date field and
+    half-open window the monthly trend uses); ``year=None`` leaves every
+    queryset untouched, so the all-time SQL is unchanged.
     """
-    recaps = Recap.objects.filter(event__tenant_id=tenant_id)
-    engagements = ConsumerEngagements.objects.filter(
-        recap__event__tenant_id=tenant_id
+    recaps = _filter_year(
+        Recap.objects.filter(event__tenant_id=tenant_id), "created_at", year
     )
-    samples = ProductSamples.objects.filter(recap__event__tenant_id=tenant_id)
+    engagements = _filter_year(
+        ConsumerEngagements.objects.filter(recap__event__tenant_id=tenant_id),
+        "created_at",
+        year,
+    )
+    samples = _filter_year(
+        ProductSamples.objects.filter(recap__event__tenant_id=tenant_id),
+        "created_at",
+        year,
+    )
     return {
         "total_engagements": _sum(recaps, "total_engagements"),
         "products_sold": _sum(recaps, "products_sold"),
@@ -157,7 +204,7 @@ _CUSTOM_KPI_NAME_RE = re.compile(
 )
 
 
-def _custom_kpis(tenant_id: int) -> dict[str, int]:
+def _custom_kpis(tenant_id: int, year: int | None = None) -> dict[str, int]:
     """Sum the custom-template :class:`recaps.models.CustomRecap` KPIs.
 
     ``total_engagements`` is a typed column → summed in the DB. The four
@@ -167,10 +214,21 @@ def _custom_kpis(tenant_id: int) -> dict[str, int]:
     apply the same label/parse rules the per-campaign report uses so the
     totals agree. We never load a CustomRecap object — only the matched
     (recap_id, name, value) value rows.
+
+    When ``year`` is given, each queryset is narrowed to its own
+    ``created_at`` within that calendar year (the custom value rows are
+    filtered on their OWN ``created_at``, consistent with the structured
+    sums and the monthly trend); ``year=None`` leaves every queryset
+    untouched, so the all-time SQL is unchanged.
     """
     out = {
         "total_engagements": _sum(
-            CustomRecap.objects.filter(tenant_id=tenant_id), "total_engagements"
+            _filter_year(
+                CustomRecap.objects.filter(tenant_id=tenant_id),
+                "created_at",
+                year,
+            ),
+            "total_engagements",
         ),
         "consumers_reached": 0,
         "first_time_consumers": 0,
@@ -184,8 +242,12 @@ def _custom_kpis(tenant_id: int) -> dict[str, int]:
 
     # Structured custom samples sum cleanly in SQL.
     structured_samples = _sum(
-        CustomRecapProductSample.objects.filter(
-            custom_recap__tenant_id=tenant_id
+        _filter_year(
+            CustomRecapProductSample.objects.filter(
+                custom_recap__tenant_id=tenant_id
+            ),
+            "created_at",
+            year,
         ),
         "quantity",
     )
@@ -194,9 +256,13 @@ def _custom_kpis(tenant_id: int) -> dict[str, int]:
     # the per-recap "consumers sampled" fallback (sold units + samples)
     # matches the campaign report's per-recap accumulation.
     rows = (
-        CustomFieldValue.objects.filter(
-            custom_recap__tenant_id=tenant_id,
-            custom_field__name__iregex=_CUSTOM_KPI_NAME_RE.pattern,
+        _filter_year(
+            CustomFieldValue.objects.filter(
+                custom_recap__tenant_id=tenant_id,
+                custom_field__name__iregex=_CUSTOM_KPI_NAME_RE.pattern,
+            ),
+            "created_at",
+            year,
         )
         .values_list("custom_recap_id", "custom_field__name", "value")
         .order_by("custom_recap_id")
@@ -245,7 +311,7 @@ def _custom_kpis(tenant_id: int) -> dict[str, int]:
     return out
 
 
-def tenant_kpi_totals(tenant_id: int) -> TenantKpiTotals:
+def tenant_kpi_totals(tenant_id: int, year: int | None = None) -> TenantKpiTotals:
     """Legacy + custom KPI totals for one tenant, summed field-by-field.
 
     THE single source of truth for this tenant's nine summable KPIs. Both
@@ -254,9 +320,14 @@ def tenant_kpi_totals(tenant_id: int) -> TenantKpiTotals:
     the chart numbers can never diverge. All sums are database aggregates
     (see :func:`_legacy_kpis` / :func:`_custom_kpis`); no recap row is
     loaded into Python beyond the bounded free-text custom value rows.
+
+    ``year=None`` (the default, and what the Ask-AI overview + Insights
+    callers pass) sums over ALL of the tenant's recaps unchanged. ``year=Y``
+    restricts every underlying aggregate to recaps whose ``created_at`` falls
+    in calendar year ``Y``.
     """
-    legacy = _legacy_kpis(tenant_id)
-    custom = _custom_kpis(tenant_id)
+    legacy = _legacy_kpis(tenant_id, year)
+    custom = _custom_kpis(tenant_id, year)
     return TenantKpiTotals(
         **{
             f.name: int(legacy.get(f.name, 0)) + int(custom.get(f.name, 0))
@@ -265,7 +336,9 @@ def tenant_kpi_totals(tenant_id: int) -> TenantKpiTotals:
     )
 
 
-def tenant_event_recap_counts(tenant_id: int) -> tuple[int, int]:
+def tenant_event_recap_counts(
+    tenant_id: int, year: int | None = None
+) -> tuple[int, int]:
     """``(event_count, recap_count)`` for one tenant — both DB counts.
 
     Shared by :func:`build_tenant_overview` (the headline line) and the
@@ -274,10 +347,22 @@ def tenant_event_recap_counts(tenant_id: int) -> tuple[int, int]:
     (legacy ``Recap`` joined through the event + custom ``CustomRecap`` via
     its direct tenant FK), exactly like the overview's headline. Each line
     is a single ``COUNT(*)``; no rows enter Python.
+
+    When ``year`` is given, each count is narrowed to its own ``created_at``
+    within that calendar year (events by ``Event.created_at``, each recap
+    shape by its own ``created_at`` — the same anchor the trend uses);
+    ``year=None`` leaves every count unfiltered, so the all-time SQL is
+    unchanged.
     """
-    event_count = Event.objects.filter(tenant_id=tenant_id).count()
-    legacy_recap_count = Recap.objects.filter(event__tenant_id=tenant_id).count()
-    custom_recap_count = CustomRecap.objects.filter(tenant_id=tenant_id).count()
+    event_count = _filter_year(
+        Event.objects.filter(tenant_id=tenant_id), "created_at", year
+    ).count()
+    legacy_recap_count = _filter_year(
+        Recap.objects.filter(event__tenant_id=tenant_id), "created_at", year
+    ).count()
+    custom_recap_count = _filter_year(
+        CustomRecap.objects.filter(tenant_id=tenant_id), "created_at", year
+    ).count()
     return event_count, legacy_recap_count + custom_recap_count
 
 
@@ -336,12 +421,49 @@ def _bucket_counts(
     return out
 
 
-def tenant_monthly_trend(tenant_id: int) -> list[TenantKpiMonth]:
-    """Last :data:`MONTHLY_TREND_MONTHS` calendar months of activity, zero-filled.
+def _trend_window(year: int | None):
+    """``(start, end, num_months)`` describing the trend's month window.
 
-    Oldest → newest, one :class:`TenantKpiMonth` per month in the window
-    (months with no activity are zero-filled, so the series is always a
-    bounded, contiguous <=12-point set the frontend can chart directly).
+    * ``year=None`` — the trailing window: ``start`` is
+      :func:`_trend_window_start` (this month minus
+      ``MONTHLY_TREND_MONTHS - 1``), ``end`` is ``None`` (no upper bound,
+      so the SQL stays exactly ``created_at >= start``), and ``num_months``
+      is :data:`MONTHLY_TREND_MONTHS`.
+    * ``year=Y`` — a calendar-year window: ``start`` / ``end`` are the
+      half-open :func:`_year_bounds` of ``Y``. A PAST year spans all twelve
+      months (Jan→Dec); the CURRENT year stops at the current month
+      (Jan→this month, no future padding); a FUTURE year yields zero months.
+    """
+    if year is None:
+        return _trend_window_start(), None, MONTHLY_TREND_MONTHS
+
+    start, end = _year_bounds(year)
+    now = timezone.now()
+    if year < now.year:
+        num_months = 12
+    elif year == now.year:
+        num_months = now.month
+    else:
+        # Future year: nothing to chart yet.
+        num_months = 0
+    return start, end, num_months
+
+
+def tenant_monthly_trend(
+    tenant_id: int, year: int | None = None
+) -> list[TenantKpiMonth]:
+    """Calendar months of a tenant's activity, oldest → newest, zero-filled.
+
+    One :class:`TenantKpiMonth` per month in the window (months with no
+    activity are zero-filled, so the series is always a bounded, contiguous
+    set the frontend can chart directly). The window depends on ``year``
+    (see :func:`_trend_window`):
+
+    * ``year=None`` — the last :data:`MONTHLY_TREND_MONTHS` calendar months
+      (the trailing window), UNCHANGED from the original behavior.
+    * ``year=Y`` — the months of calendar year ``Y``: Jan→Dec for a past
+      year, Jan→current month for the current year (future months are NOT
+      padded), and an empty series for a future year.
 
     Each metric is a database ``TruncMonth`` + ``Count``/``Sum`` over BOTH
     recap shapes, anchored to the recap's ``created_at`` (the non-null
@@ -360,22 +482,29 @@ def tenant_monthly_trend(tenant_id: int) -> list[TenantKpiMonth]:
       activity *shape* for charting, not the authoritative grand total — so
       it stays SQL-only and bounded; the headline KPIs remain exact.
 
-    All five querysets are scoped to ``tenant_id`` and floored to the trend
-    window so the GROUP BY never returns more than the window's months.
+    All five querysets are scoped to ``tenant_id`` and floored to the window
+    so the GROUP BY never returns more than the window's months.
     """
-    start = _trend_window_start()
+    start, end, num_months = _trend_window(year)
 
-    legacy_recaps = Recap.objects.filter(
-        event__tenant_id=tenant_id, created_at__gte=start
+    def _windowed(queryset):
+        """Floor to ``start``; cap at ``end`` only when a year was given.
+
+        Leaving the upper bound off for the trailing (``year=None``) window
+        keeps that query's SQL exactly ``created_at >= start`` as before.
+        """
+        queryset = queryset.filter(created_at__gte=start)
+        if end is not None:
+            queryset = queryset.filter(created_at__lt=end)
+        return queryset
+
+    legacy_recaps = _windowed(Recap.objects.filter(event__tenant_id=tenant_id))
+    custom_recaps = _windowed(CustomRecap.objects.filter(tenant_id=tenant_id))
+    legacy_samples = _windowed(
+        ProductSamples.objects.filter(recap__event__tenant_id=tenant_id)
     )
-    custom_recaps = CustomRecap.objects.filter(
-        tenant_id=tenant_id, created_at__gte=start
-    )
-    legacy_samples = ProductSamples.objects.filter(
-        recap__event__tenant_id=tenant_id, created_at__gte=start
-    )
-    custom_samples = CustomRecapProductSample.objects.filter(
-        custom_recap__tenant_id=tenant_id, created_at__gte=start
+    custom_samples = _windowed(
+        CustomRecapProductSample.objects.filter(custom_recap__tenant_id=tenant_id)
     )
 
     recap_counts: dict[str, int] = {}
@@ -400,9 +529,9 @@ def tenant_monthly_trend(tenant_id: int) -> list[TenantKpiMonth]:
     # Zero-fill every month in the window, oldest -> newest, so the series
     # is contiguous and bounded regardless of which months had activity.
     months: list[TenantKpiMonth] = []
-    year, month = start.year, start.month
-    for _ in range(MONTHLY_TREND_MONTHS):
-        key = f"{year:04d}-{month:02d}"
+    year_cursor, month = start.year, start.month
+    for _ in range(num_months):
+        key = f"{year_cursor:04d}-{month:02d}"
         months.append(
             TenantKpiMonth(
                 month=key,
@@ -414,7 +543,7 @@ def tenant_monthly_trend(tenant_id: int) -> list[TenantKpiMonth]:
         month += 1
         if month > 12:
             month = 1
-            year += 1
+            year_cursor += 1
     return months
 
 
