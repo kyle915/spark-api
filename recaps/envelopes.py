@@ -1,4 +1,5 @@
 import datetime
+from html import escape
 
 from django.conf import settings
 
@@ -343,6 +344,102 @@ class CampaignReportMailer(Mailer):
                 "state_label": self.event_meta.get("state_label"),
                 "location_label": self.event_meta.get("location_label"),
             },
+            attachments=[
+                {
+                    "filename": self.pdf_filename,
+                    "content": encoded,
+                    "content_type": "application/pdf",
+                }
+            ],
+        )
+
+
+# ─── Scheduled monthly client-report email ──────────────────────
+#
+# Wraps a generated monthly performance-report PDF
+# (recaps/client_report.py build_client_monthly_report_pdf) in a
+# client-facing email. Sent by the `send_scheduled_client_reports`
+# cron once per opted-in tenant per month — NOT a user-triggered
+# mutation. Mirrors CampaignReportMailer above (same base64 +
+# application/pdf attachment shape Resend / the Mailpit fallback
+# expect) but with an inline HTML body (the `html` kwarg bypasses
+# the Django template loader) so this scheduled report needs no new
+# template file.
+
+
+class ClientMonthlyReportMailer(Mailer):
+    """Email a tenant's monthly performance-report PDF to its client contacts."""
+
+    def __init__(
+        self,
+        *,
+        recipients: _Iterable[str],
+        tenant_name: str,
+        period_label: str,
+        pdf_bytes: bytes,
+        pdf_filename: str,
+        reply_to_email: str | None = None,
+    ) -> None:
+        # De-dup recipients case-insensitively + strip whitespace (the cron
+        # already resolves these from Tenant.scheduled_report_recipients(),
+        # but de-duping here is cheap typo-protection — same posture as
+        # CampaignReportMailer).
+        seen: set[str] = set()
+        clean: list[str] = []
+        for r in recipients:
+            norm = (r or "").strip()
+            if not norm:
+                continue
+            key = norm.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            clean.append(norm)
+        self.recipients = clean
+        self.tenant_name = (tenant_name or "").strip() or "Your brand"
+        self.period_label = (period_label or "").strip() or "Monthly"
+        self.pdf_bytes = pdf_bytes
+        self.pdf_filename = pdf_filename
+        # Replies route to the events inbox so a client can respond to the
+        # report directly — same default the recap-approval email uses.
+        self.reply_to_email = (
+            (reply_to_email or "").strip() or "events@igniteproductions.co"
+        )
+
+    def _subject_line(self) -> str:
+        return f"{self.tenant_name} — {self.period_label} performance report"
+
+    def _html_body(self) -> str:
+        # Short, plain body built inline (escaped) — the numbers live in the
+        # attached PDF, so the email itself is just a friendly cover note.
+        tenant = escape(self.tenant_name)
+        period = escape(self.period_label)
+        return (
+            '<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;'
+            'color:#111;line-height:1.5">'
+            f"<p>Hi there,</p>"
+            f"<p>Attached is the {period} performance report for "
+            f"<strong>{tenant}</strong> — a summary of the month's reach, "
+            f"sampling, sales, and highlights from the field.</p>"
+            "<p>If you have any questions, just reply to this email.</p>"
+            '<p style="color:#666">— The Ignite team</p>'
+            "</div>"
+        )
+
+    def envelope(self) -> Envelope:
+        # Resend accepts base64-encoded content directly; content_type kept
+        # explicit for the Mailpit EmailMultiAlternatives fallback path.
+        encoded = _base64.b64encode(self.pdf_bytes).decode("ascii")
+        return Envelope(
+            subject=self._subject_line(),
+            from_email=getattr(
+                settings,
+                "DEFAULT_FROM_EMAIL",
+                "Spark by Ignite <no-reply@igniteproductions.co>",
+            ),
+            to_emails=self.recipients,
+            headers={"Reply-To": self.reply_to_email},
+            html=self._html_body(),
             attachments=[
                 {
                     "filename": self.pdf_filename,

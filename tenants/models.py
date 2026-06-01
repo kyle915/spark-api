@@ -1,3 +1,5 @@
+import re
+
 from uuid6 import uuid7
 from asgiref.sync import sync_to_async
 
@@ -17,6 +19,30 @@ from utils.utils import default_tenant_theme
 # crons) so a dead client stops appearing in the UI and stops getting email.
 # Reversible: rename the tenant back to un-archive it.
 ARCHIVED_NAME_PREFIX = "[ARCHIVED]"
+
+
+def parse_recipient_emails(raw: str | None) -> list[str]:
+    """Parse a free-text recipient field into a deduped list of emails.
+
+    Splits ``raw`` on commas / newlines / semicolons (the format
+    ``Tenant.recap_recipient_emails`` documents), keeps only tokens that look
+    like an email (contain ``@`` and ``.`` — the SAME loose check
+    ``recaps.mutations._notify_recap_approved_to_rmm_or_clients`` uses), and
+    de-dupes case-insensitively while preserving first-seen order. Returns
+    ``[]`` for empty/None input. Shared so the scheduled-report cron and the
+    recap-approval path agree on what a "recipient list" means.
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    for token in re.split(r"[,\n;]+", raw or ""):
+        candidate = token.strip()
+        if "@" in candidate and "." in candidate:
+            key = candidate.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(candidate)
+    return out
 
 
 class Tenant(Asyncable, models.Model):
@@ -55,6 +81,16 @@ class Tenant(Asyncable, models.Model):
         default="",
         help_text="Extra email addresses (comma/newline/semicolon-separated) that receive recap-approval emails for this brand, in addition to the RMM, client-role users, and requestor.",
     )
+    # Opt-in switch for the scheduled monthly client performance report
+    # (the `send_scheduled_client_reports` cron). SAFE DEFAULT: OFF — a
+    # tenant is NEVER emailed a scheduled report until Ignite explicitly
+    # flips this on, so deploying the feature mails nobody. The report's
+    # recipients reuse `recap_recipient_emails` (the same client contacts
+    # the recap-approval emails go to); see `scheduled_report_recipients()`.
+    scheduled_report_enabled = models.BooleanField(
+        default=False,
+        help_text="When ON, this brand receives an automated monthly performance-report PDF by email (sent to recap_recipient_emails). OFF by default — opt-in only.",
+    )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
@@ -89,6 +125,19 @@ class Tenant(Asyncable, models.Model):
     def is_archived(self) -> bool:
         """True when this tenant was archived by the "[ARCHIVED]" rename."""
         return (self.name or "").upper().startswith(ARCHIVED_NAME_PREFIX)
+
+    def scheduled_report_recipients(self) -> list[str]:
+        """The client email addresses the scheduled monthly report goes to.
+
+        REUSES ``recap_recipient_emails`` (the same client contacts the
+        recap-approval emails reach) rather than introducing a second list to
+        keep in sync — parsed/deduped via :func:`parse_recipient_emails`.
+        Returns ``[]`` when no recipients are configured; the cron uses an
+        empty result to SKIP a tenant (no recipients → nothing sent), which —
+        combined with ``scheduled_report_enabled`` defaulting to ``False`` —
+        is what makes the feature mail nobody until it is explicitly set up.
+        """
+        return parse_recipient_emails(self.recap_recipient_emails)
 
 
 class TenantTheme(models.Model):
