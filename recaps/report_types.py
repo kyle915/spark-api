@@ -20,6 +20,8 @@ because the aggregation is synchronous Django ORM.
 
 from __future__ import annotations
 
+from datetime import datetime
+
 import strawberry
 from asgiref.sync import sync_to_async
 from django.db import transaction
@@ -28,6 +30,7 @@ from django.utils import timezone
 from recaps import report_service
 from recaps.report_tokens import make_report_token
 from recaps.tenant_insights import build_insight_buckets
+from recaps.tenant_sentiment import get_or_refresh_tenant_sentiment
 from recaps.tenant_overview import (
     build_tenant_overview,
     tenant_event_recap_counts,
@@ -699,6 +702,124 @@ def _build_tenant_insights_type(
     )
 
 
+@strawberry.type
+class SentimentTheme:
+    """One recurring theme in a tenant's consumer feedback.
+
+    ``label`` is a short human-readable theme (e.g. ``"Loved the flavor"``);
+    ``tone`` is one of ``"positive"`` / ``"neutral"`` / ``"negative"`` so the
+    frontend can colour it.
+    """
+
+    label: str
+    tone: str
+
+
+@strawberry.type
+class SentimentQuote:
+    """One representative consumer quote, selected VERBATIM from real feedback.
+
+    ``text`` is the quote word-for-word as a consumer gave it (the backend
+    drops any quote that isn't present in the gathered feedback, so this is
+    never fabricated); ``tone`` is one of ``"positive"`` / ``"neutral"`` /
+    ``"negative"``.
+    """
+
+    text: str
+    tone: str
+
+
+@strawberry.type
+class TenantSentiment:
+    """"What people are saying" — AI-summarized consumer sentiment for a client.
+
+    A compact read on how CONSUMERS reacted across a tenant's activations,
+    distilled by OpenAI from the free-text feedback on the tenant's recaps and
+    cached daily (see :func:`recaps.tenant_sentiment.build_tenant_sentiment`).
+    The resolver returns ``null`` (not this type) when there isn't enough
+    feedback to summarize or the service is unconfigured/failed, so a populated
+    ``TenantSentiment`` always reflects real data.
+
+    * ``overallSentiment`` — ``"positive"`` / ``"mixed"`` / ``"negative"``.
+    * ``positivePct`` — estimated share of positive feedback (0-100).
+    * ``summary`` — a 1-2 sentence plain-language summary.
+    * ``themes`` — up to five recurring themes (label + tone).
+    * ``quotes`` — up to three verbatim consumer quotes (text + tone).
+    * ``sampleSize`` — how many feedback snippets the summary was built from.
+    * ``generatedAt`` — when the cached snapshot was generated (null if absent).
+    """
+
+    overall_sentiment: str
+    positive_pct: int
+    summary: str
+    themes: list[SentimentTheme]
+    quotes: list[SentimentQuote]
+    sample_size: int
+    generated_at: datetime | None
+
+
+def _build_tenant_sentiment_type(
+    payload: dict, sample_size: int, generated_at
+) -> TenantSentiment | None:
+    """Map a cleaned sentiment payload + metadata onto the Strawberry type.
+
+    Defensive even though :func:`recaps.tenant_sentiment.build_tenant_sentiment`
+    already cleans the payload: a non-dict payload or one missing a string
+    ``summary`` yields ``None`` (so the query resolves to null rather than a
+    half-built object). ``themes`` / ``quotes`` are filtered to well-formed
+    entries and each tone falls back to ``"neutral"``; ``overallSentiment``
+    falls back to ``"mixed"`` and ``positivePct`` is clamped 0-100.
+    """
+    if not isinstance(payload, dict):
+        return None
+    summary = payload.get("summary")
+    if not isinstance(summary, str) or not summary.strip():
+        return None
+
+    overall = payload.get("overall_sentiment")
+    if not isinstance(overall, str) or overall not in ("positive", "mixed", "negative"):
+        overall = "mixed"
+
+    try:
+        pct = int(payload.get("positive_pct"))
+    except (TypeError, ValueError):
+        pct = 0
+    pct = max(0, min(100, pct))
+
+    def _tone(value) -> str:
+        if isinstance(value, str) and value in ("positive", "neutral", "negative"):
+            return value
+        return "neutral"
+
+    themes: list[SentimentTheme] = []
+    for item in payload.get("themes") or []:
+        if not isinstance(item, dict):
+            continue
+        label = item.get("label")
+        if not isinstance(label, str) or not label.strip():
+            continue
+        themes.append(SentimentTheme(label=label.strip(), tone=_tone(item.get("tone"))))
+
+    quotes: list[SentimentQuote] = []
+    for item in payload.get("quotes") or []:
+        if not isinstance(item, dict):
+            continue
+        text = item.get("text")
+        if not isinstance(text, str) or not text.strip():
+            continue
+        quotes.append(SentimentQuote(text=text.strip(), tone=_tone(item.get("tone"))))
+
+    return TenantSentiment(
+        overall_sentiment=overall,
+        positive_pct=pct,
+        summary=summary.strip(),
+        themes=themes,
+        quotes=quotes,
+        sample_size=int(sample_size or 0),
+        generated_at=generated_at if isinstance(generated_at, datetime) else None,
+    )
+
+
 def _compose_ai_summary_prompt(data: report_service.CampaignReportData) -> str:
     """Render a compact, plain-text view of the report for the LLM.
 
@@ -1337,6 +1458,81 @@ class CampaignReportQueries:
             return _empty_tenant_insights()
 
         return _build_tenant_insights_type(items, generated_at)
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def tenant_sentiment(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID,
+        year: int | None = None,
+    ) -> TenantSentiment | None:
+        """"What people are saying" — AI-summarized consumer sentiment.
+
+        Returns a compact read on how CONSUMERS reacted across the tenant's
+        activations (overall sentiment, positive %, a one-line summary,
+        recurring themes, and a few verbatim quotes), distilled by OpenAI from
+        the free-text feedback on the tenant's recaps. Because the read costs an
+        AI call it is served from a daily-refreshed cache (see
+        :func:`recaps.tenant_sentiment.get_or_refresh_tenant_sentiment`): a
+        fresh snapshot is served as-is, otherwise it is regenerated + persisted,
+        otherwise the last good snapshot is used.
+
+        The optional ``year`` scopes the summarized feedback to one calendar
+        year, identical to :meth:`tenant_kpis`:
+
+        * **Omitted / null** — ALL-TIME across the tenant's whole history.
+        * **A year ``Y``** — only feedback whose ``created_at`` falls in
+          calendar year ``Y``.
+
+        Tenant scoping is identical to :meth:`tenant_kpis`
+        (:meth:`_CampaignReportService.resolve_target_tenant_id`):
+        client-role users may ONLY read their own tenant — the ``tenant_id``
+        argument is overridden to their own; admins (spark-admin / staff /
+        superuser / ``@igniteproductions.co``) may target any tenant.
+
+        Returns ``null`` (not an error) when the tenant is missing/out-of-scope,
+        when there is too little feedback to summarize, when the AI service is
+        unconfigured/failed, or on any other error — so the frontend can simply
+        hide the card. Never raises.
+        """
+        service = _CampaignReportService()
+        target_tenant_id = await service.resolve_target_tenant_id(info, tenant_id)
+        if target_tenant_id is None:
+            return None
+
+        def _build():
+            # Guard the tenant's existence so an admin passing an unknown id
+            # degrades to null rather than summarizing over no tenant.
+            from tenants.models import Tenant, TenantSentimentSnapshot
+
+            if not Tenant.objects.filter(id=target_tenant_id).exists():
+                return None
+
+            # Ensure a fresh (or last-good) snapshot exists, then read the
+            # persisted row so we carry the authoritative sample_size. The
+            # front door never raises and amortises the AI call across the day.
+            payload, _generated_at = get_or_refresh_tenant_sentiment(
+                target_tenant_id, year=year
+            )
+            if payload is None:
+                return None
+            snapshot = (
+                TenantSentimentSnapshot.objects.filter(
+                    tenant_id=target_tenant_id, year=year
+                )
+                .order_by("-generated_at")
+                .first()
+            )
+            if snapshot is None:
+                return None
+            return _build_tenant_sentiment_type(
+                snapshot.payload, snapshot.sample_size, snapshot.generated_at
+            )
+
+        try:
+            return await sync_to_async(_build, thread_sensitive=True)()
+        except Exception:
+            return None
 
 
 # Maps each ``setTenantGoals`` mutation argument to its ``TenantGoal``
