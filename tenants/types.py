@@ -20,6 +20,10 @@ class TenantType(Node):
     slug: strawberry.auto
     request_url_name: strawberry.auto
     linked_sheet_url: strawberry.auto
+    # Read side of the scheduled monthly-report opt-in (toggled via
+    # setScheduledReportEnabled). Lets the admin UI show the current
+    # ON/OFF state. Default False (opt-in only).
+    scheduled_report_enabled: strawberry.auto
 
     @strawberry.field
     def recap_recipient_emails(self) -> str:
