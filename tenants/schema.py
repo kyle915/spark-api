@@ -34,6 +34,7 @@ from .mutations import (
     AmbassadorUserMutations,
 )
 from .calendar import GoogleCalendarMutations, GoogleCalendarQueries
+from .preferences import MyPreferencesQueries, MyPreferencesMutations
 from .dashboard.schema import DashboardQueries
 from utils.graphql.relay import (
     CountableConnection,
@@ -512,7 +513,7 @@ class MutationAmbassadors(
 # Clients Schemas
 # @strawberry.django.type(model=get_user_model())
 @strawberry_django.type(User)
-class QueryClients(GoogleCalendarQueries, TenantThemingQuery):
+class QueryClients(GoogleCalendarQueries, TenantThemingQuery, MyPreferencesQueries):
     @strawberry.field
     def healthcheck(self) -> str:
         return "ok"
@@ -762,6 +763,9 @@ class MutationClients(
     # GraphQL endpoint) needs to call setLinkedSheet. Same mixin is on
     # SparkTenantMutations for the spark schema, so both surfaces work.
     LinkedSheetMutations,
+    # Per-user Settings prefs (setMyPreferences). The web Settings page
+    # talks to the clients GraphQL endpoint, so the upsert lives here.
+    MyPreferencesMutations,
 ):
     verify_token = mutations.VerifyToken.field
     token_auth = mutations.ObtainJSONWebToken.field
