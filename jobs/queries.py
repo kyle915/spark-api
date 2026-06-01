@@ -5,10 +5,14 @@ from django.db.models import Prefetch
 from asgiref.sync import sync_to_async
 
 from utils.graphql.inputs import BaseTenantInput, SparkGraphQLInput
-from utils.graphql.permissions import StrictIsAuthenticated
+from utils.graphql.permissions import (
+    StrictIsAuthenticated,
+    _is_admin_access,
+    resolve_request_user_access,
+)
 from utils.graphql.relay import CountableConnection
 from utils.graphql.queries import BaseQueriesService
-from utils.graphql.mixins import resolve_id_to_int
+from utils.graphql.mixins import resolve_id_to_int, SparkGraphQLMixin
 from jobs import models
 from django.db.models import QuerySet
 from django.db.models import Model
@@ -1663,6 +1667,51 @@ class JobRequirementAnswerQueries:
 # Job lifecycle queries — applications + favorites
 # -------------------------------------------------------------------
 
+
+class _FavoriteAmbassadorScope(SparkGraphQLMixin):
+    """Tenant-scoping shell for the Favorites query + mutations.
+
+    Same posture as ``recaps/report_types.py`` ``_CampaignReportService``
+    and ``tenants/forms.py`` ``_FormScope``: clients are pinned to their
+    OWN tenant (any ``tenant_id`` argument is ignored so they can never
+    read or mutate another brand's roster), while admins (spark-admin /
+    staff / superuser / ``@igniteproductions.co``) may target ANY tenant
+    via ``tenant_id``. Lives off the resolvers so the query and both
+    mutations resolve the concrete tenant the same way without
+    duplicating the role logic.
+    """
+
+    async def resolve_target_tenant_id(
+        self, info: strawberry.Info, requested_tenant_id
+    ) -> int | None:
+        """The CONCRETE tenant id the caller may operate on, or None.
+
+        * **client** — always their own bound tenant; ``requested_tenant_id``
+          is ignored so a client can never reach another brand's favorites.
+        * **admin** — the requested tenant id (global id or int), or None
+          when none/garbage was passed (callers turn that into a safe
+          ``[]`` / ``success=False`` rather than raising).
+        """
+        user = await self.get_user(info)
+        role_slug, is_staff, is_super, email = await resolve_request_user_access(
+            user
+        )
+
+        if not _is_admin_access(role_slug, is_staff, is_super, email):
+            tenant = await self.get_user_tenant(info)
+            return tenant.id
+
+        if requested_tenant_id is None:
+            return None
+        raw = str(requested_tenant_id).strip()
+        if not raw:
+            return None
+        try:
+            return resolve_id_to_int(raw)
+        except Exception:
+            return None
+
+
 @strawberry.type
 class FavoriteAmbassadorQueries:
     """Per-tenant favorite-BA roster. Drives the Favorites tab."""
@@ -1673,22 +1722,23 @@ class FavoriteAmbassadorQueries:
         info: strawberry.Info,
         tenant_id: strawberry.ID | None = None,
     ) -> list[types.TenantFavoriteAmbassador]:
-        """Return every favorited BA for the caller's tenant. Admins
-        can override with an explicit tenant_id."""
+        """Return every favorited BA for the caller's tenant.
+
+        Tenant-scoped: clients see only their OWN tenant's roster (the
+        ``tenantId`` argument is overridden to their tenant); admins see
+        the requested tenant's roster. Never raises past the auth gate —
+        returns ``[]`` for an out-of-scope/garbage request or on error.
+        """
+        try:
+            resolved = await _FavoriteAmbassadorScope().resolve_target_tenant_id(
+                info, tenant_id
+            )
+        except Exception:
+            return []
+        if not resolved:
+            return []
+
         def _list():
-            from utils.graphql.mixins import resolve_id_to_int
-            actor = getattr(info.context.request, "user", None)
-            resolved = None
-            if tenant_id:
-                try:
-                    resolved = resolve_id_to_int(tenant_id)
-                except Exception:
-                    resolved = None
-            if not resolved and actor:
-                t = actor.get_tenant() if hasattr(actor, "get_tenant") else None
-                resolved = t.id if t else None
-            if not resolved:
-                return []
             qs = (
                 models.TenantFavoriteAmbassador.objects
                 .select_related("ambassador__user")
