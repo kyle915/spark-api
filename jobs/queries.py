@@ -1890,21 +1890,25 @@ class BriefingTemplateQueries:
         include_archived: bool = False,
     ) -> list[types.BriefingTemplate]:
         """Return templates available to the caller's tenant. Admins
-        can pass an explicit tenant_id to look up another's templates."""
+        can pass an explicit tenant_id to look up another's templates.
+
+        Tenant-scoped: clients see only their OWN tenant's templates (any
+        supplied ``tenantId`` is overridden to their tenant); admins see the
+        requested tenant's. Never raises past the auth gate — returns ``[]``
+        for an out-of-scope/garbage request or on error.
+        """
+        from jobs.job_scope import JobScope
+
+        try:
+            resolved = await JobScope().resolve_target_tenant_id(info, tenant_id)
+        except Exception:
+            return []
+        # Clients always resolve to their own tenant; an admin with no usable
+        # tenant in scope sees nothing rather than every tenant's templates.
+        if not resolved:
+            return []
+
         def _list():
-            from utils.graphql.mixins import resolve_id_to_int
-            actor = getattr(info.context.request, "user", None)
-            resolved = None
-            if tenant_id:
-                try:
-                    resolved = resolve_id_to_int(tenant_id)
-                except Exception:
-                    resolved = None
-            if not resolved and actor:
-                t = actor.get_tenant() if hasattr(actor, "get_tenant") else None
-                resolved = t.id if t else None
-            if not resolved:
-                return []
             qs = models.BriefingTemplate.objects.filter(tenant_id=resolved)
             if not include_archived:
                 qs = qs.filter(is_archived=False)
@@ -1966,6 +1970,20 @@ class JobBriefingQueries:
         info: strawberry.Info,
         job_id: strawberry.ID,
     ) -> types.JobBriefingPayload | None:
+        """Fetch the briefing attached to a specific job by job id.
+
+        Tenant-scoped: returns ``null`` when the job doesn't exist or its
+        tenant is outside the caller's scope (a client can't read another
+        brand's briefing by holding/guessing its job id). Admins -> any
+        tenant. Never raises.
+        """
+        from jobs.job_scope import JobScope
+
+        try:
+            allowed = await JobScope().accessible_tenant_ids(info)
+        except Exception:
+            return None
+
         def _get():
             from utils.graphql.mixins import resolve_id_to_int
             try:
@@ -1980,6 +1998,8 @@ class JobBriefingQueries:
                     .get(id=job_pk)
                 )
             except models.Job.DoesNotExist:
+                return None
+            if allowed is not None and job.tenant_id not in allowed:
                 return None
             return types.JobBriefingPayload(
                 title=job.briefing_title or "",

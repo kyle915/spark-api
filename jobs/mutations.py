@@ -1718,6 +1718,7 @@ from ambassadors.models import Ambassador as _Ambassador  # noqa: E402
 from utils.graphql.mixins import resolve_id_to_int as _resolve_id  # noqa: E402
 from utils.graphql.permissions import StrictIsAuthenticated as _StrictIsAuth  # noqa: E402
 from jobs.queries import _FavoriteAmbassadorScope  # noqa: E402
+from jobs.job_scope import JobScope  # noqa: E402
 
 
 def _build_lifecycle_response(success, message, *, job=None, input_obj=None):
@@ -1751,10 +1752,20 @@ class JobLifecycleMutations:
         except (TypeError, ValueError, GraphQLError):
             return _build_lifecycle_response(False, "Invalid job id.", input_obj=input)
 
+        # Tenant gate: a client may only post their OWN tenant's jobs; a job
+        # in another tenant is surfaced as "not found" (no cross-tenant
+        # existence leak / write). Admins may post any tenant's job.
+        try:
+            allowed = await JobScope().accessible_tenant_ids(info)
+        except Exception:  # noqa: BLE001
+            return _build_lifecycle_response(False, "Job not found.", input_obj=input)
+
         def _post():
             try:
                 job = models.Job.objects.get(pk=job_pk)
             except models.Job.DoesNotExist:
+                return None, "Job not found."
+            if allowed is not None and job.tenant_id not in allowed:
                 return None, "Job not found."
             if job.lifecycle_status != models.Job.STATUS_PENDING:
                 return None, (
@@ -1807,11 +1818,25 @@ class JobLifecycleMutations:
 
         actor = info.context.request.user
 
+        # Tenant gate: a client may only post their OWN tenant's events to the
+        # board; an event in another tenant is surfaced as "not found" (no
+        # cross-tenant existence leak / write). Admins may post any tenant's.
+        try:
+            allowed = await JobScope().accessible_tenant_ids(info)
+        except Exception:  # noqa: BLE001
+            return _build_lifecycle_response(
+                False, "Event not found.", input_obj=input
+            )
+
         def _post_event():
             from events.models import Event as _Event
-            # Mirror the signal's imports exactly.
-            from jobs.models import Job, STATUS_PENDING, JobTitle, Rate
+            # Mirror the signal's imports exactly. STATUS_PENDING is a Job
+            # class attribute (not a module-level name), so alias it here —
+            # importing it from jobs.models raised ImportError and broke this
+            # whole resolver for every caller before the tenant gate even ran.
+            from jobs.models import Job, JobTitle, Rate
             from jobs.models import RateType
+            STATUS_PENDING = Job.STATUS_PENDING
 
             try:
                 event = _Event.objects.select_related("tenant").get(pk=event_pk)
@@ -1819,6 +1844,8 @@ class JobLifecycleMutations:
                 return None, "Event not found."
 
             tenant_id = event.tenant_id
+            if allowed is not None and tenant_id not in allowed:
+                return None, "Event not found."
             actor_id = actor.id if getattr(actor, "id", None) else None
 
             job = Job.objects.filter(event_id=event.id).first()
@@ -1925,10 +1952,19 @@ class JobLifecycleMutations:
         except (TypeError, ValueError, GraphQLError):
             return _build_lifecycle_response(False, "Invalid job id.", input_obj=input)
 
+        # Tenant gate: a client may only open their OWN tenant's jobs; a job
+        # in another tenant is surfaced as "not found". Admins -> any tenant.
+        try:
+            allowed = await JobScope().accessible_tenant_ids(info)
+        except Exception:  # noqa: BLE001
+            return _build_lifecycle_response(False, "Job not found.", input_obj=input)
+
         def _open():
             try:
                 job = models.Job.objects.get(pk=job_pk)
             except models.Job.DoesNotExist:
+                return None, "Job not found."
+            if allowed is not None and job.tenant_id not in allowed:
                 return None, "Job not found."
             if job.lifecycle_status != models.Job.STATUS_POSTED:
                 return None, "Job must be posted before opening to all."
@@ -1955,11 +1991,24 @@ class JobLifecycleMutations:
 
         actor = info.context.request.user
 
+        # Tenant gate (the serious one): a client may only staff their OWN
+        # tenant's gigs. A job in another tenant is surfaced as "not found"
+        # so a client can never assign a BA to another brand's job. Admins
+        # may assign on any tenant's job.
+        try:
+            allowed = await JobScope().accessible_tenant_ids(info)
+        except Exception:  # noqa: BLE001
+            return _build_lifecycle_response(
+                False, "Job or ambassador not found.", input_obj=input
+            )
+
         def _assign():
             try:
                 job = models.Job.objects.get(pk=job_pk)
                 amb = _Ambassador.objects.get(pk=ba_pk)
             except (models.Job.DoesNotExist, _Ambassador.DoesNotExist):
+                return None, "Job or ambassador not found.", []
+            if allowed is not None and job.tenant_id not in allowed:
                 return None, "Job or ambassador not found.", []
             if job.lifecycle_status not in (
                 models.Job.STATUS_PENDING, models.Job.STATUS_POSTED
@@ -2375,9 +2424,20 @@ class BriefingTemplateMutations:
     async def create_briefing_template(
         self, info, input: inputs.CreateBriefingTemplateInput,
     ) -> types.BriefingTemplateResponse:
+        # Tenant-scoped: a client always creates under their OWN tenant (any
+        # supplied tenantId is ignored); an admin may target the requested
+        # tenant. A client with no tenant, or an admin who passed no usable
+        # tenant id, gets a safe success=False rather than a cross-tenant write.
+        try:
+            scoped_tenant_id = await JobScope().resolve_target_tenant_id(
+                info, input.tenant_id
+            )
+        except Exception:  # noqa: BLE001
+            scoped_tenant_id = None
+
         def _create():
             actor = info.context.request.user
-            tenant_id = _resolve_actor_tenant_id(info, input.tenant_id)
+            tenant_id = scoped_tenant_id
             if not tenant_id:
                 return None, "No tenant in scope."
             tpl = models.BriefingTemplate.objects.create(
@@ -2410,6 +2470,14 @@ class BriefingTemplateMutations:
     async def update_briefing_template(
         self, info, input: inputs.UpdateBriefingTemplateInput,
     ) -> types.BriefingTemplateResponse:
+        # Tenant gate: a client may only edit their OWN tenant's templates; a
+        # template in another tenant is surfaced as "not found" (no
+        # cross-tenant existence leak / edit). Admins -> any tenant.
+        try:
+            allowed = await JobScope().accessible_tenant_ids(info)
+        except Exception:  # noqa: BLE001
+            allowed = set()
+
         def _update():
             try:
                 tpl_pk = _resolve_id(input.template_id)
@@ -2418,6 +2486,8 @@ class BriefingTemplateMutations:
             try:
                 tpl = models.BriefingTemplate.objects.get(id=tpl_pk)
             except models.BriefingTemplate.DoesNotExist:
+                return None, "Template not found."
+            if allowed is not None and tpl.tenant_id not in allowed:
                 return None, "Template not found."
             actor = info.context.request.user
             if input.name is not None:
@@ -2453,6 +2523,14 @@ class BriefingTemplateMutations:
     async def archive_briefing_template(
         self, info, input: inputs.ArchiveBriefingTemplateInput,
     ) -> types.BriefingTemplateResponse:
+        # Tenant gate: a client may only archive their OWN tenant's templates;
+        # a template in another tenant is surfaced as "not found". Admins ->
+        # any tenant.
+        try:
+            allowed = await JobScope().accessible_tenant_ids(info)
+        except Exception:  # noqa: BLE001
+            allowed = set()
+
         def _archive():
             try:
                 tpl_pk = _resolve_id(input.template_id)
@@ -2461,6 +2539,8 @@ class BriefingTemplateMutations:
             try:
                 tpl = models.BriefingTemplate.objects.get(id=tpl_pk)
             except models.BriefingTemplate.DoesNotExist:
+                return None, "Template not found."
+            if allowed is not None and tpl.tenant_id not in allowed:
                 return None, "Template not found."
             tpl.is_archived = True
             tpl.save(update_fields=["is_archived", "updated_at"])
@@ -2483,6 +2563,14 @@ class JobBriefingMutations:
     async def set_job_briefing(
         self, info, input: inputs.SetJobBriefingInput,
     ) -> types.JobBriefingResponse:
+        # Tenant gate: a client may only brief their OWN tenant's jobs; a job
+        # in another tenant is surfaced as "not found" (no cross-tenant
+        # existence leak / write). Admins -> any tenant.
+        try:
+            allowed = await JobScope().accessible_tenant_ids(info)
+        except Exception:  # noqa: BLE001
+            allowed = set()
+
         def _set():
             try:
                 job_pk = _resolve_id(input.job_id)
@@ -2491,6 +2579,8 @@ class JobBriefingMutations:
             try:
                 job = models.Job.objects.get(id=job_pk)
             except models.Job.DoesNotExist:
+                return None, "Job not found."
+            if allowed is not None and job.tenant_id not in allowed:
                 return None, "Job not found."
             if input.title is not None:
                 job.briefing_title = input.title.strip()
@@ -2522,6 +2612,15 @@ class JobBriefingMutations:
     async def apply_briefing_template(
         self, info, input: inputs.ApplyBriefingTemplateInput,
     ) -> types.JobBriefingResponse:
+        # Tenant gate: a client may only apply their OWN tenant's template to
+        # their OWN tenant's job. Either resource living in another tenant is
+        # surfaced as "not found" so a client can neither read another brand's
+        # template body nor write it onto a foreign job. Admins -> any tenant.
+        try:
+            allowed = await JobScope().accessible_tenant_ids(info)
+        except Exception:  # noqa: BLE001
+            allowed = set()
+
         def _apply():
             try:
                 job_pk = _resolve_id(input.job_id)
@@ -2532,6 +2631,10 @@ class JobBriefingMutations:
                 job = models.Job.objects.get(id=job_pk)
                 tpl = models.BriefingTemplate.objects.get(id=tpl_pk)
             except (models.Job.DoesNotExist, models.BriefingTemplate.DoesNotExist):
+                return None, "Job or template not found."
+            if allowed is not None and (
+                job.tenant_id not in allowed or tpl.tenant_id not in allowed
+            ):
                 return None, "Job or template not found."
             job.briefing_title = tpl.title
             job.briefing_body = tpl.body

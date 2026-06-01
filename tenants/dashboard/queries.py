@@ -182,17 +182,34 @@ class DashboardQueries:
         self,
         info: strawberry.Info,
     ) -> types.EventDashboardFilterOptions:
-        """Get available filter options for Event Dashboard."""
+        """Get available filter options for Event Dashboard.
+
+        Tenant-scoped: an admin sees global filter options across all tenants;
+        a client/non-admin sees only options drawn from their own tenant(s)'
+        events so a client can't enumerate another brand's distributors/RMMs.
+        """
+        from .dashboard_scope import DashboardScope
+
         service = DashboardQueriesService()
+        scope = DashboardScope()
+        try:
+            allowed_tenant_ids = await scope.accessible_tenant_ids(info)
+        except Exception:  # noqa: BLE001
+            allowed_tenant_ids = set()
 
         async def _execute_query():
             from recaps import models as recap_models
             from tenants import models as tenant_models
 
-            # Get events that have recaps (all tenants - admin dashboard)
+            # Get events that have recaps. Admins -> all tenants; a non-admin
+            # is constrained to their own tenant(s).
             events_with_recaps = event_models.Event.objects.filter(
                 recaps__isnull=False
             ).distinct()
+            if allowed_tenant_ids is not None:
+                events_with_recaps = events_with_recaps.filter(
+                    tenant_id__in=allowed_tenant_ids
+                )
 
             # Get unique distributors from events with recaps
             distributors_data = await sync_to_async(list)(
@@ -271,12 +288,15 @@ class DashboardQueries:
                 tenants=tenants
             )
 
-        # Use a generic cache key since this is not tenant-specific
-        cache_key = service._generate_cache_key(
+        # Cache key folds in the caller's effective tenant scope so a client's
+        # own-tenant options are never served from the admin/global slot.
+        scope_token = await scope.cache_scope_token(info)
+        base_key = service._generate_cache_key(
             'event_dashboard_filter_options',
             0,  # Use 0 as tenant_id for admin/global queries
-            None
+            None,
         )
+        cache_key = f"{base_key}:{scope_token}"
         ttl = service._get_cache_ttl('event_dashboard_filter_options')
 
         # Try to get from cache
@@ -299,15 +319,34 @@ class DashboardQueries:
         info: strawberry.Info,
         filters: inputs.EventDashboardFiltersInput | None = None,
     ) -> types.EventDashboard:
-        """Get Event Dashboard data with metrics, trends, insights, and recent events."""
+        """Get Event Dashboard data with metrics, trends, insights, and recent events.
+
+        Tenant-scoped: an admin sees the global cross-tenant dashboard (and
+        may narrow with an optional ``tenantId`` filter); a client/non-admin
+        is constrained to the tenant(s) they belong to so they can't read
+        another brand's aggregate metrics. The effective scope is folded into
+        the cache key so scopes never share a cached result.
+        """
+        from .dashboard_scope import DashboardScope
+
         service = DashboardQueriesService()
+        scope = DashboardScope()
+        try:
+            allowed_tenant_ids = await scope.accessible_tenant_ids(info)
+        except Exception:  # noqa: BLE001
+            allowed_tenant_ids = set()
 
         async def _execute_query():
             from recaps import models as recap_models
 
-            # Build base queryset (all tenants - admin dashboard)
-            # Only filter by tenant if explicitly provided in filters
+            # Build base queryset. Admins see all tenants (the global admin
+            # dashboard); a non-admin is constrained to their own tenant(s).
             base_queryset = event_models.Event.objects.all()
+            if allowed_tenant_ids is not None:
+                base_queryset = base_queryset.filter(
+                    tenant_id__in=allowed_tenant_ids
+                )
+            # Only further-filter by tenant if explicitly provided in filters
             base_queryset = service._apply_event_dashboard_filters(
                 base_queryset, filters
             )
@@ -731,7 +770,14 @@ class DashboardQueries:
         filter_hash = hashlib.md5(filter_str.encode()).hexdigest()
         version = service._get_cache_version(
             'event_dashboard', tenant_id_for_cache)
-        cache_key = f"dashboard:event_dashboard:{tenant_id_for_cache}:v{version}:{filter_hash}"
+        # Fold the caller's effective tenant scope into the key so a
+        # client's own-tenant aggregate is never served from (or written to)
+        # the admin/global slot.
+        scope_token = await scope.cache_scope_token(info)
+        cache_key = (
+            f"dashboard:event_dashboard:{tenant_id_for_cache}:"
+            f"{scope_token}:v{version}:{filter_hash}"
+        )
         ttl = service._get_cache_ttl('event_dashboard')
 
         # Try to get from cache
@@ -753,15 +799,30 @@ class DashboardQueries:
         self,
         info: strawberry.Info,
     ) -> types.RecapDashboardFilterOptions:
-        """Get available filter options for Recap Dashboard."""
+        """Get available filter options for Recap Dashboard.
+
+        Tenant-scoped: an admin sees global filter options across all tenants;
+        a client/non-admin sees only options drawn from their own tenant(s)'
+        recaps so a client can't enumerate another brand's distributors/RMMs.
+        """
+        from .dashboard_scope import DashboardScope
+
         service = DashboardQueriesService()
+        scope = DashboardScope()
+        try:
+            allowed_tenant_ids = await scope.accessible_tenant_ids(info)
+        except Exception:  # noqa: BLE001
+            allowed_tenant_ids = set()
 
         async def _execute_query():
             from recaps import models as recap_models
             from tenants import models as tenant_models
 
-            # Get all recaps (all tenants - admin dashboard)
+            # Get recaps. Admins -> all tenants; a non-admin is constrained to
+            # their own tenant(s).
             recaps = recap_models.Recap.objects.all()
+            if allowed_tenant_ids is not None:
+                recaps = recaps.filter(event__tenant_id__in=allowed_tenant_ids)
 
             # Get unique distributors from recaps
             distributors_data = await sync_to_async(list)(
@@ -840,12 +901,15 @@ class DashboardQueries:
                 tenants=tenants
             )
 
-        # Use a generic cache key since this is not tenant-specific
-        cache_key = service._generate_cache_key(
+        # Cache key folds in the caller's effective tenant scope so a client's
+        # own-tenant options are never served from the admin/global slot.
+        scope_token = await scope.cache_scope_token(info)
+        base_key = service._generate_cache_key(
             'recap_dashboard_filter_options',
             0,  # Use 0 as tenant_id for admin/global queries
-            None
+            None,
         )
+        cache_key = f"{base_key}:{scope_token}"
         ttl = service._get_cache_ttl('recap_dashboard_filter_options')
 
         # Try to get from cache
@@ -868,15 +932,34 @@ class DashboardQueries:
         info: strawberry.Info,
         filters: inputs.RecapDashboardFiltersInput | None = None,
     ) -> types.RecapDashboard:
-        """Get Recap Dashboard data with metrics, trends, insights, market analysis, and RMM performance."""
+        """Get Recap Dashboard data with metrics, trends, insights, market analysis, and RMM performance.
+
+        Tenant-scoped: an admin sees the global cross-tenant dashboard (and
+        may narrow with an optional ``tenantId`` filter); a client/non-admin
+        is constrained to the tenant(s) they belong to so they can't read
+        another brand's aggregate metrics. The effective scope is folded into
+        the cache key so scopes never share a cached result.
+        """
+        from .dashboard_scope import DashboardScope
+
         service = DashboardQueriesService()
+        scope = DashboardScope()
+        try:
+            allowed_tenant_ids = await scope.accessible_tenant_ids(info)
+        except Exception:  # noqa: BLE001
+            allowed_tenant_ids = set()
 
         async def _execute_query():
             from recaps import models as recap_models
 
-            # Build base queryset (all tenants - admin dashboard)
-            # Only filter by tenant if explicitly provided in filters
+            # Build base queryset. Admins see all tenants (the global admin
+            # dashboard); a non-admin is constrained to their own tenant(s).
             base_queryset = recap_models.Recap.objects.all()
+            if allowed_tenant_ids is not None:
+                base_queryset = base_queryset.filter(
+                    event__tenant_id__in=allowed_tenant_ids
+                )
+            # Only further-filter by tenant if explicitly provided in filters
             base_queryset = service._apply_recap_dashboard_filters(
                 base_queryset, filters
             )
@@ -1509,7 +1592,14 @@ class DashboardQueries:
         filter_hash = hashlib.md5(filter_str.encode()).hexdigest()
         version = service._get_cache_version(
             'recap_dashboard', tenant_id_for_cache)
-        cache_key = f"dashboard:recap_dashboard:{tenant_id_for_cache}:v{version}:{filter_hash}"
+        # Fold the caller's effective tenant scope into the key so a
+        # client's own-tenant aggregate is never served from (or written to)
+        # the admin/global slot.
+        scope_token = await scope.cache_scope_token(info)
+        cache_key = (
+            f"dashboard:recap_dashboard:{tenant_id_for_cache}:"
+            f"{scope_token}:v{version}:{filter_hash}"
+        )
         ttl = service._get_cache_ttl('recap_dashboard')
 
         # Try to get from cache
@@ -1532,32 +1622,25 @@ class DashboardQueries:
         info: strawberry.Info,
         tenant_id: strawberry.ID | None = None,
     ) -> types.Insights | None:
-        """Get the latest Insights ordered by created_at for a tenant."""
+        """Get the latest Insights ordered by created_at for a tenant.
+
+        Tenant-scoped: a client/non-admin only reads insights for a tenant
+        they actually belong to (a supplied ``tenantId`` for another brand is
+        rejected -> ``null``); with no ``tenantId`` they get their own
+        tenant's. Admins -> any tenant. Never raises past the auth gate.
+        """
         from tenants import models as tenant_models
-        from utils.graphql.mixins import resolve_id_to_int
+        from .dashboard_scope import DashboardScope
 
         async def _execute_query():
-            user = info.context.request.user
-
-            # Resolve tenant_id if provided
-            resolved_tenant_id = None
-            if tenant_id:
-                try:
-                    resolved_tenant_id = resolve_id_to_int(tenant_id)
-                except (ValueError, TypeError):
-                    return None
-
-            # Get tenant - use user's tenant if not specified
+            try:
+                resolved_tenant_id = await DashboardScope().resolve_scoped_tenant_id(
+                    info, tenant_id
+                )
+            except Exception:  # noqa: BLE001
+                return None
             if not resolved_tenant_id:
-                # Get user's tenant
-                tenanted_user = await sync_to_async(
-                    tenant_models.TenantedUser.objects.filter(
-                        user=user, is_active=True
-                    ).select_related("tenant").first
-                )()
-                if not tenanted_user:
-                    return None
-                resolved_tenant_id = tenanted_user.tenant.id
+                return None
 
             # Get latest insights for the tenant
             latest_insights = await sync_to_async(
@@ -1658,12 +1741,22 @@ class DashboardQueries:
 
         - if userId is provided, returns goals for that user
         - if userId is not provided, returns all goals for the tenant
+
+        Tenant-scoped: a client/non-admin only sees goals for a tenant they
+        actually belong to (a supplied ``tenantId`` for another brand is
+        rejected -> ``[]``), so a client can't read another tenant's users'
+        goals + names. Admins -> any tenant. Never raises past the auth gate.
         """
         from tenants import models as tenant_models
+        from .dashboard_scope import DashboardScope
 
         try:
-            resolved_tenant_id = resolve_id_to_int(tenant_id)
-        except (TypeError, ValueError):
+            resolved_tenant_id = await DashboardScope().resolve_scoped_tenant_id(
+                info, tenant_id
+            )
+        except Exception:  # noqa: BLE001
+            return []
+        if not resolved_tenant_id:
             return []
 
         target_user_id: int | None = None
