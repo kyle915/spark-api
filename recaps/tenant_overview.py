@@ -136,6 +136,27 @@ def _year_bounds(year: int) -> tuple:
     return start, end
 
 
+def _filter_window(queryset, date_field: str, window: tuple | None):
+    """Narrow ``queryset`` to ``date_field`` within a half-open ``window``.
+
+    ``window`` is a ``(start, end)`` pair of tz-aware datetimes (the shape
+    :func:`_year_bounds` returns) applied as ``date_field__gte=start`` /
+    ``date_field__lt=end`` — the SAME field/lookup convention
+    :func:`_filter_year` has always used, factored out so the period
+    comparison can window by an arbitrary ``[start, end)`` (a month,
+    quarter, or year) and still reconcile exactly with
+    :func:`tenant_kpi_totals`. ``window=None`` returns the queryset
+    UNTOUCHED — the all-time path that keeps the byte-for-byte SQL the
+    Ask-AI / Insights callers depend on.
+    """
+    if window is None:
+        return queryset
+    start, end = window
+    return queryset.filter(
+        **{f"{date_field}__gte": start, f"{date_field}__lt": end}
+    )
+
+
 def _filter_year(queryset, date_field: str, year: int | None):
     """Narrow ``queryset`` to ``date_field`` within calendar ``year``.
 
@@ -144,40 +165,44 @@ def _filter_year(queryset, date_field: str, year: int | None):
     exact previous SQL — this is what preserves the byte-for-byte all-time
     behavior the Ask-AI and Insights callers depend on. When a year is
     given, apply the half-open :func:`_year_bounds` window on ``date_field``.
+
+    A thin wrapper over :func:`_filter_window`: a year is just the
+    :func:`_year_bounds` ``[start, end)`` window, so the period comparison
+    (which windows by month/quarter/year) and the year filter share one
+    field/lookup code path and can never drift.
     """
-    if year is None:
-        return queryset
-    start, end = _year_bounds(year)
-    return queryset.filter(
-        **{f"{date_field}__gte": start, f"{date_field}__lt": end}
-    )
+    window = None if year is None else _year_bounds(year)
+    return _filter_window(queryset, date_field, window)
 
 
-def _legacy_kpis(tenant_id: int, year: int | None = None) -> dict[str, int]:
-    """Sum the legacy :class:`recaps.models.Recap` KPIs for one tenant.
+def _legacy_kpis_window(tenant_id: int, window: tuple | None) -> dict[str, int]:
+    """Sum the legacy :class:`recaps.models.Recap` KPIs over a ``[start, end)``.
 
-    Recap has no direct tenant FK, so every queryset is scoped through the
-    event (``…__event__tenant_id`` / ``event__tenant_id``) — the same join
+    The window-based core of :func:`_legacy_kpis`. Recap has no direct
+    tenant FK, so every queryset is scoped through the event
+    (``…__event__tenant_id`` / ``event__tenant_id``) — the same join
     ``tenants.insights`` and the recap lists use. Each line is a single
     aggregate query; no Recap row is loaded into Python.
 
-    When ``year`` is given, each queryset is additionally narrowed to its
-    own ``created_at`` within that calendar year (the same date field and
-    half-open window the monthly trend uses); ``year=None`` leaves every
-    queryset untouched, so the all-time SQL is unchanged.
+    ``window`` is a ``(start, end)`` half-open pair applied per-source to
+    that source's OWN ``created_at`` (the same field/lookup
+    :func:`_filter_window` uses), or ``None`` for the all-time path that
+    leaves every queryset untouched. The period comparison passes a month /
+    quarter / year window here so its figures reconcile with
+    :func:`tenant_kpi_totals` for the matching window.
     """
-    recaps = _filter_year(
-        Recap.objects.filter(event__tenant_id=tenant_id), "created_at", year
+    recaps = _filter_window(
+        Recap.objects.filter(event__tenant_id=tenant_id), "created_at", window
     )
-    engagements = _filter_year(
+    engagements = _filter_window(
         ConsumerEngagements.objects.filter(recap__event__tenant_id=tenant_id),
         "created_at",
-        year,
+        window,
     )
-    samples = _filter_year(
+    samples = _filter_window(
         ProductSamples.objects.filter(recap__event__tenant_id=tenant_id),
         "created_at",
-        year,
+        window,
     )
     return {
         "total_engagements": _sum(recaps, "total_engagements"),
@@ -192,6 +217,18 @@ def _legacy_kpis(tenant_id: int, year: int | None = None) -> dict[str, int]:
     }
 
 
+def _legacy_kpis(tenant_id: int, year: int | None = None) -> dict[str, int]:
+    """Sum the legacy :class:`recaps.models.Recap` KPIs for one tenant/year.
+
+    The calendar-year wrapper over :func:`_legacy_kpis_window`: ``year``
+    becomes its :func:`_year_bounds` window (``year=None`` → no window,
+    untouched all-time SQL), so the year filter and the period comparison
+    share one aggregation code path and can never drift.
+    """
+    window = None if year is None else _year_bounds(year)
+    return _legacy_kpis_window(tenant_id, window)
+
+
 # Custom recaps keep most KPIs as free-text CustomFieldValue rows keyed by
 # the field NAME. They can't be summed in SQL, so we pull ONLY the
 # KPI-relevant value rows (filtered by a name regex in the DB) and parse
@@ -204,29 +241,32 @@ _CUSTOM_KPI_NAME_RE = re.compile(
 )
 
 
-def _custom_kpis(tenant_id: int, year: int | None = None) -> dict[str, int]:
-    """Sum the custom-template :class:`recaps.models.CustomRecap` KPIs.
+def _custom_kpis_window(tenant_id: int, window: tuple | None) -> dict[str, int]:
+    """Sum the custom-template :class:`recaps.models.CustomRecap` KPIs over a window.
 
-    ``total_engagements`` is a typed column → summed in the DB. The four
-    consumer metrics + sold units live in free-text ``CustomFieldValue``
-    rows; we fetch only the KPI-relevant rows (``custom_field__name``
-    matched by :data:`_CUSTOM_KPI_NAME_RE` in SQL), grouped per recap, and
-    apply the same label/parse rules the per-campaign report uses so the
-    totals agree. We never load a CustomRecap object — only the matched
-    (recap_id, name, value) value rows.
+    The window-based core of :func:`_custom_kpis`. ``total_engagements`` is
+    a typed column → summed in the DB. The four consumer metrics + sold
+    units live in free-text ``CustomFieldValue`` rows; we fetch only the
+    KPI-relevant rows (``custom_field__name`` matched by
+    :data:`_CUSTOM_KPI_NAME_RE` in SQL), grouped per recap, and apply the
+    same label/parse rules the per-campaign report uses so the totals agree.
+    We never load a CustomRecap object — only the matched (recap_id, name,
+    value) value rows.
 
-    When ``year`` is given, each queryset is narrowed to its own
-    ``created_at`` within that calendar year (the custom value rows are
-    filtered on their OWN ``created_at``, consistent with the structured
-    sums and the monthly trend); ``year=None`` leaves every queryset
-    untouched, so the all-time SQL is unchanged.
+    ``window`` is a ``(start, end)`` half-open pair applied per-source to
+    that source's OWN ``created_at`` (the custom value rows are filtered on
+    their own ``created_at``, consistent with the structured sums and the
+    monthly trend), or ``None`` for the all-time path that leaves every
+    queryset untouched. The period comparison passes a month / quarter /
+    year window here so its figures reconcile with :func:`tenant_kpi_totals`
+    for the matching window.
     """
     out = {
         "total_engagements": _sum(
-            _filter_year(
+            _filter_window(
                 CustomRecap.objects.filter(tenant_id=tenant_id),
                 "created_at",
-                year,
+                window,
             ),
             "total_engagements",
         ),
@@ -242,12 +282,12 @@ def _custom_kpis(tenant_id: int, year: int | None = None) -> dict[str, int]:
 
     # Structured custom samples sum cleanly in SQL.
     structured_samples = _sum(
-        _filter_year(
+        _filter_window(
             CustomRecapProductSample.objects.filter(
                 custom_recap__tenant_id=tenant_id
             ),
             "created_at",
-            year,
+            window,
         ),
         "quantity",
     )
@@ -256,13 +296,13 @@ def _custom_kpis(tenant_id: int, year: int | None = None) -> dict[str, int]:
     # the per-recap "consumers sampled" fallback (sold units + samples)
     # matches the campaign report's per-recap accumulation.
     rows = (
-        _filter_year(
+        _filter_window(
             CustomFieldValue.objects.filter(
                 custom_recap__tenant_id=tenant_id,
                 custom_field__name__iregex=_CUSTOM_KPI_NAME_RE.pattern,
             ),
             "created_at",
-            year,
+            window,
         )
         .values_list("custom_recap_id", "custom_field__name", "value")
         .order_by("custom_recap_id")
@@ -311,6 +351,40 @@ def _custom_kpis(tenant_id: int, year: int | None = None) -> dict[str, int]:
     return out
 
 
+def _custom_kpis(tenant_id: int, year: int | None = None) -> dict[str, int]:
+    """Sum the custom :class:`recaps.models.CustomRecap` KPIs for one tenant/year.
+
+    The calendar-year wrapper over :func:`_custom_kpis_window`: ``year``
+    becomes its :func:`_year_bounds` window (``year=None`` → no window,
+    untouched all-time SQL), so the year filter and the period comparison
+    share one aggregation code path and can never drift.
+    """
+    window = None if year is None else _year_bounds(year)
+    return _custom_kpis_window(tenant_id, window)
+
+
+def _tenant_kpi_totals_window(
+    tenant_id: int, window: tuple | None
+) -> TenantKpiTotals:
+    """Legacy + custom KPI totals over a ``[start, end)`` window, field-by-field.
+
+    The window-based core of :func:`tenant_kpi_totals`: sums the legacy and
+    custom KPIs over the same ``window`` and adds them field-by-field.
+    ``window=None`` is the all-time roll-up. The period comparison calls
+    this once per period; the public :func:`tenant_kpi_totals` is the
+    calendar-year wrapper, so a comparison period and a year filter over the
+    same span return identical totals.
+    """
+    legacy = _legacy_kpis_window(tenant_id, window)
+    custom = _custom_kpis_window(tenant_id, window)
+    return TenantKpiTotals(
+        **{
+            f.name: int(legacy.get(f.name, 0)) + int(custom.get(f.name, 0))
+            for f in dataclass_fields(TenantKpiTotals)
+        }
+    )
+
+
 def tenant_kpi_totals(tenant_id: int, year: int | None = None) -> TenantKpiTotals:
     """Legacy + custom KPI totals for one tenant, summed field-by-field.
 
@@ -325,15 +399,41 @@ def tenant_kpi_totals(tenant_id: int, year: int | None = None) -> TenantKpiTotal
     callers pass) sums over ALL of the tenant's recaps unchanged. ``year=Y``
     restricts every underlying aggregate to recaps whose ``created_at`` falls
     in calendar year ``Y``.
+
+    The calendar-year wrapper over :func:`_tenant_kpi_totals_window`, so the
+    year filter and the period comparison share one aggregation code path.
     """
-    legacy = _legacy_kpis(tenant_id, year)
-    custom = _custom_kpis(tenant_id, year)
-    return TenantKpiTotals(
-        **{
-            f.name: int(legacy.get(f.name, 0)) + int(custom.get(f.name, 0))
-            for f in dataclass_fields(TenantKpiTotals)
-        }
-    )
+    window = None if year is None else _year_bounds(year)
+    return _tenant_kpi_totals_window(tenant_id, window)
+
+
+def _tenant_event_recap_counts_window(
+    tenant_id: int, window: tuple | None
+) -> tuple[int, int]:
+    """``(event_count, recap_count)`` over a ``[start, end)`` window — both COUNTs.
+
+    The window-based core of :func:`tenant_event_recap_counts`.
+    ``recap_count`` unions BOTH shapes (legacy ``Recap`` joined through the
+    event + custom ``CustomRecap`` via its direct tenant FK), exactly like
+    the overview's headline. Each line is a single ``COUNT(*)``; no rows
+    enter Python.
+
+    ``window`` is a ``(start, end)`` half-open pair applied per-source to
+    that source's OWN ``created_at`` (events by ``Event.created_at``, each
+    recap shape by its own ``created_at`` — the same anchor the trend uses),
+    or ``None`` to leave every count unfiltered. The period comparison
+    passes a month / quarter / year window here.
+    """
+    event_count = _filter_window(
+        Event.objects.filter(tenant_id=tenant_id), "created_at", window
+    ).count()
+    legacy_recap_count = _filter_window(
+        Recap.objects.filter(event__tenant_id=tenant_id), "created_at", window
+    ).count()
+    custom_recap_count = _filter_window(
+        CustomRecap.objects.filter(tenant_id=tenant_id), "created_at", window
+    ).count()
+    return event_count, legacy_recap_count + custom_recap_count
 
 
 def tenant_event_recap_counts(
@@ -353,17 +453,239 @@ def tenant_event_recap_counts(
     shape by its own ``created_at`` — the same anchor the trend uses);
     ``year=None`` leaves every count unfiltered, so the all-time SQL is
     unchanged.
+
+    The calendar-year wrapper over :func:`_tenant_event_recap_counts_window`,
+    so the year filter and the period comparison share one count code path.
     """
-    event_count = _filter_year(
-        Event.objects.filter(tenant_id=tenant_id), "created_at", year
-    ).count()
-    legacy_recap_count = _filter_year(
-        Recap.objects.filter(event__tenant_id=tenant_id), "created_at", year
-    ).count()
-    custom_recap_count = _filter_year(
-        CustomRecap.objects.filter(tenant_id=tenant_id), "created_at", year
-    ).count()
-    return event_count, legacy_recap_count + custom_recap_count
+    window = None if year is None else _year_bounds(year)
+    return _tenant_event_recap_counts_window(tenant_id, window)
+
+
+# ---------------------------------------------------------------------------
+# Period-over-period comparison ("this period vs last").
+#
+# The dashboard's ``tenantKpis`` only scopes by calendar YEAR, so the
+# frontend cannot build a month-over-month (or quarter-over-quarter) delta on
+# its own across the full nine-KPI set. ``tenant_kpi_comparison`` returns BOTH
+# the most-recent-COMPLETE period and the one immediately before it, each as a
+# full KPI roll-up, leaving the % deltas to the frontend.
+#
+# CRITICAL — complete periods only. We deliberately NEVER use the in-progress
+# current month / quarter / year: comparing a partial current period against a
+# full prior one manufactures a misleading drop (the same "-100% halted"
+# partial-period distortion the Momentum insight bucket already had to correct
+# for). So "current" is always the most recent period that has fully ELAPSED,
+# and "previous" is the complete period before that.
+# ---------------------------------------------------------------------------
+
+# The period granularities ``tenant_kpi_comparison`` accepts.
+COMPARISON_PERIODS = ("month", "quarter", "year")
+
+# Abbreviated month names for the human labels ("May 2026"), indexed 1-12.
+# Hard-coded (not ``strftime``) so the label is locale-independent and stable
+# across environments.
+_MONTH_ABBR = (
+    "",
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+)
+
+
+def _month_start(year: int, month: int):
+    """Tz-aware midnight of the first day of ``year``-``month``.
+
+    Built off ``timezone.now()`` so it carries the same tzinfo the rest of
+    this module uses (matching :func:`_year_bounds`), then pinned to the
+    given year/month. ``month`` is 1-12.
+    """
+    return timezone.now().replace(
+        year=year,
+        month=month,
+        day=1,
+        hour=0,
+        minute=0,
+        second=0,
+        microsecond=0,
+    )
+
+
+def _add_months(year: int, month: int, delta: int) -> tuple:
+    """Shift the ``(year, month)`` pair by ``delta`` whole months (1-12 month).
+
+    Pure integer math (no dateutil), the same approach
+    :func:`_trend_window_start` uses: collapse to a month ordinal, add the
+    delta, expand back. ``delta`` may be negative.
+    """
+    total = (year * 12 + (month - 1)) + delta
+    y, m = divmod(total, 12)
+    return y, m + 1
+
+
+def _month_comparison_windows() -> tuple:
+    """The two COMPLETE-month windows + labels: ``(cur_window, cur_label, prev_window, prev_label)``.
+
+    "Current" is the most recent FULLY-ELAPSED calendar month — i.e. the
+    month BEFORE the one ``now`` falls in (the current calendar month is
+    still in progress, so it is never used). "Previous" is the month before
+    that. Each window is the half-open ``[first-of-month, first-of-next)``
+    pair, identical in shape to :func:`_year_bounds`, so the totals reconcile
+    with :func:`tenant_kpi_totals`. E.g. for a mid-June-2026 "now":
+    current = May 2026, previous = Apr 2026.
+    """
+    now = timezone.now()
+    # Most recent complete month = one month before the current (in-progress) one.
+    cur_y, cur_m = _add_months(now.year, now.month, -1)
+    prev_y, prev_m = _add_months(cur_y, cur_m, -1)
+
+    cur_start = _month_start(cur_y, cur_m)
+    cur_end = _month_start(*_add_months(cur_y, cur_m, 1))
+    prev_start = _month_start(prev_y, prev_m)
+    prev_end = cur_start  # previous month ends where the current one begins
+
+    cur_label = f"{_MONTH_ABBR[cur_m]} {cur_y}"
+    prev_label = f"{_MONTH_ABBR[prev_m]} {prev_y}"
+    return (cur_start, cur_end), cur_label, (prev_start, prev_end), prev_label
+
+
+def _quarter_comparison_windows() -> tuple:
+    """The two COMPLETE-quarter windows + labels.
+
+    Quarters are Q1=Jan-Mar, Q2=Apr-Jun, Q3=Jul-Sep, Q4=Oct-Dec. "Current"
+    is the most recent FULLY-ELAPSED quarter — the quarter BEFORE the one
+    ``now`` falls in (the in-progress quarter is never used) — and "previous"
+    is the quarter before that (rolling back across the year boundary as
+    needed). Each window is the half-open ``[first-of-quarter,
+    first-of-next-quarter)`` pair, so the totals reconcile with
+    :func:`tenant_kpi_totals`. E.g. for a "now" in Q2 2026 (Apr-Jun):
+    current = Q1 2026, previous = Q4 2025.
+    """
+    now = timezone.now()
+    current_q = (now.month - 1) // 3  # 0-based index of the in-progress quarter
+    # Most recent complete quarter = the one before the in-progress quarter.
+    # Work in a 0-based "quarter ordinal" (year*4 + quarter_index) so the
+    # year rollover is plain integer math.
+    cur_ord = (now.year * 4 + current_q) - 1
+    prev_ord = cur_ord - 1
+
+    def _q_window_and_label(ordinal: int) -> tuple:
+        y, q = divmod(ordinal, 4)  # q is 0-based (0..3)
+        start_month = q * 3 + 1
+        start = _month_start(y, start_month)
+        end = _month_start(*_add_months(y, start_month, 3))
+        return (start, end), f"Q{q + 1} {y}"
+
+    cur_window, cur_label = _q_window_and_label(cur_ord)
+    prev_window, prev_label = _q_window_and_label(prev_ord)
+    return cur_window, cur_label, prev_window, prev_label
+
+
+def _year_comparison_windows() -> tuple:
+    """The two COMPLETE-year windows + labels.
+
+    "Current" is the most recent FULLY-ELAPSED calendar year — i.e. LAST
+    year, since the current calendar year is still in progress and is never
+    used — and "previous" is the year before that. Each window is the
+    half-open :func:`_year_bounds` pair, so the totals reconcile with
+    ``tenant_kpi_totals(year=...)`` for the matching year. E.g. for a 2026
+    "now": current = 2025, previous = 2024.
+    """
+    now = timezone.now()
+    cur_year = now.year - 1
+    prev_year = cur_year - 1
+    return (
+        _year_bounds(cur_year),
+        str(cur_year),
+        _year_bounds(prev_year),
+        str(prev_year),
+    )
+
+
+# Dispatch table: granularity -> the function returning its two complete
+# windows + labels. ``tenant_kpi_comparison`` looks the period up here.
+_COMPARISON_WINDOW_BUILDERS = {
+    "month": _month_comparison_windows,
+    "quarter": _quarter_comparison_windows,
+    "year": _year_comparison_windows,
+}
+
+
+def _period_totals(tenant_id: int, window: tuple) -> dict:
+    """The full KPI roll-up for one period window as a plain dict.
+
+    Combines the event/recap COUNTs and the nine summable KPIs over the SAME
+    ``window``, reusing the window-based cores
+    (:func:`_tenant_event_recap_counts_window` /
+    :func:`_tenant_kpi_totals_window`) so a period's figures reconcile with
+    :func:`tenant_kpi_totals` for a matching span. Returns the eleven keys
+    the ``TenantKpiTotals`` GraphQL type carries (``events`` / ``recaps`` +
+    the nine KPI fields).
+    """
+    event_count, recap_count = _tenant_event_recap_counts_window(tenant_id, window)
+    totals = _tenant_kpi_totals_window(tenant_id, window)
+    out = {"events": event_count, "recaps": recap_count}
+    for f in dataclass_fields(TenantKpiTotals):
+        out[f.name] = int(getattr(totals, f.name, 0) or 0)
+    return out
+
+
+def tenant_kpi_comparison(tenant_id: int, period: str = "month") -> dict:
+    """"This period vs last" KPI deltas for one tenant — both periods, full set.
+
+    Picks the most recent COMPLETE period of the requested granularity and
+    the complete period immediately before it, then computes the FULL KPI
+    roll-up (event/recap counts + the nine summable KPIs, the same set as
+    :func:`tenant_kpi_totals`) for BOTH, scoped to each period's half-open
+    ``created_at`` window. The frontend computes the % deltas from the two.
+
+    ``period`` is one of :data:`COMPARISON_PERIODS` (``"month"`` /
+    ``"quarter"`` / ``"year"``); anything else falls back to ``"month"``.
+
+    COMPLETE periods only — see the module comment above: "current" is the
+    most recent period that has fully ELAPSED (never the in-progress current
+    month/quarter/year, which would manufacture a false drop), and
+    "previous" is the complete period before it. For a mid-June-2026 "now":
+
+    * ``month``   → current "May 2026", previous "Apr 2026"
+    * ``quarter`` → current "Q1 2026", previous "Q4 2025"
+    * ``year``    → current "2025", previous "2024"
+
+    Returns a plain dict (no framework types) the resolver maps onto
+    ``TenantKpiComparison``::
+
+        {
+            "period": "month",
+            "current_label": "May 2026",
+            "previous_label": "Apr 2026",
+            "current":  {<events, recaps, + nine KPIs>},
+            "previous": {<events, recaps, + nine KPIs>},
+        }
+
+    All figures are database aggregates over the bounded windows (no recap
+    row materialized beyond the small free-text custom value rows
+    :func:`_custom_kpis_window` already pulls), so the cost is independent of
+    tenant size.
+    """
+    if period not in _COMPARISON_WINDOW_BUILDERS:
+        period = "month"
+    builder = _COMPARISON_WINDOW_BUILDERS[period]
+    cur_window, cur_label, prev_window, prev_label = builder()
+    return {
+        "period": period,
+        "current_label": cur_label,
+        "previous_label": prev_label,
+        "current": _period_totals(tenant_id, cur_window),
+        "previous": _period_totals(tenant_id, prev_window),
+    }
 
 
 def _trend_window_start():
