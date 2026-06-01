@@ -741,18 +741,36 @@ class TenantFavoriteAmbassador:
 
     @strawberry.field
     def first_name(self) -> str:
+        # Resolve the BA's user the same robust way as ambassador_uuid:
+        # select_related("ambassador__user") caches the forward FK on
+        # _state.fields_cache, not __dict__, so fall back to the relation.
         a = self.__dict__.get("ambassador")
+        if not a:
+            try:
+                a = self.ambassador
+            except Exception:
+                a = None
         u = getattr(a, "user", None) if a else None
         return (getattr(u, "first_name", None) or "") if u else ""
 
     @strawberry.field
     def last_name(self) -> str:
         a = self.__dict__.get("ambassador")
+        if not a:
+            try:
+                a = self.ambassador
+            except Exception:
+                a = None
         u = getattr(a, "user", None) if a else None
         return (getattr(u, "last_name", None) or "") if u else ""
 
     @strawberry.field
     def email(self) -> str:
         a = self.__dict__.get("ambassador")
+        if not a:
+            try:
+                a = self.ambassador
+            except Exception:
+                a = None
         u = getattr(a, "user", None) if a else None
         return (getattr(u, "email", None) or "") if u else ""

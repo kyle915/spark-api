@@ -58,6 +58,50 @@ class Ambassador(Node):
                 return None
         return public_url(blob) if blob else None
 
+    @strawberry.field
+    async def is_favorited(self, info: strawberry.Info) -> bool:
+        """Whether this BA is on the CALLER'S tenant favorites roster.
+
+        Lets BA lists render the star without a second round-trip. Scoped
+        to the caller's OWN tenant (a client can only ever see their own
+        brand's favorite state). Resolved lazily — this only runs when the
+        field is explicitly selected, so existing ambassador-list queries
+        are untouched. A pre-annotated ``_is_favorited`` on the row (set by
+        a future list-level annotation) is honored when present to avoid an
+        N+1. Never raises: returns ``False`` for an unauthenticated/
+        tenant-less caller or on any error.
+        """
+        annotated = self.__dict__.get("_is_favorited")
+        if annotated is not None:
+            return bool(annotated)
+
+        amb_pk = getattr(self, "id", None) or getattr(self, "pk", None)
+        if not amb_pk:
+            return False
+
+        def _check() -> bool:
+            from jobs.models import TenantFavoriteAmbassador
+
+            request = getattr(info.context, "request", None)
+            user = getattr(request, "user", None) if request else None
+            if not user or not getattr(user, "is_authenticated", False):
+                return False
+            try:
+                tenant = user.get_tenant() if hasattr(user, "get_tenant") else None
+            except Exception:
+                tenant = None
+            tenant_id = getattr(tenant, "id", None)
+            if not tenant_id:
+                return False
+            return TenantFavoriteAmbassador.objects.filter(
+                tenant_id=tenant_id, ambassador_id=amb_pk
+            ).exists()
+
+        try:
+            return await sync_to_async(_check)()
+        except Exception:
+            return False
+
 
 @strawberry_django.type(models.AmbassadorPhoto)
 class AmbassadorPhotoType(Node):

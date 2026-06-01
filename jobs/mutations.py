@@ -1717,6 +1717,7 @@ from django.utils import timezone as _django_tz  # noqa: E402
 from ambassadors.models import Ambassador as _Ambassador  # noqa: E402
 from utils.graphql.mixins import resolve_id_to_int as _resolve_id  # noqa: E402
 from utils.graphql.permissions import StrictIsAuthenticated as _StrictIsAuth  # noqa: E402
+from jobs.queries import _FavoriteAmbassadorScope  # noqa: E402
 
 
 def _build_lifecycle_response(success, message, *, job=None, input_obj=None):
@@ -2257,26 +2258,22 @@ class FavoriteAmbassadorMutations:
     ) -> types.FavoriteAmbassadorResponse:
         actor = info.context.request.user
 
+        # Tenant-scoped: a client is pinned to their OWN tenant (any
+        # tenant_id is ignored), an admin may target the requested tenant.
+        try:
+            tenant_id = await _FavoriteAmbassadorScope().resolve_target_tenant_id(
+                info, input.tenant_id
+            )
+        except Exception:
+            tenant_id = None
+
         def _add():
+            if not tenant_id:
+                return False, "No tenant in scope."
             try:
                 ba_pk = _resolve_id(input.ambassador_id)
             except (TypeError, ValueError, GraphQLError):
                 return False, "Invalid ambassador id."
-
-            # Resolve tenant — explicit input wins, else fall back to
-            # the actor's bound tenant.
-            tenant_id = None
-            if input.tenant_id:
-                try:
-                    tenant_id = _resolve_id(input.tenant_id)
-                except (TypeError, ValueError, GraphQLError):
-                    return False, "Invalid tenant id."
-            else:
-                bound = actor.get_tenant() if hasattr(actor, "get_tenant") else None
-                if bound:
-                    tenant_id = bound.id
-            if not tenant_id:
-                return False, "No tenant in scope."
 
             try:
                 amb = _Ambassador.objects.get(pk=ba_pk)
@@ -2306,25 +2303,23 @@ class FavoriteAmbassadorMutations:
         info: strawberry.Info,
         input: inputs.RemoveFavoriteAmbassadorInput,
     ) -> types.FavoriteAmbassadorResponse:
-        actor = info.context.request.user
+        # Tenant-scoped: a client can only remove from their OWN tenant's
+        # roster (any tenant_id is ignored); an admin may target the
+        # requested tenant.
+        try:
+            tenant_id = await _FavoriteAmbassadorScope().resolve_target_tenant_id(
+                info, input.tenant_id
+            )
+        except Exception:
+            tenant_id = None
 
         def _rm():
+            if not tenant_id:
+                return False, "No tenant in scope."
             try:
                 ba_pk = _resolve_id(input.ambassador_id)
             except (TypeError, ValueError, GraphQLError):
                 return False, "Invalid ambassador id."
-            tenant_id = None
-            if input.tenant_id:
-                try:
-                    tenant_id = _resolve_id(input.tenant_id)
-                except (TypeError, ValueError, GraphQLError):
-                    return False, "Invalid tenant id."
-            else:
-                bound = actor.get_tenant() if hasattr(actor, "get_tenant") else None
-                if bound:
-                    tenant_id = bound.id
-            if not tenant_id:
-                return False, "No tenant in scope."
 
             deleted, _ = models.TenantFavoriteAmbassador.objects.filter(
                 tenant_id=tenant_id, ambassador_id=ba_pk,
