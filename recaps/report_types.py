@@ -35,6 +35,7 @@ from recaps.tenant_sentiment import get_or_refresh_tenant_sentiment
 from recaps.tenant_overview import (
     build_tenant_overview,
     tenant_event_recap_counts,
+    tenant_kpi_comparison,
     tenant_kpi_totals,
     tenant_market_performance,
     tenant_monthly_trend,
@@ -439,6 +440,104 @@ def _build_tenant_kpis(tenant_id: int, year: int | None = None) -> TenantKpis:
             )
             for m in trend
         ],
+    )
+
+
+@strawberry.type
+class TenantKpiTotals:
+    """A lean, period-scopable KPI roll-up for ONE tenant over ONE window.
+
+    The building block of :class:`TenantKpiComparison`'s two periods. Carries
+    the same headline counts + nine summable KPIs as :class:`TenantKpis` but
+    WITHOUT the monthly trend (a comparison shows two discrete periods, not a
+    series). The figures come from the same
+    :func:`recaps.tenant_overview` source of truth the year-scoped
+    ``tenantKpis`` uses, so a period here reconciles with that roll-up over a
+    matching span. The frontend computes the % deltas between the two periods.
+    """
+
+    events: int
+    recaps: int
+    consumers_reached: int
+    samples_distributed: int
+    products_sold: int
+    cans_sold: int
+    packs_sold: int
+    total_engagements: int
+    first_time_consumers: int
+    brand_aware_consumers: int
+    willing_to_purchase: int
+
+
+@strawberry.type
+class TenantKpiComparison:
+    """"This period vs last" — two COMPLETE periods of a tenant's KPIs.
+
+    The backend answer to month-over-month (and quarter-/year-over-) deltas
+    that the year-only ``tenantKpis`` can't express alone: it returns BOTH
+    the most recent COMPLETE period of the requested granularity and the
+    complete period immediately before it, each a full
+    :class:`TenantKpiTotals`, leaving the % deltas to the frontend.
+
+    ``period`` echoes the requested granularity (``"month"`` / ``"quarter"``
+    / ``"year"``). ``current_label`` / ``previous_label`` are human labels
+    ("May 2026" vs "Apr 2026"; "Q2 2026" vs "Q1 2026"; "2025" vs "2024").
+
+    COMPLETE periods only: ``current`` is the most recent period that has
+    fully ELAPSED — never the in-progress month/quarter/year, which would
+    manufacture a false drop — and ``previous`` is the complete period before
+    it (see :func:`recaps.tenant_overview.tenant_kpi_comparison`).
+    """
+
+    period: str
+    current_label: str
+    previous_label: str
+    current: TenantKpiTotals
+    previous: TenantKpiTotals
+
+
+def _kpi_totals_from_dict(data: dict) -> TenantKpiTotals:
+    """Map one period's plain-dict roll-up onto the :class:`TenantKpiTotals` type.
+
+    The dict is what
+    :func:`recaps.tenant_overview.tenant_kpi_comparison` puts in each period
+    slot (``events`` / ``recaps`` + the nine KPI keys); every value is
+    coerced to ``int`` (defaulting to 0) so a missing key can never raise.
+    """
+    return TenantKpiTotals(
+        events=int(data.get("events", 0) or 0),
+        recaps=int(data.get("recaps", 0) or 0),
+        consumers_reached=int(data.get("consumers_reached", 0) or 0),
+        samples_distributed=int(data.get("samples_distributed", 0) or 0),
+        products_sold=int(data.get("products_sold", 0) or 0),
+        cans_sold=int(data.get("cans_sold", 0) or 0),
+        packs_sold=int(data.get("packs_sold", 0) or 0),
+        total_engagements=int(data.get("total_engagements", 0) or 0),
+        first_time_consumers=int(data.get("first_time_consumers", 0) or 0),
+        brand_aware_consumers=int(data.get("brand_aware_consumers", 0) or 0),
+        willing_to_purchase=int(data.get("willing_to_purchase", 0) or 0),
+    )
+
+
+def _build_tenant_kpi_comparison(
+    tenant_id: int, period: str
+) -> TenantKpiComparison:
+    """Assemble the :class:`TenantKpiComparison` for one tenant + granularity.
+
+    Synchronous Django ORM (the resolver wraps it in ``sync_to_async``).
+    Delegates the complete-period selection + both roll-ups to
+    :func:`recaps.tenant_overview.tenant_kpi_comparison`, then mirrors the
+    returned dict onto the Strawberry types. The builder normalises an
+    unknown ``period`` to ``"month"``, so ``data["period"]`` is always one of
+    the valid granularities.
+    """
+    data = tenant_kpi_comparison(tenant_id, period)
+    return TenantKpiComparison(
+        period=data["period"],
+        current_label=data["current_label"],
+        previous_label=data["previous_label"],
+        current=_kpi_totals_from_dict(data["current"]),
+        previous=_kpi_totals_from_dict(data["previous"]),
     )
 
 
@@ -1356,6 +1455,61 @@ class CampaignReportQueries:
         if data is None:
             return _zeroed_tenant_kpis()
         return data
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def tenant_kpi_comparison(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID,
+        period: str = "month",
+    ) -> TenantKpiComparison | None:
+        """"This period vs last" KPI deltas for one tenant — both periods.
+
+        The backend companion to :meth:`tenant_kpis`: where that scopes only
+        by calendar YEAR (so the frontend can't build a month-over-month
+        delta across the full nine-KPI set alone), this returns BOTH the most
+        recent COMPLETE period of the requested granularity and the complete
+        period immediately before it, each a full :class:`TenantKpiTotals`,
+        leaving the % deltas to the frontend.
+
+        ``period`` is ``"month"`` (default), ``"quarter"``, or ``"year"``;
+        any other value is treated as ``"month"`` by the underlying builder.
+
+        COMPLETE periods only: ``current`` is the most recent period that has
+        fully ELAPSED (never the in-progress current month/quarter/year,
+        which would manufacture a false drop), and ``previous`` is the
+        complete period before it — e.g. for a mid-June-2026 "now",
+        ``month`` → "May 2026" vs "Apr 2026" (see
+        :func:`recaps.tenant_overview.tenant_kpi_comparison`).
+
+        Tenant scoping is identical to :meth:`tenant_kpis`
+        (:meth:`_CampaignReportService.resolve_target_tenant_id`):
+        client-role users may ONLY read their own tenant — the ``tenant_id``
+        argument is overridden to their own; admins (spark-admin / staff /
+        superuser / ``@igniteproductions.co``) may target any tenant.
+
+        Never raises: a missing or out-of-scope tenant, or any aggregation
+        error, resolves to ``null`` rather than a GraphQL error.
+        """
+        service = _CampaignReportService()
+        target_tenant_id = await service.resolve_target_tenant_id(info, tenant_id)
+        if target_tenant_id is None:
+            return None
+
+        def _build():
+            # Guard the tenant's existence the same way tenant_kpis does, so
+            # an admin passing an unknown id degrades to null instead of
+            # comparing periods over no tenant.
+            from tenants.models import Tenant
+
+            if not Tenant.objects.filter(id=target_tenant_id).exists():
+                return None
+            return _build_tenant_kpi_comparison(target_tenant_id, period)
+
+        try:
+            return await sync_to_async(_build, thread_sensitive=True)()
+        except Exception:
+            return None
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def tenant_market_performance(
