@@ -608,6 +608,96 @@ class SendScheduledClientReportsView(View):
         )
 
 
+@method_decorator(csrf_exempt, name="dispatch")
+class RepairApprovedEventStatusView(View):
+    """POST `/internal/cron/repair-approved-event-status`.
+
+    Fires the `repair_approved_event_status` backfill — sets internally-
+    materialized Events to their tenant's approved EventStatus when the parent
+    Request is approved/scheduled but the Event is still stuck on "pending"
+    (see events/management/commands/repair_approved_event_status.py). Idempotent
+    and transaction-wrapped per tenant.
+
+    This is a MANUAL one-off (triggered from the GitHub Actions UI), not a
+    recurring cron — but it reuses the same `X-Cron-Secret` gating as its
+    siblings so the trigger needs no command line.
+
+    SAFE — DRY-RUN IS THE DEFAULT. A plain trigger NEVER writes: the backfill
+    runs with `dry_run=True` unless `execute=true` is explicitly passed, so the
+    operator always sees the report first and opts in to writes deliberately.
+
+    Body / query params (all optional):
+      - execute: "1" / "true" / "yes" — perform the writes. Default OFF →
+        the command runs in DRY-RUN with NO DB writes.
+      - tenant: tenant slug or numeric id — restrict to a single tenant.
+        Default: all tenants.
+
+    The command's full stdout report (incl. the Liquid Death breakdown) is
+    captured and returned verbatim in the response under `report`, so the
+    caller reads exactly what changed / would change.
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _bool(name: str, default: bool = False) -> bool:
+            raw = (request.GET.get(name) or request.POST.get(name) or "").lower()
+            if not raw:
+                return default
+            return raw in ("1", "true", "yes", "on")
+
+        # DRY-RUN is the default: only an explicit execute=true writes.
+        execute = _bool("execute", default=False)
+
+        tenant = request.GET.get("tenant") or request.POST.get("tenant")
+        # tenant may be a slug OR a numeric id (the command resolves either),
+        # so we don't reject non-numeric values here — only normalise empty to
+        # None so the command falls through to "all tenants".
+        tenant = tenant or None
+
+        # Capture the command's stdout so the full report (incl. the Liquid
+        # Death breakdown) comes back in the HTTP response.
+        out = io.StringIO()
+        try:
+            call_command(
+                "repair_approved_event_status",
+                dry_run=(not execute),
+                tenant=tenant,
+                stdout=out,
+            )
+        except Exception as exc:  # noqa: BLE001 — surface any error to caller
+            logger.exception("Repair approved event status backfill failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "executed": execute,
+                    "tenant": tenant,
+                    "report": out.getvalue(),
+                },
+                status=500,
+            )
+
+        return JsonResponse(
+            {
+                "executed": execute,
+                "tenant": tenant,
+                "report": out.getvalue(),
+            }
+        )
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        return JsonResponse(
+            {"ok": True, "endpoint": "repair-approved-event-status"}
+        )
+
+
 def _registered_views() -> dict[str, Any]:
     """Map URL path → view class. Lets `digest/urls.py` mount these
     without each one being re-exported explicitly.
@@ -620,4 +710,5 @@ def _registered_views() -> dict[str, Any]:
         "send-payment-notifications": SendPaymentNotificationsView,
         "send-document-expiry-reminders": SendDocumentExpiryRemindersView,
         "send-scheduled-client-reports": SendScheduledClientReportsView,
+        "repair-approved-event-status": RepairApprovedEventStatusView,
     }

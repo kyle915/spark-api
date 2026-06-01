@@ -21,6 +21,7 @@ from django.urls import reverse
 ADMIN_DIGEST_URL = "/internal/cron/send-admin-digest"
 EXEC_SUMMARY_URL = "/internal/cron/send-executive-summary"
 SCHEDULED_REPORTS_URL = "/internal/cron/send-scheduled-client-reports"
+REPAIR_EVENT_STATUS_URL = "/internal/cron/repair-approved-event-status"
 
 VALID_SECRET = "test-cron-secret-value-only-for-tests"
 
@@ -342,3 +343,168 @@ class TestSendScheduledClientReportsCronView:
         )
         assert ok.status_code == 200
         assert ok.json()["endpoint"] == "send-scheduled-client-reports"
+
+
+@pytest.mark.django_db
+class TestRepairApprovedEventStatusCronView:
+    """Coverage for `/internal/cron/repair-approved-event-status`.
+
+    Same secret-gated code path as the other crons; verifies the security
+    boundary (missing/wrong/unconfigured secret denied, command never invoked)
+    and — the safety-critical bit — that the backfill defaults to DRY-RUN
+    (`dry_run=True`, NO writes) unless `execute=true` is explicitly passed. The
+    command is mocked at the call_command level: no DB writes, and the mock
+    writes a sentinel to the captured stdout buffer so we can assert the report
+    is returned verbatim in the response.
+
+    Unlike the siblings (which pass positional --flags), this view calls
+    call_command with KWARGS (dry_run=, tenant=, stdout=), so the assertions
+    inspect kwargs.
+    """
+
+    REPORT_SENTINEL = "Summary\n  Updated: 3 event(s) -> approved\n"
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        self.client = Client()
+
+    @staticmethod
+    def _write_report(*_args, **kwargs):
+        """Mimic the command writing to the stdout buffer it was handed."""
+        buf = kwargs.get("stdout")
+        if buf is not None:
+            buf.write(TestRepairApprovedEventStatusCronView.REPORT_SENTINEL)
+
+    # ── Default is DRY-RUN (no writes) ──────────────────────────────
+
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    @patch("digest.cron_views.call_command")
+    def test_default_is_dry_run_and_returns_report(self, mock_call):
+        # No `execute` param → must run the backfill in DRY-RUN.
+        mock_call.side_effect = self._write_report
+        resp = self.client.post(
+            REPAIR_EVENT_STATUS_URL, HTTP_X_CRON_SECRET=VALID_SECRET
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        # Response contract: executed / tenant / report.
+        assert body["executed"] is False
+        assert body["tenant"] is None
+        # Captured command stdout is returned verbatim.
+        assert body["report"] == self.REPORT_SENTINEL
+
+        mock_call.assert_called_once()
+        args, kwargs = mock_call.call_args
+        assert args[0] == "repair_approved_event_status"
+        # DEFAULT MUST BE DRY-RUN: dry_run=True, no tenant scope.
+        assert kwargs["dry_run"] is True
+        assert kwargs["tenant"] is None
+        # stdout is a captured buffer, not the real stdout.
+        assert kwargs["stdout"] is not None
+
+    # ── execute=true flips to a real (write) run ────────────────────
+
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    @patch("digest.cron_views.call_command")
+    def test_execute_true_runs_for_real(self, mock_call):
+        mock_call.side_effect = self._write_report
+        resp = self.client.post(
+            f"{REPAIR_EVENT_STATUS_URL}?execute=true",
+            HTTP_X_CRON_SECRET=VALID_SECRET,
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["executed"] is True
+        assert body["report"] == self.REPORT_SENTINEL
+        args, kwargs = mock_call.call_args
+        assert args[0] == "repair_approved_event_status"
+        # execute=true => dry_run=False (writes allowed).
+        assert kwargs["dry_run"] is False
+
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    @patch("digest.cron_views.call_command")
+    def test_execute_falsey_values_stay_dry_run(self, mock_call):
+        # Anything that isn't an explicit truthy token must remain DRY-RUN.
+        for falsey in ("false", "0", "no", "", "maybe"):
+            mock_call.reset_mock()
+            resp = self.client.post(
+                f"{REPAIR_EVENT_STATUS_URL}?execute={falsey}",
+                HTTP_X_CRON_SECRET=VALID_SECRET,
+            )
+            assert resp.status_code == 200
+            assert resp.json()["executed"] is False
+            _args, kwargs = mock_call.call_args
+            assert kwargs["dry_run"] is True, f"execute={falsey!r} must stay dry-run"
+
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    @patch("digest.cron_views.call_command")
+    def test_tenant_param_plumbed_as_kwarg(self, mock_call):
+        mock_call.side_effect = self._write_report
+        resp = self.client.post(
+            f"{REPAIR_EVENT_STATUS_URL}?tenant=liquid-death",
+            HTTP_X_CRON_SECRET=VALID_SECRET,
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["tenant"] == "liquid-death"
+        _args, kwargs = mock_call.call_args
+        assert kwargs["tenant"] == "liquid-death"
+        # tenant scoping must not change the dry-run default.
+        assert kwargs["dry_run"] is True
+
+    # ── Security boundary ───────────────────────────────────────────
+
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    @patch("digest.cron_views.call_command")
+    def test_missing_secret_header_returns_401(self, mock_call):
+        resp = self.client.post(REPAIR_EVENT_STATUS_URL)
+        assert resp.status_code == 401
+        mock_call.assert_not_called()
+
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    @patch("digest.cron_views.call_command")
+    def test_bad_secret_returns_401(self, mock_call):
+        resp = self.client.post(
+            REPAIR_EVENT_STATUS_URL, HTTP_X_CRON_SECRET="wrong"
+        )
+        assert resp.status_code == 401
+        body = resp.json()
+        assert body["error"] == "unauthorized"
+        mock_call.assert_not_called()
+
+    @override_settings(INTERNAL_CRON_SECRET="")
+    @patch("digest.cron_views.call_command")
+    def test_unconfigured_secret_fails_closed_503(self, mock_call):
+        resp = self.client.post(
+            REPAIR_EVENT_STATUS_URL, HTTP_X_CRON_SECRET=VALID_SECRET
+        )
+        assert resp.status_code == 503
+        body = resp.json()
+        assert body["ok"] is False
+        assert body["error"] == "internal-cron-secret-not-configured"
+        mock_call.assert_not_called()
+
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    @patch(
+        "digest.cron_views.call_command", side_effect=RuntimeError("boom"),
+    )
+    def test_command_failure_surfaces_500_with_detail(self, _mock_call):
+        resp = self.client.post(
+            REPAIR_EVENT_STATUS_URL, HTTP_X_CRON_SECRET=VALID_SECRET
+        )
+        assert resp.status_code == 500
+        body = resp.json()
+        assert body["ok"] is False
+        assert body["error"] == "command-failed"
+        assert "boom" in body["detail"]
+
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    def test_get_is_secret_gated_liveness(self):
+        bad = self.client.get(REPAIR_EVENT_STATUS_URL)
+        assert bad.status_code == 401
+
+        ok = self.client.get(
+            REPAIR_EVENT_STATUS_URL, HTTP_X_CRON_SECRET=VALID_SECRET
+        )
+        assert ok.status_code == 200
+        assert ok.json()["endpoint"] == "repair-approved-event-status"
