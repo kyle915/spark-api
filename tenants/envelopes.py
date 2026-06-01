@@ -1,3 +1,7 @@
+from html import escape
+
+from django.conf import settings
+
 from utils.mailer import Envelope, Mailer
 from tenants.models import User
 
@@ -108,6 +112,91 @@ class MagicLinkMailer(_NoAttachedLogoMixin, Mailer):
                 "mobile_link": self.mobile_link,
                 "expires_minutes": self.expires_minutes,
             },
+        )
+
+
+class SupportTicketIgniteNotificationMailer(_NoAttachedLogoMixin, Mailer):
+    """Notifies the Ignite team that a support ticket was filed from the web
+    Help page.
+
+    ``to_emails`` is resolved by the caller (the ``createSupportTicket``
+    mutation) by REUSING the same Ignite-team recipient resolution the
+    request-approval email uses — see ``events/mutations.py``
+    (``IGNITE_REVIEW_CC`` + active spark-admins + ``REQUEST_REVIEW_COPY_EMAILS``,
+    deduped through ``suppress_cc``). We do NOT hardcode an address here.
+
+    The body is built inline (the ``html`` kwarg on :class:`Envelope` bypasses
+    the Django template loader) so this internal alert needs no new template
+    file. All user-supplied fields are HTML-escaped to keep arbitrary subject /
+    body text from injecting markup into the alert email.
+    """
+
+    def __init__(
+        self,
+        *,
+        to_emails: list[str],
+        subject: str,
+        body: str,
+        category: str,
+        submitter_name: str,
+        submitter_email: str,
+        tenant_name: str | None,
+        reply_to_email: str | None = None,
+    ) -> None:
+        self.to_emails = to_emails
+        self.ticket_subject = subject
+        self.ticket_body = body
+        self.category = category or "other"
+        self.submitter_name = submitter_name
+        self.submitter_email = submitter_email
+        self.tenant_name = tenant_name
+        # Replies route back to the submitter so the Ignite team can answer
+        # directly from the alert; falls back to the support inbox.
+        self.reply_to_email = (
+            (reply_to_email or "").strip() or "staffing@igniteproductions.co"
+        )
+
+    def _subject_line(self) -> str:
+        tenant_suffix = f" — {self.tenant_name}" if self.tenant_name else ""
+        return f"[Spark Support] {self.ticket_subject}{tenant_suffix}"
+
+    def _html_body(self) -> str:
+        # Preserve line breaks in the free-text body, escaped first.
+        body_html = escape(self.ticket_body).replace("\n", "<br>")
+        rows = [
+            ("From", f"{escape(self.submitter_name)} ({escape(self.submitter_email)})"),
+            ("Brand / tenant", escape(self.tenant_name) if self.tenant_name else "—"),
+            ("Category", escape(self.category)),
+            ("Subject", escape(self.ticket_subject)),
+        ]
+        rows_html = "".join(
+            f'<tr><td style="padding:4px 12px 4px 0;color:#666;'
+            f'white-space:nowrap;vertical-align:top">{label}</td>'
+            f'<td style="padding:4px 0">{value}</td></tr>'
+            for label, value in rows
+        )
+        return (
+            '<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;'
+            'color:#111;line-height:1.5">'
+            "<p>A new support request was submitted from the Spark Help page.</p>"
+            f'<table style="border-collapse:collapse;margin:12px 0">{rows_html}</table>'
+            '<p style="color:#666;margin-bottom:4px">Message:</p>'
+            '<div style="padding:12px;background:#f6f6f6;border-radius:6px;'
+            f'white-space:normal">{body_html}</div>'
+            "</div>"
+        )
+
+    def envelope(self) -> Envelope:
+        return Envelope(
+            subject=self._subject_line(),
+            from_email=getattr(
+                settings,
+                "DEFAULT_FROM_EMAIL",
+                "Spark by Ignite <no-reply@igniteproductions.co>",
+            ),
+            to_emails=self.to_emails,
+            headers={"Reply-To": self.reply_to_email},
+            html=self._html_body(),
         )
 
 
