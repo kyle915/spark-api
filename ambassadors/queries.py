@@ -1155,6 +1155,21 @@ class AmbassadorEventQueries:
             except (TypeError, ValueError, GraphQLError):
                 raise GraphQLError("Invalid tenant id.")
 
+        # Tenant gate: an admin may probe any/all tenants' bookings (the chip
+        # powers the cross-tenant InviteBAModal); a client/non-admin is
+        # constrained to the tenant(s) they belong to so they can't enumerate
+        # which BAs are booked across other brands — including the no-arg
+        # variant that otherwise spans every tenant. A supplied foreign
+        # tenant_id intersects to empty (-> []) rather than leaking.
+        from utils.graphql.permissions import (
+            resolve_request_user_access,
+            _is_admin_access,
+        )
+
+        user = info.context.request.user
+        _rs, _st, _su, _em = await resolve_request_user_access(user)
+        is_admin = _is_admin_access(_rs, _st, _su, _em)
+
         def _fetch() -> List[strawberry.ID]:
             # Only the ambassador FK id is needed, and it's a LOCAL column on
             # AmbassadorEvent — read it directly with values_list. (The old
@@ -1164,6 +1179,14 @@ class AmbassadorEventQueries:
             # event__date / event__tenant_id are WHERE-clause joins, no
             # select_related required.
             qs = a_models.AmbassadorEvent.objects.filter(event__date=target_date)
+            if not is_admin:
+                # Non-admin: hard-constrain to the caller's own tenant(s).
+                allowed_tenant_ids = set(
+                    user.tenanted_users.filter(is_active=True).values_list(
+                        "tenant_id", flat=True
+                    )
+                )
+                qs = qs.filter(event__tenant_id__in=allowed_tenant_ids)
             if resolved_tenant_id is not None:
                 qs = qs.filter(event__tenant_id=resolved_tenant_id)
             seen: set[str] = set()
@@ -1180,7 +1203,12 @@ class AmbassadorEventQueries:
                 out.append(strawberry.ID(key))
             return out
 
-        return await sync_to_async(_fetch, thread_sensitive=True)()
+        # Non-thread-sensitive: this read now runs after an async role
+        # resolution (resolve_request_user_access), and chaining two
+        # thread-sensitive sync_to_async calls can deadlock the single shared
+        # executor under the test harness. A fresh worker thread is safe for a
+        # read-only ORM query.
+        return await sync_to_async(_fetch, thread_sensitive=False)()
 
 
 @strawberry.type
