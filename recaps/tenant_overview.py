@@ -547,6 +547,341 @@ def tenant_monthly_trend(
     return months
 
 
+# Field path from each recap shape to its event's 2-letter US state code.
+# Events carry a dedicated ``state`` FK (``events.models.Event.state`` -> a
+# ``State`` whose ``code`` is the "CA"-style abbreviation the Master
+# Tracker's MARKET column and ``_recent_event_lines`` use). Both recap
+# shapes reach it through their (non-null) ``event`` FK, so grouping by this
+# path is a single join and yields the code the frontend map keys on.
+_LEGACY_STATE_PATH = "event__state__code"
+_CUSTOM_STATE_PATH = "event__state__code"
+
+# The six summable per-state KPIs. ``event_count`` / ``recap_count`` are
+# COUNTs handled separately; these are SUMs that mirror the matching
+# ``TenantKpiTotals`` fields (same DB columns / parse rules as
+# :func:`tenant_kpi_totals`) so a state's row agrees with the tenant total
+# when summed across states.
+_MARKET_KPI_FIELDS = (
+    "consumers_reached",
+    "samples_distributed",
+    "products_sold",
+    "total_engagements",
+)
+
+
+def _blank_market_row(state: str) -> dict:
+    """A zeroed per-state row keyed by the 2-letter ``state`` code."""
+    row = {
+        "state": state,
+        "event_count": 0,
+        "recap_count": 0,
+    }
+    for field in _MARKET_KPI_FIELDS:
+        row[field] = 0
+    return row
+
+
+def _grouped_sum(queryset, group_path: str, sum_field: str) -> dict[str, int]:
+    """``{state_code: SUM(sum_field)}`` grouping ``queryset`` by ``group_path``.
+
+    A single ``.values(group_path).annotate(Sum(...))`` — the GROUP BY runs
+    in the database and only the (<= ~50) per-state buckets come back; no row
+    is loaded into Python. Rows whose state code is null/blank are dropped so
+    they never become a map bucket.
+    """
+    rows = (
+        queryset.values(group_path)
+        .annotate(_v=Sum(sum_field))
+        .values_list(group_path, "_v")
+    )
+    out: dict[str, int] = {}
+    for code, value in rows:
+        if not code:
+            continue
+        out[code] = out.get(code, 0) + int(value or 0)
+    return out
+
+
+def _grouped_count(queryset, group_path: str) -> dict[str, int]:
+    """``{state_code: COUNT(*)}`` grouping ``queryset`` by ``group_path``.
+
+    Database-side ``GROUP BY`` + ``COUNT`` (see :func:`_grouped_sum`); blank
+    state codes are skipped.
+    """
+    rows = (
+        queryset.values(group_path)
+        .annotate(_v=Count("id"))
+        .values_list(group_path, "_v")
+    )
+    out: dict[str, int] = {}
+    for code, value in rows:
+        if not code:
+            continue
+        out[code] = out.get(code, 0) + int(value or 0)
+    return out
+
+
+def _legacy_market_kpis(tenant_id: int, year: int | None = None) -> dict[str, dict]:
+    """Per-state legacy :class:`recaps.models.Recap` KPIs for one tenant.
+
+    The per-state sibling of :func:`_legacy_kpis`: the identical KPI columns
+    (``total_engagements`` / ``products_sold`` off ``Recap``,
+    ``consumers_reached`` off ``ConsumerEngagements``, ``samples_distributed``
+    off ``ProductSamples``) summed in the DB but GROUPED BY the recap's
+    ``event``'s state code instead of rolled into one tenant total. Every
+    queryset is scoped through the event (``…__event__tenant_id``) and
+    year-filtered with the same half-open window; ``year=None`` leaves the
+    SQL unfiltered. Returns ``{state_code: {kpi: value, …}}`` (recap/event
+    counts are added by the caller).
+    """
+    recaps = _filter_year(
+        Recap.objects.filter(event__tenant_id=tenant_id), "created_at", year
+    )
+    engagements = _filter_year(
+        ConsumerEngagements.objects.filter(recap__event__tenant_id=tenant_id),
+        "created_at",
+        year,
+    )
+    samples = _filter_year(
+        ProductSamples.objects.filter(recap__event__tenant_id=tenant_id),
+        "created_at",
+        year,
+    )
+
+    eng_path = f"recap__{_LEGACY_STATE_PATH}"
+    sample_path = f"recap__{_LEGACY_STATE_PATH}"
+
+    per_state: dict[str, dict] = {}
+
+    def _merge(code_map: dict[str, int], field: str) -> None:
+        for code, value in code_map.items():
+            per_state.setdefault(code, {})[field] = (
+                per_state.get(code, {}).get(field, 0) + value
+            )
+
+    _merge(_grouped_sum(recaps, _LEGACY_STATE_PATH, "total_engagements"),
+           "total_engagements")
+    _merge(_grouped_sum(recaps, _LEGACY_STATE_PATH, "products_sold"),
+           "products_sold")
+    _merge(_grouped_sum(engagements, eng_path, "total_consumer"),
+           "consumers_reached")
+    _merge(_grouped_sum(samples, sample_path, "quantity"),
+           "samples_distributed")
+    return per_state
+
+
+def _custom_market_kpis(tenant_id: int, year: int | None = None) -> dict[str, dict]:
+    """Per-state custom :class:`recaps.models.CustomRecap` KPIs for one tenant.
+
+    The per-state sibling of :func:`_custom_kpis`, attributing each metric to
+    the recap's ``event``'s state code:
+
+    * ``total_engagements`` — typed column, summed in the DB grouped by the
+      event state path.
+    * ``samples_distributed`` — STRUCTURED ``CustomRecapProductSample``
+      quantities, summed in the DB grouped by state; falls back PER STATE to
+      that state's summed free-text "consumers sampled" when it has no
+      structured samples (mirrors :func:`_custom_kpis` /
+      ``report_service._accumulate_custom``).
+    * ``consumers_reached`` / ``products_sold`` — parsed from the bounded
+      KPI-relevant ``CustomFieldValue`` rows (same name regex + parse rules
+      as :func:`_custom_kpis`), accumulated per recap and attributed to that
+      recap's event state via a recap_id -> state_code map. We never load a
+      CustomRecap object — only the matched value rows + the small id->state
+      map.
+
+    ``year`` narrows every queryset to its own ``created_at`` within the
+    calendar year, exactly like :func:`_custom_kpis`; ``year=None`` leaves the
+    SQL unfiltered. Returns ``{state_code: {kpi: value, …}}``.
+    """
+    custom_recaps = _filter_year(
+        CustomRecap.objects.filter(tenant_id=tenant_id), "created_at", year
+    )
+    structured_samples_qs = _filter_year(
+        CustomRecapProductSample.objects.filter(custom_recap__tenant_id=tenant_id),
+        "created_at",
+        year,
+    )
+
+    per_state: dict[str, dict] = {}
+
+    def _bucket(code: str) -> dict:
+        return per_state.setdefault(code, {})
+
+    # Typed engagement column groups cleanly in SQL.
+    for code, value in _grouped_sum(
+        custom_recaps, _CUSTOM_STATE_PATH, "total_engagements"
+    ).items():
+        _bucket(code)["total_engagements"] = (
+            _bucket(code).get("total_engagements", 0) + value
+        )
+
+    # Structured custom samples group cleanly in SQL.
+    structured_by_state = _grouped_sum(
+        structured_samples_qs,
+        f"custom_recap__{_CUSTOM_STATE_PATH}",
+        "quantity",
+    )
+
+    # Free-text KPI value rows: pull only the KPI-relevant rows (name regex
+    # matched in SQL), each carrying its recap id + the recap's event state
+    # code, so we can group per recap (for the per-recap parse rules) and
+    # attribute the result to the right state. Bounded slice, never the full
+    # recap tree.
+    rows = (
+        _filter_year(
+            CustomFieldValue.objects.filter(
+                custom_recap__tenant_id=tenant_id,
+                custom_field__name__iregex=_CUSTOM_KPI_NAME_RE.pattern,
+            ),
+            "created_at",
+            year,
+        )
+        .values_list(
+            "custom_recap_id",
+            f"custom_recap__{_CUSTOM_STATE_PATH}",
+            "custom_field__name",
+            "value",
+        )
+        .order_by("custom_recap_id")
+    )
+
+    per_recap: dict[int, dict] = {}
+    for recap_id, state_code, name, value in rows.iterator():
+        entry = per_recap.setdefault(
+            recap_id, {"state": state_code, "pairs": []}
+        )
+        entry["pairs"].append((name, value))
+
+    # Per-state free-text "consumers sampled" total, the structured-sample
+    # fallback source (kept separate from consumers_reached so the fallback
+    # mirrors _custom_kpis' sampled_total).
+    sampled_by_state: dict[str, int] = {}
+
+    for entry in per_recap.values():
+        code = entry["state"]
+        if not code:
+            # No event state -> can't place this recap on the map; its KPIs
+            # are dropped from the per-state view (it still counts in the
+            # whole-tenant tenant_kpi_totals, which doesn't group by state).
+            continue
+        pairs = entry["pairs"]
+        bucket = _bucket(code)
+
+        consumers_sampled = _consumers_sampled_from_fields(pairs)
+        if consumers_sampled is not None:
+            bucket["consumers_reached"] = (
+                bucket.get("consumers_reached", 0) + int(consumers_sampled)
+            )
+            sampled_by_state[code] = (
+                sampled_by_state.get(code, 0) + int(consumers_sampled)
+            )
+
+        sold = _sold_units_from_fields(pairs)
+        if sold is not None:
+            bucket["products_sold"] = bucket.get("products_sold", 0) + int(sold)
+
+    # samples_distributed per state prefers that state's structured
+    # quantities, else falls back to its summed free-text "consumers
+    # sampled" (mirrors _custom_kpis.out["samples_distributed"]).
+    for code in set(structured_by_state) | set(sampled_by_state):
+        if not code:
+            continue
+        _bucket(code)["samples_distributed"] = (
+            structured_by_state.get(code, 0) or sampled_by_state.get(code, 0)
+        )
+    return per_state
+
+
+def tenant_market_performance(
+    tenant_id: int, year: int | None = None
+) -> list[dict]:
+    """Per-US-state KPI roll-up for one tenant, for the geographic heatmap.
+
+    The geographic sibling of :func:`tenant_kpi_totals`: instead of one
+    tenant-wide total, it returns ONE row per US state the tenant has
+    activity in, so the frontend can color a map. Each row is a plain dict::
+
+        {
+            "state": "CA",            # 2-letter code (events.State.code)
+            "event_count": int,       # tenant events in that state
+            "recap_count": int,       # legacy + custom recaps in that state
+            "consumers_reached": int,
+            "samples_distributed": int,
+            "products_sold": int,
+            "total_engagements": int,
+        }
+
+    Grouping is by **the event's US state** — ``Event.state.code`` reached
+    through each recap shape's (non-null) ``event`` FK and through the
+    tenant's events directly — the same dedicated state FK
+    :func:`_recent_event_lines` reads. Rows whose state code is null/blank
+    are skipped (they can't be placed on the map).
+
+    The four summable KPIs reuse the exact column / parse rules of
+    :func:`tenant_kpi_totals` across BOTH recap shapes (legacy ``Recap`` +
+    custom ``CustomRecap``), so summing a KPI across the returned rows equals
+    that tenant's all-state total — with the one documented caveat that
+    recaps whose event has no state are excluded here (they have no map
+    bucket). Aggregation is database-side ``GROUP BY`` per state plus the
+    same bounded free-text custom value rows the tenant total parses; no full
+    recap tree is materialized, and the result is at most ~50 rows.
+
+    ``year=None`` rolls up the tenant's whole history; ``year=Y`` restricts
+    every figure to recaps/events whose ``created_at`` falls in calendar year
+    ``Y`` — the identical half-open window the other tenant aggregates use.
+
+    Rows are returned sorted by state code for a stable, deterministic order.
+    """
+    # Per-state event + recap counts (each a DB GROUP BY + COUNT).
+    event_counts = _grouped_count(
+        _filter_year(
+            Event.objects.filter(tenant_id=tenant_id), "created_at", year
+        ),
+        "state__code",
+    )
+    legacy_recap_counts = _grouped_count(
+        _filter_year(
+            Recap.objects.filter(event__tenant_id=tenant_id), "created_at", year
+        ),
+        _LEGACY_STATE_PATH,
+    )
+    custom_recap_counts = _grouped_count(
+        _filter_year(
+            CustomRecap.objects.filter(tenant_id=tenant_id), "created_at", year
+        ),
+        _CUSTOM_STATE_PATH,
+    )
+
+    legacy_kpis = _legacy_market_kpis(tenant_id, year)
+    custom_kpis = _custom_market_kpis(tenant_id, year)
+
+    # Union every state code that showed up in any of the per-state maps.
+    codes = (
+        set(event_counts)
+        | set(legacy_recap_counts)
+        | set(custom_recap_counts)
+        | set(legacy_kpis)
+        | set(custom_kpis)
+    )
+
+    rows: list[dict] = []
+    for code in sorted(codes):
+        if not code:
+            continue
+        row = _blank_market_row(code)
+        row["event_count"] = event_counts.get(code, 0)
+        row["recap_count"] = legacy_recap_counts.get(
+            code, 0
+        ) + custom_recap_counts.get(code, 0)
+        for field in _MARKET_KPI_FIELDS:
+            row[field] = legacy_kpis.get(code, {}).get(field, 0) + custom_kpis.get(
+                code, {}
+            ).get(field, 0)
+        rows.append(row)
+    return rows
+
+
 def _recent_event_lines(tenant_id: int) -> list[str]:
     """Up to :data:`MAX_RECENT_EVENTS` recent events as 'name · date · city, ST'.
 
