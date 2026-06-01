@@ -77,6 +77,14 @@ class EventManager(models.Manager):
     Custom manager for `Event` that provides helper shortcuts.
     """
 
+    # Request status slugs that mean "this activation is going ahead", so a
+    # materialized Event should land as the tenant's APPROVED EventStatus
+    # rather than the default (which is "pending" on every tenant). Mirrors
+    # the explicit approved-status resolution `create_event_with_request`
+    # already does — keeping the Master Tracker (reads Request.status) and
+    # the Event detail page (reads Event.status) in agreement.
+    APPROVED_REQUEST_STATUS_SLUGS = frozenset({"approved", "scheduled"})
+
     async def from_request(
         self,
         request: models.Model,
@@ -84,7 +92,19 @@ class EventManager(models.Manager):
         event_type: models.Model | None = None,
         status: models.Model | None = None,
     ) -> models.Model:
-        """Create an event from a request."""
+        """Create an event from a request.
+
+        When ``status`` is not supplied, the resolution is:
+          * If the parent request is already approved/scheduled (its own
+            RequestStatus slug ∈ {approved, scheduled}), use the tenant's
+            APPROVED EventStatus (slug="approved") — so an Event created off
+            an approved request never silently inherits the tenant default
+            "pending". This is the same approved status
+            `create_event_with_request` sets explicitly.
+          * Otherwise fall back to the tenant's default EventStatus (then any
+            tenant/global row) so an Event always materializes.
+        Callers may still pass an explicit ``status`` to override this.
+        """
         from .models import EventType, EventStatus
 
         async def get_object_or_default(
@@ -117,7 +137,48 @@ class EventManager(models.Manager):
                 lambda: model_class.objects.order_by("id").first()
             )()
 
+        async def get_approved_event_status(
+            tenant_id: int,
+        ) -> models.Model | None:
+            """The tenant's approved EventStatus (slug="approved"), or None.
+            Same lookup `create_event_with_request` uses, but null-safe
+            (filter().first() instead of .get()) so a tenant missing the row
+            falls through to the default rather than hard-failing."""
+            return await sync_to_async(
+                lambda: EventStatus.objects.filter(
+                    slug="approved", tenant_id=tenant_id
+                )
+                .order_by("id")
+                .first()
+            )()
+
+        async def request_is_approved() -> bool:
+            """True when the parent request's own RequestStatus slug means the
+            activation is going ahead (approved/scheduled). Resolved via
+            ``status_id`` through sync_to_async so this is safe even when the
+            request was fetched without select_related('status') — never
+            touches the lazy FK descriptor in the async context."""
+            from .models import RequestStatus
+
+            status_id = getattr(request, "status_id", None)
+            if not status_id:
+                return False
+            slug = await sync_to_async(
+                lambda: RequestStatus.objects.filter(id=status_id)
+                .values_list("slug", flat=True)
+                .first()
+            )()
+            return (slug or "") in self.APPROVED_REQUEST_STATUS_SLUGS
+
         event_type = await get_object_or_default(EventType, request.tenant_id, event_type)
+
+        # No explicit status: when the parent request is already approved/
+        # scheduled, prefer the approved EventStatus over the tenant default
+        # so the Event's status agrees with the Request's status. Falls back
+        # to the default resolution if the tenant has no "approved" row.
+        if status is None and await request_is_approved():
+            status = await get_approved_event_status(request.tenant_id)
+
         status = await get_object_or_default(EventStatus, request.tenant_id, status)
 
         if not status:
