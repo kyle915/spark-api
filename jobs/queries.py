@@ -1933,26 +1933,55 @@ class JobBriefingQueries:
         UUID — they don't see Job IDs directly — so this is the entry
         point for "show me the briefing for the shift I was offered."
 
+        Caller-aware authorization (``JobScope.can_read_event_briefing``):
+        admins -> any event; a tenant member -> only their own tenant's
+        events; a BA -> only an event their ambassador is linked to (offered
+        via ``AmbassadorEvent`` with ``is_approved=False``, assigned, or
+        on-roster) so the mobile shift-offer flow keeps working. Anyone else,
+        or an out-of-scope event, gets ``null``. Never raises past the auth
+        gate.
+
         Returns None when no job is attached to the event (BA accepting
         a shift before the job's been posted)."""
-        def _get():
+        from jobs.job_scope import JobScope
+
+        def _load_job():
             try:
                 event_uuid_str = str(event_uuid)
             except Exception:
                 return None
             try:
-                job = (
+                return (
                     models.Job.objects
                     .prefetch_related("briefing_attachments")
-                    .select_related("briefing_template")
+                    .select_related("briefing_template", "event")
                     .filter(event__uuid=event_uuid_str)
                     .order_by("-id")
                     .first()
                 )
             except Exception:
                 return None
-            if not job:
-                return None
+
+        job = await sync_to_async(_load_job)()
+        if not job:
+            return None
+
+        # Gate on the parent event's tenant + id BEFORE returning anything —
+        # the briefing is keyed by a bare event UUID with no implicit
+        # ownership, so any authenticated caller could otherwise read any
+        # tenant's brand/products/instructions cross-tenant.
+        try:
+            allowed = await JobScope().can_read_event_briefing(
+                info,
+                event_tenant_id=job.event.tenant_id,
+                event_id=job.event_id,
+            )
+        except Exception:
+            return None
+        if not allowed:
+            return None
+
+        def _payload():
             return types.JobBriefingPayload(
                 title=job.briefing_title or "",
                 body=job.briefing_body or "",
@@ -1962,7 +1991,7 @@ class JobBriefingQueries:
                 ),
                 attachments=list(job.briefing_attachments.all()),
             )
-        return await sync_to_async(_get)()
+        return await sync_to_async(_payload)()
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def job_briefing(
