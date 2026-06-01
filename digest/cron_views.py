@@ -515,6 +515,99 @@ class SendDocumentExpiryRemindersView(View):
         return JsonResponse({"ok": True, "endpoint": "send-document-expiry-reminders"})
 
 
+@method_decorator(csrf_exempt, name="dispatch")
+class SendScheduledClientReportsView(View):
+    """POST `/internal/cron/send-scheduled-client-reports`.
+
+    Fires `send_scheduled_client_reports` — generates each opted-in tenant's
+    monthly client performance-report PDF and emails it to that tenant's
+    client contacts. Designed for the MONTHLY GHA cron (1st of the month):
+    with no args the command reports the prior COMPLETE calendar month, so a
+    1st-of-month run covers the month that just ended.
+
+    SAFE — OPT-IN OFF by default. The command only touches tenants with
+    `scheduled_report_enabled=True` AND a non-empty recipient list; that flag
+    defaults to False, so until Ignite flips a client on, a scheduled run
+    emails NOBODY.
+
+    Body / query params (all optional):
+      - dry_run: "1" / "true" / "yes" — generate the PDF + log recipients,
+        but send NO email.
+      - tenant: int — restrict to a single tenant id (does NOT bypass the
+        opt-in gate).
+      - month: "YYYY-MM" — override the reporting month (default: prior
+        complete month).
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _bool(name: str, default: bool = False) -> bool:
+            raw = (request.GET.get(name) or request.POST.get(name) or "").lower()
+            if not raw:
+                return default
+            return raw in ("1", "true", "yes", "on")
+
+        dry_run = _bool("dry_run", default=False)
+
+        tenant = request.GET.get("tenant") or request.POST.get("tenant")
+        if tenant:
+            try:
+                int(tenant)
+            except ValueError:
+                return JsonResponse(
+                    {"ok": False, "error": "tenant must be an integer"},
+                    status=400,
+                )
+
+        month = request.GET.get("month") or request.POST.get("month")
+
+        # No args -> command defaults to the prior complete month, which is
+        # exactly what a 1st-of-month run wants.
+        cmd_args: list[str] = []
+        if dry_run:
+            cmd_args.append("--dry-run")
+        if tenant:
+            cmd_args.extend(["--tenant", str(tenant)])
+        if month:
+            cmd_args.extend(["--month", str(month)])
+
+        out = io.StringIO()
+        try:
+            call_command("send_scheduled_client_reports", *cmd_args, stdout=out)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("Scheduled client reports cron failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "log": out.getvalue(),
+                },
+                status=500,
+            )
+
+        return JsonResponse(
+            {
+                "ok": True,
+                "dry_run": dry_run,
+                "tenant": tenant,
+                "month": month,
+                "log": out.getvalue(),
+            }
+        )
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        return JsonResponse(
+            {"ok": True, "endpoint": "send-scheduled-client-reports"}
+        )
+
+
 def _registered_views() -> dict[str, Any]:
     """Map URL path → view class. Lets `digest/urls.py` mount these
     without each one being re-exported explicitly.
@@ -526,4 +619,5 @@ def _registered_views() -> dict[str, Any]:
         "send-recap-reminders": SendRecapRemindersView,
         "send-payment-notifications": SendPaymentNotificationsView,
         "send-document-expiry-reminders": SendDocumentExpiryRemindersView,
+        "send-scheduled-client-reports": SendScheduledClientReportsView,
     }
