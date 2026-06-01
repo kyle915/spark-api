@@ -523,6 +523,34 @@ class InsightReport(models.Model):
         return f"{self.title} ({self.priority})"
 
 
+class TenantInsightSnapshot(models.Model):
+    """A cached set of proactive "what's notable" AI insights for a tenant.
+
+    Distinct from :class:`Insights` / :class:`InsightReport` (which analyze
+    ConsumerFeedback text over a date range): this is the server-side cache
+    for the dashboard's PROACTIVE insights — a small list of auto-generated
+    headline observations about the client's whole program, surfaced without
+    the user asking. Each snapshot is one generation; the newest one younger
+    than the read freshness window is served, and a daily cron precomputes a
+    fresh snapshot so dashboard reads stay fast (see
+    :func:`recaps.tenant_insights.get_or_refresh_tenant_insights`).
+
+    ``items`` is the parsed list of insight dicts straight off the model
+    (``{title, detail, sentiment, metric}`` each); it is stored verbatim so
+    the GraphQL layer can shape it without a second model table.
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    tenant = models.ForeignKey(
+        Tenant, on_delete=models.CASCADE, related_name="insight_snapshots"
+    )
+    generated_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    items = models.JSONField(default=list)
+
+    def __str__(self) -> str:
+        return f"Insight snapshot for tenant {self.tenant_id} @ {self.generated_at}"
+
+
 class Goal(models.Model):
     """
     Per-user, per-tenant, per-year goals (target values only).

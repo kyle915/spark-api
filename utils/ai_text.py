@@ -260,6 +260,81 @@ def generate_structured_answer(
         return generate_summary(system, user, max_tokens=max_tokens), None
 
 
+def generate_json(
+    system: str, user: str, *, schema: dict, max_tokens: int = 2000
+) -> dict | None:
+    """Generate a strict-JSON object matching ``schema`` (structured outputs).
+
+    The general-purpose sibling of :func:`generate_structured_answer`: where
+    that one is hard-wired to the ``{answer, chart}`` shape, this takes an
+    arbitrary caller-supplied JSON Schema and returns the parsed object. Uses
+    OpenAI **structured outputs** (``response_format`` json_schema, strict),
+    reusing the same shared auth + model-fallback path every other helper here
+    uses, so a not-yet-enabled configured model retries against
+    :data:`_FALLBACK_MODEL`.
+
+    Args:
+        system: The system prompt (role/persona + constraints).
+        user: The user prompt (the data the model reasons over).
+        schema: A JSON Schema for the response object. For strict mode it must
+            set ``additionalProperties: false`` and list ALL properties in
+            ``required`` at every object level (nullable fields express
+            "optional" via a union type, e.g. ``["string", "null"]``).
+        max_tokens: Cap on the completion length.
+
+    Returns:
+        The parsed JSON object (a ``dict``) on success, or **None** on ANY
+        mid-flight failure — an HTTP/model error (including a model that
+        rejects ``json_schema``), an empty completion, or unparseable / non-
+        object JSON. Callers degrade gracefully on ``None``.
+
+    Raises:
+        AiUnavailable: ONLY when the service is unconfigured (no
+            ``OPENAI_API_KEY``). Every other failure returns ``None`` instead
+            of raising, so a caller can fall back to an empty result without a
+            try/except around the parse path.
+    """
+    # Read the key up front so a genuinely-unconfigured service raises
+    # AiUnavailable here (the documented "no key" contract) rather than being
+    # swallowed into the None return below.
+    headers = _auth_headers()
+
+    def _ask(model_name: str) -> dict:
+        payload = {
+            "model": model_name,
+            "messages": _chat_messages(system, user),
+            "max_completion_tokens": max_tokens,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "structured_json",
+                    "strict": True,
+                    "schema": schema,
+                },
+            },
+        }
+        body = _post_json(
+            OPENAI_CHAT_COMPLETIONS_URL,
+            payload,
+            headers,
+            timeout=DEFAULT_TIMEOUT_SECONDS,
+        )
+        content = _extract_message_text(body)
+        parsed = json.loads(content)  # JSONDecodeError caught below
+        if not isinstance(parsed, dict):
+            raise ValueError("structured JSON was not an object")
+        return parsed
+
+    try:
+        return _with_model_fallback(_ask)
+    except Exception:
+        # ANY mid-flight failure (HTTP/model error incl. a model that rejects
+        # json_schema, empty completion, bad/garbled JSON, non-object result)
+        # degrades to None. The unconfigured-key guard already raised
+        # AiUnavailable above, before we got here, so it still propagates.
+        return None
+
+
 def _extract_message_text(body: dict) -> str:
     """Pull ``choices[0].message.content`` out of an OpenAI response.
 
