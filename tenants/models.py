@@ -588,3 +588,49 @@ class Goal(models.Model):
 
     def __str__(self):
         return f"Goals {self.year} for user {self.user_id} @ tenant {self.tenant_id}"
+
+
+class TenantGoal(models.Model):
+    """Per-CLIENT (tenant-level), per-year KPI targets for the headline KPIs.
+
+    The client-level sibling of :class:`Goal` (which stores per-USER targets
+    for the team dashboard). One row per (tenant, year) holds the brand's
+    annual targets for the four headline KPIs the report surface tracks.
+    Pace-to-goal is computed at query time by comparing each target against
+    the live actuals from
+    :func:`recaps.tenant_overview.tenant_kpi_totals` (year-filtered), so no
+    "current" value is stored here.
+
+    NOTE on ``related_name``: the spec asked for ``related_name="goals"``,
+    but :class:`Goal` already owns ``Tenant.goals`` (its per-user reverse
+    accessor). Two FKs to ``Tenant`` cannot share one reverse accessor
+    (Django ``fields.E304``), so this uses ``related_name="kpi_goals"`` to
+    keep ``manage.py check`` green while leaving the existing per-user
+    ``Goal`` accessor untouched.
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    tenant = models.ForeignKey(
+        Tenant,
+        on_delete=models.CASCADE,
+        related_name="kpi_goals",
+    )
+    year = models.IntegerField()
+
+    # Annual targets for the four headline KPIs (0 = no target set). These
+    # mirror the like-named fields on
+    # :class:`recaps.tenant_overview.TenantKpiTotals`, which supplies the
+    # matching "current" actuals at query time.
+    target_consumers_reached = models.IntegerField(default=0)
+    target_samples_distributed = models.IntegerField(default=0)
+    target_products_sold = models.IntegerField(default=0)
+    target_total_engagements = models.IntegerField(default=0)
+
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ("tenant", "year")
+
+    def __str__(self) -> str:
+        return f"KPI goals {self.year} @ tenant {self.tenant_id}"
