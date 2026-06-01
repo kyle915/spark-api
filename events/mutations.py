@@ -3099,9 +3099,26 @@ class RequestMutations:
                                 .first()
                             )()
                             if existing is None:
+                                # The request was just flipped to approved, so
+                                # the Event must land as the tenant's APPROVED
+                                # EventStatus — NOT the default "pending" — so
+                                # the Event detail page agrees with the
+                                # tracker. Mirrors create_event_with_request's
+                                # explicit approved-status resolution. Null-safe
+                                # so a tenant missing the row falls through to
+                                # from_request's default handling.
+                                event_approved_status = await sync_to_async(
+                                    lambda: models.EventStatus.objects.filter(
+                                        slug="approved",
+                                        tenant_id=request_with_relations.tenant_id,
+                                    )
+                                    .order_by("id")
+                                    .first()
+                                )()
                                 await models.Event.objects.from_request(
                                     request=request_with_relations,
                                     created_by=service.user,
+                                    status=event_approved_status,
                                 )
                         except Exception:
                             import logging
@@ -3508,9 +3525,24 @@ class RequestMutations:
             )()
             if event is None:
                 try:
+                    # The request was just flipped to approved, so the Event
+                    # must land as the tenant's APPROVED EventStatus — NOT the
+                    # default "pending" — so the Event detail page agrees with
+                    # the Master Tracker. Mirrors create_event_with_request's
+                    # explicit approved-status resolution. Null-safe so a
+                    # tenant missing the row falls through to from_request's
+                    # default handling.
+                    event_approved_status = await sync_to_async(
+                        lambda: models.EventStatus.objects.filter(
+                            slug="approved", tenant_id=request.tenant_id
+                        )
+                        .order_by("id")
+                        .first()
+                    )()
                     event = await models.Event.objects.from_request(
                         request=request,
                         created_by=user,
+                        status=event_approved_status,
                     )
                 except Exception as exc:
                     # Don't block approval if event creation fails — log via
