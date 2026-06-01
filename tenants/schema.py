@@ -35,6 +35,7 @@ from .mutations import (
 )
 from .calendar import GoogleCalendarMutations, GoogleCalendarQueries
 from .preferences import MyPreferencesQueries, MyPreferencesMutations
+from .forms import TenantFormsQueries, TenantFormsMutations
 from .dashboard.schema import DashboardQueries
 from utils.graphql.relay import (
     CountableConnection,
@@ -513,7 +514,12 @@ class MutationAmbassadors(
 # Clients Schemas
 # @strawberry.django.type(model=get_user_model())
 @strawberry_django.type(User)
-class QueryClients(GoogleCalendarQueries, TenantThemingQuery, MyPreferencesQueries):
+class QueryClients(
+    GoogleCalendarQueries,
+    TenantThemingQuery,
+    MyPreferencesQueries,
+    TenantFormsQueries,
+):
     @strawberry.field
     def healthcheck(self) -> str:
         return "ok"
@@ -766,6 +772,10 @@ class MutationClients(
     # Per-user Settings prefs (setMyPreferences). The web Settings page
     # talks to the clients GraphQL endpoint, so the upsert lives here.
     MyPreferencesMutations,
+    # Form Builder definition persistence (saveForm/updateForm/deleteForm).
+    # The web Form Builder talks to the clients GraphQL endpoint, so the
+    # tenant-scoped form mutations live here too.
+    TenantFormsMutations,
 ):
     verify_token = mutations.VerifyToken.field
     token_auth = mutations.ObtainJSONWebToken.field
