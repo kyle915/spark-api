@@ -26,6 +26,7 @@ import html as _html
 
 from recaps import report_service
 from recaps.pdf import _PDF_BASE_CSS, bytes_to_data_uri, safe
+from recaps.report_charts import kpi_bar_svg
 from utils.gcs import download_blob_bytes, extract_blob_name_from_url
 
 # Embedding every photo as a base64 data URI is what makes the PDF
@@ -169,6 +170,7 @@ def _build_report_html(data: report_service.CampaignReportData) -> str:
     <section class="card">
       <h2>Performance</h2>
       {_kpi_tiles(data.kpis)}
+      <div class="kpi-chart-wrap">{kpi_bar_svg(data.kpis)}</div>
     </section>
 
     <section class="card">
@@ -244,6 +246,8 @@ _REPORT_CSS = """
             margin-bottom: 6px;
         }
         .kpi strong { font-size: 20px; font-weight: 700; color: #111827; }
+        .kpi-chart-wrap { margin-top: 16px; }
+        .kpi-chart { display: block; width: 100%; }
         table.evt {
             width: 100%;
             border-collapse: collapse;
