@@ -32,7 +32,11 @@ from recaps.tenant_overview import (
     tenant_kpi_totals,
     tenant_monthly_trend,
 )
-from utils.ai_text import AiUnavailable, generate_summary
+from utils.ai_text import (
+    AiUnavailable,
+    generate_structured_answer,
+    generate_summary,
+)
 from utils.graphql.mixins import SparkGraphQLMixin, resolve_id_to_int
 from utils.graphql.permissions import (
     StrictIsAuthenticated,
@@ -66,7 +70,15 @@ _AI_ANSWER_SYSTEM_PROMPT = (
     "paragraphs or bullet points when they aid clarity. Be thorough but do "
     "not pad or repeat. Never invent or estimate numbers that are not "
     "present in the data. If the data does not contain the answer, say "
-    "plainly that it cannot be determined from this campaign's data."
+    "plainly that it cannot be determined from this campaign's data. "
+    "Include a `chart` ONLY when the question is naturally answered by a "
+    "visualization — a trend over time, a comparison, or a breakdown — and "
+    "build it ONLY from numbers that appear in the provided data (never "
+    "invented or estimated). Pick `bar` for comparisons/breakdowns and "
+    "`line` for trends over time; `labels` are the categories or time "
+    "buckets and each series' `data` aligns one-to-one with them. The "
+    "`answer` text must stand on its own and still state the numbers even "
+    "when a chart is present. In every other case set `chart` to null."
 )
 
 # Hard cap on the inbound question length — keeps the prompt bounded and
@@ -88,7 +100,14 @@ _AI_TENANT_ANSWER_SYSTEM_PROMPT = (
     "thorough but do not pad or repeat. Never invent or estimate numbers "
     "that are not present in the data. If the data does not contain the "
     "answer, say plainly that it cannot be determined from this client's "
-    "data."
+    "data. Include a `chart` ONLY when the question is naturally answered "
+    "by a visualization — a trend over time, a comparison, or a breakdown — "
+    "and build it ONLY from numbers that appear in the provided data (never "
+    "invented or estimated). Pick `bar` for comparisons/breakdowns and "
+    "`line` for trends over time; `labels` are the categories or time "
+    "buckets and each series' `data` aligns one-to-one with them. The "
+    "`answer` text must stand on its own and still state the numbers even "
+    "when a chart is present. In every other case set `chart` to null."
 )
 
 
@@ -171,6 +190,94 @@ class CampaignReportAiSummary:
 
 
 @strawberry.type
+class AiChartSeries:
+    """One named data series within an :class:`AiChart`.
+
+    ``data`` aligns positionally with the parent chart's ``labels`` (one
+    value per label). The model builds these ONLY from numbers present in
+    the provided data.
+    """
+
+    label: str
+    data: list[float]
+
+
+@strawberry.type
+class AiChart:
+    """An optional, AI-chosen visualization accompanying an answer.
+
+    Returned alongside the text answer ONLY when a question is naturally
+    answered by a chart (a trend, comparison, or breakdown); otherwise the
+    answer's ``chart`` field is null. ``type`` is ``"bar"`` or ``"line"``;
+    ``labels`` are the shared x-axis categories/buckets and each entry of
+    ``series`` carries one line/bar's values. The frontend renders this in
+    a separate task — the text ``answer`` always stands on its own.
+    """
+
+    type: str
+    title: str | None
+    labels: list[str]
+    series: list[AiChartSeries]
+
+
+# Chart shapes the frontend can render. Anything else from the model is
+# treated as "no chart" rather than surfaced raw.
+_AI_CHART_TYPES = frozenset({"bar", "line"})
+
+
+def _build_ai_chart(chart: dict | None) -> AiChart | None:
+    """Coerce a model-supplied chart dict into an :class:`AiChart`, or None.
+
+    Defensive on purpose: the chart is a bonus on top of the text answer, so
+    a missing, wrong-typed, or malformed chart NEVER raises — it just yields
+    ``None`` (the answer is returned regardless). A chart is only built when
+    every piece is well-formed: a known ``type``, string ``labels``, and at
+    least one series whose ``data`` are all numbers. ``title`` is optional.
+    """
+    if not isinstance(chart, dict):
+        return None
+
+    chart_type = chart.get("type")
+    if chart_type not in _AI_CHART_TYPES:
+        return None
+
+    raw_labels = chart.get("labels")
+    if not isinstance(raw_labels, list) or not all(
+        isinstance(label, str) for label in raw_labels
+    ):
+        return None
+    labels = list(raw_labels)
+
+    raw_series = chart.get("series")
+    if not isinstance(raw_series, list) or not raw_series:
+        return None
+
+    series: list[AiChartSeries] = []
+    for item in raw_series:
+        if not isinstance(item, dict):
+            return None
+        series_label = item.get("label")
+        raw_data = item.get("data")
+        if not isinstance(series_label, str):
+            return None
+        if not isinstance(raw_data, list) or not all(
+            # bool is an int subclass; exclude it so True/False can't pose as
+            # a data point. Numbers are normalised to float for the schema.
+            isinstance(value, (int, float)) and not isinstance(value, bool)
+            for value in raw_data
+        ):
+            return None
+        series.append(
+            AiChartSeries(label=series_label, data=[float(v) for v in raw_data])
+        )
+
+    raw_title = chart.get("title")
+    title = raw_title if isinstance(raw_title, str) else None
+
+    return AiChart(type=chart_type, title=title, labels=labels, series=series)
+
+
+@strawberry.type
 class CampaignReportAiAnswer:
     """Result of an on-demand freeform Q&A over one campaign's report.
 
@@ -181,11 +288,17 @@ class CampaignReportAiAnswer:
     ``answer`` is ``""`` and ``reason`` carries a short, human-readable
     explanation. The resolver never raises — degradation is always a
     value, never a GraphQL error.
+
+    ``chart`` is an OPTIONAL visualization the model chose to include when
+    the question is naturally answered by one; it is null whenever no chart
+    is warranted (or ``ok`` is false). A present-but-garbled chart from the
+    model also yields null — the text ``answer`` is never affected.
     """
 
     ok: bool
     answer: str
     reason: str | None = None
+    chart: AiChart | None = None
 
 
 @strawberry.type
@@ -201,11 +314,17 @@ class TenantAiAnswer:
     ``answer`` is ``""`` and ``reason`` carries a short, human-readable
     explanation. The resolver never raises — degradation is always a
     value, never a GraphQL error.
+
+    ``chart`` is an OPTIONAL visualization the model chose to include when
+    the question is naturally answered by one; it is null whenever no chart
+    is warranted (or ``ok`` is false). A present-but-garbled chart from the
+    model also yields null — the text ``answer`` is never affected.
     """
 
     ok: bool
     answer: str
     reason: str | None = None
+    chart: AiChart | None = None
 
 
 @strawberry.type
@@ -629,22 +748,26 @@ class CampaignReportQueries:
 
         user_prompt = _compose_ai_summary_prompt(data) + "\n\nQuestion: " + question
         try:
-            answer = await sync_to_async(generate_summary, thread_sensitive=True)(
-                _AI_ANSWER_SYSTEM_PROMPT, user_prompt, max_tokens=8000
-            )
+            answer, chart = await sync_to_async(
+                generate_structured_answer, thread_sensitive=True
+            )(_AI_ANSWER_SYSTEM_PROMPT, user_prompt, max_tokens=8000)
         except AiUnavailable as exc:
             return CampaignReportAiAnswer(ok=False, answer="", reason=str(exc))
         except Exception:
-            # Belt-and-suspenders: generate_summary already funnels every
-            # failure through AiUnavailable, but never let an unexpected
-            # error escape the resolver.
+            # Belt-and-suspenders: generate_structured_answer already funnels
+            # every failure through AiUnavailable (or its text fallback), but
+            # never let an unexpected error escape the resolver.
             return CampaignReportAiAnswer(
                 ok=False,
                 answer="",
                 reason="The answer could not be generated.",
             )
 
-        return CampaignReportAiAnswer(ok=True, answer=answer, reason=None)
+        # A missing/garbled chart just yields chart=None — the text answer is
+        # always returned (see _build_ai_chart).
+        return CampaignReportAiAnswer(
+            ok=True, answer=answer, reason=None, chart=_build_ai_chart(chart)
+        )
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def tenant_ai_answer(
@@ -703,22 +826,26 @@ class CampaignReportQueries:
 
         user_prompt = overview + "\n\nQuestion: " + question
         try:
-            answer = await sync_to_async(generate_summary, thread_sensitive=True)(
-                _AI_TENANT_ANSWER_SYSTEM_PROMPT, user_prompt, max_tokens=8000
-            )
+            answer, chart = await sync_to_async(
+                generate_structured_answer, thread_sensitive=True
+            )(_AI_TENANT_ANSWER_SYSTEM_PROMPT, user_prompt, max_tokens=8000)
         except AiUnavailable as exc:
             return TenantAiAnswer(ok=False, answer="", reason=str(exc))
         except Exception:
-            # Belt-and-suspenders: generate_summary already funnels every
-            # failure through AiUnavailable, but never let an unexpected
-            # error escape the resolver.
+            # Belt-and-suspenders: generate_structured_answer already funnels
+            # every failure through AiUnavailable (or its text fallback), but
+            # never let an unexpected error escape the resolver.
             return TenantAiAnswer(
                 ok=False,
                 answer="",
                 reason="The answer could not be generated.",
             )
 
-        return TenantAiAnswer(ok=True, answer=answer, reason=None)
+        # A missing/garbled chart just yields chart=None — the text answer is
+        # always returned (see _build_ai_chart).
+        return TenantAiAnswer(
+            ok=True, answer=answer, reason=None, chart=_build_ai_chart(chart)
+        )
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def tenant_kpis(
