@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import strawberry
 from asgiref.sync import sync_to_async
+from django.db import transaction
 from django.utils import timezone
 
 from recaps import report_service
@@ -434,6 +435,125 @@ def _build_tenant_kpis(tenant_id: int, year: int | None = None) -> TenantKpis:
             for m in trend
         ],
     )
+
+
+# The headline KPIs that have a per-client annual target on
+# ``tenants.models.TenantGoal``. Each tuple is
+# ``(metric_key, human_label, TenantGoal target field, TenantKpiTotals
+# current field)``. ``metric_key`` and ``current`` field share the same
+# name as the matching ``TenantKpiTotals`` attribute, so the "current"
+# actual is read straight off the year-filtered totals — keeping the
+# goal items and the ``tenantKpis`` roll-up on the same source of truth.
+#
+# Only these four headline KPIs are goal-tracked because ``TenantGoal``
+# stores exactly these four target columns (and ``setTenantGoals`` writes
+# exactly these four). The other headline KPIs in ``tenant_kpi_totals``
+# (first_time_consumers, brand_aware_consumers, willing_to_purchase) have
+# no target column and so are not part of the pace-to-target view.
+_TENANT_GOAL_METRICS: tuple[tuple[str, str, str, str], ...] = (
+    (
+        "consumers_reached",
+        "Consumers reached",
+        "target_consumers_reached",
+        "consumers_reached",
+    ),
+    (
+        "samples_distributed",
+        "Samples distributed",
+        "target_samples_distributed",
+        "samples_distributed",
+    ),
+    (
+        "products_sold",
+        "Products sold",
+        "target_products_sold",
+        "products_sold",
+    ),
+    (
+        "total_engagements",
+        "Total engagements",
+        "target_total_engagements",
+        "total_engagements",
+    ),
+)
+
+
+@strawberry.type
+class TenantGoalItem:
+    """Pace-to-target for ONE headline KPI in a given year.
+
+    ``metric`` is the machine key (matches the ``TenantKpiTotals`` field);
+    ``label`` is the human-readable name for the UI. ``target`` is the
+    client's annual goal for this KPI (0 when none is set) and ``current``
+    is the live actual for the same year (from
+    :func:`recaps.tenant_overview.tenant_kpi_totals`). ``pace_pct`` is
+    ``current / target * 100`` rounded to one decimal, or ``0.0`` when no
+    target is set (target ``<= 0``) — it is NOT capped at 100, so a beaten
+    goal reads above 100%.
+    """
+
+    metric: str
+    label: str
+    target: int
+    current: int
+    pace_pct: float
+
+
+@strawberry.type
+class TenantGoals:
+    """A client's pace-to-target across the goal-tracked headline KPIs.
+
+    ``year`` is the calendar year the targets and actuals are scoped to;
+    ``items`` holds one :class:`TenantGoalItem` per goal-tracked headline
+    KPI (see :data:`_TENANT_GOAL_METRICS`). The resolver NEVER raises — a
+    missing/out-of-scope tenant resolves to ``TenantGoals(year, items=[])``,
+    matching the rest of the report surface.
+    """
+
+    year: int
+    items: list[TenantGoalItem]
+
+
+def _pace_pct(current: int, target: int) -> float:
+    """``current / target * 100`` to 1 dp, or ``0.0`` when target ``<= 0``.
+
+    Uncapped on purpose: a client that beat its goal should read above
+    100% rather than be clamped.
+    """
+    if target <= 0:
+        return 0.0
+    return round(current / target * 100, 1)
+
+
+def _build_tenant_goals(tenant_id: int, year: int) -> TenantGoals:
+    """Assemble :class:`TenantGoals` for one tenant + calendar year.
+
+    Synchronous Django ORM (the resolver wraps it in ``sync_to_async``).
+    Loads the (tenant, year) :class:`tenants.models.TenantGoal` — a MISSING
+    row is treated as all-zero targets, never an error — and the live
+    actuals for that same year via
+    :func:`recaps.tenant_overview.tenant_kpi_totals`, then builds one
+    :class:`TenantGoalItem` per goal-tracked headline KPI.
+    """
+    from tenants.models import TenantGoal
+
+    goal = TenantGoal.objects.filter(tenant_id=tenant_id, year=year).first()
+    totals = tenant_kpi_totals(tenant_id, year=year)
+
+    items: list[TenantGoalItem] = []
+    for metric, label, target_field, current_field in _TENANT_GOAL_METRICS:
+        target = int(getattr(goal, target_field, 0) or 0) if goal else 0
+        current = int(getattr(totals, current_field, 0) or 0)
+        items.append(
+            TenantGoalItem(
+                metric=metric,
+                label=label,
+                target=target,
+                current=current,
+                pace_pct=_pace_pct(current, target),
+            )
+        )
+    return TenantGoals(year=year, items=items)
 
 
 @strawberry.type
@@ -996,6 +1116,60 @@ class CampaignReportQueries:
         return data
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def tenant_goals(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID,
+        year: int | None = None,
+    ) -> TenantGoals:
+        """Pace-to-target for one client's headline KPIs in a given year.
+
+        Loads the client's annual targets (``tenants.models.TenantGoal``
+        for the (tenant, year) pair — a MISSING row is treated as all-zero
+        targets) and the live actuals for that same year (via
+        :func:`recaps.tenant_overview.tenant_kpi_totals`), and returns one
+        :class:`TenantGoalItem` per goal-tracked headline KPI with its
+        target, current actual, and pace percentage.
+
+        ``year`` defaults to the CURRENT calendar year when omitted/null.
+
+        Tenant scoping is identical to :meth:`tenant_kpis`
+        (:meth:`_CampaignReportService.resolve_target_tenant_id`):
+        client-role users may ONLY read their own tenant — the ``tenant_id``
+        argument is overridden to their own; admins (spark-admin / staff /
+        superuser / ``@igniteproductions.co``) may target any tenant.
+
+        Never raises: a missing or out-of-scope tenant, or any aggregation
+        error, resolves to ``TenantGoals(year=<year>, items=[])`` rather
+        than a GraphQL error.
+        """
+        resolved_year = year if year is not None else timezone.now().year
+
+        service = _CampaignReportService()
+        target_tenant_id = await service.resolve_target_tenant_id(info, tenant_id)
+        if target_tenant_id is None:
+            return TenantGoals(year=resolved_year, items=[])
+
+        def _build():
+            # Guard the tenant's existence the same way tenant_kpis does, so
+            # an admin passing an unknown id degrades to empty items instead
+            # of reporting actuals/targets over no tenant.
+            from tenants.models import Tenant
+
+            if not Tenant.objects.filter(id=target_tenant_id).exists():
+                return None
+            return _build_tenant_goals(target_tenant_id, resolved_year)
+
+        try:
+            data = await sync_to_async(_build, thread_sensitive=True)()
+        except Exception:
+            return TenantGoals(year=resolved_year, items=[])
+
+        if data is None:
+            return TenantGoals(year=resolved_year, items=[])
+        return data
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def tenant_insights(
         self,
         info: strawberry.Info,
@@ -1045,3 +1219,107 @@ class CampaignReportQueries:
 
         items, generated_at = result
         return _build_tenant_insights_type(items, generated_at)
+
+
+# Maps each ``setTenantGoals`` mutation argument to its ``TenantGoal``
+# column. Only arguments the caller actually provides (non-null) are
+# written, so a partial update leaves the other targets untouched.
+_SET_TENANT_GOAL_FIELDS: tuple[tuple[str, str], ...] = (
+    ("target_consumers_reached", "target_consumers_reached"),
+    ("target_samples_distributed", "target_samples_distributed"),
+    ("target_products_sold", "target_products_sold"),
+    ("target_total_engagements", "target_total_engagements"),
+)
+
+
+@strawberry.type
+class TenantGoalsMutations:
+    """Mutation surface for per-client KPI targets (the clients schema).
+
+    The write side of the ``tenantGoals`` query: upserts one client's
+    annual targets and returns the refreshed pace-to-target view. Tenant
+    scoping matches the read resolvers exactly
+    (:meth:`_CampaignReportService.resolve_target_tenant_id`): admins may
+    target any tenant; clients are pinned to their own.
+    """
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def set_tenant_goals(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID,
+        year: int,
+        target_consumers_reached: int | None = None,
+        target_samples_distributed: int | None = None,
+        target_products_sold: int | None = None,
+        target_total_engagements: int | None = None,
+    ) -> TenantGoals:
+        """Upsert one client's annual KPI targets; return the refreshed goals.
+
+        Creates or updates the (tenant, year)
+        :class:`tenants.models.TenantGoal`, writing ONLY the targets the
+        caller supplies (a null argument leaves that target as-is — newly
+        created rows keep the model default of 0 for any target left null).
+        Returns the same shape as the ``tenantGoals`` query, recomputed
+        against the live actuals for ``year``.
+
+        Tenant scoping (see
+        :meth:`_CampaignReportService.resolve_target_tenant_id`):
+        client-role users may ONLY write their own tenant — the
+        ``tenant_id`` argument is overridden to their own; admins
+        (spark-admin / staff / superuser / ``@igniteproductions.co``) may
+        target any tenant.
+
+        Degrades like the read side rather than raising: an out-of-scope /
+        unusable tenant id, or an unknown tenant, resolves to
+        ``TenantGoals(year=<year>, items=[])``.
+        """
+        service = _CampaignReportService()
+        target_tenant_id = await service.resolve_target_tenant_id(info, tenant_id)
+        if target_tenant_id is None:
+            return TenantGoals(year=year, items=[])
+
+        # Collect only the targets the caller actually provided (non-null),
+        # so a partial mutation never clobbers untouched targets.
+        provided = {
+            field: value
+            for (arg, field), value in zip(
+                _SET_TENANT_GOAL_FIELDS,
+                (
+                    target_consumers_reached,
+                    target_samples_distributed,
+                    target_products_sold,
+                    target_total_engagements,
+                ),
+            )
+            if value is not None
+        }
+
+        def _upsert():
+            from tenants.models import Tenant, TenantGoal
+
+            if not Tenant.objects.filter(id=target_tenant_id).exists():
+                return None
+
+            with transaction.atomic():
+                goal, _created = TenantGoal.objects.get_or_create(
+                    tenant_id=target_tenant_id,
+                    year=year,
+                )
+                if provided:
+                    update_fields = ["updated_at"]
+                    for field, value in provided.items():
+                        setattr(goal, field, value)
+                        update_fields.append(field)
+                    goal.save(update_fields=update_fields)
+
+            return _build_tenant_goals(target_tenant_id, year)
+
+        try:
+            data = await sync_to_async(_upsert, thread_sensitive=True)()
+        except Exception:
+            return TenantGoals(year=year, items=[])
+
+        if data is None:
+            return TenantGoals(year=year, items=[])
+        return data
