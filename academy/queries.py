@@ -11,12 +11,12 @@ from typing import List
 
 import strawberry
 from asgiref.sync import sync_to_async
-from graphql import GraphQLError
 
 from utils.graphql.permissions import StrictIsAuthenticated
 from utils.graphql.mixins import resolve_id_to_int
 
 from . import models, types
+from .academy_scope import AcademyScope
 from .inputs import AcademyModuleFiltersInput
 
 
@@ -48,11 +48,28 @@ class AcademyQueries:
         info: strawberry.Info,
         filters: AcademyModuleFiltersInput | None = None,
     ) -> List[types.AcademyModule]:
-        tenant_id: int | None = (
-            resolve_id_to_int(filters.tenant_id)
-            if filters and filters.tenant_id not in (None, "")
+        """List a tenant's academy modules (drafts included).
+
+        Tenant-scoped: clients see only their OWN tenant's modules (the
+        ``tenant_id`` filter is overridden to their tenant); admins see the
+        requested tenant's modules. Never raises past the auth gate — returns
+        ``[]`` for an out-of-scope/garbage request or on error.
+        """
+        requested_tenant_id = (
+            filters.tenant_id if filters and filters.tenant_id not in (None, "")
             else None
         )
+        try:
+            tenant_id = await AcademyScope().resolve_target_tenant_id(
+                info, requested_tenant_id
+            )
+        except Exception:  # noqa: BLE001
+            return []
+        # Clients always resolve to their own tenant; an admin with no usable
+        # tenant in scope sees nothing rather than every tenant's modules.
+        if not tenant_id:
+            return []
+
         kind = filters.kind if filters else None
         published = filters.published if filters else None
         qs = _filtered_queryset(
@@ -64,12 +81,27 @@ class AcademyQueries:
     async def academy_module(
         self, info: strawberry.Info, uuid: strawberry.ID
     ) -> types.AcademyModule | None:
+        """Fetch one academy module by uuid.
+
+        Tenant-scoped: returns ``null`` when the module doesn't exist or its
+        tenant is outside the caller's scope (a client can't read another
+        brand's module by guessing/holding its uuid). Never raises.
+        """
+        scope = AcademyScope()
         try:
-            return await sync_to_async(
-                models.AcademyModule.objects.get
-            )(uuid=str(uuid))
-        except models.AcademyModule.DoesNotExist:
-            raise GraphQLError("Academy module not found.")
+            allowed = await scope.accessible_tenant_ids(info)
+        except Exception:  # noqa: BLE001
+            return None
+
+        def _load() -> types.AcademyModule | None:
+            module = models.AcademyModule.objects.filter(uuid=str(uuid)).first()
+            if module is None:
+                return None
+            if allowed is not None and module.tenant_id not in allowed:
+                return None
+            return module
+
+        return await sync_to_async(_load)()
 
 
 @strawberry.type

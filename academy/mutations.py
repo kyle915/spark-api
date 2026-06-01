@@ -7,9 +7,10 @@ from asgiref.sync import sync_to_async
 from graphql import GraphQLError
 
 from utils.graphql.permissions import StrictIsAuthenticated
-from utils.graphql.mixins import resolve_id_to_int, SparkGraphQLMixin
+from utils.graphql.mixins import SparkGraphQLMixin
 
 from . import models, types
+from .academy_scope import AcademyScope
 from .inputs import (
     CreateAcademyModuleInput,
     UpdateAcademyModuleInput,
@@ -33,19 +34,16 @@ class AcademyMutations:
         svc = _AcademyService()
         user = await svc.get_user(info)
 
-        tenant_id = (
-            resolve_id_to_int(input.tenant_id)
-            if input.tenant_id not in (None, "")
-            else None
-        )
-        # Tenants are required for academy modules. Fall back to the
-        # caller's primary tenant if the client omitted it.
-        if not tenant_id:
-            primary = await sync_to_async(
-                lambda: getattr(user, "current_tenant_id", None)
-                or getattr(user, "tenant_id", None)
-            )()
-            tenant_id = primary
+        # Tenant-scoped: a client always creates under their OWN tenant (any
+        # supplied tenant_id is ignored); an admin may target the requested
+        # tenant. A client with no tenant, or an admin who passed no usable
+        # tenant id, gets a safe success=False rather than a cross-tenant write.
+        try:
+            tenant_id = await AcademyScope().resolve_target_tenant_id(
+                info, input.tenant_id
+            )
+        except Exception:  # noqa: BLE001
+            tenant_id = None
 
         if not tenant_id:
             return types.AcademyModuleResponse(
@@ -83,11 +81,26 @@ class AcademyMutations:
         svc = _AcademyService()
         user = await svc.get_user(info)
 
+        # Tenant gate: a client may only edit their OWN tenant's modules; an
+        # out-of-scope module is surfaced as "not found" so we don't leak
+        # cross-tenant existence. Admins may edit any tenant's module.
+        try:
+            allowed = await AcademyScope().accessible_tenant_ids(info)
+        except Exception:  # noqa: BLE001
+            return types.AcademyModuleResponse(
+                success=False, message="Academy module not found."
+            )
+
         try:
             module = await sync_to_async(
                 models.AcademyModule.objects.get
             )(uuid=str(input.uuid))
         except models.AcademyModule.DoesNotExist:
+            return types.AcademyModuleResponse(
+                success=False, message="Academy module not found."
+            )
+
+        if allowed is not None and module.tenant_id not in allowed:
             return types.AcademyModuleResponse(
                 success=False, message="Academy module not found."
             )
@@ -125,11 +138,26 @@ class AcademyMutations:
         svc = _AcademyService()
         await svc.get_user(info)
 
+        # Tenant gate: a client may only delete their OWN tenant's modules; an
+        # out-of-scope module is surfaced as "not found" (no cross-tenant
+        # existence leak / deletion). Admins may delete any tenant's module.
+        try:
+            allowed = await AcademyScope().accessible_tenant_ids(info)
+        except Exception:  # noqa: BLE001
+            return types.AcademyModuleResponse(
+                success=False, message="Academy module not found."
+            )
+
         try:
             module = await sync_to_async(
                 models.AcademyModule.objects.get
             )(uuid=str(input.uuid))
         except models.AcademyModule.DoesNotExist:
+            return types.AcademyModuleResponse(
+                success=False, message="Academy module not found."
+            )
+
+        if allowed is not None and module.tenant_id not in allowed:
             return types.AcademyModuleResponse(
                 success=False, message="Academy module not found."
             )
