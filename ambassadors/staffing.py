@@ -35,6 +35,7 @@ from graphql import GraphQLError
 from django.db.models import Prefetch
 
 from ambassadors.models import Ambassador, AmbassadorEvent
+from ambassadors.staffing_suggestions import suggest_ambassadors_for_event
 from availability.models import AmbassadorAvailability
 from events.models import Event
 from utils.graphql.mixins import SparkGraphQLMixin
@@ -341,5 +342,114 @@ class StaffingQueries:
                 fill_rate=fill_rate,
                 suggestions=suggestions,
             )
+
+        return await sync_to_async(_build, thread_sensitive=True)()
+
+
+# ---------------------------------------------------------------------------
+# Smart staffing SUGGESTIONS — transparent weighted best-fit ranking
+# ---------------------------------------------------------------------------
+@strawberry.type
+class StaffingSuggestion:
+    """One BA in the weighted best-fit ranking for an event.
+
+    Backed by :func:`ambassadors.staffing_suggestions.suggest_ambassadors_for_event`.
+    ``score`` is a transparent 0-100 weighted sum of the signals that exist for
+    the BA; ``reasons`` are the short human strings explaining the score
+    ("4.8★", "12 gigs for this brand", "available", "favorited", "8 mi away").
+    A missing signal is omitted (its field is null / a bool default) — never
+    fabricated.
+    """
+
+    ba_id: strawberry.ID
+    name: str
+    score: int
+    # This tenant's avg rating (else the denormalized rating), null when the
+    # BA has no rating at all.
+    avg_rating: float | None = None
+    # AmbassadorEvent roster rows the BA has for THIS tenant.
+    gigs_for_brand: int = 0
+    is_favorited: bool = False
+    # Availability vs the event's window; null when the event has no date/time.
+    is_available: bool | None = None
+    # Haversine miles; null when either the event or the BA lacks coordinates.
+    distance_mi: float | None = None
+    reasons: List[str] = strawberry.field(default_factory=list)
+
+
+@strawberry.type
+class StaffingSuggestionQueries:
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def staffing_suggestions(
+        self,
+        info: strawberry.Info,
+        event_id: strawberry.ID,
+        limit: int | None = 20,
+    ) -> List[StaffingSuggestion]:
+        """Ranked best-fit BA suggestions for one event (weighted, transparent).
+
+        ``event_id`` accepts the event UUID or its numeric pk. Tenant-scoped via
+        the event's tenant: a client-role caller may only inspect events in
+        their OWN tenant (``resolve_target_tenant_id`` posture), admins
+        (spark-admin / staff / superuser / ``@igniteproductions.co``) may
+        inspect any tenant's event. An out-of-scope or unknown event returns an
+        EMPTY list (deny/empty, never an error). Every signal — rating, brand
+        experience, availability, favorited, proximity — is scoped to the
+        event's tenant, so a BA's history for other brands never leaks in.
+
+        Never raises: out-of-scope/missing events and any internal failure all
+        degrade to an empty list.
+        """
+        identifier = str(event_id).strip()
+        if not identifier:
+            return []
+
+        service = _StaffingService()
+        scope_tenant_id = await service.resolve_scope_tenant_id(info)
+
+        try:
+            cap = int(limit)
+        except (TypeError, ValueError):
+            cap = 20
+
+        def _build() -> List[StaffingSuggestion]:
+            # Resolve the event (uuid OR pk), tenant-scoped exactly like
+            # event_staffing: clients pinned to their own tenant, admins any.
+            event_qs = Event.objects.all()
+            if scope_tenant_id is not None:
+                event_qs = event_qs.filter(tenant_id=scope_tenant_id)
+            try:
+                uuid_lib.UUID(identifier)
+                event = event_qs.filter(uuid=identifier).only(
+                    "id", "tenant_id"
+                ).first()
+            except (ValueError, AttributeError, TypeError):
+                try:
+                    event = event_qs.filter(id=int(identifier)).only(
+                        "id", "tenant_id"
+                    ).first()
+                except (ValueError, TypeError):
+                    event = None
+            if event is None:
+                return []
+
+            # Score against the event's OWN tenant (the concrete target tenant).
+            rows = suggest_ambassadors_for_event(
+                event.id, event.tenant_id, limit=cap
+            )
+            return [
+                StaffingSuggestion(
+                    ba_id=strawberry.ID(str(row["ba_id"])),
+                    name=row["name"],
+                    score=row["score"],
+                    avg_rating=row["avg_rating"],
+                    gigs_for_brand=row["gigs_for_brand"],
+                    is_favorited=row["is_favorited"],
+                    is_available=row["is_available"],
+                    distance_mi=row["distance_mi"],
+                    reasons=row["reasons"],
+                )
+                for row in rows
+            ]
 
         return await sync_to_async(_build, thread_sensitive=True)()
