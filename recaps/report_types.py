@@ -396,17 +396,22 @@ def _zeroed_tenant_kpis() -> TenantKpis:
     )
 
 
-def _build_tenant_kpis(tenant_id: int) -> TenantKpis:
+def _build_tenant_kpis(tenant_id: int, year: int | None = None) -> TenantKpis:
     """Assemble the structured :class:`TenantKpis` for one tenant.
 
     Synchronous Django ORM (the resolver wraps it in ``sync_to_async``).
     Pulls the headline counts, the nine summable KPIs, and the monthly
     trend from the shared helpers in :mod:`recaps.tenant_overview` so the
     figures match the plaintext overview exactly.
+
+    ``year=None`` rolls up the tenant's WHOLE history (all-time totals +
+    the trailing-twelve-month trend). ``year=Y`` restricts every figure to
+    calendar year ``Y`` (and the trend to that year's months), passed
+    straight through to the three shared helpers.
     """
-    event_count, recap_count = tenant_event_recap_counts(tenant_id)
-    totals = tenant_kpi_totals(tenant_id)
-    trend = tenant_monthly_trend(tenant_id)
+    event_count, recap_count = tenant_event_recap_counts(tenant_id, year)
+    totals = tenant_kpi_totals(tenant_id, year)
+    trend = tenant_monthly_trend(tenant_id, year)
     return TenantKpis(
         events=event_count,
         recaps=recap_count,
@@ -934,15 +939,27 @@ class CampaignReportQueries:
         self,
         info: strawberry.Info,
         tenant_id: strawberry.ID,
+        year: int | None = None,
     ) -> TenantKpis:
         """Structured per-tenant KPI roll-up for dashboard / pop-up charts.
 
         The visual companion to :meth:`tenant_ai_answer`: same tenant data,
         but returned as numbers (headline counts, the nine summable KPIs,
-        and a twelve-month activity trend) instead of an AI prose answer.
-        Numbers come from the shared
-        :func:`recaps.tenant_overview.tenant_kpi_totals` source of truth, so
-        they match the text overview exactly.
+        and an activity trend) instead of an AI prose answer. Numbers come
+        from the shared :func:`recaps.tenant_overview.tenant_kpi_totals`
+        source of truth, so they match the text overview exactly.
+
+        The optional ``year`` filter scopes the whole roll-up to one
+        calendar year (the dashboard's This-year / specific-year selector):
+
+        * **Omitted / null** — ALL-TIME: every figure spans the tenant's
+          whole history and ``monthly_trend`` is the trailing twelve months
+          (the original, unchanged behavior the Ask-AI overview and the
+          Insights cron also rely on).
+        * **A year ``Y``** — every figure is restricted to recaps whose
+          ``created_at`` falls in calendar year ``Y`` and ``monthly_trend``
+          becomes that year's months (Jan→Dec for a past year, Jan→current
+          month for the current year).
 
         Tenant scoping is identical to :meth:`tenant_ai_answer`
         (:meth:`_CampaignReportService.resolve_target_tenant_id`):
@@ -967,7 +984,7 @@ class CampaignReportQueries:
 
             if not Tenant.objects.filter(id=target_tenant_id).exists():
                 return None
-            return _build_tenant_kpis(target_tenant_id)
+            return _build_tenant_kpis(target_tenant_id, year)
 
         try:
             data = await sync_to_async(_build, thread_sensitive=True)()
