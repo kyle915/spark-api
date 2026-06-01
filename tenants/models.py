@@ -694,6 +694,72 @@ class UserPreference(models.Model):
         return base
 
 
+class CustomForm(models.Model):
+    """A tenant-scoped custom form DEFINITION built in the web Form Builder.
+
+    Backs the web Form Builder page (``SparkFormBuilder.tsx``), which
+    previously kept every form definition only in ``localStorage`` (under
+    ``@spark.formBuilder/<tenantId>``) — so a cache-clear lost them and they
+    never synced across devices or teammates. One row per built form.
+
+    ``schema`` is the whole field-definition blob straight off the builder
+    (NOT typed columns) so the builder can grow new field kinds / settings
+    without a backend migration each time — the front-end owns the shape.
+    Today the builder stores (see ``FormDef`` in ``SparkFormBuilder.tsx``):
+
+    * ``description`` (str) — what the form is for.
+    * ``internal`` (bool) — publish to the internal ``/requests/create`` queue.
+    * ``external`` (bool) — publish to the public ``/spark-form/<slug>`` link.
+    * ``fields`` (list) — ordered field defs, each
+      ``{id, label, kind, required, helpText?, options?}`` where ``kind`` is
+      one of text/longtext/number/email/date/time/select/checkbox/file and
+      ``options`` is the choice list for ``select``.
+
+    The builder's own ``id`` / ``name`` / ``updatedAt`` map onto this row's
+    ``pk`` / :attr:`name` / :attr:`updated_at`; everything else lives in
+    ``schema`` verbatim, so a saved blob round-trips through the GraphQL layer
+    unchanged. SUBMISSIONS (people filling out a published form) are a
+    separate, future concern — this model persists DEFINITIONS only.
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    tenant = models.ForeignKey(
+        Tenant,
+        on_delete=models.CASCADE,
+        related_name="custom_forms",
+    )
+    name = models.CharField(max_length=255)
+    # The whole builder field-definition blob (description, internal/external
+    # flags, ordered fields). Free-form so the builder can evolve without a
+    # migration; the GraphQL layer / front-end own the shape.
+    schema = models.JSONField(default=dict, blank=True)
+    # Whether this definition has been published (made available to the
+    # internal/external request surfaces). Defaults False — a freshly built
+    # form is a draft until explicitly published.
+    is_published = models.BooleanField(default=False)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="custom_forms_created",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        # Newest-first is the builder's grid order (it prepends new forms).
+        ordering = ["-updated_at"]
+        indexes = [
+            models.Index(fields=["tenant", "-updated_at"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"CustomForm '{self.name}' @ tenant {self.tenant_id}"
+
+
 class TenantGoal(models.Model):
     """Per-CLIENT (tenant-level), per-year KPI targets for the headline KPIs.
 
