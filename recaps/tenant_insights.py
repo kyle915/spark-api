@@ -1,41 +1,49 @@
-"""Proactive "what's notable" AI insights for one tenant, cached server-side.
+"""Proactive "what's notable" insights for one tenant — DETERMINISTIC.
 
-The dashboard surfaces a short list of auto-generated headline observations
-about a client's program — wins, trends, standouts, things needing attention —
-WITHOUT the user asking. This module owns:
+The dashboard surfaces a short list of headline observations about a client's
+activation program — reach, sampling, sales, new audience, and momentum —
+WITHOUT the user asking. This module owns the computation of those buckets.
 
-* :func:`build_tenant_insights` — assemble a COMPACT numeric context from the
-  shared :mod:`recaps.tenant_overview` aggregates (headline KPIs, totals, and
-  the latest-month-vs-prior deltas / recent trend) and ask OpenAI, via
-  :func:`utils.ai_text.generate_json` with a strict insights schema, for the
-  3–6 most notable items. Returns the parsed ``insights`` list, or ``[]`` on
-  any failure.
-* :func:`get_or_refresh_tenant_insights` — the cache front door: serve the
-  latest :class:`tenants.models.TenantInsightSnapshot` if it's younger than
-  ``max_age_hours``; otherwise generate a fresh one, persist it, and return it.
-  On generation failure it falls back to the most recent existing snapshot
-  (even if stale). It NEVER raises.
+This used to ask OpenAI for 3–6 free-form themes. That was inconsistent
+run-to-run and, worse, once dramatized the CURRENT/empty month (a month that
+hasn't started yet) as a scary "-100% collapse". It has been replaced with
+FIVE FIXED, deterministic, templated buckets computed straight from the shared
+:mod:`recaps.tenant_overview` aggregates — no AI call, no token cost, and the
+same numbers the ``tenantKpis`` charts show.
+
+* :func:`build_insight_buckets` — the deterministic builder. Returns ``[]`` for
+  a tenant with no activity, otherwise EXACTLY five buckets in a fixed order:
+  ``reach``, ``sampling``, ``sales``, ``new_audience``, ``momentum`` — except
+  ``momentum`` is omitted when the tenant has fewer than one *active* month
+  (so we never emit a misleading card). Each bucket is a dict
+  ``{key, title, detail, sentiment, metric}`` with every number formatted with
+  thousands separators; a number is NEVER fabricated.
+* :func:`build_tenant_insights` — thin back-compat wrapper that returns
+  :func:`build_insight_buckets` (so the snapshot/cron path keeps working
+  without any AI code). It never raises; any error degrades to ``[]``.
+* :func:`get_or_refresh_tenant_insights` — the snapshot front door, retained
+  so the cron command and any cached path keep a stable signature. Buckets are
+  cheap and deterministic, so it simply computes them live and (when there is
+  something to show) persists a snapshot; it NEVER raises.
 
 Design rules (mirroring the rest of the report surface):
 
-* **Reuse, don't re-aggregate.** All numbers come from
+* **Reuse, don't re-aggregate.** Every number comes from
   :func:`recaps.tenant_overview.tenant_kpi_totals`,
   :func:`recaps.tenant_overview.tenant_event_recap_counts`, and
-  :func:`recaps.tenant_overview.tenant_monthly_trend`, so the insights agree
+  :func:`recaps.tenant_overview.tenant_monthly_trend`, so the buckets agree
   with the ``tenantKpis`` chart and the text overview.
-* **OpenAI only.** The single AI call goes through
-  :func:`utils.ai_text.generate_json` (OpenAI structured outputs). No Gemini.
-* **The model never invents numbers.** The system prompt pins it to the
-  provided figures; ``metric`` is an OPTIONAL short figure the model lifts
-  from the context, never fabricated.
+* **Never invent a number, never dramatize an empty month.** The Momentum
+  bucket compares only months that actually have activity, so the empty
+  current/future month can never become a "-100%" card.
 
-Everything here is synchronous Django ORM — the GraphQL resolver and the cron
-command wrap the entry points in ``sync_to_async`` / call them directly.
+Everything here is synchronous Django ORM — the GraphQL resolver computes the
+buckets live and the cron command calls the entry points directly.
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from django.utils import timezone
 
@@ -44,54 +52,30 @@ from recaps.tenant_overview import (
     tenant_kpi_totals,
     tenant_monthly_trend,
 )
-from utils.ai_text import generate_json
 
-# Strict JSON Schema for the proactive-insights response (OpenAI "structured
-# outputs"). The model MUST return ``{"insights": [ {title, detail,
-# sentiment, metric} ]}``. ``strict`` mode requires every object to set
-# ``additionalProperties: false`` and list ALL of its properties in
-# ``required``; the optional ``metric`` figure expresses "absent" via a
-# ``["string", "null"]`` union rather than by omission.
-_INSIGHTS_JSON_SCHEMA = {
-    "type": "object",
-    "additionalProperties": False,
-    "required": ["insights"],
-    "properties": {
-        "insights": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "additionalProperties": False,
-                "required": ["title", "detail", "sentiment", "metric"],
-                "properties": {
-                    "title": {"type": "string"},
-                    "detail": {"type": "string"},
-                    "sentiment": {
-                        "type": "string",
-                        "enum": ["positive", "neutral", "attention"],
-                    },
-                    "metric": {"type": ["string", "null"]},
-                },
-            },
-        },
-    },
-}
-
-# Sentiments the frontend knows how to render. Anything else the model emits is
-# normalised to "neutral" so a stray value can't break the badge.
+# Sentiments the frontend knows how to render. Buckets only ever set one of
+# these three; anything else would be normalised to "neutral" downstream.
 _VALID_SENTIMENTS = frozenset({"positive", "neutral", "attention"})
 
-_INSIGHTS_SYSTEM_PROMPT = (
-    "You are a field-marketing analyst surfacing the most notable things "
-    "about ONE client's activation program for their dashboard, using ONLY "
-    "the numbers provided. Pick the 3-6 MOST notable items — wins, trends, "
-    "standouts, and anything needing attention. Each item is a short title "
-    "plus a single-sentence detail. Set `sentiment` to `positive` for a good "
-    "result, `attention` for something that needs attention, and `neutral` "
-    "otherwise. `metric` is an OPTIONAL short figure like \"+42% MoM\" or "
-    "\"12,400 samples\" drawn straight from the provided numbers, or null "
-    "when no single figure fits. NEVER invent or estimate numbers that are "
-    "not present in the data. Return between 3 and 6 insights."
+# A month-over-month drop at least this steep flips Momentum to "attention"
+# (a meaningful decline worth a callout) rather than plain "neutral".
+_MOMENTUM_ATTENTION_PCT = -25
+
+# Abbreviated month names indexed 1..12 (index 0 unused), for "2026-04" -> "Apr".
+_MONTH_ABBR = (
+    "",
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
 )
 
 
@@ -101,7 +85,13 @@ def _format_delta(latest: int, prior: int) -> str | None:
     Returns e.g. ``"+42% (1,200 -> 1,704)"`` or ``"-15% (200 -> 170)"``. When
     the prior month is zero we can't compute a percent, so we report the raw
     move (``"+170 (0 -> 170)"``); when both months are zero there's nothing to
-    say and we return None so the prompt stays tight.
+    say and we return None.
+
+    Retained from the original AI-prompt module per request as a generic,
+    reusable month-over-month delta formatter (e.g. for any future caller that
+    wants this verbose ``"+42% (a -> b)"`` form). The Momentum bucket computes
+    its own compact ``"▲ 12% vs Apr"`` figure inline because it needs the
+    arrow + absolute-percent rendering this verbose form doesn't produce.
     """
     if latest == 0 and prior == 0:
         return None
@@ -113,207 +103,256 @@ def _format_delta(latest: int, prior: int) -> str | None:
     return f"{sign}{pct}% ({prior:,} -> {latest:,})"
 
 
-def _compose_insights_prompt(tenant_id: int) -> str:
-    """Render the compact numeric context the model reasons over.
+def _short_month(month: str) -> str:
+    """Shorten a ``"YYYY-MM"`` trend key to a month abbreviation (``"Apr"``).
+
+    Falls back to the raw input if it can't be parsed, so a malformed key
+    never raises — it just renders verbatim.
+    """
+    try:
+        _year, mm = month.split("-")
+        idx = int(mm)
+    except (ValueError, AttributeError):
+        return month
+    if 1 <= idx <= 12:
+        return _MONTH_ABBR[idx]
+    return month
+
+
+def _momentum_bucket(trend: list) -> dict | None:
+    """Build the Momentum bucket from the monthly trend, or None to skip it.
+
+    THE fix for the old "-100% halted" bug: we only ever look at months that
+    actually have activity (any of recaps / engagements / samples > 0), so the
+    empty current/future month at the tail of the trend can never be compared
+    against a real prior month and dramatized as a collapse.
+
+    * ``>= 2`` active months — compare the latest active month's engagements
+      against the previous active month's: ``▲``/``▼``/``▬`` + percent vs the
+      prior active month's short name; detail names the latest active month,
+      its engagements, and the direction. Sentiment is ``positive`` when up,
+      ``attention`` on a meaningful drop (<= -25%), else ``neutral``.
+    * ``== 1`` active month — no comparison to make; report it as the peak so
+      far. Sentiment ``neutral``.
+    * ``0`` active months — return None so no (misleading) card is emitted.
+    """
+    active = [m for m in trend if m.recaps or m.engagements or m.samples]
+    if not active:
+        return None
+
+    latest = active[-1]
+    latest_short = _short_month(latest.month)
+
+    if len(active) == 1:
+        return {
+            "key": "momentum",
+            "title": "Momentum",
+            "metric": f"Peak: {latest_short}",
+            "detail": (
+                f"Strongest month so far: {latest.month} with "
+                f"{latest.engagements:,} engagements."
+            ),
+            "sentiment": "neutral",
+        }
+
+    prior = active[-2]
+    prior_short = _short_month(prior.month)
+    latest_eng = latest.engagements
+    prior_eng = prior.engagements
+
+    # Percent move on engagements, latest active month vs prior active month.
+    # When the prior active month had zero engagements we can't express a
+    # percent, so fall back to a flat "▬ vs <prior>" marker rather than a
+    # bogus number — and never a negative one (the empty-month guard above
+    # already prevents the latest from being the empty tail).
+    if prior_eng == 0:
+        pct = 0
+    else:
+        pct = round((latest_eng - prior_eng) / prior_eng * 100)
+
+    if pct > 0:
+        arrow = "▲"
+        direction = "up"
+        sentiment = "positive"
+    elif pct < 0:
+        arrow = "▼"
+        direction = "down"
+        sentiment = "attention" if pct <= _MOMENTUM_ATTENTION_PCT else "neutral"
+    else:
+        arrow = "▬"
+        direction = "flat"
+        sentiment = "neutral"
+
+    metric = f"{arrow} {abs(pct)}% vs {prior_short}"
+    detail = (
+        f"Engagements {direction} {abs(pct)}% in {latest.month} "
+        f"({latest_eng:,} vs {prior_eng:,} in {prior.month})."
+    )
+    return {
+        "key": "momentum",
+        "title": "Momentum",
+        "metric": metric,
+        "detail": detail,
+        "sentiment": sentiment,
+    }
+
+
+def build_insight_buckets(tenant_id: int) -> list[dict]:
+    """Deterministic proactive-insight buckets for one tenant (or ``[]``).
 
     Pulls the headline counts, the nine summable KPIs, and the monthly trend
-    from the shared :mod:`recaps.tenant_overview` helpers (so the figures match
-    the ``tenantKpis`` chart and the text overview), then renders: the totals,
-    the latest-month-vs-prior deltas for the charted metrics, and a short tail
-    of the recent monthly trend. Bounded by construction — a handful of KPI
-    lines plus at most the last few trend months — so the prompt stays small
-    regardless of tenant size.
+    from the shared :mod:`recaps.tenant_overview` helpers (so every figure
+    matches the ``tenantKpis`` chart) and assembles the fixed buckets.
+
+    Returns ``[]`` when the tenant has NO activity at all (no events, no
+    recaps, and every KPI total zero). Otherwise returns the buckets in this
+    exact order — ``reach``, ``sampling``, ``sales``, ``new_audience``,
+    ``momentum`` — each a dict ``{key, title, detail, sentiment, metric}`` with
+    every number formatted with thousands separators. ``momentum`` is omitted
+    when the tenant has fewer than one active month (see
+    :func:`_momentum_bucket`), so the card count is four or five.
+
+    Synchronous Django ORM; callers wrap it as needed. Numbers are only ever
+    read from the aggregates — never fabricated.
     """
     event_count, recap_count = tenant_event_recap_counts(tenant_id)
     k = tenant_kpi_totals(tenant_id)
     trend = tenant_monthly_trend(tenant_id)
 
-    lines = [
-        "Client program totals (all campaigns, events, and recaps):",
-        f"- Events: {event_count}",
-        f"- Recaps: {recap_count}",
-        f"- Consumers reached: {k.consumers_reached}",
-        f"- Samples distributed: {k.samples_distributed}",
-        f"- Products sold: {k.products_sold}",
-        f"- Cans sold: {k.cans_sold}",
-        f"- Packs sold: {k.packs_sold}",
-        f"- Total engagements: {k.total_engagements}",
-        f"- First-time consumers: {k.first_time_consumers}",
-        f"- Brand-aware consumers: {k.brand_aware_consumers}",
-        f"- Willing to purchase: {k.willing_to_purchase}",
-    ]
-
-    # Latest-month-vs-prior deltas for the three charted activity metrics.
-    if len(trend) >= 2:
-        latest, prior = trend[-1], trend[-2]
-        delta_lines = []
-        for label, attr in (
-            ("Recaps", "recaps"),
-            ("Engagements", "engagements"),
-            ("Samples", "samples"),
-        ):
-            delta = _format_delta(getattr(latest, attr), getattr(prior, attr))
-            if delta is not None:
-                delta_lines.append(f"- {label}: {delta}")
-        if delta_lines:
-            lines.append("")
-            lines.append(
-                f"Latest month ({latest.month}) vs prior ({prior.month}):"
+    # No activity anywhere -> nothing to surface (avoids a wall of zero cards).
+    if (
+        event_count == 0
+        and recap_count == 0
+        and not any(
+            (
+                k.consumers_reached,
+                k.samples_distributed,
+                k.products_sold,
+                k.cans_sold,
+                k.packs_sold,
+                k.total_engagements,
+                k.first_time_consumers,
+                k.brand_aware_consumers,
+                k.willing_to_purchase,
             )
-            lines.extend(delta_lines)
-
-    # A short tail of the monthly trend so the model can spot a direction.
-    recent = [m for m in trend if m.recaps or m.engagements or m.samples][-6:]
-    if recent:
-        lines.append("")
-        lines.append("Recent monthly activity (month: recaps/engagements/samples):")
-        lines.extend(
-            f"- {m.month}: {m.recaps}/{m.engagements}/{m.samples}" for m in recent
         )
+    ):
+        return []
 
-    return "\n".join(lines)
+    buckets: list[dict] = []
 
+    # 1) Reach.
+    buckets.append(
+        {
+            "key": "reach",
+            "title": "Reach",
+            "metric": f"{k.consumers_reached:,}",
+            "detail": (
+                f"{k.consumers_reached:,} consumers reached across "
+                f"{event_count:,} events and {k.total_engagements:,} engagements."
+            ),
+            "sentiment": "positive" if k.consumers_reached > 0 else "neutral",
+        }
+    )
 
-def _clean_insight(item: object) -> dict | None:
-    """Coerce one model-supplied insight dict into a clean dict, or None.
+    # 2) Sampling.
+    sampling_detail = f"{k.samples_distributed:,} samples handed out"
+    if event_count > 0:
+        avg = round(k.samples_distributed / event_count)
+        sampling_detail += f", ~{avg:,}/event"
+    sampling_detail += "."
+    buckets.append(
+        {
+            "key": "sampling",
+            "title": "Sampling",
+            "metric": f"{k.samples_distributed:,}",
+            "detail": sampling_detail,
+            "sentiment": "positive" if k.samples_distributed > 0 else "neutral",
+        }
+    )
 
-    Defensive on purpose — even with strict structured outputs we never trust
-    the shape blindly. Requires a non-empty ``title`` and ``detail``; clamps
-    ``sentiment`` to a known value (defaulting to ``"neutral"``); and keeps
-    ``metric`` only when it's a non-empty string (else null). Anything that
-    can't produce a usable title+detail yields None and is dropped.
-    """
-    if not isinstance(item, dict):
-        return None
+    # 3) Sales.
+    sales_detail = f"{k.products_sold:,} products sold"
+    if k.cans_sold > 0 or k.packs_sold > 0:
+        sales_detail += f" ({k.cans_sold:,} cans · {k.packs_sold:,} packs)"
+    sales_detail += "."
+    buckets.append(
+        {
+            "key": "sales",
+            "title": "Sales",
+            "metric": f"{k.products_sold:,}",
+            "detail": sales_detail,
+            "sentiment": "positive" if k.products_sold > 0 else "neutral",
+        }
+    )
 
-    title = item.get("title")
-    detail = item.get("detail")
-    if not isinstance(title, str) or not title.strip():
-        return None
-    if not isinstance(detail, str) or not detail.strip():
-        return None
+    # 4) New audience.
+    buckets.append(
+        {
+            "key": "new_audience",
+            "title": "New audience",
+            "metric": f"{k.first_time_consumers:,}",
+            "detail": (
+                f"{k.first_time_consumers:,} first-time consumers · "
+                f"{k.brand_aware_consumers:,} brand-aware · "
+                f"{k.willing_to_purchase:,} willing to purchase."
+            ),
+            "sentiment": "positive" if k.first_time_consumers > 0 else "neutral",
+        }
+    )
 
-    sentiment = item.get("sentiment")
-    if sentiment not in _VALID_SENTIMENTS:
-        sentiment = "neutral"
+    # 5) Momentum — only when there is at least one active month to describe.
+    momentum = _momentum_bucket(trend)
+    if momentum is not None:
+        buckets.append(momentum)
 
-    metric = item.get("metric")
-    metric = metric.strip() if isinstance(metric, str) and metric.strip() else None
-
-    return {
-        "title": title.strip(),
-        "detail": detail.strip(),
-        "sentiment": sentiment,
-        "metric": metric,
-    }
+    return buckets
 
 
 def build_tenant_insights(tenant_id: int) -> list[dict]:
-    """Generate the proactive insights list for one tenant (or ``[]``).
+    """Back-compat entry point — now the deterministic buckets, never AI.
 
-    Assembles the compact numeric context (see :func:`_compose_insights_prompt`)
-    and asks OpenAI for the 3-6 most notable items via
-    :func:`utils.ai_text.generate_json` with :data:`_INSIGHTS_JSON_SCHEMA`.
-    Returns the cleaned list of insight dicts
-    (``{title, detail, sentiment, metric}``), or ``[]`` on ANY failure — an
-    unconfigured key, an upstream/model error, or an unparseable response.
-
-    Synchronous Django ORM + one HTTP call; callers wrap it as needed.
+    Kept so the snapshot/cron path keeps a stable name. Delegates to
+    :func:`build_insight_buckets` and returns ``[]`` on ANY error (matching
+    the original never-raise contract) so a single tenant's data hiccup can't
+    abort a batch refresh.
     """
     try:
-        user_prompt = _compose_insights_prompt(tenant_id)
-        result = generate_json(
-            _INSIGHTS_SYSTEM_PROMPT,
-            user_prompt,
-            schema=_INSIGHTS_JSON_SCHEMA,
-        )
+        return build_insight_buckets(tenant_id)
     except Exception:
-        # generate_json raises AiUnavailable only when the key is missing;
-        # any aggregation hiccup also lands here. Either way: degrade to [].
         return []
-
-    if not isinstance(result, dict):
-        return []
-
-    raw = result.get("insights")
-    if not isinstance(raw, list):
-        return []
-
-    cleaned: list[dict] = []
-    for item in raw:
-        insight = _clean_insight(item)
-        if insight is not None:
-            cleaned.append(insight)
-    return cleaned
 
 
 def get_or_refresh_tenant_insights(
     tenant_id: int, max_age_hours: int = 24
 ) -> tuple[list[dict], datetime | None]:
-    """Serve cached insights for a tenant, refreshing when stale.
+    """Compute (and snapshot) the deterministic insight buckets for a tenant.
 
-    The cache front door for the dashboard:
+    Retained as the snapshot front door so the daily cron command keeps the
+    same call. Now that the buckets are deterministic and cheap there is no AI
+    call to amortise, so this simply:
 
-    * If the newest :class:`tenants.models.TenantInsightSnapshot` for the
-      tenant is younger than ``max_age_hours``, return its items + timestamp
-      (a fast read, no AI call).
-    * Otherwise generate a fresh set via :func:`build_tenant_insights`, persist
-      a new snapshot, and return it. ``max_age_hours=0`` forces a refresh — the
-      mode the daily cron uses to precompute.
-    * If generation fails (returns ``[]``), fall back to the most recent
-      existing snapshot even if it's stale, so the dashboard keeps showing the
-      last good insights rather than going blank.
-    * If there's nothing to serve at all, return ``([], None)``.
+    * computes the buckets live via :func:`build_tenant_insights`;
+    * persists a fresh :class:`tenants.models.TenantInsightSnapshot` when there
+      is something to show (so the cron keeps producing the historical record
+      / cache rows other code may read), and returns those items + timestamp;
+    * when there are no buckets, returns ``([], now)`` and writes nothing.
 
-    NEVER raises: any error (DB hiccup, AI failure) degrades to the best
-    available value. ``datetime`` is the served snapshot's ``generated_at`` (or
-    None when there are no insights to show).
+    ``max_age_hours`` is accepted for signature compatibility but no longer
+    gates a network call (deterministic compute is always fresh). NEVER raises:
+    any DB/compute error degrades to ``([], None)``.
     """
     # Imported lazily so this module stays importable without Django apps
-    # loaded (e.g. for unit-testing the pure prompt/clean helpers).
+    # loaded (e.g. for unit-testing the pure bucket/helper functions).
     from tenants.models import TenantInsightSnapshot
 
     try:
-        latest = (
-            TenantInsightSnapshot.objects.filter(tenant_id=tenant_id)
-            .order_by("-generated_at")
-            .first()
-        )
-
-        # Fresh enough to serve straight from cache.
-        if latest is not None and max_age_hours > 0:
-            cutoff = timezone.now() - timedelta(hours=max_age_hours)
-            if latest.generated_at >= cutoff:
-                items = latest.items if isinstance(latest.items, list) else []
-                return items, latest.generated_at
-
-        # Stale (or forced refresh): try to generate a new set.
         items = build_tenant_insights(tenant_id)
         if items:
             snapshot = TenantInsightSnapshot.objects.create(
                 tenant_id=tenant_id, items=items
             )
             return snapshot.items, snapshot.generated_at
-
-        # Generation produced nothing — fall back to the last good snapshot
-        # (even if stale) so the dashboard doesn't go blank.
-        if latest is not None:
-            stale_items = latest.items if isinstance(latest.items, list) else []
-            return stale_items, latest.generated_at
-
-        return [], None
+        return [], timezone.now()
     except Exception:
-        # Belt-and-suspenders: never let a DB / unexpected error escape. Try
-        # one more time to surface whatever snapshot already exists.
-        try:
-            fallback = (
-                TenantInsightSnapshot.objects.filter(tenant_id=tenant_id)
-                .order_by("-generated_at")
-                .first()
-            )
-            if fallback is not None:
-                items = fallback.items if isinstance(fallback.items, list) else []
-                return items, fallback.generated_at
-        except Exception:
-            pass
         return [], None
