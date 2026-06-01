@@ -29,6 +29,7 @@ from django.utils import timezone
 
 from recaps import report_service
 from recaps.report_tokens import make_report_token
+from recaps.tenant_ba_leaderboard import tenant_ba_leaderboard
 from recaps.tenant_insights import build_insight_buckets
 from recaps.tenant_sentiment import get_or_refresh_tenant_sentiment
 from recaps.tenant_overview import (
@@ -487,6 +488,64 @@ def _build_market_performance(
             total_engagements=row["total_engagements"],
         )
         for row in tenant_market_performance(tenant_id, year)
+    ]
+
+
+@strawberry.type
+class BaLeaderboardEntry:
+    """One Brand Ambassador's performance row in a tenant's leaderboard.
+
+    The per-BA companion to :class:`TenantKpis` (which rolls a tenant's whole
+    program into one total): instead of one row per tenant, the
+    ``tenantBaLeaderboard`` query returns one of these per BA who worked for
+    the tenant, ranked by performance. Every metric is SCOPED TO THIS TENANT
+    (a BA's work for other brands is not counted), aggregated by
+    :func:`recaps.tenant_ba_leaderboard.tenant_ba_leaderboard`.
+
+    * ``ba_id`` — the :class:`ambassadors.models.Ambassador` pk.
+    * ``name`` — "First Last" (else email, else a placeholder).
+    * ``shifts_worked`` — tenant roster rows
+      (:class:`ambassadors.models.AmbassadorEvent`).
+    * ``recaps_filed`` — legacy + custom recaps the BA filed for the tenant.
+    * ``avg_rating`` — mean 1-5 gig rating, or ``null`` when the BA is unrated.
+    * ``ratings_count`` — number of ratings behind ``avg_rating`` (0 when unrated).
+    * ``reliability_pct`` — on-time %, or ``null``. Always ``null`` today: the
+      attendance data does not cleanly support it (see
+      :data:`recaps.tenant_ba_leaderboard.RELIABILITY_SUPPORTED`); the field is
+      carried so a clean signal can light it up later with no schema change.
+    """
+
+    ba_id: strawberry.ID
+    name: str
+    shifts_worked: int
+    recaps_filed: int
+    avg_rating: float | None
+    ratings_count: int
+    reliability_pct: int | None = None
+
+
+def _build_ba_leaderboard(
+    tenant_id: int, year: int | None = None
+) -> list[BaLeaderboardEntry]:
+    """Map the per-BA leaderboard dicts to :class:`BaLeaderboardEntry` rows.
+
+    Synchronous Django ORM (the resolver wraps it in ``sync_to_async``).
+    Delegates the tenant-scoped aggregation + ranking to
+    :func:`recaps.tenant_ba_leaderboard.tenant_ba_leaderboard`, then mirrors
+    each already-sorted dict field-for-field onto the strawberry type
+    (preserving the builder's order).
+    """
+    return [
+        BaLeaderboardEntry(
+            ba_id=strawberry.ID(str(row["ba_id"])),
+            name=row["name"],
+            shifts_worked=row["shifts_worked"],
+            recaps_filed=row["recaps_filed"],
+            avg_rating=row["avg_rating"],
+            ratings_count=row["ratings_count"],
+            reliability_pct=row["reliability_pct"],
+        )
+        for row in tenant_ba_leaderboard(tenant_id, year)
     ]
 
 
@@ -1343,6 +1402,64 @@ class CampaignReportQueries:
             if not Tenant.objects.filter(id=target_tenant_id).exists():
                 return None
             return _build_market_performance(target_tenant_id, year)
+
+        try:
+            data = await sync_to_async(_build, thread_sensitive=True)()
+        except Exception:
+            return []
+
+        if data is None:
+            return []
+        return data
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def tenant_ba_leaderboard(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID,
+        year: int | None = None,
+    ) -> list[BaLeaderboardEntry]:
+        """Per-BA performance leaderboard for ONE tenant.
+
+        Returns one :class:`BaLeaderboardEntry` per Brand Ambassador who
+        worked for the tenant — anyone with a recap filed for the tenant's
+        events, a roster/shift on them, or a rating on the tenant's gigs —
+        ranked by ``avg_rating`` desc (unrated last), then ``recaps_filed``
+        desc, then ``shifts_worked`` desc, capped at the builder's top-N.
+        EVERY metric is scoped to this tenant (a BA's work for other brands is
+        not counted), via
+        :func:`recaps.tenant_ba_leaderboard.tenant_ba_leaderboard`.
+
+        The optional ``year`` scopes every metric to one calendar year,
+        identical to :meth:`tenant_kpis`:
+
+        * **Omitted / null** — ALL-TIME across the tenant's whole history.
+        * **A year ``Y``** — only activity whose ``created_at`` falls in
+          calendar year ``Y``.
+
+        Tenant scoping is identical to :meth:`tenant_kpis`
+        (:meth:`_CampaignReportService.resolve_target_tenant_id`):
+        client-role users may ONLY read their own tenant — the ``tenant_id``
+        argument is overridden to their own; admins (spark-admin / staff /
+        superuser / ``@igniteproductions.co``) may target any tenant.
+
+        Never raises: a missing or out-of-scope tenant, or any aggregation
+        error, resolves to an empty list rather than a GraphQL error.
+        """
+        service = _CampaignReportService()
+        target_tenant_id = await service.resolve_target_tenant_id(info, tenant_id)
+        if target_tenant_id is None:
+            return []
+
+        def _build():
+            # Guard the tenant's existence the same way tenant_kpis does, so
+            # an admin passing an unknown id degrades to an empty list instead
+            # of aggregating over no tenant.
+            from tenants.models import Tenant
+
+            if not Tenant.objects.filter(id=target_tenant_id).exists():
+                return None
+            return _build_ba_leaderboard(target_tenant_id, year)
 
         try:
             data = await sync_to_async(_build, thread_sensitive=True)()
