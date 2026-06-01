@@ -29,6 +29,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from recaps import report_service
+from recaps.recap_quality import recap_quality_flags
 from recaps.report_tokens import make_report_token
 from recaps.tenant_ba_leaderboard import tenant_ba_leaderboard
 from recaps.tenant_insights import build_insight_buckets
@@ -982,6 +983,72 @@ def _build_tenant_sentiment_type(
     )
 
 
+@strawberry.type
+class RecapQualityFlag:
+    """One quality problem found on a recap.
+
+    * ``code`` — a stable machine code (e.g. ``"no_photos"``,
+      ``"sold_exceeds_sampled"``) the frontend can switch on / localize.
+    * ``label`` — a human-readable description safe to show as-is.
+    * ``severity`` — ``"high"`` / ``"medium"`` / ``"low"``.
+    """
+
+    code: str
+    label: str
+    severity: str
+
+
+@strawberry.type
+class RecapQualityResult:
+    """The quality read for one recap: a 0-100 score plus the flags raised.
+
+    ``score`` is ``100`` minus the summed per-severity penalties (floored at
+    ``0``); ``100`` with an empty ``flags`` list means the recap looks clean
+    (and is also what the resolver returns on a missing / out-of-scope recap, so
+    the frontend never has to special-case an error). Flags are ordered
+    worst-severity-first. See :func:`recaps.recap_quality.recap_quality_flags`.
+    """
+
+    score: int
+    flags: list[RecapQualityFlag]
+
+
+def _build_recap_quality_type(result: dict) -> RecapQualityResult:
+    """Map a :func:`recaps.recap_quality.recap_quality_flags` dict onto the type.
+
+    Defensive even though the producer already returns a well-formed dict: a
+    non-dict / missing ``score`` falls back to a clean ``100``; only well-formed
+    flag dicts (string ``code`` + ``label`` + ``severity``) are kept.
+    """
+    if not isinstance(result, dict):
+        return RecapQualityResult(score=100, flags=[])
+
+    try:
+        score = int(result.get("score"))
+    except (TypeError, ValueError):
+        score = 100
+    score = max(0, min(100, score))
+
+    flags: list[RecapQualityFlag] = []
+    for item in result.get("flags") or []:
+        if not isinstance(item, dict):
+            continue
+        code = item.get("code")
+        label = item.get("label")
+        severity = item.get("severity")
+        if not (isinstance(code, str) and code):
+            continue
+        if not (isinstance(label, str) and label):
+            continue
+        if severity not in ("high", "medium", "low"):
+            severity = "low"
+        flags.append(
+            RecapQualityFlag(code=code, label=label, severity=severity)
+        )
+
+    return RecapQualityResult(score=score, flags=flags)
+
+
 def _compose_ai_summary_prompt(data: report_service.CampaignReportData) -> str:
     """Render a compact, plain-text view of the report for the LLM.
 
@@ -1808,6 +1875,79 @@ class CampaignReportQueries:
             return await sync_to_async(_build, thread_sensitive=True)()
         except Exception:
             return None
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def recap_quality_flags(
+        self,
+        info: strawberry.Info,
+        recap_id: strawberry.ID,
+        is_custom: bool = False,
+    ) -> RecapQualityResult:
+        """Quality-check ONE recap and flag it for review if it looks thin.
+
+        Returns a ``RecapQualityResult`` — a 0-100 ``score`` plus the ``flags``
+        raised (missing/low photos, blank feedback, inconsistent or all-zero
+        numbers, etc.). Handles BOTH recap shapes: ``isCustom=false`` (the
+        default) reads a legacy :class:`recaps.models.Recap`, ``isCustom=true``
+        a custom-template :class:`recaps.models.CustomRecap`. The core checks
+        are deterministic; when the recap has free-text feedback a small CACHED
+        OpenAI pass may add a "thin feedback" flag (see
+        :func:`recaps.recap_quality.recap_quality_flags`).
+
+        Tenant scoping matches :meth:`tenant_sentiment`
+        (:meth:`_CampaignReportService.resolve_target_tenant_id`): a client-role
+        user may ONLY read a recap belonging to their OWN tenant; admins
+        (spark-admin / staff / superuser / ``@igniteproductions.co``) may read
+        any. A legacy recap's tenant is reached through its event
+        (``recap.event.tenant_id``); a custom recap's is its direct tenant FK.
+
+        Degrades to a clean, neutral ``{score: 100, flags: []}`` (NOT an error)
+        when the recap is missing, out-of-scope for the caller, or on any
+        failure — so the frontend can render the badge without special-casing.
+        Never raises.
+        """
+        service = _CampaignReportService()
+        scope_tenant_id = await service.resolve_scope_tenant_id(info)
+
+        try:
+            rid = resolve_id_to_int(str(recap_id).strip())
+        except Exception:
+            return RecapQualityResult(score=100, flags=[])
+
+        def _build() -> RecapQualityResult:
+            from recaps.models import CustomRecap, Recap
+
+            # Resolve the recap's tenant from its own shape, then enforce the
+            # caller's scope: a client may only read their own tenant's recap;
+            # an admin (scope_tenant_id is None) passes through. An
+            # out-of-scope or missing recap degrades to the neutral result.
+            if is_custom:
+                row_tenant_id = (
+                    CustomRecap.objects.filter(id=rid)
+                    .values_list("tenant_id", flat=True)
+                    .first()
+                )
+            else:
+                row_tenant_id = (
+                    Recap.objects.filter(id=rid)
+                    .values_list("event__tenant_id", flat=True)
+                    .first()
+                )
+
+            if row_tenant_id is None:
+                return RecapQualityResult(score=100, flags=[])
+            if scope_tenant_id is not None and row_tenant_id != scope_tenant_id:
+                # Client asking about another tenant's recap — treat as
+                # not-found rather than leaking its existence.
+                return RecapQualityResult(score=100, flags=[])
+
+            result = recap_quality_flags(rid, is_custom=is_custom)
+            return _build_recap_quality_type(result)
+
+        try:
+            return await sync_to_async(_build, thread_sensitive=True)()
+        except Exception:
+            return RecapQualityResult(score=100, flags=[])
 
 
 # Maps each ``setTenantGoals`` mutation argument to its ``TenantGoal``
