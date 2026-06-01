@@ -20,6 +20,7 @@ because the aggregation is synchronous Django ORM.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 
 import strawberry
@@ -45,12 +46,15 @@ from utils.ai_text import (
     generate_structured_answer,
     generate_summary,
 )
+from utils.graphql.inputs import SparkGraphQLInput
 from utils.graphql.mixins import SparkGraphQLMixin, resolve_id_to_int
 from utils.graphql.permissions import (
     StrictIsAuthenticated,
     _is_admin_access,
     resolve_request_user_access,
 )
+
+logger = logging.getLogger(__name__)
 
 # System prompt for the executive-summary generator. Pins the persona +
 # the hard constraint that the model must only use the numbers we hand it
@@ -1908,3 +1912,306 @@ class TenantGoalsMutations:
         if data is None:
             return TenantGoals(year=year, items=[])
         return data
+
+
+# ── Scheduled monthly client-report controls (clients schema) ──────────
+#
+# The write side the web admin's "Scheduled Reports" panel needs for the
+# #698 feature (the `send_scheduled_client_reports` cron):
+#
+#   * setScheduledReportEnabled — flip a tenant's opt-in switch
+#     (Tenant.scheduled_report_enabled) on/off.
+#   * sendTestClientReport — a SAFE PREVIEW: generate one tenant's monthly
+#     report PDF and email it to ONLY the requesting user's own address, so
+#     Ignite can eyeball the deliverable WITHOUT ever emailing the client.
+#
+# Both are tenant-scoped exactly like the read side + TenantGoalsMutations
+# (_CampaignReportService.resolve_target_tenant_id): clients are pinned to
+# their own tenant; admins (spark-admin / staff / superuser /
+# @igniteproductions.co) may target any tenant. Both NEVER raise — every
+# failure path resolves to success=False + a human-readable message.
+
+
+@strawberry.input
+class SetScheduledReportEnabledInput(SparkGraphQLInput):
+    """Flip one tenant's scheduled-monthly-report opt-in switch.
+
+    ``tenantId`` is the brand to toggle (a client may only toggle their own —
+    the value is overridden server-side); ``enabled`` is the new state.
+    """
+
+    tenant_id: strawberry.ID
+    enabled: bool
+
+
+@strawberry.type
+class SetScheduledReportEnabledResponse:
+    success: bool
+    message: str
+    # The persisted state after the mutation. Authoritative ONLY when
+    # ``success`` is true; on a no-op / failure it echoes the requested value
+    # (which was NOT applied), so callers should gate on ``success`` first.
+    enabled: bool
+    client_mutation_id: strawberry.ID | None = None
+
+
+@strawberry.input
+class SendTestClientReportInput(SparkGraphQLInput):
+    """Request a SAFE PREVIEW of a tenant's monthly report.
+
+    ``tenantId`` is the brand to preview (tenant-scoped — a client may only
+    preview their own). ``month`` optionally overrides the reporting period as
+    ``"YYYY-MM"``; omitted/null → the prior COMPLETE month (the same period the
+    cron defaults to). The PDF is emailed to ONLY the requesting user's own
+    email — NEVER the tenant's client recipients.
+    """
+
+    tenant_id: strawberry.ID
+    month: str | None = None
+
+
+@strawberry.type
+class SendTestClientReportResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+
+
+@strawberry.type
+class ScheduledReportMutations:
+    """Mutation surface for the scheduled monthly client-report controls
+    (the clients schema). The write side of the #698 feature; tenant scoping
+    matches the read resolvers + ``TenantGoalsMutations`` exactly
+    (:meth:`_CampaignReportService.resolve_target_tenant_id`)."""
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def set_scheduled_report_enabled(
+        self,
+        info: strawberry.Info,
+        input: SetScheduledReportEnabledInput,
+    ) -> SetScheduledReportEnabledResponse:
+        """Toggle a tenant's ``scheduled_report_enabled`` flag; return the new state.
+
+        Resolves the target tenant via
+        :meth:`_CampaignReportService.resolve_target_tenant_id` (client → own
+        tenant only; admins → any). Persists the requested ``enabled`` state and
+        returns it.
+
+        Never raises: an out-of-scope / unusable tenant id, an unknown tenant,
+        or any DB failure resolves to ``success=False`` + a clear message (the
+        flag is left untouched).
+        """
+        service = _CampaignReportService()
+        try:
+            target_tenant_id = await service.resolve_target_tenant_id(
+                info, input.tenant_id
+            )
+        except Exception:  # noqa: BLE001
+            target_tenant_id = None
+
+        if target_tenant_id is None:
+            # Out of scope / unusable id — no-op, do not reveal whether the
+            # tenant exists. Echo the (un-applied) requested value.
+            return SetScheduledReportEnabledResponse(
+                success=False,
+                message="You do not have access to this brand.",
+                enabled=input.enabled,
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        desired = bool(input.enabled)
+
+        def _set_flag():
+            from tenants.models import Tenant
+
+            tenant = Tenant.objects.filter(id=target_tenant_id).first()
+            if tenant is None:
+                return None
+            if tenant.scheduled_report_enabled != desired:
+                tenant.scheduled_report_enabled = desired
+                tenant.save(update_fields=["scheduled_report_enabled", "updated_at"])
+            return tenant.scheduled_report_enabled
+
+        try:
+            new_state = await sync_to_async(_set_flag, thread_sensitive=True)()
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(
+                "setScheduledReportEnabled failed for tenant=%s: %s",
+                target_tenant_id,
+                exc,
+            )
+            return SetScheduledReportEnabledResponse(
+                success=False,
+                message="Could not update the scheduled-report setting.",
+                enabled=input.enabled,
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        if new_state is None:
+            return SetScheduledReportEnabledResponse(
+                success=False,
+                message="Brand not found.",
+                enabled=input.enabled,
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        message = (
+            "Scheduled monthly report turned ON for this brand."
+            if new_state
+            else "Scheduled monthly report turned OFF for this brand."
+        )
+        return SetScheduledReportEnabledResponse(
+            success=True,
+            message=message,
+            enabled=bool(new_state),
+            client_mutation_id=input.client_mutation_id,
+        )
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def send_test_client_report(
+        self,
+        info: strawberry.Info,
+        input: SendTestClientReportInput,
+    ) -> SendTestClientReportResponse:
+        """SAFE PREVIEW: email a tenant's monthly report to the REQUESTER only.
+
+        Generates the monthly performance PDF
+        (:func:`recaps.client_report.build_client_monthly_report_pdf`) for the
+        prior COMPLETE month (or ``input.month`` ``"YYYY-MM"``) and emails it via
+        :class:`recaps.envelopes.ClientMonthlyReportMailer` to ONLY the
+        requesting user's own email — NEVER the tenant's configured client
+        recipients. This lets Ignite preview the deliverable without ever
+        mailing the brand.
+
+        Tenant-scoped via
+        :meth:`_CampaignReportService.resolve_target_tenant_id` (a client may
+        only test their own brand). ``include_sentiment=False`` is passed to the
+        PDF builder so a preview never triggers a fresh (paid) AI sentiment call.
+
+        Never raises. Returns ``success=False`` + a clear message when: the
+        tenant is out of scope, the requesting user has no email on file, or PDF
+        generation / send fails (wrapped in try/except + ``logger.exception``).
+        """
+        # The ONLY recipient — the requesting user's own email. Resolved up
+        # front so we never even build a PDF if there's nowhere safe to send it.
+        user = info.context.request.user
+        requester_email = (getattr(user, "email", "") or "").strip()
+        if not requester_email:
+            return SendTestClientReportResponse(
+                success=False,
+                message=(
+                    "Your account has no email address on file, so there's "
+                    "nowhere to send the preview."
+                ),
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        service = _CampaignReportService()
+        try:
+            target_tenant_id = await service.resolve_target_tenant_id(
+                info, input.tenant_id
+            )
+        except Exception:  # noqa: BLE001
+            target_tenant_id = None
+
+        if target_tenant_id is None:
+            return SendTestClientReportResponse(
+                success=False,
+                message="You do not have access to this brand.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        # Resolve the reporting period: the cron's helpers, so a preview
+        # reports the SAME window the scheduled run would. An invalid override
+        # degrades to a clear message rather than raising.
+        from django.core.management.base import CommandError
+
+        from tenants.management.commands.send_scheduled_client_reports import (
+            _month_label,
+            _parse_month_arg,
+            _prior_complete_month,
+        )
+
+        raw_month = (input.month or "").strip()
+        if raw_month:
+            try:
+                year, month = _parse_month_arg(raw_month)
+            except CommandError:
+                return SendTestClientReportResponse(
+                    success=False,
+                    message="Month must be in YYYY-MM format (e.g. 2026-05).",
+                    client_mutation_id=input.client_mutation_id,
+                )
+        else:
+            year, month = _prior_complete_month()
+        period_label = _month_label(year, month)
+
+        def _generate_and_send() -> str | None:
+            """Build the PDF + email it to the requester only. Returns the
+            tenant name on success, or None if the tenant vanished."""
+            from tenants.management.commands.send_scheduled_client_reports import (
+                Command as _ScheduledReportCommand,
+            )
+            from tenants.models import Tenant
+
+            from recaps.client_report import build_client_monthly_report_pdf
+            from recaps.envelopes import ClientMonthlyReportMailer
+
+            tenant = Tenant.objects.filter(id=target_tenant_id).first()
+            if tenant is None:
+                return None
+
+            # include_sentiment=False: a preview must never trigger a fresh
+            # (paid) AI sentiment call on a cache miss.
+            pdf_bytes = build_client_monthly_report_pdf(
+                tenant.id, year, month, include_sentiment=False
+            )
+            filename = _ScheduledReportCommand._pdf_filename(tenant, year, month)
+
+            mailer = ClientMonthlyReportMailer(
+                # SAFETY-CRITICAL: the requesting user's own email is the ONLY
+                # recipient — NEVER tenant.scheduled_report_recipients().
+                recipients=[requester_email],
+                tenant_name=tenant.name or "",
+                period_label=period_label,
+                pdf_bytes=pdf_bytes,
+                pdf_filename=filename,
+            )
+            mailer.send()
+            return tenant.name or "this brand"
+
+        try:
+            tenant_name = await sync_to_async(
+                _generate_and_send, thread_sensitive=True
+            )()
+        except Exception as exc:  # noqa: BLE001 — includes ClientMonthlyReportError
+            logger.exception(
+                "sendTestClientReport failed for tenant=%s period=%s-%s: %s",
+                target_tenant_id,
+                year,
+                month,
+                exc,
+            )
+            return SendTestClientReportResponse(
+                success=False,
+                message=(
+                    "Could not generate the preview report. Please try again."
+                ),
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        if tenant_name is None:
+            return SendTestClientReportResponse(
+                success=False,
+                message="Brand not found.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        return SendTestClientReportResponse(
+            success=True,
+            message=(
+                f"Preview of the {period_label} report for {tenant_name} was "
+                f"sent to {requester_email}."
+            ),
+            client_mutation_id=input.client_mutation_id,
+        )
