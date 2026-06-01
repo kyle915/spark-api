@@ -18,9 +18,9 @@ from asgiref.sync import sync_to_async
 from django.utils.dateparse import parse_datetime
 
 from utils.graphql.permissions import StrictIsAuthenticated
-from utils.graphql.mixins import resolve_id_to_int
 
 from . import models, types
+from .announcement_scope import AnnouncementScope
 from .inputs import AnnouncementFiltersInput
 
 
@@ -49,17 +49,33 @@ class AnnouncementQueries:
         info: strawberry.Info,
         filters: AnnouncementFiltersInput | None = None,
     ) -> List[types.Announcement]:
-        tenant_id: int | None = (
-            resolve_id_to_int(filters.tenant_id)
-            if filters and filters.tenant_id not in (None, "")
+        """List a tenant's announcements (newest first) for the manage UI.
+
+        Tenant-scoped: clients see only their OWN tenant's announcements (the
+        ``tenant_id`` filter is overridden to their tenant); admins see the
+        requested tenant's announcements. Never raises past the auth gate —
+        returns ``[]`` for an out-of-scope/garbage request or on error.
+        """
+        requested_tenant_id = (
+            filters.tenant_id if filters and filters.tenant_id not in (None, "")
             else None
         )
+        try:
+            tenant_id = await AnnouncementScope().resolve_target_tenant_id(
+                info, requested_tenant_id
+            )
+        except Exception:  # noqa: BLE001
+            return []
+        # Clients always resolve to their own tenant; an admin with no usable
+        # tenant in scope sees nothing rather than every tenant's announcements.
+        if not tenant_id:
+            return []
 
         @sync_to_async
         def _load():
-            qs = models.Announcement.objects.select_related("created_by").all()
-            if tenant_id:
-                qs = qs.filter(tenant_id=tenant_id)
+            qs = models.Announcement.objects.select_related("created_by").filter(
+                tenant_id=tenant_id
+            )
             return list(qs.order_by("-published_at", "-created_at")[:200])
 
         return await _load()

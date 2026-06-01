@@ -14,9 +14,10 @@ from asgiref.sync import sync_to_async
 from django.utils import timezone
 
 from utils.graphql.permissions import StrictIsAuthenticated
-from utils.graphql.mixins import resolve_id_to_int, SparkGraphQLMixin
+from utils.graphql.mixins import SparkGraphQLMixin
 
 from . import models, types
+from .announcement_scope import AnnouncementScope
 from .inputs import CreateAnnouncementInput, DeleteAnnouncementInput
 
 logger = logging.getLogger(__name__)
@@ -41,16 +42,17 @@ class AnnouncementMutations:
                 success=False, message="Title is required."
             )
 
-        tenant_id = (
-            resolve_id_to_int(input.tenant_id)
-            if input.tenant_id not in (None, "")
-            else None
-        )
-        if not tenant_id:
-            tenant_id = await sync_to_async(
-                lambda: getattr(user, "current_tenant_id", None)
-                or getattr(user, "tenant_id", None)
-            )()
+        # Tenant-scoped: a client always posts to their OWN tenant (any
+        # supplied tenant_id is ignored), so a client can never broadcast a
+        # push to another brand's BAs; an admin may target the requested
+        # tenant. A client with no tenant, or an admin who passed no usable
+        # tenant id, gets a safe success=False rather than a cross-tenant post.
+        try:
+            tenant_id = await AnnouncementScope().resolve_target_tenant_id(
+                info, input.tenant_id
+            )
+        except Exception:  # noqa: BLE001
+            tenant_id = None
         if not tenant_id:
             return types.AnnouncementResponse(
                 success=False,
@@ -105,6 +107,18 @@ class AnnouncementMutations:
     ) -> types.AnnouncementResponse:
         svc = _AnnouncementService()
         await svc.get_user(info)
+
+        # Tenant gate: a client may only delete their OWN tenant's
+        # announcements; an out-of-scope row is surfaced as "not found" (no
+        # cross-tenant existence leak / deletion). Admins may delete any
+        # tenant's announcement.
+        try:
+            allowed = await AnnouncementScope().accessible_tenant_ids(info)
+        except Exception:  # noqa: BLE001
+            return types.AnnouncementResponse(
+                success=False, message="Announcement not found."
+            )
+
         try:
             announcement = await sync_to_async(
                 models.Announcement.objects.get
@@ -113,6 +127,12 @@ class AnnouncementMutations:
             return types.AnnouncementResponse(
                 success=False, message="Announcement not found."
             )
+
+        if allowed is not None and announcement.tenant_id not in allowed:
+            return types.AnnouncementResponse(
+                success=False, message="Announcement not found."
+            )
+
         await sync_to_async(announcement.delete)()
         return types.AnnouncementResponse(
             success=True, message="Announcement deleted."
