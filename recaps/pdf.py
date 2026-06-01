@@ -492,6 +492,32 @@ def build_recap_pdf_html(
     </section>
 """
 
+    # Per-SKU Product Samples + Sales Performance. The legacy/template
+    # branches embed these sections inside their own `summary_html`, but the
+    # custom-recap `summary_html` is a short block that omits them — so for a
+    # custom recap the per-SKU rows (already computed above in `samples` /
+    # `sales`, and prefetched by generate_custom_recap_pdf) were silently
+    # dropped from the PDF. Render a shared copy of those sections only for
+    # custom recaps and splice it in right after the summary; the non-custom
+    # branches keep their inline copies, so their output is unchanged.
+    samples_sales_html = ""
+    if is_custom_recap:
+        samples_sales_html = f"""
+    <section class="card">
+      <h2>Product Samples</h2>
+      <ul class="list">
+        {"".join(f"<li>{safe(item)}</li>" for item in samples) or "<li>N/A</li>"}
+      </ul>
+    </section>
+
+    <section class="card">
+      <h2>Sales Performance</h2>
+      <ul class="list">
+        {"".join(f"<li>{safe(item)}</li>" for item in sales) or "<li>N/A</li>"}
+      </ul>
+    </section>
+"""
+
     return f"""
 <!doctype html>
 <html>
@@ -511,6 +537,7 @@ def build_recap_pdf_html(
     </header>
 
     {summary_html}
+    {samples_sales_html}
     {custom_fields_html}
     <section class="card">
       <h2>Images</h2>

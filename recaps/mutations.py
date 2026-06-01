@@ -55,24 +55,79 @@ from recaps.excel import build_recaps_xlsx
 ensure_relay_mutation()
 
 
+# Positional file-category sentinels sent by the upload widgets (web + mobile).
+# These are NOT database PKs — they are stable *role* markers baked into the
+# clients: "1" = the sampling photos slot, "2" = the receipts slot. They must
+# resolve to the uploading tenant's OWN category that plays that role, found by
+# its seeded NAME, never by raw PK. (Default categories are seeded per-tenant in
+# the order ["Sampling photos", "Table setup", "Receipts"], so PK 2 happens to
+# be "Table setup" — treating sentinel "2" as a PK is exactly what mis-filed
+# receipts into "Table setup".) Names anchor on tenants.mutations'
+# DEFAULT_FILE_RECAP_CATEGORIES so the two never drift.
+_PHOTOS_CATEGORY_NAME = "Sampling photos"
+_RECEIPTS_CATEGORY_NAME = "Receipts"
+_FILE_CATEGORY_SENTINEL_NAMES = {
+    "1": _PHOTOS_CATEGORY_NAME,
+    "2": _RECEIPTS_CATEGORY_NAME,
+}
+
+# Anchor the sentinel role names on the seeded defaults so a rename of the
+# tenant seeds can't silently break sentinel resolution. (Local import keeps the
+# tenants.mutations dependency lazy and one-directional.)
+def _assert_sentinel_names_match_seeds():
+    from tenants.mutations import DEFAULT_FILE_RECAP_CATEGORIES
+
+    seeded = {name.lower() for name in DEFAULT_FILE_RECAP_CATEGORIES}
+    for role_name in _FILE_CATEGORY_SENTINEL_NAMES.values():
+        assert role_name.lower() in seeded, (
+            f"File-category sentinel role {role_name!r} is no longer a seeded "
+            f"default ({DEFAULT_FILE_RECAP_CATEGORIES}); update "
+            "_FILE_CATEGORY_SENTINEL_NAMES in recaps.mutations to match."
+        )
+
+
+_assert_sentinel_names_match_seeds()
+
+
 def _resolve_file_recap_category(raw_id, *, tenant_id):
-    """Resolve a FileRecapCategory for an uploaded recap file — tenant-scoped
-    and graceful.
+    """Resolve a FileRecapCategory for an uploaded recap file — tenant-scoped,
+    semantic, and graceful.
 
-    FileRecapCategory rows are PER-TENANT, but clients (mobile + web) send a
-    stable positional id — "1" = photos, "2" = receipts — that only lines up
-    with whichever tenant was seeded first. Resolving that id globally tagged
-    a tenant's receipts with another tenant's category (so they never showed
-    under the tenant's own "Receipts" group), and an id with no global row at
-    all raised and rolled back the ENTIRE recap — which is why receipts
-    "didn't stick."
+    FileRecapCategory rows are PER-TENANT, but the upload widgets (web + mobile)
+    send a stable *positional* sentinel — "1" = photos, "2" = receipts — that is
+    a ROLE marker, not a DB PK. The old code matched the sentinel as a raw PK
+    (own tenant's exact PK first, then the global row's name): because defaults
+    are seeded ["Sampling photos", "Table setup", "Receipts"], the global PK 2
+    is "Table setup", so a receipt sentinel "2" landed under "Table setup"
+    instead of "Receipts".
 
-    Resolution order: the category the recap's tenant actually owns (exact id,
-    then the same name as the global row), then the global row, then None.
+    Resolution order:
+      1. If `raw_id` is a known positional sentinel ("1"/"2"), resolve it to the
+         tenant's OWN category by its seeded role NAME (case-insensitive) —
+         "1" -> "Sampling photos", "2" -> "Receipts".
+      2. Otherwise (a real explicit category id, e.g. one the user picked in the
+         category-management UI), keep the old behavior: the tenant's own row
+         with that exact PK, then the tenant's row sharing the global row's name,
+         then the global row, then None.
+
     Never raises — a stray category id must not lose the recap or its files.
     """
     if raw_id in (None, ""):
         return None
+
+    # Positional sentinel -> tenant's own category by seeded role name. We match
+    # on the *string* sentinel the clients actually send ("1"/"2"); only fall
+    # through to PK behavior when there is no name match for that tenant.
+    sentinel_name = _FILE_CATEGORY_SENTINEL_NAMES.get(str(raw_id).strip())
+    if sentinel_name is not None and tenant_id is not None:
+        by_name = models.FileRecapCategory.objects.filter(
+            tenant_id=tenant_id, name__iexact=sentinel_name
+        ).first()
+        if by_name is not None:
+            return by_name
+        # No seeded role category for this tenant — fall through to the legacy
+        # PK behavior so we degrade gracefully rather than dropping the file.
+
     try:
         category_id = resolve_id_to_int(raw_id)
     except (TypeError, ValueError, GraphQLError):
@@ -1236,22 +1291,13 @@ class RecapMutationService(SparkGraphQLMixin):
                     if not file_type:
                         raise GraphQLError("No file type available.")
 
-                    file_recap_category = None
-                    if file_input.file_recap_category_id not in (None, ""):
-                        try:
-                            category_id = resolve_id_to_int(
-                                file_input.file_recap_category_id
-                            )
-                            file_recap_category = models.FileRecapCategory.objects.get(
-                                id=category_id
-                            )
-                        except (
-                            models.FileRecapCategory.DoesNotExist,
-                            TypeError,
-                            ValueError,
-                            GraphQLError,
-                        ):
-                            raise GraphQLError("File recap category not found.")
+                    # New file added during an update: resolve through the
+                    # shared tenant-aware resolver so positional "1"/"2"
+                    # sentinels map to this tenant's photos/receipts by name.
+                    file_recap_category = _resolve_file_recap_category(
+                        file_input.file_recap_category_id,
+                        tenant_id=getattr(event, "tenant_id", None),
+                    )
 
                     recap_file = models.RecapFile(
                         name=f"Recap file for {self.input.name}",
@@ -2232,24 +2278,14 @@ class RecapMutationService(SparkGraphQLMixin):
                             if not file_type:
                                 raise GraphQLError("No file type available.")
 
-                            file_recap_category = None
-                            if file_input.file_recap_category_id not in (None, ""):
-                                try:
-                                    category_id = resolve_id_to_int(
-                                        file_input.file_recap_category_id
-                                    )
-                                    file_recap_category = (
-                                        models.FileRecapCategory.objects.get(
-                                            id=category_id
-                                        )
-                                    )
-                                except (
-                                    models.FileRecapCategory.DoesNotExist,
-                                    TypeError,
-                                    ValueError,
-                                    GraphQLError,
-                                ):
-                                    raise GraphQLError("File recap category not found.")
+                            # Mobile-added new file: resolve through the shared
+                            # tenant-aware resolver so positional "1"/"2"
+                            # sentinels map to this tenant's photos/receipts by
+                            # name (CustomRecap carries a direct tenant FK).
+                            file_recap_category = _resolve_file_recap_category(
+                                file_input.file_recap_category_id,
+                                tenant_id=getattr(custom_recap, "tenant_id", None),
+                            )
 
                             models.CustomRecapFile.objects.create(
                                 name=f"Custom recap file for {self.input.name}",
@@ -2351,24 +2387,14 @@ class RecapMutationService(SparkGraphQLMixin):
                             if not file_type:
                                 raise GraphQLError("No file type available.")
 
-                            file_recap_category = None
-                            if file_input.file_recap_category_id not in (None, ""):
-                                try:
-                                    category_id = resolve_id_to_int(
-                                        file_input.file_recap_category_id
-                                    )
-                                    file_recap_category = (
-                                        models.FileRecapCategory.objects.get(
-                                            id=category_id
-                                        )
-                                    )
-                                except (
-                                    models.FileRecapCategory.DoesNotExist,
-                                    TypeError,
-                                    ValueError,
-                                    GraphQLError,
-                                ):
-                                    raise GraphQLError("File recap category not found.")
+                            # New file added during a (non-mobile) update:
+                            # resolve through the shared tenant-aware resolver so
+                            # positional "1"/"2" sentinels map to this tenant's
+                            # photos/receipts by name.
+                            file_recap_category = _resolve_file_recap_category(
+                                file_input.file_recap_category_id,
+                                tenant_id=getattr(custom_recap, "tenant_id", None),
+                            )
 
                             custom_recap_file = models.CustomRecapFile.objects.create(
                                 name=f"Custom recap file for {self.input.name}",
@@ -2923,19 +2949,14 @@ class RecapMutationService(SparkGraphQLMixin):
                         "No file type available. Please create a file type first."
                     )
 
-                file_recap_category = None
-                if self.input.file_recap_category_id not in (None, ""):
-                    try:
-                        file_recap_category = models.FileRecapCategory.objects.get(
-                            id=resolve_id_to_int(self.input.file_recap_category_id)
-                        )
-                    except (
-                        models.FileRecapCategory.DoesNotExist,
-                        TypeError,
-                        ValueError,
-                        GraphQLError,
-                    ):
-                        raise GraphQLError("File recap category not found.")
+                # Resolve through the shared tenant-aware resolver so the
+                # positional "1"/"2" sentinels the upload widget sends map to
+                # this recap's tenant's own photos/receipts categories by name
+                # (Recap has no direct tenant FK — it scopes through the event).
+                file_recap_category = _resolve_file_recap_category(
+                    self.input.file_recap_category_id,
+                    tenant_id=getattr(recap.event, "tenant_id", None),
+                )
 
                 recap_file = models.RecapFile(
                     name=f"Recap file for {recap.name}",
@@ -3019,19 +3040,14 @@ class RecapMutationService(SparkGraphQLMixin):
                         "No file type available. Please create a file type first."
                     )
 
-                file_recap_category = None
-                if self.input.file_recap_category_id not in (None, ""):
-                    try:
-                        file_recap_category = models.FileRecapCategory.objects.get(
-                            id=resolve_id_to_int(self.input.file_recap_category_id)
-                        )
-                    except (
-                        models.FileRecapCategory.DoesNotExist,
-                        TypeError,
-                        ValueError,
-                        GraphQLError,
-                    ):
-                        raise GraphQLError("File recap category not found.")
+                # Resolve through the shared tenant-aware resolver so the
+                # positional "1"/"2" sentinels map to this custom recap's
+                # tenant's own photos/receipts categories by name (CustomRecap
+                # carries a direct tenant FK).
+                file_recap_category = _resolve_file_recap_category(
+                    self.input.file_recap_category_id,
+                    tenant_id=getattr(custom_recap, "tenant_id", None),
+                )
 
                 models.CustomRecapFile.objects.create(
                     name=f"Custom recap file for {custom_recap.name}",
