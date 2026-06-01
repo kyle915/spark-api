@@ -551,6 +551,53 @@ class TenantInsightSnapshot(models.Model):
         return f"Insight snapshot for tenant {self.tenant_id} @ {self.generated_at}"
 
 
+class TenantSentimentSnapshot(models.Model):
+    """A cached "What people are saying" consumer-sentiment read for a tenant.
+
+    The AI-backed sibling of :class:`TenantInsightSnapshot` (which caches the
+    now-deterministic proactive buckets): this stores the OpenAI-summarized
+    consumer sentiment for a tenant's free-text recap feedback — an overall
+    sentiment, a positive-percentage estimate, a one-line summary, the
+    recurring themes, and a few verbatim quotes. Because the read costs an
+    OpenAI call, it is cached here and refreshed at most daily; the newest
+    snapshot younger than the read freshness window is served, and a daily cron
+    precomputes a fresh one so dashboard reads stay fast (see
+    :func:`recaps.tenant_sentiment.get_or_refresh_tenant_sentiment`).
+
+    ``payload`` is the cleaned structured dict straight off
+    :func:`recaps.tenant_sentiment.build_tenant_sentiment`
+    (``{overall_sentiment, positive_pct, summary, themes, quotes}``), stored
+    verbatim so the GraphQL layer can shape it without a second table.
+    ``sample_size`` is the number of feedback snippets the summary was built
+    from. ``year`` partitions the cache: ``None`` is the all-time snapshot, an
+    integer is that calendar year's snapshot (mirrors the ``year`` argument the
+    tenant aggregates accept), so per-year and all-time reads never collide.
+
+    NOTE on ``related_name``: :class:`TenantInsightSnapshot` already owns
+    ``Tenant.insight_snapshots``; two FKs to ``Tenant`` cannot share one
+    reverse accessor (Django ``fields.E304``), so this uses
+    ``related_name="sentiment_snapshots"`` to stay distinct (the
+    ``TenantGoal.kpi_goals`` lesson).
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    tenant = models.ForeignKey(
+        Tenant, on_delete=models.CASCADE, related_name="sentiment_snapshots"
+    )
+    # All-time when null; otherwise the calendar year this snapshot summarizes.
+    year = models.IntegerField(null=True, blank=True, db_index=True)
+    payload = models.JSONField(default=dict)
+    sample_size = models.IntegerField(default=0)
+    generated_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    def __str__(self) -> str:
+        scope = "all-time" if self.year is None else str(self.year)
+        return (
+            f"Sentiment snapshot ({scope}) for tenant {self.tenant_id} "
+            f"@ {self.generated_at}"
+        )
+
+
 class Goal(models.Model):
     """
     Per-user, per-tenant, per-year goals (target values only).
