@@ -765,3 +765,51 @@ class CustomRecapFile(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
     updated_at = models.DateTimeField(auto_now=True)
+
+
+class RecapQualitySnapshot(models.Model):
+    """Cached AI feedback-quality verdict for ONE recap (legacy or custom).
+
+    The recap-quality read (:func:`recaps.recap_quality.recap_quality_flags`) is
+    deterministic at its core, but it can ALSO ask OpenAI whether the recap's
+    free-text feedback is thin / vague / low-effort. Because that costs an AI
+    call, the verdict is cached here — the AI-backed sibling of
+    :class:`tenants.models.TenantSentimentSnapshot`, but per-recap rather than
+    per-tenant, so steady-state spend is ~one call per recap regardless of how
+    often the quality flags are read.
+
+    A recap is identified by ``(recap_id, is_custom)`` rather than a ForeignKey
+    because the two recap shapes — legacy :class:`Recap` and
+    :class:`CustomRecap` — are SEPARATE tables with independent id spaces, so a
+    single FK can't reference both. ``is_custom`` is the discriminator (False ->
+    legacy ``Recap.id``, True -> ``CustomRecap.id``); the pair is unique.
+
+    ``low_quality`` is the model's verdict (True when the feedback is judged
+    thin); ``label`` is the short human reason rebuilt into the flag on a cache
+    hit. The NEGATIVE verdict is stored too (``low_quality=False`` with an empty
+    label) so a "feedback is fine" recap isn't re-asked on every read.
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    # The recap's pk in its own table; paired with ``is_custom`` to disambiguate
+    # the legacy vs custom id spaces.
+    recap_id = models.BigIntegerField()
+    is_custom = models.BooleanField(default=False)
+    low_quality = models.BooleanField(default=False)
+    label = models.TextField(blank=True, default="")
+    generated_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["recap_id", "is_custom"],
+                name="rc_recap_quality_snapshot_uniq",
+            )
+        ]
+
+    def __str__(self) -> str:
+        shape = "custom" if self.is_custom else "legacy"
+        return (
+            f"Quality snapshot ({shape}) for recap {self.recap_id} "
+            f"@ {self.generated_at}"
+        )
