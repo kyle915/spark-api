@@ -32,6 +32,7 @@ from recaps.tenant_overview import (
     build_tenant_overview,
     tenant_event_recap_counts,
     tenant_kpi_totals,
+    tenant_market_performance,
     tenant_monthly_trend,
 )
 from utils.ai_text import (
@@ -435,6 +436,55 @@ def _build_tenant_kpis(tenant_id: int, year: int | None = None) -> TenantKpis:
             for m in trend
         ],
     )
+
+
+@strawberry.type
+class MarketPerformance:
+    """One US state's KPI roll-up for the geographic performance heatmap.
+
+    The per-state companion to :class:`TenantKpis`: instead of one
+    tenant-wide total, the ``tenantMarketPerformance`` query returns a list
+    of these — one per state the tenant has activity in — so the frontend
+    can color a US map. ``state`` is the 2-letter code
+    (``events.models.State.code``, e.g. ``"CA"``); the counts and the four
+    summable KPIs come from the same source of truth as
+    :class:`TenantKpis`, aggregated across BOTH recap shapes but GROUPED BY
+    the event's state (see
+    :func:`recaps.tenant_overview.tenant_market_performance`).
+    """
+
+    state: str
+    event_count: int
+    recap_count: int
+    consumers_reached: int
+    samples_distributed: int
+    products_sold: int
+    total_engagements: int
+
+
+def _build_market_performance(
+    tenant_id: int, year: int | None = None
+) -> list[MarketPerformance]:
+    """Map the per-state dicts to :class:`MarketPerformance` GraphQL rows.
+
+    Synchronous Django ORM (the resolver wraps it in ``sync_to_async``).
+    Delegates the aggregation to
+    :func:`recaps.tenant_overview.tenant_market_performance` so the numbers
+    share the tenant KPI source of truth, then mirrors each dict field-for-
+    field onto the strawberry type.
+    """
+    return [
+        MarketPerformance(
+            state=row["state"],
+            event_count=row["event_count"],
+            recap_count=row["recap_count"],
+            consumers_reached=row["consumers_reached"],
+            samples_distributed=row["samples_distributed"],
+            products_sold=row["products_sold"],
+            total_engagements=row["total_engagements"],
+        )
+        for row in tenant_market_performance(tenant_id, year)
+    ]
 
 
 # The headline KPIs that have a per-client annual target on
@@ -1113,6 +1163,61 @@ class CampaignReportQueries:
 
         if data is None:
             return _zeroed_tenant_kpis()
+        return data
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def tenant_market_performance(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID,
+        year: int | None = None,
+    ) -> list[MarketPerformance]:
+        """Per-US-state KPI roll-up for the geographic performance heatmap.
+
+        Returns one :class:`MarketPerformance` per state the tenant has
+        activity in (rows whose event has no US state are omitted), so the
+        frontend can color a map. The counts and four summable KPIs come from
+        the same :func:`recaps.tenant_overview` aggregation the
+        :meth:`tenant_kpis` roll-up uses, grouped by the event's state.
+
+        The optional ``year`` scopes every figure to one calendar year,
+        identical to :meth:`tenant_kpis`:
+
+        * **Omitted / null** — ALL-TIME across the tenant's whole history.
+        * **A year ``Y``** — only recaps/events whose ``created_at`` falls in
+          calendar year ``Y``.
+
+        Tenant scoping is identical to :meth:`tenant_kpis`
+        (:meth:`_CampaignReportService.resolve_target_tenant_id`):
+        client-role users may ONLY read their own tenant — the ``tenant_id``
+        argument is overridden to their own; admins (spark-admin / staff /
+        superuser / ``@igniteproductions.co``) may target any tenant.
+
+        Never raises: a missing or out-of-scope tenant, or any aggregation
+        error, resolves to an empty list rather than a GraphQL error.
+        """
+        service = _CampaignReportService()
+        target_tenant_id = await service.resolve_target_tenant_id(info, tenant_id)
+        if target_tenant_id is None:
+            return []
+
+        def _build():
+            # Guard the tenant's existence the same way tenant_kpis does, so
+            # an admin passing an unknown id degrades to an empty list instead
+            # of aggregating over no tenant.
+            from tenants.models import Tenant
+
+            if not Tenant.objects.filter(id=target_tenant_id).exists():
+                return None
+            return _build_market_performance(target_tenant_id, year)
+
+        try:
+            data = await sync_to_async(_build, thread_sensitive=True)()
+        except Exception:
+            return []
+
+        if data is None:
+            return []
         return data
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
