@@ -36,6 +36,7 @@ from .mutations import (
 from .calendar import GoogleCalendarMutations, GoogleCalendarQueries
 from .preferences import MyPreferencesQueries, MyPreferencesMutations
 from .forms import TenantFormsQueries, TenantFormsMutations
+from .support import SupportTicketMutations, SupportTicketQueries
 from .dashboard.schema import DashboardQueries
 from utils.graphql.relay import (
     CountableConnection,
@@ -519,6 +520,8 @@ class QueryClients(
     TenantThemingQuery,
     MyPreferencesQueries,
     TenantFormsQueries,
+    # Admin read of captured Help-page support tickets (tenantSupportTickets).
+    SupportTicketQueries,
 ):
     @strawberry.field
     def healthcheck(self) -> str:
@@ -776,6 +779,9 @@ class MutationClients(
     # The web Form Builder talks to the clients GraphQL endpoint, so the
     # tenant-scoped form mutations live here too.
     TenantFormsMutations,
+    # Help-page support ticket capture + Ignite-team notify
+    # (createSupportTicket). Web Help page talks to the clients endpoint.
+    SupportTicketMutations,
 ):
     verify_token = mutations.VerifyToken.field
     token_auth = mutations.ObtainJSONWebToken.field

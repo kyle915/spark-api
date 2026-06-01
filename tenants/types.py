@@ -3,7 +3,7 @@ import strawberry
 import strawberry_django
 from asgiref.sync import sync_to_async
 from utils.gcs import extract_blob_name_from_url, public_url
-from .models import Tenant, Role, User, TenantTheme
+from .models import Tenant, Role, User, TenantTheme, SupportTicket
 from strawberry.relay import Node
 
 
@@ -77,3 +77,19 @@ class TenantThemeType(Node):
     color_scheme: strawberry.auto
     css_variables: strawberry.auto
     tenant: strawberry.auto
+
+
+@strawberry_django.type(SupportTicket)
+class SupportTicketType(Node):
+    """A captured Help-page support request. Returned by createSupportTicket
+    (so the FE can confirm the row was saved) and the admin
+    tenantSupportTickets query."""
+
+    uuid: strawberry.auto
+    subject: strawberry.auto
+    body: strawberry.auto
+    category: strawberry.auto
+    status: strawberry.auto
+    created_at: strawberry.auto
+    created_by: "SparkUserType | None"
+    tenant: "TenantType | None"

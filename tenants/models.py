@@ -760,6 +760,91 @@ class CustomForm(models.Model):
         return f"CustomForm '{self.name}' @ tenant {self.tenant_id}"
 
 
+class SupportTicket(models.Model):
+    """A support request submitted from the web Help page (``SparkHelp.tsx``).
+
+    Backs the Help page's "How can we help?" form. Previously that page was
+    fully static (FAQs + mailto links); this captures the request as a row so
+    nothing relies on a user actually opening their mail client, and so we keep
+    a record. On create, the ``createSupportTicket`` mutation also notifies the
+    Ignite team by REUSING the same recipient resolution the request-approval
+    email uses (``events/mutations.py`` — ``IGNITE_REVIEW_CC`` + active
+    spark-admins + ``REQUEST_REVIEW_COPY_EMAILS``).
+
+    ``tenant`` is nullable: a signed-in user without a bound tenant can still
+    file a ticket (we just notify Ignite without a brand name). ``created_by``
+    is the authenticated submitter; ``SET_NULL`` so deleting a user doesn't
+    erase the support history.
+    """
+
+    # Category choices — kept loose (a plain CharField with choices for the
+    # admin) so the front-end can offer a dropdown without a migration per new
+    # bucket. Defaults to "other" when the form omits it.
+    CATEGORY_QUESTION = "question"
+    CATEGORY_BUG = "bug"
+    CATEGORY_BILLING = "billing"
+    CATEGORY_OTHER = "other"
+    CATEGORY_CHOICES = [
+        (CATEGORY_QUESTION, "Question"),
+        (CATEGORY_BUG, "Bug"),
+        (CATEGORY_BILLING, "Billing"),
+        (CATEGORY_OTHER, "Other"),
+    ]
+
+    # Status lifecycle — "open" on create; "closed"/"resolved" are for a future
+    # admin triage surface. Loose CharField for the same reason as category.
+    STATUS_OPEN = "open"
+    STATUS_CLOSED = "closed"
+    STATUS_CHOICES = [
+        (STATUS_OPEN, "Open"),
+        (STATUS_CLOSED, "Closed"),
+    ]
+
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    tenant = models.ForeignKey(
+        Tenant,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="support_tickets",
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="support_tickets_created",
+    )
+    subject = models.CharField(max_length=255)
+    body = models.TextField()
+    category = models.CharField(
+        max_length=32,
+        choices=CATEGORY_CHOICES,
+        default=CATEGORY_OTHER,
+        blank=True,
+    )
+    status = models.CharField(
+        max_length=32,
+        choices=STATUS_CHOICES,
+        default=STATUS_OPEN,
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        # Newest-first for an admin triage list.
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["tenant", "-created_at"]),
+            models.Index(fields=["status", "-created_at"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"SupportTicket #{self.pk} '{self.subject}' @ tenant {self.tenant_id}"
+
+
 class TenantGoal(models.Model):
     """Per-CLIENT (tenant-level), per-year KPI targets for the headline KPIs.
 
