@@ -904,15 +904,38 @@ class RecapMutationService(SparkGraphQLMixin):
             except (Job.DoesNotExist, TypeError, ValueError, GraphQLError):
                 raise GraphQLError("Job not found.")
 
+        # Event-derived defaults for retailer/location/state when the caller
+        # omits them. The mobile path already inherited these from the event;
+        # we now apply the SAME defaulting to the admin/internal create path so
+        # an internally-created recap (the "Log event" → recap flow) doesn't
+        # persist a null retailer/state — which is what made the recap PDF show
+        # "State / Retailer: N/A" for internally-created recaps (the PDF custom
+        # branch reads recap.state / recap.retailer directly). Read off the
+        # event inside sync_to_async (its FK chain isn't select_related here).
+        @sync_to_async
+        def _event_defaults():
+            ev_retailer = getattr(event, "retailer", None)
+            ev_location = getattr(event, "location", None)
+            if ev_location is None and ev_retailer is not None:
+                ev_location = getattr(ev_retailer, "location", None)
+            ev_state = getattr(event, "state", None)
+            if ev_state is None and ev_location is not None:
+                ev_state = getattr(ev_location, "state", None)
+            return ev_retailer, ev_location, ev_state
+
+        event_retailer, event_location, event_state = await _event_defaults()
+
         retailer = None
         if is_mobile_input:
-            retailer = getattr(event, "retailer", None)
+            retailer = event_retailer
         elif self.input.retailer_id:
             try:
                 retailer_id = resolve_id_to_int(self.input.retailer_id)
                 retailer = await sync_to_async(Retailer.objects.get)(id=retailer_id)
             except (Retailer.DoesNotExist, TypeError, ValueError, GraphQLError):
                 raise GraphQLError("Retailer not found.")
+        else:
+            retailer = event_retailer
 
         ambassador = None
         if self.input.ambassador_id:
@@ -926,7 +949,7 @@ class RecapMutationService(SparkGraphQLMixin):
 
         location = None
         if is_mobile_input:
-            location = getattr(event, "location", None)
+            location = event_location
             if location is None:
                 location = getattr(retailer, "location", None) if retailer else None
         elif self.input.location_id:
@@ -935,10 +958,12 @@ class RecapMutationService(SparkGraphQLMixin):
                 location = await sync_to_async(Location.objects.get)(id=location_id)
             except (Location.DoesNotExist, TypeError, ValueError, GraphQLError):
                 raise GraphQLError("Location not found.")
+        else:
+            location = event_location
 
         state = None
         if is_mobile_input:
-            state = getattr(event, "state", None)
+            state = event_state
             if state is None:
                 state = getattr(location, "state", None) if location else None
         elif self.input.state_id:
@@ -947,6 +972,8 @@ class RecapMutationService(SparkGraphQLMixin):
                 state = await sync_to_async(State.objects.get)(id=state_id)
             except (State.DoesNotExist, TypeError, ValueError, GraphQLError):
                 raise GraphQLError("State not found.")
+        else:
+            state = event_state
 
         if not self.input.files or len(self.input.files) == 0:
             raise GraphQLError("At least one file is required.")
@@ -3621,6 +3648,10 @@ class RecapMutationService(SparkGraphQLMixin):
                     "event",
                     "event__tenant",
                     "event__event_type",
+                    # event_date PDF fallback walks to the parent request when
+                    # Event.date is null (pre-#718 events); prefetch it so the
+                    # render stays a single query.
+                    "event__request",
                     "job",
                     "retailer",
                     "ambassador",
@@ -4188,6 +4219,17 @@ class RecapMutationService(SparkGraphQLMixin):
                     "event",
                     "event__tenant",
                     "event__event_type",
+                    # Event Date / State / Retailer fallbacks (mirror the
+                    # event_date / event_state / event_retailer resolvers):
+                    # the PDF helpers walk these chains when the recap's own
+                    # FKs are null, so prefetch them to keep the render a
+                    # single query and resolve the "Event Date / State /
+                    # Retailer shows N/A" symptom on pre-#718 events.
+                    "event__request",
+                    "event__request__retailer",
+                    "event__location__state",
+                    "event__state",
+                    "event__retailer__location__state",
                     "job",
                     "retailer",
                     "location",

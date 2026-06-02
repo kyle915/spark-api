@@ -103,6 +103,84 @@ def _submitted_at(recap):
     return getattr(recap, "submited_at", None) or getattr(recap, "submitted_at", None)
 
 
+def _event_date(recap):
+    """Resolve the recap's Event Date with the same fallback chain as the
+    ``event_date`` GraphQL resolver (recaps/types.py), so the PDF matches the
+    custom-recap info panel.
+
+    Events materialized before the create-path fix (#718) have
+    ``Event.date IS NULL`` but ``Event.start_time`` populated (and the date
+    also lives on the parent Request). Prefer, in order:
+        event.date → event.start_time → request.date → request.start_time
+    Returns the raw datetime/date (caller formats via ``format_date_only``),
+    or None when every source is absent. Null-safe throughout.
+    """
+    event = getattr(recap, "event", None)
+    if event is None:
+        return None
+    value = getattr(event, "date", None) or getattr(event, "start_time", None)
+    if value:
+        return value
+    request = getattr(event, "request", None)
+    if request is not None:
+        value = getattr(request, "date", None) or getattr(
+            request, "start_time", None
+        )
+    return value or None
+
+
+def _event_state(recap):
+    """State for the custom-recap PDF branch, matching the ``event_state``
+    resolver's fallback so the PDF agrees with the info panel. Prefers the
+    Recap's own State FK (what the internal create may set), then walks the
+    event: event.state → event.location.state → event.retailer.location.state.
+    Returns a State-like object (``format_object_name`` reads ``.name``) or
+    None. Null-safe throughout."""
+    state = getattr(recap, "state", None)
+    if state is not None:
+        return state
+    event = getattr(recap, "event", None)
+    if event is None:
+        return None
+    state = getattr(event, "state", None)
+    if state is not None:
+        return state
+    location = getattr(event, "location", None)
+    loc_state = getattr(location, "state", None) if location else None
+    if loc_state is not None:
+        return loc_state
+    retailer = getattr(event, "retailer", None)
+    r_loc = getattr(retailer, "location", None) if retailer else None
+    return getattr(r_loc, "state", None) if r_loc else None
+
+
+def _event_retailer(recap):
+    """Retailer for the custom-recap PDF branch, matching the ``event_retailer``
+    resolver's fallback so the PDF agrees with the info panel. Prefers the
+    Recap's own Retailer FK, then walks the event:
+        event.retailer → event.request.retailer → event.request.retailer_name
+    Returns a Retailer-like object OR a plain string (the request's
+    ``retailer_name`` free-text), both of which ``format_object_name`` renders;
+    or None. Null-safe throughout."""
+    retailer = getattr(recap, "retailer", None)
+    if retailer is not None:
+        return retailer
+    event = getattr(recap, "event", None)
+    if event is None:
+        return None
+    retailer = getattr(event, "retailer", None)
+    if retailer is not None:
+        return retailer
+    request = getattr(event, "request", None)
+    if request is None:
+        return None
+    retailer = getattr(request, "retailer", None)
+    if retailer is not None:
+        return retailer
+    name = (getattr(request, "retailer_name", None) or "").strip()
+    return name or None
+
+
 def _custom_field_sections(recap) -> dict[str, list[tuple[str, str]]]:
     sections: dict[str, list[tuple[str, str]]] = {}
     for custom_field_value in _related_items(recap, "custom_field_value"):
@@ -338,15 +416,15 @@ def build_recap_pdf_html(
       <div class="grid">
         <div><span>Name</span><strong>{safe(getattr(recap, "name", None))}</strong></div>
         <div><span>Event</span><strong>{format_object_name(getattr(recap, "event", None))}</strong></div>
-        <div><span>Event Date</span><strong>{format_date_only(getattr(getattr(recap, "event", None), "date", None))}</strong></div>
+        <div><span>Event Date</span><strong>{format_date_only(_event_date(recap))}</strong></div>
         <div><span>Total Engagements</span><strong>{safe(getattr(recap, "total_engagements", None))}</strong></div>
         <div><span>Used Corpo Card</span><strong>{format_bool(getattr(recap, "used_corpo_card", None))}</strong></div>
         <div><span>Timezone</span><strong>{format_object_name(getattr(recap, "timezone", None))}</strong></div>
         <div><span>Ambassador</span><strong>{safe(ambassador_name)}</strong></div>
         <div><span>Ambassador Email</span><strong>{safe(ambassador_email)}</strong></div>
-        <div><span>State</span><strong>{format_object_name(getattr(recap, "state", None))}</strong></div>
+        <div><span>State</span><strong>{format_object_name(_event_state(recap))}</strong></div>
         <div><span>City</span><strong>{format_object_name(getattr(recap, "location", None))}</strong></div>
-        <div><span>Retailer</span><strong>{format_object_name(getattr(recap, "retailer", None))}</strong></div>
+        <div><span>Retailer</span><strong>{format_object_name(_event_retailer(recap))}</strong></div>
       </div>
     </section>
 """
@@ -357,7 +435,7 @@ def build_recap_pdf_html(
       <div class="grid">
         <div><span>Name</span><strong>{safe(recap.name)}</strong></div>
         <div><span>Event</span><strong>{safe(getattr(recap.event, "name", None))}</strong></div>
-        <div><span>Event Date</span><strong>{format_date_only(getattr(recap.event, "date", None))}</strong></div>
+        <div><span>Event Date</span><strong>{format_date_only(_event_date(recap))}</strong></div>
         <div><span>Address</span><strong>{safe(getattr(recap.event, "address", None))}</strong></div>
         <div><span>Event Type</span><strong>{safe(getattr(getattr(recap.event, "event_type", None), "name", None))}</strong></div>
         <div><span>Total Consumers</span><strong>{safe(getattr(engagement, "total_consumer", None))}</strong></div>
@@ -389,7 +467,7 @@ def build_recap_pdf_html(
         safe(getattr(recap.event, "name", None))
     }</strong></div>
         <div><span>Event Date</span><strong>{
-        format_date_only(getattr(recap.event, "date", None))
+        format_date_only(_event_date(recap))
     }</strong></div>
         <div><span>Submitted At</span><strong>{
         format_date_only(_submitted_at(recap))

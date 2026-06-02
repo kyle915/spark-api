@@ -828,6 +828,100 @@ class RepairMissingEventsForApprovedRequestsView(View):
         )
 
 
+@method_decorator(csrf_exempt, name="dispatch")
+class RepairEventDatesView(View):
+    """POST `/internal/cron/repair-event-dates`.
+
+    Fires the `repair_event_dates` backfill — copies a derived date
+    (start_time → request.date → request.start_time) into ``Event.date`` for
+    events created before the date-copy fix (#718) that have ``date IS NULL``
+    but ``start_time`` set, so "Event Date" reads correctly off the stored row
+    (sheets sync, raw exports, admin). See
+    events/management/commands/repair_event_dates.py.
+
+    NOTE: the accompanying code fix already makes the read side fall back, so
+    the recap "Event Date" display is fixed on deploy WITHOUT this backfill —
+    this endpoint is DATA HYGIENE. Idempotent and transaction-wrapped per
+    tenant.
+
+    This is a MANUAL one-off (triggered from the GitHub Actions UI), not a
+    recurring cron — but it reuses the same `X-Cron-Secret` gating as its
+    siblings so the trigger needs no command line.
+
+    SAFE — DRY-RUN IS THE DEFAULT. A plain trigger NEVER writes: the backfill
+    runs with `dry_run=True` unless `execute=true` is explicitly passed, so the
+    operator always sees the report first and opts in to writes deliberately.
+
+    Body / query params (all optional):
+      - execute: "1" / "true" / "yes" — perform the writes. Default OFF →
+        the command runs in DRY-RUN with NO DB writes.
+      - tenant: tenant slug or numeric id — restrict to a single tenant.
+        Default: all tenants.
+
+    The command's full stdout report (incl. the per-tenant breakdown) is
+    captured and returned verbatim in the response under `report`.
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _bool(name: str, default: bool = False) -> bool:
+            raw = (request.GET.get(name) or request.POST.get(name) or "").lower()
+            if not raw:
+                return default
+            return raw in ("1", "true", "yes", "on")
+
+        # DRY-RUN is the default: only an explicit execute=true writes.
+        execute = _bool("execute", default=False)
+
+        tenant = request.GET.get("tenant") or request.POST.get("tenant")
+        tenant = tenant or None
+
+        out = io.StringIO()
+        try:
+            call_command(
+                "repair_event_dates",
+                execute=execute,
+                tenant=tenant,
+                stdout=out,
+            )
+        except Exception as exc:  # noqa: BLE001 — surface any error to caller
+            logger.exception("Repair event dates backfill failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "exception": _concise_exc(exc),
+                    "executed": execute,
+                    "tenant": tenant,
+                    "report": out.getvalue(),
+                },
+                status=500,
+            )
+
+        return JsonResponse(
+            {
+                "executed": execute,
+                "tenant": tenant,
+                "report": out.getvalue(),
+            }
+        )
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        return JsonResponse(
+            {
+                "ok": True,
+                "endpoint": "repair-event-dates",
+            }
+        )
+
+
 def _registered_views() -> dict[str, Any]:
     """Map URL path → view class. Lets `digest/urls.py` mount these
     without each one being re-exported explicitly.
@@ -844,4 +938,5 @@ def _registered_views() -> dict[str, Any]:
         "repair-missing-events-for-approved-requests": (
             RepairMissingEventsForApprovedRequestsView
         ),
+        "repair-event-dates": RepairEventDatesView,
     }
