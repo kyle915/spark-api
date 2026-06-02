@@ -65,6 +65,7 @@ Usage:
 from __future__ import annotations
 
 import logging
+import traceback
 
 from asgiref.sync import async_to_sync
 from django.core.management.base import BaseCommand, CommandError
@@ -85,6 +86,28 @@ APPROVED_REQUEST_STATUS_SLUGS = tuple(EventManager.APPROVED_REQUEST_STATUS_SLUGS
 
 # Target EventStatus slug the created event should land on.
 APPROVED_EVENT_STATUS_SLUG = "approved"
+
+
+def _format_exc(exc: BaseException) -> str:
+    """Concise, log-safe one-liner for a failed create: exception type +
+    message + the LAST traceback frame (file:line in func). Deliberately does
+    NOT dump the full traceback or any env/secret — just enough to pinpoint
+    which line in ``from_request`` (or the create path) threw, so a re-run
+    surfaces the real cause in the GitHub Actions / cron log even without GCP
+    access. Example:
+      IntegrityError: null value in column "created_by_id" ... [managers.py:287 in from_request]
+    """
+    type_name = type(exc).__name__
+    message = " ".join(str(exc).split())  # collapse newlines/whitespace
+    if len(message) > 300:
+        message = message[:297] + "..."
+    frame = ""
+    tb = exc.__traceback__
+    if tb is not None:
+        last = traceback.extract_tb(tb)[-1]
+        filename = last.filename.split("/")[-1]
+        frame = f" [{filename}:{last.lineno} in {last.name}]"
+    return f"{type_name}: {message}{frame}"
 
 
 class Command(BaseCommand):
@@ -145,12 +168,14 @@ class Command(BaseCommand):
         grand_total_candidates = 0
         grand_total_created = 0
         grand_total_failed = 0
+        all_errors: list[dict] = []
 
         for tenant in tenants:
             stats = self._process_tenant(tenant, dry_run=dry_run)
             grand_total_candidates += stats["candidates"]
             grand_total_created += stats["created"]
             grand_total_failed += stats["failed"]
+            all_errors.extend(stats.get("errors", []))
 
         # ─── Summary ────────────────────────────────────────────────
         verb = "Would create" if dry_run else "Created"
@@ -168,8 +193,15 @@ class Command(BaseCommand):
         if grand_total_failed:
             self.stdout.write(self.style.WARNING(
                 f"  Failed to create: {grand_total_failed} event(s) "
-                "(see log) — re-run to retry"
+                "— re-run to retry"
             ))
+            # Print the real cause per failed request, right here in the run
+            # log, so the operator (and a future re-run) can pinpoint it
+            # without Cloud Run log access.
+            for err in all_errors:
+                self.stdout.write(self.style.ERROR(
+                    f"    - request id={err['request_id']}: {err['error']}"
+                ))
 
         if not dry_run and grand_total_created:
             logger.info(
@@ -192,6 +224,9 @@ class Command(BaseCommand):
             "candidates": 0,
             "created": 0,
             "failed": 0,
+            # Per-failure detail [{request_id, error}] so the summary can
+            # surface the real exception text (not just a count).
+            "errors": [],
         }
 
         # The affected requests: approved/scheduled, not soft-deleted, and with
@@ -265,10 +300,15 @@ class Command(BaseCommand):
             )
             return stats
 
+        # Each request gets its OWN savepoint so one failure doesn't poison
+        # the surrounding transaction (a raised statement aborts the whole
+        # Postgres tx — subsequent requests would then all fail with
+        # "current transaction is aborted"). The outer atomic() still gives an
+        # all-or-nothing tenant run on an unexpected crash.
         with transaction.atomic():
             for req in candidates:
-                created = self._create_event_for_request(req)
-                if created:
+                error = self._create_event_for_request(req)
+                if error is None:
                     stats["created"] += 1
                     self.stdout.write(self.style.SUCCESS(
                         f"    ✓ created approved Event for request "
@@ -276,24 +316,33 @@ class Command(BaseCommand):
                     ))
                 else:
                     stats["failed"] += 1
-                    self.stdout.write(self.style.WARNING(
-                        f"    ! failed/skipped request id={req.id} — see log"
+                    stats["errors"].append({"request_id": req.id, "error": error})
+                    # Surface the REAL error in the run log (GitHub Actions /
+                    # stdout) so a re-run pinpoints the cause without needing
+                    # Cloud Run log access.
+                    self.stdout.write(self.style.ERROR(
+                        f"    ! failed request id={req.id}: {error}"
                     ))
 
         return stats
 
     # ─── Single-request event creation ──────────────────────────────
 
-    def _create_event_for_request(self, request: Request) -> bool:
+    def _create_event_for_request(self, request: Request) -> str | None:
         """Create the approved Event (+ pending Job) for one request.
 
-        Returns True if an Event was created. Idempotent: re-checks for an
-        existing Event inside the (transaction-held) call so a request that
-        somehow already grew an Event is skipped rather than double-created.
+        Returns ``None`` on success (Event created or idempotently skipped),
+        or a concise error string (exception type + message + last traceback
+        frame) on failure — so the caller can both count it AND print the real
+        cause. Idempotent: re-checks for an existing Event inside the
+        (transaction-held) call so a request that somehow already grew an
+        Event is skipped rather than double-created. The create itself runs in
+        a nested savepoint so a failure rolls back just this request, leaving
+        the surrounding transaction usable for the rest of the batch.
         """
         # Idempotent guard — re-check inside the transaction.
         if Event.objects.filter(request_id=request.id).exists():
-            return False
+            return None
 
         # Resolve the tenant's approved EventStatus null-safely (same lookup
         # the live fix uses). from_request also defaults approved/scheduled
@@ -308,29 +357,32 @@ class Command(BaseCommand):
         )
 
         try:
-            # Event.objects.from_request is async; this command is sync, so
-            # bridge with async_to_sync. created_by mirrors the request's
-            # creator so the audit trail points at who filed it.
-            async_to_sync(Event.objects.from_request)(
-                request=request,
-                created_by=request.created_by,
-                status=event_approved_status,
-            )
-        except Exception:
+            with transaction.atomic():
+                # Event.objects.from_request is async; this command is sync, so
+                # bridge with async_to_sync. created_by mirrors the request's
+                # creator so the audit trail points at who filed it.
+                async_to_sync(Event.objects.from_request)(
+                    request=request,
+                    created_by=request.created_by,
+                    status=event_approved_status,
+                )
+        except Exception as exc:
             logger.exception(
                 "repair_missing_events: failed to create Event for "
                 "request_id=%s",
                 request.id,
             )
-            return False
+            return _format_exc(exc)
 
         # Create the Pending Job(s) now that the Event exists. Idempotent +
         # best-effort — a job failure must not undo the (successful) event
-        # creation, so it's caught and logged, not raised.
+        # creation, so it's caught and logged, not raised. Runs in its own
+        # savepoint for the same transaction-integrity reason.
         try:
-            from events.signals import create_pending_jobs_for_request
+            with transaction.atomic():
+                from events.signals import create_pending_jobs_for_request
 
-            create_pending_jobs_for_request(request)
+                create_pending_jobs_for_request(request)
         except Exception:
             logger.exception(
                 "repair_missing_events: failed to create pending job for "
@@ -338,7 +390,7 @@ class Command(BaseCommand):
                 request.id,
             )
 
-        return True
+        return None
 
     # ─── Liquid Death specifics ─────────────────────────────────────
 
