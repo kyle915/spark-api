@@ -1967,6 +1967,44 @@ class BriefingTemplateQueries:
 
 
 @strawberry.type
+class GigTemplateQueries:
+    """List + lookup for per-tenant GigTemplates (Post-Job-modal defaults)."""
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def gig_templates(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID | None = None,
+        include_archived: bool = False,
+    ) -> list[types.GigTemplate]:
+        """Return gig templates available to the caller's tenant. Admins
+        can pass an explicit tenant_id to look up another's templates.
+
+        Tenant-scoped: clients see only their OWN tenant's templates (any
+        supplied ``tenantId`` is overridden to their tenant); admins see the
+        requested tenant's. Never raises past the auth gate — returns ``[]``
+        for an out-of-scope/garbage request or on error.
+        """
+        from jobs.job_scope import JobScope
+
+        try:
+            resolved = await JobScope().resolve_target_tenant_id(info, tenant_id)
+        except Exception:
+            return []
+        # Clients always resolve to their own tenant; an admin with no usable
+        # tenant in scope sees nothing rather than every tenant's templates.
+        if not resolved:
+            return []
+
+        def _list():
+            qs = models.GigTemplate.objects.filter(tenant_id=resolved)
+            if not include_archived:
+                qs = qs.filter(is_archived=False)
+            return list(qs)
+        return await sync_to_async(_list)()
+
+
+@strawberry.type
 class JobBriefingQueries:
     """One-shot lookup for the briefing attached to a specific job."""
 

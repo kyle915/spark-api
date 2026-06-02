@@ -38,6 +38,7 @@ class ClientJobQueries(
     queries.QuestionOptionQueries,
     queries.JobRequirementAnswerQueries,
     queries.BriefingTemplateQueries,
+    queries.GigTemplateQueries,
     queries.JobBriefingQueries,
     queries.JobApplicationQueries,
     queries.FavoriteAmbassadorQueries,
@@ -88,6 +89,7 @@ class ClientJobMutations(
     mutations.JobLifecycleMutations,
     mutations.FavoriteAmbassadorMutations,
     mutations.BriefingTemplateMutations,
+    mutations.GigTemplateMutations,
     mutations.JobBriefingMutations,
 ):
     pass

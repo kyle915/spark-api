@@ -2790,6 +2790,186 @@ class BriefingTemplateMutations:
 
 
 @strawberry.type
+class GigTemplateMutations:
+    """CRUD for reusable Gig templates (per-tenant Post-Job-modal defaults)."""
+
+    @relay.mutation(permission_classes=[_StrictIsAuth])
+    async def create_gig_template(
+        self, info, input: inputs.CreateGigTemplateInput,
+    ) -> types.GigTemplateResponse:
+        # Tenant-scoped: a client always creates under their OWN tenant (any
+        # supplied tenantId is ignored); an admin may target the requested
+        # tenant. A client with no tenant, or an admin who passed no usable
+        # tenant id, gets a safe success=False rather than a cross-tenant write.
+        try:
+            scoped_tenant_id = await JobScope().resolve_target_tenant_id(
+                info, input.tenant_id
+            )
+        except Exception:  # noqa: BLE001
+            scoped_tenant_id = None
+
+        def _create():
+            actor = info.context.request.user
+            tenant_id = scoped_tenant_id
+            if not tenant_id:
+                return None, "No tenant in scope."
+            tpl = models.GigTemplate.objects.create(
+                tenant_id=tenant_id,
+                name=input.name.strip(),
+                hourly_rate=input.hourly_rate,
+                total_hours=input.total_hours,
+                uniform_notes=(input.uniform_notes or ""),
+                default_open_to_all=bool(input.default_open_to_all),
+                created_by=actor if getattr(actor, "is_authenticated", False) else None,
+                updated_by=actor if getattr(actor, "is_authenticated", False) else None,
+            )
+            return tpl, "Gig template created."
+
+        tpl, msg = await sync_to_async(_create)()
+        return types.GigTemplateResponse(
+            success=tpl is not None,
+            message=msg,
+            gig_template=tpl,
+            client_mutation_id=input.client_mutation_id,
+        )
+
+    @relay.mutation(permission_classes=[_StrictIsAuth])
+    async def save_job_post_as_gig_template(
+        self, info, input: inputs.SaveJobPostAsGigTemplateInput,
+    ) -> types.GigTemplateResponse:
+        """Snapshot a Job's current post settings (hourly_rate, total_hours,
+        uniform_notes, default_open_to_all = not favorites_only) into a new
+        reusable GigTemplate under the JOB's tenant.
+
+        Tenant gate: a client may only save from their OWN tenant's job; a job
+        in another tenant is surfaced as "not found" (no cross-tenant read of
+        another brand's job). Admins -> any tenant. The new template is always
+        created under job.tenant_id (not a caller-supplied tenant)."""
+        try:
+            allowed = await JobScope().accessible_tenant_ids(info)
+        except Exception:  # noqa: BLE001
+            allowed = set()
+
+        def _save():
+            try:
+                job_pk = _resolve_id(input.job_id)
+            except Exception:
+                return None, "Invalid job id."
+            name = (input.name or "").strip()
+            if not name:
+                return None, "Template name is required."
+            try:
+                job = models.Job.objects.get(id=job_pk)
+            except models.Job.DoesNotExist:
+                return None, "Job not found."
+            if allowed is not None and job.tenant_id not in allowed:
+                return None, "Job not found."
+
+            actor = info.context.request.user
+            tpl = models.GigTemplate.objects.create(
+                tenant_id=job.tenant_id,
+                name=name,
+                hourly_rate=job.hourly_rate,
+                total_hours=job.total_hours,
+                uniform_notes=(job.uniform_notes or ""),
+                # favorites_only is the inverse of the modal's "Open to all".
+                default_open_to_all=not job.favorites_only,
+                created_by=actor if getattr(actor, "is_authenticated", False) else None,
+                updated_by=actor if getattr(actor, "is_authenticated", False) else None,
+            )
+            return tpl, "Job post saved as gig template."
+
+        tpl, msg = await sync_to_async(_save)()
+        return types.GigTemplateResponse(
+            success=tpl is not None,
+            message=msg,
+            gig_template=tpl,
+            client_mutation_id=input.client_mutation_id,
+        )
+
+    @relay.mutation(permission_classes=[_StrictIsAuth])
+    async def update_gig_template(
+        self, info, input: inputs.UpdateGigTemplateInput,
+    ) -> types.GigTemplateResponse:
+        # Tenant gate: a client may only edit their OWN tenant's templates; a
+        # template in another tenant is surfaced as "not found" (no
+        # cross-tenant existence leak / edit). Admins -> any tenant.
+        try:
+            allowed = await JobScope().accessible_tenant_ids(info)
+        except Exception:  # noqa: BLE001
+            allowed = set()
+
+        def _update():
+            try:
+                tpl_pk = _resolve_id(input.template_id)
+            except Exception:
+                return None, "Invalid template id."
+            try:
+                tpl = models.GigTemplate.objects.get(id=tpl_pk)
+            except models.GigTemplate.DoesNotExist:
+                return None, "Template not found."
+            if allowed is not None and tpl.tenant_id not in allowed:
+                return None, "Template not found."
+            actor = info.context.request.user
+            if input.name is not None:
+                tpl.name = input.name.strip()
+            if input.hourly_rate is not None:
+                tpl.hourly_rate = input.hourly_rate
+            if input.total_hours is not None:
+                tpl.total_hours = input.total_hours
+            if input.uniform_notes is not None:
+                tpl.uniform_notes = input.uniform_notes
+            if input.default_open_to_all is not None:
+                tpl.default_open_to_all = input.default_open_to_all
+            tpl.updated_by = actor if getattr(actor, "is_authenticated", False) else None
+            tpl.save()
+            return tpl, "Template updated."
+
+        tpl, msg = await sync_to_async(_update)()
+        return types.GigTemplateResponse(
+            success=tpl is not None,
+            message=msg,
+            gig_template=tpl,
+            client_mutation_id=input.client_mutation_id,
+        )
+
+    @relay.mutation(permission_classes=[_StrictIsAuth])
+    async def archive_gig_template(
+        self, info, input: inputs.ArchiveGigTemplateInput,
+    ) -> types.GigTemplateResponse:
+        # Tenant gate: a client may only archive their OWN tenant's templates;
+        # a template in another tenant is surfaced as "not found". Admins ->
+        # any tenant.
+        try:
+            allowed = await JobScope().accessible_tenant_ids(info)
+        except Exception:  # noqa: BLE001
+            allowed = set()
+
+        def _archive():
+            try:
+                tpl_pk = _resolve_id(input.template_id)
+            except Exception:
+                return None, "Invalid template id."
+            try:
+                tpl = models.GigTemplate.objects.get(id=tpl_pk)
+            except models.GigTemplate.DoesNotExist:
+                return None, "Template not found."
+            if allowed is not None and tpl.tenant_id not in allowed:
+                return None, "Template not found."
+            tpl.is_archived = True
+            tpl.save(update_fields=["is_archived", "updated_at"])
+            return tpl, "Template archived."
+
+        tpl, msg = await sync_to_async(_archive)()
+        return types.GigTemplateResponse(
+            success=tpl is not None,
+            message=msg,
+            gig_template=tpl,
+            client_mutation_id=input.client_mutation_id,
+        )
+
+
+@strawberry.type
 class JobBriefingMutations:
     """Per-job briefing edits + template-apply."""
 

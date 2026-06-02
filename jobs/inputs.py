@@ -526,3 +526,41 @@ class ApplyBriefingTemplateInput(SparkGraphQLInput):
     editing manually."""
     job_id: strawberry.ID
     template_id: strawberry.ID
+
+
+# -------------------------------------------------------------------
+# Gig template inputs (reusable Post-Job-modal defaults)
+# -------------------------------------------------------------------
+
+@strawberry.input
+class CreateGigTemplateInput(SparkGraphQLInput):
+    tenant_id: strawberry.ID | None = None
+    name: str
+    hourly_rate: float | None = None
+    total_hours: float | None = None
+    uniform_notes: str | None = None
+    default_open_to_all: bool | None = None
+
+
+@strawberry.input
+class UpdateGigTemplateInput(SparkGraphQLInput):
+    template_id: strawberry.ID
+    name: str | None = None
+    hourly_rate: float | None = None
+    total_hours: float | None = None
+    uniform_notes: str | None = None
+    default_open_to_all: bool | None = None
+
+
+@strawberry.input
+class ArchiveGigTemplateInput(SparkGraphQLInput):
+    template_id: strawberry.ID
+
+
+@strawberry.input
+class SaveJobPostAsGigTemplateInput(SparkGraphQLInput):
+    """Snapshot a Job's current post settings (hourly_rate, total_hours,
+    uniform_notes, and default_open_to_all = not favorites_only) as a new
+    reusable GigTemplate under the job's tenant."""
+    job_id: strawberry.ID
+    name: str
