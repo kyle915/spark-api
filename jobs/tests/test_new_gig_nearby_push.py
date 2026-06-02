@@ -1,0 +1,193 @@
+"""Tests for the at-post-time geo-proximity "new gig near you" push.
+
+Covers jobs/notifications.notify_nearby_bas_of_new_gig:
+  - a BA within 30mi (coords present on both sides) IS notified, with the
+    rounded distance in the payload;
+  - a BA beyond 30mi (coords present) is NOT notified;
+  - a BA who already applied to the job is skipped;
+  - the preferred-state fallback fires for a BA with NULL coords whose
+    preferred_state_codes match the job's event state;
+  - notify_new_gigs=False opts a BA out.
+
+enqueue_push is stubbed so nothing hits the network / RQ.
+"""
+from unittest.mock import patch
+
+import pytest
+
+from jobs.tests.base import JobsGraphQLTestCase
+from jobs import models
+from events.models import State
+
+
+@pytest.mark.django_db(transaction=True)
+class TestNewGigNearbyPush(JobsGraphQLTestCase):
+    @pytest.fixture(autouse=True)
+    def setup(self, db):
+        from ambassadors.models import PushDevice
+
+        self.roles = self.setup_default_roles()
+        self.tenant = self.create_tenant(name="Proximity Co")
+
+        self.state_ca = State.objects.create(
+            name="California", code="CA", created_by=self.get_system_user()
+        )
+
+        # Event in San Francisco (downtown). All distances are measured
+        # from this point.
+        self.sf_coords = [37.7749, -122.4194]
+        self.event = self.create_event(
+            name="Whole Foods SF Demo",
+            tenant=self.tenant,
+            address="1 Market St, San Francisco, CA",
+            coordinates=self.sf_coords,
+            state=self.state_ca,
+        )
+        self.job_title = self.create_job_title(name="Brand Ambassador", tenant=self.tenant)
+        # Posted + open-to-all (favorites_only=False) so the favorites gate
+        # doesn't filter anyone out — we're testing distance/fallback here.
+        self.job = self.create_job(
+            name="In-Store Sampling",
+            code="JOB-NEAR-001",
+            address="1 Market St",
+            event=self.event,
+            job_title=self.job_title,
+            tenant=self.tenant,
+            lifecycle_status=models.Job.STATUS_POSTED,
+            favorites_only=False,
+            public=True,
+        )
+
+        self._device_counter = 0
+
+        def make_ba(username, **amb_kwargs):
+            user = self.create_user(
+                username=username,
+                email=username,
+                role=self.roles["ambassador"],
+                password="testpass123",
+            )
+            self.create_tenanted_user(user=user, tenant=self.tenant)
+            amb = self.create_ambassador(user=user, **amb_kwargs)
+            self._device_counter += 1
+            # Every BA in these tests has an active push device (reachable).
+            PushDevice.objects.create(
+                user=user,
+                token=f"ExponentPushToken[near-{self._device_counter}]",
+                platform="ios",
+                is_active=True,
+            )
+            return user, amb
+
+        self.make_ba = make_ba
+
+        # ~13 mi south of SF (San Mateo-ish): within 30mi -> notified.
+        self.near_user, self.near_amb = make_ba(
+            "near@test.com", coordinates=[37.5630, -122.3255]
+        )
+        # ~90 mi away (Sacramento): beyond 30mi -> NOT notified.
+        self.far_user, self.far_amb = make_ba(
+            "far@test.com", coordinates=[38.5816, -121.4944]
+        )
+        # Within 30mi but already applied -> skipped.
+        self.applied_user, self.applied_amb = make_ba(
+            "applied@test.com", coordinates=[37.8044, -122.2712]  # Oakland ~8mi
+        )
+        models.JobApplication.objects.create(
+            tenant=self.tenant,
+            job=self.job,
+            ambassador=self.applied_amb,
+        )
+        # No coordinates (NULL/empty) but preferred state CA matches the
+        # event state -> state fallback fires.
+        self.fallback_user, self.fallback_amb = make_ba(
+            "fallback@test.com", coordinates=[]
+        )
+        models.AmbassadorJobPreference.objects.create(
+            ambassador=self.fallback_amb,
+            notify_new_gigs=True,
+            preferred_state_codes=["CA"],
+        )
+
+    def test_proximity_and_fallback(self):
+        from jobs.notifications import notify_nearby_bas_of_new_gig
+
+        with patch("ambassadors.push.enqueue_push") as mock_push:
+            sent = notify_nearby_bas_of_new_gig(self.job)
+
+        # Notified: near (proximity) + fallback (state). NOT: far, applied.
+        notified_user_ids = {call.args[0] for call in mock_push.call_args_list}
+
+        assert self.near_user.id in notified_user_ids
+        assert self.fallback_user.id in notified_user_ids
+        assert self.far_user.id not in notified_user_ids
+        assert self.applied_user.id not in notified_user_ids
+        assert sent == 2
+        assert mock_push.call_count == 2
+
+        # Each BA pushed at most once (dedupe).
+        assert len(mock_push.call_args_list) == len(notified_user_ids)
+
+        # Payload shape per the mobile contract.
+        by_user = {call.args[0]: call.kwargs for call in mock_push.call_args_list}
+
+        near_kwargs = by_user[self.near_user.id]
+        assert near_kwargs["title"] == "New gig near you"
+        assert near_kwargs["data"]["screen"] == "jobs"
+        assert near_kwargs["data"]["kind"] == "new_gig_nearby"
+        assert near_kwargs["data"]["jobUuid"] == str(self.job.uuid)
+        # Proximity match carries an integer distance ~13mi.
+        assert "distanceMiles" in near_kwargs["data"]
+        assert isinstance(near_kwargs["data"]["distanceMiles"], int)
+        assert 5 <= near_kwargs["data"]["distanceMiles"] <= 20
+        assert "mi away" in near_kwargs["body"]
+
+        # Fallback match: no distanceMiles, state-flavored copy.
+        fb_kwargs = by_user[self.fallback_user.id]
+        assert "distanceMiles" not in fb_kwargs["data"]
+        assert fb_kwargs["data"]["jobUuid"] == str(self.job.uuid)
+        assert "CA" in fb_kwargs["body"]
+
+    def test_notify_new_gigs_false_opts_out(self):
+        from jobs.notifications import notify_nearby_bas_of_new_gig
+
+        # Turn the near BA's master switch off — they should be skipped even
+        # though they're within range.
+        models.AmbassadorJobPreference.objects.create(
+            ambassador=self.near_amb,
+            notify_new_gigs=False,
+        )
+
+        with patch("ambassadors.push.enqueue_push") as mock_push:
+            notify_nearby_bas_of_new_gig(self.job)
+
+        notified_user_ids = {call.args[0] for call in mock_push.call_args_list}
+        assert self.near_user.id not in notified_user_ids
+        # Fallback BA still notified.
+        assert self.fallback_user.id in notified_user_ids
+
+    def test_favorites_only_gate(self):
+        """A favorites_only job only reaches BAs on the tenant's favorites."""
+        from jobs.notifications import notify_nearby_bas_of_new_gig
+
+        self.job.favorites_only = True
+        self.job.save(update_fields=["favorites_only"])
+
+        # Put only the near BA on the favorites roster.
+        models.TenantFavoriteAmbassador.objects.create(
+            tenant=self.tenant,
+            ambassador=self.near_amb,
+            added_by=self.get_system_user(),
+        )
+
+        with patch("ambassadors.push.enqueue_push") as mock_push:
+            notify_nearby_bas_of_new_gig(self.job)
+
+        notified_user_ids = {call.args[0] for call in mock_push.call_args_list}
+        # Near BA is favorited + in range -> notified.
+        assert self.near_user.id in notified_user_ids
+        # Fallback BA is NOT favorited -> gated out despite state match.
+        assert self.fallback_user.id not in notified_user_ids
+        # Far + applied still excluded.
+        assert self.far_user.id not in notified_user_ids
+        assert self.applied_user.id not in notified_user_ids

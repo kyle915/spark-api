@@ -1897,6 +1897,11 @@ class JobLifecycleMutations:
                 "description", "max_applications", "favorites_only",
                 "lifecycle_status", "posted_at", "public", "updated_at",
             ])
+            # At-post-time geo-proximity push to eligible BAs near the gig
+            # (falls back to preferred-state matching when coords are
+            # missing). Best-effort: never breaks the post on push failure.
+            from jobs.notifications import notify_nearby_bas_of_new_gig
+            notify_nearby_bas_of_new_gig(job)
             return job, "Job posted."
 
         job, msg = await sync_to_async(_post)()
@@ -2042,6 +2047,10 @@ class JobLifecycleMutations:
                 "favorites_only", "lifecycle_status", "posted_at",
                 "public", "updated_at",
             ])
+            # At-post-time geo-proximity push to eligible BAs near the gig
+            # (state fallback when coords are missing). Best-effort.
+            from jobs.notifications import notify_nearby_bas_of_new_gig
+            notify_nearby_bas_of_new_gig(job)
             return job, "Event posted to the job board, open to all BAs."
 
         job, msg = await sync_to_async(_post_event)()
