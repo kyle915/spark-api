@@ -25,6 +25,7 @@ REPAIR_EVENT_STATUS_URL = "/internal/cron/repair-approved-event-status"
 REPAIR_MISSING_EVENTS_URL = (
     "/internal/cron/repair-missing-events-for-approved-requests"
 )
+REPAIR_EVENT_DATES_URL = "/internal/cron/repair-event-dates"
 
 VALID_SECRET = "test-cron-secret-value-only-for-tests"
 
@@ -673,3 +674,151 @@ class TestRepairMissingEventsForApprovedRequestsCronView:
             ok.json()["endpoint"]
             == "repair-missing-events-for-approved-requests"
         )
+
+
+@pytest.mark.django_db
+class TestRepairEventDatesCronView:
+    """Coverage for `/internal/cron/repair-event-dates`.
+
+    Same secret-gated code path as its siblings; verifies the security boundary
+    and — the safety-critical bit — that the backfill defaults to DRY-RUN (NO
+    writes) unless `execute=true` is explicitly passed. The command is mocked
+    at the call_command level: no DB writes, and the mock writes a sentinel to
+    the captured stdout buffer so we assert the report comes back verbatim.
+    """
+
+    REPORT_SENTINEL = "Summary\n  Updated: 3 event(s)\n"
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        self.client = Client()
+
+    @staticmethod
+    def _write_report(*_args, **kwargs):
+        buf = kwargs.get("stdout")
+        if buf is not None:
+            buf.write(TestRepairEventDatesCronView.REPORT_SENTINEL)
+
+    # ── Default is DRY-RUN (no writes) ──────────────────────────────
+
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    @patch("digest.cron_views.call_command")
+    def test_default_is_dry_run_and_returns_report(self, mock_call):
+        mock_call.side_effect = self._write_report
+        resp = self.client.post(
+            REPAIR_EVENT_DATES_URL, HTTP_X_CRON_SECRET=VALID_SECRET
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["executed"] is False
+        assert body["tenant"] is None
+        assert body["report"] == self.REPORT_SENTINEL
+
+        mock_call.assert_called_once()
+        args, kwargs = mock_call.call_args
+        assert args[0] == "repair_event_dates"
+        assert kwargs["execute"] is False
+        assert kwargs["tenant"] is None
+        assert kwargs["stdout"] is not None
+
+    # ── execute=true flips to a real (write) run ────────────────────
+
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    @patch("digest.cron_views.call_command")
+    def test_execute_true_runs_for_real(self, mock_call):
+        mock_call.side_effect = self._write_report
+        resp = self.client.post(
+            f"{REPAIR_EVENT_DATES_URL}?execute=true",
+            HTTP_X_CRON_SECRET=VALID_SECRET,
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["executed"] is True
+        assert body["report"] == self.REPORT_SENTINEL
+        args, kwargs = mock_call.call_args
+        assert args[0] == "repair_event_dates"
+        assert kwargs["execute"] is True
+
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    @patch("digest.cron_views.call_command")
+    def test_execute_falsey_values_stay_dry_run(self, mock_call):
+        for falsey in ("false", "0", "no", "", "maybe"):
+            mock_call.reset_mock()
+            mock_call.side_effect = self._write_report
+            resp = self.client.post(
+                f"{REPAIR_EVENT_DATES_URL}?execute={falsey}",
+                HTTP_X_CRON_SECRET=VALID_SECRET,
+            )
+            assert resp.status_code == 200
+            assert resp.json()["executed"] is False
+            _args, kwargs = mock_call.call_args
+            assert kwargs["execute"] is False, (
+                f"execute={falsey!r} must stay dry-run"
+            )
+
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    @patch("digest.cron_views.call_command")
+    def test_tenant_param_plumbed_as_kwarg(self, mock_call):
+        mock_call.side_effect = self._write_report
+        resp = self.client.post(
+            f"{REPAIR_EVENT_DATES_URL}?tenant=liquid-death",
+            HTTP_X_CRON_SECRET=VALID_SECRET,
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["tenant"] == "liquid-death"
+        _args, kwargs = mock_call.call_args
+        assert kwargs["tenant"] == "liquid-death"
+        assert kwargs["execute"] is False
+
+    # ── Security boundary ───────────────────────────────────────────
+
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    @patch("digest.cron_views.call_command")
+    def test_missing_secret_header_returns_401(self, mock_call):
+        resp = self.client.post(REPAIR_EVENT_DATES_URL)
+        assert resp.status_code == 401
+        mock_call.assert_not_called()
+
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    @patch("digest.cron_views.call_command")
+    def test_bad_secret_returns_401(self, mock_call):
+        resp = self.client.post(
+            REPAIR_EVENT_DATES_URL, HTTP_X_CRON_SECRET="wrong"
+        )
+        assert resp.status_code == 401
+        mock_call.assert_not_called()
+
+    @override_settings(INTERNAL_CRON_SECRET="")
+    @patch("digest.cron_views.call_command")
+    def test_unconfigured_secret_fails_closed_503(self, mock_call):
+        resp = self.client.post(
+            REPAIR_EVENT_DATES_URL, HTTP_X_CRON_SECRET=VALID_SECRET
+        )
+        assert resp.status_code == 503
+        mock_call.assert_not_called()
+
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    @patch(
+        "digest.cron_views.call_command", side_effect=RuntimeError("boom"),
+    )
+    def test_command_failure_surfaces_500_with_detail(self, _mock_call):
+        resp = self.client.post(
+            REPAIR_EVENT_DATES_URL, HTTP_X_CRON_SECRET=VALID_SECRET
+        )
+        assert resp.status_code == 500
+        body = resp.json()
+        assert body["ok"] is False
+        assert body["error"] == "command-failed"
+        assert "boom" in body["detail"]
+
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    def test_get_is_secret_gated_liveness(self):
+        bad = self.client.get(REPAIR_EVENT_DATES_URL)
+        assert bad.status_code == 401
+
+        ok = self.client.get(
+            REPAIR_EVENT_DATES_URL, HTTP_X_CRON_SECRET=VALID_SECRET
+        )
+        assert ok.status_code == 200
+        assert ok.json()["endpoint"] == "repair-event-dates"

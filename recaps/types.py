@@ -29,6 +29,26 @@ from .heic_conversion import display_blob_name, is_heic_blob
 # the unit tests can exercise the exact regex/parse rules without a DB.
 # ---------------------------------------------------------------------------
 
+# Event Date fallback chain, shared by the `event_date` resolver. Pulled out
+# as a module-level pure helper (like the card-derivation helpers above) so the
+# fallback can be unit-tested without standing up the Strawberry schema, and so
+# it mirrors the PDF's `recaps.pdf._event_date`. Returns the first available of
+#     event.date → event.start_time → request.date → request.start_time
+# as a raw datetime/date (caller isoformat()s it), or None when all are absent.
+# Null-safe: tolerates a None event / None request / missing attrs.
+def _resolve_event_date(event):
+    if event is None:
+        return None
+    value = getattr(event, "date", None) or getattr(event, "start_time", None)
+    if not value:
+        request = getattr(event, "request", None)
+        if request is not None:
+            value = getattr(request, "date", None) or getattr(
+                request, "start_time", None
+            )
+    return value or None
+
+
 # Matches the whole word can(s) or pack(s) in a field NAME — e.g. "Single
 # Cans", "Packs Sold" — while excluding "willing to purchase"-style fields.
 # Mirrors SOLD_FIELD_RE = /\b(cans?|packs?)\b/i.
@@ -800,14 +820,25 @@ class CustomRecap(Node):
 
     @strawberry.field
     async def event_date(self) -> str | None:
-        """Date of the linked event (the day the activation happened)."""
+        """Date of the linked event (the day the activation happened).
+
+        Falls back through the available date-bearing fields so recaps whose
+        Event predates the create-path fix (#718, which started copying
+        ``request.date`` into ``Event.date``) still resolve a date. Those
+        older events have ``Event.date IS NULL`` but ``Event.start_time``
+        populated (and the date also lives on the parent Request), so we
+        prefer, in order:
+            event.date → event.start_time → request.date → request.start_time
+        Each is ``.isoformat()``-ed; all accesses are null-safe (mirrors the
+        ``getattr``-chain style of ``event_state`` below). Returns None only
+        when every source is truly absent.
+        """
         if not getattr(self, "event_id", None):
             return None
 
         @sync_to_async
         def _get():
-            ev = getattr(self, "event", None)
-            d = getattr(ev, "date", None) if ev else None
+            d = _resolve_event_date(getattr(self, "event", None))
             return d.isoformat() if d else None
 
         return await _get()

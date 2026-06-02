@@ -116,9 +116,26 @@ class TestExpressEventMaterialization(EventsGraphQLTestCase):
         assert event.end_time == _aware(2026, 5, 29, 16)
         # created_by was backfilled to a non-null user (NOT the null we passed).
         assert event.created_by_id is not None
+        # from_request copies request.date into event.date (#718) so the recap
+        # "Event Date" is populated at create time — the forward fix the
+        # read-side fallback + backfill complement.
+        assert event.date == _aware(2026, 5, 29, 12)  # == request.date
         # Approved request → approved Event status (agrees with the tracker).
         status = await sync_to_async(lambda: event.status)()
         assert status.slug == "approved"
+
+    @pytest.mark.asyncio
+    async def test_from_request_copies_request_date_into_event_date(self):
+        """Explicit, focused coverage for the #718 forward fix: from_request
+        sets event.date = request.date so newly-materialized events never have
+        the null-date condition this PR's backfill repairs."""
+        request = await sync_to_async(self._make_express_request)(
+            date=_aware(2026, 7, 4, 9),
+            start_time=_aware(2026, 7, 4, 9),
+            end_time=_aware(2026, 7, 4, 13),
+        )
+        event = await event_models.Event.objects.from_request(request=request)
+        assert event.date == _aware(2026, 7, 4, 9)
 
     @pytest.mark.asyncio
     async def test_from_request_derives_end_time_when_express_request_lacks_it(
