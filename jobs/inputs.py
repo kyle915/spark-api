@@ -484,6 +484,14 @@ class CreateBriefingTemplateInput(SparkGraphQLInput):
 
 
 @strawberry.input
+class SaveJobBriefingAsTemplateInput(SparkGraphQLInput):
+    """Save a Job's current briefing (title + body + attachments) as a new
+    reusable BriefingTemplate under the job's tenant."""
+    job_id: strawberry.ID
+    name: str
+
+
+@strawberry.input
 class UpdateBriefingTemplateInput(SparkGraphQLInput):
     template_id: strawberry.ID
     name: str | None = None

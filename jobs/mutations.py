@@ -2628,6 +2628,70 @@ class BriefingTemplateMutations:
         )
 
     @relay.mutation(permission_classes=[_StrictIsAuth])
+    async def save_job_briefing_as_template(
+        self, info, input: inputs.SaveJobBriefingAsTemplateInput,
+    ) -> types.BriefingTemplateResponse:
+        """Snapshot a Job's current briefing (title + body + attachments) into
+        a new reusable BriefingTemplate under the JOB's tenant.
+
+        Tenant gate: a client may only save from their OWN tenant's job; a job
+        in another tenant is surfaced as "not found" (no cross-tenant read of
+        another brand's briefing). Admins -> any tenant. The new template is
+        always created under job.tenant_id (not a caller-supplied tenant)."""
+        try:
+            allowed = await JobScope().accessible_tenant_ids(info)
+        except Exception:  # noqa: BLE001
+            allowed = set()
+
+        def _save():
+            try:
+                job_pk = _resolve_id(input.job_id)
+            except Exception:
+                return None, "Invalid job id."
+            name = (input.name or "").strip()
+            if not name:
+                return None, "Template name is required."
+            try:
+                job = models.Job.objects.get(id=job_pk)
+            except models.Job.DoesNotExist:
+                return None, "Job not found."
+            if allowed is not None and job.tenant_id not in allowed:
+                return None, "Job not found."
+
+            actor = info.context.request.user
+            tpl = models.BriefingTemplate.objects.create(
+                tenant_id=job.tenant_id,
+                name=name,
+                title=job.briefing_title or "",
+                body=job.briefing_body or "",
+                created_by=actor if getattr(actor, "is_authenticated", False) else None,
+                updated_by=actor if getattr(actor, "is_authenticated", False) else None,
+            )
+            # Clone the job's briefing attachments into template attachments
+            # (same blob paths — they point at the same GCS objects).
+            for att in job.briefing_attachments.all():
+                models.BriefingTemplateAttachment.objects.create(
+                    template=tpl, **_copy_attachment_dict(att),
+                )
+            # Re-fetch with attachments prefetched so the type's (sync)
+            # attachments resolver reads the cache instead of issuing a DB
+            # query in the async response phase (which would 0-out the list).
+            tpl = (
+                models.BriefingTemplate.objects
+                .prefetch_related("attachments")
+                .get(pk=tpl.pk)
+            )
+            return tpl, "Briefing saved as template."
+
+        tpl, msg = await sync_to_async(_save)()
+        return types.BriefingTemplateResponse(
+            success=tpl is not None,
+            message=msg,
+            briefing_template=tpl,
+            client_mutation_id=input.client_mutation_id,
+        )
+
+    @relay.mutation(permission_classes=[_StrictIsAuth])
     async def update_briefing_template(
         self, info, input: inputs.UpdateBriefingTemplateInput,
     ) -> types.BriefingTemplateResponse:
