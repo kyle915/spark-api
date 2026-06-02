@@ -740,6 +740,34 @@ class JobBriefingResponse:
 
 
 # -------------------------------------------------------------------
+# Gig template types (reusable Post-Job-modal defaults)
+# -------------------------------------------------------------------
+
+@strawberry_django.type(models.GigTemplate)
+class GigTemplate:
+    uuid: str
+    name: str
+    # Mirror Job.hourly_rate / Job.total_hours — exposed as nullable floats
+    # so the modal can leave them blank.
+    hourly_rate: float | None
+    total_hours: float | None
+    uniform_notes: str
+    default_open_to_all: bool
+    is_archived: bool
+    tenant_id: strawberry.ID
+    created_at: str
+    updated_at: str
+
+
+@strawberry.type
+class GigTemplateResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    gig_template: GigTemplate | None = None
+
+
+# -------------------------------------------------------------------
 # Tenant favorite ambassador types (Favorites tab UI)
 # -------------------------------------------------------------------
 

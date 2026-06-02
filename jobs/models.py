@@ -1124,6 +1124,65 @@ class JobBriefingAttachment(models.Model):
         ordering = ("id",)
 
 
+# ---------------------------------------------------------------------
+# Gig Template (reusable Post-Job-modal defaults)
+# ---------------------------------------------------------------------
+#
+# A reusable per-tenant set of defaults for the "Post Job" modal:
+# hourly_rate, total_hours (usually overridden per-gig — kept optional),
+# uniform_notes, and default_open_to_all (the modal's "Open to all BAs
+# now" toggle; note Job.favorites_only is the INVERSE of this flag).
+# Admins pick a template to prefill the modal, save the current modal
+# settings as a template, and edit/archive templates.
+#
+# Structural clone of BriefingTemplate (per-tenant, soft-deletable, audit
+# fields) minus attachments — gig defaults are scalar.
+class GigTemplate(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+
+    tenant = models.ForeignKey(
+        Tenant,
+        on_delete=models.CASCADE,
+        related_name="gig_templates",
+    )
+    name = models.CharField(max_length=120)
+    # Mirror Job.hourly_rate / Job.total_hours so the modal prefill is a
+    # 1:1 copy. total_hours is OPTIONAL on purpose — hours are usually set
+    # per-gig, but a template can carry a default.
+    hourly_rate = models.DecimalField(
+        max_digits=8, decimal_places=2, null=True, blank=True,
+    )
+    total_hours = models.DecimalField(
+        max_digits=6, decimal_places=2, null=True, blank=True,
+    )
+    uniform_notes = models.TextField(blank=True, default="")
+    # The modal's "Open to all BAs now" toggle. Job.favorites_only is the
+    # inverse (favorites_only == not default_open_to_all).
+    default_open_to_all = models.BooleanField(default=False)
+    # Soft-delete so the admin picker can filter is_archived=False without
+    # hard-deleting history.
+    is_archived = models.BooleanField(default=False, db_index=True)
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name="gig_templates_created",
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name="gig_templates_updated",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("name",)
+
+
 class AmbassadorJobPreference(models.Model):
     """Per-BA job-board preferences.
 
