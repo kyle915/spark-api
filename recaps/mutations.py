@@ -28,7 +28,11 @@ from events.models import Event, Retailer, Location, State, TimeZone, EventType
 from jobs.models import Job, AmbassadorJob
 from tenants.models import Role, TenantedUser, Tenant
 from utils.graphql.inputs import SparkGraphQLInput
-from utils.graphql.permissions import StrictIsAuthenticated
+from utils.graphql.permissions import (
+    StrictIsAuthenticated,
+    resolve_request_user_access,
+    _is_admin_access,
+)
 from utils.graphql.relay import ensure_relay_mutation
 from utils.graphql.mixins import SparkGraphQLMixin, resolve_id_to_int
 from utils.utils import ROLE_ID, build_mutation_response
@@ -1141,9 +1145,19 @@ class RecapMutationService(SparkGraphQLMixin):
 
         try:
             recap_id = resolve_id_to_int(self.input.id)
-            recap = await sync_to_async(models.Recap.objects.get)(id=recap_id)
+            recap = await sync_to_async(
+                models.Recap.objects.select_related("event").get
+            )(id=recap_id)
         except (models.Recap.DoesNotExist, TypeError, ValueError, GraphQLError):
             raise GraphQLError("Recap not found.")
+
+        # Cross-tenant write gate (value-edit). Scope off the recap's CURRENT
+        # tenant (via its event) before applying any caller-supplied changes,
+        # so a foreign-tenant caller can't edit this recap by guessing its id.
+        await self._assert_caller_authorized_for_recap_tenant(
+            recap.event.tenant_id if recap.event_id else None,
+            action="update",
+        )
 
         # Validate event exists
         try:
@@ -1876,6 +1890,17 @@ class RecapMutationService(SparkGraphQLMixin):
             )(id=custom_recap_id)
         except (models.CustomRecap.DoesNotExist, TypeError, ValueError, GraphQLError):
             raise GraphQLError("Custom recap not found.")
+
+        # Cross-tenant write gate (value-edit; covers both the web
+        # updateCustomRecap and the BA-driven updateCustomRecapMobile, which
+        # share this method). Scope off the recap's CURRENT tenant (direct FK)
+        # before applying any caller-supplied changes. BAs edit their own
+        # recaps on mobile, so ambassadors are not blocked — only
+        # foreign-tenant access is.
+        await self._assert_caller_authorized_for_recap_tenant(
+            custom_recap.tenant_id,
+            action="update",
+        )
 
         job = None
         if is_mobile_input:
@@ -2777,30 +2802,89 @@ class RecapMutationService(SparkGraphQLMixin):
 
         return await update_recap_section_transaction()
 
-    async def _assert_can_delete_recap(self, tenant_id: int) -> None:
-        """Authorize the current user to delete a recap in `tenant_id`.
+    async def _assert_caller_authorized_for_recap_tenant(
+        self,
+        tenant_id: int | None,
+        *,
+        action: str = "modify",
+        block_ambassadors: bool = False,
+    ) -> None:
+        """Authorize the current user to act on a recap owned by `tenant_id`.
 
-        Mirrors the `delete_request` precedent (events.mutations):
-          - Ambassadors are blocked outright (role_id == 1).
-          - spark-admin (unrestricted) may delete in any tenant.
-          - any other role (client / RMM) may only delete inside a
-            tenant they belong to.
-        Raises GraphQLError when not allowed.
+        This is the cross-tenant write gate for the recap mutation cluster.
+        The READ resolvers (recaps/customRecaps queries) are already tenant
+        scoped; the *mutation* write path historically loaded a recap by raw
+        PK gated only by StrictIsAuthenticated, so any authenticated user
+        could approve / decline / edit / add-file-to another tenant's recap
+        by guessing its global id (IDOR / cross-tenant write).
+
+        Authorization mirrors the hardened `approve_request` / `decline_request`
+        precedent (events.mutations) and the recaps-queries isolation sweep:
+          - Admins (spark-admin / is_staff / is_superuser / any
+            @igniteproductions.co email) may act in ANY tenant. We resolve
+            this authoritatively via `resolve_request_user_access`, because
+            the JWT request.user often does not hydrate its role FK / flags
+            inside async resolvers (reading `user.role` directly returns
+            empty and would deny genuine admins).
+          - Optionally (approve/decline only) ambassadors are blocked
+            outright — approval is an admin/client action, never a BA one
+            (matches the `delete_request` / `approve_request` precedent).
+          - Any other role (client, and BA on the mobile edit path) may act
+            ONLY inside a tenant they belong to. `get_tenant` raises for a
+            non-member, which we convert into a denial.
+
+        Raises GraphQLError when not allowed (the resolver converts that into
+        a success=False response; nothing is mutated and we never 500).
         """
         user = self.user
         if user is None:
             raise GraphQLError("Authentication required.")
-        if getattr(user, "role_id", None) == ROLE_ID.Ambassadors:
-            raise GraphQLError("You are not authorized to delete recaps.")
-        is_spark_admin = await user.role.is_spark_admin
-        if is_spark_admin:
+
+        # Admins (staff / superuser / spark-admin / @igniteproductions.co)
+        # bypass the per-tenant check. Resolved from the DB row, not the
+        # (often unhydrated) JWT user, so real admins aren't wrongly denied.
+        role_slug, is_staff, is_super, email = await resolve_request_user_access(
+            user
+        )
+        if _is_admin_access(role_slug, is_staff, is_super, email):
             return
+
+        if block_ambassadors and (
+            role_slug == Role.AMBASSADOR_SLUG
+            or getattr(user, "role_id", None) == ROLE_ID.Ambassadors
+        ):
+            raise GraphQLError(f"You are not authorized to {action} recaps.")
+
+        # A recap with no resolvable tenant can't be ownership-checked; deny
+        # rather than fall open (defensive — every recap has a tenant).
+        if tenant_id is None:
+            raise GraphQLError(
+                f"You are not authorized to {action} this recap."
+            )
+
+        # Non-admins may only act inside a tenant they belong to. get_tenant
+        # raises Tenant.DoesNotExist for a non-member -> deny.
         try:
             await sync_to_async(user.get_tenant)(tenant_id=tenant_id)
         except Exception:
             raise GraphQLError(
-                "You are not authorized to delete recaps for this tenant."
+                f"You are not authorized to {action} recaps for this tenant."
             )
+
+    async def _assert_can_delete_recap(self, tenant_id: int) -> None:
+        """Authorize the current user to delete a recap in `tenant_id`.
+
+        Mirrors the `delete_request` precedent (events.mutations):
+          - Ambassadors are blocked outright.
+          - admins (spark-admin / staff / superuser / @igniteproductions.co)
+            may delete in any tenant.
+          - any other role (client / RMM) may only delete inside a
+            tenant they belong to.
+        Raises GraphQLError when not allowed.
+        """
+        await self._assert_caller_authorized_for_recap_tenant(
+            tenant_id, action="delete", block_ambassadors=True
+        )
 
     async def delete_recap(self) -> models.Recap:
         """Delete a legacy Recap (tenant-scoped, admin-only).
@@ -2916,9 +3000,19 @@ class RecapMutationService(SparkGraphQLMixin):
 
         try:
             recap_id = resolve_id_to_int(self.input.recap_id)
-            recap = await sync_to_async(models.Recap.objects.get)(id=recap_id)
+            recap = await sync_to_async(
+                models.Recap.objects.select_related("event").get
+            )(id=recap_id)
         except (models.Recap.DoesNotExist, TypeError, ValueError, GraphQLError):
             raise GraphQLError("Recap not found.")
+
+        # Cross-tenant write gate (Recap scopes tenant via its event). BAs
+        # legitimately attach files to their own-tenant recaps (mobile), so
+        # ambassadors are not blocked here — only foreign-tenant access is.
+        await self._assert_caller_authorized_for_recap_tenant(
+            recap.event.tenant_id if recap.event_id else None,
+            action="attach files to",
+        )
 
         blob_name = extract_blob_name_from_url(self.input.file)
         if not blob_name:
@@ -3011,6 +3105,14 @@ class RecapMutationService(SparkGraphQLMixin):
         ):
             raise GraphQLError("Custom recap not found.")
 
+        # Cross-tenant write gate. CustomRecap carries a direct tenant FK.
+        # BAs legitimately attach files to their own-tenant recaps (mobile),
+        # so ambassadors are not blocked here — only foreign-tenant access is.
+        await self._assert_caller_authorized_for_recap_tenant(
+            custom_recap.tenant_id,
+            action="attach files to",
+        )
+
         blob_name = extract_blob_name_from_url(self.input.file)
         if not blob_name:
             raise GraphQLError("Invalid recap file path.")
@@ -3081,7 +3183,7 @@ class RecapMutationService(SparkGraphQLMixin):
         try:
             recap_file_id = resolve_id_to_int(self.input.id)
             recap_file = await sync_to_async(
-                models.RecapFile.objects.select_related("recap").get
+                models.RecapFile.objects.select_related("recap__event").get
             )(id=recap_file_id)
         except (models.RecapFile.DoesNotExist, TypeError, ValueError, GraphQLError):
             raise GraphQLError("Recap file not found.")
@@ -3089,6 +3191,17 @@ class RecapMutationService(SparkGraphQLMixin):
         recap_id = recap_file.recap_id
         if not recap_id:
             raise GraphQLError("This file isn't attached to a recap.")
+
+        # Cross-tenant write gate (delete of a recap-linked file + its blob).
+        # Tenant scopes through recap.event; recap__event is select_related
+        # above. BAs may remove files from their own-tenant recaps (mobile),
+        # so ambassadors are not blocked — only foreign-tenant access is.
+        await self._assert_caller_authorized_for_recap_tenant(
+            recap_file.recap.event.tenant_id
+            if recap_file.recap and recap_file.recap.event_id
+            else None,
+            action="remove files from",
+        )
 
         @sync_to_async
         def remove():
@@ -3192,9 +3305,20 @@ class RecapMutationService(SparkGraphQLMixin):
 
         try:
             recap_id = resolve_id_to_int(self.input.id)
-            recap = await sync_to_async(models.Recap.objects.get)(id=recap_id)
+            recap = await sync_to_async(
+                models.Recap.objects.select_related("event").get
+            )(id=recap_id)
         except (models.Recap.DoesNotExist, TypeError, ValueError, GraphQLError):
             raise GraphQLError("Recap not found.")
+
+        # Cross-tenant write gate: Recap scopes its tenant through the event
+        # (no direct tenant FK). `event` is select_related above so reading
+        # event.tenant_id here doesn't trigger a sync DB fetch in async ctx.
+        await self._assert_caller_authorized_for_recap_tenant(
+            recap.event.tenant_id if recap.event_id else None,
+            action="approve",
+            block_ambassadors=True,
+        )
 
         @sync_to_async
         def approve_recap_transaction():
@@ -3251,6 +3375,13 @@ class RecapMutationService(SparkGraphQLMixin):
         except (models.CustomRecap.DoesNotExist, TypeError, ValueError, GraphQLError):
             raise GraphQLError("Custom recap not found.")
 
+        # Cross-tenant write gate. CustomRecap carries a direct tenant FK.
+        await self._assert_caller_authorized_for_recap_tenant(
+            custom_recap.tenant_id,
+            action="approve",
+            block_ambassadors=True,
+        )
+
         @sync_to_async
         def approve_custom_recap_transaction():
             with transaction.atomic():
@@ -3305,6 +3436,13 @@ class RecapMutationService(SparkGraphQLMixin):
             )
         except (models.CustomRecap.DoesNotExist, TypeError, ValueError, GraphQLError):
             raise GraphQLError("Custom recap not found.")
+
+        # Cross-tenant write gate. CustomRecap carries a direct tenant FK.
+        await self._assert_caller_authorized_for_recap_tenant(
+            custom_recap.tenant_id,
+            action="decline",
+            block_ambassadors=True,
+        )
 
         @sync_to_async
         def decline_custom_recap_transaction():
@@ -5714,6 +5852,29 @@ class RecapMutations:
                 new_event_pk = resolve_id_to_int(input.event_id)
             except (TypeError, ValueError, GraphQLError):
                 raise GraphQLError("Invalid recap_id or event_id.")
+
+            service = RecapMutationService.with_input(input)
+            await service.set_user(info)
+
+            # Cross-tenant write gate: verify the CALLER owns the recap's
+            # CURRENT tenant before moving it. The inner _reassign already
+            # forbids moving across tenants, but without this a foreign-tenant
+            # caller could still re-link another tenant's recap to a different
+            # event WITHIN that tenant by guessing its id. Scope off the
+            # recap's current event tenant. BAs aren't blocked (this can be a
+            # same-tenant fix-up); only foreign-tenant access is denied.
+            recap_tenant_id = await sync_to_async(
+                lambda: models.Recap.objects.select_related("event")
+                .filter(pk=recap_pk)
+                .values_list("event__tenant_id", flat=True)
+                .first()
+            )()
+            if recap_tenant_id is None:
+                raise GraphQLError("Recap not found.")
+            await service._assert_caller_authorized_for_recap_tenant(
+                recap_tenant_id,
+                action="reassign",
+            )
 
             @sync_to_async
             def _reassign() -> models.Recap:
