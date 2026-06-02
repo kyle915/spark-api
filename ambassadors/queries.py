@@ -1733,9 +1733,20 @@ class TalentProfileDetailQueries:
         except models.Ambassador.DoesNotExist:
             return None
 
+        # A BA is "reachable" in this tenant if they've worked/been booked on
+        # one of its events (AmbassadorEvent) OR — so an admin can open a
+        # not-yet-booked applicant's profile from the Jobs page — if they have
+        # a JobApplication on one of this tenant's jobs (task #256). All other
+        # auth/tenant scoping is unchanged.
         reachable = await models.AmbassadorEvent.objects.filter(
             ambassador_id=ambassador.id, event__tenant_id=resolved_tenant_id
         ).aexists()
+        if not reachable:
+            from jobs.models import JobApplication
+
+            reachable = await JobApplication.objects.filter(
+                ambassador_id=ambassador.id, tenant_id=resolved_tenant_id
+            ).aexists()
         if not reachable:
             return None
 
