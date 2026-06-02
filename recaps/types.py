@@ -1287,6 +1287,21 @@ class RecapSectionDetailResponse:
 
 
 @strawberry.type
+class DeleteRecapSectionResponse:
+    """Result of deleting a RecapSection.
+
+    Returns the deleted section's uuid so the client can drop it from
+    the Relay store / template-builder UI without a full refetch.
+    Mirrors DeleteRecapResponse (deleted_recap_uuid).
+    """
+
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    deleted_recap_section_uuid: str | None = None
+
+
+@strawberry.type
 class RecapListResponse:
     total_pages: int
     recaps: List[Recap]
