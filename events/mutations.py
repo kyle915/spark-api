@@ -2791,6 +2791,83 @@ async def _resolve_requestor_email(request: models.Request) -> str:
     return requestor_email.strip()
 
 
+async def _materialize_approved_event_for_request(
+    request: models.Request,
+    user: User | None,
+) -> models.Event | None:
+    """Materialize the approved Event (and its pending Job) for a request
+    that has just been auto-approved.
+
+    This is the shared escape hatch used by EVERY auto-approve path so an
+    approved Request never ends up eventless — which would make it invisible
+    to the Missing Recaps query and the recap event picker (both iterate
+    Event rows), so no recap could ever be filed against it.
+
+    Mirrors exactly what ``approve_request`` does after flipping the status:
+      1. Idempotent guard — if an Event already exists for this request, do
+         nothing and return it (so re-entry / a later approve_request is a
+         no-op).
+      2. Resolve the tenant's APPROVED EventStatus (slug="approved") null-
+         safely — the same lookup ``approve_request`` /
+         ``create_event_with_request`` use — so the Event lands as approved
+         (NOT the tenant default "pending") and the Event detail page agrees
+         with the Master Tracker. A tenant missing the row falls through to
+         ``from_request``'s default handling rather than hard-failing.
+      3. Create the Event via ``Event.objects.from_request(...)``.
+      4. Create the Pending Job(s) via ``create_pending_jobs_for_request``.
+         The Request post_save signal fired before the Event existed (it was
+         a no-op then), so we do it explicitly here. Idempotent.
+
+    Best-effort: every step is wrapped so a failure is logged but never
+    blocks the create/approve mutation. Returns the Event (existing, newly
+    created, or None on failure).
+    """
+    # 1. Idempotent: skip if an Event already exists for this request.
+    event = await sync_to_async(
+        lambda: models.Event.objects.filter(request_id=request.id)
+        .order_by("-id")
+        .first()
+    )()
+    if event is not None:
+        return event
+
+    # 2 + 3. Resolve the approved EventStatus and create the Event.
+    try:
+        event_approved_status = await sync_to_async(
+            lambda: models.EventStatus.objects.filter(
+                slug="approved", tenant_id=request.tenant_id
+            )
+            .order_by("id")
+            .first()
+        )()
+        event = await models.Event.objects.from_request(
+            request=request,
+            created_by=user,
+            status=event_approved_status,
+        )
+    except Exception:
+        logger.exception(
+            "auto-approve: failed to materialize Event for request_id=%s",
+            request.id,
+        )
+        event = None
+
+    # 4. Create the Pending Job(s) now that the Event exists. Idempotent +
+    # best-effort; runs even if event creation above raised so a partially
+    # set-up request still gets retried on the next pass.
+    try:
+        from .signals import create_pending_jobs_for_request
+
+        await sync_to_async(create_pending_jobs_for_request)(request)
+    except Exception:
+        logger.exception(
+            "auto-approve: failed to create pending job for request_id=%s",
+            request.id,
+        )
+
+    return event
+
+
 @strawberry.type
 class RequestMutations:
     @relay.mutation(permission_classes=[StrictIsAuthenticated])
@@ -3048,6 +3125,18 @@ class RequestMutations:
 
             is_client = service.user is not None and await service.user.role.is_client
             if is_client:
+                # The client self-serve path auto-approves the request (see
+                # RequestWithDependenciesMutationService.save → auto_approve),
+                # so it MUST also materialize the approved Event + Pending Job
+                # — exactly like the admin branch below and approve_request do.
+                # Without this the request is approved-but-eventless and is
+                # invisible to the Missing Recaps query and the recap event
+                # picker (both iterate Event rows), so no recap can ever be
+                # filed. Best-effort: never blocks the client-facing emails.
+                await _materialize_approved_event_for_request(
+                    request_with_relations, service.user
+                )
+
                 location = await _resolve_request_location(request_with_relations)
                 await _notify_spark_admins_for_client_request(
                     request_with_relations, location
@@ -3087,66 +3176,14 @@ class RequestMutations:
                             )
                         except Exception:
                             pass
-                        # Materialize a corresponding Event row so the
-                        # tracker shows the activation as scheduled.
-                        # Idempotent: skip if an event already exists.
-                        try:
-                            existing = await sync_to_async(
-                                lambda: models.Event.objects.filter(
-                                    request_id=request_with_relations.id
-                                )
-                                .order_by("-id")
-                                .first()
-                            )()
-                            if existing is None:
-                                # The request was just flipped to approved, so
-                                # the Event must land as the tenant's APPROVED
-                                # EventStatus — NOT the default "pending" — so
-                                # the Event detail page agrees with the
-                                # tracker. Mirrors create_event_with_request's
-                                # explicit approved-status resolution. Null-safe
-                                # so a tenant missing the row falls through to
-                                # from_request's default handling.
-                                event_approved_status = await sync_to_async(
-                                    lambda: models.EventStatus.objects.filter(
-                                        slug="approved",
-                                        tenant_id=request_with_relations.tenant_id,
-                                    )
-                                    .order_by("id")
-                                    .first()
-                                )()
-                                await models.Event.objects.from_request(
-                                    request=request_with_relations,
-                                    created_by=service.user,
-                                    status=event_approved_status,
-                                )
-                        except Exception:
-                            import logging
-                            logging.getLogger(__name__).exception(
-                                "log-event: failed to materialize Event for "
-                                "request_id=%s",
-                                request_with_relations.id,
-                            )
-                        # Now that the Event exists, create the Pending
-                        # Job(s) for it so the activation lands in the Jobs
-                        # queue and the tracker shows Assign-BA / Post-to-
-                        # board. The Request post_save signal fired on the
-                        # save above — before the event existed — so it was
-                        # a no-op; do it explicitly here. Idempotent.
-                        try:
-                            from .signals import (
-                                create_pending_jobs_for_request,
-                            )
-                            await sync_to_async(
-                                create_pending_jobs_for_request
-                            )(request_with_relations)
-                        except Exception:
-                            import logging
-                            logging.getLogger(__name__).exception(
-                                "log-event: failed to create pending job "
-                                "for request_id=%s",
-                                request_with_relations.id,
-                            )
+                        # Materialize the approved Event + Pending Job so the
+                        # activation lands on the Master Tracker as approved
+                        # and shows Assign-BA / Post-to-board. Shared with the
+                        # client self-serve branch above and approve_request —
+                        # idempotent + best-effort, never blocks the create.
+                        await _materialize_approved_event_for_request(
+                            request_with_relations, service.user
+                        )
                 except Exception:
                     # Don't fail the whole create if approval steps
                     # blow up — admin can still approve manually.
@@ -3514,58 +3551,13 @@ class RequestMutations:
             except Exception:
                 pass
 
-            # Materialize a real Event row so Ignite ops can staff against it.
-            # The approved email promises "Ignite staffs a BA + calendar invite",
-            # which requires an Event in the operational pipeline. We skip
-            # creation if an event already exists for this request (idempotent).
-            event = await sync_to_async(
-                lambda: models.Event.objects.filter(request_id=request.id)
-                .order_by("-id")
-                .first()
-            )()
-            if event is None:
-                try:
-                    # The request was just flipped to approved, so the Event
-                    # must land as the tenant's APPROVED EventStatus — NOT the
-                    # default "pending" — so the Event detail page agrees with
-                    # the Master Tracker. Mirrors create_event_with_request's
-                    # explicit approved-status resolution. Null-safe so a
-                    # tenant missing the row falls through to from_request's
-                    # default handling.
-                    event_approved_status = await sync_to_async(
-                        lambda: models.EventStatus.objects.filter(
-                            slug="approved", tenant_id=request.tenant_id
-                        )
-                        .order_by("id")
-                        .first()
-                    )()
-                    event = await models.Event.objects.from_request(
-                        request=request,
-                        created_by=user,
-                        status=event_approved_status,
-                    )
-                except Exception as exc:
-                    # Don't block approval if event creation fails — log via
-                    # the response message tail but still mark approved.
-                    logger.exception(
-                        "approve_request: failed to materialize Event for request_id=%s: %s",
-                        request.id,
-                        exc,
-                    )
-                    event = None
-
-            # Materialize the Pending Job(s) now that the event exists. The
-            # Request post_save signal fired on the approve save above —
-            # before the event was created — so it was a no-op; do it
-            # explicitly here. Idempotent + best-effort.
-            try:
-                from .signals import create_pending_jobs_for_request
-                await sync_to_async(create_pending_jobs_for_request)(request)
-            except Exception:
-                logger.exception(
-                    "approve_request: failed to create pending job for request_id=%s",
-                    request.id,
-                )
+            # Materialize a real Event row (+ its Pending Job) so Ignite ops
+            # can staff against it. The approved email promises "Ignite staffs
+            # a BA + calendar invite", which requires an Event in the
+            # operational pipeline. Shared with the createRequest auto-approve
+            # paths (client self-serve + admin log-event) — idempotent (skips
+            # if an Event already exists) + best-effort (never blocks approval).
+            event = await _materialize_approved_event_for_request(request, user)
 
             location = await _resolve_request_location(request)
             await _notify_notification_group_users_for_request(request, location)
