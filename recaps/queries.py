@@ -20,6 +20,7 @@ from recaps.inputs import (
 from utils.graphql.permissions import (
     StrictIsAuthenticated,
     resolve_request_user_access,
+    _is_admin_access,
     IGNITE_EMAIL_DOMAIN,
 )
 from utils.graphql.mixins import SparkGraphQLMixin, resolve_id_to_int
@@ -1146,6 +1147,55 @@ async def _is_client_only_user(info: strawberry.Info) -> bool:
     return role_slug == "client"
 
 
+# ---------------------------------------------------------------------------
+# Cross-tenant READ gate for the single-recap detail-by-id/uuid resolvers
+# (`recap`, `customRecap`). Follow-up to the recap WRITE IDOR sweep (#708),
+# which gated the mutation cluster via
+# RecapMutationService._assert_caller_authorized_for_recap_tenant but flagged
+# the read side as still leaky.
+#
+# The single-recap query resolvers loaded a recap by raw id/uuid from an
+# UNSCOPED queryset and only verified tenant ownership when
+# `get_role_slug(user) == "client"`. That check is doubly unsafe:
+#   * it never fires for a non-client role (e.g. a Brand Ambassador), so a BA
+#     could read ANY tenant's recap by guessing its id/uuid; and
+#   * `get_role_slug` reads the JWT user.role FK directly, which is often
+#     unhydrated inside async resolvers — so it returns "" even for a genuine
+#     client, silently skipping the tenant check.
+#
+# This helper mirrors the #708 admin-bypass + `user.get_tenant` membership
+# pattern, resolving role/flags authoritatively from the DB row (same as
+# `_is_client_only_user` above):
+#   * admins (spark-admin / is_staff / is_superuser / @igniteproductions.co)
+#     may read any tenant;
+#   * every other role may read ONLY inside a tenant they belong to;
+#   * a recap with no resolvable tenant is denied.
+# Raises GraphQLError on denial — the resolvers catch GraphQLError and return
+# None, so a cross-tenant lookup is indistinguishable from "not found" and
+# never leaks the existence of another tenant's record.
+# ---------------------------------------------------------------------------
+async def _assert_caller_authorized_to_read_recap_tenant(
+    user,
+    tenant_id: int | None,
+) -> None:
+    if user is None:
+        raise GraphQLError("Authentication required.")
+
+    role_slug, is_staff, is_super, email = await resolve_request_user_access(
+        user
+    )
+    if _is_admin_access(role_slug, is_staff, is_super, email):
+        return
+
+    if tenant_id is None:
+        raise GraphQLError("Recap not found.")
+
+    try:
+        await sync_to_async(user.get_tenant)(tenant_id=tenant_id)
+    except Exception:
+        raise GraphQLError("Recap not found.")
+
+
 @strawberry.type
 class RecapQueries:
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
@@ -1299,11 +1349,10 @@ class RecapQueries:
     ) -> types.Recap | None:
         """Get a single recap by UUID.
 
-        For client-role users we look up the recap and then verify the
-        recap's tenant matches the user's. Cross-tenant uuids return None
-        instead of raising — keeps the resolver indistinguishable from a
-        "not found" lookup so we don't leak the existence of cross-tenant
-        records.
+        We look up the recap and then verify the caller is authorized for the
+        recap's tenant. Cross-tenant uuids return None instead of raising —
+        keeps the resolver indistinguishable from a "not found" lookup so we
+        don't leak the existence of cross-tenant records.
         """
         try:
             service = RecapQueriesService()
@@ -1311,11 +1360,17 @@ class RecapQueries:
             recap = await service.get_record_by_uuid(str(uuid))
             if recap is None:
                 return None
-            if service.get_role_slug(user) == "client":
-                # tenant_id is a direct FK on Recap — no extra query needed.
-                user_tenant = await service.get_user_tenant(info)
-                if recap.tenant_id != user_tenant.id:
-                    return None
+            # Cross-tenant READ gate (follow-up to #708). The previous check
+            # only fired for the "client" role-slug — which never matched a BA
+            # and was unreliable for clients (unhydrated role FK in async
+            # context) — so any authenticated user could read another tenant's
+            # recap by uuid. Authorize authoritatively (admins any tenant,
+            # everyone else only their own). The legacy Recap has NO direct
+            # tenant FK — its tenant is reached via the event, which the
+            # service queryset select_related's, so this read is async-safe.
+            await _assert_caller_authorized_to_read_recap_tenant(
+                user, getattr(recap.event, "tenant_id", None)
+            )
             # Client-only users never see unapproved drafts. Return None
             # rather than raising — same posture as the tenant mismatch
             # above, so we don't leak the existence of in-flight work.
@@ -1478,9 +1533,9 @@ class RecapQueries:
     ) -> types.CustomRecap | None:
         """Get a single custom recap by id or UUID.
 
-        Client users only get the record back if it belongs to their tenant.
-        Cross-tenant lookups silently return None (matches "not found" so
-        we don't leak the existence of other-tenant records).
+        The caller only gets the record back if they're authorized for its
+        tenant. Cross-tenant lookups silently return None (matches "not found"
+        so we don't leak the existence of other-tenant records).
         """
         try:
             service = CustomRecapQueriesService()
@@ -1491,10 +1546,14 @@ class RecapQueries:
             )
             if record is None:
                 return None
-            if service.get_role_slug(user) == "client":
-                user_tenant = await service.get_user_tenant(info)
-                if record.tenant_id != user_tenant.id:
-                    return None
+            # Cross-tenant READ gate (follow-up to #708) — same fix as the
+            # legacy `recap` resolver above. The old "client" role-slug check
+            # never matched a BA and was unreliable for clients, leaving this
+            # by-id/uuid accessor open cross-tenant. CustomRecap carries a
+            # direct tenant FK.
+            await _assert_caller_authorized_to_read_recap_tenant(
+                user, record.tenant_id
+            )
             # Hide unapproved drafts from client-only users — same
             # posture as the legacy Recap resolver above.
             if await _is_client_only_user(info):

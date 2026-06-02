@@ -3509,6 +3509,16 @@ class RecapMutationService(SparkGraphQLMixin):
         except models.Recap.DoesNotExist:
             raise GraphQLError("Recap not found.")
 
+        # Cross-tenant READ gate (follow-up to #708). This accessor loaded a
+        # Recap by raw PK gated only by StrictIsAuthenticated, so any
+        # authenticated user could render + persist another tenant's recap as
+        # a PDF — and read its embedded image content — by guessing the id.
+        # `event` is select_related above, so reading event.tenant_id here is
+        # async-safe. Deny => GraphQLError => the field returns success=False.
+        await self._assert_caller_authorized_for_recap_tenant(
+            recap.event.tenant_id, action="export"
+        )
+
         # Pre-filter to image-typed files BEFORE downloading — we used
         # to download every blob (including PDFs / docs / videos) then
         # drop non-images, paying a full GCS round-trip per skipped
@@ -4077,6 +4087,13 @@ class RecapMutationService(SparkGraphQLMixin):
         except models.CustomRecap.DoesNotExist:
             raise GraphQLError("Custom recap not found.")
 
+        # Cross-tenant READ gate (follow-up to #708). Same leak as the legacy
+        # generate_recap_pdf path: loaded by raw PK gated only by
+        # StrictIsAuthenticated. CustomRecap carries a direct tenant FK.
+        await self._assert_caller_authorized_for_recap_tenant(
+            custom_recap.tenant_id, action="export"
+        )
+
         @sync_to_async
         def build_custom_recap_pdf_bytes():
             # Parallel blob fetch — same approach as the standard recap
@@ -4305,6 +4322,27 @@ class RecapMutationService(SparkGraphQLMixin):
 
         frontend_base_url = settings.ADMIN_FRONTEND_URL
 
+        # Cross-tenant READ gate (follow-up to #708) — resolve the recap's
+        # owning tenant up front and authorize BEFORE building/uploading the
+        # export. This accessor loaded a single Recap by raw PK gated only by
+        # StrictIsAuthenticated, so any authenticated user could export
+        # another tenant's recap data by guessing the id.
+        @sync_to_async
+        def fetch_recap_tenant_id():
+            return (
+                models.Recap.objects.select_related("event")
+                .filter(id=recap_id)
+                .values_list("event__tenant_id", flat=True)
+                .first()
+            )
+
+        recap_tenant_id = await fetch_recap_tenant_id()
+        if recap_tenant_id is None:
+            raise GraphQLError("Recap not found.")
+        await self._assert_caller_authorized_for_recap_tenant(
+            recap_tenant_id, action="export"
+        )
+
         @sync_to_async
         def build_xlsx_for_recap():
             try:
@@ -4446,6 +4484,25 @@ class RecapMutationService(SparkGraphQLMixin):
 
         frontend_base_url = settings.ADMIN_FRONTEND_URL
 
+        # Cross-tenant READ gate (follow-up to #708) — resolve the custom
+        # recap's owning tenant up front and authorize BEFORE building the
+        # export. Single-recap-by-id accessor previously gated only by
+        # StrictIsAuthenticated. CustomRecap carries a direct tenant FK.
+        @sync_to_async
+        def fetch_custom_recap_tenant_id():
+            return (
+                models.CustomRecap.objects.filter(id=custom_recap_id)
+                .values_list("tenant_id", flat=True)
+                .first()
+            )
+
+        custom_recap_tenant_id = await fetch_custom_recap_tenant_id()
+        if custom_recap_tenant_id is None:
+            raise GraphQLError("Custom recap not found.")
+        await self._assert_caller_authorized_for_recap_tenant(
+            custom_recap_tenant_id, action="export"
+        )
+
         @sync_to_async
         def build_xlsx_for_custom_recap():
             try:
@@ -4494,64 +4551,65 @@ class RecapMutationService(SparkGraphQLMixin):
         return public_url(blob_name)
 
     async def get_recap_file_download_url(self) -> str:
-        """Return a signed download URL for a recap or custom recap file."""
+        """Return a signed download URL for a recap or custom recap file.
+
+        Cross-tenant READ gate (follow-up to #708). This accessor returns a
+        download URL for the file *content* of a recap file looked up by raw
+        uuid. The old code split on `is_spark_schema_request` (a role-slug
+        check that misses staff / superuser / @igniteproductions.co admins)
+        and otherwise scoped to the caller's default tenant only — neither
+        reused the authoritative admin model from #708. We now resolve the
+        file's owning tenant from its parent recap and authorize via the
+        shared gate: admins (resolved from the DB row) get any tenant, every
+        other role only their own. A file with no resolvable parent recap
+        (detached blob, recap=None) has no tenant and is denied.
+        """
         if not isinstance(self.input, inputs.RecapFileDownloadUrlInput):
             raise GraphQLError("Invalid input type.")
 
         recap_file_uuid = str(self.input.uuid)
 
-        if self.is_spark_schema_request(self.info, user=self.user):
-
-            @sync_to_async
-            def fetch_recap_file():
-                recap_file = (
-                    models.RecapFile.objects.select_related(
-                        "recap",
-                        "recap__event",
-                    )
-                    .filter(uuid=recap_file_uuid)
-                    .first()
+        @sync_to_async
+        def fetch_recap_file():
+            recap_file = (
+                models.RecapFile.objects.select_related(
+                    "recap",
+                    "recap__event",
                 )
-                if recap_file is not None:
-                    return recap_file
-                return (
-                    models.CustomRecapFile.objects.select_related(
-                        "custom_recap",
-                        "custom_recap__event",
-                    )
-                    .filter(uuid=recap_file_uuid)
-                    .first()
+                .filter(uuid=recap_file_uuid)
+                .first()
+            )
+            if recap_file is not None:
+                return recap_file
+            return (
+                models.CustomRecapFile.objects.select_related(
+                    "custom_recap",
+                    "custom_recap__event",
                 )
-        else:
-            tenant = await self.get_user_tenant(self.info, user=self.user)
-
-            @sync_to_async
-            def fetch_recap_file():
-                recap_file = (
-                    models.RecapFile.objects.select_related(
-                        "recap",
-                        "recap__event",
-                    )
-                    .filter(uuid=recap_file_uuid, recap__event__tenant_id=tenant.id)
-                    .first()
-                )
-                if recap_file is not None:
-                    return recap_file
-                return (
-                    models.CustomRecapFile.objects.select_related(
-                        "custom_recap",
-                        "custom_recap__event",
-                    )
-                    .filter(
-                        uuid=recap_file_uuid,
-                        custom_recap__tenant_id=tenant.id,
-                    )
-                    .first()
-                )
+                .filter(uuid=recap_file_uuid)
+                .first()
+            )
 
         recap_file = await fetch_recap_file()
         if recap_file is None:
             raise GraphQLError("Recap file not found.")
+
+        # Derive the file's owning tenant from its parent recap. RecapFile
+        # scopes tenant via recap.event.tenant_id; CustomRecapFile via
+        # custom_recap.tenant_id. Both parents are select_related above so the
+        # reads here are async-safe. A detached file (parent is None) yields
+        # tenant_id=None, which the gate treats as a denial.
+        if isinstance(recap_file, models.CustomRecapFile):
+            parent = recap_file.custom_recap
+            file_tenant_id = getattr(parent, "tenant_id", None)
+        else:
+            parent = recap_file.recap
+            event = getattr(parent, "event", None) if parent is not None else None
+            file_tenant_id = getattr(event, "tenant_id", None)
+
+        await self._assert_caller_authorized_for_recap_tenant(
+            file_tenant_id, action="download"
+        )
 
         file_field = getattr(recap_file, "file", None) or getattr(recap_file, "url", None)
         blob_name = extract_blob_name_from_url(str(file_field))
