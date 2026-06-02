@@ -1900,6 +1900,7 @@ class RecapMutationService(SparkGraphQLMixin):
         await self._assert_caller_authorized_for_recap_tenant(
             custom_recap.tenant_id,
             action="update",
+            record_label="Custom recap",
         )
 
         job = None
@@ -2808,6 +2809,7 @@ class RecapMutationService(SparkGraphQLMixin):
         *,
         action: str = "modify",
         block_ambassadors: bool = False,
+        record_label: str = "Recap",
     ) -> None:
         """Authorize the current user to act on a recap owned by `tenant_id`.
 
@@ -2833,6 +2835,16 @@ class RecapMutationService(SparkGraphQLMixin):
             ONLY inside a tenant they belong to. `get_tenant` raises for a
             non-member, which we convert into a denial.
 
+        Denial message posture (non-existence-leaking): a cross-tenant caller
+        (or a recap whose tenant can't be resolved) is told the record was
+        "not found" — never "you're not authorized for this tenant", which
+        would confirm the record exists in some other brand. `record_label`
+        picks the noun ("Recap" / "Custom recap") so the message matches the
+        surface the caller hit. The ambassador-block path keeps its explicit
+        "not authorized to {action} recaps" wording: that's a role limit, not
+        a record-existence signal (a same-tenant BA legitimately sees it), so
+        it leaks nothing about a specific recap.
+
         Raises GraphQLError when not allowed (the resolver converts that into
         a success=False response; nothing is mutated and we never 500).
         """
@@ -2856,22 +2868,23 @@ class RecapMutationService(SparkGraphQLMixin):
             raise GraphQLError(f"You are not authorized to {action} recaps.")
 
         # A recap with no resolvable tenant can't be ownership-checked; deny
-        # rather than fall open (defensive — every recap has a tenant).
+        # rather than fall open (defensive — every recap has a tenant). Read
+        # as "not found" so we don't hint that an unscopeable record exists.
         if tenant_id is None:
-            raise GraphQLError(
-                f"You are not authorized to {action} this recap."
-            )
+            raise GraphQLError(f"{record_label} not found.")
 
         # Non-admins may only act inside a tenant they belong to. get_tenant
-        # raises Tenant.DoesNotExist for a non-member -> deny.
+        # raises Tenant.DoesNotExist for a non-member -> deny. Read as "not
+        # found" (not "...for this tenant") so a cross-tenant probe can't
+        # confirm the record exists under another brand.
         try:
             await sync_to_async(user.get_tenant)(tenant_id=tenant_id)
         except Exception:
-            raise GraphQLError(
-                f"You are not authorized to {action} recaps for this tenant."
-            )
+            raise GraphQLError(f"{record_label} not found.")
 
-    async def _assert_can_delete_recap(self, tenant_id: int) -> None:
+    async def _assert_can_delete_recap(
+        self, tenant_id: int, *, record_label: str = "Recap"
+    ) -> None:
         """Authorize the current user to delete a recap in `tenant_id`.
 
         Mirrors the `delete_request` precedent (events.mutations):
@@ -2880,10 +2893,14 @@ class RecapMutationService(SparkGraphQLMixin):
             may delete in any tenant.
           - any other role (client / RMM) may only delete inside a
             tenant they belong to.
-        Raises GraphQLError when not allowed.
+        Raises GraphQLError when not allowed. `record_label` flows through to
+        the shared gate's non-existence-leaking denial message.
         """
         await self._assert_caller_authorized_for_recap_tenant(
-            tenant_id, action="delete", block_ambassadors=True
+            tenant_id,
+            action="delete",
+            block_ambassadors=True,
+            record_label=record_label,
         )
 
     async def delete_recap(self) -> models.Recap:
@@ -2963,7 +2980,9 @@ class RecapMutationService(SparkGraphQLMixin):
 
         # CustomRecap carries its own tenant_id column (denormalized at
         # create time), so scope off that directly.
-        await self._assert_can_delete_recap(recap.tenant_id)
+        await self._assert_can_delete_recap(
+            recap.tenant_id, record_label="Custom recap"
+        )
 
         @sync_to_async
         def delete_custom_recap_with_children():
@@ -3111,6 +3130,7 @@ class RecapMutationService(SparkGraphQLMixin):
         await self._assert_caller_authorized_for_recap_tenant(
             custom_recap.tenant_id,
             action="attach files to",
+            record_label="Custom recap",
         )
 
         blob_name = extract_blob_name_from_url(self.input.file)
@@ -3380,6 +3400,7 @@ class RecapMutationService(SparkGraphQLMixin):
             custom_recap.tenant_id,
             action="approve",
             block_ambassadors=True,
+            record_label="Custom recap",
         )
 
         @sync_to_async
@@ -3442,6 +3463,7 @@ class RecapMutationService(SparkGraphQLMixin):
             custom_recap.tenant_id,
             action="decline",
             block_ambassadors=True,
+            record_label="Custom recap",
         )
 
         @sync_to_async
@@ -4091,7 +4113,9 @@ class RecapMutationService(SparkGraphQLMixin):
         # generate_recap_pdf path: loaded by raw PK gated only by
         # StrictIsAuthenticated. CustomRecap carries a direct tenant FK.
         await self._assert_caller_authorized_for_recap_tenant(
-            custom_recap.tenant_id, action="export"
+            custom_recap.tenant_id,
+            action="export",
+            record_label="Custom recap",
         )
 
         @sync_to_async
@@ -4500,7 +4524,9 @@ class RecapMutationService(SparkGraphQLMixin):
         if custom_recap_tenant_id is None:
             raise GraphQLError("Custom recap not found.")
         await self._assert_caller_authorized_for_recap_tenant(
-            custom_recap_tenant_id, action="export"
+            custom_recap_tenant_id,
+            action="export",
+            record_label="Custom recap",
         )
 
         @sync_to_async
@@ -4602,13 +4628,15 @@ class RecapMutationService(SparkGraphQLMixin):
         if isinstance(recap_file, models.CustomRecapFile):
             parent = recap_file.custom_recap
             file_tenant_id = getattr(parent, "tenant_id", None)
+            record_label = "Custom recap"
         else:
             parent = recap_file.recap
             event = getattr(parent, "event", None) if parent is not None else None
             file_tenant_id = getattr(event, "tenant_id", None)
+            record_label = "Recap"
 
         await self._assert_caller_authorized_for_recap_tenant(
-            file_tenant_id, action="download"
+            file_tenant_id, action="download", record_label=record_label
         )
 
         file_field = getattr(recap_file, "file", None) or getattr(recap_file, "url", None)

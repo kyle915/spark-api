@@ -236,7 +236,12 @@ class TestRecapReadTenantIsolation(AmbassadorsGraphQLTestCase):
 
     @staticmethod
     def _denied(message: str) -> bool:
-        return "authorized" in (message or "").lower()
+        # A denial reads either as a role limit ("not authorized…") or, for a
+        # cross-tenant / foreign-id probe, as non-existence ("… not found.")
+        # so we never confirm another brand's record exists (#247). Both mean
+        # "denied" here.
+        m = (message or "").lower()
+        return "authorized" in m or "not found" in m
 
     # ════════════════════════════════════════════════════════════════
     # recapFileDownloadUrl — leaks file CONTENT (RecapFile via parent recap)
