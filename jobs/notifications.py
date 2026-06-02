@@ -51,23 +51,62 @@ logger = logging.getLogger(__name__)
 NEARBY_RADIUS_MILES = 30.0
 
 
-def notify_nearby_bas_of_new_gig(job) -> int:
-    """Push "new gig near you" to eligible BAs for a freshly-posted job.
+def notify_nearby_bas_of_new_gig(job) -> None:
+    """Kick off the at-post "new gig near you" fan-out for a freshly-posted job.
 
-    `job` is a jobs.models.Job that has just transitioned to POSTED.
-    Returns the number of BAs we enqueued a push for. Fully best-effort:
-    any failure is swallowed (logged) so a bad token or a transient queue
-    issue never breaks the job post.
+    `job` is a jobs.models.Job that has just transitioned to POSTED. This
+    ENQUEUES a single background RQ task (`_run_notify_nearby_bas_task`) that
+    does the whole eligibility/distance/push fan-out off-request, then returns
+    immediately. It does NOT run the fan-out inline — that's what was stalling
+    the postJob mutation for large rosters and freezing the "Posting…" modal.
 
-    Synchronous + DB-touching: call it inside the same sync_to_async block
-    that saved the job (mutations) or directly from the sync signal path.
+    Best-effort and non-blocking by contract: if the enqueue itself fails
+    (queue / Redis unreachable) we log and return. We deliberately do NOT fall
+    back to running the fan-out inline — the post must never block on this. The
+    once-a-day digest (`send_new_gig_digest`) still covers these BAs, so
+    dropping the at-post push on a queue outage is acceptable.
+
+    Fast + only-touches-`job.id`: safe to call inside the same sync_to_async
+    block that saved the job (mutations) or directly from the sync signal path.
     """
+    job_id = getattr(job, "id", None)
+    if job_id is None:
+        return
+    try:
+        from utils.queues import Queues
+
+        # Pass the int id (not the model instance) so the task re-fetches a
+        # fresh row in the worker — mirrors how enqueue_push passes user_id.
+        Queues().default.add(_run_notify_nearby_bas_task, job_id)
+    except Exception:
+        # Never run _notify inline as a fallback: blocking the post is worse
+        # than dropping one at-post push (the daily digest still covers it).
+        logger.exception(
+            "new-gig-nearby enqueue failed for job=%s; skipping at-post push "
+            "(daily digest still covers these BAs)",
+            job_id,
+        )
+
+
+def _run_notify_nearby_bas_task(job_id: int) -> int:
+    """RQ worker entrypoint: re-fetch the job and run the full fan-out.
+
+    Runs off-request so the post path stays fast. Re-fetches the Job by id
+    (the enqueue only carried the int) with the relations `_notify` reads,
+    then delegates to `_notify`. Best-effort: a missing job or any failure is
+    logged and swallowed so the worker job doesn't crash-loop.
+    """
+    from jobs.models import Job
+
+    try:
+        job = Job.objects.select_related("event", "event__state").get(id=job_id)
+    except Job.DoesNotExist:
+        logger.warning("new-gig-nearby task: job=%s no longer exists", job_id)
+        return 0
     try:
         return _notify(job)
     except Exception:
-        logger.exception(
-            "new-gig-nearby push failed for job=%s", getattr(job, "id", None)
-        )
+        logger.exception("new-gig-nearby push failed for job=%s", job_id)
         return 0
 
 
