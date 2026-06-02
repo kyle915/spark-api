@@ -2419,7 +2419,11 @@ class TimeZoneQueriesService(BaseEventQueriesService):
         queryset = self.get_queryset()
         if q:
             queryset = queryset.filter(name__icontains=q)
-        return queryset
+        # Defense-in-depth: the unique constraint added in
+        # events/migrations/0048_dedupe_timezones prevents duplicate rows, but
+        # .distinct() guarantees the timezones / public_timezones resolvers never
+        # surface a zone twice even if dupes somehow reappear.
+        return queryset.distinct()
 
 
 @strawberry.type

@@ -37,6 +37,17 @@ class TimeZone(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
     updated_at = models.DateTimeField(auto_now=True)
 
+    class Meta:
+        # Prevent duplicate, semantically-identical timezones. Existing dupes are
+        # collapsed first by the data migration in 0048_dedupe_timezones so this
+        # constraint can be added safely on deploy.
+        constraints = [
+            models.UniqueConstraint(
+                fields=["name", "code", "offset"],
+                name="uq_timezone_name_code_offset",
+            ),
+        ]
+
     def __str__(self):
         return f"{self.offset}"
 
