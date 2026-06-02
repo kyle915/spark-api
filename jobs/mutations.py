@@ -15,6 +15,7 @@ from jobs.envelopes import (
     AmbassadorJobApprovedNotificationMailer,
     AmbassadorJobUpdatedMailer,
     AmbassadorUnassignedFromJobMailer,
+    JobBookingConfirmationMailer,
 )
 from jobs.notification_rules import should_send_ambassador_event_email
 from ambassadors.models import AmbassadorEvent
@@ -127,6 +128,52 @@ async def _notify_approval_to_rmm_or_clients(
         await sync_to_async(mailer.send)()
 
 
+async def _confirm_booking_for_ambassador_job(
+    ambassador_job: models.AmbassadorJob,
+    actor,
+) -> None:
+    """Ensure an is_approved=True AmbassadorEvent exists for an approved
+    AmbassadorJob's (ambassador, event). Get-or-creates, and flips an
+    existing is_approved=False invite/accept row to True so the shift
+    surfaces on the mobile shift screens. Best-effort: a booking failure
+    must not undo the approval that already committed."""
+    job = getattr(ambassador_job, "job", None)
+    event_id = getattr(job, "event_id", None)
+    ambassador_id = getattr(ambassador_job, "ambassador_id", None)
+    if not event_id or not ambassador_id:
+        return
+
+    actor_id = getattr(actor, "id", None)
+    creator_id = actor_id or getattr(ambassador_job, "created_by_id", None)
+
+    def _confirm() -> None:
+        booking, created = AmbassadorEvent.objects.get_or_create(
+            ambassador_id=ambassador_id,
+            event_id=event_id,
+            defaults={
+                "tenant_id": ambassador_job.tenant_id,
+                "is_approved": True,
+                "created_by_id": creator_id,
+                "updated_by_id": creator_id,
+            },
+        )
+        if not created and not booking.is_approved:
+            booking.is_approved = True
+            booking.updated_by_id = creator_id
+            booking.save(
+                update_fields=["is_approved", "updated_by", "updated_at"]
+            )
+
+    try:
+        await sync_to_async(_confirm)()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Failed to confirm booking for ambassador_job=%s: %s",
+            getattr(ambassador_job, "id", None),
+            exc,
+        )
+
+
 async def _notify_approved_ambassador_by_push(
     ambassador_job: models.AmbassadorJob,
 ) -> None:
@@ -197,6 +244,58 @@ async def _notify_assigned_ambassador_by_email(
         ambassador_job=ambassador_job,
         to_emails=[email],
         recipient_first_name=(getattr(user, "first_name", None) or "").strip() or None,
+    )
+    await sync_to_async(mailer.send)()
+
+
+def _booking_push_body(job: "models.Job") -> str:
+    """Push body for a marketplace booking. Enriches with venue + date
+    when available ("You're booked: {venue} {date}"), else falls back to
+    the job name so the BA always gets a meaningful nudge."""
+    event = getattr(job, "event", None)
+    venue = (
+        getattr(event, "name", None)
+        or getattr(getattr(event, "retailer", None), "name", None)
+        or job.name
+    )
+    when = getattr(event, "start_time", None) or getattr(event, "date", None)
+    date_str = ""
+    if when is not None:
+        try:
+            date_str = when.strftime("%b %-d")
+        except (ValueError, AttributeError):
+            date_str = ""
+    label = f"{venue} {date_str}".strip() if venue else date_str
+    if label:
+        return f"You're booked: {label}. Tap to see details."
+    return f"You've been booked for {job.name}. Tap to see details."
+
+
+async def _notify_booked_ambassador_by_email(job: "models.Job", ambassador_pk: int) -> None:
+    """Send the booking-confirmation email to the just-booked BA.
+
+    Built from the Job (the marketplace accept flow has no AmbassadorJob),
+    guarded by the caller's try/except so mail failure never breaks the
+    booking. No-ops when the BA has no email on file."""
+    def _resolve_email_and_name() -> tuple[str, str | None]:
+        amb = (
+            _Ambassador.objects.select_related("user")
+            .filter(pk=ambassador_pk)
+            .first()
+        )
+        user = getattr(amb, "user", None) if amb else None
+        email = (getattr(user, "email", None) or "").strip()
+        first_name = (getattr(user, "first_name", None) or "").strip() or None
+        return email, first_name
+
+    email, first_name = await sync_to_async(_resolve_email_and_name)()
+    if not email:
+        return
+
+    mailer = JobBookingConfirmationMailer(
+        job=job,
+        to_emails=[email],
+        recipient_first_name=first_name,
     )
     await sync_to_async(mailer.send)()
 
@@ -1494,6 +1593,15 @@ class ApproveAmbassadorJobMutationService(SparkGraphQLMixin):
                 "status",
             ).get
         )(id=ambassador_job.id)
+        # Confirm the booking: approving an AmbassadorJob is an admin/RMM
+        # confirming the BA onto the shift, so the AmbassadorEvent must end
+        # is_approved=True or the shift never surfaces on the mobile
+        # "What's on the books" screen (which reads is_approved=True only).
+        # Get-or-create, and flip an existing invite/accept row from
+        # is_approved=False → True. created_by/updated_by are non-null
+        # RESTRICT; stamp the acting admin, fall back to the job creator.
+        await _confirm_booking_for_ambassador_job(ambassador_job, user)
+
         await _notify_approval_to_rmm_or_clients(ambassador_job)
         await _notify_approved_ambassador_by_email(ambassador_job)
         await _notify_approved_ambassador_by_push(ambassador_job)
@@ -2060,6 +2168,49 @@ class JobLifecycleMutations:
             job.lifecycle_status = models.Job.STATUS_FILLED
             job.closed = True
             job.save(update_fields=["lifecycle_status", "closed", "updated_at"])
+
+            # Create (or flip) the booking so the accepted BA's shift shows
+            # up on the mobile "What's on the books" screen, which reads
+            # ONLY AmbassadorEvent(is_approved=True). Without this the BA
+            # gets the "you got the gig" push but the shift never appears.
+            # Mirrors ambassadors/mutations.py's invite pattern; created_by/
+            # updated_by are non-null RESTRICT so we always stamp a real
+            # user — the acting admin, falling back to job.created_by.
+            actor_for_event = actor if getattr(actor, "id", None) else None
+            booking_creator_id = (
+                actor_for_event.id if actor_for_event else job.created_by_id
+            )
+            event = job.event
+            booking, booking_created = AmbassadorEvent.objects.get_or_create(
+                ambassador=amb,
+                event=event,
+                defaults={
+                    "tenant_id": job.tenant_id,
+                    "is_approved": True,
+                    "created_by_id": booking_creator_id,
+                    "updated_by_id": booking_creator_id,
+                },
+            )
+            if not booking_created and not booking.is_approved:
+                # A prior invite/accept left an is_approved=False row — flip
+                # it to approved so the shift surfaces, and re-stamp updater.
+                booking.is_approved = True
+                booking.updated_by_id = booking_creator_id
+                booking.save(update_fields=["is_approved", "updated_by", "updated_at"])
+
+            # The mobile shift screens key off event.start_time / event.date.
+            # If both are null the booking won't surface there yet — still
+            # create it (above), but log so the gap is visible.
+            if not getattr(event, "start_time", None) and not getattr(
+                event, "date", None
+            ):
+                logger.warning(
+                    "Booking created for job=%s ambassador=%s event=%s with no "
+                    "start_time/date — shift won't appear on mobile shift "
+                    "screens until the event is scheduled.",
+                    job.id, amb.id, event.id,
+                )
+
             return (
                 job,
                 f"{amb.user.get_full_name() if amb.user else 'BA'} assigned to the job.",
@@ -2082,7 +2233,7 @@ class JobLifecycleMutations:
                     enqueue_push(
                         ba_user_id,
                         title="You got the gig",
-                        body=f"You've been assigned to {job.name}. Tap to see details.",
+                        body=_booking_push_body(job),
                         data={
                             "kind": "job_assigned",
                             "jobUuid": str(job.uuid),
@@ -2091,6 +2242,16 @@ class JobLifecycleMutations:
                     )
             except Exception:
                 # Push is best-effort — don't fail the assignment.
+                pass
+
+            # Booking-confirmation email — the BA gets the full event card
+            # (venue, date, time, address, pay). Guarded so a mail failure
+            # (no Redis, bad template, transient SMTP) never breaks the
+            # booking that already committed above.
+            try:
+                await _notify_booked_ambassador_by_email(job, ba_pk)
+            except Exception:
+                # Email is best-effort — the booking + push already landed.
                 pass
             # Fan-out "your application wasn't selected this time" pushes
             # to the BAs whose applications got auto-declined when this
