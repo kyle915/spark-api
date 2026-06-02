@@ -297,11 +297,12 @@ def create_pending_jobs_for_request(request: Request) -> int:
             posted_at = None
             public = False
 
+        posted_jobs = []
         for ev in events:
             try:
                 if Job.objects.filter(event_id=ev.id).exists():
                     continue
-                Job.objects.create(
+                new_job = Job.objects.create(
                     tenant_id=request.tenant_id,
                     event_id=ev.id,
                     name=(ev.name or request.name or "Activation")[:200],
@@ -323,10 +324,29 @@ def create_pending_jobs_for_request(request: Request) -> int:
                     or request.created_by_id,
                 )
                 created_count += 1
+                if is_open_gig:
+                    posted_jobs.append(new_job)
             except Exception as exc:
                 logger.warning(
                     "auto_create_job: failed for event=%s: %s",
                     getattr(ev, "id", None),
+                    exc,
+                )
+
+        # At-post-time geo-proximity push for each freshly auto-posted gig
+        # (open gigs only; pre-assigned/already_scheduled jobs stay pending
+        # and don't reach the board). Best-effort — never breaks approval.
+        if posted_jobs:
+            try:
+                from jobs.notifications import notify_nearby_bas_of_new_gig
+
+                for posted in posted_jobs:
+                    notify_nearby_bas_of_new_gig(posted)
+            except Exception as exc:
+                logger.warning(
+                    "auto_create_job: new-gig-nearby push dispatch failed "
+                    "for request=%s: %s",
+                    getattr(request, "id", None),
                     exc,
                 )
     except Exception as exc:
