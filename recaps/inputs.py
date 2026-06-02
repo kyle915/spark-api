@@ -516,6 +516,43 @@ class UpdateRecapSectionInput(CreateRecapSectionInput):
 
 
 @strawberry.input
+class MoveCustomFieldToSectionInput(SparkGraphQLInput):
+    """Move an existing CustomField into a different RecapSection of the
+    SAME template (template-structure edit — e.g. drag "Account Spend
+    Amount" out of "Additional Insights" into "Engagement + Spend").
+
+    This is a pure pointer change on ``CustomField.recap_section``: the
+    field row and every ``CustomFieldValue`` already captured for it are
+    preserved (the move mutation must NOT delete+recreate the field,
+    which would orphan submitted answers). The target section must
+    belong to the same template/tenant as the field — cross-template /
+    cross-tenant moves are rejected.
+    """
+
+    # The CustomField being moved (Relay-encoded global id).
+    field_id: strawberry.ID
+    # The destination RecapSection (Relay-encoded global id). Must be a
+    # section already in use by the field's template.
+    section_id: strawberry.ID
+
+
+@strawberry.input
+class DeleteRecapSectionInput(SparkGraphQLInput):
+    """Delete an (empty) RecapSection — the structural counterpart to
+    moving fields out of a section first.
+
+    Guard: the mutation REFUSES if the section still has any CustomField
+    rows ("Move or remove this section's fields before deleting it.")
+    rather than cascading away fields and their captured values. The FE
+    requires the section be emptied (via moveCustomFieldToSection /
+    removeCustomField) before this is offered.
+    """
+
+    # The RecapSection to delete (Relay-encoded global id).
+    section_id: strawberry.ID
+
+
+@strawberry.input
 class ImportConnecteamRecapPdfInput(SparkGraphQLInput):
     """Drop a Connecteam-exported recap PDF onto an event, get back a
     pre-filled draft CustomRecap. Admin reviews/edits before approving."""

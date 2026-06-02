@@ -2803,6 +2803,134 @@ class RecapMutationService(SparkGraphQLMixin):
 
         return await update_recap_section_transaction()
 
+    async def move_custom_field_to_section(self) -> models.CustomField:
+        """Move a CustomField into a different RecapSection of the SAME
+        template (template-structure edit).
+
+        Reassigns ``CustomField.recap_section`` only — the field row and
+        all ``CustomFieldValue`` rows captured for it are preserved (a
+        pointer change, never delete+recreate, so no submitted answer is
+        orphaned). The destination section must belong to the field's
+        own template/tenant; cross-template / cross-tenant moves are
+        rejected (a section reused by a *different* template is not a
+        valid target). Tenant-scoped via the shared recap write gate.
+        """
+        if not isinstance(self.input, inputs.MoveCustomFieldToSectionInput):
+            raise GraphQLError("Invalid input type.")
+
+        try:
+            custom_field_id = resolve_id_to_int(self.input.field_id)
+            custom_field = await sync_to_async(
+                models.CustomField.objects.select_related(
+                    "custom_recap_template"
+                ).get
+            )(id=custom_field_id)
+        except (models.CustomField.DoesNotExist, TypeError, ValueError, GraphQLError):
+            raise GraphQLError("Custom field not found.")
+
+        try:
+            recap_section_id = resolve_id_to_int(self.input.section_id)
+            recap_section = await sync_to_async(models.RecapSection.objects.get)(
+                id=recap_section_id
+            )
+        except (models.RecapSection.DoesNotExist, TypeError, ValueError, GraphQLError):
+            raise GraphQLError("Recap section not found.")
+
+        # Tenant write gate — only an admin or a member of the field's
+        # template tenant may restructure it. `custom_recap_template` is
+        # select_related above so reading tenant_id here doesn't trip a
+        # sync DB fetch inside the async resolver.
+        await self._assert_caller_authorized_for_recap_tenant(
+            custom_field.custom_recap_template.tenant_id,
+            action="modify",
+            record_label="Custom field",
+        )
+
+        # The destination section must belong to the SAME template as the
+        # field. We anchor on the template (not just the tenant) because a
+        # section is template-scoped via its fields; a section that only
+        # other templates use — even in the same tenant — is not a valid
+        # target. Checked by: does any CustomField of this template
+        # already live in the target section? (Sections are created per
+        # template in the builder, so every in-use section has >=1 field.)
+        same_template = await sync_to_async(
+            models.CustomField.objects.filter(
+                custom_recap_template_id=custom_field.custom_recap_template_id,
+                recap_section_id=recap_section.id,
+            ).exists
+        )()
+        # A no-op move (field already in the target section) is allowed and
+        # trivially same-template — short-circuit so it isn't rejected.
+        if (
+            recap_section.id != custom_field.recap_section_id
+            and not same_template
+        ):
+            raise GraphQLError(
+                "Target section does not belong to the same template as "
+                "the field."
+            )
+
+        @sync_to_async
+        def move_custom_field_transaction():
+            with transaction.atomic():
+                custom_field.recap_section = recap_section
+                custom_field.updated_by = self.user
+                # Pointer-only update: name / type / template / values
+                # untouched, so captured CustomFieldValue rows are intact.
+                custom_field.save(update_fields=["recap_section", "updated_by", "updated_at"])
+                return custom_field
+
+        return await move_custom_field_transaction()
+
+    async def delete_recap_section(self) -> models.RecapSection:
+        """Delete an EMPTY RecapSection (template-structure edit).
+
+        Returns the deleted section instance (detached) so the caller can
+        surface its uuid for a Relay store prune. Refuses if the section
+        still has CustomField rows — the FE must move/remove those fields
+        first (via moveCustomFieldToSection / removeCustomField) so
+        deleting a section can never cascade away fields and their
+        captured CustomFieldValue data. Tenant-scoped via the shared
+        recap write gate against the section's own tenant.
+        """
+        if not isinstance(self.input, inputs.DeleteRecapSectionInput):
+            raise GraphQLError("Invalid input type.")
+
+        try:
+            recap_section_id = resolve_id_to_int(self.input.section_id)
+            recap_section = await sync_to_async(models.RecapSection.objects.get)(
+                id=recap_section_id
+            )
+        except (models.RecapSection.DoesNotExist, TypeError, ValueError, GraphQLError):
+            raise GraphQLError("Recap section not found.")
+
+        # Tenant write gate — RecapSection carries its own tenant FK
+        # (it has no template FK), so authorize against that directly.
+        await self._assert_caller_authorized_for_recap_tenant(
+            recap_section.tenant_id,
+            action="delete",
+            record_label="Recap section",
+        )
+
+        @sync_to_async
+        def delete_recap_section_transaction():
+            with transaction.atomic():
+                # Guard: refuse if any field still points at this section.
+                # Re-checked inside the transaction so a concurrent
+                # create_custom_field can't slip a field in after the read.
+                field_count = models.CustomField.objects.filter(
+                    recap_section=recap_section
+                ).count()
+                if field_count:
+                    raise GraphQLError(
+                        "Move or remove this section's fields before "
+                        "deleting it."
+                    )
+                recap_section.delete()
+                return recap_section
+
+        return await delete_recap_section_transaction()
+
     async def _assert_caller_authorized_for_recap_tenant(
         self,
         tenant_id: int | None,
@@ -5444,6 +5572,62 @@ class RecapMutations:
         except GraphQLError as e:
             return build_mutation_response(
                 types.RecapSectionDetailResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def move_custom_field_to_section(
+        self,
+        info: strawberry.Info,
+        input: inputs.MoveCustomFieldToSectionInput,
+    ) -> types.CustomFieldDetailResponse:
+        """Move a custom field into a different section of the same
+        template (structure edit). Preserves the field + its captured
+        values; rejects cross-template / cross-tenant moves. Tenant-scoped."""
+        try:
+            service = RecapMutationService.with_input(input)
+            await service.set_user(info)
+            custom_field = await service.move_custom_field_to_section()
+            return build_mutation_response(
+                types.CustomFieldDetailResponse,
+                success=True,
+                message="Custom field moved successfully.",
+                input_obj=input,
+                custom_field=custom_field,
+            )
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.CustomFieldDetailResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def delete_recap_section(
+        self,
+        info: strawberry.Info,
+        input: inputs.DeleteRecapSectionInput,
+    ) -> types.DeleteRecapSectionResponse:
+        """Delete an EMPTY recap section (structure edit). Refuses if the
+        section still has fields ("Move or remove this section's fields
+        before deleting it."). Tenant-scoped."""
+        try:
+            service = RecapMutationService.with_input(input)
+            await service.set_user(info)
+            recap_section = await service.delete_recap_section()
+            return build_mutation_response(
+                types.DeleteRecapSectionResponse,
+                success=True,
+                message="Recap section deleted successfully.",
+                input_obj=input,
+                deleted_recap_section_uuid=str(recap_section.uuid),
+            )
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.DeleteRecapSectionResponse,
                 success=False,
                 message=str(e),
                 input_obj=input,
