@@ -540,34 +540,50 @@ class JobApplication:
     # straight into assignAmbassadorToJob to accept a specific applicant.
     ambassador_id: strawberry.ID
 
+    # NOTE: traverse with getattr(self, "ambassador", ...) — NOT
+    # self.__dict__.get("ambassador"). The strawberry-django optimizer can
+    # attach the related row via the field-descriptor cache, which
+    # __dict__.get misses → empty strings → the admin Applicants list shows
+    # the literal "Ambassador" instead of the real name (task #256).
     @strawberry.field
     def ambassador_first_name(self) -> str:
-        a = self.__dict__.get("ambassador")
-        if not a:
-            return ""
-        u = getattr(a, "user", None)
+        a = getattr(self, "ambassador", None)
+        u = getattr(a, "user", None) if a else None
         return (getattr(u, "first_name", None) or "") if u else ""
 
     @strawberry.field
     def ambassador_last_name(self) -> str:
-        a = self.__dict__.get("ambassador")
-        if not a:
-            return ""
-        u = getattr(a, "user", None)
+        a = getattr(self, "ambassador", None)
+        u = getattr(a, "user", None) if a else None
         return (getattr(u, "last_name", None) or "") if u else ""
 
     @strawberry.field
     def ambassador_email(self) -> str:
-        a = self.__dict__.get("ambassador")
-        if not a:
-            return ""
-        u = getattr(a, "user", None)
+        a = getattr(self, "ambassador", None)
+        u = getattr(a, "user", None) if a else None
         return (getattr(u, "email", None) or "") if u else ""
 
     @strawberry.field
     def ambassador_uuid(self) -> str:
-        a = self.__dict__.get("ambassador")
+        a = getattr(self, "ambassador", None)
         return str(a.uuid) if a and getattr(a, "uuid", None) else ""
+
+    @strawberry.field
+    def ambassador_phone(self) -> str:
+        """BA's phone for the admin contact card."""
+        a = getattr(self, "ambassador", None)
+        return (getattr(a, "phone", None) or "") if a else ""
+
+    @strawberry.field
+    def ambassador_image(self) -> str | None:
+        """Resolved public URL for the BA's headshot (None when unset) so the
+        applicant card / profile pop-up can render an avatar."""
+        a = getattr(self, "ambassador", None)
+        headshot = (getattr(a, "headshot", None) or "") if a else ""
+        if not headshot:
+            return None
+        from utils.gcs import public_url
+        return public_url(headshot)
 
 
 @strawberry.type
