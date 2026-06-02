@@ -213,6 +213,16 @@ class TestRequestMutationsApprovedEventStatus(EventsGraphQLTestCase):
         )
         self.create_tenanted_user(user=self.admin, tenant=self.tenant)
 
+        # A CLIENT user (role slug="client") with membership in the tenant. The
+        # client self-serve create-request path auto-approves and must now
+        # materialize an approved Event — the bug this PR fixes.
+        self.client_user = self.create_user(
+            username="client-user",
+            email="client-user@test.com",
+            role=self.roles["client"],
+        )
+        self.create_tenanted_user(user=self.client_user, tenant=self.tenant)
+
         self.req_pending = self.create_request_status(
             name="Pending", tenant=self.tenant, slug="pending", is_default=True
         )
@@ -307,6 +317,56 @@ class TestRequestMutationsApprovedEventStatus(EventsGraphQLTestCase):
         assert event is not None, "Admin log-event should materialize an Event"
         assert event.status.slug == "approved", (
             "Event materialized by the admin log-event flow must be "
+            "'approved', not 'pending'."
+        )
+
+    @pytest.mark.asyncio
+    async def test_create_request_client_self_serve_materializes_approved_event(
+        self,
+    ):
+        """REGRESSION: a CLIENT-created request (is_client=True) auto-approves
+        and must now materialize an APPROVED Event — previously the is_client
+        branch only sent emails and left the request approved-but-eventless,
+        invisible to the Missing Recaps query and the recap event picker."""
+        # No tenantId in the input: the client isn't a spark-schema user, so
+        # the service resolves the tenant from the client's single membership,
+        # and save() flips auto_approve on (role.is_client) → status approved.
+        variables = {
+            "input": {
+                "name": "Client self-serve demo",
+                "date": "2026-06-04T10:00:00+00:00",
+                "startTime": "2026-06-04T10:00:00+00:00",
+                "endTime": "2026-06-04T14:00:00+00:00",
+                "address": "123 Main St",
+                "coordinates": [0.0, 0.0],
+                "timezoneId": str(self.timezone.id),
+                "requestTypeId": str(self.request_type.id),
+                "details": [],
+                "products": [],
+            }
+        }
+        result = await self._execute_mutation_authenticated(
+            self.CREATE_REQUEST, variables, user=self.client_user
+        )
+        assert result.errors is None, result.errors
+        payload = result.data["createRequest"]
+        assert payload["success"] is True, payload["message"]
+        # Client self-serve auto-approves the request.
+        assert payload["request"]["status"]["slug"] == "approved"
+
+        # The materialized Event must exist and be approved — this is the fix.
+        request_uuid = payload["request"]["uuid"]
+        event = await sync_to_async(
+            lambda: event_models.Event.objects.select_related("status", "request")
+            .filter(request__uuid=request_uuid)
+            .first()
+        )()
+        assert event is not None, (
+            "Client self-serve create-request must materialize an Event — "
+            "an approved-but-eventless request can never receive a recap."
+        )
+        assert event.status.slug == "approved", (
+            "Event materialized by the client self-serve flow must be "
             "'approved', not 'pending'."
         )
 
@@ -512,3 +572,236 @@ class TestRepairApprovedEventStatusCommand(EventsGraphQLTestCase):
         # Dry-run must not have changed the pending event.
         ev_pending.refresh_from_db()
         assert ev_pending.status_id == self.ld_ev_pending.id
+
+
+@pytest.mark.django_db(transaction=True)
+class TestRepairMissingEventsForApprovedRequestsCommand(EventsGraphQLTestCase):
+    """Coverage for the `repair_missing_events_for_approved_requests` backfill —
+    CREATES the approved Event for approved/scheduled requests that have NO
+    Event at all (the client auto-approve gap). Distinct from
+    `repair_approved_event_status`, which flips an EXISTING pending event."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        self.system_user = self.get_system_user()
+
+        # ── Tenant A (generic) ──────────────────────────────────────
+        self.tenant_a = self.create_tenant(name="Tenant A", slug="tenant-a")
+        self.a_req_pending = self.create_request_status(
+            name="Pending", tenant=self.tenant_a, slug="pending", is_default=True
+        )
+        self.a_req_approved = self.create_request_status(
+            name="Approved", tenant=self.tenant_a, slug="approved"
+        )
+        self.a_req_scheduled = self.create_request_status(
+            name="Scheduled", tenant=self.tenant_a, slug="scheduled"
+        )
+        self.a_ev_pending = self.create_event_status(
+            name="Pending", tenant=self.tenant_a, slug="pending", is_default=True
+        )
+        self.a_ev_approved = self.create_event_status(
+            name="Approved", tenant=self.tenant_a, slug="approved"
+        )
+
+        # ── Tenant B (Liquid Death) ─────────────────────────────────
+        self.tenant_ld = self.create_tenant(name="Liquid Death", slug="liquid-death")
+        self.ld_req_approved = self.create_request_status(
+            name="Approved", tenant=self.tenant_ld, slug="approved"
+        )
+        self.ld_ev_pending = self.create_event_status(
+            name="Pending", tenant=self.tenant_ld, slug="pending", is_default=True
+        )
+        self.ld_ev_approved = self.create_event_status(
+            name="Approved", tenant=self.tenant_ld, slug="approved"
+        )
+        # EventType is required by Event.objects.from_request (it resolves the
+        # tenant default/first), so every tenant under test needs one.
+        self.event_type_a = self.create_event_type(name="In Store", tenant=self.tenant_a)
+        self.event_type_ld = self.create_event_type(
+            name="In Store", tenant=self.tenant_ld
+        )
+        self.request_type_a = self.create_request_type(
+            name="Sampling", tenant=self.tenant_a
+        )
+        self.request_type_ld = self.create_request_type(
+            name="Sampling", tenant=self.tenant_ld
+        )
+        self._request_type_for = {
+            self.tenant_a.id: self.request_type_a,
+            self.tenant_ld.id: self.request_type_ld,
+        }
+
+    # ── helpers ─────────────────────────────────────────────────────
+
+    def _request(self, tenant, status, **kwargs):
+        """An EVENTLESS request (no Event created for it)."""
+        return event_models.Request.objects.create(
+            name="Req",
+            address="123 Main St",
+            tenant=tenant,
+            status=status,
+            request_type=self._request_type_for[tenant.id],
+            start_time=_aware(2026, 5, 29, 10),
+            end_time=_aware(2026, 5, 29, 14),
+            created_by=self.system_user,
+            **kwargs,
+        )
+
+    def _event_count_for(self, request):
+        return event_models.Event.objects.filter(request_id=request.id).count()
+
+    def _run(self, *args):
+        out = StringIO()
+        call_command(
+            "repair_missing_events_for_approved_requests",
+            *args,
+            stdout=out,
+            stderr=out,
+        )
+        return out.getvalue()
+
+    # ── tests ───────────────────────────────────────────────────────
+
+    def test_creates_approved_event_for_eventless_approved_request(self):
+        req = self._request(self.tenant_a, self.a_req_approved)
+        assert self._event_count_for(req) == 0
+
+        self._run("--execute")
+
+        event = event_models.Event.objects.select_related("status").get(
+            request_id=req.id
+        )
+        assert event.status.slug == "approved", (
+            "Repaired event must land approved (not the tenant default pending)."
+        )
+
+    def test_creates_event_for_eventless_scheduled_request(self):
+        req = self._request(self.tenant_a, self.a_req_scheduled)
+
+        self._run("--execute")
+
+        event = event_models.Event.objects.select_related("status").get(
+            request_id=req.id
+        )
+        assert event.status.slug == "approved"
+
+    def test_creates_pending_job_for_repaired_request(self):
+        """The repair also materializes the Pending Job (mirrors the resolver
+        flow): an approved open-gig request lands a Job once it has an Event."""
+        from jobs import models as job_models
+
+        # create_pending_jobs_for_request needs a JobTitle + Rate for the tenant.
+        self.create_job_title(name="Brand Ambassador", tenant=self.tenant_a)
+        rate_type = self.create_rate_type(name="Hourly", tenant=self.tenant_a)
+        self.create_rate(amount=25, rate_type=rate_type, tenant=self.tenant_a)
+        req = self._request(self.tenant_a, self.a_req_approved)
+
+        self._run("--execute")
+
+        assert event_models.Event.objects.filter(request_id=req.id).exists()
+        assert job_models.Job.objects.filter(
+            event__request_id=req.id
+        ).exists(), "Repair should create the Pending Job for the new Event."
+
+    def test_leaves_request_that_already_has_an_event_alone(self):
+        req = self._request(self.tenant_a, self.a_req_approved)
+        # Pre-existing event (e.g. created by approve_request).
+        existing = event_models.Event.objects.create(
+            name="Existing",
+            tenant=self.tenant_a,
+            address="123 Main St",
+            request=req,
+            status=self.a_ev_approved,
+            created_by=self.system_user,
+        )
+
+        self._run("--execute")
+
+        # Still exactly one event, and it's the original (no duplicate created).
+        events = list(event_models.Event.objects.filter(request_id=req.id))
+        assert len(events) == 1
+        assert events[0].id == existing.id
+
+    def test_leaves_pending_request_alone(self):
+        req = self._request(self.tenant_a, self.a_req_pending)
+
+        self._run("--execute")
+
+        assert self._event_count_for(req) == 0, (
+            "A pending (not approved/scheduled) request must not get an Event."
+        )
+
+    def test_skips_soft_deleted_request(self):
+        from django.utils import timezone as dj_tz
+
+        req = self._request(
+            self.tenant_a, self.a_req_approved, deleted_at=dj_tz.now()
+        )
+
+        self._run("--execute")
+
+        assert self._event_count_for(req) == 0, (
+            "Soft-deleted requests must be skipped."
+        )
+
+    def test_dry_run_default_writes_nothing(self):
+        """No flags → DRY RUN by default (must not write)."""
+        req = self._request(self.tenant_a, self.a_req_approved)
+
+        output = self._run()  # no --execute → dry run
+
+        assert self._event_count_for(req) == 0, "Default run must not write."
+        assert "DRY RUN" in output
+        assert "Would create" in output
+
+    def test_explicit_dry_run_writes_nothing(self):
+        req = self._request(self.tenant_a, self.a_req_approved)
+
+        output = self._run("--dry-run")
+
+        assert self._event_count_for(req) == 0
+        assert "DRY RUN" in output
+
+    def test_idempotent_second_run_is_zero_changes(self):
+        req = self._request(self.tenant_a, self.a_req_approved)
+
+        self._run("--execute")  # first run creates the event
+        assert self._event_count_for(req) == 1
+
+        output = self._run("--execute")  # second run: nothing left to do
+        assert "Created: 0 event(s)" in output
+        assert self._event_count_for(req) == 1, (
+            "Second run must not create a duplicate event."
+        )
+
+    def test_tenant_scoping_only_touches_named_tenant(self):
+        req_a = self._request(self.tenant_a, self.a_req_approved)
+        req_ld = self._request(self.tenant_ld, self.ld_req_approved)
+
+        # Scope to tenant A only (by slug).
+        self._run("--tenant", "tenant-a", "--execute")
+
+        assert self._event_count_for(req_a) == 1, "Tenant A should be repaired"
+        assert self._event_count_for(req_ld) == 0, (
+            "Liquid Death must be untouched when scoped to tenant A"
+        )
+
+    def test_tenant_scoping_by_numeric_id(self):
+        req_a = self._request(self.tenant_a, self.a_req_approved)
+
+        self._run("--tenant", str(self.tenant_a.id), "--execute")
+
+        assert self._event_count_for(req_a) == 1
+
+    def test_liquid_death_specifics_reported(self):
+        """The LD report surfaces the eventless approved/scheduled request
+        count under a LIQUID DEATH header."""
+        self._request(self.tenant_ld, self.ld_req_approved)
+
+        output = self._run("--tenant", "liquid-death")  # dry run default
+
+        assert "LIQUID DEATH" in output
+        assert "Liquid Death specifics:" in output
+        assert "eventless approved/scheduled requests:" in output
+        # 1 eventless candidate request for LD.
+        assert "eventless approved/scheduled requests:    1" in output
