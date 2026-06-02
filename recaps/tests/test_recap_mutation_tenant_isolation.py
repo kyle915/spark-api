@@ -13,7 +13,12 @@ These run end to end against the real `schema_clients` GraphQL surface and
 assert, for BOTH legacy `Recap` and `CustomRecap`, that:
 
   * a client/user of tenant A CANNOT approve / decline / edit / add-file-to a
-    tenant B recap (success=False, "authorized", and NOTHING is mutated), and
+    tenant B recap. The denial reads as non-existence ("Recap not found." /
+    "Custom recap not found.") rather than "not authorized for this tenant",
+    so a cross-tenant probe can't confirm the record exists under another
+    brand (#247); success=False and NOTHING is mutated. The ambassador-block
+    path keeps its explicit "not authorized" wording (a role limit, not a
+    record-existence signal), and
   * a same-tenant client AND a spark-admin still CAN.
 
 Mirrors the fixture style of test_delete_custom_recap_file /
@@ -245,7 +250,10 @@ class TestRecapMutationTenantIsolation(AmbassadorsGraphQLTestCase):
         assert result.errors is None, f"errored: {result.errors}"
         payload = result.data["approveRecap"]
         assert payload["success"] is False, payload
-        assert "authorized" in payload["message"].lower()
+        # #247: cross-tenant denial reads as non-existent — never leaks that
+        # the recap exists under another brand.
+        assert payload["message"] == "Recap not found.", payload
+        assert "authorized" not in payload["message"].lower(), payload
         # NOT mutated.
         refreshed = await self._refresh_recap(recap)
         assert refreshed.approved is False
@@ -318,7 +326,9 @@ class TestRecapMutationTenantIsolation(AmbassadorsGraphQLTestCase):
         assert result.errors is None, f"errored: {result.errors}"
         payload = result.data["approveCustomRecap"]
         assert payload["success"] is False, payload
-        assert "authorized" in payload["message"].lower()
+        # #247: cross-tenant denial reads as non-existent (no existence leak).
+        assert payload["message"] == "Custom recap not found.", payload
+        assert "authorized" not in payload["message"].lower(), payload
         refreshed = await self._refresh_custom(recap)
         assert refreshed.approved is False
 
@@ -375,7 +385,9 @@ class TestRecapMutationTenantIsolation(AmbassadorsGraphQLTestCase):
         assert result.errors is None, f"errored: {result.errors}"
         payload = result.data["declineCustomRecap"]
         assert payload["success"] is False, payload
-        assert "authorized" in payload["message"].lower()
+        # #247: cross-tenant denial reads as non-existent (no existence leak).
+        assert payload["message"] == "Custom recap not found.", payload
+        assert "authorized" not in payload["message"].lower(), payload
         refreshed = await self._refresh_custom(recap)
         assert refreshed.approved is True  # untouched
 
@@ -414,7 +426,9 @@ class TestRecapMutationTenantIsolation(AmbassadorsGraphQLTestCase):
         assert result.errors is None, f"errored: {result.errors}"
         payload = result.data["addRecapFile"]
         assert payload["success"] is False, payload
-        assert "authorized" in payload["message"].lower()
+        # #247: cross-tenant denial reads as non-existent (no existence leak).
+        assert payload["message"] == "Recap not found.", payload
+        assert "authorized" not in payload["message"].lower(), payload
         # No file row created for the foreign recap.
         count = await sync_to_async(
             recap_models.RecapFile.objects.filter(recap=recap).count
@@ -454,7 +468,9 @@ class TestRecapMutationTenantIsolation(AmbassadorsGraphQLTestCase):
         assert result.errors is None, f"errored: {result.errors}"
         payload = result.data["addCustomRecapFile"]
         assert payload["success"] is False, payload
-        assert "authorized" in payload["message"].lower()
+        # #247: cross-tenant denial reads as non-existent (no existence leak).
+        assert payload["message"] == "Custom recap not found.", payload
+        assert "authorized" not in payload["message"].lower(), payload
         count = await sync_to_async(
             recap_models.CustomRecapFile.objects.filter(
                 custom_recap=recap
@@ -480,7 +496,9 @@ class TestRecapMutationTenantIsolation(AmbassadorsGraphQLTestCase):
         assert result.errors is None, f"errored: {result.errors}"
         payload = result.data["removeRecapFile"]
         assert payload["success"] is False, payload
-        assert "authorized" in payload["message"].lower()
+        # #247: cross-tenant denial reads as non-existent (no existence leak).
+        assert payload["message"] == "Recap not found.", payload
+        assert "authorized" not in payload["message"].lower(), payload
         # File still present.
         still = await sync_to_async(
             recap_models.RecapFile.objects.filter(id=rec_file.id).exists
@@ -511,7 +529,9 @@ class TestRecapMutationTenantIsolation(AmbassadorsGraphQLTestCase):
         assert result.errors is None, f"errored: {result.errors}"
         payload = result.data["updateCustomRecap"]
         assert payload["success"] is False, payload
-        assert "authorized" in payload["message"].lower()
+        # #247: cross-tenant denial reads as non-existent (no existence leak).
+        assert payload["message"] == "Custom recap not found.", payload
+        assert "authorized" not in payload["message"].lower(), payload
         refreshed = await self._refresh_custom(recap)
         assert refreshed.name == "Custom recap"  # untouched
 
