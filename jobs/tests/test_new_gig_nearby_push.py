@@ -1,13 +1,24 @@
 """Tests for the at-post-time geo-proximity "new gig near you" push.
 
-Covers jobs/notifications.notify_nearby_bas_of_new_gig:
+The public entry point `notify_nearby_bas_of_new_gig(job)` now just ENQUEUES
+a single background RQ task and returns immediately — the fan-out runs
+off-request in `_notify(job)` (re-fetched via `_run_notify_nearby_bas_task`).
+This split is what keeps the postJob mutation from stalling on large rosters.
+
+So the WHO-gets-pushed assertions exercise the worker logic `_notify(job)`
+directly:
   - a BA within 30mi (coords present on both sides) IS notified, with the
     rounded distance in the payload;
   - a BA beyond 30mi (coords present) is NOT notified;
   - a BA who already applied to the job is skipped;
   - the preferred-state fallback fires for a BA with NULL coords whose
     preferred_state_codes match the job's event state;
-  - notify_new_gigs=False opts a BA out.
+  - notify_new_gigs=False opts a BA out;
+  - the favorites_only gate.
+
+Plus two tests for the public fn's contract: it enqueues once with the task
+fn + job.id and does NOT fan out inline, and a failing enqueue is swallowed
+(never falls back to running the fan-out inline).
 
 enqueue_push is stubbed so nothing hits the network / RQ.
 """
@@ -110,10 +121,10 @@ class TestNewGigNearbyPush(JobsGraphQLTestCase):
         )
 
     def test_proximity_and_fallback(self):
-        from jobs.notifications import notify_nearby_bas_of_new_gig
+        from jobs.notifications import _notify
 
         with patch("ambassadors.push.enqueue_push") as mock_push:
-            sent = notify_nearby_bas_of_new_gig(self.job)
+            sent = _notify(self.job)
 
         # Notified: near (proximity) + fallback (state). NOT: far, applied.
         notified_user_ids = {call.args[0] for call in mock_push.call_args_list}
@@ -149,7 +160,7 @@ class TestNewGigNearbyPush(JobsGraphQLTestCase):
         assert "CA" in fb_kwargs["body"]
 
     def test_notify_new_gigs_false_opts_out(self):
-        from jobs.notifications import notify_nearby_bas_of_new_gig
+        from jobs.notifications import _notify
 
         # Turn the near BA's master switch off — they should be skipped even
         # though they're within range.
@@ -159,7 +170,7 @@ class TestNewGigNearbyPush(JobsGraphQLTestCase):
         )
 
         with patch("ambassadors.push.enqueue_push") as mock_push:
-            notify_nearby_bas_of_new_gig(self.job)
+            _notify(self.job)
 
         notified_user_ids = {call.args[0] for call in mock_push.call_args_list}
         assert self.near_user.id not in notified_user_ids
@@ -168,7 +179,7 @@ class TestNewGigNearbyPush(JobsGraphQLTestCase):
 
     def test_favorites_only_gate(self):
         """A favorites_only job only reaches BAs on the tenant's favorites."""
-        from jobs.notifications import notify_nearby_bas_of_new_gig
+        from jobs.notifications import _notify
 
         self.job.favorites_only = True
         self.job.save(update_fields=["favorites_only"])
@@ -181,7 +192,7 @@ class TestNewGigNearbyPush(JobsGraphQLTestCase):
         )
 
         with patch("ambassadors.push.enqueue_push") as mock_push:
-            notify_nearby_bas_of_new_gig(self.job)
+            _notify(self.job)
 
         notified_user_ids = {call.args[0] for call in mock_push.call_args_list}
         # Near BA is favorited + in range -> notified.
@@ -191,3 +202,77 @@ class TestNewGigNearbyPush(JobsGraphQLTestCase):
         # Far + applied still excluded.
         assert self.far_user.id not in notified_user_ids
         assert self.applied_user.id not in notified_user_ids
+
+    def test_public_fn_enqueues_and_does_not_fan_out_inline(self):
+        """The post path must NOT run the fan-out inline.
+
+        `notify_nearby_bas_of_new_gig` should enqueue exactly one RQ task
+        (the worker entrypoint + job.id) and return without touching
+        `_notify` / `enqueue_push` synchronously. That's the whole point of
+        the freeze fix: the postJob mutation can't block on the fan-out.
+        """
+        from jobs import notifications
+
+        with patch("utils.queues.Queues") as mock_queues, patch.object(
+            notifications, "_notify"
+        ) as mock_notify, patch("ambassadors.push.enqueue_push") as mock_push:
+            add = mock_queues.return_value.default.add
+            result = notifications.notify_nearby_bas_of_new_gig(self.job)
+
+        # Enqueued exactly once, with the worker fn + the int job id.
+        add.assert_called_once_with(
+            notifications._run_notify_nearby_bas_task, self.job.id
+        )
+        # Fan-out did NOT run inline in the request path.
+        mock_notify.assert_not_called()
+        mock_push.assert_not_called()
+        # Public fn no longer returns a count — it's fire-and-forget.
+        assert result is None
+
+    def test_public_fn_swallows_enqueue_failure_no_inline_fallback(self):
+        """If the enqueue raises, swallow it (log) and do NOT fan out inline.
+
+        A queue/Redis outage must not block the post and must not silently
+        degrade into the old inline fan-out — the daily digest still covers
+        these BAs.
+        """
+        from jobs import notifications
+
+        with patch("utils.queues.Queues") as mock_queues, patch.object(
+            notifications, "_notify"
+        ) as mock_notify, patch("ambassadors.push.enqueue_push") as mock_push:
+            mock_queues.return_value.default.add.side_effect = RuntimeError(
+                "redis down"
+            )
+            # Must not raise — the post path stays alive.
+            result = notifications.notify_nearby_bas_of_new_gig(self.job)
+
+        # Never fell back to running the fan-out inline.
+        mock_notify.assert_not_called()
+        mock_push.assert_not_called()
+        assert result is None
+
+    def test_worker_task_refetches_and_fans_out(self):
+        """The worker entrypoint re-fetches the job by id and runs `_notify`."""
+        from jobs import notifications
+
+        with patch.object(
+            notifications, "_notify", return_value=7
+        ) as mock_notify:
+            sent = notifications._run_notify_nearby_bas_task(self.job.id)
+
+        assert sent == 7
+        mock_notify.assert_called_once()
+        # It re-fetched a real Job instance (not the int) for the same job.
+        passed_job = mock_notify.call_args.args[0]
+        assert passed_job.id == self.job.id
+
+    def test_worker_task_missing_job_is_swallowed(self):
+        """A job deleted before the worker runs is logged, not crashed."""
+        from jobs import notifications
+
+        with patch.object(notifications, "_notify") as mock_notify:
+            sent = notifications._run_notify_nearby_bas_task(2_000_000_001)
+
+        assert sent == 0
+        mock_notify.assert_not_called()
