@@ -585,6 +585,21 @@ class JobApplication:
         from utils.gcs import public_url
         return public_url(headshot)
 
+    # ----- BA-facing fields (myApplications) -----
+    @strawberry.field
+    def application_uuid(self) -> str:
+        """Alias of `uuid` under the name the mobile myApplications screen
+        requests."""
+        return str(getattr(self, "uuid", "") or "")
+
+    @strawberry.field
+    async def job(self) -> "Job":
+        """The Job this application is for — venue/date/pay/state live on
+        job.event. Powers the BA's "gigs I've applied to" list. The
+        my_applications resolver select_related's job + job.event so this
+        resolves without an N+1."""
+        return await sync_to_async(lambda: self.job)()
+
 
 @strawberry.type
 class JobApplicationResponse:

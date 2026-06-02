@@ -1820,6 +1820,54 @@ class JobApplicationQueries:
         return await sync_to_async(_list)()
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def my_applications(
+        self,
+        info: strawberry.Info,
+        status: str | None = None,
+    ) -> list[types.JobApplication]:
+        """Gigs the calling BA has applied to, newest first. The job board
+        (my_available_jobs) deliberately hides applied jobs, so this is the
+        only place a BA can see their application history + current status.
+
+        Optional `status` filter (applied / accepted / declined / withdrawn).
+        Tenant scoping is implicit: rows are filtered to the caller's own
+        Ambassador, which only spans tenants they belong to. Returns empty for
+        non-ambassador users. select_related pulls job + event (+ state +
+        title) so the nested `job { ... event { ... } }` summary the mobile
+        screen requests resolves without an N+1.
+        """
+        actor = getattr(info.context.request, "user", None)
+        status_filter = (status or "").strip().lower() or None
+
+        def _list():
+            from ambassadors.models import Ambassador
+            if not actor or not getattr(actor, "id", None):
+                return []
+            try:
+                amb = Ambassador.objects.get(user_id=actor.id)
+            except Ambassador.DoesNotExist:
+                return []
+            qs = (
+                models.JobApplication.objects
+                .select_related(
+                    "job", "job__event", "job__event__state", "job__job_title"
+                )
+                .filter(ambassador=amb)
+                .order_by("-applied_at")
+            )
+            valid = {
+                models.JobApplication.STATUS_APPLIED,
+                models.JobApplication.STATUS_ACCEPTED,
+                models.JobApplication.STATUS_DECLINED,
+                models.JobApplication.STATUS_WITHDRAWN,
+            }
+            if status_filter in valid:
+                qs = qs.filter(status=status_filter)
+            return list(qs)
+
+        return await sync_to_async(_list)()
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def my_job_preferences(
         self,
         info: strawberry.Info,
