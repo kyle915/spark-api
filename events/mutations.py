@@ -2845,10 +2845,17 @@ async def _materialize_approved_event_for_request(
             created_by=user,
             status=event_approved_status,
         )
-    except Exception:
+    except Exception as exc:
+        # Loud + non-swallowing: log the request id AND the exception repr so
+        # the real cause is visible in the run log (this used to be a quiet
+        # best-effort catch). logger.exception also attaches the full
+        # traceback. We still return None rather than re-raising so an
+        # auto-approve / approve mutation isn't blocked by event
+        # materialization — the surfaced log is enough to act on.
         logger.exception(
-            "auto-approve: failed to materialize Event for request_id=%s",
+            "auto-approve: failed to materialize Event for request_id=%s: %r",
             request.id,
+            exc,
         )
         event = None
 

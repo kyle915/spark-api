@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import io
 import logging
+import traceback
 from typing import Any
 
 from django.conf import settings
@@ -36,6 +37,27 @@ from django.views import View
 from django.views.decorators.csrf import csrf_exempt
 
 logger = logging.getLogger(__name__)
+
+
+def _concise_exc(exc: BaseException) -> dict[str, str]:
+    """Concise, log-safe error detail for a cron command that itself crashed:
+    exception type + message + the LAST traceback frame (file:line in func).
+    Returned in the JSON response so a re-run surfaces the real cause in the
+    GitHub Actions log even without Cloud Run / GCP access. Deliberately does
+    NOT include the full traceback or any env/secret."""
+    message = " ".join(str(exc).split())
+    if len(message) > 500:
+        message = message[:497] + "..."
+    frame = ""
+    tb = exc.__traceback__
+    if tb is not None:
+        last = traceback.extract_tb(tb)[-1]
+        frame = f"{last.filename.split('/')[-1]}:{last.lineno} in {last.name}"
+    return {
+        "type": type(exc).__name__,
+        "message": message,
+        "frame": frame,
+    }
 
 
 def _check_secret(request: HttpRequest) -> JsonResponse | None:
@@ -767,11 +789,18 @@ class RepairMissingEventsForApprovedRequestsView(View):
             logger.exception(
                 "Repair missing events for approved requests backfill failed"
             )
+            # Include the exception type + message + last frame so the real
+            # cause shows in the trigger's JSON response (and the GitHub
+            # Actions log) without needing Cloud Run log access. Per-request
+            # failures don't reach here — the command catches those and writes
+            # them into `report`; this branch is for the command crashing
+            # outright.
             return JsonResponse(
                 {
                     "ok": False,
                     "error": "command-failed",
                     "detail": str(exc),
+                    "exception": _concise_exc(exc),
                     "executed": execute,
                     "tenant": tenant,
                     "report": out.getvalue(),
