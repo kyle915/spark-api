@@ -8,6 +8,7 @@ This module tests:
 - ambassador_notes query (authenticated users)
 - ambassador_note query (authenticated users)
 """
+import base64
 import pytest
 import strawberry_django  # noqa: F401
 import uuid
@@ -787,9 +788,13 @@ class TestAmbassadorNoteQueries(AmbassadorsGraphQLTestCase):
         edges = result.data["ambassadorNotes"]["edges"]
         assert len(edges) >= 4
 
-        # Verify notes are ordered by created_at descending (newest first)
-        note_ids = [edge["node"]["id"] for edge in edges]
-        assert str(self.note4.id) == note_ids[0]  # Most recent
+        # Verify notes are ordered by created_at descending (newest first).
+        # node.id is a Relay global ID (base64 "AmbassadorNoteType:<pk>").
+        note_ids = [
+            base64.b64decode(edge["node"]["id"]).decode("utf-8")
+            for edge in edges
+        ]
+        assert note_ids[0] == f"AmbassadorNoteType:{self.note4.id}"  # Most recent
 
     @pytest.mark.asyncio
     async def test_ambassador_notes_filter_by_ambassador(self):
@@ -942,7 +947,9 @@ class TestAmbassadorNoteQueries(AmbassadorsGraphQLTestCase):
         assert result.errors is None
         assert result.data is not None
         assert result.data["ambassadorNote"] is not None
-        assert result.data["ambassadorNote"]["id"] == str(self.note1.id)
+        decoded_id = base64.b64decode(
+            result.data["ambassadorNote"]["id"]).decode("utf-8")
+        assert decoded_id == f"AmbassadorNoteType:{self.note1.id}"
         assert result.data["ambassadorNote"]["note"] == "Great ambassador note!"
 
     @pytest.mark.asyncio

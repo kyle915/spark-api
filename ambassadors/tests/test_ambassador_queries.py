@@ -23,6 +23,8 @@ from ambassadors.models import (
 )
 from ambassadors.tests.base import AmbassadorsGraphQLTestCase
 from ambassadors.constants import INVITATION_EXPIRY_DAYS
+from jobs import models as job_models
+from strawberry.relay import to_base64
 from tenants.models import Tenant, TenantedUser
 from utils.utils import ROLE_ID
 
@@ -860,21 +862,28 @@ class TestInvitedGroupsByJobQuery(AmbassadorsGraphQLTestCase):
 
     @pytest.mark.asyncio
     async def test_invited_groups_by_job_without_matches_returns_empty(self):
-        other_event = self.create_event(
-            name="No Match Event",
-            tenant=self.tenant,
-            address="No Match St",
-        )
-        other_job = job_models.Job.objects.create(
-            name="No Match Job",
-            code=f"JOB-{str(uuid.uuid4())[:6]}",
-            address="No Match St",
-            event=other_event,
-            job_title=self.job_title,
-            tenant=self.tenant,
-            rate=self.rate,
-            created_by=self.get_system_user(),
-        )
+        # Object creation touches the ORM synchronously, so it must run off
+        # the async event loop (sync_to_async) — the same pattern the other
+        # async tests in this module use.
+        @sync_to_async
+        def create_unmatched_job():
+            other_event = self.create_event(
+                name="No Match Event",
+                tenant=self.tenant,
+                address="No Match St",
+            )
+            return job_models.Job.objects.create(
+                name="No Match Job",
+                code=f"JOB-{str(uuid.uuid4())[:6]}",
+                address="No Match St",
+                event=other_event,
+                job_title=self.job_title,
+                tenant=self.tenant,
+                rate=self.rate,
+                created_by=self.get_system_user(),
+            )
+
+        other_job = await create_unmatched_job()
 
         result = await self._execute_query_authenticated(
             self.query,
@@ -981,10 +990,11 @@ class TestAmbassadorsQuery(AmbassadorsGraphQLTestCase):
         assert result.errors is None
         assert result.data is not None
         assert result.data["ambassadors"]["totalCount"] == 1
+        # node.id is a Relay global ID (base64 "Ambassador:<pk>").
         assert result.data["ambassadors"]["edges"] == [
             {
                 "node": {
-                    "id": str(self.match_ambassador.id),
+                    "id": to_base64("Ambassador", self.match_ambassador.id),
                     "address": "123 Match Street",
                 }
             }
