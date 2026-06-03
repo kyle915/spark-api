@@ -26,8 +26,7 @@ Why this exists (and why it's NOT a migration):
 
 How it fills each event — two sources, cheapest first:
     1. COPY from the parent ``Request.coordinates`` when that's populated and
-       valid (free, no network). This is the common case and runs first so we
-       never hit Photon for a row we can fill for free.
+       valid (free, no network). This is the common case.
     2. GEOCODE ``Event.address`` via the keyless Photon API
        (``utils.geocoding.photon_geocode``) for the rest. Best-effort: a small
        ``time.sleep`` between network calls keeps us polite to the free
@@ -36,21 +35,41 @@ How it fills each event — two sources, cheapest first:
 
     Saves ONLY the ``coordinates`` field (``update_fields=["coordinates"]``).
 
+Two-phase EXECUTE (so a single request finishes well under the Cloud Run 300s
+timeout — the bug that PR #732 originally shipped geocoded the WHOLE backlog
+inline with a 1s sleep per address and 504'd):
+    * Phase 1 (no network, do ALL): copy ``Request.coordinates`` → event for
+      every candidate whose parent request has valid coords. Free, instant.
+    * Phase 2 (network, CAPPED at ``--limit``, default 40): for rows that still
+      need coords, geocode the address via Photon — but only up to ``limit`` of
+      them per invocation, keeping the 1s polite sleep. With limit=40 the
+      request takes ~40s + overhead, safely under 300s. The report says how
+      many still REMAIN so the operator re-runs until 0.
+
+Count-only DRY-RUN:
+    Dry-run NEVER touches the network. It only COUNTS: total candidates, how
+    many are fillable by the free Request→Event copy, and how many would need a
+    geocode. Returns instantly regardless of backlog size.
+
 Idempotent + wrapped in a transaction per tenant:
     A row that already has valid coordinates is skipped (the candidate
     queryset excludes them, and a re-check guards the single-row helper), so a
-    second run updates zero rows. Each written row gets its own savepoint so
-    one failure doesn't poison the surrounding tenant transaction.
+    second run only drains whatever geocode backlog is left. Each written row
+    gets its own savepoint so one failure doesn't poison the surrounding
+    tenant transaction.
 
-Flags (identical surface to repair_event_dates):
-    --dry-run        Report what WOULD change; write nothing. DEFAULT: ON.
+Flags:
+    --dry-run        Report counts only (no network); write nothing. DEFAULT: ON.
     --execute        Actually write coordinates (turns OFF the dry-run default).
     --tenant <x>     Scope to a single tenant (slug or numeric id). Default: all.
+    --limit <n>      Max addresses to GEOCODE per invocation (Phase 2 cap).
+                     DEFAULT: 40. The free copy phase is never capped.
 
 Usage:
-    python manage.py backfill_event_coordinates                      # DRY RUN
+    python manage.py backfill_event_coordinates                      # DRY RUN (counts)
     python manage.py backfill_event_coordinates --tenant liquid-death  # dry run, one tenant
     python manage.py backfill_event_coordinates --execute            # APPLY, all tenants
+    python manage.py backfill_event_coordinates --execute --limit 100
     python manage.py backfill_event_coordinates --tenant liquid-death --execute
 """
 
@@ -72,6 +91,11 @@ logger = logging.getLogger(__name__)
 # Politeness delay between Photon network calls (the copy-from-request path
 # does NOT sleep — it never touches the network).
 GEOCODE_SLEEP_SECONDS = 1.0
+
+# Default cap on how many addresses we GEOCODE per invocation (Phase 2). Keeps
+# a single request under the Cloud Run 300s timeout: ~limit seconds of sleeps +
+# the per-call timeout + overhead. The free copy phase is never capped.
+DEFAULT_GEOCODE_LIMIT = 40
 
 
 def _format_exc(exc: BaseException) -> str:
@@ -110,10 +134,12 @@ def _coords_from_request(event: Event) -> list[float] | None:
 class Command(BaseCommand):
     help = (
         "Backfill Event.coordinates for events with missing coordinates "
-        "(null/empty/[0,0]). Copies from the parent Request.coordinates when "
-        "valid (free), else geocodes Event.address via the keyless Photon API. "
-        "Idempotent + transaction-wrapped. DRY-RUN by default — pass --execute "
-        "to write. Supports --tenant."
+        "(null/empty/[0,0]). Phase 1 copies from the parent Request.coordinates "
+        "when valid (free, no network, ALL rows); Phase 2 geocodes Event.address "
+        "via the keyless Photon API for the rest, CAPPED at --limit per run "
+        "(default 40) to stay under the Cloud Run timeout. Idempotent + "
+        "transaction-wrapped. DRY-RUN by default (COUNTS ONLY, no network) — "
+        "pass --execute to write. Supports --tenant."
     )
 
     def add_arguments(self, parser):
@@ -122,7 +148,7 @@ class Command(BaseCommand):
             action="store_true",
             default=True,
             help=(
-                "Report what WOULD change without writing to the DB. "
+                "Report counts only (no network, no DB writes). "
                 "This is the DEFAULT; pass --execute to actually write."
             ),
         )
@@ -143,6 +169,16 @@ class Command(BaseCommand):
                 "Default: all tenants."
             ),
         )
+        parser.add_argument(
+            "--limit",
+            type=int,
+            default=DEFAULT_GEOCODE_LIMIT,
+            help=(
+                "Max addresses to GEOCODE per invocation (Phase 2 cap). "
+                f"Default: {DEFAULT_GEOCODE_LIMIT}. The free copy-from-request "
+                "phase is never capped. Re-run until 'remaining' hits 0."
+            ),
+        )
 
     # ─── Entry point ────────────────────────────────────────────────
 
@@ -150,6 +186,9 @@ class Command(BaseCommand):
         execute: bool = opts["execute"]
         dry_run: bool = not execute
         tenant_arg: str | None = opts["tenant"]
+        limit: int = opts.get("limit") or DEFAULT_GEOCODE_LIMIT
+        if limit < 0:
+            raise CommandError("--limit must be >= 0")
 
         tenants = self._resolve_tenants(tenant_arg)
 
@@ -158,38 +197,75 @@ class Command(BaseCommand):
             f"({'ALL tenants' if tenant_arg is None else f'tenant={tenant_arg}'})"
         ))
         if dry_run:
-            self.stdout.write(self.style.NOTICE("DRY RUN — no DB writes.\n"))
+            self.stdout.write(self.style.NOTICE(
+                "DRY RUN — counts only, NO network, NO DB writes.\n"
+            ))
+        else:
+            self.stdout.write(self.style.NOTICE(
+                f"EXECUTE — Phase 1 copies all from request; "
+                f"Phase 2 geocodes at most {limit} this run.\n"
+            ))
+
+        # Phase-2 geocode budget is shared ACROSS tenants so a single
+        # invocation geocodes at most `limit` addresses total (the network
+        # cost is what we're capping, regardless of how it's split per tenant).
+        budget = {"remaining": limit}
 
         grand_candidates = 0
-        grand_updated = 0
-        grand_from_request = 0
-        grand_geocoded = 0
+        grand_copyable = 0          # fillable by Request→Event copy (free)
+        grand_needs_geocode = 0     # candidates that require a geocode
+        grand_copied = 0            # actually copied (Phase 1)
+        grand_geocoded = 0          # actually geocoded (Phase 2)
         grand_failed = 0
+        grand_remaining = 0         # still need a geocode after this run
         all_errors: list[dict] = []
         per_tenant: list[dict] = []
 
         for tenant in tenants:
-            stats = self._process_tenant(tenant, dry_run=dry_run)
+            stats = self._process_tenant(
+                tenant, dry_run=dry_run, budget=budget
+            )
             grand_candidates += stats["candidates"]
-            grand_updated += stats["updated"]
-            grand_from_request += stats["from_request"]
+            grand_copyable += stats["copyable"]
+            grand_needs_geocode += stats["needs_geocode"]
+            grand_copied += stats["copied"]
             grand_geocoded += stats["geocoded"]
             grand_failed += stats["failed"]
+            grand_remaining += stats["remaining"]
             all_errors.extend(stats.get("errors", []))
             per_tenant.append({"tenant": tenant, **stats})
 
         # ─── Summary ────────────────────────────────────────────────
-        verb = "Would update" if dry_run else "Updated"
         self.stdout.write(self.style.MIGRATE_HEADING("\nSummary"))
         self.stdout.write(f"  Tenants scanned:            {len(tenants)}")
         self.stdout.write(
             f"  Candidate events (coordinates null/empty/[0,0]): "
             f"{grand_candidates}"
         )
-        self.stdout.write(self.style.SUCCESS(
-            f"  {verb}: {grand_updated} event(s) "
-            f"(from request={grand_from_request}, geocoded={grand_geocoded})"
-        ))
+        if dry_run:
+            # COUNT-ONLY report: copyable vs needs-geocode, no writes happened.
+            self.stdout.write(self.style.SUCCESS(
+                f"  Would fill {grand_candidates} event(s): "
+                f"by request-copy={grand_copyable} (free), "
+                f"by geocode={grand_needs_geocode}"
+            ))
+            self.stdout.write(
+                f"  Geocode batches needed at limit={limit}: "
+                f"{self._batches(grand_needs_geocode, limit)}"
+            )
+        else:
+            self.stdout.write(self.style.SUCCESS(
+                f"  Updated: {grand_copied + grand_geocoded} event(s) "
+                f"(copied={grand_copied}, geocoded={grand_geocoded})"
+            ))
+            remaining_style = (
+                self.style.WARNING if grand_remaining else self.style.SUCCESS
+            )
+            self.stdout.write(remaining_style(
+                f"  Remaining (still need geocode): {grand_remaining}"
+                + (" — re-run --execute to drain the next batch"
+                   if grand_remaining else " — backlog drained")
+            ))
         if grand_failed:
             self.stdout.write(self.style.WARNING(
                 f"  Skipped/failed (no usable source): {grand_failed} event(s) "
@@ -200,33 +276,62 @@ class Command(BaseCommand):
                     f"    - event id={err['event_id']}: {err['error']}"
                 ))
 
+        # MACHINE-READABLE one-liner so the cron endpoint / operator can parse
+        # the outcome out of the captured report without scraping prose.
+        self.stdout.write(
+            "\nRESULT "
+            + (
+                f"mode=dry_run candidates={grand_candidates} "
+                f"copyable={grand_copyable} needs_geocode={grand_needs_geocode} "
+                f"limit={limit} "
+                f"batches={self._batches(grand_needs_geocode, limit)}"
+                if dry_run else
+                f"mode=execute candidates={grand_candidates} "
+                f"copied={grand_copied} geocoded={grand_geocoded} "
+                f"remaining={grand_remaining} failed={grand_failed} limit={limit}"
+            )
+        )
+
         self.stdout.write(self.style.MIGRATE_HEADING("\nPer-tenant breakdown"))
         for row in per_tenant:
             t = row["tenant"]
-            self.stdout.write(
-                f"  {t.name} (id={t.id}, slug={t.slug}): "
-                f"candidates={row['candidates']} {verb.lower()}={row['updated']} "
-                f"(request={row['from_request']}, geocoded={row['geocoded']})"
-                + (f" failed={row['failed']}" if row["failed"] else "")
-            )
+            if dry_run:
+                self.stdout.write(
+                    f"  {t.name} (id={t.id}, slug={t.slug}): "
+                    f"candidates={row['candidates']} "
+                    f"copyable={row['copyable']} "
+                    f"needs_geocode={row['needs_geocode']}"
+                )
+            else:
+                self.stdout.write(
+                    f"  {t.name} (id={t.id}, slug={t.slug}): "
+                    f"candidates={row['candidates']} "
+                    f"copied={row['copied']} geocoded={row['geocoded']} "
+                    f"remaining={row['remaining']}"
+                    + (f" failed={row['failed']}" if row["failed"] else "")
+                )
 
-        if not dry_run and grand_updated:
+        if not dry_run and (grand_copied or grand_geocoded):
             logger.info(
-                "backfill_event_coordinates: updated=%s (request=%s geocoded=%s) "
-                "failed=%s tenants=%s",
-                grand_updated, grand_from_request, grand_geocoded,
-                grand_failed, len(tenants),
+                "backfill_event_coordinates: copied=%s geocoded=%s remaining=%s "
+                "failed=%s tenants=%s limit=%s",
+                grand_copied, grand_geocoded, grand_remaining,
+                grand_failed, len(tenants), limit,
             )
 
     # ─── Per-tenant processing ──────────────────────────────────────
 
-    def _process_tenant(self, tenant: Tenant, *, dry_run: bool) -> dict:
+    def _process_tenant(
+        self, tenant: Tenant, *, dry_run: bool, budget: dict
+    ) -> dict:
         stats = {
             "candidates": 0,
-            "updated": 0,
-            "from_request": 0,
-            "geocoded": 0,
+            "copyable": 0,        # candidates fillable via request copy (free)
+            "needs_geocode": 0,   # candidates that require a geocode
+            "copied": 0,          # rows actually copied (Phase 1)
+            "geocoded": 0,        # rows actually geocoded (Phase 2)
             "failed": 0,
+            "remaining": 0,       # rows still needing a geocode after this run
             "errors": [],
         }
 
@@ -251,29 +356,66 @@ class Command(BaseCommand):
         ]
         stats["candidates"] = len(candidates)
 
+        # Partition candidates WITHOUT any network call:
+        #   copyable    — parent Request has valid coords (Phase 1, free)
+        #   to_geocode  — everything else (Phase 2, network, capped)
+        copyable: list[tuple[Event, list[float]]] = []
+        to_geocode: list[Event] = []
+        for ev in candidates:
+            coords = _coords_from_request(ev)
+            if coords is not None:
+                copyable.append((ev, coords))
+            else:
+                to_geocode.append(ev)
+        stats["copyable"] = len(copyable)
+        stats["needs_geocode"] = len(to_geocode)
+
         header = (
             f"\n  Tenant '{tenant.name}' (id={tenant.id}, slug={tenant.slug}) "
-            f"— {len(candidates)} candidate event(s)"
+            f"— {len(candidates)} candidate(s): "
+            f"copyable={len(copyable)}, needs_geocode={len(to_geocode)}"
         )
         self.stdout.write(self.style.HTTP_INFO(header))
 
-        if not candidates:
+        if dry_run:
+            # COUNT ONLY — never touch the network, never write.
+            for ev, coords in copyable:
+                self.stdout.write(
+                    f"    ~ would copy coordinates={coords} from request onto "
+                    f"event id={ev.id} (uuid={getattr(ev, 'uuid', None)})"
+                )
+            for ev in to_geocode:
+                self.stdout.write(
+                    f"    ~ would geocode event id={ev.id} "
+                    f"(uuid={getattr(ev, 'uuid', None)}, address={ev.address!r})"
+                )
+            # Everything that needs a geocode is "remaining" in a dry-run.
+            stats["remaining"] = len(to_geocode)
             return stats
 
-        for ev in candidates:
-            self._process_event(ev, dry_run=dry_run, stats=stats)
+        # ── EXECUTE ──────────────────────────────────────────────────
+        # Phase 1: copy from request for ALL copyable rows (free, no network).
+        for ev, coords in copyable:
+            error = self._save_coords(ev, coords)
+            if error is None:
+                stats["copied"] += 1
+                self.stdout.write(self.style.SUCCESS(
+                    f"    ✓ copied coordinates={coords} from request onto "
+                    f"event id={ev.id}"
+                ))
+            else:
+                stats["failed"] += 1
+                stats["errors"].append({"event_id": ev.id, "error": error})
+                self.stdout.write(self.style.ERROR(
+                    f"    ! failed event id={ev.id}: {error}"
+                ))
 
-        return stats
-
-    def _process_event(self, ev: Event, *, dry_run: bool, stats: dict) -> None:
-        """Resolve coordinates for one event (copy-first, then geocode) and
-        write them (unless dry-run). Updates ``stats`` in place."""
-        coords = _coords_from_request(ev)
-        source = "request"
-        if coords is None:
-            # No usable request coords → geocode the address via Photon.
-            # Sleep BEFORE the network call to space out requests politely
-            # (skipped entirely for the free copy-from-request path above).
+        # Phase 2: geocode the rest, capped by the SHARED cross-tenant budget.
+        for ev in to_geocode:
+            if budget["remaining"] <= 0:
+                # Cap hit — count this (and the rest) as still-remaining.
+                stats["remaining"] += 1
+                continue
             address = (getattr(ev, "address", None) or "").strip()
             if not address:
                 stats["failed"] += 1
@@ -283,11 +425,12 @@ class Command(BaseCommand):
                 self.stdout.write(self.style.WARNING(
                     f"    ? skip event id={ev.id}: no request coords, no address"
                 ))
-                return
-            if not dry_run:
-                time.sleep(GEOCODE_SLEEP_SECONDS)
+                continue
+            # Consume a unit of the geocode budget BEFORE the network call.
+            budget["remaining"] -= 1
+            # Sleep BEFORE the network call to space out requests politely.
+            time.sleep(GEOCODE_SLEEP_SECONDS)
             coords = photon_geocode(address)
-            source = "geocode"
             if coords is None:
                 stats["failed"] += 1
                 stats["errors"].append(
@@ -297,41 +440,21 @@ class Command(BaseCommand):
                     f"    ? skip event id={ev.id}: geocode returned nothing for "
                     f"{address!r}"
                 ))
-                return
-
-        # We have coordinates. Count the source.
-        if source == "request":
-            stats["from_request"] += 1
-        else:
-            stats["geocoded"] += 1
-
-        if dry_run:
-            stats["updated"] += 1
-            self.stdout.write(
-                f"    ~ would set coordinates={coords} on event id={ev.id} "
-                f"(uuid={getattr(ev, 'uuid', None)}, source={source})"
-            )
-            return
-
-        error = self._save_coords(ev, coords)
-        if error is None:
-            stats["updated"] += 1
-            self.stdout.write(self.style.SUCCESS(
-                f"    ✓ set coordinates={coords} on event id={ev.id} "
-                f"(source={source})"
-            ))
-        else:
-            # The source counter was incremented optimistically; back it out
-            # so the summary reflects only successful writes.
-            if source == "request":
-                stats["from_request"] -= 1
+                continue
+            error = self._save_coords(ev, coords)
+            if error is None:
+                stats["geocoded"] += 1
+                self.stdout.write(self.style.SUCCESS(
+                    f"    ✓ geocoded coordinates={coords} onto event id={ev.id}"
+                ))
             else:
-                stats["geocoded"] -= 1
-            stats["failed"] += 1
-            stats["errors"].append({"event_id": ev.id, "error": error})
-            self.stdout.write(self.style.ERROR(
-                f"    ! failed event id={ev.id}: {error}"
-            ))
+                stats["failed"] += 1
+                stats["errors"].append({"event_id": ev.id, "error": error})
+                self.stdout.write(self.style.ERROR(
+                    f"    ! failed event id={ev.id}: {error}"
+                ))
+
+        return stats
 
     # ─── Single-event write ─────────────────────────────────────────
 
@@ -355,6 +478,14 @@ class Command(BaseCommand):
         return None
 
     # ─── Helpers ────────────────────────────────────────────────────
+
+    @staticmethod
+    def _batches(count: int, limit: int) -> int:
+        """How many --execute runs of size `limit` it takes to drain `count`
+        geocodes. limit=0 means "no geocoding this run" → report 0 batches."""
+        if count <= 0 or limit <= 0:
+            return 0
+        return (count + limit - 1) // limit
 
     def _resolve_tenants(self, tenant_arg: str | None) -> list[Tenant]:
         """Resolve --tenant (slug or numeric id) to a list of tenants.

@@ -164,15 +164,43 @@ class TestBackfillAmbassadorCoordinates(AmbassadorsGraphQLTestCase):
     def test_dry_run_is_default_and_writes_nothing(self):
         amb = self._make_ba(coordinates=[])
         out = StringIO()
-        with patch(GEOCODE_PATH, return_value=[39.53, -119.81]), \
+        with patch(GEOCODE_PATH, return_value=[39.53, -119.81]) as mock_geo, \
                 patch(SLEEP_PATH) as mock_sleep:
             call_command("backfill_ambassador_coordinates", stdout=out)  # dry-run
+            # Count-only: dry-run never geocodes or sleeps (the 504 fix).
+            mock_geo.assert_not_called()
             mock_sleep.assert_not_called()
         amb.refresh_from_db()
         assert amb.coordinates == []  # untouched
         report = out.getvalue()
         assert "DRY RUN" in report
-        assert "Would update: 1 ambassador(s)" in report
+        assert "Would geocode 1 ambassador(s)" in report
+
+    def test_execute_caps_geocode_at_limit_and_reports_remaining(self):
+        # 3 BAs all need a geocode. --limit 2 geocodes only 2 this run and
+        # reports 1 remaining; a second run drains it (keeps each request under
+        # the Cloud Run timeout).
+        for _ in range(3):
+            self._make_ba(coordinates=[])
+        out1 = StringIO()
+        with patch(GEOCODE_PATH, return_value=[39.53, -119.81]), patch(SLEEP_PATH):
+            call_command(
+                "backfill_ambassador_coordinates", execute=True, limit=2, stdout=out1
+            )
+        r1 = out1.getvalue()
+        assert "geocoded=2" in r1
+        assert "Remaining (still need geocode): 1" in r1
+        assert Ambassador.objects.filter(coordinates=[39.53, -119.81]).count() == 2
+
+        out2 = StringIO()
+        with patch(GEOCODE_PATH, return_value=[39.53, -119.81]), patch(SLEEP_PATH):
+            call_command(
+                "backfill_ambassador_coordinates", execute=True, limit=2, stdout=out2
+            )
+        r2 = out2.getvalue()
+        assert "geocoded=1" in r2
+        assert "Remaining (still need geocode): 0" in r2
+        assert Ambassador.objects.filter(coordinates=[39.53, -119.81]).count() == 3
 
     # ─── --tenant scoping ────────────────────────────────────────────
 
