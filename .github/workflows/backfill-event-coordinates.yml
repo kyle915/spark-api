@@ -33,6 +33,11 @@ on:
         required: true
         default: true
         type: boolean
+      auto_drain:
+        description: "When applying (dry_run=false), keep firing until the backlog is fully drained (remaining=0). Each pass geocodes up to 40, so one run clears everything. Ignored on dry-run."
+        required: false
+        default: true
+        type: boolean
       tenant:
         description: "Restrict to a single tenant (slug or numeric id). Empty = all tenants."
         required: false
@@ -48,6 +53,7 @@ jobs:
           CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/backfill-event-coordinates
           CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
           DRY_RUN: ${{ github.event.inputs.dry_run }}
+          AUTO_DRAIN: ${{ github.event.inputs.auto_drain }}
           TENANT: ${{ github.event.inputs.tenant || '' }}
         run: |
           set -euo pipefail
@@ -63,7 +69,7 @@ jobs:
           else
             EXECUTE="false"
           fi
-          echo "dry_run=$DRY_RUN -> execute=$EXECUTE (writes only when execute=true)"
+          echo "dry_run=$DRY_RUN -> execute=$EXECUTE | auto_drain=${AUTO_DRAIN:-true} (writes only when execute=true)"
 
           # Only add tenant when supplied so an unscoped run falls through to
           # the command's default (all tenants).
@@ -72,20 +78,55 @@ jobs:
             QS="$QS&tenant=$TENANT"
           fi
 
-          # Secret travels in the X-Cron-Secret HEADER (never in the URL).
-          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
-            -X POST "$CRON_URL?$QS" \
-            -H "X-Cron-Secret: $CRON_SECRET")
-          echo "HTTP $STATUS"
+          # Each pass geocodes at most the command's --limit (default 40) so a
+          # single HTTP request stays well under the Cloud Run 300s ceiling. On
+          # execute with auto_drain we loop the endpoint until the backlog is
+          # gone (remaining=0) or a pass makes no forward progress (an
+          # un-geocodable tail), so one run drains everything without timing out.
+          MAX_PASSES=400
+          PASS=0
+          while :; do
+            PASS=$((PASS + 1))
+            # Secret travels in the X-Cron-Secret HEADER (never in the URL).
+            STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+              -X POST "$CRON_URL?$QS" \
+              -H "X-Cron-Secret: $CRON_SECRET")
 
-          # Print the full report body to the Actions log so the operator reads
-          # the dry-run report (incl. the per-tenant breakdown) right here.
-          echo "----- response body (backfill report) -----"
-          cat /tmp/cron-response.json
-          echo
-          echo "--------------------------------------------"
+            # Parse the JSON body's `report` (the captured command stdout) and
+            # print it line-by-line so it survives `gh run view --log`.
+            REPORT="$(jq -r '.report // .detail // "(no report field in response)"' /tmp/cron-response.json 2>/dev/null || cat /tmp/cron-response.json)"
+            echo "===== pass $PASS — HTTP $STATUS ====="
+            printf '%s\n' "$REPORT"
 
-          if [ "$STATUS" != "200" ]; then
-            echo "::error::Cron endpoint returned $STATUS — see body above."
-            exit 1
-          fi
+            if [ "$STATUS" != "200" ]; then
+              echo "::error::Cron endpoint returned $STATUS on pass $PASS — see report above."
+              exit 1
+            fi
+
+            # Pull the machine-readable RESULT line counters.
+            REMAINING="$(printf '%s\n' "$REPORT" | grep -oE 'remaining=[0-9]+' | tail -1 | cut -d= -f2 || true)"
+            GEOCODED="$(printf '%s\n' "$REPORT" | grep -oE 'geocoded=[0-9]+' | tail -1 | cut -d= -f2 || true)"
+            COPIED="$(printf '%s\n' "$REPORT" | grep -oE 'copied=[0-9]+' | tail -1 | cut -d= -f2 || true)"
+            echo "pass $PASS summary: copied=${COPIED:-?} geocoded=${GEOCODED:-?} remaining=${REMAINING:-unknown}"
+
+            # Dry-run is a single preview pass; never loops.
+            [ "$EXECUTE" = "true" ] || break
+            # Apply without auto_drain: a single batch (<=40 geocodes).
+            [ "${AUTO_DRAIN:-true}" = "true" ] || break
+            # Drained.
+            if [ "${REMAINING:-0}" = "0" ]; then
+              echo "Backlog drained (remaining=0) after $PASS pass(es)."
+              break
+            fi
+            # No forward progress (e.g. an un-geocodable address tail) — stop
+            # rather than spin.
+            if [ "${GEOCODED:-0}" = "0" ] && [ "${COPIED:-0}" = "0" ]; then
+              echo "::warning::No progress on pass $PASS (copied=0, geocoded=0) but remaining=${REMAINING:-?} — likely un-geocodable addresses. Stopping; inspect those rows' addresses."
+              break
+            fi
+            if [ "$PASS" -ge "$MAX_PASSES" ]; then
+              echo "::warning::Hit MAX_PASSES=$MAX_PASSES with remaining=${REMAINING:-?} — re-run to continue draining."
+              break
+            fi
+            sleep 2
+          done
