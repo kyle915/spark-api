@@ -405,7 +405,7 @@ class TestCreateAmbassadorGroup(AmbassadorsGraphQLTestCase):
 
     @pytest.mark.asyncio
     async def test_create_ambassador_group_missing_job_id(self):
-        """Test creating ambassador group without job_id (required field)."""
+        """Test creating ambassador group without job_id (job_id is optional)."""
         variables = {
             "input": {
                 "name": "Group Without Job",
@@ -418,10 +418,22 @@ class TestCreateAmbassadorGroup(AmbassadorsGraphQLTestCase):
             self.mutation, variables, self.client_user, self.endpoint_path
         )
 
-        # GraphQL validation error for missing required field
-        assert result.errors is not None
-        assert any("jobId" in str(error) and "required" in str(
-            error).lower() for error in result.errors)
+        # job_id is optional, so the group is created successfully without one
+        assert result.errors is None
+        assert result.data["createAmbassadorGroup"]["success"] is True
+        assert (
+            result.data["createAmbassadorGroup"]["ambassadorGroup"]["name"]
+            == "Group Without Job"
+        )
+        group_id = int(
+            base64.b64decode(
+                result.data["createAmbassadorGroup"]["ambassadorGroup"]["id"]
+            )
+            .decode("utf-8")
+            .split(":")[1]
+        )
+        group = await sync_to_async(AmbassadorGroup.objects.get)(pk=group_id)
+        assert group.name == "Group Without Job"
 
 
 @pytest.mark.django_db(transaction=True)
@@ -614,10 +626,9 @@ class TestUpdateAmbassadorGroup(AmbassadorsGraphQLTestCase):
             self.mutation, variables, self.client_user, self.endpoint_path
         )
 
-        assert result.errors is not None
-        assert len(result.errors) > 0
-        assert "AmbassadorGroup matching query does not exist" in str(
-            result.errors[0].message)
+        assert result.errors is None
+        assert result.data["updateAmbassadorGroup"]["success"] is False
+        assert "does not exist" in result.data["updateAmbassadorGroup"]["message"]
 
     @pytest.mark.asyncio
     async def test_update_ambassador_group_unauthorized_ambassador(self):

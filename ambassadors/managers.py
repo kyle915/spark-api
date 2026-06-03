@@ -41,7 +41,7 @@ class AmbassadorInvitationManager(BaseManager, models.Manager):
 
     def by_token(self, token: str):
         """Return ambassador invitation by token."""
-        return self.select_related("tenant", "invited_by").get(token=token)
+        return self.select_related("tenant", "invited_by", "job").get(token=token)
 
     async def _by_token(self, token: str):
         """Return ambassador invitation by token but in async way."""

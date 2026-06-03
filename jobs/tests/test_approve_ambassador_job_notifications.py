@@ -106,6 +106,9 @@ class TestApproveAmbassadorJobNotifications(JobsGraphQLTestCase):
         }
 
         with patch(
+            "jobs.notification_rules.timezone.now",
+            return_value=datetime(2026, 3, 20, 12, 0, tzinfo=timezone.utc),
+        ), patch(
             "jobs.mutations.AmbassadorJobApprovedNotificationMailer.send"
         ) as mock_client_send, patch(
             "jobs.mutations.AmbassadorApprovedForJobMailer.send"
@@ -199,8 +202,12 @@ class TestApproveAmbassadorJobNotifications(JobsGraphQLTestCase):
             recipient_first_name=self.rmm_user.first_name,
             reply_to_email=self.rmm_user.email,
         )
-        envelope = mailer.envelope()
-        rendered_html = envelope.render_template()
+
+        def _build_and_render():
+            built = mailer.envelope()
+            return built, built.render_template()
+
+        envelope, rendered_html = await sync_to_async(_build_and_render)()
 
         assert envelope.template == "jobs.templates.emails.ambassador_job_approved_notification"
         assert envelope.to_emails == [self.rmm_user.email]

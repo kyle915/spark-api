@@ -8,6 +8,8 @@ This module tests:
   - BLACKLIST action
   - WHITELIST action
 """
+import base64
+
 import pytest
 import strawberry_django  # noqa: F401
 from asgiref.sync import sync_to_async
@@ -140,8 +142,9 @@ class TestClientManageAmbassadorJobMutations(JobsGraphQLTestCase):
         assert result.data["manageAmbassadorJobAssignment"]["success"] is True
         assert "accepted" in result.data["manageAmbassadorJobAssignment"]["message"].lower(
         )
-        assert result.data["manageAmbassadorJobAssignment"]["ambassadorJob"]["status"]["id"] == str(
-            self.accept_status.id)
+        assert int(base64.b64decode(
+            result.data["manageAmbassadorJobAssignment"]["ambassadorJob"]["status"]["id"]
+        ).decode("utf-8").split(":")[1]) == self.accept_status.id
 
         # Verify status was updated
         updated_job = await sync_to_async(models.AmbassadorJob.objects.get)(pk=self.ambassador_job.id)
@@ -181,8 +184,9 @@ class TestClientManageAmbassadorJobMutations(JobsGraphQLTestCase):
         assert result.data["manageAmbassadorJobAssignment"]["success"] is True
         assert "rejected" in result.data["manageAmbassadorJobAssignment"]["message"].lower(
         )
-        assert result.data["manageAmbassadorJobAssignment"]["ambassadorJob"]["status"]["id"] == str(
-            self.reject_status.id)
+        assert int(base64.b64decode(
+            result.data["manageAmbassadorJobAssignment"]["ambassadorJob"]["status"]["id"]
+        ).decode("utf-8").split(":")[1]) == self.reject_status.id
 
         # Verify status was updated
         updated_job = await sync_to_async(models.AmbassadorJob.objects.get)(pk=self.ambassador_job.id)
@@ -222,8 +226,9 @@ class TestClientManageAmbassadorJobMutations(JobsGraphQLTestCase):
         assert result.data["manageAmbassadorJobAssignment"]["success"] is True
         assert "blacklisted" in result.data["manageAmbassadorJobAssignment"]["message"].lower(
         )
-        assert result.data["manageAmbassadorJobAssignment"]["ambassadorJob"]["status"]["id"] == str(
-            self.blacklist_status.id)
+        assert int(base64.b64decode(
+            result.data["manageAmbassadorJobAssignment"]["ambassadorJob"]["status"]["id"]
+        ).decode("utf-8").split(":")[1]) == self.blacklist_status.id
 
     @pytest.mark.asyncio
     async def test_manage_assignment_whitelist_with_status_id(self):
@@ -259,8 +264,9 @@ class TestClientManageAmbassadorJobMutations(JobsGraphQLTestCase):
         assert result.data["manageAmbassadorJobAssignment"]["success"] is True
         assert "whitelisted" in result.data["manageAmbassadorJobAssignment"]["message"].lower(
         )
-        assert result.data["manageAmbassadorJobAssignment"]["ambassadorJob"]["status"]["id"] == str(
-            self.whitelist_status.id)
+        assert int(base64.b64decode(
+            result.data["manageAmbassadorJobAssignment"]["ambassadorJob"]["status"]["id"]
+        ).decode("utf-8").split(":")[1]) == self.whitelist_status.id
 
     @pytest.mark.asyncio
     async def test_manage_assignment_accept_without_status_id(self):
@@ -478,8 +484,9 @@ class TestSparkManageAmbassadorJobMutations(JobsGraphQLTestCase):
         assert result.data["manageAmbassadorJobAssignment"]["success"] is True
         assert "accepted" in result.data["manageAmbassadorJobAssignment"]["message"].lower(
         )
-        assert result.data["manageAmbassadorJobAssignment"]["ambassadorJob"]["status"]["id"] == str(
-            self.accept_status.id)
+        assert int(base64.b64decode(
+            result.data["manageAmbassadorJobAssignment"]["ambassadorJob"]["status"]["id"]
+        ).decode("utf-8").split(":")[1]) == self.accept_status.id
 
         # Verify status was updated
         updated_job = await sync_to_async(models.AmbassadorJob.objects.get)(pk=self.ambassador_job.id)
