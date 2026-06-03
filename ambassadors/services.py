@@ -708,6 +708,7 @@ class AcceptInvitationService(BaseAmbassadorService):
             # Create user
             user = await cls.create_ambassador_user(
                 first_name=input.first_name,
+                last_name=getattr(input, "last_name", None),
                 email=invitation.email,
                 role=role,
                 password=input.password1,

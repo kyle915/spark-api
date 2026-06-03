@@ -5,6 +5,8 @@ This module tests:
 - jobs query (Client, Spark, Ambassador schemas)
 - job query (Client, Spark, Ambassador schemas)
 """
+import base64
+
 import pytest
 import strawberry_django  # noqa: F401
 from asgiref.sync import sync_to_async
@@ -137,7 +139,10 @@ class TestClientJobQueries(JobsGraphQLTestCase):
 
         assert result.data is not None
         assert result.data["job"] is not None
-        assert result.data["job"]["id"] == str(self.job1.id)
+        decoded_id = int(
+            base64.b64decode(result.data["job"]["id"]).decode("utf-8").split(":")[1]
+        )
+        assert decoded_id == self.job1.id
         assert result.data["job"]["name"] == "Job 1"
         assert result.data["job"]["code"] == "JOB-001"
 
@@ -248,24 +253,31 @@ class TestSparkJobQueries(JobsGraphQLTestCase):
     @pytest.mark.asyncio
     async def test_ambassador_jobs_query_with_status_filter(self):
         """Test ambassadorJobs query accepts status filter without resolver errors."""
-        ambassador_user = self.create_user(
-            username="spark_query_ambassador@test.com",
-            email="spark_query_ambassador@test.com",
-            role=self.roles["ambassador"],
-            password="testpass123",
-        )
-        ambassador = self.create_ambassador(user=ambassador_user)
-        self.create_tenanted_user(user=ambassador_user, tenant=self.tenant)
-        status = self.create_status(name="Pending", tenant=self.tenant, slug="pending")
-        rate_type = self.create_rate_type(name="Hour", tenant=self.tenant)
-        rate = self.create_rate(amount=25.0, rate_type=rate_type, tenant=self.tenant)
-        self.create_ambassador_job(
-            ambassador=ambassador,
-            job=self.job,
-            status=status,
-            rate=rate,
-            tenant=self.tenant,
-        )
+        def _create_test_data():
+            ambassador_user = self.create_user(
+                username="spark_query_ambassador@test.com",
+                email="spark_query_ambassador@test.com",
+                role=self.roles["ambassador"],
+                password="testpass123",
+            )
+            ambassador = self.create_ambassador(user=ambassador_user)
+            self.create_tenanted_user(user=ambassador_user, tenant=self.tenant)
+            status = self.create_status(
+                name="Pending", tenant=self.tenant, slug="pending"
+            )
+            rate_type = self.create_rate_type(name="Hour", tenant=self.tenant)
+            rate = self.create_rate(
+                amount=25.0, rate_type=rate_type, tenant=self.tenant
+            )
+            self.create_ambassador_job(
+                ambassador=ambassador,
+                job=self.job,
+                status=status,
+                rate=rate,
+                tenant=self.tenant,
+            )
+
+        await sync_to_async(_create_test_data)()
 
         query = """
         query AmbassadorJobsPendingQuery($first: Int) {
@@ -293,28 +305,35 @@ class TestSparkJobQueries(JobsGraphQLTestCase):
     @pytest.mark.asyncio
     async def test_ambassador_jobs_query_with_search_q(self):
         """Test ambassadorJobs query supports q filtering without FieldError."""
-        ambassador_user = self.create_user(
-            username="spark_query_ambassador_q@test.com",
-            email="spark_query_ambassador_q@test.com",
-            role=self.roles["ambassador"],
-            password="testpass123",
-        )
-        ambassador = self.create_ambassador(
-            user=ambassador_user,
-            first_name="Alex",
-            last_name="Morgan",
-        )
-        self.create_tenanted_user(user=ambassador_user, tenant=self.tenant)
-        status = self.create_status(name="Pending", tenant=self.tenant, slug="pending")
-        rate_type = self.create_rate_type(name="Hour", tenant=self.tenant)
-        rate = self.create_rate(amount=25.0, rate_type=rate_type, tenant=self.tenant)
-        self.create_ambassador_job(
-            ambassador=ambassador,
-            job=self.job,
-            status=status,
-            rate=rate,
-            tenant=self.tenant,
-        )
+        def _create_test_data():
+            ambassador_user = self.create_user(
+                username="spark_query_ambassador_q@test.com",
+                email="spark_query_ambassador_q@test.com",
+                role=self.roles["ambassador"],
+                password="testpass123",
+                first_name="Alex",
+                last_name="Morgan",
+            )
+            ambassador = self.create_ambassador(
+                user=ambassador_user,
+            )
+            self.create_tenanted_user(user=ambassador_user, tenant=self.tenant)
+            status = self.create_status(
+                name="Pending", tenant=self.tenant, slug="pending"
+            )
+            rate_type = self.create_rate_type(name="Hour", tenant=self.tenant)
+            rate = self.create_rate(
+                amount=25.0, rate_type=rate_type, tenant=self.tenant
+            )
+            self.create_ambassador_job(
+                ambassador=ambassador,
+                job=self.job,
+                status=status,
+                rate=rate,
+                tenant=self.tenant,
+            )
+
+        await sync_to_async(_create_test_data)()
 
         query = """
         query AmbassadorJobsSearchQuery($first: Int, $q: String) {
@@ -527,10 +546,11 @@ class TestMobileAmbassadorJobQueries(JobsGraphQLTestCase):
         assert result.data["ambassadorJobsMobile"] is not None
         assert result.data["ambassadorJobsMobile"]["totalCount"] == 1
         returned_ids = [
-            edge["node"]["id"] for edge in result.data["ambassadorJobsMobile"]["edges"]
+            int(base64.b64decode(edge["node"]["id"]).decode("utf-8").split(":")[1])
+            for edge in result.data["ambassadorJobsMobile"]["edges"]
         ]
-        assert str(self.own_ambassador_job.id) in returned_ids
-        assert str(self.other_ambassador_job.id) not in returned_ids
+        assert self.own_ambassador_job.id in returned_ids
+        assert self.other_ambassador_job.id not in returned_ids
 
     @pytest.mark.asyncio
     async def test_ambassador_job_mobile_returns_logged_user_record(self):
@@ -550,7 +570,12 @@ class TestMobileAmbassadorJobQueries(JobsGraphQLTestCase):
         assert result.errors is None
         assert result.data is not None
         assert result.data["ambassadorJobMobile"] is not None
-        assert result.data["ambassadorJobMobile"]["id"] == str(self.own_ambassador_job.id)
+        decoded_id = int(
+            base64.b64decode(result.data["ambassadorJobMobile"]["id"])
+            .decode("utf-8")
+            .split(":")[1]
+        )
+        assert decoded_id == self.own_ambassador_job.id
 
     @pytest.mark.asyncio
     async def test_ambassador_job_mobile_hides_other_ambassador_record(self):

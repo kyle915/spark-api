@@ -54,6 +54,9 @@ class TestCreateAmbassadorJobNotifications(JobsGraphQLTestCase):
         self.create_tenanted_user(user=self.ambassador_user, tenant=self.tenant)
 
         self.pending_status = self.create_status(name="Pending", tenant=self.tenant)
+        self.approved_status = self.create_status(
+            name="Approved", tenant=self.tenant, slug="approved"
+        )
 
         self.schema = schema_spark
         self.endpoint_path = "/api/v1/graphql/spark"
@@ -82,7 +85,10 @@ class TestCreateAmbassadorJobNotifications(JobsGraphQLTestCase):
             }
         }
 
-        with patch("jobs.mutations.AmbassadorAssignedToJobMailer.send") as mock_send:
+        with patch(
+            "jobs.notification_rules.timezone.now",
+            return_value=datetime(2026, 3, 20, 12, 0, tzinfo=timezone.utc),
+        ), patch("jobs.mutations.AmbassadorAssignedToJobMailer.send") as mock_send:
             result = await self._execute_mutation_authenticated(
                 mutation,
                 variables,

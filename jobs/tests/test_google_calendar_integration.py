@@ -16,11 +16,15 @@ class TestGoogleCalendarIntegration(JobsGraphQLTestCase):
             tenant=self.tenant,
             address="123 Test St",
         )
+        self.job_title = self.create_job_title(
+            name="Brand Ambassador", tenant=self.tenant
+        )
         self.job = self.create_job(
             name="In-Store Sampling",
             code="JOB-APV-001",
             address="123 Test St",
             event=self.event,
+            job_title=self.job_title,
             tenant=self.tenant,
             start_date=timezone.now(),
             end_date=timezone.now() + timezone.timedelta(hours=2)

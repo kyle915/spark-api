@@ -5,6 +5,7 @@ This module tests:
 - create_job (Client and Spark schemas)
 - update_job (Client and Spark schemas)
 """
+import base64
 from datetime import datetime, timezone
 import pytest
 import strawberry_django  # noqa: F401
@@ -94,7 +95,8 @@ class TestClientJobMutations(JobsGraphQLTestCase):
         assert result.data["createJob"]["job"]["code"] == "JOB-001"
 
         # Verify job was created
-        job_id = result.data["createJob"]["job"]["id"]
+        job_gid = result.data["createJob"]["job"]["id"]
+        job_id = int(base64.b64decode(job_gid).decode("utf-8").split(":")[1])
         job = await sync_to_async(models.Job.objects.get)(pk=job_id)
         assert job.name == "Test Job"
         assert job.code == "JOB-001"
@@ -493,7 +495,8 @@ class TestSparkJobMutations(JobsGraphQLTestCase):
         assert result.data["createJob"]["job"]["name"] == "Spark Job"
 
         # Verify job was created
-        job_id = result.data["createJob"]["job"]["id"]
+        job_gid = result.data["createJob"]["job"]["id"]
+        job_id = int(base64.b64decode(job_gid).decode("utf-8").split(":")[1])
         job = await sync_to_async(models.Job.objects.get)(pk=job_id)
         assert job.name == "Spark Job"
         assert job.coordinates == coordinates

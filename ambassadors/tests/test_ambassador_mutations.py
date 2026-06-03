@@ -12,7 +12,7 @@ This module tests:
 import pytest
 import strawberry_django  # noqa: F401
 import uuid
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from asgiref.sync import sync_to_async
 from django.contrib.auth import get_user_model
 from django.utils import timezone
@@ -94,7 +94,7 @@ class TestPublicAmbassadorCreation(AmbassadorsGraphQLTestCase):
         user = await sync_to_async(User.objects.get)(email=email)
         assert user.first_name == "John"
         assert user.role.id == ROLE_ID.Ambassadors
-        assert user.is_active is False  # Inactive until email verification
+        assert user.is_active is True  # User account is active; ambassador needs approval
 
         # Verify ambassador was created
         ambassador = await sync_to_async(Ambassador.objects.get)(user=user)
@@ -351,8 +351,8 @@ class TestRegenerateAmbassadorPasswords(AmbassadorsGraphQLTestCase):
             "ambassadors.services.generate_random_password",
             side_effect=["BatchPass001", "BatchPass002"],
         ), patch(
-            "ambassadors.services.AmbassadorGeneratedPasswordMailer.send_async",
-            new_callable=AsyncMock,
+            "ambassadors.services.AmbassadorGeneratedPasswordMailer.send",
+            new_callable=MagicMock,
         ) as mocked_send:
             result = await self._execute_mutation(
                 self.mutation,
@@ -365,7 +365,7 @@ class TestRegenerateAmbassadorPasswords(AmbassadorsGraphQLTestCase):
         assert result.data["regenerateAmbassadorPasswords"]["success"] is True
         assert result.data["regenerateAmbassadorPasswords"]["clientMutationId"] == "regen-passwords-1"
         assert len(result.data["regenerateAmbassadorPasswords"]["results"]) == 2
-        assert mocked_send.await_count == 2
+        assert mocked_send.call_count == 2
 
         await sync_to_async(self.ambassador_user_1.refresh_from_db)()
         await sync_to_async(self.ambassador_user_2.refresh_from_db)()

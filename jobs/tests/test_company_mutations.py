@@ -5,6 +5,8 @@ This module tests:
 - create_company
 - update_company
 """
+import base64
+
 import pytest
 import strawberry_django  # noqa: F401
 from asgiref.sync import sync_to_async
@@ -75,7 +77,8 @@ class TestClientCompanyMutations(JobsGraphQLTestCase):
         assert result.data["createCompany"]["company"]["email"] == "company@test.com"
 
         # Verify company was created
-        company_id = result.data["createCompany"]["company"]["id"]
+        company_gid = result.data["createCompany"]["company"]["id"]
+        company_id = int(base64.b64decode(company_gid).decode("utf-8").split(":")[1])
         company = await sync_to_async(models.Company.objects.get)(pk=company_id)
         assert company.name == "Test Company Inc"
         assert company.email == "company@test.com"

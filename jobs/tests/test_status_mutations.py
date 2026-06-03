@@ -6,6 +6,8 @@ This module tests:
 - update_ambassador_job_status
 """
 
+import base64
+
 import pytest
 import strawberry_django  # noqa: F401
 from asgiref.sync import sync_to_async
@@ -79,7 +81,8 @@ class TestClientStatusMutations(JobsGraphQLTestCase):
         )
 
         # Verify status was created
-        status_id = result.data["createAmbassadorJobStatus"]["status"]["id"]
+        status_gid = result.data["createAmbassadorJobStatus"]["status"]["id"]
+        status_id = int(base64.b64decode(status_gid).decode("utf-8").split(":")[1])
         status = await sync_to_async(models.Status.objects.get)(pk=status_id)
         assert status.name == "Test Status"
         # Compare tenant IDs to avoid async database access
