@@ -345,14 +345,21 @@ class TestSendInvitationMailToAmbassadorMailer(AmbassadorsGraphQLTestCase):
         # Create the mailer
         mailer = SendInvitationMailToAmbassadorMailer(invitation)
 
-        # Get the envelope
-        envelope = mailer.envelope()
+        # Get the envelope. envelope() runs ORM queries (it builds the
+        # deep-link invite context), so it must be wrapped in sync_to_async
+        # when called from an async test — same as the other envelope tests.
+        envelope = await sync_to_async(mailer.envelope)()
 
-        # Verify envelope properties
+        # Verify envelope properties. As of the "unify invitation flows to
+        # deep-link template" refactor the mailer renders the shared job
+        # invite template with a flattened context (no raw `invitation`
+        # object), so assert against that contract.
         assert envelope.subject == "You have been invited to a job"
-        assert envelope.template == "ambassadors.templates.emails.send_invitation_to_ambassador"
+        assert envelope.template == "jobs.templates.emails.ambassador_invited_to_job"
         assert envelope.to_emails == [invitation.email]
-        assert envelope.context["invitation"] == invitation
+        assert envelope.context["brand_name"] == self.tenant.name
+        assert envelope.context["recipient_first_name"] == "there"
+        assert envelope.context["deep_link"].startswith("spark://my-gigs/")
 
     @pytest.mark.asyncio
     async def test_send_invitation_mail_to_ambassador_mailer_template_renders(self):
@@ -379,11 +386,13 @@ class TestSendInvitationMailToAmbassadorMailer(AmbassadorsGraphQLTestCase):
         # Create the mailer
         mailer = SendInvitationMailToAmbassadorMailer(invitation)
 
-        # Get the envelope
-        envelope = mailer.envelope()
+        # Build the envelope and render it. envelope() runs ORM queries to
+        # assemble the invite context, so wrap the whole thing in
+        # sync_to_async (mirrors the other envelope tests).
+        def _render():
+            return mailer.envelope().render_template()
 
-        # Test that template renders without syntax errors
-        rendered_html = envelope.render_template()
+        rendered_html = await sync_to_async(_render)()
         assert rendered_html is not None
         assert len(rendered_html) > 0
         # Verify the template contains expected content
