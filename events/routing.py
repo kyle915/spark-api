@@ -236,3 +236,95 @@ def assign_rmm_for_request(request, tenant_slug: str) -> tuple[object | None, li
         request.rmm_asigned_id = user.id
         request.save(update_fields=["rmm_asigned_id", "updated_at"])
     return user, emails
+
+
+def _state_for_code(code: str | None):
+    """Look up the State row for a 2-letter code (case-insensitive).
+
+    Returns None when the code is empty or unknown to the State table."""
+    if not code:
+        return None
+    from events import models as event_models
+
+    return (
+        event_models.State.objects.filter(code__iexact=code).order_by("id").first()
+    )
+
+
+def compute_request_routing(request):
+    """READ-ONLY: determine the state + territory RMM this request *should*
+    have, without persisting anything.
+
+    This is the shared brain behind both the create-time hook and the
+    backfill's dry-run. It mirrors `assign_rmm_for_request`'s logic — the
+    tenant-level ``default_external_rmm`` override wins, otherwise the
+    per-state territory map (LD only today) — but writes nothing and sends
+    no email.
+
+    Returns ``(assigned_user_or_None, state_code_or_None, state_obj_or_None)``.
+    """
+    from tenants.models import Tenant, User
+
+    state_code = _state_code_from_request(request)
+    state_obj = _state_for_code(state_code) if state_code else None
+
+    assigned = None
+    if request.tenant_id:
+        tenant = (
+            Tenant.objects.filter(id=request.tenant_id)
+            .select_related("default_external_rmm")
+            .first()
+        )
+        if tenant:
+            if tenant.default_external_rmm_id and tenant.default_external_rmm:
+                # Tenant-wide override — every unrouted request goes here.
+                assigned = tenant.default_external_rmm
+            else:
+                slug = tenant.request_url_name or tenant.slug
+                emails = territory_emails_for_state(slug, state_code)
+                if emails:
+                    assigned = (
+                        User.objects.filter(
+                            email__iexact=emails[0], is_active=True
+                        ).first()
+                        or User.objects.filter(email__iexact=emails[0]).first()
+                    )
+    return assigned, state_code, state_obj
+
+
+def route_request_sync(request) -> tuple[object | None, str | None]:
+    """Synchronous, signal-free RMM routing + state stamping for ONE request.
+
+    Parity with the public-form `assign_rmm_for_request`, but for
+    INTERNALLY-created requests and the backfill: it stamps ``request.state``
+    from the address (so the Tracker "Market" column and the linked-sheet
+    "State" column populate) and assigns the territory RMM (so the row lands
+    in that RMM's filtered sheet view) — WITHOUT sending any territory email.
+
+    Only fills BLANKS — an already-set ``state``/``rmm_asigned`` is left
+    untouched, so it's idempotent and safe to re-run. Persists via a queryset
+    ``.update()`` so it does NOT fire the Request post_save signal; the caller
+    must re-sync the sheet exactly once (``upsert_request_row``) afterward.
+
+    Returns ``(assigned_user_or_None, resolved_state_code_or_None, changed)``
+    where ``changed`` is True iff a field was actually written (lets callers
+    skip a redundant sheet re-sync when nothing changed).
+    """
+    from django.utils import timezone
+    from events import models as event_models
+
+    assigned, state_code, state_obj = compute_request_routing(request)
+
+    updates: dict = {}
+    if not request.state_id and state_obj is not None:
+        request.state_id = state_obj.id
+        updates["state_id"] = state_obj.id
+    if not request.rmm_asigned_id and assigned is not None:
+        request.rmm_asigned_id = assigned.id
+        updates["rmm_asigned_id"] = assigned.id
+
+    if updates:
+        updates["updated_at"] = timezone.now()
+        event_models.Request.objects.filter(pk=request.pk).update(**updates)
+
+    return assigned, state_code, bool(updates)
