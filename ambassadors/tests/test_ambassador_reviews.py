@@ -8,6 +8,7 @@ This module tests:
 - ambassador_reviews query (authenticated users)
 - ambassador_review query (authenticated users)
 """
+import base64
 import pytest
 import strawberry_django  # noqa: F401
 import uuid
@@ -936,9 +937,13 @@ class TestAmbassadorReviewQueries(AmbassadorsGraphQLTestCase):
         edges = result.data["ambassadorReviews"]["edges"]
         assert len(edges) >= 3
 
-        # Verify reviews are ordered by created_at descending (newest first)
-        review_ids = [edge["node"]["id"] for edge in edges]
-        assert str(self.review3.id) == review_ids[0]  # Most recent
+        # Verify reviews are ordered by created_at descending (newest first).
+        # node.id is a Relay global ID (base64 "AmbassadorReviewType:<pk>").
+        review_ids = [
+            base64.b64decode(edge["node"]["id"]).decode("utf-8")
+            for edge in edges
+        ]
+        assert review_ids[0] == f"AmbassadorReviewType:{self.review3.id}"  # Most recent
 
     @pytest.mark.asyncio
     async def test_ambassador_reviews_filter_by_ambassador(self):
@@ -1112,7 +1117,9 @@ class TestAmbassadorReviewQueries(AmbassadorsGraphQLTestCase):
         assert result.errors is None
         assert result.data is not None
         assert result.data["ambassadorReview"] is not None
-        assert result.data["ambassadorReview"]["id"] == str(self.review1.id)
+        decoded_id = base64.b64decode(
+            result.data["ambassadorReview"]["id"]).decode("utf-8")
+        assert decoded_id == f"AmbassadorReviewType:{self.review1.id}"
         assert result.data["ambassadorReview"]["review"] == "Great ambassador!"
         assert result.data["ambassadorReview"]["score"] == 5
 

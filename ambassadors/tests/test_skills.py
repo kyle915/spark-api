@@ -12,6 +12,7 @@ This module tests:
 - ambassador_skills query (authenticated users)
 - ambassador_skill query (authenticated users)
 """
+import base64
 import pytest
 import strawberry_django  # noqa: F401
 import uuid
@@ -459,7 +460,9 @@ class TestSkillQueries(AmbassadorsGraphQLTestCase):
 
         assert result.errors is None
         assert result.data is not None
-        assert result.data["skill"]["id"] == str(self.skill1.id)
+        decoded_id = base64.b64decode(
+            result.data["skill"]["id"]).decode("utf-8")
+        assert decoded_id == f"SkillType:{self.skill1.id}"
         assert result.data["skill"]["name"] == "Python"
 
     @pytest.mark.asyncio
@@ -1037,7 +1040,9 @@ class TestAmbassadorSkillQueries(AmbassadorsGraphQLTestCase):
 
         assert result.errors is None
         assert result.data is not None
-        assert result.data["ambassadorSkill"]["id"] == str(self.ambassador_skill1.id)
+        decoded_id = base64.b64decode(
+            result.data["ambassadorSkill"]["id"]).decode("utf-8")
+        assert decoded_id == f"AmbassadorSkillType:{self.ambassador_skill1.id}"
         assert result.data["ambassadorSkill"]["ambassadorId"] == str(self.ambassador1.id)
         assert result.data["ambassadorSkill"]["skillId"] == str(self.skill1.id)
 
@@ -1106,8 +1111,11 @@ class TestAmbassadorSkillQueries(AmbassadorsGraphQLTestCase):
 
         assert result.errors is None
         assert result.data is not None
-        # Should only see ambassador skills from user's tenant.
-        assert result.data["ambassadorSkills"]["totalCount"] == 3
+        # AmbassadorSkill is no longer tenant-scoped (the tenant column was
+        # dropped — see migration 0016_remove_ambassadorskill_tenant), so the
+        # query returns every skill: the 3 created in setUp plus the 4th
+        # created above.
+        assert result.data["ambassadorSkills"]["totalCount"] == 4
 
     @pytest.mark.asyncio
     async def test_ambassador_skills_unauthorized(self):

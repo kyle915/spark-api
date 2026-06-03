@@ -278,9 +278,14 @@ class TestClientInviteAmbassadorsToJob(JobsGraphQLTestCase):
         result = await self._execute_mutation_authenticated(
             self.mutation, variables, self.client_user, self.endpoint_path)
 
-        assert result.errors is not None
-        assert any("Job not found or has no rate" in str(error)
-                   for error in result.errors)
+        # Business-validation failures are surfaced through the structured
+        # response (success=False + message), not as a raised GraphQLError —
+        # the resolver catches the GraphQLError and wraps it via
+        # build_mutation_response (jobs/mutations.py).
+        assert result.errors is None
+        payload = result.data["inviteAmbassadorsToJob"]
+        assert payload["success"] is False
+        assert "Job not found or has no rate" in payload["message"]
 
     @pytest.mark.asyncio
     async def test_invite_ambassadors_job_without_rate(self):
@@ -311,9 +316,13 @@ class TestClientInviteAmbassadorsToJob(JobsGraphQLTestCase):
         result = await self._execute_mutation_authenticated(
             self.mutation, variables, self.client_user, self.endpoint_path)
 
-        assert result.errors is not None
-        assert any("Job not found or has no rate" in str(error)
-                   for error in result.errors)
+        # A rate-less job is filtered out by the same job lookup, so it returns
+        # the structured "Job not found or has no rate." payload, not a raised
+        # GraphQLError.
+        assert result.errors is None
+        payload = result.data["inviteAmbassadorsToJob"]
+        assert payload["success"] is False
+        assert "Job not found or has no rate" in payload["message"]
 
     @pytest.mark.asyncio
     async def test_invite_ambassador_twice_same_job_fails(self):
@@ -335,10 +344,14 @@ class TestClientInviteAmbassadorsToJob(JobsGraphQLTestCase):
         second_result = await self._execute_mutation_authenticated(
             self.mutation, variables, self.client_user, self.endpoint_path
         )
-        assert second_result.errors is not None
-        assert any(
-            "already have an invitation for this job" in str(error).lower()
-            for error in second_result.errors
+        # A duplicate invitation is a business-validation failure → structured
+        # success=False + message, not a raised GraphQLError.
+        assert second_result.errors is None
+        second_payload = second_result.data["inviteAmbassadorsToJob"]
+        assert second_payload["success"] is False
+        assert (
+            "already have an invitation for this job"
+            in second_payload["message"].lower()
         )
 
     @pytest.mark.asyncio

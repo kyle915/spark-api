@@ -15,7 +15,17 @@ User = get_user_model()
 
 @pytest.fixture
 def user(db):
-    return User.objects.create_user(username="ba-push", email="ba-push@example.com")
+    # User.role is a non-nullable FK (Role, on_delete=RESTRICT), so a bare
+    # create_user() violates the NOT NULL constraint. Attach an ambassador
+    # Role (these are BA push tests).
+    from tenants.models import Role
+
+    role, _ = Role.objects.get_or_create(
+        slug=Role.AMBASSADOR_SLUG, defaults={"name": "Ambassador"}
+    )
+    return User.objects.create_user(
+        username="ba-push", email="ba-push@example.com", role=role
+    )
 
 
 @pytest.fixture
@@ -51,8 +61,10 @@ async def test_send_push_to_user_fans_out_per_device(user, devices):
     assert ok == 2
     fake_client.send.assert_awaited_once()
     sent = fake_client.send.await_args.args[0]
+    # Both devices get a message; send order isn't guaranteed, so compare
+    # the token sets rather than a positional list.
     tokens = sorted(m.to for m in sent)
-    assert tokens == [ios.token, android.token]
+    assert tokens == sorted([ios.token, android.token])
     # Android message carries the channel id; iOS doesn't.
     by_platform = {m.to: m for m in sent}
     assert by_platform[android.token].channel_id == "default"
