@@ -4,7 +4,7 @@ Earnings tab's shift count + hour estimate.
 """
 
 import pytest
-from datetime import datetime, time, timedelta, timezone as _tz
+from datetime import datetime, timedelta, timezone as _tz
 from asgiref.sync import sync_to_async
 from django.contrib.auth import get_user_model
 
@@ -32,12 +32,19 @@ class TestMyEarningsStats(AmbassadorsGraphQLTestCase):
 
     @staticmethod
     def _shift_at(days_ago: int, start_hour: int, end_hour: int):
-        """Helper: (date, start_time, end_time) for a shift `days_ago`."""
+        """Helper: (date, start_time, end_time) for a shift `days_ago`.
+
+        Event.start_time / Event.end_time are DateTimeField (not TimeField),
+        so they must be tz-aware datetimes, not bare ``time`` objects. We
+        anchor start/end to the shift's calendar day; the earnings resolver
+        only reads their clock components (.hour/.minute/.second) for the
+        hour estimate, so the date portion is incidental.
+        """
         d = datetime.now(_tz.utc) - timedelta(days=days_ago)
         return (
             d,
-            time(start_hour, 0),
-            time(end_hour, 0),
+            d.replace(hour=start_hour, minute=0, second=0, microsecond=0),
+            d.replace(hour=end_hour, minute=0, second=0, microsecond=0),
         )
 
     QUERY = """
@@ -205,14 +212,16 @@ class TestMyEarningsStats(AmbassadorsGraphQLTestCase):
         )
         ambassador = await sync_to_async(self.create_ambassador)(ba_user)
 
-        # 10 PM → 2 AM = 4 hours across midnight
+        # 10 PM → 2 AM = 4 hours across midnight. start_time/end_time are
+        # DateTimeField, so build tz-aware datetimes (the resolver reads only
+        # their clock components and rolls a negative delta over midnight).
         d = datetime.now(_tz.utc) - timedelta(days=2)
         ev = await sync_to_async(self.create_event)(
             name="Late shift",
             tenant=self.tenant,
             date=d,
-            start_time=time(22, 0),
-            end_time=time(2, 0),
+            start_time=d.replace(hour=22, minute=0, second=0, microsecond=0),
+            end_time=d.replace(hour=2, minute=0, second=0, microsecond=0),
         )
         await sync_to_async(AmbassadorEvent.objects.create)(
             ambassador=ambassador,
