@@ -556,12 +556,18 @@ class SparkUserMutations:
         )
         link = _build_magic_link(token, input.redirect)
         mobile_link = _build_magic_link_mobile(token)
+        # BAs (ambassadors) live in the mobile app — make the app deep-link
+        # the PRIMARY CTA for them so the big button opens the Spark app, not
+        # the admin web (which has no BA home). Admins/clients keep the web
+        # link primary.
+        is_ambassador = getattr(user, "role_id", None) == ROLE_ID.Ambassadors
 
         try:
             mailer = MagicLinkMailer(
                 user=user,
                 link=link,
                 mobile_link=mobile_link,
+                app_primary=is_ambassador,
                 expires_minutes=MAGIC_LINK_TTL_SECONDS // 60,
             )
             # send_async_now bypasses the django-rq queue (Redis isn't
@@ -854,8 +860,22 @@ class SparkUserMutations:
             settings, "ADMIN_FRONTEND_URL", "https://spark-new-admin.web.app",
         ).rstrip("/")
         link = f"{base}/magic/{token}"
+        # Also hand the mobile app deep-link so an invited BA can open the
+        # Spark app straight from the email instead of bouncing through the
+        # admin web. For BA (ambassador) recipients the app link is the
+        # PRIMARY CTA; admins/clients keep the web link primary. Keyed off the
+        # user's persisted role (an idempotent re-invite never overwrites an
+        # existing user's role, so this reflects who they actually are).
+        mobile_link = _build_magic_link_mobile(token)
+        is_ambassador = getattr(user, "role_id", None) == ROLE_ID.Ambassadors
         try:
-            mailer = MagicLinkMailer(user=user, link=link, expires_minutes=30)
+            mailer = MagicLinkMailer(
+                user=user,
+                link=link,
+                mobile_link=mobile_link,
+                app_primary=is_ambassador,
+                expires_minutes=30,
+            )
             await mailer.send_async_now()
         except Exception:
             logging.getLogger(__name__).exception(

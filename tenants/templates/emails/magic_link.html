@@ -75,7 +75,55 @@
               </td>
             </tr>
 
-            <!-- CTA -->
+            {% if app_primary %}
+            <!-- PRIMARY CTA — APP DEEP-LINK (ambassador / BA recipients).
+                 The recipient's role is known to be a BA at send time, and
+                 BAs live in the mobile app (there is no BA home on the admin
+                 web). So the big green button opens the Spark app directly
+                 via the spark:// deep-link (expo-linking catches it and signs
+                 them in). The web link drops to a small "no app? open in your
+                 browser" fallback below so nobody is stranded. -->
+            <tr>
+              <td class="pad" style="padding:28px 40px 12px 40px;">
+                <table role="presentation" cellspacing="0" cellpadding="0" border="0">
+                  <tr>
+                    <td bgcolor="#c5f546"
+                        style="border-radius:14px;
+                               box-shadow:0 0 0 1px rgba(10,13,9,0.06);">
+                      <a href="{{ mobile_link }}" class="cta"
+                         style="display:inline-block;
+                                padding:14px 26px;font-size:15px;font-weight:700;
+                                color:#0a0d09;text-decoration:none;
+                                font-family:Georgia,'Times New Roman',serif;
+                                letter-spacing:-0.01em;border-radius:14px;">
+                        📱 Open in the Spark app&nbsp;→
+                      </a>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+
+            <!-- Secondary / fallback — web browser link. -->
+            <tr>
+              <td class="pad" style="padding:0 40px 20px 40px;">
+                <p style="margin:0;font-size:13px;line-height:20px;color:#3b4034;">
+                  Don't have the app yet, or signing in on a computer?
+                  <a href="{{ link }}"
+                     style="color:#5fb8ef;text-decoration:underline;
+                            font-weight:600;">Open in your browser&nbsp;→</a>
+                </p>
+                <p style="margin:8px 0 0 0;font-size:12px;line-height:18px;
+                          word-break:break-all;">
+                  <a href="{{ link }}"
+                     style="color:#7a8074;text-decoration:underline;">{{ link }}</a>
+                </p>
+              </td>
+            </tr>
+            {% else %}
+            <!-- PRIMARY CTA — WEB LINK (admin / client recipients, or when
+                 no app deep-link is available). Lands on the admin web app
+                 where admins/clients do their work. -->
             <tr>
               <td class="pad" style="padding:28px 40px 12px 40px;">
                 <table role="presentation" cellspacing="0" cellpadding="0" border="0">
@@ -101,10 +149,9 @@
             <!-- Mobile app deep-link. Tap on a phone that has Spark BA
                  installed → app catches the spark:// URL via expo-linking
                  and signs the user in directly. Styled as a near-equal
-                 secondary CTA (not buried in body text) because most BAs
-                 read this email on their phone with the app installed,
-                 and the web button above lands them on the admin site —
-                 not where a BA wants to be. -->
+                 secondary CTA (not buried in body text). For BA recipients
+                 the caller flips app_primary so this becomes the big button
+                 instead — see the app_primary branch above. -->
             <tr>
               <td class="pad" style="padding:0 40px 24px 40px;">
                 <table role="presentation" cellspacing="0" cellpadding="0"
@@ -140,6 +187,7 @@
                 </p>
               </td>
             </tr>
+            {% endif %}
 
             <!-- Reassurance row -->
             <tr>
