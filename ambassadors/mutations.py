@@ -1097,6 +1097,12 @@ class AmbassadorMobileMutations:
                     ] if p
                 ) or None
                 update_fields.append("address")
+            # Best-effort lat/lng from the onboarding address autocomplete.
+            # Written only when provided; mirrors the admin update/upsert
+            # paths so Ambassador.coordinates feeds the nearby-gig push.
+            if input.coordinates is not None:
+                ambassador.coordinates = input.coordinates
+                update_fields.append("coordinates")
             if input.shirt_size is not None:
                 ambassador.t_shirt_size = input.shirt_size.strip() or None
                 update_fields.append("t_shirt_size")

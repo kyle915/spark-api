@@ -71,6 +71,13 @@ class UpdateBaProfileInput(SparkGraphQLInput):
     state: str | None = None
     zip: str | None = None
     shirt_size: str | None = None
+    # [latitude, longitude] for the BA's home/shipping address. Optional
+    # and best-effort: the mobile onboarding screen captures it from the
+    # keyless Photon address autocomplete when the BA picks a suggestion,
+    # and omits it otherwise. Populating Ambassador.coordinates is what
+    # lets the "new gig nearby" distance push reach app-onboarded BAs.
+    # None = leave the stored coordinates untouched.
+    coordinates: List[float] | None = None  # [latitude, longitude]
     # profile content
     bio: str | None = None
     about: str | None = None  # alias of bio
