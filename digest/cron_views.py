@@ -922,6 +922,183 @@ class RepairEventDatesView(View):
         )
 
 
+@method_decorator(csrf_exempt, name="dispatch")
+class SendActivationRemindersView(View):
+    """POST `/internal/cron/activation-reminders`.
+
+    Fires the `send_activation_reminders` command — pushes the per-shift
+    "your shift starts soon" activation reminder to every BA with an
+    approved shift starting in the next N minutes (once per shift, deduped
+    via AmbassadorEvent.activation_reminder_sent_at).
+
+    Replaces the dead django-rq scheduled reminder (no rqscheduler in prod).
+    Designed for a frequent GHA cron (every ~10 min). The push is sent
+    INLINE in the web process — no worker needed.
+
+    Body / query params (all optional):
+      - lead_minutes: int (default 25) — remind shifts starting within this
+        many minutes. Wider than the old 15-min lead so a */10 cron + GHA
+        jitter still catches every shift exactly once.
+      - dry_run: "1" / "true" / "yes" — log who would be reminded, send
+        nothing, stamp nothing.
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _bool(name: str, default: bool = False) -> bool:
+            raw = (request.GET.get(name) or request.POST.get(name) or "").lower()
+            if not raw:
+                return default
+            return raw in ("1", "true", "yes", "on")
+
+        def _int(name: str, default: int) -> int | None:
+            raw = request.GET.get(name) or request.POST.get(name)
+            if raw is None or raw == "":
+                return default
+            try:
+                return int(raw)
+            except ValueError:
+                return None
+
+        lead_minutes = _int("lead_minutes", 25)
+        if lead_minutes is None:
+            return JsonResponse(
+                {"ok": False, "error": "lead_minutes must be an integer"},
+                status=400,
+            )
+        dry_run = _bool("dry_run", default=False)
+
+        cmd_args: list[str] = ["--lead-minutes", str(lead_minutes)]
+        if dry_run:
+            cmd_args.append("--dry-run")
+
+        out = io.StringIO()
+        try:
+            call_command("send_activation_reminders", *cmd_args, stdout=out)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("Activation reminders cron failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "log": out.getvalue(),
+                },
+                status=500,
+            )
+
+        return JsonResponse(
+            {
+                "ok": True,
+                "lead_minutes": lead_minutes,
+                "dry_run": dry_run,
+                "log": out.getvalue(),
+            }
+        )
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        return JsonResponse({"ok": True, "endpoint": "activation-reminders"})
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class SendRecapNudgesView(View):
+    """POST `/internal/cron/recap-nudges`.
+
+    Fires the `send_recap_nudges` command — the single, timely per-shift
+    "don't forget your recap" nudge for every BA whose approved shift ended
+    a few hours ago with no recap on file (once per shift, deduped via
+    AmbassadorEvent.recap_nudge_sent_at).
+
+    Replaces the dead django-rq scheduled nudge (no rqscheduler in prod).
+    COMPLEMENTS the daily recap-reminders sweep — this is the timely
+    once-per-shift ping, the sweep is the escalating daily hammer; the
+    dedup stamp guarantees this fires at most once per shift. The push is
+    sent INLINE in the web process — no worker needed. Designed for an
+    hourly GHA cron.
+
+    Body / query params (all optional):
+      - grace_hours: int (default 1) — don't nudge until this many hours
+        after the shift ends.
+      - max_age_hours: int (default 24) — stop the timely nudge once a shift
+        is older than this (the daily sweep takes over).
+      - dry_run: "1" / "true" / "yes" — log who would be nudged, send
+        nothing, stamp nothing.
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _bool(name: str, default: bool = False) -> bool:
+            raw = (request.GET.get(name) or request.POST.get(name) or "").lower()
+            if not raw:
+                return default
+            return raw in ("1", "true", "yes", "on")
+
+        def _int(name: str, default: int) -> int | None:
+            raw = request.GET.get(name) or request.POST.get(name)
+            if raw is None or raw == "":
+                return default
+            try:
+                return int(raw)
+            except ValueError:
+                return None
+
+        grace_hours = _int("grace_hours", 1)
+        max_age_hours = _int("max_age_hours", 24)
+        if grace_hours is None or max_age_hours is None:
+            return JsonResponse(
+                {"ok": False, "error": "grace_hours/max_age_hours must be integers"},
+                status=400,
+            )
+        dry_run = _bool("dry_run", default=False)
+
+        cmd_args: list[str] = [
+            "--grace-hours", str(grace_hours),
+            "--max-age-hours", str(max_age_hours),
+        ]
+        if dry_run:
+            cmd_args.append("--dry-run")
+
+        out = io.StringIO()
+        try:
+            call_command("send_recap_nudges", *cmd_args, stdout=out)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("Recap nudges cron failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "log": out.getvalue(),
+                },
+                status=500,
+            )
+
+        return JsonResponse(
+            {
+                "ok": True,
+                "grace_hours": grace_hours,
+                "max_age_hours": max_age_hours,
+                "dry_run": dry_run,
+                "log": out.getvalue(),
+            }
+        )
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        return JsonResponse({"ok": True, "endpoint": "recap-nudges"})
+
+
 def _registered_views() -> dict[str, Any]:
     """Map URL path → view class. Lets `digest/urls.py` mount these
     without each one being re-exported explicitly.
@@ -931,6 +1108,8 @@ def _registered_views() -> dict[str, Any]:
         "send-executive-summary": SendExecutiveSummaryView,
         "send-new-gig-digest": SendNewGigDigestView,
         "send-recap-reminders": SendRecapRemindersView,
+        "activation-reminders": SendActivationRemindersView,
+        "recap-nudges": SendRecapNudgesView,
         "send-payment-notifications": SendPaymentNotificationsView,
         "send-document-expiry-reminders": SendDocumentExpiryRemindersView,
         "send-scheduled-client-reports": SendScheduledClientReportsView,

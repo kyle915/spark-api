@@ -1,0 +1,77 @@
+name: Recap nudges
+
+# Fires `/internal/cron/recap-nudges` on Cloud Run once an hour.
+# Pushes the single, timely per-shift "don't forget your recap" nudge to
+# every BA whose approved shift ended a few hours ago with no recap on
+# file (once per shift, deduped via AmbassadorEvent.recap_nudge_sent_at).
+# See recaps/management/commands/send_recap_nudges.py.
+#
+# Replaces the dead django-rq scheduled nudge (there is no rqscheduler in
+# prod). COMPLEMENTS the daily recap-reminders sweep (daily-recap-reminders.yml)
+# — this is the timely once-per-shift ping; that is the escalating daily
+# hammer for shifts still outstanding days later. The dedup stamp guarantees
+# this fires at most once per shift. The push is sent INLINE in the web
+# process — no worker needed.
+#
+# Secret-gated via `X-Cron-Secret` (shared INTERNAL_CRON_SECRET) — see the
+# daily-admin-digest workflow for the full setup notes.
+#
+# Schedule: top of every hour. The command nudges shifts whose end_time is
+# in [now-24h, now-1h]; the 1h grace lower-bound keeps us off someone who
+# just walked out, the 24h upper-bound hands long-overdue shifts to the
+# daily sweep.
+
+on:
+  schedule:
+    - cron: "0 * * * *"
+  workflow_dispatch:
+    inputs:
+      grace_hours:
+        description: "Don't nudge until this many hours after shift end"
+        required: false
+        default: "1"
+      max_age_hours:
+        description: "Stop the timely nudge once a shift is older than this"
+        required: false
+        default: "24"
+      dry_run:
+        description: "Log who would be nudged, but send nothing"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+jobs:
+  fire-recap-nudges:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire recap nudges cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/recap-nudges
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          GRACE_HOURS: ${{ github.event.inputs.grace_hours || '1' }}
+          MAX_AGE_HOURS: ${{ github.event.inputs.max_age_hours || '24' }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            echo "Generate one with: openssl rand -hex 32"
+            echo "Then set it as INTERNAL_CRON_SECRET in both the repo secrets"
+            echo "and the Cloud Run service env (must match)."
+            exit 1
+          fi
+
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL?grace_hours=$GRACE_HOURS&max_age_hours=$MAX_AGE_HOURS&dry_run=$DRY_RUN" \
+            -H "X-Cron-Secret: $CRON_SECRET")
+
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS — see body above."
+            exit 1
+          fi

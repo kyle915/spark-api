@@ -287,6 +287,16 @@ class AmbassadorEvent(models.Model):
         related_name="ambassadors_events_updated_by",
     )
 
+    # Cron dedup stamps. The "your shift starts soon" activation reminder
+    # and the "don't forget your recap" nudge are fired by wall-clock crons
+    # (events/management/commands/send_activation_reminders.py +
+    # send_recap_nudges.py, hit via /internal/cron/…), NOT by an RQ
+    # scheduler — there's no rqscheduler running in prod. Each cron stamps
+    # the matching field the first time it sends so a shift is reminded /
+    # nudged exactly once, no matter how often the cron runs.
+    activation_reminder_sent_at = models.DateTimeField(null=True, blank=True)
+    recap_nudge_sent_at = models.DateTimeField(null=True, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
     updated_at = models.DateTimeField(auto_now=True)
 
