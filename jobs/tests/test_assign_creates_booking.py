@@ -133,7 +133,12 @@ class TestAssignCreatesBooking(JobsGraphQLTestCase):
     async def test_assign_creates_approved_booking_and_shows_in_active_shifts(self):
         """A today-dated gig: assign creates is_approved=True booking and it
         surfaces in myActiveShifts for the booked BA."""
-        today = timezone.now().replace(hour=10, minute=0, second=0, microsecond=0)
+        # Use "now" as the start so the shift is unambiguously today in the
+        # event's local zone regardless of the UTC/local wall-clock offset at
+        # test time. (A fixed UTC hour like 10:00 can land on the *next* local
+        # day when the run happens after UTC midnight but before local
+        # midnight, which would correctly bucket it as Upcoming, not Active.)
+        today = timezone.now()
         event, job = await sync_to_async(self._make_job)(start_time=today)
 
         result = await self._assign(job, self.ambassador)
@@ -209,3 +214,89 @@ class TestAssignCreatesBooking(JobsGraphQLTestCase):
             )
         )()
         assert rows == [True], f"expected a single approved row, got {rows}"
+
+    @pytest.mark.asyncio
+    async def test_assign_with_declined_applicants_no_nameerror(self):
+        """Regression for the latent NameError in the declined-applicant
+        fan-out (jobs/mutations.py): ``ba_user_id`` was only bound inside the
+        accepted-BA push try-block. If that push raised before binding it, the
+        except swallowed the error but the later fan-out reference threw
+        NameError out of the resolver — AFTER the booking already committed — so
+        a successful accept surfaced as a failed mutation.
+
+        Here a second applicant is present (so the fan-out loop actually runs)
+        and we force the accepted-BA push to raise *before* ba_user_id binds.
+        The mutation must still succeed and the booking + status changes must
+        persist.
+        """
+        today = timezone.now()
+        event, job = await sync_to_async(self._make_job)(start_time=today)
+
+        # A second BA applies — this row gets auto-declined and drives the
+        # fan-out loop that referenced ba_user_id.
+        other_user = await sync_to_async(self.create_user)(
+            username=f"other_{uuid.uuid4().hex[:6]}@test.com",
+            email=f"other_{uuid.uuid4().hex[:6]}@test.com",
+            role=self.roles["ambassador"],
+            password="testpass123",
+        )
+        await sync_to_async(self.create_tenanted_user)(
+            user=other_user, tenant=self.tenant
+        )
+        other_amb = await sync_to_async(self.create_ambassador)(user=other_user)
+        applied_app = await sync_to_async(models.JobApplication.objects.create)(
+            job=job,
+            ambassador=other_amb,
+            tenant=self.tenant,
+            status=models.JobApplication.STATUS_APPLIED,
+        )
+
+        # Force the accepted-BA push *lookup* to raise BEFORE ba_user_id binds
+        # (the resolver does `_Ambassador.objects.values_list(...).get(pk=...)`
+        # then assigns ba_user_id). Patching values_list to raise reproduces
+        # the exact ordering of the latent bug: with it present the fan-out's
+        # later ba_user_id reference is unbound → NameError out of the resolver;
+        # with the fix (ba_user_id pre-bound to None) the resolver completes.
+        # The sync _assign() path resolves the Ambassador via .get(pk=...) (not
+        # values_list), so this patch only trips the push-block lookup.
+        variables = {
+            "input": {
+                "jobId": to_base64("Job", job.id),
+                "ambassadorId": to_base64("Ambassador", self.ambassador.id),
+            }
+        }
+        self.schema = self.schema_spark
+        with patch(
+            "ambassadors.models.Ambassador.objects.values_list",
+            side_effect=RuntimeError("push lookup boom"),
+        ), patch("ambassadors.push._send_push_to_user_sync"), patch(
+            "utils.mailer.Mailer.send"
+        ):
+            result = await self._execute_mutation_authenticated(
+                ASSIGN_MUTATION, variables, self.admin_user,
+                "/api/v1/graphql/spark",
+            )
+
+        assert result.errors is None, f"resolver raised (NameError?): {result.errors}"
+        assert result.data["assignAmbassadorToJob"]["success"] is True
+        assert result.data["assignAmbassadorToJob"]["lifecycleStatus"] == (
+            models.Job.STATUS_FILLED
+        )
+
+        # Booking committed and approved.
+        booking_ok = await sync_to_async(
+            lambda: AmbassadorEvent.objects.filter(
+                ambassador=self.ambassador, event=event, is_approved=True
+            ).exists()
+        )()
+        assert booking_ok is True
+
+        # Accepted + declined status changes persisted.
+        await sync_to_async(applied_app.refresh_from_db)()
+        assert applied_app.status == models.JobApplication.STATUS_DECLINED
+        accepted_status = await sync_to_async(
+            lambda: models.JobApplication.objects.get(
+                job=job, ambassador=self.ambassador
+            ).status
+        )()
+        assert accepted_status == models.JobApplication.STATUS_ACCEPTED
