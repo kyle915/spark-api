@@ -1097,6 +1097,95 @@ class BackfillAmbassadorCoordinatesView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class BackfillRequestRmmRoutingView(View):
+    """POST `/internal/cron/backfill-request-rmm-routing`.
+
+    Fires the `backfill_request_rmm_routing` command — assigns the territory
+    RMM (and stamps ``request.state``) for requests created WITHOUT routing
+    (the internally-created / "SCHEDULED" rows), so they show a Market in the
+    Master Tracker and land in the right RMM's linked-sheet view. Assignment
+    only — no territory email. See
+    events/management/commands/backfill_request_rmm_routing.py. Idempotent +
+    per-row savepointed.
+
+    Manual one-off (triggered from the GitHub Actions UI), reusing the same
+    `X-Cron-Secret` gating as the other backfills.
+
+    SAFE — DRY-RUN IS THE DEFAULT. A plain trigger NEVER writes and makes NO
+    Sheets calls; it runs with `dry_run=True` unless `execute=true` is passed.
+
+    Query/body params (all optional):
+      - execute: "1"/"true"/"yes" — perform the assignments + sheet re-syncs.
+        Default OFF → DRY-RUN (counts only).
+      - tenant: tenant slug or numeric id — restrict to one tenant. Default:
+        all routable tenants (territory-mapped or with a default RMM).
+      - limit: max requests to repair per invocation (default 100). Re-run
+        until the report says remaining=0.
+
+    The command's full stdout report is returned verbatim under `report`.
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _bool(name: str, default: bool = False) -> bool:
+            raw = (request.GET.get(name) or request.POST.get(name) or "").lower()
+            if not raw:
+                return default
+            return raw in ("1", "true", "yes", "on")
+
+        execute = _bool("execute", default=False)
+        tenant = request.GET.get("tenant") or request.POST.get("tenant") or None
+        limit_raw = request.GET.get("limit") or request.POST.get("limit")
+        limit = None
+        if limit_raw:
+            try:
+                limit = int(limit_raw)
+            except (TypeError, ValueError):
+                limit = None
+
+        cmd_kwargs: dict = {"execute": execute, "tenant": tenant}
+        if limit is not None:
+            cmd_kwargs["limit"] = limit
+
+        out = io.StringIO()
+        try:
+            call_command("backfill_request_rmm_routing", stdout=out, **cmd_kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface any error to caller
+            logger.exception("Backfill request RMM routing failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "exception": _concise_exc(exc),
+                    "executed": execute,
+                    "tenant": tenant,
+                    "report": out.getvalue(),
+                },
+                status=500,
+            )
+
+        return JsonResponse(
+            {
+                "executed": execute,
+                "tenant": tenant,
+                "report": out.getvalue(),
+            }
+        )
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        return JsonResponse(
+            {"ok": True, "endpoint": "backfill-request-rmm-routing"}
+        )
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class SendActivationRemindersView(View):
     """POST `/internal/cron/activation-reminders`.
 
@@ -1294,4 +1383,5 @@ def _registered_views() -> dict[str, Any]:
         "repair-event-dates": RepairEventDatesView,
         "backfill-event-coordinates": BackfillEventCoordinatesView,
         "backfill-ambassador-coordinates": BackfillAmbassadorCoordinatesView,
+        "backfill-request-rmm-routing": BackfillRequestRmmRoutingView,
     }

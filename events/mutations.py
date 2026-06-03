@@ -662,6 +662,42 @@ class EventMutations:
                 ).get
             )(id=event.id)
 
+            # Parity with the public-form path: stamp the state from the
+            # address + assign the territory RMM for INTERNALLY-created
+            # events too (the "SCHEDULED" rows), so they show a Market in
+            # the Tracker and land in the right RMM's linked-sheet view.
+            # Assignment only — no territory email (an admin created this).
+            # Best-effort: a routing miss must never fail event creation.
+            try:
+                from events.routing import route_request_sync
+                from utils.sheets_mirror import upsert_request_row
+
+                _assigned, _state_code, _routed = await sync_to_async(
+                    route_request_sync
+                )(request)
+                if _routed:
+                    # route_request_sync persists via .update() (no
+                    # post_save), so re-sync the sheet once with the final
+                    # state + RMM and refresh the request for the response.
+                    request = await sync_to_async(
+                        models.Request.objects.select_related(
+                            "tenant",
+                            "timezone",
+                            "request_type",
+                            "retailer__location__state",
+                            "distributor__location__state",
+                            "state",
+                            "rmm_asigned",
+                        ).get
+                    )(id=request.id)
+                    await sync_to_async(upsert_request_row)(request)
+            except Exception:
+                logger.warning(
+                    "internal RMM routing failed for request=%s",
+                    getattr(request, "id", None),
+                    exc_info=True,
+                )
+
             return build_mutation_response(
                 types.EventWithRequestDetailResponse,
                 success=True,

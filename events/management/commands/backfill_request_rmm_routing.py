@@ -1,0 +1,287 @@
+"""
+Backfill: assign the territory RMM (and stamp the state) for requests that
+were created WITHOUT routing — the "SCHEDULED" / internally-created events.
+
+Why this exists (and why it's NOT a migration):
+    RMM auto-routing (``events/routing.py:assign_rmm_for_request``) historically
+    only ran on the PUBLIC-FORM submission path (`/spark-form/:slug`). Requests
+    created INTERNALLY (the admin "create event with request" flow, bulk
+    uploads, the missing-event escape hatch) never called it, so they were
+    saved with ``rmm_asigned = NULL`` and often no structured ``state``. That
+    produced the two symptoms ops reported:
+
+      * the Master Tracker "Market" column is blank (Market is derived from
+        ``retailer.location.state`` OR ``request.state`` — neither was set,
+        even though the city/state sits in the address text), and
+      * the row never routes to a territory owner, so it's absent from that
+        RMM's filtered linked-sheet view ("visible in Spark, missing from my
+        sheet").
+
+    The forward fix (calling ``route_request_sync`` on the internal create
+    path) is handled in ``events/mutations.py:create_event_with_request``.
+    This command repairs the EXISTING backlog.
+
+    It is NOT a migration because the target rows are tenant data and the work
+    re-syncs the linked Google Sheet per row (a network round-trip); a one-shot
+    migration would run once at deploy across all environments, whereas this
+    can be previewed (dry-run, no writes/network), scoped per tenant, capped
+    per invocation, and re-run idempotently against prod separately or from
+    GitHub Actions. Mirrors the backfill_*/repair_* command family.
+
+How it fills each request (no Photon, no geocode — all from data we already
+have):
+    1. STATE — parsed from the request's address (``extract_state_code``) with
+       the same fallback chain the public form uses (address → request.state →
+       location.state → retailer.location.state). Stamped onto ``request.state``
+       when blank, so "Market" renders.
+    2. RMM — the territory owner for that state per the per-tenant map
+       (Liquid Death today), or the tenant's ``default_external_rmm`` override.
+       Assignment only — NO territory email is sent (an admin/import created
+       these; the public-form notify flow doesn't apply).
+
+    Persisted via ``route_request_sync`` (a queryset ``.update()``, so it does
+    NOT fire the Request post_save signal), then the linked Sheet row is
+    re-synced exactly once per changed row via ``upsert_request_row``.
+
+Count-only DRY-RUN:
+    Dry-run writes NOTHING and makes NO Sheets calls. It counts the candidates
+    and, for up to ``--limit`` of them, previews how many WOULD get an RMM /
+    a state. Returns fast.
+
+EXECUTE is CAPPED at ``--limit`` per invocation (default 100):
+    Each repaired row costs ~2 Google Sheets API calls (find + write), so the
+    cap keeps a single run well under the Sheets per-minute quota and the Cloud
+    Run timeout. The report says how many still REMAIN so the operator re-runs
+    until 0.
+
+Idempotent:
+    Only BLANK fields are filled — an already-set ``state``/``rmm_asigned`` is
+    left untouched, and the candidate queryset only selects ``rmm_asigned IS
+    NULL`` rows, so a second run only drains whatever's left. Each row is
+    savepointed so one failure doesn't poison the run.
+
+Flags:
+    --dry-run        Report counts only (no writes, no Sheets calls). DEFAULT: ON.
+    --execute        Actually assign + stamp + re-sync (turns OFF dry-run).
+    --tenant <x>     Scope to a single tenant (slug or numeric id). Default: all
+                     routable tenants (territory-mapped OR with a default RMM).
+    --limit <n>      Max requests to REPAIR per invocation. DEFAULT: 100.
+
+Usage:
+    python manage.py backfill_request_rmm_routing                       # DRY RUN
+    python manage.py backfill_request_rmm_routing --tenant liquid-death # dry run, one tenant
+    python manage.py backfill_request_rmm_routing --execute             # APPLY (cap 100)
+    python manage.py backfill_request_rmm_routing --execute --limit 200
+"""
+
+from __future__ import annotations
+
+import logging
+import traceback
+
+from django.core.management.base import BaseCommand, CommandError
+from django.db import transaction
+from django.db.models import Q
+
+from events.models import Request
+from events.routing import (
+    ROUTED_TENANT_SLUGS,
+    compute_request_routing,
+    route_request_sync,
+)
+from tenants.models import Tenant
+from utils.sheets_mirror import upsert_request_row
+
+logger = logging.getLogger(__name__)
+
+# Default cap on how many requests we REPAIR per invocation. Each repaired row
+# does ~2 Google Sheets API calls (find row + write), so this keeps a single
+# run under the Sheets per-minute quota and the Cloud Run 300s timeout. The
+# report says how many REMAIN so the operator re-runs until 0.
+DEFAULT_LIMIT = 100
+
+# select_related set used everywhere we touch a request, so routing + the sheet
+# upsert never trigger a sync-query in an unexpected place.
+_REQUEST_RELATIONS = (
+    "tenant",
+    "tenant__default_external_rmm",
+    "state",
+    "rmm_asigned",
+    "location__state",
+    "retailer__location__state",
+    "request_type",
+    "timezone",
+)
+
+
+def _format_exc(exc: BaseException) -> str:
+    """Concise, log-safe one-liner for a failed row (mirrors the geocode
+    backfill helper): exception type + message + the last traceback frame."""
+    type_name = type(exc).__name__
+    message = " ".join(str(exc).split())
+    if len(message) > 300:
+        message = message[:297] + "..."
+    frame = ""
+    tb = exc.__traceback__
+    if tb is not None:
+        last = traceback.extract_tb(tb)[-1]
+        filename = last.filename.split("/")[-1]
+        frame = f" [{filename}:{last.lineno} in {last.name}]"
+    return f"{type_name}: {message}{frame}"
+
+
+class Command(BaseCommand):
+    help = (
+        "Backfill rmm_asigned (and request.state) for requests created without "
+        "routing — the internally-created/SCHEDULED rows that show a blank "
+        "Market and never reach the right RMM's sheet view. Assignment only, no "
+        "email; re-syncs each changed row's linked Sheet. DRY-RUN by default "
+        "(counts only, no writes/Sheets calls) — pass --execute. Supports "
+        "--tenant and --limit (default 100)."
+    )
+
+    def add_arguments(self, parser):
+        parser.add_argument("--dry-run", action="store_true", default=True)
+        parser.add_argument("--execute", action="store_true", default=False)
+        parser.add_argument("--tenant", type=str, default=None)
+        parser.add_argument("--limit", type=int, default=None)
+
+    # ── candidate selection ────────────────────────────────────────────
+    def _candidates(self, tenant_arg: str | None):
+        """Requests with no RMM assigned, scoped to routable tenants.
+
+        Routable = the tenant's public-form slug is in the territory map, OR
+        the tenant has a ``default_external_rmm`` override. An explicit
+        --tenant scopes to just that tenant (and trusts the operator)."""
+        qs = Request.objects.filter(rmm_asigned__isnull=True)
+
+        if tenant_arg:
+            tenant = self._resolve_tenant(tenant_arg)
+            return qs.filter(tenant_id=tenant.id)
+
+        routable = (
+            Q(tenant__request_url_name__in=ROUTED_TENANT_SLUGS)
+            | Q(tenant__slug__in=ROUTED_TENANT_SLUGS)
+            | Q(tenant__default_external_rmm__isnull=False)
+        )
+        return qs.filter(routable)
+
+    def _resolve_tenant(self, tenant_arg: str) -> Tenant:
+        tenant = (
+            Tenant.objects.filter(slug=tenant_arg).first()
+            or Tenant.objects.filter(request_url_name=tenant_arg).first()
+        )
+        if tenant is None and tenant_arg.isdigit():
+            tenant = Tenant.objects.filter(id=int(tenant_arg)).first()
+        if tenant is None:
+            raise CommandError(f"No tenant matched '{tenant_arg}' (slug or id).")
+        return tenant
+
+    # ── entry point ────────────────────────────────────────────────────
+    def handle(self, *args, **opts):
+        execute = bool(opts.get("execute"))
+        dry_run = not execute
+        tenant_arg = opts.get("tenant")
+        limit = opts.get("limit") or DEFAULT_LIMIT
+
+        base_qs = self._candidates(tenant_arg).select_related(*_REQUEST_RELATIONS)
+        total = base_qs.count()
+
+        scope = f"tenant={tenant_arg}" if tenant_arg else "all routable tenants"
+        self.stdout.write(
+            f"Request RMM routing backfill — {scope}; "
+            f"{total} request(s) with no RMM assigned."
+        )
+
+        if dry_run:
+            return self._dry_run(base_qs, total, limit)
+        return self._execute(base_qs, total, limit)
+
+    # ── dry-run: counts only, no writes, no Sheets calls ───────────────
+    def _dry_run(self, base_qs, total: int, limit: int):
+        self.stdout.write(self.style.WARNING("DRY RUN — no writes, no Sheets calls."))
+        would_rmm = 0
+        would_state = 0
+        sampled = 0
+        for request in base_qs.order_by("id")[:limit]:
+            sampled += 1
+            assigned, _state_code, state_obj = compute_request_routing(request)
+            if assigned is not None:
+                would_rmm += 1
+            if not request.state_id and state_obj is not None:
+                would_state += 1
+
+        self.stdout.write(
+            f"Of the first {sampled} candidate(s) (limit={limit}): "
+            f"would assign an RMM to {would_rmm}, "
+            f"would stamp a state on {would_state}."
+        )
+        if total > sampled:
+            self.stdout.write(
+                f"{total - sampled} more candidate(s) beyond this preview — "
+                f"run --execute (repeatedly, cap {limit}) to drain them all."
+            )
+        self.stdout.write(
+            self.style.SUCCESS(
+                f"Would route up to {would_rmm} request(s) to an RMM. "
+                f"Re-run with --execute to apply."
+            )
+        )
+        self.stdout.write(
+            f"RESULT mode=dry-run candidates={total} sampled={sampled} "
+            f"would_rmm={would_rmm} would_state={would_state} limit={limit}"
+        )
+        return None
+
+    # ── execute: assign + stamp + re-sync, capped at limit ─────────────
+    def _execute(self, base_qs, total: int, limit: int):
+        assigned_n = 0
+        stated_n = 0
+        synced_n = 0
+        failed_n = 0
+        processed = 0
+
+        for request in base_qs.order_by("id")[:limit]:
+            processed += 1
+            try:
+                with transaction.atomic():
+                    had_state = bool(request.state_id)
+                    assigned, _state_code, changed = route_request_sync(request)
+                    if assigned is not None:
+                        assigned_n += 1
+                    if not had_state and request.state_id:
+                        stated_n += 1
+                if changed:
+                    # Re-fetch with fresh relations so the sheet row reflects
+                    # the new state + RMM, then sync once (route_request_sync
+                    # used .update(), so the post_save signal did NOT fire).
+                    fresh = (
+                        Request.objects.select_related(*_REQUEST_RELATIONS)
+                        .filter(pk=request.pk)
+                        .first()
+                    )
+                    if fresh is not None and upsert_request_row(fresh):
+                        synced_n += 1
+            except Exception as exc:  # noqa: BLE001 — best-effort per row
+                failed_n += 1
+                logger.warning(
+                    "RMM routing backfill failed for request=%s: %s",
+                    getattr(request, "id", None),
+                    _format_exc(exc),
+                )
+
+        remaining = max(0, total - assigned_n)
+        self.stdout.write(
+            self.style.SUCCESS(
+                f"Updated: {processed} request(s) processed "
+                f"(assigned RMM={assigned_n}, stamped state={stated_n}, "
+                f"sheet re-synced={synced_n}, failed={failed_n})."
+            )
+        )
+        self.stdout.write(f"Remaining (still need an RMM): {remaining}")
+        self.stdout.write(
+            f"RESULT mode=execute candidates={total} processed={processed} "
+            f"assigned={assigned_n} stated={stated_n} synced={synced_n} "
+            f"failed={failed_n} remaining={remaining} limit={limit}"
+        )
+        return None
