@@ -64,11 +64,67 @@ _APP_TZ_TO_IANA: dict[str, str] = {
 }
 
 
+# US state/territory → IANA zone, dominant zone per state. A best-effort
+# FALLBACK for when a request carries no TimeZone row but we do know the
+# state (from request.state, retailer.location.state, or parsed from the
+# address) — used so emails render the activation's LOCAL time instead of
+# raw UTC. Multi-zone states map to their dominant zone; AZ uses Phoenix
+# (no DST). Not authoritative scheduling data — just a display fallback.
+_US_STATE_TO_IANA: dict[str, str] = {
+    # Eastern
+    "CT": "America/New_York", "DE": "America/New_York", "FL": "America/New_York",
+    "GA": "America/New_York", "IN": "America/New_York", "ME": "America/New_York",
+    "MD": "America/New_York", "MA": "America/New_York", "MI": "America/New_York",
+    "NH": "America/New_York", "NJ": "America/New_York", "NY": "America/New_York",
+    "NC": "America/New_York", "OH": "America/New_York", "PA": "America/New_York",
+    "RI": "America/New_York", "SC": "America/New_York", "VT": "America/New_York",
+    "VA": "America/New_York", "WV": "America/New_York", "DC": "America/New_York",
+    # Central
+    "AL": "America/Chicago", "AR": "America/Chicago", "IL": "America/Chicago",
+    "IA": "America/Chicago", "KS": "America/Chicago", "KY": "America/Chicago",
+    "LA": "America/Chicago", "MN": "America/Chicago", "MS": "America/Chicago",
+    "MO": "America/Chicago", "NE": "America/Chicago", "ND": "America/Chicago",
+    "OK": "America/Chicago", "SD": "America/Chicago", "TN": "America/Chicago",
+    "TX": "America/Chicago", "WI": "America/Chicago",
+    # Mountain (AZ = Phoenix, no DST)
+    "AZ": "America/Phoenix", "CO": "America/Denver", "ID": "America/Denver",
+    "MT": "America/Denver", "NM": "America/Denver", "UT": "America/Denver",
+    "WY": "America/Denver",
+    # Pacific
+    "CA": "America/Los_Angeles", "NV": "America/Los_Angeles",
+    "OR": "America/Los_Angeles", "WA": "America/Los_Angeles",
+    # Non-contiguous
+    "AK": "America/Anchorage", "HI": "Pacific/Honolulu",
+}
+
+
 def _try_zone(name: str) -> Optional[ZoneInfo]:
     try:
         return ZoneInfo(name)
     except (ZoneInfoNotFoundError, ValueError, KeyError):
         return None
+
+
+def offset_minutes_for_state(
+    state_code: str | None, at: _dt.datetime | None = None
+) -> Optional[int]:
+    """DST-aware UTC offset (minutes) for a US state's dominant zone at `at`.
+
+    A display-only FALLBACK for rows with no TimeZone relation. Returns None
+    when the state is unknown so callers can fall through to their own
+    default (e.g. UTC) rather than guessing.
+    """
+    code = (state_code or "").strip().upper()
+    iana = _US_STATE_TO_IANA.get(code)
+    if not iana:
+        return None
+    zi = _try_zone(iana)
+    if zi is None:
+        return None
+    when = at or _dt.datetime.now(_dt.timezone.utc)
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=_dt.timezone.utc)
+    return int(zi.utcoffset(when).total_seconds() // 60)
 
 
 def resolve_zoneinfo(tz_row: Any | None) -> Optional[ZoneInfo]:
@@ -211,5 +267,6 @@ __all__ = [
     "fixed_offset_minutes",
     "naive_local_iso",
     "offset_minutes_for",
+    "offset_minutes_for_state",
     "resolve_zoneinfo",
 ]

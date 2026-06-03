@@ -67,6 +67,29 @@ def _admin_request_url(request: models.Request | None) -> str:
     return f"{base}/request/view/{request.uuid}"
 
 
+def _state_code_for_tz_fallback(obj) -> str | None:
+    """Best-effort 2-letter US state code for the no-TimeZone email fallback.
+
+    Tries, in order: the request/event's own ``state`` FK, the retailer's
+    location state, then parsing the address text (e.g. "...Encinitas CA
+    92024" → "CA"). Returns None when nothing resolves."""
+    from events.routing import extract_state_code
+
+    candidates = (
+        lambda: obj.state.code,
+        lambda: obj.retailer.location.state.code,
+        lambda: extract_state_code(getattr(obj, "address", None)),
+    )
+    for getter in candidates:
+        try:
+            code = getter()
+        except Exception:
+            continue
+        if code:
+            return str(code).strip().upper()
+    return None
+
+
 def _get_timezone_offset_minutes(obj) -> int:
     """Return effective timezone offset (minutes) for event/request, DST-aware.
 
@@ -81,7 +104,7 @@ def _get_timezone_offset_minutes(obj) -> int:
       2. Otherwise fall back to the static `TimeZone.offset` field, with
          the same hours-vs-minutes auto-detect used elsewhere.
     """
-    from utils.tz import offset_minutes_for
+    from utils.tz import offset_minutes_for, offset_minutes_for_state
 
     # Prefer attached relation
     tz_row = None
@@ -96,19 +119,28 @@ def _get_timezone_offset_minutes(obj) -> int:
                 tz_row = models.TimeZone.objects.filter(id=tz_id).first()
             except Exception:
                 tz_row = None
-    if tz_row is None:
-        return 0
-
     # Pick the most relevant datetime for the DST lookup — events have
     # `start_time` (most precise), requests have `start_time` too, both
     # have `date` as a fallback. If none are set, fall through to "now"
-    # inside `offset_minutes_for`, which is fine because the row's
-    # IANA mapping is what matters; the exact wall-clock only matters
-    # near a DST transition.
+    # inside the offset helpers; the IANA mapping is what matters, the
+    # exact wall-clock only matters near a DST transition.
     when = (
         getattr(obj, "start_time", None)
         or getattr(obj, "date", None)
     )
+
+    if tz_row is None:
+        # No TimeZone relation — fall back to the activation's STATE so the
+        # email renders LOCAL time, not raw UTC (an Encinitas request with
+        # no tz row was showing its UTC time). State comes from the request
+        # FK, the retailer location, or the address text.
+        state_code = _state_code_for_tz_fallback(obj)
+        if state_code:
+            state_off = offset_minutes_for_state(state_code, at=when)
+            if state_off is not None:
+                return state_off
+        return 0
+
     return offset_minutes_for(tz_row, at=when)
 
 
