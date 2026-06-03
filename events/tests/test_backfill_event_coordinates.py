@@ -111,7 +111,7 @@ class TestBackfillEventCoordinates(EventsGraphQLTestCase):
         assert ev.coordinates == [40.758, -73.985]
         report = out.getvalue()
         assert "Updated: 1 event(s)" in report
-        assert "from request=1" in report
+        assert "copied=1" in report
 
     def test_request_zero_island_coords_are_not_copied_falls_back_to_geocode(self):
         # [0,0] on the request is the null-island sentinel — NOT usable, so the
@@ -188,15 +188,53 @@ class TestBackfillEventCoordinates(EventsGraphQLTestCase):
         assert ev.coordinates == []  # untouched
         report = out.getvalue()
         assert "DRY RUN" in report
-        assert "Would update: 1 event(s)" in report
+        assert "Would fill 1 event(s)" in report
+        assert "by request-copy=1" in report
 
-    def test_dry_run_does_not_sleep_even_on_geocode_path(self):
+    def test_dry_run_is_count_only_never_geocodes_or_sleeps(self):
+        # Even when a candidate would need a geocode, dry-run is COUNT-ONLY:
+        # it must not hit the network (photon) or sleep. This is the fix for
+        # the 504 — dry-run used to geocode the whole backlog inline.
         self._make_event(coordinates=[], request_coordinates=[])
         out = StringIO()
-        with patch(GEOCODE_PATH, return_value=[1.0, 2.0]), patch(SLEEP_PATH) as mock_sleep:
+        with patch(GEOCODE_PATH, return_value=[1.0, 2.0]) as mock_geo, \
+                patch(SLEEP_PATH) as mock_sleep:
             call_command("backfill_event_coordinates", stdout=out)  # dry-run
+            mock_geo.assert_not_called()
             mock_sleep.assert_not_called()
-        assert "Would update: 1 event(s)" in out.getvalue()
+        report = out.getvalue()
+        assert "Would fill 1 event(s)" in report
+        assert "by geocode=1" in report
+
+    def test_execute_caps_geocode_at_limit_and_reports_remaining(self):
+        # 3 events all need a geocode (no request coords). --limit 2 geocodes
+        # only 2 this run and reports 1 remaining; a second run drains it
+        # (idempotent). This keeps a single request under the Cloud Run timeout.
+        for _ in range(3):
+            self._make_event(coordinates=[], request_coordinates=[])
+        out1 = StringIO()
+        with patch(GEOCODE_PATH, return_value=[34.05, -118.24]), patch(SLEEP_PATH):
+            call_command(
+                "backfill_event_coordinates", execute=True, limit=2, stdout=out1
+            )
+        r1 = out1.getvalue()
+        assert "geocoded=2" in r1
+        assert "Remaining (still need geocode): 1" in r1
+        assert event_models.Event.objects.filter(
+            coordinates=[34.05, -118.24]
+        ).count() == 2
+
+        out2 = StringIO()
+        with patch(GEOCODE_PATH, return_value=[34.05, -118.24]), patch(SLEEP_PATH):
+            call_command(
+                "backfill_event_coordinates", execute=True, limit=2, stdout=out2
+            )
+        r2 = out2.getvalue()
+        assert "geocoded=1" in r2
+        assert "Remaining (still need geocode): 0" in r2
+        assert event_models.Event.objects.filter(
+            coordinates=[34.05, -118.24]
+        ).count() == 3
 
     # ─── --tenant scoping ────────────────────────────────────────────
 

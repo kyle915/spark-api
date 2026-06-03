@@ -64,6 +64,11 @@ logger = logging.getLogger(__name__)
 
 GEOCODE_SLEEP_SECONDS = 1.0
 
+# Default cap on how many addresses we GEOCODE per invocation. Keeps a single
+# request under the Cloud Run 300s timeout (~limit seconds of sleeps + per-call
+# timeout + overhead). Re-run --execute until 'remaining' hits 0.
+DEFAULT_GEOCODE_LIMIT = 40
+
 
 def _format_exc(exc: BaseException) -> str:
     """Concise, log-safe one-liner for a failed row. Mirrors repair_event_dates."""
@@ -115,6 +120,15 @@ class Command(BaseCommand):
                 "by slug or numeric id. Default: all ambassadors."
             ),
         )
+        parser.add_argument(
+            "--limit",
+            type=int,
+            default=DEFAULT_GEOCODE_LIMIT,
+            help=(
+                "Max addresses to GEOCODE per invocation. "
+                f"Default: {DEFAULT_GEOCODE_LIMIT}. Re-run until 'remaining' is 0."
+            ),
+        )
 
     # ─── Entry point ────────────────────────────────────────────────
 
@@ -122,6 +136,9 @@ class Command(BaseCommand):
         execute: bool = opts["execute"]
         dry_run: bool = not execute
         tenant_arg: str | None = opts["tenant"]
+        limit: int = opts.get("limit") or DEFAULT_GEOCODE_LIMIT
+        if limit < 0:
+            raise CommandError("--limit must be >= 0")
 
         tenant = self._resolve_tenant(tenant_arg)
 
@@ -132,7 +149,13 @@ class Command(BaseCommand):
             f"\nBackfill Ambassador.coordinates ({scope})"
         ))
         if dry_run:
-            self.stdout.write(self.style.NOTICE("DRY RUN — no DB writes.\n"))
+            self.stdout.write(self.style.NOTICE(
+                "DRY RUN — counts only, NO network, NO DB writes.\n"
+            ))
+        else:
+            self.stdout.write(self.style.NOTICE(
+                f"EXECUTE — geocodes at most {limit} ambassador(s) this run.\n"
+            ))
 
         candidates = self._candidates(tenant)
         self.stdout.write(self.style.HTTP_INFO(
@@ -140,67 +163,86 @@ class Command(BaseCommand):
             "(empty coordinates + an address)"
         ))
 
-        updated = 0
         geocoded = 0
         failed = 0
+        remaining = 0
         errors: list[dict] = []
 
-        for amb in candidates:
-            address = (getattr(amb, "address", None) or "").strip()
-            if not address:
-                # The queryset requires a non-empty address, but stay defensive.
-                failed += 1
-                errors.append({"ambassador_id": amb.id, "error": "no address"})
-                continue
-
-            if not dry_run:
-                time.sleep(GEOCODE_SLEEP_SECONDS)
-            coords = photon_geocode(address)
-            if coords is None:
-                failed += 1
-                errors.append(
-                    {"ambassador_id": amb.id, "error": f"geocode miss for {address!r}"}
-                )
-                self.stdout.write(self.style.WARNING(
-                    f"    ? skip ambassador id={amb.id}: geocode returned "
-                    f"nothing for {address!r}"
-                ))
-                continue
-
-            if dry_run:
-                updated += 1
-                geocoded += 1
+        if dry_run:
+            # COUNT ONLY — never touch the network, never write.
+            for amb in candidates:
                 self.stdout.write(
-                    f"    ~ would set coordinates={coords} on ambassador "
-                    f"id={amb.id} (uuid={getattr(amb, 'uuid', None)})"
+                    f"    ~ would geocode ambassador id={amb.id} "
+                    f"(uuid={getattr(amb, 'uuid', None)}, address={amb.address!r})"
                 )
-                continue
-
-            error = self._save_coords(amb, coords)
-            if error is None:
-                updated += 1
-                geocoded += 1
-                self.stdout.write(self.style.SUCCESS(
-                    f"    ✓ set coordinates={coords} on ambassador id={amb.id}"
-                ))
-            else:
-                failed += 1
-                errors.append({"ambassador_id": amb.id, "error": error})
-                self.stdout.write(self.style.ERROR(
-                    f"    ! failed ambassador id={amb.id}: {error}"
-                ))
+            remaining = len(candidates)
+        else:
+            budget = limit
+            for amb in candidates:
+                if budget <= 0:
+                    # Cap hit — count this (and the rest) as still-remaining.
+                    remaining += 1
+                    continue
+                address = (getattr(amb, "address", None) or "").strip()
+                if not address:
+                    # The queryset requires an address, but stay defensive.
+                    failed += 1
+                    errors.append({"ambassador_id": amb.id, "error": "no address"})
+                    continue
+                # Consume a unit of budget BEFORE the network call.
+                budget -= 1
+                time.sleep(GEOCODE_SLEEP_SECONDS)
+                coords = photon_geocode(address)
+                if coords is None:
+                    failed += 1
+                    errors.append(
+                        {"ambassador_id": amb.id, "error": f"geocode miss for {address!r}"}
+                    )
+                    self.stdout.write(self.style.WARNING(
+                        f"    ? skip ambassador id={amb.id}: geocode returned "
+                        f"nothing for {address!r}"
+                    ))
+                    continue
+                error = self._save_coords(amb, coords)
+                if error is None:
+                    geocoded += 1
+                    self.stdout.write(self.style.SUCCESS(
+                        f"    ✓ set coordinates={coords} on ambassador id={amb.id}"
+                    ))
+                else:
+                    failed += 1
+                    errors.append({"ambassador_id": amb.id, "error": error})
+                    self.stdout.write(self.style.ERROR(
+                        f"    ! failed ambassador id={amb.id}: {error}"
+                    ))
 
         # ─── Summary ────────────────────────────────────────────────
-        verb = "Would update" if dry_run else "Updated"
         self.stdout.write(self.style.MIGRATE_HEADING("\nSummary"))
         self.stdout.write(f"  Scope:                      {scope}")
         self.stdout.write(
             f"  Candidate ambassadors (empty coords + address): "
             f"{len(candidates)}"
         )
-        self.stdout.write(self.style.SUCCESS(
-            f"  {verb}: {updated} ambassador(s) (geocoded={geocoded})"
-        ))
+        if dry_run:
+            self.stdout.write(self.style.SUCCESS(
+                f"  Would geocode {len(candidates)} ambassador(s)"
+            ))
+            self.stdout.write(
+                f"  Geocode batches needed at limit={limit}: "
+                f"{self._batches(len(candidates), limit)}"
+            )
+        else:
+            self.stdout.write(self.style.SUCCESS(
+                f"  Updated: {geocoded} ambassador(s) (geocoded={geocoded})"
+            ))
+            remaining_style = (
+                self.style.WARNING if remaining else self.style.SUCCESS
+            )
+            self.stdout.write(remaining_style(
+                f"  Remaining (still need geocode): {remaining}"
+                + (" — re-run --execute to drain the next batch"
+                   if remaining else " — backlog drained")
+            ))
         if failed:
             self.stdout.write(self.style.WARNING(
                 f"  Skipped/failed (geocode miss / no address): {failed} "
@@ -211,11 +253,33 @@ class Command(BaseCommand):
                     f"    - ambassador id={err['ambassador_id']}: {err['error']}"
                 ))
 
-        if not dry_run and updated:
-            logger.info(
-                "backfill_ambassador_coordinates: updated=%s failed=%s scope=%s",
-                updated, failed, scope,
+        # MACHINE-READABLE one-liner so the cron endpoint / operator can parse
+        # the outcome without scraping prose.
+        self.stdout.write(
+            "\nRESULT "
+            + (
+                f"mode=dry_run candidates={len(candidates)} limit={limit} "
+                f"batches={self._batches(len(candidates), limit)}"
+                if dry_run else
+                f"mode=execute candidates={len(candidates)} geocoded={geocoded} "
+                f"remaining={remaining} failed={failed} limit={limit}"
             )
+        )
+
+        if not dry_run and geocoded:
+            logger.info(
+                "backfill_ambassador_coordinates: geocoded=%s remaining=%s "
+                "failed=%s scope=%s limit=%s",
+                geocoded, remaining, failed, scope, limit,
+            )
+
+    @staticmethod
+    def _batches(count: int, limit: int) -> int:
+        """How many --execute runs of size `limit` it takes to drain `count`
+        geocodes. limit=0 → 0 batches (no geocoding this run)."""
+        if count <= 0 or limit <= 0:
+            return 0
+        return (count + limit - 1) // limit
 
     # ─── Candidate selection ────────────────────────────────────────
 
