@@ -253,75 +253,14 @@ def schedule_push_at(
         )
 
 
-def _send_recap_nudge_if_unfiled(
-    user_id: int,
-    ambassador_id: int,
-    event_id: int,
-    *,
-    title: str,
-    body: str,
-    data: dict[str, Any] | None = None,
-) -> None:
-    """Recap-nudge worker entry point.
-
-    Runs at event end + N hours. Short-circuits if the BA already filed
-    a recap for this event — we don't want to nag people who did the
-    thing.
-    """
-    from recaps.models import Recap  # local import to avoid app-loading order issues
-
-    already_filed = Recap.objects.filter(
-        event_id=event_id,
-        ambassador_id=ambassador_id,
-        submited_at__isnull=False,
-    ).exists()
-    if already_filed:
-        logger.info(
-            "recap nudge skipped — already filed event_id=%s ambassador_id=%s",
-            event_id, ambassador_id,
-        )
-        return
-    _send_push_to_user_sync(user_id, title=title, body=body, data=data)
-
-
-def schedule_recap_nudge_at(
-    eta: datetime.datetime,
-    user_id: int,
-    ambassador_id: int,
-    event_id: int,
-    *,
-    title: str,
-    body: str,
-    data: dict[str, Any] | None = None,
-) -> None:
-    """Like ``schedule_push_at``, but checks the recap state at fire time."""
-    now = timezone.now()
-    if eta <= now + datetime.timedelta(seconds=5):
-        # Past-due: fire the recap-check inline.
-        try:
-            _send_recap_nudge_if_unfiled(
-                user_id, ambassador_id, event_id, title=title, body=body, data=data,
-            )
-        except Exception:
-            logger.exception("inline recap nudge failed event_id=%s", event_id)
-        return
-
-    try:
-        import django_rq
-
-        scheduler = django_rq.get_scheduler("default")
-        scheduler.enqueue_at(
-            eta,
-            _send_recap_nudge_if_unfiled,
-            user_id,
-            ambassador_id,
-            event_id,
-            title=title,
-            body=body,
-            data=data,
-        )
-    except Exception as exc:
-        logger.warning(
-            "recap nudge scheduler unreachable (%s); dropping eta=%s event_id=%s",
-            exc, eta.isoformat(), event_id,
-        )
+# NOTE: the recap-nudge scheduler (schedule_recap_nudge_at /
+# _send_recap_nudge_if_unfiled) used to live here, scheduling a per-shift
+# "don't forget your recap" push via django-rq at event end + N hours. It
+# never fired — there is no rqscheduler in prod — so it was removed. The
+# recap nudge is now a wall-clock cron that sends inline (no worker):
+# recaps/management/commands/send_recap_nudges.py, hit via
+# /internal/cron/recap-nudges. Likewise the activation reminder is now
+# send_activation_reminders.py → /internal/cron/activation-reminders.
+# `schedule_push_at` above is still used (the pre-shift checklist), and
+# `enqueue_push` (immediate sends, with inline fallback) is the live path
+# for shift offers and the other event-driven pushes.

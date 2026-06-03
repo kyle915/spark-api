@@ -1,0 +1,69 @@
+name: Activation reminders
+
+# Fires `/internal/cron/activation-reminders` on Cloud Run every ~10 min.
+# Pushes the per-shift "your shift starts soon" reminder to every BA with
+# an approved shift starting in the next ~25 min (once per shift, deduped
+# via AmbassadorEvent.activation_reminder_sent_at). See
+# events/management/commands/send_activation_reminders.py.
+#
+# Replaces the dead django-rq scheduled reminder (there is no rqscheduler
+# in prod). The push is sent INLINE in the web process — no worker needed.
+#
+# Secret-gated via `X-Cron-Secret` (shared INTERNAL_CRON_SECRET, set on
+# both the Cloud Run service env and the GitHub repo secret) — see the
+# daily-admin-digest workflow for the full setup notes.
+#
+# Schedule: every 10 minutes. The command's 25-min look-ahead window is
+# wider than the 10-min cadence on purpose, so a shift never slips between
+# two runs even with GitHub Actions' on-the-hour cron jitter; the dedup
+# stamp keeps it to a single ping per shift.
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+    inputs:
+      lead_minutes:
+        description: "Remind shifts starting within this many minutes"
+        required: false
+        default: "25"
+      dry_run:
+        description: "Log who would be reminded, but send nothing"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+jobs:
+  fire-activation-reminders:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire activation reminders cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/activation-reminders
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          LEAD_MINUTES: ${{ github.event.inputs.lead_minutes || '25' }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            echo "Generate one with: openssl rand -hex 32"
+            echo "Then set it as INTERNAL_CRON_SECRET in both the repo secrets"
+            echo "and the Cloud Run service env (must match)."
+            exit 1
+          fi
+
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL?lead_minutes=$LEAD_MINUTES&dry_run=$DRY_RUN" \
+            -H "X-Cron-Secret: $CRON_SECRET")
+
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS — see body above."
+            exit 1
+          fi
