@@ -1186,6 +1186,73 @@ class BackfillRequestRmmRoutingView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class RepairRequestActivationTimeView(View):
+    """POST `/internal/cron/repair-request-activation-time`.
+
+    Fixes ONE request's mis-captured activation time (e.g. an AM/PM mix-up
+    stored as 3:00 AM instead of 3:00 PM) by setting its LOCAL start/end and
+    storing the correct UTC. See
+    events/management/commands/repair_request_activation_time.py.
+
+    DRY-RUN IS THE DEFAULT — a plain trigger writes nothing. Required query
+    params: `request` (id), `start_local` + `end_local` (24h HH:MM). Pass
+    `execute=true` to apply. X-Cron-Secret gated like the other ops endpoints.
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _q(name: str) -> str | None:
+            return request.GET.get(name) or request.POST.get(name) or None
+
+        execute = (_q("execute") or "").lower() in ("1", "true", "yes", "on")
+        req_id = _q("request")
+        start_local = _q("start_local")
+        end_local = _q("end_local")
+        if not (req_id and start_local and end_local):
+            return JsonResponse(
+                {"ok": False, "error": "request, start_local and end_local are required."},
+                status=400,
+            )
+
+        out = io.StringIO()
+        try:
+            call_command(
+                "repair_request_activation_time",
+                request=int(req_id),
+                start_local=start_local,
+                end_local=end_local,
+                execute=execute,
+                stdout=out,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Repair request activation time failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "exception": _concise_exc(exc),
+                    "executed": execute,
+                    "report": out.getvalue(),
+                },
+                status=500,
+            )
+
+        return JsonResponse({"executed": execute, "report": out.getvalue()})
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        return JsonResponse(
+            {"ok": True, "endpoint": "repair-request-activation-time"}
+        )
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class SendActivationRemindersView(View):
     """POST `/internal/cron/activation-reminders`.
 
@@ -1384,4 +1451,5 @@ def _registered_views() -> dict[str, Any]:
         "backfill-event-coordinates": BackfillEventCoordinatesView,
         "backfill-ambassador-coordinates": BackfillAmbassadorCoordinatesView,
         "backfill-request-rmm-routing": BackfillRequestRmmRoutingView,
+        "repair-request-activation-time": RepairRequestActivationTimeView,
     }
