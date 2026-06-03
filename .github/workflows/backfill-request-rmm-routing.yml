@@ -1,0 +1,95 @@
+name: Backfill Request RMM routing (assign RMM + stamp state)
+
+# Manually fires `/internal/cron/backfill-request-rmm-routing` on Cloud Run to
+# run the `backfill_request_rmm_routing` command — assigns the territory RMM
+# (and stamps `request.state` from the address) for requests created WITHOUT
+# routing (the internally-created / "SCHEDULED" rows). That fixes both
+# reported symptoms: the Master Tracker "Market" column is blank for those
+# rows, and they never reach the right RMM's linked-sheet view ("visible in
+# Spark, missing from my sheet"). Assignment only — no territory email.
+#
+# IMPORTANT: run this AFTER the code is deployed — it repairs the existing
+# backlog. The endpoint must exist in the running service.
+#
+# This is a MANUAL one-off, NOT a recurring cron — so there is deliberately no
+# `schedule:` trigger, only `workflow_dispatch`. Run it from the Actions tab.
+#
+# SAFE — DRY-RUN IS THE DEFAULT. The `dry_run` input defaults to true, which
+# sends `execute=false`, so the backfill runs in DRY-RUN with NO DB writes and
+# NO Google Sheets calls, and the endpoint returns the count report. To
+# actually assign + re-sync, re-run with dry_run=false (→ execute=true). The
+# endpoint NEVER writes unless execute=true is passed. EXECUTE is capped at
+# `limit` requests per run — re-run until the report says remaining=0.
+#
+# Secret-gated via X-Cron-Secret (shared INTERNAL_CRON_SECRET) — same setup as
+# the other backfill workflows. The secret is sent as a HEADER, never the URL.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (no writes, no Sheets calls). Leave true to preview the counts; set false to apply."
+        required: true
+        default: true
+        type: boolean
+      tenant:
+        description: "Restrict to a single tenant (slug or numeric id). Empty = all routable tenants."
+        required: false
+        default: ""
+        type: string
+      limit:
+        description: "Max requests to repair per run (EXECUTE only). Re-run until remaining=0."
+        required: false
+        default: "100"
+        type: string
+
+jobs:
+  fire-backfill-request-rmm-routing:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire backfill-request-rmm-routing cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/backfill-request-rmm-routing
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+          TENANT: ${{ github.event.inputs.tenant || '' }}
+          LIMIT: ${{ github.event.inputs.limit || '100' }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+
+          # execute is the inverse of dry_run: dry_run=true -> execute=false
+          # (preview, no writes); dry_run=false -> execute=true (apply).
+          if [ "$DRY_RUN" = "false" ]; then
+            EXECUTE="true"
+          else
+            EXECUTE="false"
+          fi
+          echo "dry_run=$DRY_RUN -> execute=$EXECUTE (writes only when execute=true); limit=$LIMIT"
+
+          QS="execute=$EXECUTE&limit=$LIMIT"
+          if [ -n "$TENANT" ]; then
+            QS="$QS&tenant=$TENANT"
+          fi
+
+          # Secret travels in the X-Cron-Secret HEADER (never in the URL).
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL?$QS" \
+            -H "X-Cron-Secret: $CRON_SECRET")
+          echo "HTTP $STATUS"
+
+          # Print the command's report (incl. the machine-readable RESULT
+          # line) plainly so the operator reads it right here. jq-extract the
+          # `report` field rather than cat-ing raw JSON, which `gh run view
+          # --log` doesn't always surface.
+          echo "----- backfill report -----"
+          jq -r '.report // .detail // "(no report in response)"' /tmp/cron-response.json || cat /tmp/cron-response.json
+          echo "---------------------------"
+
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS — see report above."
+            exit 1
+          fi
