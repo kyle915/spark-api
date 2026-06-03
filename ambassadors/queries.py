@@ -98,6 +98,77 @@ def _shift_time_labels(event) -> tuple[str | None, str | None, str | None]:
     return date_label, start_label, end_label
 
 
+# Fallback IANA zone for events that have no resolvable timezone row. The
+# business is US-marketing-led and the create flow defaults venues to a US
+# zone; Pacific is the most conservative choice for "is this shift today?"
+# because it's the latest US local clock (an event with no tz that's stored
+# at e.g. 2026-06-03T02:00:00Z is still "Jun 2" in Pacific, matching how the
+# BA who booked it thinks about it). Mirrors utils.tz / events.queries which
+# both treat a missing offset as a soft fallback rather than crashing.
+_DEFAULT_SHIFT_TZ = "America/Los_Angeles"
+
+
+def _resolve_shift_zone(event):
+    """ZoneInfo for an event: its own `timezone` row, else `_DEFAULT_SHIFT_TZ`.
+
+    Resolves through `utils.tz.resolve_zoneinfo` (DST-aware IANA lookup with
+    the static `offset` field as a fallback) — the same resolution
+    `_shift_time_labels` uses to format the shift. Never raises; UTC is the
+    last-ditch fallback if tzdata is somehow unavailable.
+    """
+    from datetime import timezone as _dt_timezone
+    from zoneinfo import ZoneInfo
+    from utils.tz import resolve_zoneinfo
+
+    zi = resolve_zoneinfo(getattr(event, "timezone", None))
+    if zi is not None:
+        return zi
+    try:
+        return ZoneInfo(_DEFAULT_SHIFT_TZ)
+    except Exception:  # pragma: no cover - tzdata always present on deploy
+        return _dt_timezone.utc
+
+
+def _event_local_dates(event):
+    """(event_local_date, today_local_date) BOTH in the event's own timezone.
+
+    The Active/Upcoming partition is decided entirely *within a single zone per
+    event* so it can never leave a gap or double-count across the UTC/local
+    midnight boundary:
+
+      * event_local_date — the shift's wall-clock date in its own tz. A shift
+        stored `2026-06-03T00:00:00Z` (5 PM Pacific Jun 2) is Jun 2 locally,
+        even though its UTC date is Jun 3. (`start_time` is the authority;
+        a dated-but-untimed booking falls back to `date`.)
+      * today_local_date — "now" rendered into the *same* zone. Comparing two
+        dates computed in one frame is what guarantees every approved booking
+        in [today, +N] lands on exactly one of Active (==today) or
+        Upcoming ((today, +N]).
+
+    The event's tz resolves via `_resolve_shift_zone` (own `timezone` row, else
+    Pacific). Returns (None, today) when the event has no placeable date (both
+    start_time and date null) — callers skip such bookings (invisible until
+    scheduled) rather than crashing.
+    """
+    from datetime import datetime as _datetime, timezone as _dt_timezone
+
+    zi = _resolve_shift_zone(event)
+    today_local = _datetime.now(_dt_timezone.utc).astimezone(zi).date()
+
+    source = getattr(event, "start_time", None) or getattr(event, "date", None)
+    if source is None:
+        return None, today_local
+
+    # Normalize to a UTC-aware datetime; stored datetimes are UTC under
+    # USE_TZ=True but a naive value (some fixtures/imports) is treated as UTC.
+    if source.tzinfo is None:
+        source = source.replace(tzinfo=_dt_timezone.utc)
+    else:
+        source = source.astimezone(_dt_timezone.utc)
+
+    return source.astimezone(zi).date(), today_local
+
+
 @strawberry.input
 class AmbassadorEventsFiltersInput:
     """Filters for ambassador-scoped events."""
@@ -310,15 +381,25 @@ class AmbassadorEventQueries:
         within_days: int = 14,
     ) -> List[types.ShiftOfferDetails]:
         """Accepted (is_approved=True) AmbassadorEvent rows for the
-        current BA whose event date is in the next N days (default 14).
+        current BA whose LOCAL event date falls AFTER today and within the
+        next N days (default 14) — i.e. local date in (today, today+N].
 
-        Powers the "Upcoming" section on the spark-mobile Shifts tab.
-        Sorted by event start_time ascending (next-up first). Returns
-        empty for non-ambassador users; cross-tenant access blocked
-        via the Ambassador→user relationship.
+        Powers the "Upcoming" section on the spark-mobile Shifts tab. This is
+        the future-dated complement to `my_active_shifts` (local date == today):
+        together the two cover every approved booking in [today, today+N] with
+        no gap and no overlap. The partition is on each event's LOCAL date vs
+        local "today" computed in the SAME zone (`_event_local_dates`, the
+        event's own timezone, Pacific fallback) NOT its UTC date — so a shift
+        stored 2026-06-03T00:00:00Z (5 PM Pacific Jun 2) is correctly "today"
+        (Active) rather than slipping a UTC day forward into this list.
+
+        Sorted by event start_time ascending (next-up first). Returns empty for
+        non-ambassador users; cross-tenant access blocked via the
+        Ambassador→user relationship.
         """
         from datetime import timedelta
         from django.utils import timezone
+        from django.db.models import Q
 
         user = info.context.request.user
         if not getattr(user, "is_authenticated", False):
@@ -327,13 +408,21 @@ class AmbassadorEventQueries:
         from ambassadors import models as a_models
         from ambassadors import types as a_types
 
-        cutoff = timezone.now() + timedelta(days=max(1, within_days))
+        within_days = max(1, within_days)
 
         def _fetch() -> List:
             try:
                 ambassador = a_models.Ambassador.objects.get(user=user)
             except a_models.Ambassador.DoesNotExist:
                 return []
+            now = timezone.now()
+            # Coarse UTC bracket for the DB scan only. The precise, gap-free
+            # bucketing is done per-event in the loop (each event's local date
+            # vs local-today in its own zone). 1 day of slack on the near edge
+            # and 2 on the far edge generously cover every real UTC↔local
+            # offset so no in-window shift is sliced off by this coarse bound.
+            scan_start = now - timedelta(days=1)
+            scan_end = now + timedelta(days=within_days + 2)
             qs = (
                 a_models.AmbassadorEvent.objects.select_related(
                     "event",
@@ -344,14 +433,29 @@ class AmbassadorEventQueries:
                 .filter(
                     ambassador=ambassador,
                     is_approved=True,
-                    event__start_time__gte=timezone.now(),
-                    event__start_time__lte=cutoff,
+                )
+                .filter(
+                    Q(event__start_time__gte=scan_start, event__start_time__lte=scan_end)
+                    | Q(event__date__gte=scan_start, event__date__lte=scan_end)
                 )
                 .order_by("event__start_time")
             )
             out: List = []
             for ae in qs:
                 ev = ae.event
+                # Upcoming = LOCAL date strictly after local-today, through the
+                # window end (today, today+N]. Both dates are computed in the
+                # event's own zone (`_event_local_dates`) so the boundary with
+                # my_active_shifts (local date == today) is exact: every booking
+                # lands on exactly one list. Today-local shifts belong to Active;
+                # an event we can't date (no start/date) is skipped, matching the
+                # documented "won't show until scheduled" behavior.
+                local_date, local_today = _event_local_dates(ev)
+                if local_date is None:
+                    continue
+                window_end = local_today + timedelta(days=within_days)
+                if not (local_today < local_date <= window_end):
+                    continue
                 venue = (
                     getattr(ev, "name", None)
                     or getattr(getattr(ev, "retailer", None), "name", None)
@@ -409,11 +513,20 @@ class AmbassadorEventQueries:
         clock-in / extend / heads-up can resolve the shift reliably via
         `ambassadorEventUuid` (the previous `todayEvents` showed every
         tenant event, so acting on one the BA wasn't rostered on returned
-        "Shift not found"). Unlike my_upcoming_shifts (future-dated), this
-        includes shifts whose start time has already passed today so an
-        in-progress shift can still be clocked in. BA-scoped via
-        Ambassador→user; empty for non-ambassador users.
+        "Shift not found").
+
+        "Today" is the shift's LOCAL date (the venue's wall-clock day via
+        `_event_local_dates`) compared against local "today" in the SAME zone,
+        NOT the server's UTC date. Under TIME_ZONE=UTC, a 5 PM Pacific shift on
+        Jun 2 is stored 2026-06-03T00:00:00Z; the old `__date` filter compared
+        its UTC date (Jun 3) against a UTC `today` (Jun 2) and dropped it — so a
+        just-booked evening shift showed on neither Active nor Upcoming. We now
+        compare local-to-local. This includes shifts whose start time has
+        already passed earlier today so an in-progress shift can still be
+        clocked in. BA-scoped via Ambassador→user; empty for non-ambassador
+        users.
         """
+        from datetime import timedelta
         from django.utils import timezone
         from django.db.models import Q
 
@@ -429,7 +542,15 @@ class AmbassadorEventQueries:
                 ambassador = a_models.Ambassador.objects.get(user=user)
             except a_models.Ambassador.DoesNotExist:
                 return []
-            today = timezone.localdate()
+            now = timezone.now()
+            # Coarse ±1 day UTC bracket for the DB scan only; the exact
+            # "local date == local today (same zone)" decision happens in the
+            # loop via _event_local_dates so the UTC/local boundary can't drop a
+            # today-evening shift. start_time is the authority, but a
+            # dated-but-untimed booking is bracketed on `date` too — both share
+            # the same local-date test below.
+            scan_start = now - timedelta(days=1)
+            scan_end = now + timedelta(days=1)
             qs = (
                 a_models.AmbassadorEvent.objects.select_related(
                     "event",
@@ -438,15 +559,25 @@ class AmbassadorEventQueries:
                     "event__timezone",
                 )
                 .filter(
-                    Q(event__start_time__date=today) | Q(event__date=today),
                     ambassador=ambassador,
                     is_approved=True,
+                )
+                .filter(
+                    Q(event__start_time__gte=scan_start, event__start_time__lte=scan_end)
+                    | Q(event__date__gte=scan_start, event__date__lte=scan_end)
                 )
                 .order_by("event__start_time")
             )
             out: List = []
             for ae in qs:
                 ev = ae.event
+                # Active = the shift's LOCAL date equals local today, both in
+                # the event's own zone. Skip events with no placeable date
+                # (both start_time and date null) — they stay invisible until
+                # scheduled, matching prior behavior.
+                local_date, local_today = _event_local_dates(ev)
+                if local_date is None or local_date != local_today:
+                    continue
                 venue = (
                     getattr(ev, "name", None)
                     or getattr(getattr(ev, "retailer", None), "name", None)

@@ -2231,6 +2231,15 @@ class JobLifecycleMutations:
         # to accepted (or assigned them outright). Without this the BA
         # has no idea they got the gig until they re-open the app.
         if job is not None:
+            # Bind before the push try: the declined-applicant fan-out below
+            # references ba_user_id to skip the accepted BA. If the push
+            # lookup raised before assigning it (e.g. the Ambassador row
+            # vanished mid-request), the except swallowed the error but the
+            # later reference threw NameError out of the resolver — AFTER the
+            # booking had already committed, so the accept surfaced as a failed
+            # mutation. Pre-binding to None keeps the fan-out safe (None never
+            # equals a real declined_user_id, so no recipient is skipped).
+            ba_user_id = None
             try:
                 from ambassadors.push import enqueue_push
                 ba_user_id = await sync_to_async(
