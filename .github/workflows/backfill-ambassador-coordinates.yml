@@ -101,11 +101,16 @@ jobs:
               exit 1
             fi
 
-            # Pull the machine-readable RESULT line counters (no copy phase for
-            # ambassadors, so COPIED stays unset -> treated as 0).
-            REMAINING="$(printf '%s\n' "$REPORT" | grep -oE 'remaining=[0-9]+' | tail -1 | cut -d= -f2 || true)"
-            GEOCODED="$(printf '%s\n' "$REPORT" | grep -oE 'geocoded=[0-9]+' | tail -1 | cut -d= -f2 || true)"
-            COPIED="$(printf '%s\n' "$REPORT" | grep -oE 'copied=[0-9]+' | tail -1 | cut -d= -f2 || true)"
+            # Pull counters from the grand RESULT line ONLY. The per-tenant
+            # breakdown printed below it ALSO contains `remaining=` for each
+            # tenant, so scraping the whole report and taking the last match
+            # would read a single tenant's remaining, not the total — anchor to
+            # the one `RESULT mode=...` line to get the grand totals. (No copy
+            # phase for ambassadors, so COPIED stays unset -> treated as 0.)
+            RESULT_LINE="$(printf '%s\n' "$REPORT" | grep -E 'RESULT mode=' | tail -1 || true)"
+            REMAINING="$(printf '%s\n' "$RESULT_LINE" | grep -oE 'remaining=[0-9]+' | cut -d= -f2 || true)"
+            GEOCODED="$(printf '%s\n' "$RESULT_LINE" | grep -oE 'geocoded=[0-9]+' | cut -d= -f2 || true)"
+            COPIED="$(printf '%s\n' "$RESULT_LINE" | grep -oE 'copied=[0-9]+' | cut -d= -f2 || true)"
             echo "pass $PASS summary: geocoded=${GEOCODED:-?} remaining=${REMAINING:-unknown}"
 
             # Dry-run is a single preview pass; never loops.
