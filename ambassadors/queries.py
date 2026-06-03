@@ -740,6 +740,7 @@ class AmbassadorEventQueries:
             str(ambassador_event_uuid), info
         )
 
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def my_pending_offers(
         self,
         info: strawberry.Info,
