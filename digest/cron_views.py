@@ -923,6 +923,180 @@ class RepairEventDatesView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class BackfillEventCoordinatesView(View):
+    """POST `/internal/cron/backfill-event-coordinates`.
+
+    Fires the `backfill_event_coordinates` command — populates
+    ``Event.coordinates`` for events with missing coordinates
+    (null/empty/[0,0]) by COPYING from the parent ``Request.coordinates`` when
+    valid (free, no network) and otherwise GEOCODING ``Event.address`` via the
+    keyless Photon API. Needed so the "new gig nearby" distance push (and the
+    map pins) work for the existing backlog of coordinate-less events. See
+    events/management/commands/backfill_event_coordinates.py. Idempotent and
+    per-row savepointed.
+
+    This is a MANUAL one-off (triggered from the GitHub Actions UI), not a
+    recurring cron — but it reuses the same `X-Cron-Secret` gating as its
+    siblings so the trigger needs no command line.
+
+    SAFE — DRY-RUN IS THE DEFAULT. A plain trigger NEVER writes: the backfill
+    runs with `dry_run=True` unless `execute=true` is explicitly passed, so the
+    operator always sees the report (incl. the geocode plan) first and opts in
+    to writes deliberately.
+
+    Body / query params (all optional):
+      - execute: "1" / "true" / "yes" — perform the writes (and the real
+        Photon geocoding). Default OFF → DRY-RUN, no DB writes, no sleeps.
+      - tenant: tenant slug or numeric id — restrict to a single tenant.
+        Default: all tenants.
+
+    The command's full stdout report (per-tenant breakdown + which rows came
+    from the request copy vs geocoding) is captured and returned verbatim
+    under `report`.
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _bool(name: str, default: bool = False) -> bool:
+            raw = (request.GET.get(name) or request.POST.get(name) or "").lower()
+            if not raw:
+                return default
+            return raw in ("1", "true", "yes", "on")
+
+        # DRY-RUN is the default: only an explicit execute=true writes.
+        execute = _bool("execute", default=False)
+
+        tenant = request.GET.get("tenant") or request.POST.get("tenant")
+        tenant = tenant or None
+
+        out = io.StringIO()
+        try:
+            call_command(
+                "backfill_event_coordinates",
+                execute=execute,
+                tenant=tenant,
+                stdout=out,
+            )
+        except Exception as exc:  # noqa: BLE001 — surface any error to caller
+            logger.exception("Backfill event coordinates failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "exception": _concise_exc(exc),
+                    "executed": execute,
+                    "tenant": tenant,
+                    "report": out.getvalue(),
+                },
+                status=500,
+            )
+
+        return JsonResponse(
+            {
+                "executed": execute,
+                "tenant": tenant,
+                "report": out.getvalue(),
+            }
+        )
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        return JsonResponse(
+            {"ok": True, "endpoint": "backfill-event-coordinates"}
+        )
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class BackfillAmbassadorCoordinatesView(View):
+    """POST `/internal/cron/backfill-ambassador-coordinates`.
+
+    Fires the `backfill_ambassador_coordinates` command — geocodes
+    ``Ambassador.address`` via the keyless Photon API to populate
+    ``Ambassador.coordinates`` for BAs with empty coordinates and an address,
+    so the "new gig nearby" distance push can measure how far each BA is. See
+    ambassadors/management/commands/backfill_ambassador_coordinates.py.
+    Idempotent and per-row savepointed.
+
+    This is a MANUAL one-off (triggered from the GitHub Actions UI), not a
+    recurring cron — but it reuses the same `X-Cron-Secret` gating.
+
+    SAFE — DRY-RUN IS THE DEFAULT. A plain trigger NEVER writes: the backfill
+    runs with `dry_run=True` unless `execute=true` is explicitly passed.
+
+    Body / query params (all optional):
+      - execute: "1" / "true" / "yes" — perform the writes (and the real
+        Photon geocoding). Default OFF → DRY-RUN, no DB writes, no sleeps.
+      - tenant: tenant slug or numeric id — restrict to BAs linked to that
+        tenant. Default: all ambassadors.
+
+    The command's full stdout report is captured and returned verbatim under
+    `report`.
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _bool(name: str, default: bool = False) -> bool:
+            raw = (request.GET.get(name) or request.POST.get(name) or "").lower()
+            if not raw:
+                return default
+            return raw in ("1", "true", "yes", "on")
+
+        # DRY-RUN is the default: only an explicit execute=true writes.
+        execute = _bool("execute", default=False)
+
+        tenant = request.GET.get("tenant") or request.POST.get("tenant")
+        tenant = tenant or None
+
+        out = io.StringIO()
+        try:
+            call_command(
+                "backfill_ambassador_coordinates",
+                execute=execute,
+                tenant=tenant,
+                stdout=out,
+            )
+        except Exception as exc:  # noqa: BLE001 — surface any error to caller
+            logger.exception("Backfill ambassador coordinates failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "exception": _concise_exc(exc),
+                    "executed": execute,
+                    "tenant": tenant,
+                    "report": out.getvalue(),
+                },
+                status=500,
+            )
+
+        return JsonResponse(
+            {
+                "executed": execute,
+                "tenant": tenant,
+                "report": out.getvalue(),
+            }
+        )
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        return JsonResponse(
+            {"ok": True, "endpoint": "backfill-ambassador-coordinates"}
+        )
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class SendActivationRemindersView(View):
     """POST `/internal/cron/activation-reminders`.
 
@@ -1118,4 +1292,6 @@ def _registered_views() -> dict[str, Any]:
             RepairMissingEventsForApprovedRequestsView
         ),
         "repair-event-dates": RepairEventDatesView,
+        "backfill-event-coordinates": BackfillEventCoordinatesView,
+        "backfill-ambassador-coordinates": BackfillAmbassadorCoordinatesView,
     }

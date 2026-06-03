@@ -26,6 +26,8 @@ REPAIR_MISSING_EVENTS_URL = (
     "/internal/cron/repair-missing-events-for-approved-requests"
 )
 REPAIR_EVENT_DATES_URL = "/internal/cron/repair-event-dates"
+BACKFILL_EVENT_COORDS_URL = "/internal/cron/backfill-event-coordinates"
+BACKFILL_AMBASSADOR_COORDS_URL = "/internal/cron/backfill-ambassador-coordinates"
 
 VALID_SECRET = "test-cron-secret-value-only-for-tests"
 
@@ -822,3 +824,230 @@ class TestRepairEventDatesCronView:
         )
         assert ok.status_code == 200
         assert ok.json()["endpoint"] == "repair-event-dates"
+
+
+@pytest.mark.django_db
+class TestBackfillEventCoordinatesCronView:
+    """Coverage for `/internal/cron/backfill-event-coordinates`.
+
+    Same secret-gated path as the repair siblings; verifies the security
+    boundary and that the backfill defaults to DRY-RUN (NO writes / NO real
+    geocoding) unless `execute=true` is explicitly passed. call_command is
+    mocked: no DB writes, no network — the mock writes a sentinel to the
+    captured stdout so we assert the report comes back verbatim.
+    """
+
+    REPORT_SENTINEL = "Summary\n  Updated: 2 event(s)\n"
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        self.client = Client()
+
+    @staticmethod
+    def _write_report(*_args, **kwargs):
+        buf = kwargs.get("stdout")
+        if buf is not None:
+            buf.write(TestBackfillEventCoordinatesCronView.REPORT_SENTINEL)
+
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    @patch("digest.cron_views.call_command")
+    def test_default_is_dry_run_and_returns_report(self, mock_call):
+        mock_call.side_effect = self._write_report
+        resp = self.client.post(
+            BACKFILL_EVENT_COORDS_URL, HTTP_X_CRON_SECRET=VALID_SECRET
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["executed"] is False
+        assert body["tenant"] is None
+        assert body["report"] == self.REPORT_SENTINEL
+        mock_call.assert_called_once()
+        args, kwargs = mock_call.call_args
+        assert args[0] == "backfill_event_coordinates"
+        assert kwargs["execute"] is False
+        assert kwargs["tenant"] is None
+        assert kwargs["stdout"] is not None
+
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    @patch("digest.cron_views.call_command")
+    def test_execute_true_runs_for_real(self, mock_call):
+        mock_call.side_effect = self._write_report
+        resp = self.client.post(
+            f"{BACKFILL_EVENT_COORDS_URL}?execute=true",
+            HTTP_X_CRON_SECRET=VALID_SECRET,
+        )
+        assert resp.status_code == 200
+        assert resp.json()["executed"] is True
+        _args, kwargs = mock_call.call_args
+        assert kwargs["execute"] is True
+
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    @patch("digest.cron_views.call_command")
+    def test_execute_falsey_values_stay_dry_run(self, mock_call):
+        for falsey in ("false", "0", "no", "", "maybe"):
+            mock_call.reset_mock()
+            mock_call.side_effect = self._write_report
+            resp = self.client.post(
+                f"{BACKFILL_EVENT_COORDS_URL}?execute={falsey}",
+                HTTP_X_CRON_SECRET=VALID_SECRET,
+            )
+            assert resp.status_code == 200
+            assert resp.json()["executed"] is False
+            _args, kwargs = mock_call.call_args
+            assert kwargs["execute"] is False, (
+                f"execute={falsey!r} must stay dry-run"
+            )
+
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    @patch("digest.cron_views.call_command")
+    def test_tenant_param_plumbed_as_kwarg(self, mock_call):
+        mock_call.side_effect = self._write_report
+        resp = self.client.post(
+            f"{BACKFILL_EVENT_COORDS_URL}?tenant=liquid-death",
+            HTTP_X_CRON_SECRET=VALID_SECRET,
+        )
+        assert resp.status_code == 200
+        assert resp.json()["tenant"] == "liquid-death"
+        _args, kwargs = mock_call.call_args
+        assert kwargs["tenant"] == "liquid-death"
+        assert kwargs["execute"] is False
+
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    @patch("digest.cron_views.call_command")
+    def test_missing_secret_header_returns_401(self, mock_call):
+        resp = self.client.post(BACKFILL_EVENT_COORDS_URL)
+        assert resp.status_code == 401
+        mock_call.assert_not_called()
+
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    @patch("digest.cron_views.call_command")
+    def test_bad_secret_returns_401(self, mock_call):
+        resp = self.client.post(
+            BACKFILL_EVENT_COORDS_URL, HTTP_X_CRON_SECRET="wrong"
+        )
+        assert resp.status_code == 401
+        mock_call.assert_not_called()
+
+    @override_settings(INTERNAL_CRON_SECRET="")
+    @patch("digest.cron_views.call_command")
+    def test_unconfigured_secret_fails_closed_503(self, mock_call):
+        resp = self.client.post(
+            BACKFILL_EVENT_COORDS_URL, HTTP_X_CRON_SECRET=VALID_SECRET
+        )
+        assert resp.status_code == 503
+        mock_call.assert_not_called()
+
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    @patch(
+        "digest.cron_views.call_command", side_effect=RuntimeError("boom"),
+    )
+    def test_command_failure_surfaces_500_with_detail(self, _mock_call):
+        resp = self.client.post(
+            BACKFILL_EVENT_COORDS_URL, HTTP_X_CRON_SECRET=VALID_SECRET
+        )
+        assert resp.status_code == 500
+        body = resp.json()
+        assert body["ok"] is False
+        assert body["error"] == "command-failed"
+        assert "boom" in body["detail"]
+
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    def test_get_is_secret_gated_liveness(self):
+        assert self.client.get(BACKFILL_EVENT_COORDS_URL).status_code == 401
+        ok = self.client.get(
+            BACKFILL_EVENT_COORDS_URL, HTTP_X_CRON_SECRET=VALID_SECRET
+        )
+        assert ok.status_code == 200
+        assert ok.json()["endpoint"] == "backfill-event-coordinates"
+
+
+@pytest.mark.django_db
+class TestBackfillAmbassadorCoordinatesCronView:
+    """Coverage for `/internal/cron/backfill-ambassador-coordinates`.
+
+    Mirrors the event-coordinates endpoint: secret-gated, DRY-RUN by default,
+    execute/tenant plumbed through to the mocked command.
+    """
+
+    REPORT_SENTINEL = "Summary\n  Updated: 4 ambassador(s)\n"
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        self.client = Client()
+
+    @staticmethod
+    def _write_report(*_args, **kwargs):
+        buf = kwargs.get("stdout")
+        if buf is not None:
+            buf.write(TestBackfillAmbassadorCoordinatesCronView.REPORT_SENTINEL)
+
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    @patch("digest.cron_views.call_command")
+    def test_default_is_dry_run_and_returns_report(self, mock_call):
+        mock_call.side_effect = self._write_report
+        resp = self.client.post(
+            BACKFILL_AMBASSADOR_COORDS_URL, HTTP_X_CRON_SECRET=VALID_SECRET
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["executed"] is False
+        assert body["tenant"] is None
+        assert body["report"] == self.REPORT_SENTINEL
+        args, kwargs = mock_call.call_args
+        assert args[0] == "backfill_ambassador_coordinates"
+        assert kwargs["execute"] is False
+        assert kwargs["tenant"] is None
+        assert kwargs["stdout"] is not None
+
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    @patch("digest.cron_views.call_command")
+    def test_execute_true_runs_for_real(self, mock_call):
+        mock_call.side_effect = self._write_report
+        resp = self.client.post(
+            f"{BACKFILL_AMBASSADOR_COORDS_URL}?execute=1",
+            HTTP_X_CRON_SECRET=VALID_SECRET,
+        )
+        assert resp.status_code == 200
+        assert resp.json()["executed"] is True
+        _args, kwargs = mock_call.call_args
+        assert kwargs["execute"] is True
+
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    @patch("digest.cron_views.call_command")
+    def test_tenant_param_plumbed_as_kwarg(self, mock_call):
+        mock_call.side_effect = self._write_report
+        resp = self.client.post(
+            f"{BACKFILL_AMBASSADOR_COORDS_URL}?tenant=42",
+            HTTP_X_CRON_SECRET=VALID_SECRET,
+        )
+        assert resp.status_code == 200
+        _args, kwargs = mock_call.call_args
+        assert kwargs["tenant"] == "42"
+        assert kwargs["execute"] is False
+
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    @patch("digest.cron_views.call_command")
+    def test_missing_secret_header_returns_401(self, mock_call):
+        resp = self.client.post(BACKFILL_AMBASSADOR_COORDS_URL)
+        assert resp.status_code == 401
+        mock_call.assert_not_called()
+
+    @override_settings(INTERNAL_CRON_SECRET="")
+    @patch("digest.cron_views.call_command")
+    def test_unconfigured_secret_fails_closed_503(self, mock_call):
+        resp = self.client.post(
+            BACKFILL_AMBASSADOR_COORDS_URL, HTTP_X_CRON_SECRET=VALID_SECRET
+        )
+        assert resp.status_code == 503
+        mock_call.assert_not_called()
+
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    def test_get_is_secret_gated_liveness(self):
+        assert self.client.get(
+            BACKFILL_AMBASSADOR_COORDS_URL
+        ).status_code == 401
+        ok = self.client.get(
+            BACKFILL_AMBASSADOR_COORDS_URL, HTTP_X_CRON_SECRET=VALID_SECRET
+        )
+        assert ok.status_code == 200
+        assert ok.json()["endpoint"] == "backfill-ambassador-coordinates"

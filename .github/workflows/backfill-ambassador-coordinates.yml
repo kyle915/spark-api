@@ -1,0 +1,87 @@
+name: Backfill Ambassador.coordinates (keyless Photon)
+
+# Manually fires `/internal/cron/backfill-ambassador-coordinates` on Cloud Run
+# to run the `backfill_ambassador_coordinates` command — geocodes
+# `Ambassador.address` via the keyless Photon API to populate
+# `Ambassador.coordinates` for BAs with empty coordinates and an address, so
+# the "new gig nearby" distance push can measure how far each BA is. See
+# ambassadors/management/commands/backfill_ambassador_coordinates.py.
+#
+# IMPORTANT: run this AFTER the code is deployed — it repairs the existing
+# backlog. The endpoint must exist in the running service.
+#
+# This is a MANUAL one-off, NOT a recurring cron — so there is deliberately no
+# `schedule:` trigger, only `workflow_dispatch`. Run it from the Actions tab.
+#
+# SAFE — DRY-RUN IS THE DEFAULT. The `dry_run` input defaults to true, which
+# sends `execute=false`, so the backfill runs in DRY-RUN with NO DB writes and
+# NO real geocoding sleeps, and the endpoint returns the report. To actually
+# write (and geocode for real), re-run with dry_run=false (→ execute=true).
+# The endpoint NEVER writes unless execute=true is passed.
+#
+# Secret-gated via X-Cron-Secret (shared INTERNAL_CRON_SECRET) — same setup as
+# the repair-event-dates workflow. The secret is sent as a HEADER, never in
+# the URL.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (no DB writes, no geocoding). Leave true to preview; set false to apply."
+        required: true
+        default: true
+        type: boolean
+      tenant:
+        description: "Restrict to BAs linked to a single tenant (slug or numeric id). Empty = all BAs."
+        required: false
+        default: ""
+        type: string
+
+jobs:
+  fire-backfill-ambassador-coordinates:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire backfill-ambassador-coordinates cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/backfill-ambassador-coordinates
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+          TENANT: ${{ github.event.inputs.tenant || '' }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+
+          # execute is the inverse of dry_run: dry_run=true -> execute=false
+          # (preview, no writes); dry_run=false -> execute=true (apply).
+          if [ "$DRY_RUN" = "false" ]; then
+            EXECUTE="true"
+          else
+            EXECUTE="false"
+          fi
+          echo "dry_run=$DRY_RUN -> execute=$EXECUTE (writes only when execute=true)"
+
+          # Only add tenant when supplied so an unscoped run falls through to
+          # the command's default (all ambassadors).
+          QS="execute=$EXECUTE"
+          if [ -n "$TENANT" ]; then
+            QS="$QS&tenant=$TENANT"
+          fi
+
+          # Secret travels in the X-Cron-Secret HEADER (never in the URL).
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL?$QS" \
+            -H "X-Cron-Secret: $CRON_SECRET")
+          echo "HTTP $STATUS"
+
+          echo "----- response body (backfill report) -----"
+          cat /tmp/cron-response.json
+          echo
+          echo "--------------------------------------------"
+
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS — see body above."
+            exit 1
+          fi
