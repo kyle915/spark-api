@@ -1,0 +1,70 @@
+name: Repair Request activation time (fix a mis-captured time)
+
+# Manually fires `/internal/cron/repair-request-activation-time` to correct ONE
+# request whose activation time was mis-captured (e.g. an AM/PM mix-up stored
+# as 3:00 AM instead of 3:00 PM — the REQ-1072 report). Sets the LOCAL start/end
+# and stores the correct UTC, resolving the timezone the same way the approval
+# email does (request.timezone → state → address).
+#
+# SAFE — DRY-RUN IS THE DEFAULT. A plain trigger prints the before/after and
+# writes nothing; set dry_run=false to apply. Targets exactly ONE request id.
+# Secret-gated via X-Cron-Secret (header, never the URL).
+
+on:
+  workflow_dispatch:
+    inputs:
+      request_id:
+        description: "Request id (the number after REQ- in the email, e.g. 1072)."
+        required: true
+        type: string
+      start_local:
+        description: "Local start time, 24h HH:MM (e.g. 15:00 for 3 PM)."
+        required: true
+        default: "15:00"
+        type: string
+      end_local:
+        description: "Local end time, 24h HH:MM (e.g. 18:00 for 6 PM)."
+        required: true
+        default: "18:00"
+        type: string
+      dry_run:
+        description: "Dry run (preview only, no write). Leave true to preview; set false to apply."
+        required: true
+        default: true
+        type: boolean
+
+jobs:
+  fire-repair-request-activation-time:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire repair-request-activation-time cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/repair-request-activation-time
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          REQUEST_ID: ${{ github.event.inputs.request_id }}
+          START_LOCAL: ${{ github.event.inputs.start_local }}
+          END_LOCAL: ${{ github.event.inputs.end_local }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          if [ "$DRY_RUN" = "false" ]; then EXECUTE="true"; else EXECUTE="false"; fi
+          echo "request=$REQUEST_ID start_local=$START_LOCAL end_local=$END_LOCAL dry_run=$DRY_RUN -> execute=$EXECUTE"
+
+          QS="request=${REQUEST_ID}&start_local=${START_LOCAL}&end_local=${END_LOCAL}&execute=${EXECUTE}"
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL?$QS" \
+            -H "X-Cron-Secret: $CRON_SECRET")
+          echo "HTTP $STATUS"
+
+          echo "----- repair report -----"
+          jq -r '.report // .error // "(no report in response)"' /tmp/cron-response.json || cat /tmp/cron-response.json
+          echo "-------------------------"
+
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS — see report above."
+            exit 1
+          fi
