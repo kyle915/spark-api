@@ -1155,6 +1155,18 @@ class BackfillRequestRmmRoutingView(View):
         if limit is not None:
             cmd_kwargs["limit"] = limit
 
+        # Manual force path: set an explicit state on a known ID list (for the
+        # incomplete rows the parser/geocode can't resolve but a human knows,
+        # e.g. "Madison Square Garden" → NY). Both must be present together.
+        ids = request.GET.get("ids") or request.POST.get("ids") or None
+        force_state = (
+            request.GET.get("force_state") or request.POST.get("force_state") or None
+        )
+        if ids:
+            cmd_kwargs["ids"] = ids
+        if force_state:
+            cmd_kwargs["force_state"] = force_state
+
         out = io.StringIO()
         try:
             call_command("backfill_request_rmm_routing", stdout=out, **cmd_kwargs)

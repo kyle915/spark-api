@@ -19,6 +19,7 @@ from unittest.mock import patch
 
 import pytest
 from django.core.management import call_command
+from django.core.management.base import CommandError
 
 from events import models as event_models
 from events.routing import compute_request_routing, route_request_sync
@@ -255,3 +256,94 @@ class TestRequestRmmRouting(EventsGraphQLTestCase):
         report = out.getvalue()
         assert "stated=1" in report
         assert "unroutable=0" in report
+
+    # ── force path (--ids + --force-state) ──────────────────────────────
+    def test_force_state_stamps_explicit_state_and_assigns_rmm(self):
+        # A venue-only address the parser + Photon can't resolve, with no RMM
+        # and no state — the genuinely-incomplete case. The operator knows it's
+        # Florida and forces it; the territory RMM (Manuela) then attaches and
+        # the Sheet row re-syncs.
+        fl = event_models.State.objects.create(
+            name="Florida", code="FL", created_by=self.system_user
+        )
+        req = event_models.Request.objects.create(
+            name="Conde Nast",
+            address="1 World Trade Center",  # no parseable state
+            request_type=self.request_type,
+            tenant=self.ld,
+            created_by=self.system_user,
+        )
+        assert req.state_id is None and req.rmm_asigned_id is None
+        out = StringIO()
+        with patch(UPSERT_PATH, return_value=True) as mock_upsert:
+            call_command(
+                "backfill_request_rmm_routing",
+                execute=True,
+                ids=str(req.id),
+                force_state="FL",
+                stdout=out,
+            )
+            mock_upsert.assert_called_once()  # one row re-synced
+        req.refresh_from_db()
+        assert req.state_id == fl.id  # state forced
+        assert req.rmm_asigned_id == self.manuela.id  # FL → m.cristancho
+        report = out.getvalue()
+        assert "RESULT mode=execute force_state=FL" in report
+        assert "forced=1" in report
+        assert "assigned=1" in report
+        assert "synced=1" in report
+
+    def test_force_state_preserves_existing_rmm(self):
+        # A row that already has an RMM but no state: force the state, keep RMM.
+        ga = self.ga
+        req = self._make_request(rmm_asigned=self.manuela, address="venue only")
+        assert req.state_id is None
+        out = StringIO()
+        with patch(UPSERT_PATH, return_value=True):
+            call_command(
+                "backfill_request_rmm_routing",
+                execute=True,
+                ids=str(req.id),
+                force_state="GA",
+                stdout=out,
+            )
+        req.refresh_from_db()
+        assert req.state_id == ga.id
+        assert req.rmm_asigned_id == self.manuela.id  # unchanged
+        # RMM was already set → not counted as a NEW assignment.
+        assert "assigned=0" in out.getvalue()
+
+    def test_force_state_dry_run_writes_nothing(self):
+        req = self._make_request()
+        out = StringIO()
+        with patch(UPSERT_PATH) as mock_upsert:
+            call_command(
+                "backfill_request_rmm_routing",
+                ids=str(req.id),
+                force_state="GA",
+                stdout=out,
+            )
+            mock_upsert.assert_not_called()
+        req.refresh_from_db()
+        assert req.state_id is None  # untouched in dry-run
+        assert "RESULT mode=dry-run force_state=GA" in out.getvalue()
+
+    def test_force_state_requires_both_ids_and_state(self):
+        with pytest.raises(CommandError):
+            call_command(
+                "backfill_request_rmm_routing",
+                execute=True,
+                ids="1",
+                stdout=StringIO(),
+            )
+
+    def test_force_state_unknown_code_errors(self):
+        req = self._make_request()
+        with pytest.raises(CommandError):
+            call_command(
+                "backfill_request_rmm_routing",
+                execute=True,
+                ids=str(req.id),
+                force_state="ZZ",  # not a real state
+                stdout=StringIO(),
+            )
