@@ -310,8 +310,37 @@ class TestRequestRmmRouting(EventsGraphQLTestCase):
         req.refresh_from_db()
         assert req.state_id == ga.id
         assert req.rmm_asigned_id == self.manuela.id  # unchanged
-        # RMM was already set → not counted as a NEW assignment.
+        # RMM was already set (and legitimately owns GA) → no new assignment,
+        # no reroute.
         assert "assigned=0" in out.getvalue()
+        assert "rerouted=0" in out.getvalue()
+
+    def test_force_state_corrects_wrong_rmm(self):
+        # The real backlog bug: a FL/GA row stuck on the WRONG owner (ross owns
+        # TX/OK/AR/LA/AL/MS, not GA) from an earlier mis-geocode. Forcing the
+        # state must MOVE it to the correct owner's sheet — not just fill blanks.
+        ross = self.create_user(
+            username="ross@liquiddeath.com",
+            email="ross@liquiddeath.com",
+            role=self.roles["spark_admin"],
+        )
+        req = self._make_request(rmm_asigned=ross, address="venue only")
+        assert req.state_id is None
+        out = StringIO()
+        with patch(UPSERT_PATH, return_value=True):
+            call_command(
+                "backfill_request_rmm_routing",
+                execute=True,
+                ids=str(req.id),
+                force_state="GA",
+                stdout=out,
+            )
+        req.refresh_from_db()
+        assert req.state_id == self.ga.id
+        assert req.rmm_asigned_id == self.manuela.id  # ross → m.cristancho
+        report = out.getvalue()
+        assert "rerouted=1" in report
+        assert "assigned=0" in report  # it was a correction, not a new assign
 
     def test_force_state_dry_run_writes_nothing(self):
         req = self._make_request()
