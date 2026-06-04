@@ -42,6 +42,11 @@ on:
         required: false
         default: "100"
         type: string
+      geocode_state:
+        description: "Also geocode the address (Photon) to derive a state for requests the parser can't resolve. EXECUTE only; slower."
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   fire-backfill-request-rmm-routing:
@@ -54,6 +59,7 @@ jobs:
           DRY_RUN: ${{ github.event.inputs.dry_run }}
           TENANT: ${{ github.event.inputs.tenant || '' }}
           LIMIT: ${{ github.event.inputs.limit || '100' }}
+          GEOCODE_STATE: ${{ github.event.inputs.geocode_state }}
         run: |
           set -euo pipefail
           if [ -z "$CRON_SECRET" ]; then
@@ -70,7 +76,10 @@ jobs:
           fi
           echo "dry_run=$DRY_RUN -> execute=$EXECUTE (writes only when execute=true); limit=$LIMIT"
 
-          QS="execute=$EXECUTE&limit=$LIMIT"
+          GEO="false"
+          if [ "$GEOCODE_STATE" = "true" ]; then GEO="true"; fi
+          QS="execute=$EXECUTE&limit=$LIMIT&geocode_state=$GEO"
+          echo "geocode_state=$GEO"
           if [ -n "$TENANT" ]; then
             QS="$QS&tenant=$TENANT"
           fi
