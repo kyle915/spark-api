@@ -237,3 +237,21 @@ class TestRequestRmmRouting(EventsGraphQLTestCase):
         req.refresh_from_db()
         assert req.rmm_asigned_id == self.manuela.id
         assert req.state_id == self.ga.id
+
+    def test_backfill_stamps_state_for_rmm_set_but_state_null(self):
+        # The old public-form path set the RMM but never stamped request.state,
+        # so the Market/State column was blank and the RMM couldn't see the row
+        # on their sheet. The backfill must catch these (candidates = no RMM OR
+        # no state) and stamp the state without disturbing the RMM.
+        req = self._make_request(rmm_asigned=self.manuela)  # rmm set, state null
+        assert req.state_id is None
+        out = StringIO()
+        with patch(UPSERT_PATH, return_value=True) as mock_upsert:
+            call_command("backfill_request_rmm_routing", execute=True, stdout=out)
+            mock_upsert.assert_called_once()  # re-synced with the stamped state
+        req.refresh_from_db()
+        assert req.state_id == self.ga.id  # state now stamped
+        assert req.rmm_asigned_id == self.manuela.id  # RMM preserved
+        report = out.getvalue()
+        assert "stated=1" in report
+        assert "unroutable=0" in report

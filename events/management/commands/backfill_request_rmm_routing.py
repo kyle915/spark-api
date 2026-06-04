@@ -153,12 +153,20 @@ class Command(BaseCommand):
 
     # ── candidate selection ────────────────────────────────────────────
     def _candidates(self, tenant_arg: str | None):
-        """Requests with no RMM assigned, scoped to routable tenants.
+        """Requests missing an RMM *or* a state, scoped to routable tenants.
+
+        We include `state IS NULL` (not just `rmm_asigned IS NULL`) because the
+        RMMs filter their sheets by the Market/State column — a request that was
+        assigned an RMM but never had its state stamped (e.g. the old public-
+        form path set only the RMM) still shows a blank Market and falls out of
+        their view. route_request_sync fills whichever blank is missing.
 
         Routable = the tenant's public-form slug is in the territory map, OR
         the tenant has a ``default_external_rmm`` override. An explicit
         --tenant scopes to just that tenant (and trusts the operator)."""
-        qs = Request.objects.filter(rmm_asigned__isnull=True)
+        qs = Request.objects.filter(
+            Q(rmm_asigned__isnull=True) | Q(state__isnull=True)
+        )
 
         if tenant_arg:
             tenant = self._resolve_tenant(tenant_arg)
@@ -270,6 +278,8 @@ class Command(BaseCommand):
         for request in base_qs.order_by("id")[:limit]:
             processed += 1
             try:
+                had_rmm = bool(request.rmm_asigned_id)
+                had_state = bool(request.state_id)
                 assigned, _state_code, changed = route_request_sync(request)
 
                 # Geocode fallback: the address had no parseable state and the
@@ -298,11 +308,16 @@ class Command(BaseCommand):
                         assigned, _state_code, changed = route_request_sync(request)
                     _time.sleep(1.0)  # polite to the free Photon service
 
-                if assigned is not None:
+                # Count what actually got filled this run.
+                if not had_rmm and getattr(request, "rmm_asigned_id", None):
                     assigned_n += 1
-                    if request and request.state_id:
-                        stated_n += 1
-                else:
+                if not had_state and getattr(request, "state_id", None):
+                    stated_n += 1
+                # Genuinely unroutable only when NOTHING resolved — still no
+                # RMM and no state (e.g. a venue-name-only address).
+                if not getattr(request, "rmm_asigned_id", None) and not getattr(
+                    request, "state_id", None
+                ):
                     unroutable.append(
                         (
                             getattr(request, "id", None),
@@ -330,7 +345,10 @@ class Command(BaseCommand):
                     _format_exc(exc),
                 )
 
-        remaining = max(0, total - assigned_n)
+        # "Remaining" = candidates beyond this run's cap — re-run to drain
+        # them. The genuinely-stuck rows are reported separately as `unroutable`
+        # (still no RMM and no state — e.g. a venue-name-only address).
+        remaining = max(0, total - processed)
         self.stdout.write(
             self.style.SUCCESS(
                 f"Updated: {processed} request(s) processed "
@@ -339,7 +357,7 @@ class Command(BaseCommand):
                 f"failed={failed_n})."
             )
         )
-        self.stdout.write(f"Remaining (still need an RMM): {remaining}")
+        self.stdout.write(f"Remaining to process (re-run to drain): {remaining}")
         if unroutable:
             self.stdout.write(
                 "Still unroutable (no state from address or geocode — add a "
