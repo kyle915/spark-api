@@ -75,40 +75,76 @@ def suppress_cc(emails: list[str]) -> list[str]:
 # types in the public form URL: /spark-form/ighn-liquid-death.
 ROUTED_TENANT_SLUGS = {"ighn-liquid-death"}
 
-# Match a US state code at the end of an address, optionally followed by a
-# zip and an optional ", USA" suffix.
-#
-# The class between state and zip is intentionally permissive — `[,\s]*` —
-# because real addresses come from at least three sources, each with its
-# own punctuation style:
-#
-#   "Chino, CA 91710"               (Google Places, state SPACE zip)
-#   "EDMOND, OK, 73034"             (manual entry, state COMMA SPACE zip)
-#   "Sparks, NV 89436, USA"         (Google Places with country)
-#   "Brooklyn, NY"                  (no zip at all — defensible default)
-#
-# REQ-926 regressed because the previous regex required `\s*` (whitespace
-# only) between state and zip, so the comma form silently failed to parse
-# and the request fell through to Ignite-only routing.
-_STATE_AFTER_ZIP_RE = re.compile(
-    r"\b([A-Z]{2})\b[,\s]*(?:\d{5}(?:-\d{4})?)?\s*(?:,\s*USA)?\s*$"
+# Full US state (+ DC) names → 2-letter code. Lets the parser resolve forms
+# the bare 2-letter regex misses, e.g. "…Columbia, Missouri" or "…Cabot,
+# Arkansas, United States".
+_US_STATE_NAME_TO_CODE: dict[str, str] = {
+    "alabama": "AL", "alaska": "AK", "arizona": "AZ", "arkansas": "AR",
+    "california": "CA", "colorado": "CO", "connecticut": "CT", "delaware": "DE",
+    "district of columbia": "DC", "florida": "FL", "georgia": "GA",
+    "hawaii": "HI", "idaho": "ID", "illinois": "IL", "indiana": "IN",
+    "iowa": "IA", "kansas": "KS", "kentucky": "KY", "louisiana": "LA",
+    "maine": "ME", "maryland": "MD", "massachusetts": "MA", "michigan": "MI",
+    "minnesota": "MN", "mississippi": "MS", "missouri": "MO", "montana": "MT",
+    "nebraska": "NE", "nevada": "NV", "new hampshire": "NH", "new jersey": "NJ",
+    "new mexico": "NM", "new york": "NY", "north carolina": "NC",
+    "north dakota": "ND", "ohio": "OH", "oklahoma": "OK", "oregon": "OR",
+    "pennsylvania": "PA", "rhode island": "RI", "south carolina": "SC",
+    "south dakota": "SD", "tennessee": "TN", "texas": "TX", "utah": "UT",
+    "vermont": "VT", "virginia": "VA", "washington": "WA",
+    "west virginia": "WV", "wisconsin": "WI", "wyoming": "WY",
+}
+_US_STATE_CODES: set[str] = set(_US_STATE_NAME_TO_CODE.values())
+# Longest names first so "west virginia" wins over "virginia", etc.
+_US_STATE_NAMES_BY_LEN = sorted(_US_STATE_NAME_TO_CODE, key=len, reverse=True)
+
+# Trailing country suffix to strip before looking for the state.
+_COUNTRY_SUFFIX_RE = re.compile(
+    r"[\s,]*(?:united states of america|united states|u\.?\s*s\.?\s*a\.?|"
+    r"u\.?\s*s\.?)\s*$",
+    re.IGNORECASE,
 )
+# A 2-letter code at the END (optionally before a zip) — the most authoritative
+# signal. Case-insensitive; validated against the real US-state set below.
+_END_CODE_RE = re.compile(r"\b([A-Za-z]{2})\b[,\s]*(?:\d{5}(?:-\d{4})?)?\s*$")
 
 
 def extract_state_code(address: str | None) -> str | None:
-    """Pull the 2-letter state code out of a US address string.
+    """Pull the 2-letter US state code out of an address string.
 
-    Accepts the common Google-Places format ("1885 Halite Dr, Sparks,
-    NV 89436, USA"), the manual-entry comma form ("EDMOND, OK,
-    73034"), and addresses without a zip ("Brooklyn, NY"). Returns
-    None for international addresses or parser misses — callers
-    should treat None as "route manually" (see
-    `_state_code_from_request` for the full fallback chain).
+    Robust to the messy real-world forms we actually receive:
+      * Google-Places ("1885 Halite Dr, Sparks, NV 89436, USA")
+      * manual comma form ("EDMOND, OK, 73034")
+      * lowercase codes ("11650 s 73rd st papillion, ne 68046")
+      * full state names ("405 East Nifong Blvd, Columbia, Missouri")
+      * a "United States" country suffix
+      * tab / irregular whitespace ("OREGON CITY\\tOR\\t97045")
+
+    Resolution order (most authoritative first):
+      1. a trailing 2-letter code (optionally before a zip), validated
+         against the real US-state set — beats a state-named city like
+         "Indiana, PA";
+      2. a full state name anywhere in the string (longest match wins).
+
+    Returns None for international addresses or genuine misses — callers
+    treat None as "route manually" (see `_state_code_from_request`).
     """
     if not address:
         return None
-    m = _STATE_AFTER_ZIP_RE.search(address.strip())
-    return m.group(1).upper() if m else None
+    # Normalise: collapse tabs/spaces, then drop the trailing country.
+    norm = re.sub(r"[\t ]+", " ", address.strip())
+    norm = _COUNTRY_SUFFIX_RE.sub("", norm).strip()
+
+    m = _END_CODE_RE.search(norm)
+    if m and m.group(1).upper() in _US_STATE_CODES:
+        return m.group(1).upper()
+
+    low = norm.lower()
+    for name in _US_STATE_NAMES_BY_LEN:
+        if re.search(r"\b" + re.escape(name) + r"\b", low):
+            return _US_STATE_NAME_TO_CODE[name]
+
+    return None
 
 
 def _state_code_from_request(request) -> str | None:
