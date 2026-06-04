@@ -150,6 +150,15 @@ class Command(BaseCommand):
         # already geocoded these for the coordinate backfill). Off by default
         # (it makes per-row network calls); the operator opts in.
         parser.add_argument("--geocode-state", action="store_true", default=False)
+        # Manual force path: set an explicit state on a known list of request
+        # IDs, then assign the territory RMM from it + re-sync the Sheet. For
+        # the genuinely-incomplete rows (venue-only / city-only addresses) that
+        # neither the parser nor Photon can resolve — and where guessing via
+        # geocode is unsafe — but a human knows the answer (e.g. "Madison
+        # Square Garden" is NY). Both must be passed together; --execute still
+        # gates writes. Honors --tenant as an extra safety scope.
+        parser.add_argument("--ids", type=str, default=None)
+        parser.add_argument("--force-state", type=str, default=None)
 
     # ── candidate selection ────────────────────────────────────────────
     def _candidates(self, tenant_arg: str | None):
@@ -196,6 +205,24 @@ class Command(BaseCommand):
         dry_run = not execute
         tenant_arg = opts.get("tenant")
         limit = opts.get("limit") or DEFAULT_LIMIT
+
+        # Manual force path takes precedence over the candidate scan: when the
+        # operator passes an explicit ID list + state, we set that state on
+        # exactly those rows (no parser, no geocode) and route the RMM from it.
+        force_state = opts.get("force_state")
+        ids_raw = opts.get("ids")
+        if force_state or ids_raw:
+            if not (force_state and ids_raw):
+                raise CommandError(
+                    "--ids and --force-state must be used together "
+                    "(e.g. --ids 267,268,291 --force-state NY)."
+                )
+            ids = [int(x) for x in str(ids_raw).split(",") if x.strip().isdigit()]
+            if not ids:
+                raise CommandError(f"--ids parsed to an empty list from {ids_raw!r}.")
+            return self._force_state(
+                ids=ids, code=force_state, tenant_arg=tenant_arg, execute=execute
+            )
 
         base_qs = self._candidates(tenant_arg).select_related(*_REQUEST_RELATIONS)
         total = base_qs.count()
@@ -374,5 +401,111 @@ class Command(BaseCommand):
             f"assigned={assigned_n} stated={stated_n} geocoded={geocoded_n} "
             f"synced={synced_n} failed={failed_n} remaining={remaining} "
             f"unroutable={len(unroutable)} limit={limit}"
+        )
+        return None
+
+    # ── force path: set an explicit state on a known ID list ───────────
+    def _force_state(self, *, ids: list[int], code: str, tenant_arg, execute: bool):
+        """Stamp ``code`` as the state on exactly ``ids``, then assign the
+        territory RMM from it and re-sync each Sheet row.
+
+        For the genuinely-incomplete rows the parser AND Photon can't resolve
+        (venue-only / city-only addresses) but a human knows the answer
+        ("Madison Square Garden" → NY). No guessing: the operator supplies the
+        ids + state. We still route the RMM via the same territory map (so a
+        forced NY row lands on the NY owner's sheet) and re-sync once per row.
+        DRY-RUN by default — only writes when ``execute``.
+        """
+        from django.utils import timezone as _djtz
+        from events.models import State as _State
+
+        code = (code or "").strip()
+        state = (
+            _State.objects.filter(code__iexact=code).order_by("id").first()
+            or _State.objects.filter(name__iexact=code).order_by("id").first()
+        )
+        if state is None:
+            raise CommandError(f"No State row matched '{code}' (2-letter code or name).")
+
+        qs = Request.objects.filter(pk__in=ids).select_related(*_REQUEST_RELATIONS)
+        if tenant_arg:
+            tenant = self._resolve_tenant(tenant_arg)
+            qs = qs.filter(tenant_id=tenant.id)
+        found = {r.id: r for r in qs}
+        missing = [i for i in ids if i not in found]
+
+        self.stdout.write(
+            f"Force-state {state.code} ({state.name}) on {len(found)} of "
+            f"{len(ids)} request(s)"
+            + (f" — not found / out of scope: {missing}" if missing else "")
+        )
+
+        if not execute:
+            for rid in ids:
+                r = found.get(rid)
+                if r is None:
+                    continue
+                cur = getattr(r.rmm_asigned, "email", None)
+                self.stdout.write(
+                    f"  • REQ-{r.id} {r.name} — would set state={state.code}, "
+                    f"current state={getattr(r.state, 'code', None)}, rmm={cur}"
+                )
+            self.stdout.write(
+                self.style.WARNING("DRY RUN — no writes. Re-run with --execute.")
+            )
+            self.stdout.write(
+                f"RESULT mode=dry-run force_state={state.code} "
+                f"matched={len(found)} missing={len(missing)} ids={len(ids)}"
+            )
+            return None
+
+        forced = assigned_n = synced = failed = 0
+        for rid in ids:
+            request = found.get(rid)
+            if request is None:
+                continue
+            try:
+                had_rmm = bool(request.rmm_asigned_id)
+                if request.state_id != state.id:
+                    Request.objects.filter(pk=request.pk).update(
+                        state_id=state.id, updated_at=_djtz.now()
+                    )
+                    forced += 1
+                request = (
+                    Request.objects.select_related(*_REQUEST_RELATIONS)
+                    .filter(pk=request.pk)
+                    .first()
+                )
+                # Assign the territory RMM from the now-set state (fills a blank
+                # RMM; leaves an existing one untouched — idempotent).
+                route_request_sync(request)
+                request = (
+                    Request.objects.select_related(*_REQUEST_RELATIONS)
+                    .filter(pk=request.pk)
+                    .first()
+                )
+                if not had_rmm and getattr(request, "rmm_asigned_id", None):
+                    assigned_n += 1
+                # Re-sync the Sheet once — we forced a state, so the row needs
+                # to reflect the new Market/State (and any newly-set RMM).
+                if request is not None and upsert_request_row(request):
+                    synced += 1
+            except Exception as exc:  # noqa: BLE001 — best-effort per row
+                failed += 1
+                logger.warning(
+                    "force-state failed for request=%s: %s", rid, _format_exc(exc)
+                )
+
+        self.stdout.write(
+            self.style.SUCCESS(
+                f"Force-state {state.code}: state set on {forced} row(s), "
+                f"RMM newly assigned to {assigned_n}, sheet re-synced={synced}, "
+                f"failed={failed}."
+            )
+        )
+        self.stdout.write(
+            f"RESULT mode=execute force_state={state.code} matched={len(found)} "
+            f"forced={forced} assigned={assigned_n} synced={synced} "
+            f"failed={failed} missing={len(missing)} ids={len(ids)}"
         )
         return None
