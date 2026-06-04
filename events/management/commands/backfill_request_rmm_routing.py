@@ -145,6 +145,11 @@ class Command(BaseCommand):
         parser.add_argument("--execute", action="store_true", default=False)
         parser.add_argument("--tenant", type=str, default=None)
         parser.add_argument("--limit", type=int, default=None)
+        # Network fallback: for candidates the regex/relations can't resolve a
+        # state for, geocode the address via Photon to derive it (Photon
+        # already geocoded these for the coordinate backfill). Off by default
+        # (it makes per-row network calls); the operator opts in.
+        parser.add_argument("--geocode-state", action="store_true", default=False)
 
     # ── candidate selection ────────────────────────────────────────────
     def _candidates(self, tenant_arg: str | None):
@@ -193,9 +198,10 @@ class Command(BaseCommand):
             f"{total} request(s) with no RMM assigned."
         )
 
+        geocode_state = bool(opts.get("geocode_state"))
         if dry_run:
             return self._dry_run(base_qs, total, limit)
-        return self._execute(base_qs, total, limit)
+        return self._execute(base_qs, total, limit, geocode_state=geocode_state)
 
     # ── dry-run: counts only, no writes, no Sheets calls ───────────────
     def _dry_run(self, base_qs, total: int, limit: int):
@@ -203,11 +209,16 @@ class Command(BaseCommand):
         would_rmm = 0
         would_state = 0
         sampled = 0
+        unroutable: list[tuple] = []
         for request in base_qs.order_by("id")[:limit]:
             sampled += 1
             assigned, _state_code, state_obj = compute_request_routing(request)
             if assigned is not None:
                 would_rmm += 1
+            else:
+                unroutable.append(
+                    (request.id, request.name, getattr(request, "address", "") or "")
+                )
             if not request.state_id and state_obj is not None:
                 would_state += 1
 
@@ -216,6 +227,17 @@ class Command(BaseCommand):
             f"would assign an RMM to {would_rmm}, "
             f"would stamp a state on {would_state}."
         )
+        if unroutable:
+            self.stdout.write(
+                f"{len(unroutable)} have NO resolvable state (address won't "
+                "parse + no location relation). Add a city/state to the "
+                "address, OR run --execute --geocode-state to let Photon "
+                "derive it:"
+            )
+            for rid, rname, raddr in unroutable[:40]:
+                self.stdout.write(
+                    f"  • REQ-{rid}  {rname}  —  {raddr or '(no address)'}"
+                )
         if total > sampled:
             self.stdout.write(
                 f"{total - sampled} more candidate(s) beyond this preview — "
@@ -229,28 +251,66 @@ class Command(BaseCommand):
         )
         self.stdout.write(
             f"RESULT mode=dry-run candidates={total} sampled={sampled} "
-            f"would_rmm={would_rmm} would_state={would_state} limit={limit}"
+            f"would_rmm={would_rmm} would_state={would_state} "
+            f"unroutable={len(unroutable)} limit={limit}"
         )
         return None
 
     # ── execute: assign + stamp + re-sync, capped at limit ─────────────
-    def _execute(self, base_qs, total: int, limit: int):
-        assigned_n = 0
-        stated_n = 0
-        synced_n = 0
-        failed_n = 0
-        processed = 0
+    def _execute(self, base_qs, total: int, limit: int, *, geocode_state: bool = False):
+        import time as _time
+
+        from django.utils import timezone as _djtz
+        from events.models import State as _State
+        from utils.geocoding import photon_state_for_address
+
+        assigned_n = stated_n = synced_n = failed_n = geocoded_n = processed = 0
+        unroutable: list[tuple] = []
 
         for request in base_qs.order_by("id")[:limit]:
             processed += 1
             try:
-                with transaction.atomic():
-                    had_state = bool(request.state_id)
-                    assigned, _state_code, changed = route_request_sync(request)
-                    if assigned is not None:
-                        assigned_n += 1
-                    if not had_state and request.state_id:
+                assigned, _state_code, changed = route_request_sync(request)
+
+                # Geocode fallback: the address had no parseable state and the
+                # relations gave none, but Photon can often derive one (it
+                # geocoded these for the coordinate backfill). Map the returned
+                # state NAME to a State row, stamp it, and re-route. Only US
+                # states exist in the table, so a bad/international result just
+                # doesn't match — no mis-routing.
+                if assigned is None and geocode_state and not request.state_id:
+                    name = photon_state_for_address(getattr(request, "address", None))
+                    state = (
+                        _State.objects.filter(name__iexact=name).order_by("id").first()
+                        if name
+                        else None
+                    )
+                    if state is not None:
+                        Request.objects.filter(pk=request.pk).update(
+                            state_id=state.id, updated_at=_djtz.now()
+                        )
+                        request = (
+                            Request.objects.select_related(*_REQUEST_RELATIONS)
+                            .filter(pk=request.pk)
+                            .first()
+                        )
+                        geocoded_n += 1
+                        assigned, _state_code, changed = route_request_sync(request)
+                    _time.sleep(1.0)  # polite to the free Photon service
+
+                if assigned is not None:
+                    assigned_n += 1
+                    if request and request.state_id:
                         stated_n += 1
+                else:
+                    unroutable.append(
+                        (
+                            getattr(request, "id", None),
+                            getattr(request, "name", ""),
+                            getattr(request, "address", "") or "",
+                        )
+                    )
+
                 if changed:
                     # Re-fetch with fresh relations so the sheet row reflects
                     # the new state + RMM, then sync once (route_request_sync
@@ -275,13 +335,26 @@ class Command(BaseCommand):
             self.style.SUCCESS(
                 f"Updated: {processed} request(s) processed "
                 f"(assigned RMM={assigned_n}, stamped state={stated_n}, "
-                f"sheet re-synced={synced_n}, failed={failed_n})."
+                f"geocoded state={geocoded_n}, sheet re-synced={synced_n}, "
+                f"failed={failed_n})."
             )
         )
         self.stdout.write(f"Remaining (still need an RMM): {remaining}")
+        if unroutable:
+            self.stdout.write(
+                "Still unroutable (no state from address or geocode — add a "
+                "city/state to the address, then re-run):"
+            )
+            for rid, rname, raddr in unroutable[:40]:
+                self.stdout.write(
+                    f"  • REQ-{rid}  {rname}  —  {raddr or '(no address)'}"
+                )
+            if len(unroutable) > 40:
+                self.stdout.write(f"  …and {len(unroutable) - 40} more.")
         self.stdout.write(
             f"RESULT mode=execute candidates={total} processed={processed} "
-            f"assigned={assigned_n} stated={stated_n} synced={synced_n} "
-            f"failed={failed_n} remaining={remaining} limit={limit}"
+            f"assigned={assigned_n} stated={stated_n} geocoded={geocoded_n} "
+            f"synced={synced_n} failed={failed_n} remaining={remaining} "
+            f"unroutable={len(unroutable)} limit={limit}"
         )
         return None

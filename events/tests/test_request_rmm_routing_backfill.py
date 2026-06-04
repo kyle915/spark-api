@@ -198,3 +198,42 @@ class TestRequestRmmRouting(EventsGraphQLTestCase):
         assert (
             event_models.Request.objects.filter(rmm_asigned=self.manuela).count() == 3
         )
+
+    def test_geocode_state_fallback_routes_unparseable_address(self):
+        # Address with NO parseable state (just a venue name). Without
+        # --geocode-state it can't route; WITH it, Photon resolves "Georgia"
+        # → GA → m.cristancho's territory.
+        req = event_models.Request.objects.create(
+            name="Walmart SC",
+            address="Walmart Supercenter 389",  # no city/state for the regex
+            request_type=self.request_type,
+            tenant=self.ld,
+            created_by=self.system_user,
+        )
+        # Sanity: not routable without geocoding.
+        out0 = StringIO()
+        with patch(UPSERT_PATH, return_value=True):
+            call_command(
+                "backfill_request_rmm_routing", execute=True, stdout=out0
+            )
+        assert "assigned=0" in out0.getvalue()
+        req.refresh_from_db()
+        assert req.rmm_asigned_id is None
+
+        # With --geocode-state: Photon → "Georgia" → GA → Manuela.
+        out1 = StringIO()
+        with patch(UPSERT_PATH, return_value=True), patch("time.sleep"), patch(
+            "utils.geocoding.photon_state_for_address", return_value="Georgia"
+        ):
+            call_command(
+                "backfill_request_rmm_routing",
+                execute=True,
+                geocode_state=True,
+                stdout=out1,
+            )
+        r1 = out1.getvalue()
+        assert "geocoded=1" in r1
+        assert "assigned=1" in r1
+        req.refresh_from_db()
+        assert req.rmm_asigned_id == self.manuela.id
+        assert req.state_id == self.ga.id
