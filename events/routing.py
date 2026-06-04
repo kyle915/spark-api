@@ -106,7 +106,12 @@ _COUNTRY_SUFFIX_RE = re.compile(
 )
 # A 2-letter code at the END (optionally before a zip) — the most authoritative
 # signal. Case-insensitive; validated against the real US-state set below.
-_END_CODE_RE = re.compile(r"\b([A-Za-z]{2})\b[,\s]*(?:\d{5}(?:-\d{4})?)?\s*$")
+# The trailing number is 2-5 digits (not just 5): spreadsheet/CSV imports
+# routinely strip the leading zero off New-England ZIPs ("WOLFEBORO NH 3894"
+# is 03894) or carry a short store number after the state ("Chula Vista CA
+# 3516"). Matching only \d{5} missed the state on every one of those, so the
+# row landed stateless and dropped off the RMM's sheet.
+_END_CODE_RE = re.compile(r"\b([A-Za-z]{2})\b[,\s]*(?:\d{2,5}(?:-\d{4})?)?\s*$")
 
 
 def extract_state_code(address: str | None) -> str | None:
