@@ -32,6 +32,18 @@ from events.routing import extract_state_code, territory_emails_for_state
         # we don't accidentally match a lowercased "ny" inside a
         # word like "Anytown").
         ("Anytown, NY 12345", "NY"),
+        # Real forms from the unrouted LD backlog the old regex missed:
+        ("11650 s 73rd st papillion, ne 68046", "NE"),  # lowercase code
+        ("405 East Nifong Boulevard, Columbia, Missouri", "MO"),  # full name
+        (
+            "Walmart Supercenter, Telegraph Road, 13310, Santa Fe Springs, "
+            "California, United States",
+            "CA",
+        ),  # full name + country suffix
+        ("85 NH-101A, Amherst, NH 03031, United States", "NH"),  # code + country
+        ("1839 MOLALLA AVE\tOREGON CITY\tOR\t97045\t242", "OR"),  # tab + name
+        ("625 US-40, Blue Springs, MO 64014, United States", "MO"),
+        ("Indiana, PA", "PA"),  # state-named city — trailing code wins
     ],
 )
 def test_extract_state_code_ok(address, expected):
@@ -53,18 +65,13 @@ def test_extract_state_code_returns_none(address):
     assert extract_state_code(address) is None
 
 
-def test_extract_state_code_international_address_is_handled_downstream():
-    """A UK address surfaces 'UK' here because it pattern-matches
-    [A-Z]{2} at the end of the string. We don't filter it at the regex
-    level because (a) maintaining a state allowlist creates a separate
-    drift hazard and (b) downstream `territory_emails_for_state`
-    returns [] for any non-US code, which then routes the request to
-    Ignite-only via the same path as an unparseable address. The full
-    chain is what produces the correct outcome, not this single step.
-    """
-    assert extract_state_code("10 Downing St, London, SW1A 2AA, UK") == "UK"
-    # The important downstream guarantee:
-    assert territory_emails_for_state("ighn-liquid-death", "UK") == []
+def test_extract_state_code_non_us_returns_none():
+    """A non-US address resolves to None: the trailing 2-letter code is
+    validated against the real US-state set (so "UK" is rejected) and no
+    full US state name matches. Downstream still routes Ignite-only — the
+    same safe outcome as any unparseable address."""
+    assert extract_state_code("10 Downing St, London, SW1A 2AA, UK") is None
+    assert territory_emails_for_state("ighn-liquid-death", None) == []
 
 
 def test_territory_emails_for_state_known_state_returns_only_owner():
