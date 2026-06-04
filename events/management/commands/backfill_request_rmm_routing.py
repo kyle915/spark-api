@@ -459,35 +459,45 @@ class Command(BaseCommand):
             )
             return None
 
-        forced = assigned_n = synced = failed = 0
+        forced = assigned_n = rerouted_n = synced = failed = 0
         for rid in ids:
             request = found.get(rid)
             if request is None:
                 continue
             try:
-                had_rmm = bool(request.rmm_asigned_id)
+                had_rmm_id = request.rmm_asigned_id
                 if request.state_id != state.id:
                     Request.objects.filter(pk=request.pk).update(
                         state_id=state.id, updated_at=_djtz.now()
                     )
                     forced += 1
-                request = (
-                    Request.objects.select_related(*_REQUEST_RELATIONS)
-                    .filter(pk=request.pk)
-                    .first()
-                )
-                # Assign the territory RMM from the now-set state (fills a blank
-                # RMM; leaves an existing one untouched — idempotent).
-                route_request_sync(request)
-                request = (
-                    Request.objects.select_related(*_REQUEST_RELATIONS)
-                    .filter(pk=request.pk)
-                    .first()
-                )
-                if not had_rmm and getattr(request, "rmm_asigned_id", None):
-                    assigned_n += 1
-                # Re-sync the Sheet once — we forced a state, so the row needs
-                # to reflect the new Market/State (and any newly-set RMM).
+                    request = (
+                        Request.objects.select_related(*_REQUEST_RELATIONS)
+                        .filter(pk=request.pk)
+                        .first()
+                    )
+                # Derive the territory owner for the ASSERTED state and set it,
+                # OVERWRITING any existing RMM. Unlike the candidate scan (which
+                # only fills blanks), the force path CORRECTS a wrong owner: a
+                # row stuck on the West-region RMM that the operator now asserts
+                # is FL must move to the FL owner's sheet. compute_request_routing
+                # is read-only; we persist the assignment explicitly.
+                owner, _code, _obj = compute_request_routing(request)
+                if owner is not None and request.rmm_asigned_id != owner.id:
+                    Request.objects.filter(pk=request.pk).update(
+                        rmm_asigned_id=owner.id, updated_at=_djtz.now()
+                    )
+                    if had_rmm_id:
+                        rerouted_n += 1  # corrected an existing (wrong) RMM
+                    else:
+                        assigned_n += 1
+                    request = (
+                        Request.objects.select_related(*_REQUEST_RELATIONS)
+                        .filter(pk=request.pk)
+                        .first()
+                    )
+                # Re-sync the Sheet once — we forced a state (and maybe moved the
+                # RMM), so the row needs to reflect the new Market/State + owner.
                 if request is not None and upsert_request_row(request):
                     synced += 1
             except Exception as exc:  # noqa: BLE001 — best-effort per row
@@ -499,13 +509,13 @@ class Command(BaseCommand):
         self.stdout.write(
             self.style.SUCCESS(
                 f"Force-state {state.code}: state set on {forced} row(s), "
-                f"RMM newly assigned to {assigned_n}, sheet re-synced={synced}, "
-                f"failed={failed}."
+                f"RMM newly assigned to {assigned_n}, RMM corrected on "
+                f"{rerouted_n}, sheet re-synced={synced}, failed={failed}."
             )
         )
         self.stdout.write(
             f"RESULT mode=execute force_state={state.code} matched={len(found)} "
-            f"forced={forced} assigned={assigned_n} synced={synced} "
-            f"failed={failed} missing={len(missing)} ids={len(ids)}"
+            f"forced={forced} assigned={assigned_n} rerouted={rerouted_n} "
+            f"synced={synced} failed={failed} missing={len(missing)} ids={len(ids)}"
         )
         return None
