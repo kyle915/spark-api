@@ -44,6 +44,15 @@ from events.routing import extract_state_code, territory_emails_for_state
         ("1839 MOLALLA AVE\tOREGON CITY\tOR\t97045\t242", "OR"),  # tab + name
         ("625 US-40, Blue Springs, MO 64014, United States", "MO"),
         ("Indiana, PA", "PA"),  # state-named city — trailing code wins
+        # State code SPACE a short trailing number — spreadsheet/CSV imports
+        # strip the leading zero off New-England ZIPs (03894 -> 3894) or carry
+        # a store number after the state. The old \d{5}-only regex missed the
+        # state on every one of these and they dropped off the RMM sheet.
+        ("670 CENTER ST WOLFEBORO NH 3894", "NH"),  # 03894 stripped
+        ("1024 COVE RD NEW BEDFORD MA 2744", "MA"),  # 02744 stripped
+        ("122 122-128 CAMBRIDGE ST BOSTON MA 2114", "MA"),  # 02114 stripped
+        ("85 S MAIN ST MANCHESTER NH 3102", "NH"),
+        ("1360 Eastlake Pkwy Chula Vista CA 3516", "CA"),  # store no. after code
     ],
 )
 def test_extract_state_code_ok(address, expected):
@@ -59,6 +68,13 @@ def test_extract_state_code_ok(address, expected):
         # routing fallback in the first place (REQ-925).
         "1608 Broadway St",
         "Walmart Supercenter 389",
+        # Genuinely stateless backlog forms: a city with no state token, a
+        # highway name where "US" must NOT be mistaken for a state, and a
+        # bare venue. The widened trailing-number regex must not invent a
+        # state for these (they go to manual edit, not a wrong RMM).
+        "2150 West ISB, Daytona",
+        "1717 South US 17",
+        "Madison Square Garden",
     ],
 )
 def test_extract_state_code_returns_none(address):
