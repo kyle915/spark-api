@@ -47,6 +47,16 @@ on:
         required: false
         default: false
         type: boolean
+      ids:
+        description: "FORCE PATH: comma-separated request IDs to set a known state on (e.g. 267,268,291). Use WITH force_state. For incomplete addresses the parser/geocode can't resolve."
+        required: false
+        default: ""
+        type: string
+      force_state:
+        description: "FORCE PATH: the 2-letter state to set on `ids` (e.g. NY, FL). Assigns the territory RMM from it + re-syncs the Sheet. Use WITH ids; EXECUTE only."
+        required: false
+        default: ""
+        type: string
 
 jobs:
   fire-backfill-request-rmm-routing:
@@ -60,6 +70,8 @@ jobs:
           TENANT: ${{ github.event.inputs.tenant || '' }}
           LIMIT: ${{ github.event.inputs.limit || '100' }}
           GEOCODE_STATE: ${{ github.event.inputs.geocode_state }}
+          IDS: ${{ github.event.inputs.ids || '' }}
+          FORCE_STATE: ${{ github.event.inputs.force_state || '' }}
         run: |
           set -euo pipefail
           if [ -z "$CRON_SECRET" ]; then
@@ -83,6 +95,18 @@ jobs:
           if [ -n "$TENANT" ]; then
             QS="$QS&tenant=$TENANT"
           fi
+
+          # FORCE PATH: set a known state on an explicit ID list (for the
+          # incomplete-address rows). Both must be present; the endpoint runs
+          # the force path instead of the candidate scan. EXECUTE still gates
+          # writes (dry_run=true previews which rows would be set).
+          if [ -n "$IDS" ]; then
+            QS="$QS&ids=$IDS"
+          fi
+          if [ -n "$FORCE_STATE" ]; then
+            QS="$QS&force_state=$FORCE_STATE"
+          fi
+          echo "ids=$IDS force_state=$FORCE_STATE"
 
           # Secret travels in the X-Cron-Secret HEADER (never in the URL).
           STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
