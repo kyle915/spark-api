@@ -353,10 +353,12 @@ def route_request_sync(request) -> tuple[object | None, str | None]:
 
     updates: dict = {}
     if not request.state_id and state_obj is not None:
-        request.state_id = state_obj.id
+        # Set the relation (not just the id) so an in-memory caller — e.g. the
+        # post_save sheet mirror — reads request.state.code without a re-fetch.
+        request.state = state_obj
         updates["state_id"] = state_obj.id
     if not request.rmm_asigned_id and assigned is not None:
-        request.rmm_asigned_id = assigned.id
+        request.rmm_asigned = assigned
         updates["rmm_asigned_id"] = assigned.id
 
     if updates:

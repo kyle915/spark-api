@@ -2278,6 +2278,37 @@ class PublicRequestMutations:
                 await _notify_ignite_for_unroutable_request(
                     request_with_relations, location
                 )
+            # assign_rmm_for_request set the RMM but NOT request.state — and the
+            # RMMs filter their sheet by the Market/State column, so external-
+            # form requests (a shortened form with no state field) showed a
+            # blank Market and fell out of their view. Stamp the state from the
+            # address (and assign the RMM if assign_rmm couldn't, e.g. a tenant
+            # routing via default_external_rmm), then re-sync the sheet row.
+            # Best-effort: never fail the create.
+            try:
+                from events.routing import route_request_sync
+
+                _a, _c, _routed = await sync_to_async(route_request_sync)(
+                    request_with_relations
+                )
+                if _routed:
+                    request_with_relations = await sync_to_async(
+                        models.Request.objects.select_related(
+                            "tenant", "timezone", "request_type",
+                            "retailer__location__state",
+                            "distributor__location__state",
+                            "state", "rmm_asigned",
+                        ).get
+                    )(id=request_with_relations.id)
+                    from utils.sheets_mirror import upsert_request_row
+
+                    await sync_to_async(upsert_request_row)(request_with_relations)
+            except Exception:
+                logger.warning(
+                    "external-form state stamp failed for request=%s",
+                    getattr(request_with_relations, "id", None),
+                    exc_info=True,
+                )
             await _notify_requestor_for_request_created(
                 request_with_relations, location, delay_seconds=2
             )
