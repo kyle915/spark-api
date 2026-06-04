@@ -98,3 +98,42 @@ def photon_geocode(
         return None
 
     return [lat, lng]
+
+
+def photon_state_for_address(
+    address: str,
+    *,
+    timeout: float = DEFAULT_TIMEOUT_SECONDS,
+) -> str | None:
+    """Return the US state NAME (e.g. ``"California"``) for ``address`` via
+    Photon, or ``None``.
+
+    Lets the RMM-routing backfill resolve a territory for addresses whose
+    2-letter state code the regex can't parse but Photon CAN derive (Photon
+    already geocoded these for the coordinate backfill). The caller maps the
+    returned name to a ``State`` row (and only US states exist there, so an
+    international result simply won't match — no bad routing). NEVER raises.
+    """
+    address = (address or "").strip()
+    if not address:
+        return None
+
+    try:
+        resp = httpx.get(
+            PHOTON_URL,
+            params={"q": address, "limit": 1},
+            timeout=timeout,
+            headers={"User-Agent": "spark-api/rmm-routing-backfill"},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        logger.warning("Photon state lookup failed for %r: %s", address, exc)
+        return None
+
+    features = (data or {}).get("features") or []
+    if not features:
+        return None
+    props = (features[0] or {}).get("properties") or {}
+    state = (props.get("state") or "").strip()
+    return state or None

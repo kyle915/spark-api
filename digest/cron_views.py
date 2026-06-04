@@ -1146,7 +1146,12 @@ class BackfillRequestRmmRoutingView(View):
             except (TypeError, ValueError):
                 limit = None
 
-        cmd_kwargs: dict = {"execute": execute, "tenant": tenant}
+        geocode_state = _bool("geocode_state", default=False)
+        cmd_kwargs: dict = {
+            "execute": execute,
+            "tenant": tenant,
+            "geocode_state": geocode_state,
+        }
         if limit is not None:
             cmd_kwargs["limit"] = limit
 
