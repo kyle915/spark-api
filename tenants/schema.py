@@ -12,6 +12,7 @@ from asgiref.sync import sync_to_async
 from utils.gcs import extract_blob_name_from_url, public_url
 from utils.graphql.permissions import (
     StrictIsAuthenticated,
+    _is_admin_access,
     resolve_request_user_access,
 )
 from strawberry.relay import Node
@@ -720,13 +721,21 @@ class QueryClients(
     ) -> CountableConnection[TenantType]:
         user = info.context.request.user
 
-        # Staff / superusers see every tenant regardless of TenantedUser
-        # membership. TenantGuard's "auto-pick a tenant on first sign-in"
-        # flow can't land anywhere if the platform owner has no explicit
-        # TenantedUser row — they'd see "No companies associated with this
-        # account" even though they manage all of them. Non-staff users
-        # are still scoped by tenanted_users membership.
-        if user.is_staff or user.is_superuser:
+        # Admins see EVERY tenant regardless of TenantedUser membership;
+        # everyone else is scoped to the tenants they belong to. "Admin" is
+        # resolved authoritatively (DB-backed) and matches the data-layer gate
+        # the recap/ambassador/report resolvers use — staff, superuser, the
+        # spark-admin role, OR an @igniteproductions.co email. Gating only on
+        # is_staff/is_superuser (the old check) left Ignite-team members and
+        # spark-admins who manage every client — but lack the staff flag —
+        # seeing "No companies associated with this account" in the switcher
+        # even though the data layer already let them act in any tenant. The
+        # JWT request.user's role FK / flags are unreliable in async context,
+        # so resolve from the DB row (same pattern as the sibling resolvers).
+        role_slug, is_staff, is_super, email = await resolve_request_user_access(
+            user
+        )
+        if _is_admin_access(role_slug, is_staff, is_super, email):
             queryset = Tenant.active()
         else:
             filter_dict = {
