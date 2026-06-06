@@ -64,15 +64,45 @@ def sync_event_on_create_or_update(sender, instance: Event, created: bool, **kwa
 
 @receiver(post_save, sender=AmbassadorEvent)
 def sync_event_for_ambassador(sender, instance: AmbassadorEvent, created: bool, **kwargs):
-    # Same best-effort posture — don't let calendar sync abort the
-    # ambassador-event save path.
+    # Calendar sync makes LIVE Google API calls (OAuth token refresh +
+    # event create/update). google-auth's requests transport defaults to a
+    # 120s timeout and httplib2 has none, so a stalled call would BLOCK this
+    # post_save — i.e. freeze the invite/accept mutation that triggered the
+    # save for up to ~2 minutes (a hung socket doesn't raise, so the
+    # try/except can't save us). It's best-effort decoration, so fire it off
+    # the request thread: the save (and the invite) returns instantly and
+    # the calendar push happens in the background.
+    #
+    # Only the event_id (an int) is captured — never the model instance —
+    # so the thread can't touch a stale/detached object. The background ORM
+    # reads run under fresh_db_connection (a pooled thread keeps a
+    # thread-local connection Django's request cleanup never closes).
+    event_id = instance.event_id
+
+    def _run() -> None:
+        from utils.db import fresh_db_connection
+
+        def _sync() -> None:
+            from events.jobs.google_calendar_jobs import EventGoogleCalendarJob
+
+            EventGoogleCalendarJob(event_id).send_to_ambassadors()
+
+        try:
+            fresh_db_connection(_sync)()
+        except Exception as exc:  # noqa: BLE001 — best-effort, never propagate
+            logger.warning(
+                "Ambassador calendar sync failed for event %s: %s", event_id, exc
+            )
+
     try:
-        from events.jobs.google_calendar_jobs import EventGoogleCalendarJob
-        job: EventGoogleCalendarJob = EventGoogleCalendarJob(instance.event_id)
-        job.send_to_ambassadors()
-    except Exception as exc:
+        import threading
+
+        threading.Thread(
+            target=_run, name=f"cal-sync-ae-{event_id}", daemon=True
+        ).start()
+    except Exception as exc:  # noqa: BLE001 — spawning failed; skip, never block
         logger.warning(
-            f"Skipping ambassador calendar sync for event {instance.event_id}: {exc}"
+            "Could not start calendar sync thread for event %s: %s", event_id, exc
         )
 
 
