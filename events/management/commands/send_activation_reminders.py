@@ -128,6 +128,7 @@ class Command(BaseCommand):
                     # re-opening the accept/decline offer screen. Mirrors the
                     # old scheduled activation-reminder payload.
                     data={
+                        "kind": "activation_reminder",
                         "screen": "shifts",
                         "eventUuid": str(getattr(event, "uuid", "")),
                     },

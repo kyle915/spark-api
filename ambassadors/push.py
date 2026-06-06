@@ -86,6 +86,52 @@ def _record_push_notification(
     )
 
 
+# Discretionary push categories the BA can mute (PushPreference). Everything
+# not resolved here is transactional (you got booked, your shift was
+# cancelled, an applicant decision, …) and ALWAYS sends. Resolution leans on
+# the payload fields each sender already sets — `type` for shift offers,
+# `kind` for chat/pay/gigs/checklist, `screen` for reminders/pay fallbacks.
+def _push_category(data: "dict[str, Any] | None") -> "str | None":
+    """Map a push ``data`` payload to a mutable preference category, or None.
+
+    None means "not a discretionary category" → never gated.
+    """
+    if not isinstance(data, dict):
+        return None
+    type_ = str(data.get("type") or "").strip().lower()
+    kind = str(data.get("kind") or "").strip().lower()
+    screen = str(data.get("screen") or "").strip().lower()
+
+    if type_ == "shift_offer":
+        return "shift_offers"
+    if kind == "chat" or screen == "chat":
+        return "chat"
+    if kind == "payment" or screen == "earnings":
+        return "pay"
+    if kind in {"new_gig_nearby", "new_gig", "gig_digest", "job_digest"}:
+        return "gigs"
+    if (
+        kind in {"activation_reminder", "recap_nudge", "recap_reminder", "pre_shift_checklist"}
+        or screen == "recap"
+    ):
+        return "reminders"
+    return None
+
+
+@sync_to_async
+def _is_push_category_muted(user_id: int, category: str) -> bool:
+    """True if the user has explicitly turned this category off.
+
+    Missing PushPreference row → all categories on (returns False).
+    """
+    from .models import PushPreference
+
+    pref = PushPreference.objects.filter(user_id=user_id).first()
+    if pref is None:
+        return False
+    return not bool(getattr(pref, category, True))
+
+
 async def send_push_to_user(
     user: "User | int",
     *,
@@ -116,6 +162,22 @@ async def send_push_to_user(
     except Exception:
         logger.warning(
             "failed to record push notification for user_id=%s", user_id, exc_info=True
+        )
+
+    # Respect the BA's push opt-outs for discretionary categories. The inbox
+    # record above is already written, so muting silences the banner without
+    # losing history. Best-effort: a preference lookup failure must never
+    # block a send (fail open).
+    try:
+        category = _push_category(data)
+        if category and await _is_push_category_muted(user_id, category):
+            logger.info(
+                "push suppressed by preference user_id=%s category=%s", user_id, category
+            )
+            return 0
+    except Exception:
+        logger.warning(
+            "push preference check failed for user_id=%s", user_id, exc_info=True
         )
 
     devices = await sync_to_async(

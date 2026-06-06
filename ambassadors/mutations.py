@@ -70,6 +70,7 @@ from .types import (
     RateAmbassadorResponse,
     UpdateBaProfileResponse,
     BaSelfProfileType,
+    PushPreferences,
 )
 from . import inputs
 from .services import (
@@ -2070,3 +2071,50 @@ class NotificationMutations:
             return qs.update(read_at=_tz.now())
 
         return await sync_to_async(_mark)()
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def set_push_preferences(
+        self,
+        info: strawberry.Info,
+        shift_offers: bool | None = None,
+        reminders: bool | None = None,
+        chat: bool | None = None,
+        pay: bool | None = None,
+        gigs: bool | None = None,
+    ) -> PushPreferences:
+        """Update the caller's push opt-ins. Only categories you pass are
+        changed; omitted ones keep their current value. Creates the row on
+        first use (defaults = everything on). Returns the full resulting set."""
+        from .models import PushPreference
+
+        user = info.context.request.user
+        _defaults = PushPreferences(
+            shift_offers=True, reminders=True, chat=True, pay=True, gigs=True
+        )
+        if not getattr(user, "is_authenticated", False):
+            return _defaults
+
+        updates = {
+            "shift_offers": shift_offers,
+            "reminders": reminders,
+            "chat": chat,
+            "pay": pay,
+            "gigs": gigs,
+        }
+
+        def _save() -> PushPreferences:
+            pref, _ = PushPreference.objects.get_or_create(user=user)
+            dirty = [f for f, v in updates.items() if v is not None and getattr(pref, f) != v]
+            for f in dirty:
+                setattr(pref, f, updates[f])
+            if dirty:
+                pref.save(update_fields=dirty + ["updated_at"])
+            return PushPreferences(
+                shift_offers=pref.shift_offers,
+                reminders=pref.reminders,
+                chat=pref.chat,
+                pay=pref.pay,
+                gigs=pref.gigs,
+            )
+
+        return await sync_to_async(_save)()

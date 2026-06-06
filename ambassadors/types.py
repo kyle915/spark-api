@@ -1051,3 +1051,16 @@ class NotificationItem:
     data_json: str | None
     read: bool
     created_at: str
+
+
+@strawberry.type
+class PushPreferences:
+    """The BA's per-category push opt-ins. True = send (the default). Mirrors
+    the discretionary categories on the ``PushPreference`` model; transactional
+    pushes are never gated and aren't represented here."""
+
+    shift_offers: bool
+    reminders: bool
+    chat: bool
+    pay: bool
+    gigs: bool
