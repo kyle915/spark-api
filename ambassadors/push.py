@@ -108,7 +108,7 @@ def _push_category(data: "dict[str, Any] | None") -> "str | None":
         return "chat"
     if kind == "payment" or screen == "earnings":
         return "pay"
-    if kind in {"new_gig_nearby", "new_gig", "gig_digest", "job_digest"}:
+    if kind in {"new_gig_nearby", "new_gig", "gig_digest", "job_digest", "open_shift"}:
         return "gigs"
     if (
         kind in {"activation_reminder", "recap_nudge", "recap_reminder", "pre_shift_checklist"}
