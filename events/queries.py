@@ -1058,6 +1058,13 @@ class RequestQueriesService(BaseEventQueriesService):
                 # per event (N+1). The count resolvers read from this
                 # prefetched list when present.
                 "event_set__ambassadors_events",
+                # Admin shift-swap visibility: Request.openShifts traverses
+                # Request → events → open_shifts (+ who dropped / claimed).
+                # Prefetch so the Master Tracker chip + Request View panel read
+                # from cache instead of an N+1 per row.
+                "event_set__open_shifts",
+                "event_set__open_shifts__released_by",
+                "event_set__open_shifts__claimed_by",
             )
         )
 

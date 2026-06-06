@@ -349,6 +349,23 @@ class RequestStatusDetailResponse:
     request_status: RequestStatus | None = None
 
 
+@strawberry.type
+class OpenShiftAdminType:
+    """Admin-side view of a shift-swap slot — a shift a BA dropped that
+    reopened for self-serve claim. ``status`` is "open" (still claimable) or
+    "claimed" (another BA grabbed it). Surfaced on the request so RMMs see
+    swap activity at a glance."""
+
+    uuid: strawberry.ID
+    event_uuid: strawberry.ID
+    event_name: str | None
+    released_by_name: str | None
+    claimed_by_name: str | None
+    claimed_at: str | None
+    created_at: str | None
+    status: str
+
+
 @strawberry_django.type(models.Request)
 class Request(Node):
     uuid: str
@@ -420,6 +437,67 @@ class Request(Node):
             self.request_product.select_related("product").all()
         )
         return [item.product for item in items if item.product]
+
+    @strawberry.field
+    async def open_shifts(self) -> List[OpenShiftAdminType]:
+        """Shift-swap activity across this request's events — dropped slots
+        that reopened for self-serve claim (open or claimed). Reads from the
+        event_set__open_shifts prefetch when present (no N+1)."""
+
+        def _name(u):
+            if not u:
+                return None
+            full = (
+                (getattr(u, "first_name", "") or "")
+                + " "
+                + (getattr(u, "last_name", "") or "")
+            ).strip()
+            return full or getattr(u, "email", None)
+
+        def _collect():
+            ev_cache = getattr(self, "_prefetched_objects_cache", {}).get("event_set")
+            events = list(ev_cache) if ev_cache is not None else list(
+                self.event_set.all()
+            )
+            out: list[OpenShiftAdminType] = []
+            for ev in events:
+                os_cache = getattr(ev, "_prefetched_objects_cache", {}).get(
+                    "open_shifts"
+                )
+                rows = (
+                    list(os_cache)
+                    if os_cache is not None
+                    else list(
+                        ev.open_shifts.select_related(
+                            "released_by", "claimed_by"
+                        ).all()
+                    )
+                )
+                for r in rows:
+                    out.append(
+                        OpenShiftAdminType(
+                            uuid=strawberry.ID(str(r.uuid)),
+                            event_uuid=strawberry.ID(str(getattr(ev, "uuid", ""))),
+                            event_name=getattr(ev, "name", None),
+                            released_by_name=_name(getattr(r, "released_by", None)),
+                            claimed_by_name=_name(getattr(r, "claimed_by", None)),
+                            claimed_at=(
+                                r.claimed_at.isoformat()
+                                if getattr(r, "claimed_at", None)
+                                else None
+                            ),
+                            created_at=(
+                                r.created_at.isoformat()
+                                if getattr(r, "created_at", None)
+                                else None
+                            ),
+                            status="claimed" if getattr(r, "claimed_at", None) else "open",
+                        )
+                    )
+            out.sort(key=lambda x: x.created_at or "", reverse=True)
+            return out
+
+        return await sync_to_async(_collect)()
 
     @strawberry.field
     async def event(self) -> Event | None:
