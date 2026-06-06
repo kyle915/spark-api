@@ -28,6 +28,12 @@
           <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Activation Type</td>
           <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ request.request_type.name|default:"-" }}</td>
         </tr>
+        {% if products %}
+        <tr>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Products / SKUs</td>
+          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ products|join:", " }}</td>
+        </tr>
+        {% endif %}
         <tr>
           <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Location(s)</td>
           <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ location_name }}</td>
