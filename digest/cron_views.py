@@ -1446,6 +1446,67 @@ class SendRecapNudgesView(View):
         return JsonResponse({"ok": True, "endpoint": "recap-nudges"})
 
 
+@method_decorator(csrf_exempt, name="dispatch")
+class SendOpenShiftAlertsView(View):
+    """POST `/internal/cron/send-open-shift-alerts`.
+
+    Fires `send_open_shift_alerts` — pushes eligible BAs when a shift is
+    dropped (an OpenShift opens up). Runs off-request because there's no RQ
+    worker in prod and the fan-out shouldn't block the drop mutation; each
+    OpenShift is alerted exactly once (deduped via `notified_at`).
+
+    Body / query params (all optional):
+      - radius_miles: float (proximity gate when the event has coordinates)
+      - max_per_shift: int (cap the per-shift fan-out)
+      - dry_run: "1" / "true" / "yes" — log who'd be alerted, send nothing
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _bool(name: str, default: bool = False) -> bool:
+            raw = (request.GET.get(name) or request.POST.get(name) or "").lower()
+            return raw in ("1", "true", "yes", "on") if raw else default
+
+        cmd_args: list[str] = []
+        radius = request.GET.get("radius_miles") or request.POST.get("radius_miles")
+        if radius:
+            cmd_args += ["--radius-miles", str(radius)]
+        max_per = request.GET.get("max_per_shift") or request.POST.get(
+            "max_per_shift"
+        )
+        if max_per:
+            cmd_args += ["--max-per-shift", str(max_per)]
+        dry_run = _bool("dry_run", default=False)
+        if dry_run:
+            cmd_args.append("--dry-run")
+
+        out = io.StringIO()
+        try:
+            call_command("send_open_shift_alerts", *cmd_args, stdout=out)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("Open-shift alerts cron failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "log": out.getvalue(),
+                },
+                status=500,
+            )
+
+        return JsonResponse({"ok": True, "dry_run": dry_run, "log": out.getvalue()})
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        return JsonResponse({"ok": True, "endpoint": "send-open-shift-alerts"})
+
+
 def _registered_views() -> dict[str, Any]:
     """Map URL path → view class. Lets `digest/urls.py` mount these
     without each one being re-exported explicitly.
@@ -1455,6 +1516,7 @@ def _registered_views() -> dict[str, Any]:
         "send-executive-summary": SendExecutiveSummaryView,
         "send-new-gig-digest": SendNewGigDigestView,
         "send-recap-reminders": SendRecapRemindersView,
+        "send-open-shift-alerts": SendOpenShiftAlertsView,
         "activation-reminders": SendActivationRemindersView,
         "recap-nudges": SendRecapNudgesView,
         "send-payment-notifications": SendPaymentNotificationsView,

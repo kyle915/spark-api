@@ -1,0 +1,72 @@
+name: Open shift alerts
+
+# Fires `/internal/cron/send-open-shift-alerts` on Cloud Run every ~10 min.
+# When a BA drops a booked shift it becomes an OpenShift; this sweep pushes
+# the eligible pool ("a shift opened up near you — tap to grab it") so the
+# self-serve Open Shifts board actually fills. Each OpenShift is alerted
+# exactly once (deduped via OpenShift.notified_at), and the fan-out runs
+# here — NOT inline in the drop mutation — because there is no RQ worker in
+# prod and a synchronous fan-out would stall the drop. See
+# ambassadors/management/commands/send_open_shift_alerts.py.
+#
+# Secret-gated via `X-Cron-Secret` (shared INTERNAL_CRON_SECRET, set on both
+# the Cloud Run service env and the GitHub repo secret) — see the
+# activation-reminders workflow for the full setup notes.
+#
+# Schedule: every 10 minutes. notified_at dedup keeps a drop to a single
+# fan-out regardless of cron jitter.
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+    inputs:
+      radius_miles:
+        description: "Proximity gate (mi) when the event has coordinates"
+        required: false
+        default: "30"
+      max_per_shift:
+        description: "Cap the per-shift fan-out"
+        required: false
+        default: "200"
+      dry_run:
+        description: "Log who would be alerted, but send nothing"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+jobs:
+  fire-open-shift-alerts:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire open-shift alerts cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/send-open-shift-alerts
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          RADIUS_MILES: ${{ github.event.inputs.radius_miles || '30' }}
+          MAX_PER_SHIFT: ${{ github.event.inputs.max_per_shift || '200' }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            echo "Generate one with: openssl rand -hex 32"
+            echo "Then set it as INTERNAL_CRON_SECRET in both the repo secrets"
+            echo "and the Cloud Run service env (must match)."
+            exit 1
+          fi
+
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL?radius_miles=$RADIUS_MILES&max_per_shift=$MAX_PER_SHIFT&dry_run=$DRY_RUN" \
+            -H "X-Cron-Secret: $CRON_SECRET")
+
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS — see body above."
+            exit 1
+          fi

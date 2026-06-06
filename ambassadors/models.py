@@ -1375,6 +1375,11 @@ class OpenShift(models.Model):
         related_name="open_shifts_claimed",
     )
     claimed_at = models.DateTimeField(null=True, blank=True)
+    # When the "an open shift opened up" alert was fanned out to eligible BAs
+    # (set by the send_open_shift_alerts cron). Null = not yet alerted; the
+    # cron only ever alerts a row once, so a drop pings eligible BAs exactly
+    # once without an inline fan-out in the drop request path.
+    notified_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
 
     class Meta:
@@ -1382,6 +1387,7 @@ class OpenShift(models.Model):
         indexes = [
             models.Index(fields=["claimed_at"]),
             models.Index(fields=["event"]),
+            models.Index(fields=["notified_at"]),
         ]
 
     def __str__(self):
