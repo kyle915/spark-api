@@ -448,3 +448,149 @@ class ClientMonthlyReportMailer(Mailer):
                 }
             ],
         )
+
+
+def _client_base_url() -> str:
+    """Client-app base URL for digest deep-links (no trailing slash)."""
+    base = getattr(settings, "CLIENT_FRONTEND_URL", "") or ""
+    return base.rstrip("/")
+
+
+def _fmt_when(value: "datetime.datetime | None", *, with_time: bool = True) -> str:
+    """Readable date (+ optional time) for the digest, displayed as-stored.
+
+    Mirrors :func:`_format_dt_no_tz`: we strip tzinfo and format the wall-clock
+    value the event was saved with, rather than converting between zones. The
+    rest of the app's emails read times this way, so the digest stays
+    consistent and doesn't reintroduce the DST-conversion drift we already
+    fought elsewhere.
+    """
+    if not value:
+        return "TBD"
+    naive = value.replace(tzinfo=None)
+    day = naive.strftime("%a, %b %d").replace(" 0", " ")
+    if not with_time:
+        return day
+    clock = naive.strftime("%I:%M %p").lstrip("0")
+    return f"{day} · {clock}"
+
+
+class ClientWeeklyDigestMailer(Mailer):
+    """Email a client a once-a-week per-tenant rollup.
+
+    Three sections, all gated by the caller on ``Tenant.scheduled_report_enabled``:
+      * **This week at a glance** — what ran + the headline KPIs (last 7 days).
+      * **Coming up** — activations in the next 7 days.
+      * **Needs your approval** — requests still awaiting sign-off.
+
+    Pre-formats every value into plain strings here so the template is a dumb
+    renderer (no tz math, no model access at render time).
+    """
+
+    def __init__(
+        self,
+        *,
+        recipients: "_Iterable[str]",
+        tenant_name: str,
+        digest: "WeeklyDigest",
+        reply_to_email: str | None = None,
+    ) -> None:
+        # De-dup recipients case-insensitively (same posture as the monthly
+        # report mailer) — cheap typo protection on top of the cron's resolve.
+        seen: set[str] = set()
+        clean: list[str] = []
+        for r in recipients:
+            norm = (r or "").strip()
+            if not norm:
+                continue
+            key = norm.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            clean.append(norm)
+        self.recipients = clean
+        self.tenant_name = (tenant_name or "").strip() or "Your brand"
+        self.digest = digest
+        self.reply_to_email = (
+            (reply_to_email or "").strip() or "events@igniteproductions.co"
+        )
+
+    def _period_label(self) -> str:
+        start = (
+            self.digest.start.replace(tzinfo=None).strftime("%b %d").replace(" 0", " ")
+        )
+        end = (
+            self.digest.end.replace(tzinfo=None).strftime("%b %d").replace(" 0", " ")
+        )
+        return f"{start} – {end}"
+
+    def _subject_line(self) -> str:
+        d = self.digest
+        # Lead the subject with the single most action-worthy fact so it reads
+        # well in a crowded inbox: pending approvals first, else what's coming.
+        if d.pending_total:
+            tail = (
+                f"{d.pending_total} awaiting approval"
+                if d.pending_total != 1
+                else "1 awaiting approval"
+            )
+        elif d.upcoming_total:
+            tail = f"{d.upcoming_total} coming up"
+        else:
+            tail = "your weekly recap"
+        return f"{self.tenant_name}: {tail} — week of {self._period_label()}"
+
+    def _context(self) -> dict:
+        d = self.digest
+        base = _client_base_url()
+        kpis = d.kpis
+        return {
+            "tenant_name": self.tenant_name,
+            "period_label": self._period_label(),
+            "glance": {
+                "completed_activations": d.completed_activations,
+                "recaps_filed": d.recaps_filed,
+                "total_engagements": kpis.total_engagements,
+                "samples_distributed": kpis.samples_distributed,
+                "products_sold": kpis.products_sold,
+            },
+            "upcoming": [
+                {
+                    "name": u.name,
+                    "when": _fmt_when(u.when),
+                    "address": u.address,
+                }
+                for u in d.upcoming
+            ],
+            "upcoming_total": d.upcoming_total,
+            "upcoming_overflow": d.upcoming_overflow,
+            "pending": [
+                {
+                    "name": p.name,
+                    "when": _fmt_when(p.when, with_time=False),
+                    "url": f"{base}/request/view/{p.uuid}" if base else "",
+                }
+                for p in d.pending
+            ],
+            "pending_total": d.pending_total,
+            "pending_overflow": d.pending_overflow,
+            "links": {
+                "dashboard": f"{base}/" if base else "",
+                "tracker": f"{base}/master-tracker" if base else "",
+                "approvals": f"{base}/approvals" if base else "",
+            },
+        }
+
+    def envelope(self) -> Envelope:
+        return Envelope(
+            subject=self._subject_line(),
+            template="events.templates.emails.client_weekly_digest",
+            from_email=getattr(
+                settings,
+                "DEFAULT_FROM_EMAIL",
+                "Spark by Ignite <no-reply@igniteproductions.co>",
+            ),
+            to_emails=self.recipients,
+            headers={"Reply-To": self.reply_to_email},
+            context=self._context(),
+        )
