@@ -1576,6 +1576,99 @@ class ShiftAttendanceMutations:
             client_mutation_id=input.client_mutation_id,
         )
 
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def release_my_shift(
+        self,
+        info: strawberry.Info,
+        input: inputs.CancelShiftInviteInput,
+    ) -> CancelShiftInviteResponse:
+        """A BA drops a shift they're booked on but can't make.
+
+        Self-scoped: only the caller's own AmbassadorEvent can be released
+        (cross-BA attempts get the same "not found" as a missing row, so we
+        don't leak existence). Frees the slot by deleting the row — the exact
+        effect as an admin removal — and pings the event's RMM + notification-
+        group admins to re-staff (also lands in their in-app inbox). PENDING
+        offers use the decline path; this is only for APPROVED bookings, and
+        only before the shift starts.
+        """
+        from django.utils import timezone as _tz
+
+        user = info.context.request.user
+        cmid = input.client_mutation_id
+
+        def _release():
+            try:
+                ae = AmbassadorEvent.objects.select_related(
+                    "ambassador",
+                    "ambassador__user",
+                    "event",
+                    "event__request",
+                    "event__location",
+                ).get(uuid=str(input.ambassador_event_uuid))
+            except AmbassadorEvent.DoesNotExist:
+                return (False, "Shift not found.", None, None, None)
+
+            if getattr(ae.ambassador, "user_id", None) != getattr(user, "id", None):
+                return (False, "Shift not found.", None, None, None)
+            if not ae.is_approved:
+                return (False, "This shift isn't booked yet.", None, None, None)
+
+            ev = ae.event
+            start = getattr(ev, "start_time", None)
+            if start is not None and start <= _tz.now():
+                return (
+                    False,
+                    "This shift has already started — message your RMM.",
+                    None,
+                    None,
+                    None,
+                )
+
+            ba_name = (
+                (getattr(ae.ambassador.user, "first_name", "") or "").strip()
+                or getattr(ae.ambassador.user, "email", "")
+                or "A BA"
+            )
+            ev_name = getattr(ev, "name", None) or "a shift"
+            ev_date = getattr(ev, "date", None) or start
+            watchers = _event_watcher_user_ids(ev)
+
+            ae.delete()
+            return (True, "You're off this shift — we've let the team know.",
+                    ba_name, (ev_name, ev_date), watchers)
+
+        ok, msg, ba_name, ev_info, watchers = await sync_to_async(_release)()
+        if not ok:
+            return CancelShiftInviteResponse(
+                success=False, message=msg, client_mutation_id=cmid
+            )
+
+        # Best-effort re-staff ping to the RMM + notification-group admins.
+        try:
+            from ambassadors.push import send_push_to_user
+
+            ev_name, ev_date = ev_info
+            date_str = ""
+            if ev_date is not None:
+                try:
+                    date_str = f" on {ev_date.strftime('%a %b %-d')}"
+                except Exception:
+                    date_str = ""
+            for uid in watchers or []:
+                await send_push_to_user(
+                    uid,
+                    title="Shift dropped — needs re-staffing",
+                    body=f"{ba_name} can't make {ev_name}{date_str}.",
+                    data={"kind": "shift_dropped", "screen": "today"},
+                )
+        except Exception:
+            pass
+
+        return CancelShiftInviteResponse(
+            success=True, message=msg, client_mutation_id=cmid
+        )
+
 
 def _event_watcher_user_ids(event) -> list[int]:
     """User ids to notify about a shift event: the request's assigned RMM
