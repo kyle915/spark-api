@@ -1064,3 +1064,19 @@ class PushPreferences:
     chat: bool
     pay: bool
     gigs: bool
+
+
+@strawberry.type
+class OpenShiftItem:
+    """A dropped shift the current BA can claim from the "Open shifts" board.
+    ``open_shift_uuid`` is the claimable OpenShift row (pass it to
+    claimOpenShift), not the event uuid."""
+
+    open_shift_uuid: strawberry.ID
+    event_uuid: strawberry.ID
+    event_name: str
+    venue: str | None
+    address: str | None
+    start_time: str | None
+    end_time: str | None
+    state_code: str | None

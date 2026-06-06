@@ -1338,3 +1338,52 @@ class PushPreference(models.Model):
 
     def __str__(self):
         return f"PushPreference(user={self.user_id})"
+
+
+class OpenShift(models.Model):
+    """A booked shift a BA dropped that's now claimable by another eligible BA
+    — the self-serve half of shift-swap. Created by ``release_my_shift`` when a
+    BA releases an approved booking; an eligible BA can then claim it from the
+    mobile "Open shifts" board, which instantly books them (a new approved
+    AmbassadorEvent) without admin involvement.
+
+    One row == one freed slot. ``my_open_shifts`` only ever surfaces rows that
+    are unclaimed AND whose event is still in the future, so stale rows simply
+    fall out of view once the event passes (no cleanup job needed). Claiming
+    stamps ``claimed_by``/``claimed_at`` under ``select_for_update`` so two BAs
+    racing for the same slot can't both win.
+    """
+
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    event = models.ForeignKey(
+        Event,
+        on_delete=models.CASCADE,
+        related_name="open_shifts",
+    )
+    released_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="open_shifts_released",
+    )
+    claimed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="open_shifts_claimed",
+    )
+    claimed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["claimed_at"]),
+            models.Index(fields=["event"]),
+        ]
+
+    def __str__(self):
+        state = "claimed" if self.claimed_at else "open"
+        return f"OpenShift(event={self.event_id} {state})"

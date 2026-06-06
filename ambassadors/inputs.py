@@ -643,6 +643,16 @@ class CancelShiftInviteInput(SparkGraphQLInput):
 
 
 @strawberry.input
+class ClaimOpenShiftInput(SparkGraphQLInput):
+    """A BA claims a dropped shift from the self-serve "Open shifts" board.
+    Books them instantly (no admin approval) when the slot is still open and
+    they're eligible. ``open_shift_uuid`` is the OpenShift row, not the event.
+    """
+
+    open_shift_uuid: strawberry.ID
+
+
+@strawberry.input
 class BulkInviteToShiftInput(SparkGraphQLInput):
     """Admin invites several BAs to one event in a single call.
 
