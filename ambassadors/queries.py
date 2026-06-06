@@ -1427,7 +1427,19 @@ class AmbassadorEventQueries:
         # thread-sensitive sync_to_async calls can deadlock the single shared
         # executor under the test harness. A fresh worker thread is safe for a
         # read-only ORM query.
-        return await sync_to_async(_fetch, thread_sensitive=False)()
+        #
+        # fresh_db_connection is REQUIRED here: the non-thread-sensitive pool
+        # thread keeps its thread-local DB connection across requests, and
+        # Django's request-lifecycle cleanup never reaches it — so a connection
+        # the server later closes (Cloud SQL idle timeout) gets reused and
+        # raises "the connection is closed" (which surfaced as the BA-assign
+        # "This section couldn't load" error). The wrapper forces a fresh
+        # connection per call.
+        from utils.db import fresh_db_connection
+
+        return await sync_to_async(
+            fresh_db_connection(_fetch), thread_sensitive=False
+        )()
 
 
 @strawberry.type
