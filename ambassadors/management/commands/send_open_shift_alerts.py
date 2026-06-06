@@ -51,6 +51,10 @@ class Command(BaseCommand):
             PushDevice,
         )
         from ambassadors.push import _send_push_to_user_sync
+        from ambassadors.reliability import (
+            NEUTRAL_SORT_SCORE,
+            reliability_for_users,
+        )
 
         try:
             from ambassadors.staffing import _haversine_miles
@@ -96,12 +100,30 @@ class Command(BaseCommand):
                     "ambassador_id", flat=True
                 )
             )
-            candidates = (
+            candidates = list(
                 Ambassador.objects.filter(
                     id__in=worked_amb_ids, user_id__in=device_user_ids
                 )
                 .exclude(id__in=already_amb_ids)
                 .select_related("user")
+            )
+
+            # Rank most-reliable-first so that when the fan-out is capped
+            # (max_per_shift) the BAs most likely to actually show up are the
+            # ones pinged. One batched set of grouped COUNTs for the whole pool
+            # (no N+1); ties break on completed-shift count. New BAs sort at a
+            # neutral rank — above known droppers, below proven-reliable.
+            reliability = reliability_for_users([a.user_id for a in candidates])
+            candidates.sort(
+                key=lambda a: (
+                    reliability[a.user_id].sort_score
+                    if a.user_id in reliability
+                    else NEUTRAL_SORT_SCORE,
+                    reliability[a.user_id].completed
+                    if a.user_id in reliability
+                    else 0,
+                ),
+                reverse=True,
             )
 
             sent_this = 0
