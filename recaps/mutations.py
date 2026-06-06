@@ -3754,8 +3754,14 @@ class RecapMutationService(SparkGraphQLMixin):
         # Render PDF off-thread so a slow WeasyPrint pass doesn't block
         # the event loop and so we don't trip Django's async-context
         # warning when downstream ORM access happens during render.
+        # fresh_db_connection: build_recap_pdf does ORM reads while rendering,
+        # and the non-thread-sensitive pool thread can otherwise reuse a
+        # server-closed connection ("the connection is closed"). Force a fresh
+        # one per call (same guard as ambassadorsBookedOnDate).
+        from utils.db import fresh_db_connection
+
         pdf_bytes = await sync_to_async(
-            build_recap_pdf, thread_sensitive=False
+            fresh_db_connection(build_recap_pdf), thread_sensitive=False
         )(recap, image_entries)
         timestamp = django_timezone.now().strftime("%Y%m%d%H%M%S")
         blob_name = f"recaps/pdfs/{recap.uuid}-{timestamp}.pdf"

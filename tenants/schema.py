@@ -245,7 +245,14 @@ async def _build_server_info() -> ServerInfoType:
     import os
     from datetime import datetime, timezone as _tz
 
-    db_ok = await sync_to_async(_check_database_ok_sync, thread_sensitive=False)()
+    # fresh_db_connection: the non-thread-sensitive pool thread can reuse a
+    # server-closed connection; closing before the probe makes the health
+    # check accurate instead of failing on a stale handle.
+    from utils.db import fresh_db_connection
+
+    db_ok = await sync_to_async(
+        fresh_db_connection(_check_database_ok_sync), thread_sensitive=False
+    )()
 
     return ServerInfoType(
         server_time=datetime.now(_tz.utc).isoformat(),
