@@ -1,0 +1,361 @@
+{% load static %}<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Your weekly Spark digest</title>
+    <style type="text/css">
+      @media only screen and (max-width: 600px) {
+        .shell { width: 100% !important; }
+        .pad   { padding-left: 24px !important; padding-right: 24px !important; }
+        .hero  { font-size: 28px !important; line-height: 32px !important; }
+        .tile  { display: block !important; width: 100% !important; }
+      }
+      a.cta:hover { filter: brightness(1.05); }
+    </style>
+  </head>
+  <body
+    style="margin:0;padding:0;background:#f4f4f0;
+           font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,
+                       'Helvetica Neue',Arial,sans-serif;
+           color:#0a0d09;">
+    <table role="presentation" cellspacing="0" cellpadding="0" border="0"
+           width="100%" style="background:#f4f4f0;">
+      <tr>
+        <td align="center" style="padding:24px 12px;">
+          <!-- Email card -->
+          <table role="presentation" cellspacing="0" cellpadding="0" border="0"
+                 width="600" class="shell"
+                 style="width:600px;max-width:600px;
+                        background:#ffffff;border-radius:18px;
+                        overflow:hidden;
+                        box-shadow:0 1px 2px rgba(10,13,9,0.04);">
+
+            <!-- Header: Spark BY IGNITE logo on dark band -->
+            <tr>
+              <td class="pad" style="padding:24px 40px;background:#0a0d09;">
+                <img src="https://spark-new-admin.web.app/legal/spark-logo-full.png"
+                     alt="Spark by Ignite"
+                     width="180" height="auto"
+                     style="display:block;height:auto;border:0;outline:none;
+                            text-decoration:none;" />
+              </td>
+            </tr>
+
+            <!-- Hero copy -->
+            <tr>
+              <td class="pad" style="padding:36px 40px 8px 40px;">
+                <p style="margin:0 0 4px 0;
+                          font-family:'Courier New',Courier,monospace;
+                          font-size:10px;letter-spacing:0.22em;
+                          color:#5a6354;">
+                  WEEKLY DIGEST · {{ period_label }}
+                </p>
+                <h1 class="hero"
+                    style="margin:0;
+                           font-family:Georgia,'Times New Roman',serif;
+                           font-weight:700;font-size:34px;line-height:38px;
+                           letter-spacing:-0.02em;color:#0a0d09;">
+                  This week with {{ tenant_name }}.
+                </h1>
+              </td>
+            </tr>
+
+            <!-- Body intro -->
+            <tr>
+              <td class="pad" style="padding:14px 40px 4px 40px;">
+                <p style="margin:0;font-size:15px;line-height:22px;color:#3b4034;">
+                  Here's your field-marketing week at a glance — what ran, what's
+                  coming up, and anything waiting on your approval.
+                </p>
+              </td>
+            </tr>
+
+            <!-- ===================================================== -->
+            <!-- SECTION 1 — This week at a glance                      -->
+            <!-- ===================================================== -->
+            <tr>
+              <td class="pad" style="padding:26px 40px 4px 40px;">
+                <p style="margin:0 0 12px 0;
+                          font-family:Georgia,'Times New Roman',serif;
+                          font-weight:700;font-size:18px;
+                          letter-spacing:-0.01em;color:#0a0d09;">
+                  This week at a glance
+                </p>
+
+                <!-- Headline tile row: Activations · Recaps · Engagements -->
+                <table role="presentation" cellspacing="0" cellpadding="0" border="0"
+                       width="100%" style="border-collapse:separate;border-spacing:0;">
+                  <tr>
+                    <td class="tile" valign="top" width="33%"
+                        style="padding:14px 12px;background:#f9f9f4;
+                               border:1px solid #eeeae0;border-radius:12px;">
+                      <p style="margin:0;font-family:Georgia,'Times New Roman',serif;
+                                font-weight:700;font-size:28px;line-height:30px;color:#0a0d09;">
+                        {{ glance.completed_activations }}
+                      </p>
+                      <p style="margin:4px 0 0 0;font-family:'Courier New',Courier,monospace;
+                                font-size:10px;letter-spacing:0.14em;color:#5a6354;">
+                        ACTIVATIONS RAN
+                      </p>
+                    </td>
+                    <td width="10">&nbsp;</td>
+                    <td class="tile" valign="top" width="33%"
+                        style="padding:14px 12px;background:#f9f9f4;
+                               border:1px solid #eeeae0;border-radius:12px;">
+                      <p style="margin:0;font-family:Georgia,'Times New Roman',serif;
+                                font-weight:700;font-size:28px;line-height:30px;color:#0a0d09;">
+                        {{ glance.recaps_filed }}
+                      </p>
+                      <p style="margin:4px 0 0 0;font-family:'Courier New',Courier,monospace;
+                                font-size:10px;letter-spacing:0.14em;color:#5a6354;">
+                        RECAPS FILED
+                      </p>
+                    </td>
+                    <td width="10">&nbsp;</td>
+                    <td class="tile" valign="top" width="33%"
+                        style="padding:14px 12px;background:#f9f9f4;
+                               border:1px solid #eeeae0;border-radius:12px;">
+                      <p style="margin:0;font-family:Georgia,'Times New Roman',serif;
+                                font-weight:700;font-size:28px;line-height:30px;color:#0a0d09;">
+                        {{ glance.total_engagements }}
+                      </p>
+                      <p style="margin:4px 0 0 0;font-family:'Courier New',Courier,monospace;
+                                font-size:10px;letter-spacing:0.14em;color:#5a6354;">
+                        ENGAGEMENTS
+                      </p>
+                    </td>
+                  </tr>
+                </table>
+
+                <!-- Secondary metrics: samples + products sold -->
+                <table role="presentation" cellspacing="0" cellpadding="0" border="0"
+                       width="100%" style="border:1px solid #eeeae0;border-radius:12px;
+                              border-collapse:separate;border-spacing:0;overflow:hidden;margin-top:10px;">
+                  <tr>
+                    <td style="padding:10px 14px;border-bottom:1px solid #eeeae0;font-size:12px;font-weight:700;color:#3b4034;width:60%;">Samples distributed</td>
+                    <td style="padding:10px 14px;border-bottom:1px solid #eeeae0;font-size:13px;color:#0a0d09;">{{ glance.samples_distributed }}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:10px 14px;font-size:12px;font-weight:700;color:#3b4034;">Products sold</td>
+                    <td style="padding:10px 14px;font-size:13px;color:#0a0d09;">{{ glance.products_sold }}</td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+
+            {% if links.dashboard %}
+            <tr>
+              <td class="pad" style="padding:12px 40px 0 40px;">
+                <a href="{{ links.dashboard }}" class="cta"
+                   style="display:inline-block;background:#c5f546;color:#0a0d09;
+                          padding:10px 18px;border-radius:999px;
+                          font-family:Georgia,'Times New Roman',serif;
+                          font-weight:700;font-size:13px;text-decoration:none;
+                          letter-spacing:-0.01em;box-shadow:0 0 0 1px #b2dd41 inset;">
+                  Open your dashboard →
+                </a>
+              </td>
+            </tr>
+            {% endif %}
+
+            <!-- ===================================================== -->
+            <!-- SECTION 2 — Coming up (next 7 days)                    -->
+            <!-- ===================================================== -->
+            <tr>
+              <td class="pad" style="padding:28px 40px 4px 40px;">
+                <p style="margin:0 0 4px 0;
+                          font-family:Georgia,'Times New Roman',serif;
+                          font-weight:700;font-size:18px;
+                          letter-spacing:-0.01em;color:#0a0d09;">
+                  Coming up
+                  <span style="font-family:-apple-system,Arial,sans-serif;font-weight:400;font-size:13px;color:#7a8074;">· next 7 days</span>
+                </p>
+              </td>
+            </tr>
+            <tr>
+              <td class="pad" style="padding:8px 40px 4px 40px;">
+                {% if upcoming %}
+                <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%"
+                       style="border:1px solid #eeeae0;border-radius:12px;border-collapse:separate;border-spacing:0;overflow:hidden;">
+                  {% for ev in upcoming %}
+                  <tr>
+                    <td style="padding:12px 14px;{% if not forloop.last %}border-bottom:1px solid #eeeae0;{% endif %}">
+                      <p style="margin:0;font-size:14px;font-weight:700;color:#0a0d09;">{{ ev.name }}</p>
+                      <p style="margin:3px 0 0 0;font-size:12px;color:#5a6354;">
+                        {{ ev.when }}{% if ev.address %} · {{ ev.address }}{% endif %}
+                      </p>
+                    </td>
+                  </tr>
+                  {% endfor %}
+                </table>
+                {% if upcoming_overflow %}
+                <p style="margin:8px 0 0 0;font-size:12px;color:#7a8074;">
+                  + {{ upcoming_overflow }} more on the tracker.
+                </p>
+                {% endif %}
+                {% if links.tracker %}
+                <p style="margin:10px 0 0 0;">
+                  <a href="{{ links.tracker }}" style="color:#5fb8ef;text-decoration:none;font-size:13px;font-weight:600;">
+                    View the full schedule →
+                  </a>
+                </p>
+                {% endif %}
+                {% else %}
+                <p style="margin:0;font-size:13px;line-height:20px;color:#7a8074;">
+                  Nothing on the calendar for the next 7 days. Want to schedule
+                  an activation? Reply to this email and we'll set it up.
+                </p>
+                {% endif %}
+              </td>
+            </tr>
+
+            <!-- ===================================================== -->
+            <!-- SECTION 3 — Needs your approval                        -->
+            <!-- ===================================================== -->
+            <tr>
+              <td class="pad" style="padding:28px 40px 4px 40px;">
+                <p style="margin:0 0 4px 0;
+                          font-family:Georgia,'Times New Roman',serif;
+                          font-weight:700;font-size:18px;
+                          letter-spacing:-0.01em;color:#0a0d09;">
+                  Needs your approval
+                  {% if pending_total %}<span style="font-family:'Courier New',Courier,monospace;font-size:11px;color:#ef5a2a;letter-spacing:0.08em;">&nbsp;{{ pending_total }} PENDING</span>{% endif %}
+                </p>
+              </td>
+            </tr>
+            <tr>
+              <td class="pad" style="padding:8px 40px 4px 40px;">
+                {% if pending %}
+                <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%"
+                       style="border:1px solid #f3d7cb;border-radius:12px;border-collapse:separate;border-spacing:0;overflow:hidden;background:#fdf4ef;">
+                  {% for rq in pending %}
+                  <tr>
+                    <td style="padding:12px 14px;{% if not forloop.last %}border-bottom:1px solid #f3d7cb;{% endif %}">
+                      <p style="margin:0;font-size:14px;font-weight:700;color:#0a0d09;">
+                        {% if rq.url %}<a href="{{ rq.url }}" style="color:#0a0d09;text-decoration:none;">{{ rq.name }}</a>{% else %}{{ rq.name }}{% endif %}
+                      </p>
+                      <p style="margin:3px 0 0 0;font-size:12px;color:#5a6354;">Requested {{ rq.when }}</p>
+                    </td>
+                  </tr>
+                  {% endfor %}
+                </table>
+                {% if pending_overflow %}
+                <p style="margin:8px 0 0 0;font-size:12px;color:#7a8074;">
+                  + {{ pending_overflow }} more awaiting review.
+                </p>
+                {% endif %}
+                {% if links.approvals %}
+                <p style="margin:12px 0 0 0;">
+                  <a href="{{ links.approvals }}" class="cta"
+                     style="display:inline-block;background:#c5f546;color:#0a0d09;
+                            padding:10px 18px;border-radius:999px;
+                            font-family:Georgia,'Times New Roman',serif;
+                            font-weight:700;font-size:13px;text-decoration:none;
+                            letter-spacing:-0.01em;box-shadow:0 0 0 1px #b2dd41 inset;">
+                    Review &amp; approve →
+                  </a>
+                </p>
+                {% endif %}
+                {% else %}
+                <p style="margin:0;font-size:13px;line-height:20px;color:#7a8074;">
+                  You're all caught up — nothing is waiting on your approval. 🎉
+                </p>
+                {% endif %}
+              </td>
+            </tr>
+
+            <!-- Sign-off -->
+            <tr>
+              <td class="pad" style="padding:26px 40px 4px 40px;">
+                <p style="margin:0;font-size:14px;line-height:20px;color:#3b4034;">
+                  — Spark, Ignite Productions
+                </p>
+              </td>
+            </tr>
+
+            <!-- Divider -->
+            <tr>
+              <td class="pad" style="padding:8px 40px 0 40px;">
+                <hr style="border:0;border-top:1px solid #ef5a2a;margin:0;" />
+              </td>
+            </tr>
+
+            <!-- Disclaimer -->
+            <tr>
+              <td class="pad" style="padding:16px 40px 8px 40px;">
+                <p style="margin:0;font-size:12px;line-height:18px;
+                          color:#7a8074;font-style:italic;">
+                  This is your automated weekly digest from Spark, Ignite's field
+                  marketing platform. Prefer a different cadence or want to turn
+                  this off? Just reply and a human will follow up.
+                </p>
+              </td>
+            </tr>
+
+            <!-- Ignite signature block -->
+            <tr>
+              <td class="pad" style="padding:16px 40px 36px 40px;">
+                <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+                  <tr>
+                    <td valign="top" width="140" style="padding-right:18px;">
+                      <a href="https://www.igniteproductions.co"
+                         style="display:inline-block;text-decoration:none;">
+                        <img src="https://admin.igniteproductions.co/legal/ignite-full-white.png"
+                             alt="Ignite Productions"
+                             width="140" height="auto"
+                             style="display:block;width:140px;height:auto;
+                                    border:0;outline:none;text-decoration:none;
+                                    background:#0a0d09;padding:14px;
+                                    border-radius:10px;" />
+                      </a>
+                    </td>
+                    <td valign="top" style="font-size:14px;line-height:22px;color:#0a0d09;">
+                      <p style="margin:0 0 4px 0;color:#ef5a2a;font-weight:700;font-size:16px;">
+                        Ignite Productions
+                      </p>
+                      <p style="margin:0 0 4px 0;color:#3b4034;">
+                        Brand Activation &amp; Event Marketing Agency
+                      </p>
+                      <p style="margin:0;">
+                        📞 <a href="tel:+17754060435"
+                              style="color:#0a0d09;text-decoration:none;">775-406-0435</a>
+                      </p>
+                      <p style="margin:0;">
+                        ✉️ <a href="mailto:staffing@igniteproductions.co"
+                              style="color:#ef5a2a;text-decoration:none;">staffing@igniteproductions.co</a>
+                      </p>
+                      <p style="margin:0;">
+                        🌐 <a href="https://www.igniteproductions.co"
+                              style="color:#5fb8ef;text-decoration:none;">igniteproductions.co</a>
+                      </p>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+
+            <!-- Legal footer -->
+            <tr>
+              <td class="pad"
+                  style="padding:18px 40px 28px 40px;
+                         background:#f9f9f4;border-top:1px solid #eeeae0;">
+                <p style="margin:0;font-family:'Courier New',Courier,monospace;
+                          font-size:10px;letter-spacing:0.16em;color:#7a8074;
+                          line-height:16px;">
+                  © {% now "Y" %} IGNITE PRODUCTIONS LLC<br/>
+                  <a href="https://spark-new-admin.web.app/legal/terms-of-service.pdf"
+                     style="color:#7a8074;">TERMS</a>
+                  &nbsp;·&nbsp;
+                  <a href="https://spark-new-admin.web.app/legal/privacy-policy.pdf"
+                     style="color:#7a8074;">PRIVACY</a>
+                </p>
+              </td>
+            </tr>
+          </table>
+
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>

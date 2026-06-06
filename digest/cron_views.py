@@ -1507,6 +1507,90 @@ class SendOpenShiftAlertsView(View):
         return JsonResponse({"ok": True, "endpoint": "send-open-shift-alerts"})
 
 
+@method_decorator(csrf_exempt, name="dispatch")
+class SendClientWeeklyDigestView(View):
+    """POST `/internal/cron/send-client-weekly-digest`.
+
+    Fires `send_client_weekly_digest` — builds each opted-in tenant's weekly
+    rollup (this week at a glance / coming up / needs your approval) and emails
+    it to that tenant's client contacts. Designed for a WEEKLY GHA cron
+    (Monday AM): the command's trailing window is the last 7 days and the
+    look-ahead is the next 7 days.
+
+    SAFE — OPT-IN OFF by default. Reuses the SAME gate as the monthly report:
+    only tenants with `scheduled_report_enabled=True` AND recipients get email,
+    and that flag defaults to False — so a scheduled run emails NOBODY until
+    Ignite flips a client on. Quiet weeks are skipped unless `force`.
+
+    Body / query params (all optional):
+      - dry_run: "1" / "true" / "yes" — build the digest + log recipients,
+        but send NO email.
+      - tenant: int — restrict to a single tenant id (does NOT bypass opt-in).
+      - force: "1" / "true" / "yes" — send even if the week is quiet.
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _bool(name: str, default: bool = False) -> bool:
+            raw = (request.GET.get(name) or request.POST.get(name) or "").lower()
+            return raw in ("1", "true", "yes", "on") if raw else default
+
+        dry_run = _bool("dry_run", default=False)
+        force = _bool("force", default=False)
+
+        tenant = request.GET.get("tenant") or request.POST.get("tenant")
+        if tenant:
+            try:
+                int(tenant)
+            except ValueError:
+                return JsonResponse(
+                    {"ok": False, "error": "tenant must be an integer"},
+                    status=400,
+                )
+
+        cmd_args: list[str] = []
+        if dry_run:
+            cmd_args.append("--dry-run")
+        if force:
+            cmd_args.append("--force")
+        if tenant:
+            cmd_args.extend(["--tenant", str(tenant)])
+
+        out = io.StringIO()
+        try:
+            call_command("send_client_weekly_digest", *cmd_args, stdout=out)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("Client weekly digest cron failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "log": out.getvalue(),
+                },
+                status=500,
+            )
+
+        return JsonResponse(
+            {
+                "ok": True,
+                "dry_run": dry_run,
+                "force": force,
+                "tenant": tenant,
+                "log": out.getvalue(),
+            }
+        )
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        return JsonResponse({"ok": True, "endpoint": "send-client-weekly-digest"})
+
+
 def _registered_views() -> dict[str, Any]:
     """Map URL path → view class. Lets `digest/urls.py` mount these
     without each one being re-exported explicitly.
@@ -1522,6 +1606,7 @@ def _registered_views() -> dict[str, Any]:
         "send-payment-notifications": SendPaymentNotificationsView,
         "send-document-expiry-reminders": SendDocumentExpiryRemindersView,
         "send-scheduled-client-reports": SendScheduledClientReportsView,
+        "send-client-weekly-digest": SendClientWeeklyDigestView,
         "repair-approved-event-status": RepairApprovedEventStatusView,
         "repair-missing-events-for-approved-requests": (
             RepairMissingEventsForApprovedRequestsView
