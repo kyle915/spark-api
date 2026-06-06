@@ -2610,3 +2610,61 @@ class AttendanceMobileQueries:
             return None
         except service.get_model().DoesNotExist:
             return None
+
+
+@strawberry.type
+class NotificationQueries:
+    """Mobile Notifications inbox — the per-user log of pushes we've sent.
+
+    Strictly self-scoped: every row is filtered to the JWT user, so there's no
+    cross-user exposure. Powers the inbox list + the unread badge.
+    """
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def my_notifications(
+        self,
+        info: strawberry.Info,
+        limit: int = 50,
+    ) -> list[types.NotificationItem]:
+        import json as _json
+
+        user = info.context.request.user
+        if not getattr(user, "is_authenticated", False):
+            return []
+        capped = max(1, min(int(limit or 50), 100))
+
+        def _fetch() -> list:
+            rows = list(
+                models.PushNotification.objects.filter(user=user).order_by(
+                    "-created_at"
+                )[:capped]
+            )
+            out: list = []
+            for n in rows:
+                out.append(
+                    types.NotificationItem(
+                        uuid=strawberry.ID(str(n.uuid)),
+                        title=n.title or "",
+                        body=n.body or "",
+                        kind=n.kind or "",
+                        data_json=(
+                            _json.dumps(n.data) if n.data not in (None, {}) else None
+                        ),
+                        read=n.read_at is not None,
+                        created_at=n.created_at.isoformat() if n.created_at else "",
+                    )
+                )
+            return out
+
+        return await sync_to_async(_fetch)()
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def my_unread_notification_count(self, info: strawberry.Info) -> int:
+        user = info.context.request.user
+        if not getattr(user, "is_authenticated", False):
+            return 0
+        return await sync_to_async(
+            lambda: models.PushNotification.objects.filter(
+                user=user, read_at__isnull=True
+            ).count()
+        )()

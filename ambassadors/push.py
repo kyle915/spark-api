@@ -59,6 +59,33 @@ User = get_user_model()
 DEFAULT_ANDROID_CHANNEL = "default"
 
 
+@sync_to_async
+def _record_push_notification(
+    user_id: int,
+    title: str,
+    body: str,
+    data: "dict[str, Any] | None",
+) -> None:
+    """Best-effort: persist an in-app record of this push for the inbox.
+
+    Logged regardless of device reachability, so the BA's Notifications inbox
+    reflects everything we sent (push delivery itself is fire-and-forget and
+    keeps no history). Never raises into the caller.
+    """
+    from .models import PushNotification
+
+    kind = ""
+    if isinstance(data, dict):
+        kind = str(data.get("kind") or data.get("screen") or "")[:64]
+    PushNotification.objects.create(
+        user_id=user_id,
+        title=(title or "")[:255],
+        body=body or "",
+        data=data if isinstance(data, dict) else None,
+        kind=kind,
+    )
+
+
 async def send_push_to_user(
     user: "User | int",
     *,
@@ -80,6 +107,16 @@ async def send_push_to_user(
     """
     user_id = user.pk if hasattr(user, "pk") else int(user)
     client = client or expo_push_client
+
+    # Log the in-app record FIRST, before the device check — the BA's
+    # Notifications inbox should reflect everything we sent even when no device
+    # is currently reachable. Best-effort: a logging failure never blocks send.
+    try:
+        await _record_push_notification(user_id, title, body, data)
+    except Exception:
+        logger.warning(
+            "failed to record push notification for user_id=%s", user_id, exc_info=True
+        )
 
     devices = await sync_to_async(
         lambda: list(

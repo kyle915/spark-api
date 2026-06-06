@@ -55,6 +55,7 @@ class AmbassadorQueryMobile(
     queries.AmbassadorSkillQueries,
     queries.AttendanceMobileQueries,
     queries.GroupTypeQueries,
+    queries.NotificationQueries,
 ):
     pass
 
@@ -73,6 +74,7 @@ class AmbassadorMutationsMobile(
     mutations.AmbassadorMobileMutations,
     mutations.AttendanceMutations,
     mutations.ShiftAttendanceMutations,
+    mutations.NotificationMutations,
 ):
     pass
 
