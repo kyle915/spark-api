@@ -1974,12 +1974,18 @@ class TalentProfileDetailQueries:
                 models.AmbassadorPhoto.objects.filter(ambassador_id=ambassador.id)
             )
 
-        photos, gig_history, stats = await asyncio.gather(
+        from ambassadors.reliability import compute_reliability
+
+        photos, gig_history, stats, reliability = await asyncio.gather(
             fetch_photos(),
             sync_to_async(_gig_rows_for_ambassador)(
                 ambassador.id, resolved_tenant_id
             ),
             sync_to_async(_ba_stats)(ambassador.id, resolved_tenant_id),
+            # Reliability is shift-history-wide (completed/dropped/claimed
+            # across all tenants), not tenant-scoped — a BA's dependability is
+            # a property of the BA, so it reads the same from any admin.
+            sync_to_async(compute_reliability)(ambassador.user_id),
         )
 
         user = ambassador.user
@@ -2013,6 +2019,11 @@ class TalentProfileDetailQueries:
             rating_count=stats["rating_count"],
             jobs_count=stats["jobs_count"],
             on_time_rate=stats["on_time_rate"],
+            reliability_score=reliability.score,
+            reliability_label=reliability.label,
+            completed_shifts=reliability.completed,
+            dropped_shifts=reliability.dropped,
+            claimed_shifts=reliability.claimed,
         )
 
 

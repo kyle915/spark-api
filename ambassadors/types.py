@@ -751,6 +751,16 @@ class AmbassadorProfileDetail:
     # Share of completed shifts with an on-time clock-in, 0-100; None
     # when the BA has no completed shifts to measure.
     on_time_rate: float | None = None
+    # ---- reliability (completed vs dropped, + claimed) ----
+    # Dependability score 0-100, or None when the BA has no shift history
+    # yet (label "New"). Computed by ambassadors.reliability: completed +
+    # claimed shifts over completed + claimed + dropped. Same signal used to
+    # order open-shift alerts most-reliable-first.
+    reliability_score: int | None = None
+    reliability_label: str = "New"
+    completed_shifts: int = 0
+    dropped_shifts: int = 0
+    claimed_shifts: int = 0
 
 
 @strawberry_django.type(models.AttendanceType)
