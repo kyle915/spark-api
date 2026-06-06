@@ -2668,3 +2668,29 @@ class NotificationQueries:
                 user=user, read_at__isnull=True
             ).count()
         )()
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def my_push_preferences(
+        self, info: strawberry.Info
+    ) -> types.PushPreferences:
+        """The signed-in BA's push opt-ins. A missing row = everything on."""
+        user = info.context.request.user
+        _defaults = types.PushPreferences(
+            shift_offers=True, reminders=True, chat=True, pay=True, gigs=True
+        )
+        if not getattr(user, "is_authenticated", False):
+            return _defaults
+
+        def _fetch() -> types.PushPreferences:
+            pref = models.PushPreference.objects.filter(user=user).first()
+            if pref is None:
+                return _defaults
+            return types.PushPreferences(
+                shift_offers=pref.shift_offers,
+                reminders=pref.reminders,
+                chat=pref.chat,
+                pay=pref.pay,
+                gigs=pref.gigs,
+            )
+
+        return await sync_to_async(_fetch)()

@@ -1301,3 +1301,40 @@ class PushNotification(models.Model):
 
     def __str__(self):
         return f"PushNotification(user={self.user_id} {self.title!r})"
+
+
+class PushPreference(models.Model):
+    """Per-user push notification opt-outs, by category.
+
+    A *missing* row means "everything on" — the default for every user who
+    never visits the Notifications settings screen. Only discretionary
+    categories are represented here; transactional pushes (you got booked,
+    your shift was cancelled, an applicant decision, …) are never gated and
+    always send. ``send_push_to_user`` consults this row after writing the
+    in-app inbox record, so muting a category silences the push banner
+    without dropping the history.
+
+    Category → which pushes it gates (see ``ambassadors.push._push_category``):
+      * shift_offers — "New shift offered" invites
+      * reminders    — activation reminders, recap nudges, pre-shift checklist
+      * chat         — new chat messages
+      * pay          — payment-sent notifications
+      * gigs         — nearby/new-gig marketplace alerts
+    """
+
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="push_preference",
+    )
+    shift_offers = models.BooleanField(default=True)
+    reminders = models.BooleanField(default=True)
+    chat = models.BooleanField(default=True)
+    pay = models.BooleanField(default=True)
+    gigs = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"PushPreference(user={self.user_id})"
