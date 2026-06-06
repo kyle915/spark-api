@@ -8,16 +8,23 @@ from typing import Optional, Tuple
 from zoneinfo import ZoneInfo
 from django.conf import settings
 from django.utils import timezone
+import httplib2
 from google.oauth2.credentials import Credentials
-from google.auth.transport.requests import Request
 from google.auth.exceptions import RefreshError
-from google_auth_httplib2 import AuthorizedHttp
+from google_auth_httplib2 import AuthorizedHttp, Request as Httplib2Request
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 from tenants.models import GoogleCalendarConnection, User
 from events.models import Event, GoogleCalendarEvent, TimeZone
 from .constants import GOOGLE_CALENDAR_SCOPES
+
+# Hard ceiling on every Google Calendar HTTP call (OAuth token refresh + API
+# requests). Without it, google-auth's requests transport defaults to 120s and
+# httplib2 to NO timeout — a stalled call hangs the caller. That inline hang in
+# the AmbassadorEvent post_save froze the invite mutation for ~2 min. Calendar
+# sync is best-effort, so keep this short.
+_CALENDAR_HTTP_TIMEOUT_SECONDS = 10
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +88,11 @@ class GoogleCalendarService:
         if connection.token_expiry and connection.token_expiry <= timezone.now():
             if refresh_token:
                 try:
-                    credentials.refresh(Request())
+                    credentials.refresh(
+                        Httplib2Request(
+                            httplib2.Http(timeout=_CALENDAR_HTTP_TIMEOUT_SECONDS)
+                        )
+                    )
                     # Update stored tokens
                     connection.set_access_token(credentials.token)
                     if credentials.refresh_token:
@@ -137,7 +148,9 @@ class GoogleCalendarService:
         if not credentials:
             return None
 
-        http = AuthorizedHttp(credentials)
+        http = AuthorizedHttp(
+            credentials, http=httplib2.Http(timeout=_CALENDAR_HTTP_TIMEOUT_SECONDS)
+        )
         return build("calendar", "v3", http=http)
 
     def _ensure_service_and_connection(

@@ -7,6 +7,7 @@ This module tests:
 - Signal triggers RQ jobs correctly
 """
 import pytest
+import threading
 from unittest.mock import patch, MagicMock
 from datetime import date, time, datetime
 from django.contrib.auth import get_user_model
@@ -17,6 +18,15 @@ from events.models import Client, Distributor, Retailer, Location
 from ambassadors.models import Ambassador, AmbassadorEvent
 
 User = get_user_model()
+
+
+def _join_calendar_sync_threads(timeout: float = 5.0) -> None:
+    """The AmbassadorEvent calendar sync runs in a daemon thread (so a slow
+    Google API call can't freeze the save / invite mutation). Join those
+    threads so assertions observe the completed call deterministically."""
+    for t in list(threading.enumerate()):
+        if t.name.startswith("cal-sync-ae-"):
+            t.join(timeout=timeout)
 
 
 @pytest.mark.django_db
@@ -215,6 +225,10 @@ class TestGoogleCalendarSignals:
             created_by=self.ambassador_user  # Ambassador creates the AmbassadorEvent
         )
 
+        # Calendar sync now runs in a daemon thread (so a slow Google call
+        # can't freeze the save / invite). Wait for it before asserting.
+        _join_calendar_sync_threads()
+
         # Verify job was instantiated with event_id from AmbassadorEvent
         mock_job_class.assert_called_once_with(ambassador_event.event_id)
         # Verify send_to_ambassadors() was called
@@ -243,6 +257,10 @@ class TestGoogleCalendarSignals:
             tenant=self.tenant,
             created_by=self.client_user
         )
+
+        # Calendar sync now runs in a daemon thread (so a slow Google call
+        # can't freeze the save / invite). Wait for it before asserting.
+        _join_calendar_sync_threads()
 
         # Verify job was instantiated with event_id from AmbassadorEvent
         mock_job_class.assert_called_once_with(ambassador_event.event_id)
