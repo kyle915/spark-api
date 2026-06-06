@@ -1636,6 +1636,15 @@ class ShiftAttendanceMutations:
             watchers = _event_watcher_user_ids(ev)
 
             ae.delete()
+            # Reopen the freed slot for self-serve claim by another eligible BA
+            # (the "Open shifts" board). Best-effort — the drop itself must
+            # succeed even if we can't record the open slot.
+            try:
+                from .models import OpenShift
+
+                OpenShift.objects.create(event=ev, released_by=user)
+            except Exception:
+                pass
             return (True, "You're off this shift — we've let the team know.",
                     ba_name, (ev_name, ev_date), watchers)
 
@@ -1662,6 +1671,130 @@ class ShiftAttendanceMutations:
                     title="Shift dropped — needs re-staffing",
                     body=f"{ba_name} can't make {ev_name}{date_str}.",
                     data={"kind": "shift_dropped", "screen": "today"},
+                )
+        except Exception:
+            pass
+
+        return CancelShiftInviteResponse(
+            success=True, message=msg, client_mutation_id=cmid
+        )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def claim_open_shift(
+        self,
+        info: strawberry.Info,
+        input: inputs.ClaimOpenShiftInput,
+    ) -> CancelShiftInviteResponse:
+        """A BA claims a dropped shift from the self-serve "Open shifts" board.
+
+        Instantly books them (an approved AmbassadorEvent) — no admin approval
+        — when the slot is still open, the event is in the future, and the BA is
+        eligible (has worked with the brand, isn't already on the event).
+        Race-safe: the OpenShift is locked with select_for_update, so if two
+        BAs race for the same slot only the first wins; the loser gets a clear
+        "just claimed" message. The event's RMM + notification-group admins get
+        a heads-up push so re-staffing oversight stays intact.
+        """
+        from django.db import transaction
+        from django.utils import timezone as _tz
+        from .models import Ambassador, OpenShift
+
+        user = info.context.request.user
+        cmid = input.client_mutation_id
+
+        def _claim():
+            with transaction.atomic():
+                try:
+                    row = (
+                        OpenShift.objects.select_for_update()
+                        .select_related("event")
+                        .get(uuid=str(input.open_shift_uuid))
+                    )
+                except OpenShift.DoesNotExist:
+                    return (False, "This shift is no longer available.", None, None)
+
+                if row.claimed_at is not None:
+                    return (
+                        False,
+                        "This shift was just claimed by someone else.",
+                        None,
+                        None,
+                    )
+
+                ev = row.event
+                start = getattr(ev, "start_time", None)
+                if start is not None and start <= _tz.now():
+                    return (False, "This shift has already started.", None, None)
+
+                ambassador = Ambassador.objects.filter(user=user).first()
+                if ambassador is None:
+                    return (False, "This shift is no longer available.", None, None)
+
+                # Eligibility: must have history with this brand (tenant) — the
+                # same audience my_open_shifts surfaces it to.
+                worked = set(
+                    AmbassadorEvent.objects.filter(ambassador=ambassador)
+                    .values_list("event__tenant_id", flat=True)
+                )
+                if ev.tenant_id not in worked:
+                    return (False, "This shift isn't available to you.", None, None)
+
+                # If they're somehow already on the event, just resolve the open
+                # slot rather than creating a duplicate booking.
+                already = AmbassadorEvent.objects.filter(
+                    ambassador=ambassador, event=ev
+                ).exists()
+                if not already:
+                    AmbassadorEvent.objects.create(
+                        ambassador=ambassador,
+                        event=ev,
+                        tenant_id=ev.tenant_id,
+                        is_approved=True,
+                        created_by=user,
+                    )
+
+                row.claimed_by = user
+                row.claimed_at = _tz.now()
+                row.save(update_fields=["claimed_by", "claimed_at"])
+
+                ba_name = (
+                    (getattr(user, "first_name", "") or "").strip()
+                    or getattr(user, "email", "")
+                    or "A BA"
+                )
+                ev_name = getattr(ev, "name", None) or "a shift"
+                ev_date = getattr(ev, "date", None) or start
+                watchers = _event_watcher_user_ids(ev)
+                return (
+                    True,
+                    "You're booked — see you there!",
+                    (ba_name, ev_name, ev_date),
+                    watchers,
+                )
+
+        ok, msg, info_tuple, watchers = await sync_to_async(_claim)()
+        if not ok:
+            return CancelShiftInviteResponse(
+                success=False, message=msg, client_mutation_id=cmid
+            )
+
+        # Heads-up to the RMM + notification-group admins that the slot filled.
+        try:
+            from ambassadors.push import send_push_to_user
+
+            ba_name, ev_name, ev_date = info_tuple
+            date_str = ""
+            if ev_date is not None:
+                try:
+                    date_str = f" on {ev_date.strftime('%a %b %-d')}"
+                except Exception:
+                    date_str = ""
+            for uid in watchers or []:
+                await send_push_to_user(
+                    uid,
+                    title="Open shift claimed",
+                    body=f"{ba_name} grabbed {ev_name}{date_str}.",
+                    data={"kind": "shift_claimed", "screen": "today"},
                 )
         except Exception:
             pass

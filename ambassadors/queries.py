@@ -819,6 +819,93 @@ class AmbassadorEventQueries:
         return await sync_to_async(_fetch, thread_sensitive=True)()
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def my_open_shifts(
+        self,
+        info: strawberry.Info,
+    ) -> list[types.OpenShiftItem]:
+        """Dropped shifts the current BA can claim — the self-serve "Open
+        shifts" board.
+
+        A shift shows here when it is: unclaimed, still in the future, for a
+        brand (tenant) the BA has worked with before, not one they dropped
+        themselves, and not an event they're already on. This keeps the board
+        relevant and tenant-safe (no cross-brand exposure). Claiming is
+        instant via claimOpenShift. Sorted next-up first.
+        """
+        from django.utils import timezone
+
+        user = info.context.request.user
+        if not getattr(user, "is_authenticated", False):
+            return []
+
+        def _fetch() -> list:
+            ambassador = models.Ambassador.objects.filter(user=user).first()
+            if ambassador is None:
+                return []
+            now = timezone.now()
+            # Brands this BA has any history with (vetted audience for a drop).
+            worked_tenant_ids = set(
+                models.AmbassadorEvent.objects.filter(ambassador=ambassador)
+                .values_list("event__tenant_id", flat=True)
+            )
+            if not worked_tenant_ids:
+                return []
+            # Events the BA already has a row on — never show those.
+            my_event_ids = set(
+                models.AmbassadorEvent.objects.filter(
+                    ambassador=ambassador
+                ).values_list("event_id", flat=True)
+            )
+            qs = (
+                models.OpenShift.objects.select_related(
+                    "event", "event__retailer", "event__state"
+                )
+                .filter(
+                    claimed_at__isnull=True,
+                    event__start_time__gte=now,
+                    event__tenant_id__in=worked_tenant_ids,
+                )
+                .exclude(released_by_id=getattr(user, "id", None))
+                .exclude(event_id__in=my_event_ids)
+                .order_by("event__start_time")[:100]
+            )
+            out: list = []
+            seen_events: set = set()
+            for row in qs:
+                ev = row.event
+                # One card per event even if it was dropped more than once.
+                if ev.id in seen_events:
+                    continue
+                seen_events.add(ev.id)
+                venue = (
+                    getattr(ev, "name", None)
+                    or getattr(getattr(ev, "retailer", None), "name", None)
+                )
+                out.append(
+                    types.OpenShiftItem(
+                        open_shift_uuid=strawberry.ID(str(row.uuid)),
+                        event_uuid=strawberry.ID(str(ev.uuid)),
+                        event_name=venue or "(shift)",
+                        venue=venue,
+                        address=getattr(ev, "address", None),
+                        start_time=(
+                            ev.start_time.isoformat()
+                            if getattr(ev, "start_time", None)
+                            else None
+                        ),
+                        end_time=(
+                            ev.end_time.isoformat()
+                            if getattr(ev, "end_time", None)
+                            else None
+                        ),
+                        state_code=getattr(getattr(ev, "state", None), "code", None),
+                    )
+                )
+            return out
+
+        return await sync_to_async(_fetch, thread_sensitive=True)()
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def my_earnings_stats(
         self,
         info: strawberry.Info,
