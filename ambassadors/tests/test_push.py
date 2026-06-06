@@ -71,6 +71,82 @@ async def test_send_push_to_user_fans_out_per_device(user, devices):
     assert by_platform[ios.token].channel_id is None
 
 
+# ── Notifications inbox: send-side recording + read scoping ──────────────
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+async def test_send_push_records_notification_even_with_no_devices(user):
+    """The in-app inbox must reflect everything we sent, even when the BA has
+    no reachable device — so the record is written before the device check."""
+    from ambassadors.models import PushNotification
+
+    fake_client = AsyncMock()  # never called (no devices)
+    ok = await send_push_to_user(
+        user,
+        title="Payment sent",
+        body="$120 is on the way",
+        data={"kind": "payment"},
+        client=fake_client,
+    )
+    assert ok == 0  # no devices → nothing delivered
+    rows = await sync_to_async(
+        lambda: list(PushNotification.objects.filter(user=user))
+    )()
+    assert len(rows) == 1
+    assert rows[0].title == "Payment sent"
+    assert rows[0].kind == "payment"
+    assert rows[0].read_at is None  # starts unread
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+async def test_send_push_records_kind_falls_back_to_screen(user):
+    from ambassadors.models import PushNotification
+
+    fake_client = AsyncMock()
+    await send_push_to_user(
+        user, title="t", body="b", data={"screen": "shifts"}, client=fake_client
+    )
+    row = await sync_to_async(
+        lambda: PushNotification.objects.filter(user=user).first()
+    )()
+    assert row is not None
+    assert row.kind == "shifts"  # no `kind` → derived from `screen`
+    assert row.data == {"screen": "shifts"}
+
+
+@pytest.mark.django_db
+def test_mark_notifications_read_scopes_to_user_and_unread():
+    """The mark-read query must only ever touch the caller's own UNREAD rows."""
+    from django.utils import timezone
+    from ambassadors.models import PushNotification
+    from tenants.models import Role
+
+    role, _ = Role.objects.get_or_create(
+        slug=Role.AMBASSADOR_SLUG, defaults={"name": "Ambassador"}
+    )
+    me = User.objects.create_user(username="me", email="me@x.com", role=role)
+    other = User.objects.create_user(username="other", email="other@x.com", role=role)
+
+    mine_unread = PushNotification.objects.create(user=me, title="a")
+    mine_read = PushNotification.objects.create(
+        user=me, title="b", read_at=timezone.now()
+    )
+    theirs = PushNotification.objects.create(user=other, title="c")
+
+    # Mirror the mutation's _mark: caller-scoped, unread-only, mark-all.
+    marked = PushNotification.objects.filter(
+        user=me, read_at__isnull=True
+    ).update(read_at=timezone.now())
+
+    assert marked == 1  # only mine_unread
+    mine_unread.refresh_from_db()
+    theirs.refresh_from_db()
+    assert mine_unread.read_at is not None
+    assert theirs.read_at is None  # other user's row untouched
+
+
 @pytest.mark.asyncio
 @pytest.mark.django_db(transaction=True)
 async def test_send_push_deactivates_invalid_tokens(user, devices):

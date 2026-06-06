@@ -1035,3 +1035,19 @@ class OAuthSignInResponse:
     user: OAuthUserType | None = None
     is_new_account: bool = False
     client_mutation_id: strawberry.ID | None = None
+
+
+@strawberry.type
+class NotificationItem:
+    """One row in the mobile Notifications inbox — a push we recorded for this
+    BA. ``data_json`` is the original push payload (screen + ids) JSON-encoded
+    so the client can deep-link the tap; ``kind`` is a coarse category for the
+    row icon."""
+
+    uuid: strawberry.ID
+    title: str
+    body: str
+    kind: str
+    data_json: str | None
+    read: bool
+    created_at: str

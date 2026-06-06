@@ -1264,3 +1264,40 @@ class ShiftExtensionRequest(models.Model):
             f"extension {self.minutes_requested}min "
             f"ba={self.ambassador_id} ev={self.event_id} [{self.status}]"
         )
+
+
+class PushNotification(models.Model):
+    """An in-app record of a push notification sent to a user.
+
+    Push delivery through Expo is fire-and-forget and leaves no history, so a
+    BA who swipes a notification away loses it. We log every push here (per
+    user) when ``send_push_to_user`` fires — independent of whether a device
+    was actually reachable — so the mobile Notifications inbox can show the
+    history and deep-link from ``data``.
+    """
+
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="push_notifications",
+    )
+    title = models.CharField(max_length=255)
+    body = models.TextField(blank=True, default="")
+    # The push `data` payload (screen / ids) used for in-app deep-linking.
+    data = models.JSONField(null=True, blank=True)
+    # Coarse category for grouping / iconography, derived from `data` at send
+    # time (e.g. "shift_offer", "recap_nudge", "chat", "payment").
+    kind = models.CharField(max_length=64, blank=True, default="")
+    read_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["user", "-created_at"]),
+            models.Index(fields=["user", "read_at"]),
+        ]
+
+    def __str__(self):
+        return f"PushNotification(user={self.user_id} {self.title!r})"

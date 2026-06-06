@@ -1945,3 +1945,35 @@ class AttendanceMutations:
         input: inputs.UpdateAttendanceInput,
     ) -> AttendanceDetailResponse:
         return await AttendanceMutationService.update(input, info)
+
+
+@strawberry.type
+class NotificationMutations:
+    """Mark Notifications-inbox rows read. Self-scoped: only the caller's own
+    rows are ever touched (filter by the JWT user), so passing another user's
+    uuid is a silent no-op."""
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def mark_notifications_read(
+        self,
+        info: strawberry.Info,
+        uuids: list[strawberry.ID] | None = None,
+    ) -> int:
+        """Mark the given notification uuids read, or ALL unread when no uuids
+        are passed (the "mark all read" affordance). Returns the count newly
+        marked read."""
+        from django.utils import timezone as _tz
+
+        from .models import PushNotification
+
+        user = info.context.request.user
+        if not getattr(user, "is_authenticated", False):
+            return 0
+
+        def _mark() -> int:
+            qs = PushNotification.objects.filter(user=user, read_at__isnull=True)
+            if uuids:
+                qs = qs.filter(uuid__in=[str(u) for u in uuids])
+            return qs.update(read_at=_tz.now())
+
+        return await sync_to_async(_mark)()
