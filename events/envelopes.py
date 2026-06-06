@@ -67,6 +67,29 @@ def _admin_request_url(request: models.Request | None) -> str:
     return f"{base}/request/view/{request.uuid}"
 
 
+def _request_product_names(request) -> list[str]:
+    """Distinct SKU/product names selected on a request, for the email detail
+    table. Best-effort and sync-safe: envelope() runs synchronously, so the
+    reverse `request_product` query is fine here; any lookup failure yields an
+    empty list so the email still sends without the products row.
+    """
+    if not request or not getattr(request, "id", None):
+        return []
+    try:
+        rows = request.request_product.select_related("product").all()
+        names: list[str] = []
+        seen: set[str] = set()
+        for rp in rows:
+            product = getattr(rp, "product", None)
+            name = ((getattr(product, "name", None) or "").strip()) if product else ""
+            if name and name not in seen:
+                seen.add(name)
+                names.append(name)
+        return names
+    except Exception:
+        return []
+
+
 def _state_code_for_tz_fallback(obj) -> str | None:
     """Best-effort 2-letter US state code for the no-TimeZone email fallback.
 
@@ -226,6 +249,7 @@ class RequestApprovedNotificationMailer(Mailer):
             to_emails=self.to_emails,
             context={
                 "request": self.request,
+                "products": _request_product_names(self.request),
                 "location": self.location,
                 "request_date": _format_dt_no_tz(
                     self.request.date, "%B %d, %Y", offset
@@ -325,6 +349,7 @@ class RequestorRequestApprovedMailer(Mailer):
             from_email="Spark by Ignite <no-reply@igniteproductions.co>",
             context={
                 "request": self.request,
+                "products": _request_product_names(self.request),
                 "location": self.location,
                 "request_id": getattr(self.request, "id", None),
                 "request_url": _admin_request_url(self.request),
@@ -421,6 +446,7 @@ class RequestorRequestDeclinedMailer(Mailer):
             from_email="Spark by Ignite <no-reply@igniteproductions.co>",
             context={
                 "request": self.request,
+                "products": _request_product_names(self.request),
                 "location": self.location,
                 "request_id": getattr(self.request, "id", None),
                 "request_url": _admin_request_url(self.request),
@@ -479,6 +505,7 @@ class RequestCreatedNotificationMailer(Mailer):
             to_emails=self.to_emails,
             context={
                 "request": self.request,
+                "products": _request_product_names(self.request),
                 "location": self.location,
                 "recipient_name": self.recipient_name or "",
                 "request_url": request_url,
@@ -514,6 +541,7 @@ class ClientRequestCreatedNotificationMailer(Mailer):
             to_emails=self.to_emails,
             context={
                 "request": self.request,
+                "products": _request_product_names(self.request),
                 "location": self.location,
                 "request_date": _format_dt_no_tz(
                     self.request.date, "%B %d, %Y", offset
@@ -609,6 +637,7 @@ class RmmAssignedRequestMailer(Mailer):
             headers={"Reply-To": "staffing@igniteproductions.co"},
             context={
                 "request": self.request,
+                "products": _request_product_names(self.request),
                 "location": self.location,
                 "request_id": getattr(self.request, "id", None),
                 "request_url": _admin_request_url(self.request),
@@ -710,6 +739,7 @@ class RequestorRequestCreatedMailer(Mailer):
             headers={"Reply-To": "staffing@igniteproductions.co"},
             context={
                 "request": self.request,
+                "products": _request_product_names(self.request),
                 "location": self.location,
                 "request_id": getattr(self.request, "id", None),
                 "request_url": _admin_request_url(self.request),
@@ -790,6 +820,7 @@ class RequestorRequestAutoApprovedMailer(Mailer):
             ),
             context={
                 "request": self.request,
+                "products": _request_product_names(self.request),
                 "location": self.location,
                 "request_id": request_id,
                 "request_url": _admin_request_url(self.request),
