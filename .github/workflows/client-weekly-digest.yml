@@ -1,0 +1,88 @@
+name: Client weekly digest
+
+# Fires `/internal/cron/send-client-weekly-digest` on Cloud Run once a WEEK
+# (Monday morning). Builds each opted-in tenant's weekly rollup — this week at
+# a glance / coming up (next 7 days) / needs your approval — and emails it to
+# that tenant's client contacts (see
+# tenants/management/commands/send_client_weekly_digest.py).
+#
+# SAFE — OPT-IN OFF by default. Reuses the SAME gate as the monthly report:
+# only tenants with scheduled_report_enabled=True AND recipients configured get
+# email; that flag defaults to False, so until Ignite flips a client on this
+# run emails NOBODY. Quiet weeks are skipped unless `force`.
+#
+# Secret-gated via X-Cron-Secret (shared INTERNAL_CRON_SECRET) — same setup as
+# the monthly send-scheduled-client-reports workflow.
+#
+# NOTE: GitHub only fires `schedule:` from the DEFAULT branch (main), but the
+# cron ENDPOINT deploys from develop. So this workflow must live on BOTH
+# branches — same as activation-reminders.yml / open-shift-alerts.yml.
+#
+# Schedule: 14:30 UTC Monday = 07:30 PT (DST) / 06:30 PST. 30-past avoids GHA's
+# on-the-hour cron jitter (same offset convention as the other crons).
+
+on:
+  schedule:
+    # 14:30 UTC every Monday.
+    - cron: "30 14 * * 1"
+  workflow_dispatch:
+    inputs:
+      tenant:
+        description: "Restrict to a single tenant id (optional)"
+        required: false
+        default: ""
+      force:
+        description: "Send even if the week is quiet (skip the has_content gate)"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      dry_run:
+        description: "Build + log recipients, but send no email"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+jobs:
+  fire-client-weekly-digest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire client weekly digest cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/send-client-weekly-digest
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          TENANT: ${{ github.event.inputs.tenant || '' }}
+          FORCE: ${{ github.event.inputs.force || 'false' }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+
+          # Build the query string, only adding tenant/force when supplied so an
+          # unattended run falls through to the command's defaults (all opted-in
+          # tenants, quiet weeks skipped).
+          QS="dry_run=$DRY_RUN"
+          if [ "$FORCE" = "true" ]; then
+            QS="$QS&force=true"
+          fi
+          if [ -n "$TENANT" ]; then
+            QS="$QS&tenant=$TENANT"
+          fi
+
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL?$QS" \
+            -H "X-Cron-Secret: $CRON_SECRET")
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS — see body above."
+            exit 1
+          fi
