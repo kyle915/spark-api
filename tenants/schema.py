@@ -29,7 +29,6 @@ from .mutations import (
     ClientsCustomRegister,
     SparkCustomRegister,
     SparkTenantMutations,
-    LinkedSheetMutations,
     TenantThemeMutations,
     SparkUserMutations,
     AmbassadorUserMutations,
@@ -784,10 +783,15 @@ class MutationClients(
     SparkUserMutations,
     GoogleCalendarMutations,
     TenantThemeMutations,
-    # Linked-sheet management — admin frontend (which uses the clients
-    # GraphQL endpoint) needs to call setLinkedSheet. Same mixin is on
-    # SparkTenantMutations for the spark schema, so both surfaces work.
-    LinkedSheetMutations,
+    # Tenant management for the admin frontend, which talks to the CLIENTS
+    # GraphQL endpoint: createTenant (new-client onboarding) + updateTenant +
+    # setLinkedSheet. SparkTenantMutations subclasses LinkedSheetMutations, so
+    # this is a strict superset (setLinkedSheet still here). create_tenant and
+    # update_tenant self-gate to spark-admin internally, so exposing them on
+    # the clients schema is safe — a non-admin caller gets a permission-denied
+    # response, never a tenant. Fixes "Cannot query field 'createTenant'" when
+    # onboarding a new client from the admin app.
+    SparkTenantMutations,
     # Per-user Settings prefs (setMyPreferences). The web Settings page
     # talks to the clients GraphQL endpoint, so the upsert lives here.
     MyPreferencesMutations,

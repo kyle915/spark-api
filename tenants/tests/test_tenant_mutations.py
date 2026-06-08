@@ -153,3 +153,76 @@ class TestTenantMutations(BaseGraphQLTestCase):
 
     async def create_user_async(self, **kwargs):
         return await sync_to_async(self.create_user)(**kwargs)
+
+
+@pytest.mark.django_db(transaction=True)
+class TestCreateTenantOnClientsSchema(BaseGraphQLTestCase):
+    """Regression guard: the CLIENTS GraphQL schema (the one the admin web app
+    actually hits) must expose createTenant.
+
+    It briefly didn't — MutationClients included only LinkedSheetMutations, not
+    SparkTenantMutations — so onboarding a new client from the admin app failed
+    with "Cannot query field 'createTenant' on type 'Mutation'".
+    """
+
+    _MUTATION = """
+    mutation CreateTenant($input: CreateTenantInput!) {
+        createTenant(input: $input) {
+            success
+            message
+            tenant { id name uuid }
+        }
+    }
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self, db):
+        from config.schema_client import schema_clients
+
+        self.roles = self.setup_default_roles()
+        self.schema = schema_clients
+        self.endpoint_path = "/api/v1/graphql/clients"
+
+    async def create_user_async(self, **kwargs):
+        return await sync_to_async(self.create_user)(**kwargs)
+
+    @pytest.mark.asyncio
+    async def test_spark_admin_can_create_tenant_via_clients_schema(self):
+        user = await self.create_user_async(
+            username="sparkadmin_clients",
+            email="sparkadmin_clients@test.com",
+            role=self.roles["spark_admin"],
+            password="password123",
+        )
+        result = await self._execute_mutation(
+            self._MUTATION,
+            {"input": {"name": "Alloy Fitness", "clientMutationId": "c-1"}},
+            self.endpoint_path,
+            user=user,
+        )
+        # The headline regression: the field must EXIST on the clients schema
+        # (no "Cannot query field 'createTenant'") AND succeed for an admin.
+        assert result.errors is None, f"errored: {result.errors}"
+        assert result.data is not None
+        assert result.data["createTenant"]["success"] is True
+        assert result.data["createTenant"]["tenant"]["name"] == "Alloy Fitness"
+
+    @pytest.mark.asyncio
+    async def test_clients_schema_create_tenant_blocks_non_admin(self):
+        user = await self.create_user_async(
+            username="amb_clients",
+            email="amb_clients@test.com",
+            role=self.roles["ambassador"],
+            password="password123",
+        )
+        result = await self._execute_mutation(
+            self._MUTATION,
+            {"input": {"name": "Should Not Exist"}},
+            self.endpoint_path,
+            user=user,
+        )
+        # Field exists on the clients schema, but the resolver's own
+        # spark-admin self-gate still denies non-admins.
+        assert result.errors is None, f"errored: {result.errors}"
+        assert result.data["createTenant"]["success"] is False
+        assert "permission" in result.data["createTenant"]["message"].lower()
