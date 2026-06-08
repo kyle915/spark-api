@@ -75,6 +75,18 @@ _FILE_CATEGORY_SENTINEL_NAMES = {
     "2": _RECEIPTS_CATEGORY_NAME,
 }
 
+# Keyword fallbacks for tenants whose role category isn't named the exact
+# seeded default. A tenant onboarded with a CUSTOM recap template can label its
+# receipt bucket "Receipt", "Upload Receipt", "Product Purchase Receipt", etc.
+# — none of which match name__iexact="Receipts" — so the receipt sentinel "2"
+# used to fall through to the PK fallback and mis-file into "Table setup" (the
+# Girl Beer report). Matching the role by case-insensitive keyword lands the
+# file in the right bucket regardless of the exact label.
+_FILE_CATEGORY_SENTINEL_KEYWORDS = {
+    "1": ("photo",),
+    "2": ("receipt",),
+}
+
 # Anchor the sentinel role names on the seeded defaults so a rename of the
 # tenant seeds can't silently break sentinel resolution. (Local import keeps the
 # tenants.mutations dependency lazy and one-directional.)
@@ -122,14 +134,31 @@ def _resolve_file_recap_category(raw_id, *, tenant_id):
     # Positional sentinel -> tenant's own category by seeded role name. We match
     # on the *string* sentinel the clients actually send ("1"/"2"); only fall
     # through to PK behavior when there is no name match for that tenant.
-    sentinel_name = _FILE_CATEGORY_SENTINEL_NAMES.get(str(raw_id).strip())
+    sentinel = str(raw_id).strip()
+    sentinel_name = _FILE_CATEGORY_SENTINEL_NAMES.get(sentinel)
     if sentinel_name is not None and tenant_id is not None:
+        # 1) Exact seeded role name (fast path for tenants on the defaults).
         by_name = models.FileRecapCategory.objects.filter(
             tenant_id=tenant_id, name__iexact=sentinel_name
         ).first()
         if by_name is not None:
             return by_name
-        # No seeded role category for this tenant — fall through to the legacy
+        # 2) Naming variant (custom-template tenants like Girl Beer): match the
+        #    role by keyword so a receipt sentinel still lands on a category
+        #    named "Receipt" / "Upload Receipt" / "Product Purchase Receipt"
+        #    rather than mis-filing into "Table setup" via the PK fallback
+        #    below. Tenant-scoped; lowest id wins on ties.
+        for keyword in _FILE_CATEGORY_SENTINEL_KEYWORDS.get(sentinel, ()):
+            by_keyword = (
+                models.FileRecapCategory.objects.filter(
+                    tenant_id=tenant_id, name__icontains=keyword
+                )
+                .order_by("id")
+                .first()
+            )
+            if by_keyword is not None:
+                return by_keyword
+        # No role category for this tenant at all — fall through to the legacy
         # PK behavior so we degrade gracefully rather than dropping the file.
 
     try:
