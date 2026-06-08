@@ -84,8 +84,11 @@ class TestGoogleCalendarService:
             status=self.event_status,
             address="123 Test St",
             notes="Test notes",
-            start_time=datetime.now().time(),
-            end_time=(datetime.now() + timedelta(hours=2)).time(),
+            # Event.start_time / end_time are DateTimeFields — pass aware
+            # datetimes, not .time() objects (the latter tripped
+            # "fromisoformat: argument must be str" on insert).
+            start_time=timezone.now(),
+            end_time=timezone.now() + timedelta(hours=2),
             created_by=self.user
         )
 
@@ -150,7 +153,9 @@ class TestGoogleCalendarService:
         mock_events.get.return_value = mock_get
 
         mock_update.execute.return_value = {'id': 'google_event_123'}
-        mock_events.update.return_value = mock_update
+        # update_event issues events().patch(...).execute() (not .update()),
+        # so mock patch — the prior .update mock was never hit.
+        mock_events.patch.return_value = mock_update
         mock_service.events.return_value = mock_events
         mock_build.return_value = mock_service
 

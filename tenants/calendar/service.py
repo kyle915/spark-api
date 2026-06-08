@@ -509,7 +509,10 @@ class GoogleCalendarService:
         end_iso = self._format_google_datetime(end_local_with_offset)
 
         request_product_names: list[str] = []
-        if event.request_id:
+        # getattr (not event.request_id) so this formatter stays duck-typed —
+        # it's called with lightweight event stubs in tests as well as real
+        # Event rows; same defensive posture as the retailer access below.
+        if getattr(event, "request_id", None):
             request_product_names = list(
                 event.request.request_product.select_related("product")
                 .values_list("product__name", flat=True)
