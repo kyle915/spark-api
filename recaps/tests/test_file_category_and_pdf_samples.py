@@ -167,6 +167,105 @@ class TestResolveFileRecapCategoryB2(_Base):
         assert resolved.id == only_cat.id
 
 
+@pytest.mark.django_db
+class TestReceiptSentinelKeywordFallback(_Base):
+    """A custom-template tenant (e.g. Girl Beer) whose receipt bucket isn't
+    named exactly "Receipts" must STILL catch the receipt sentinel "2" by
+    keyword — never mis-file into "Table setup" via the PK fallback."""
+
+    def _seed_custom(self, tenant, receipt_name):
+        """Seed ["Sampling photos", "Table setup", <receipt_name>] in order so
+        "Table setup" gets a low PK — the layout that made the old resolver
+        mis-file sentinel "2" into "Table setup"."""
+        system_user = self.get_system_user()
+        by_name = {}
+        for name in ["Sampling photos", "Table setup", receipt_name]:
+            by_name[name] = recap_models.FileRecapCategory.objects.create(
+                name=name, tenant=tenant, created_by=system_user
+            )
+        return by_name
+
+    def test_upload_receipt_variant_matches_not_table_setup(self):
+        # The Girl Beer report: receipt bucket named "Upload Receipt".
+        tenant = self.create_tenant(name="Girl Beer Custom")
+        cats = self._seed_custom(tenant, "Upload Receipt")
+        resolved = _resolve_file_recap_category(
+            RECEIPTS_SENTINEL, tenant_id=tenant.id
+        )
+        assert resolved is not None
+        assert resolved.id == cats["Upload Receipt"].id
+        assert resolved.name == "Upload Receipt"
+        assert resolved.id != cats["Table setup"].id
+        assert resolved.name != "Table setup"
+
+    def test_singular_receipt_variant_matches(self):
+        tenant = self.create_tenant(name="Singular Co")
+        cats = self._seed_custom(tenant, "Receipt")
+        resolved = _resolve_file_recap_category(
+            RECEIPTS_SENTINEL, tenant_id=tenant.id
+        )
+        assert resolved.id == cats["Receipt"].id
+        assert resolved.name != "Table setup"
+
+    def test_descriptive_receipt_variant_matches(self):
+        tenant = self.create_tenant(name="Descriptive Co")
+        cats = self._seed_custom(tenant, "Product Purchase Receipt")
+        resolved = _resolve_file_recap_category(
+            RECEIPTS_SENTINEL, tenant_id=tenant.id
+        )
+        assert resolved.id == cats["Product Purchase Receipt"].id
+        assert resolved.name != "Table setup"
+
+    def test_exact_receipts_still_wins_over_keyword(self):
+        # When BOTH an exact "Receipts" and a keyword-ish "Receipt photos"
+        # exist, the exact seeded name takes precedence (fast path).
+        tenant = self.create_tenant(name="Both Names Co")
+        system_user = self.get_system_user()
+        recap_models.FileRecapCategory.objects.create(
+            name="Receipt photos", tenant=tenant, created_by=system_user
+        )
+        exact = recap_models.FileRecapCategory.objects.create(
+            name="Receipts", tenant=tenant, created_by=system_user
+        )
+        resolved = _resolve_file_recap_category(
+            RECEIPTS_SENTINEL, tenant_id=tenant.id
+        )
+        assert resolved.id == exact.id
+        assert resolved.name == "Receipts"
+
+    def test_photos_variant_matches_by_keyword(self):
+        tenant = self.create_tenant(name="Custom Photos Co")
+        system_user = self.get_system_user()
+        recap_models.FileRecapCategory.objects.create(
+            name="Table setup", tenant=tenant, created_by=system_user
+        )
+        photos = recap_models.FileRecapCategory.objects.create(
+            name="Event Photos", tenant=tenant, created_by=system_user
+        )
+        resolved = _resolve_file_recap_category(
+            PHOTOS_SENTINEL, tenant_id=tenant.id
+        )
+        assert resolved is not None
+        assert resolved.id == photos.id
+
+    def test_no_receipt_category_still_degrades_gracefully(self):
+        # A tenant with NO receipt-ish category at all: sentinel "2" has no
+        # keyword match and falls through to the legacy PK behavior (here PK 2
+        # = "Table setup"). Documents the one case a DATA fix (add a receipt
+        # category) is still needed — code can't invent a bucket.
+        tenant = self.create_tenant(name="No Receipt Co")
+        system_user = self.get_system_user()
+        for name in ["Sampling photos", "Table setup", "Misc"]:
+            recap_models.FileRecapCategory.objects.create(
+                name=name, tenant=tenant, created_by=system_user
+            )
+        resolved = _resolve_file_recap_category(
+            RECEIPTS_SENTINEL, tenant_id=tenant.id
+        )
+        # No "receipt" anywhere -> graceful PK/global fallback, never a crash.
+        assert resolved is None or resolved.tenant_id in (tenant.id, None)
+
+
 @pytest.mark.django_db(transaction=True)
 class TestCustomRecapPdfSamplesB6(_Base):
     """B6: custom-recap PDF HTML includes the per-SKU samples + sales rows."""
