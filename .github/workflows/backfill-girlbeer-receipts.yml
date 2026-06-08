@@ -1,18 +1,23 @@
 name: Backfill Girl Beer receipts (manual)
 
 # Manually fires `/internal/cron/backfill-girlbeer-receipts` on Cloud Run to run
-# the `backfill_girlbeer_receipts` command — re-files recap receipts that were
-# mis-categorized into "Table setup" into the tenant's receipt category (the
-# Girl Beer bug fixed for NEW uploads in #765). See
-# recaps/management/commands/backfill_girlbeer_receipts.py.
+# the `backfill_girlbeer_receipts` command. Girl Beer was onboarded WITHOUT its
+# own FileRecapCategory rows, so receipt uploads (positional sentinel "2") fell
+# through to a foreign/global PK-2 "Table setup" — a cross-tenant leak (the #765
+# bug ran deeper than a keyword match could fix). This command does the real fix
+# in two safe steps:
+#   1. SEED Girl Beer's own default categories ("Sampling photos", "Table setup",
+#      "Receipts") so NEW uploads resolve correctly.
+#   2. BACKFILL the existing mis-filed receipts — Girl Beer recap files (scoped by
+#      the file's RECAP tenant, to catch the foreign-category leak) currently in a
+#      `source`-named category are moved to the tenant's `target` ("Receipts").
+# See recaps/management/commands/backfill_girlbeer_receipts.py.
 #
-# RECATEGORIZE-ONLY: it never deletes a file or moves a blob.
+# RECATEGORIZE + SEED only: it never deletes a file or moves a blob. Idempotent.
 #
-# SAFE — DRY-RUN IS THE DEFAULT, and it's REPORT-ONLY unless you pick a
-# selection. dry_run=true sends execute=false (no writes). With no `match` and
-# move_all=false it just REPORTS the source-category files (and a
-# looks-like-receipt hint) so you can choose. To actually move, set
-# dry_run=false AND give a selection (match="receipt" or move_all=true).
+# SAFE — DRY-RUN IS THE DEFAULT. dry_run=true sends execute=false (no writes) and
+# just REPORTS what it would seed + move. Set dry_run=false to apply (seed
+# categories + move the mis-filed receipts).
 #
 # Run it from the Actions tab AFTER the endpoint is deployed (it ships from
 # develop). Secret-gated via X-Cron-Secret (shared INTERNAL_CRON_SECRET) — the
@@ -22,19 +27,9 @@ on:
   workflow_dispatch:
     inputs:
       dry_run:
-        description: "Dry run (no DB writes). Leave true to preview; set false to apply."
+        description: "Dry run (no DB writes). Leave true to preview; set false to seed + re-file."
         required: true
         default: true
-        type: boolean
-      match:
-        description: "Move only files whose name/url contains this (e.g. receipt). Empty = report only (unless move_all)."
-        required: false
-        default: ""
-        type: string
-      move_all:
-        description: "Move ALL files in the source category (use only if the dry-run shows none are legit table-setup photos)."
-        required: false
-        default: false
         type: boolean
       tenant_slug:
         description: "Tenant slug."
@@ -46,6 +41,11 @@ on:
         required: false
         default: "Table setup"
         type: string
+      target:
+        description: "Target category name to move into."
+        required: false
+        default: "Receipts"
+        type: string
 
 jobs:
   fire-backfill-girlbeer-receipts:
@@ -56,10 +56,9 @@ jobs:
           CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/backfill-girlbeer-receipts
           CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
           DRY_RUN: ${{ github.event.inputs.dry_run }}
-          MATCH: ${{ github.event.inputs.match || '' }}
-          MOVE_ALL: ${{ github.event.inputs.move_all }}
           TENANT_SLUG: ${{ github.event.inputs.tenant_slug || 'girl-beer' }}
           SOURCE: ${{ github.event.inputs.source || 'Table setup' }}
+          TARGET: ${{ github.event.inputs.target || 'Receipts' }}
         run: |
           set -euo pipefail
           if [ -z "$CRON_SECRET" ]; then
@@ -70,13 +69,12 @@ jobs:
           # dry_run=true -> execute=false (no writes); dry_run=false -> execute=true.
           if [ "$DRY_RUN" = "false" ]; then EXECUTE=true; else EXECUTE=false; fi
 
-          QS="execute=$EXECUTE&move_all=$MOVE_ALL&tenant_slug=$TENANT_SLUG"
-          if [ -n "$MATCH" ]; then
-            # URL-encode spaces minimally (the values we pass are simple tokens).
-            QS="$QS&match=$MATCH"
-          fi
+          QS="execute=$EXECUTE&tenant_slug=$TENANT_SLUG"
           if [ -n "$SOURCE" ]; then
             QS="$QS&source=$(printf '%s' "$SOURCE" | sed 's/ /%20/g')"
+          fi
+          if [ -n "$TARGET" ]; then
+            QS="$QS&target=$(printf '%s' "$TARGET" | sed 's/ /%20/g')"
           fi
 
           STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \

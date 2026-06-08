@@ -1595,24 +1595,26 @@ class SendClientWeeklyDigestView(View):
 class BackfillGirlBeerReceiptsView(View):
     """POST `/internal/cron/backfill-girlbeer-receipts`.
 
-    Fires `backfill_girlbeer_receipts` — re-files recap receipts that were
-    mis-categorized into "Table setup" (the Girl Beer bug, #765) into the
-    tenant's receipt category. RECATEGORIZE-ONLY: never deletes a file or
-    moves a blob. One-off manual backfill, not a recurring cron.
+    Fires `backfill_girlbeer_receipts`. Girl Beer was onboarded WITHOUT its
+    own FileRecapCategory rows, so receipt uploads (positional sentinel "2")
+    fell through to a foreign/global PK-2 "Table setup" — a cross-tenant leak
+    (the #765 bug ran deeper than a keyword match could fix). This command
+    does the real fix in two safe steps: (1) SEED Girl Beer's own default
+    categories ("Sampling photos", "Table setup", "Receipts") so NEW uploads
+    resolve correctly, and (2) BACKFILL the existing mis-filed receipts —
+    Girl Beer recap files (scoped by the file's RECAP tenant, to catch the
+    foreign-category leak) currently in a `source`-named category are moved to
+    the tenant's `target` ("Receipts"). RECATEGORIZE + SEED only: never
+    deletes a file or moves a blob. Idempotent. One-off manual backfill.
 
-    SAFE — DRY-RUN by default + REPORT-ONLY unless a selection is given. Only
-    an explicit `execute=true` writes, and it only moves files when `match` or
-    `move_all` is supplied. With neither, the endpoint just reports the
-    source-category files so you can choose.
+    SAFE — DRY-RUN by default. Only an explicit `execute=true` writes (seeds +
+    moves). Without it, the endpoint reports what it WOULD seed and move.
 
     Body / query params (all optional):
       - execute: "1"/"true"/"yes" — perform the writes (default OFF → dry-run).
-      - match: substring — move only files whose name/url contains it
-        (case-insensitive), e.g. "receipt".
-      - move_all: "1"/"true"/"yes" — move ALL files in the source category.
       - tenant_slug: default "girl-beer".
-      - source: source category name, default "Table setup".
-      - target: target category name (default: the tenant's receipt category).
+      - source: source category name to drain, default "Table setup".
+      - target: target category name, default "Receipts".
     """
 
     def post(self, request: HttpRequest) -> HttpResponse:
@@ -1628,20 +1630,15 @@ class BackfillGirlBeerReceiptsView(View):
             return request.GET.get(name) or request.POST.get(name) or None
 
         execute = _bool("execute", default=False)
-        move_all = _bool("move_all", default=False)
-        match = _str("match")
         tenant_slug = _str("tenant_slug") or "girl-beer"
         source = _str("source") or "Table setup"
         target = _str("target")
 
         kwargs = {
             "execute": execute,
-            "move_all": move_all,
             "tenant_slug": tenant_slug,
             "source": source,
         }
-        if match is not None:
-            kwargs["match"] = match
         if target is not None:
             kwargs["target"] = target
 
@@ -1664,9 +1661,8 @@ class BackfillGirlBeerReceiptsView(View):
             {
                 "ok": True,
                 "executed": execute,
-                "match": match,
-                "move_all": move_all,
                 "tenant_slug": tenant_slug,
+                "source": source,
                 "log": out.getvalue(),
             }
         )
