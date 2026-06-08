@@ -1591,6 +1591,93 @@ class SendClientWeeklyDigestView(View):
         return JsonResponse({"ok": True, "endpoint": "send-client-weekly-digest"})
 
 
+@method_decorator(csrf_exempt, name="dispatch")
+class BackfillGirlBeerReceiptsView(View):
+    """POST `/internal/cron/backfill-girlbeer-receipts`.
+
+    Fires `backfill_girlbeer_receipts` — re-files recap receipts that were
+    mis-categorized into "Table setup" (the Girl Beer bug, #765) into the
+    tenant's receipt category. RECATEGORIZE-ONLY: never deletes a file or
+    moves a blob. One-off manual backfill, not a recurring cron.
+
+    SAFE — DRY-RUN by default + REPORT-ONLY unless a selection is given. Only
+    an explicit `execute=true` writes, and it only moves files when `match` or
+    `move_all` is supplied. With neither, the endpoint just reports the
+    source-category files so you can choose.
+
+    Body / query params (all optional):
+      - execute: "1"/"true"/"yes" — perform the writes (default OFF → dry-run).
+      - match: substring — move only files whose name/url contains it
+        (case-insensitive), e.g. "receipt".
+      - move_all: "1"/"true"/"yes" — move ALL files in the source category.
+      - tenant_slug: default "girl-beer".
+      - source: source category name, default "Table setup".
+      - target: target category name (default: the tenant's receipt category).
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _bool(name: str, default: bool = False) -> bool:
+            raw = (request.GET.get(name) or request.POST.get(name) or "").lower()
+            return raw in ("1", "true", "yes", "on") if raw else default
+
+        def _str(name: str):
+            return request.GET.get(name) or request.POST.get(name) or None
+
+        execute = _bool("execute", default=False)
+        move_all = _bool("move_all", default=False)
+        match = _str("match")
+        tenant_slug = _str("tenant_slug") or "girl-beer"
+        source = _str("source") or "Table setup"
+        target = _str("target")
+
+        kwargs = {
+            "execute": execute,
+            "move_all": move_all,
+            "tenant_slug": tenant_slug,
+            "source": source,
+        }
+        if match is not None:
+            kwargs["match"] = match
+        if target is not None:
+            kwargs["target"] = target
+
+        out = io.StringIO()
+        try:
+            call_command("backfill_girlbeer_receipts", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("Girl Beer receipt backfill cron failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "log": out.getvalue(),
+                },
+                status=500,
+            )
+
+        return JsonResponse(
+            {
+                "ok": True,
+                "executed": execute,
+                "match": match,
+                "move_all": move_all,
+                "tenant_slug": tenant_slug,
+                "log": out.getvalue(),
+            }
+        )
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        return JsonResponse({"ok": True, "endpoint": "backfill-girlbeer-receipts"})
+
+
 def _registered_views() -> dict[str, Any]:
     """Map URL path → view class. Lets `digest/urls.py` mount these
     without each one being re-exported explicitly.
@@ -1616,4 +1703,5 @@ def _registered_views() -> dict[str, Any]:
         "backfill-ambassador-coordinates": BackfillAmbassadorCoordinatesView,
         "backfill-request-rmm-routing": BackfillRequestRmmRoutingView,
         "repair-request-activation-time": RepairRequestActivationTimeView,
+        "backfill-girlbeer-receipts": BackfillGirlBeerReceiptsView,
     }
