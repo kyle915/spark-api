@@ -29,8 +29,13 @@ class TestGoogleCalendarService:
 
         event_data = service._format_event_data(event)
 
-        assert event_data["start"]["dateTime"] == "2026-04-30T15:00:00-06:00"
-        assert event_data["end"]["dateTime"] == "2026-04-30T17:00:00-06:00"
+        # April 30 is DST in America/Chicago (CDT, UTC-5), so 3:00 PM Central
+        # is 20:00 UTC. Expressed against the event's -06:00 (CST) offset that
+        # instant reads 14:00 — i.e. 14:00-06:00 == 15:00-05:00 == 20:00 UTC,
+        # the correct instant. (The prior expectation, 15:00-06:00, ignored
+        # DST and pointed an hour late.)
+        assert event_data["start"]["dateTime"] == "2026-04-30T14:00:00-06:00"
+        assert event_data["end"]["dateTime"] == "2026-04-30T16:00:00-06:00"
         assert event_data["start"]["timeZone"] == "America/Chicago"
         assert event_data["end"]["timeZone"] == "America/Chicago"
 
@@ -52,5 +57,7 @@ class TestGoogleCalendarService:
 
         assert event_data["start"]["dateTime"] == "2026-04-30T15:00:00+00:00"
         assert event_data["end"]["dateTime"] == "2026-04-30T17:00:00+00:00"
-        assert "timeZone" not in event_data["start"]
-        assert "timeZone" not in event_data["end"]
+        # No event timezone -> the formatter defaults the Google timeZone to
+        # UTC (it always emits a timeZone now).
+        assert event_data["start"]["timeZone"] == "UTC"
+        assert event_data["end"]["timeZone"] == "UTC"
