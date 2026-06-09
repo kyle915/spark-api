@@ -1695,6 +1695,9 @@ class AuditTenantOnboardingView(View):
     Body / query params (all optional):
       - seed_file_categories / seed_defaults / rehome_foreign_files /
         execute: "1"/"true"/"yes" (all default OFF).
+      - notify: "1"/"true"/"yes" — email the Ignite team when the audit finds
+        a regression (seed gaps or cross-tenant files). Quiet runs send
+        nothing. Used by the weekly scheduled run.
     """
 
     def post(self, request: HttpRequest) -> HttpResponse:
@@ -1710,6 +1713,7 @@ class AuditTenantOnboardingView(View):
         seed_file_categories = _bool("seed_file_categories", default=False)
         seed_defaults = _bool("seed_defaults", default=False)
         rehome_foreign_files = _bool("rehome_foreign_files", default=False)
+        notify = _bool("notify", default=False)
 
         out = io.StringIO()
         try:
@@ -1720,6 +1724,7 @@ class AuditTenantOnboardingView(View):
                 seed_file_categories=seed_file_categories,
                 seed_defaults=seed_defaults,
                 rehome_foreign_files=rehome_foreign_files,
+                notify=notify,
             )
         except Exception as exc:  # noqa: BLE001 — surface to caller
             logger.exception("Tenant onboarding audit cron failed")
@@ -1740,6 +1745,7 @@ class AuditTenantOnboardingView(View):
                 "seed_file_categories": seed_file_categories,
                 "seed_defaults": seed_defaults,
                 "rehome_foreign_files": rehome_foreign_files,
+                "notify": notify,
                 "log": out.getvalue(),
             }
         )
