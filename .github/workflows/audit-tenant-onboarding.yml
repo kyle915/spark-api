@@ -7,9 +7,12 @@ name: Audit tenant onboarding (manual)
 # Girl Beer cross-tenant leak), and duplicate global skills. See
 # tenants/management/commands/audit_tenant_onboarding.py.
 #
-# READ-ONLY by default. Set seed_file_categories=true AND dry_run=false to
-# additionally create the default file categories for tenants that have NONE —
-# additive only: it never touches existing rows, never moves or deletes files.
+# READ-ONLY by default. Optional writes (each only applies when dry_run=false):
+#   - seed_file_categories: seed default file categories for tenants with NONE.
+#   - seed_defaults: same, plus rate types / types of good for tenants with zero.
+#   - rehome_foreign_files: move each cross-tenant recap file to the OWNER
+#     tenant's same-NAME category (created if missing). The category name the
+#     UI groups by is preserved exactly. Additive only — never deletes.
 #
 # Run it from the Actions tab AFTER the endpoint is deployed (it ships from
 # develop). Secret-gated via X-Cron-Secret (shared INTERNAL_CRON_SECRET) — the
@@ -19,12 +22,22 @@ on:
   workflow_dispatch:
     inputs:
       dry_run:
-        description: "Dry run (no DB writes). Leave true to report; set false (with seed_file_categories) to seed."
+        description: "Dry run (no DB writes). Leave true to report; set false to apply the selected writes."
         required: true
         default: true
         type: boolean
       seed_file_categories:
         description: "Seed default file categories for tenants that have NONE (only writes when dry_run=false)."
+        required: false
+        default: false
+        type: boolean
+      seed_defaults:
+        description: "Seed file categories AND rate types / types of good for tenants with zero (only writes when dry_run=false)."
+        required: false
+        default: false
+        type: boolean
+      rehome_foreign_files:
+        description: "Re-home cross-tenant recap files to the owner tenant's same-name category (only writes when dry_run=false)."
         required: false
         default: false
         type: boolean
@@ -39,6 +52,8 @@ jobs:
           CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
           DRY_RUN: ${{ github.event.inputs.dry_run }}
           SEED: ${{ github.event.inputs.seed_file_categories }}
+          SEED_DEFAULTS: ${{ github.event.inputs.seed_defaults }}
+          REHOME: ${{ github.event.inputs.rehome_foreign_files }}
         run: |
           set -euo pipefail
           if [ -z "$CRON_SECRET" ]; then
@@ -49,7 +64,7 @@ jobs:
           # dry_run=true -> execute=false (no writes); dry_run=false -> execute=true.
           if [ "$DRY_RUN" = "false" ]; then EXECUTE=true; else EXECUTE=false; fi
 
-          QS="execute=$EXECUTE&seed_file_categories=$SEED"
+          QS="execute=$EXECUTE&seed_file_categories=$SEED&seed_defaults=$SEED_DEFAULTS&rehome_foreign_files=$REHOME"
 
           STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
             -X POST "$CRON_URL?$QS" \

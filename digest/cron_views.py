@@ -1683,14 +1683,18 @@ class AuditTenantOnboardingView(View):
     types, types of good), recap files sitting in ANOTHER tenant's category
     (the Girl Beer cross-tenant leak), and duplicate global skills.
 
-    READ-ONLY by default. Pass `seed_file_categories=true` AND `execute=true`
-    to additionally create the default file categories for tenants that have
-    NONE — additive only; never touches existing rows or moves files.
+    READ-ONLY by default. Optional writes (each ALSO requires `execute=true`):
+      - seed_file_categories: seed default file categories for tenants with
+        NONE (additive only).
+      - seed_defaults: same, plus rate types / types of good for tenants with
+        zero of those (additive only).
+      - rehome_foreign_files: move each cross-tenant recap file to the OWNER
+        tenant's same-NAME category (created if missing) — the category name
+        the UI groups by is preserved exactly; never deletes anything.
 
     Body / query params (all optional):
-      - seed_file_categories: "1"/"true"/"yes" — seed defaults for tenants
-        with zero file categories (requires execute).
-      - execute: "1"/"true"/"yes" — actually write the seeds (default OFF).
+      - seed_file_categories / seed_defaults / rehome_foreign_files /
+        execute: "1"/"true"/"yes" (all default OFF).
     """
 
     def post(self, request: HttpRequest) -> HttpResponse:
@@ -1704,6 +1708,8 @@ class AuditTenantOnboardingView(View):
 
         execute = _bool("execute", default=False)
         seed_file_categories = _bool("seed_file_categories", default=False)
+        seed_defaults = _bool("seed_defaults", default=False)
+        rehome_foreign_files = _bool("rehome_foreign_files", default=False)
 
         out = io.StringIO()
         try:
@@ -1712,6 +1718,8 @@ class AuditTenantOnboardingView(View):
                 stdout=out,
                 execute=execute,
                 seed_file_categories=seed_file_categories,
+                seed_defaults=seed_defaults,
+                rehome_foreign_files=rehome_foreign_files,
             )
         except Exception as exc:  # noqa: BLE001 — surface to caller
             logger.exception("Tenant onboarding audit cron failed")
@@ -1730,6 +1738,8 @@ class AuditTenantOnboardingView(View):
                 "ok": True,
                 "executed": execute,
                 "seed_file_categories": seed_file_categories,
+                "seed_defaults": seed_defaults,
+                "rehome_foreign_files": rehome_foreign_files,
                 "log": out.getvalue(),
             }
         )
