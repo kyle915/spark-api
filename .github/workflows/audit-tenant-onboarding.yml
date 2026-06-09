@@ -1,0 +1,62 @@
+name: Audit tenant onboarding (manual)
+
+# Manually fires `/internal/cron/audit-tenant-onboarding` on Cloud Run to run
+# the `audit_tenant_onboarding` command. Reports, for EVERY tenant: missing
+# onboarding seeds (file categories, event/request types + statuses, rate
+# types, types of good), recap files sitting in ANOTHER tenant's category (the
+# Girl Beer cross-tenant leak), and duplicate global skills. See
+# tenants/management/commands/audit_tenant_onboarding.py.
+#
+# READ-ONLY by default. Set seed_file_categories=true AND dry_run=false to
+# additionally create the default file categories for tenants that have NONE —
+# additive only: it never touches existing rows, never moves or deletes files.
+#
+# Run it from the Actions tab AFTER the endpoint is deployed (it ships from
+# develop). Secret-gated via X-Cron-Secret (shared INTERNAL_CRON_SECRET) — the
+# secret is a HEADER, never in the URL. Manual one-off — no `schedule:`.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (no DB writes). Leave true to report; set false (with seed_file_categories) to seed."
+        required: true
+        default: true
+        type: boolean
+      seed_file_categories:
+        description: "Seed default file categories for tenants that have NONE (only writes when dry_run=false)."
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  fire-audit-tenant-onboarding:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire audit-tenant-onboarding cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/audit-tenant-onboarding
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+          SEED: ${{ github.event.inputs.seed_file_categories }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+
+          # dry_run=true -> execute=false (no writes); dry_run=false -> execute=true.
+          if [ "$DRY_RUN" = "false" ]; then EXECUTE=true; else EXECUTE=false; fi
+
+          QS="execute=$EXECUTE&seed_file_categories=$SEED"
+
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL?$QS" \
+            -H "X-Cron-Secret: $CRON_SECRET")
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS — see body above."
+            exit 1
+          fi
