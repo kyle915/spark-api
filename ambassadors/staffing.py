@@ -374,6 +374,11 @@ class StaffingSuggestion:
     is_available: bool | None = None
     # Haversine miles; null when either the event or the BA lacks coordinates.
     distance_mi: float | None = None
+    # Platform-wide completion-vs-drop record (ambassadors.reliability):
+    # 0-100 score + label ("Excellent" … "New"). Null score for BAs with no
+    # shift history — the signal is omitted from their fit score too.
+    reliability_score: int | None = None
+    reliability_label: str | None = None
     reasons: List[str] = strawberry.field(default_factory=list)
 
 
@@ -447,6 +452,8 @@ class StaffingSuggestionQueries:
                     is_favorited=row["is_favorited"],
                     is_available=row["is_available"],
                     distance_mi=row["distance_mi"],
+                    reliability_score=row.get("reliability_score"),
+                    reliability_label=row.get("reliability_label"),
                     reasons=row["reasons"],
                 )
                 for row in rows
