@@ -2096,6 +2096,29 @@ class SetScheduledReportEnabledResponse:
 
 
 @strawberry.input
+class SetClientWeeklyDigestEnabledInput(SparkGraphQLInput):
+    """Flip one tenant's weekly client-digest opt-in switch.
+
+    ``tenantId`` is the brand to toggle (a client may only toggle their own —
+    the value is overridden server-side); ``enabled`` is the new state.
+    """
+
+    tenant_id: strawberry.ID
+    enabled: bool
+
+
+@strawberry.type
+class SetClientWeeklyDigestEnabledResponse:
+    success: bool
+    message: str
+    # The persisted state after the mutation. Authoritative ONLY when
+    # ``success`` is true; on a no-op / failure it echoes the requested value
+    # (which was NOT applied), so callers should gate on ``success`` first.
+    enabled: bool
+    client_mutation_id: strawberry.ID | None = None
+
+
+@strawberry.input
 class SendTestClientReportInput(SparkGraphQLInput):
     """Request a SAFE PREVIEW of a tenant's monthly report.
 
@@ -2201,6 +2224,85 @@ class ScheduledReportMutations:
             else "Scheduled monthly report turned OFF for this brand."
         )
         return SetScheduledReportEnabledResponse(
+            success=True,
+            message=message,
+            enabled=bool(new_state),
+            client_mutation_id=input.client_mutation_id,
+        )
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def set_client_weekly_digest_enabled(
+        self,
+        info: strawberry.Info,
+        input: SetClientWeeklyDigestEnabledInput,
+    ) -> SetClientWeeklyDigestEnabledResponse:
+        """Toggle a tenant's ``client_weekly_digest_enabled`` flag.
+
+        The weekly digest's own opt-in — independent from the monthly report
+        toggle above so each rolls out per tenant separately. Tenant scoping,
+        no-op posture, and never-raise behavior mirror
+        :meth:`set_scheduled_report_enabled` exactly.
+        """
+        service = _CampaignReportService()
+        try:
+            target_tenant_id = await service.resolve_target_tenant_id(
+                info, input.tenant_id
+            )
+        except Exception:  # noqa: BLE001
+            target_tenant_id = None
+
+        if target_tenant_id is None:
+            return SetClientWeeklyDigestEnabledResponse(
+                success=False,
+                message="You do not have access to this brand.",
+                enabled=input.enabled,
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        desired = bool(input.enabled)
+
+        def _set_flag():
+            from tenants.models import Tenant
+
+            tenant = Tenant.objects.filter(id=target_tenant_id).first()
+            if tenant is None:
+                return None
+            if tenant.client_weekly_digest_enabled != desired:
+                tenant.client_weekly_digest_enabled = desired
+                tenant.save(
+                    update_fields=["client_weekly_digest_enabled", "updated_at"]
+                )
+            return tenant.client_weekly_digest_enabled
+
+        try:
+            new_state = await sync_to_async(_set_flag, thread_sensitive=True)()
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(
+                "setClientWeeklyDigestEnabled failed for tenant=%s: %s",
+                target_tenant_id,
+                exc,
+            )
+            return SetClientWeeklyDigestEnabledResponse(
+                success=False,
+                message="Could not update the weekly-digest setting.",
+                enabled=input.enabled,
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        if new_state is None:
+            return SetClientWeeklyDigestEnabledResponse(
+                success=False,
+                message="Brand not found.",
+                enabled=input.enabled,
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        message = (
+            "Weekly client digest turned ON for this brand."
+            if new_state
+            else "Weekly client digest turned OFF for this brand."
+        )
+        return SetClientWeeklyDigestEnabledResponse(
             success=True,
             message=message,
             enabled=bool(new_state),

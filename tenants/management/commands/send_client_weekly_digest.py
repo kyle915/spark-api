@@ -9,12 +9,13 @@ tenant's client contacts (:class:`recaps.envelopes.ClientWeeklyDigestMailer`):
   2. **Coming up (next 7 days)** — upcoming activations.
   3. **Needs your approval** — requests still awaiting sign-off.
 
-SAFE DEFAULT — OPT-IN OFF. Reuses the SAME opt-in the monthly report uses:
-the command only ever touches tenants with BOTH
-``scheduled_report_enabled=True`` AND a non-empty recipient list
-(``Tenant.scheduled_report_recipients()``). ``scheduled_report_enabled``
-defaults to ``False``, so deploying this is inert until Ignite flips a tenant
-on — no new model, no migration, no new toggle.
+SAFE DEFAULT — OPT-IN OFF. The digest has its OWN per-tenant flag,
+``client_weekly_digest_enabled`` (split from ``scheduled_report_enabled`` in
+migration 0025, which copied the old shared value so nobody silently lost the
+digest), so the weekly digest and the monthly report roll out independently.
+The command only ever touches tenants with BOTH the flag ON AND a non-empty
+recipient list (``Tenant.scheduled_report_recipients()`` — the same client
+contacts the recap-approval emails reach).
 
 Quiet weeks are skipped. A tenant whose week has nothing worth reporting
 (nothing ran, nothing coming up, nothing pending — see
@@ -61,8 +62,8 @@ logger = logging.getLogger(__name__)
 class Command(BaseCommand):
     help = (
         "Build + email the weekly digest to each tenant that has opted in "
-        "(scheduled_report_enabled=True) and has recipients. Quiet weeks are "
-        "skipped unless --force. Opt-in OFF by default."
+        "(client_weekly_digest_enabled=True) and has recipients. Quiet weeks "
+        "are skipped unless --force. Opt-in OFF by default."
     )
 
     def add_arguments(self, parser):
@@ -91,8 +92,10 @@ class Command(BaseCommand):
 
         # Candidate tenants: opted-in + active only. --tenant narrows to one id
         # WITHOUT bypassing the opt-in gate, so testing still can't email a
-        # brand that hasn't opted in.
-        tenants = Tenant.active().filter(scheduled_report_enabled=True)
+        # brand that hasn't opted in. The digest has its OWN flag (split from
+        # scheduled_report_enabled in migration 0025 so the weekly digest and
+        # the monthly report roll out independently per tenant).
+        tenants = Tenant.active().filter(client_weekly_digest_enabled=True)
         if only_tenant is not None:
             tenants = tenants.filter(id=only_tenant)
 
