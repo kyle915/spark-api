@@ -46,10 +46,13 @@ one into the fit score.
 
 Scoring weights (sum to 1.0 over the signals that EXIST for a BA):
 
-    rating        0.35   — past quality on this brand is the strongest signal
+    rating        0.30   — past quality on this brand is the strongest signal
     availability  0.25   — a BA who can't make the date isn't a fit
     brand_exp     0.20   — knows this brand's playbook / products
-    proximity     0.15   — less travel = more reliable show-up, lower cost
+    reliability   0.10   — platform-wide completion-vs-drop record
+                           (:mod:`ambassadors.reliability`; omitted for BAs
+                           with no shift history, so "New" isn't punished)
+    proximity     0.10   — less travel = more reliable show-up, lower cost
     favorited     0.05   — a light "the tenant likes them" nudge, not a thumb
 
 The weights are RE-NORMALIZED per BA over only the signals present for that BA
@@ -103,11 +106,16 @@ MAX_DISTANCE_MILES = 100.0
 
 # --- weights (see module docstring) ----------------------------------------
 # Documented inline; re-normalized per BA over the signals that exist.
-WEIGHT_RATING = 0.35
+WEIGHT_RATING = 0.30
 WEIGHT_AVAILABILITY = 0.25
 WEIGHT_BRAND_EXPERIENCE = 0.20
-WEIGHT_PROXIMITY = 0.15
+WEIGHT_RELIABILITY = 0.10
+WEIGHT_PROXIMITY = 0.10
 WEIGHT_FAVORITED = 0.05
+
+# A reliability score at/above this earns a human reason chip ("96% reliable");
+# below it the score still weighs in silently (no shaming strings in the UI).
+RELIABILITY_REASON_THRESHOLD = 85
 
 
 # ---------------------------------------------------------------------------
@@ -312,6 +320,7 @@ def _score_ba(
     is_favorited: bool,
     is_available: bool | None,
     distance_mi: float | None,
+    reliability=None,
 ) -> dict:
     """Compute one BA's weighted fit dict from already-resolved signals.
 
@@ -363,6 +372,15 @@ def _score_ba(
         parts.append((WEIGHT_PROXIMITY, norm))
         reasons.append(f"{distance_mi:g} mi away")
 
+    # --- reliability: platform-wide completion-vs-drop record (0-100). ----
+    # score is None for BAs with no shift history ("New") → signal omitted,
+    # so a brand-new BA isn't punished for data that doesn't exist yet.
+    rel_score = getattr(reliability, "score", None)
+    if rel_score is not None:
+        parts.append((WEIGHT_RELIABILITY, max(0.0, min(1.0, rel_score / 100.0))))
+        if rel_score >= RELIABILITY_REASON_THRESHOLD:
+            reasons.append(f"{rel_score}% reliable")
+
     # --- favorited: boolean ----------------------------------------------
     if is_favorited:
         parts.append((WEIGHT_FAVORITED, 1.0))
@@ -387,6 +405,8 @@ def _score_ba(
         "is_favorited": bool(is_favorited),
         "is_available": is_available,
         "distance_mi": distance_mi,
+        "reliability_score": rel_score,
+        "reliability_label": getattr(reliability, "label", None),
         "reasons": reasons,
     }
 
@@ -416,6 +436,8 @@ def suggest_ambassadors_for_event(
             "is_favorited": bool,
             "is_available": bool | None,  # None when the event has no date/time
             "distance_mi": float | None,  # None when either side lacks coords
+            "reliability_score": int | None,  # 0-100; None for "New" BAs
+            "reliability_label": str | None,  # e.g. "Excellent" / "New"
             "reasons": list[str],         # e.g. ["4.8★", "12 gigs for this brand"]
         }
 
@@ -474,7 +496,7 @@ def suggest_ambassadors_for_event(
         # the per-BA availability check is in-memory (same as staffing.py).
         from django.db.models import Prefetch
 
-        candidates = (
+        candidates = list(
             Ambassador.objects.filter(
                 user__tenanted_users__tenant_id=tenant_id,
                 user__tenanted_users__is_active=True,
@@ -492,6 +514,19 @@ def suggest_ambassadors_for_event(
             )
             .distinct()
         )
+
+        # Reliability is per USER and batched (three grouped COUNTs, no N+1).
+        # A failure degrades the signal for everyone rather than killing the
+        # suggestion list — same posture as the other signal maps.
+        try:
+            from ambassadors.reliability import reliability_for_users
+
+            rel_map = reliability_for_users(
+                [getattr(ba, "user_id", None) for ba in candidates]
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("staffing_suggestions: reliability batch failed")
+            rel_map = {}
 
         results: list[dict] = []
         for ba in candidates:
@@ -513,6 +548,7 @@ def suggest_ambassadors_for_event(
                     is_favorited=ba_id in favorited,
                     is_available=_ba_is_available(slots, on_date, start_t, end_t),
                     distance_mi=_haversine_miles(event_coords, ba.coordinates),
+                    reliability=rel_map.get(getattr(ba, "user_id", None)),
                 )
             )
 
