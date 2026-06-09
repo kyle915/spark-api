@@ -24,6 +24,10 @@ class TenantType(Node):
     # setScheduledReportEnabled). Lets the admin UI show the current
     # ON/OFF state. Default False (opt-in only).
     scheduled_report_enabled: strawberry.auto
+    # Read side of the WEEKLY client-digest opt-in (toggled via
+    # setClientWeeklyDigestEnabled) — its own flag so the weekly digest and
+    # the monthly report roll out independently. Default False (opt-in only).
+    client_weekly_digest_enabled: strawberry.auto
 
     @strawberry.field
     def recap_recipient_emails(self) -> str:

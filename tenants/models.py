@@ -91,6 +91,17 @@ class Tenant(Asyncable, models.Model):
         default=False,
         help_text="When ON, this brand receives an automated monthly performance-report PDF by email (sent to recap_recipient_emails). OFF by default — opt-in only.",
     )
+    # Opt-in switch for the WEEKLY client digest (the
+    # `send_client_weekly_digest` cron). Its own flag — independent from the
+    # monthly report above — so Ignite can roll each out per tenant
+    # separately; the digest previously piggybacked on
+    # `scheduled_report_enabled`, and the migration copies that value so
+    # tenants already receiving it keep receiving it. Recipients reuse
+    # `scheduled_report_recipients()`. SAFE DEFAULT: OFF.
+    client_weekly_digest_enabled = models.BooleanField(
+        default=False,
+        help_text="When ON, this brand receives the weekly field-marketing digest email (sent to recap_recipient_emails). OFF by default — opt-in only.",
+    )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
