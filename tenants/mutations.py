@@ -1990,12 +1990,18 @@ class SparkTenantMutations(LinkedSheetMutations):
                             created_by=user,
                         )
 
-                    # Skills (Skill model is global, no tenant FK)
+                    # Skills (Skill model is global, no tenant FK) — create
+                    # only the ones that don't exist yet. Skill.name has no
+                    # unique constraint, so an unconditional create() here
+                    # duplicated the whole default list on EVERY tenant
+                    # creation. filter().exists() (not get_or_create) so
+                    # pre-existing duplicates can't raise MultipleObjects.
                     for skill in DEFAULT_SKILLS:
-                        Skill.objects.create(
-                            name=skill,
-                            created_by=user,
-                        )
+                        if not Skill.objects.filter(name__iexact=skill).exists():
+                            Skill.objects.create(
+                                name=skill,
+                                created_by=user,
+                            )
 
                 return tenant
 

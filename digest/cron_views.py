@@ -1674,6 +1674,72 @@ class BackfillGirlBeerReceiptsView(View):
         return JsonResponse({"ok": True, "endpoint": "backfill-girlbeer-receipts"})
 
 
+class AuditTenantOnboardingView(View):
+    """POST `/internal/cron/audit-tenant-onboarding`.
+
+    Fires `audit_tenant_onboarding` — reports, for every tenant: missing
+    onboarding seeds (file categories, event/request types + statuses, rate
+    types, types of good), recap files sitting in ANOTHER tenant's category
+    (the Girl Beer cross-tenant leak), and duplicate global skills.
+
+    READ-ONLY by default. Pass `seed_file_categories=true` AND `execute=true`
+    to additionally create the default file categories for tenants that have
+    NONE — additive only; never touches existing rows or moves files.
+
+    Body / query params (all optional):
+      - seed_file_categories: "1"/"true"/"yes" — seed defaults for tenants
+        with zero file categories (requires execute).
+      - execute: "1"/"true"/"yes" — actually write the seeds (default OFF).
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _bool(name: str, default: bool = False) -> bool:
+            raw = (request.GET.get(name) or request.POST.get(name) or "").lower()
+            return raw in ("1", "true", "yes", "on") if raw else default
+
+        execute = _bool("execute", default=False)
+        seed_file_categories = _bool("seed_file_categories", default=False)
+
+        out = io.StringIO()
+        try:
+            call_command(
+                "audit_tenant_onboarding",
+                stdout=out,
+                execute=execute,
+                seed_file_categories=seed_file_categories,
+            )
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("Tenant onboarding audit cron failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "log": out.getvalue(),
+                },
+                status=500,
+            )
+
+        return JsonResponse(
+            {
+                "ok": True,
+                "executed": execute,
+                "seed_file_categories": seed_file_categories,
+                "log": out.getvalue(),
+            }
+        )
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        return JsonResponse({"ok": True, "endpoint": "audit-tenant-onboarding"})
+
+
 def _registered_views() -> dict[str, Any]:
     """Map URL path → view class. Lets `digest/urls.py` mount these
     without each one being re-exported explicitly.
@@ -1700,4 +1766,5 @@ def _registered_views() -> dict[str, Any]:
         "backfill-request-rmm-routing": BackfillRequestRmmRoutingView,
         "repair-request-activation-time": RepairRequestActivationTimeView,
         "backfill-girlbeer-receipts": BackfillGirlBeerReceiptsView,
+        "audit-tenant-onboarding": AuditTenantOnboardingView,
     }

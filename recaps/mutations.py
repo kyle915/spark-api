@@ -119,12 +119,13 @@ def _resolve_file_recap_category(raw_id, *, tenant_id):
 
     Resolution order:
       1. If `raw_id` is a known positional sentinel ("1"/"2"), resolve it to the
-         tenant's OWN category by its seeded role NAME (case-insensitive) —
-         "1" -> "Sampling photos", "2" -> "Receipts".
+         tenant's OWN category — exact seeded role NAME, then role keyword, and
+         if the tenant has no matching category at all, CREATE the tenant's own
+         role category (self-heal). A sentinel never resolves cross-tenant.
       2. Otherwise (a real explicit category id, e.g. one the user picked in the
-         category-management UI), keep the old behavior: the tenant's own row
-         with that exact PK, then the tenant's row sharing the global row's name,
-         then the global row, then None.
+         category-management UI): the tenant's own row with that exact PK, then
+         the tenant's row sharing that row's name, else None — never another
+         tenant's row. (Only a tenantless call may return the raw global row.)
 
     Never raises — a stray category id must not lose the recap or its files.
     """
@@ -158,8 +159,18 @@ def _resolve_file_recap_category(raw_id, *, tenant_id):
             )
             if by_keyword is not None:
                 return by_keyword
-        # No role category for this tenant at all — fall through to the legacy
-        # PK behavior so we degrade gracefully rather than dropping the file.
+        # 3) No matching role category for this tenant at all — SELF-HEAL:
+        #    create the tenant's own role category under the seeded default
+        #    name instead of falling through to the PK path. The PK path could
+        #    only land the file in ANOTHER tenant's category (the Girl Beer
+        #    leak: a tenant onboarded outside createTenant has no categories,
+        #    so sentinel "2" fell through to the global PK-2 "Table setup"
+        #    owned by a different tenant). Sentinels are role markers; they
+        #    must never resolve cross-tenant.
+        seeded, _created = models.FileRecapCategory.objects.get_or_create(
+            tenant_id=tenant_id, name=sentinel_name
+        )
+        return seeded
 
     try:
         category_id = resolve_id_to_int(raw_id)
@@ -180,6 +191,11 @@ def _resolve_file_recap_category(raw_id, *, tenant_id):
             ).first()
             if same_name is not None:
                 return same_name
+        # An explicit id that is neither the tenant's own row nor name-mappable
+        # onto one resolves to None (uncategorized) — never another tenant's
+        # category. A cross-tenant category renders fine in the UI (views group
+        # by the file's category), which is exactly why this leak went unseen.
+        return None
     return global_cat
 
 User = get_user_model()
