@@ -1674,6 +1674,7 @@ class BackfillGirlBeerReceiptsView(View):
         return JsonResponse({"ok": True, "endpoint": "backfill-girlbeer-receipts"})
 
 
+@method_decorator(csrf_exempt, name="dispatch")
 class AuditTenantOnboardingView(View):
     """POST `/internal/cron/audit-tenant-onboarding`.
 
