@@ -1,4 +1,4 @@
-name: Audit tenant onboarding (manual)
+name: Audit tenant onboarding
 
 # Manually fires `/internal/cron/audit-tenant-onboarding` on Cloud Run to run
 # the `audit_tenant_onboarding` command. Reports, for EVERY tenant: missing
@@ -14,16 +14,31 @@ name: Audit tenant onboarding (manual)
 #     tenant's same-NAME category (created if missing). The category name the
 #     UI groups by is preserved exactly. Additive only — never deletes.
 #
+# SELF-RUNNING: a weekly schedule fires a READ-ONLY pass with notify=true —
+# the endpoint emails the Ignite team only when something regressed (a tenant
+# with seed gaps or cross-tenant files). A clean week sends nothing. Scheduled
+# runs NEVER write (inputs are empty on schedule events → execute=false).
+# Manual runs from the Actions tab apply writes only when dry_run=false.
+#
 # Run it from the Actions tab AFTER the endpoint is deployed (it ships from
 # develop). Secret-gated via X-Cron-Secret (shared INTERNAL_CRON_SECRET) — the
-# secret is a HEADER, never in the URL. Manual one-off — no `schedule:`.
+# secret is a HEADER, never in the URL.
 
 on:
+  schedule:
+    # Mondays 15:07 UTC ≈ 8:07am PT (off the top of the hour to dodge GH's
+    # scheduled-job congestion). Schedules only fire from the default branch.
+    - cron: "7 15 * * 1"
   workflow_dispatch:
     inputs:
       dry_run:
         description: "Dry run (no DB writes). Leave true to report; set false to apply the selected writes."
         required: true
+        default: true
+        type: boolean
+      notify:
+        description: "Email the Ignite team if the audit finds regressions (quiet runs never email)."
+        required: false
         default: true
         type: boolean
       seed_file_categories:
@@ -54,6 +69,9 @@ jobs:
           SEED: ${{ github.event.inputs.seed_file_categories }}
           SEED_DEFAULTS: ${{ github.event.inputs.seed_defaults }}
           REHOME: ${{ github.event.inputs.rehome_foreign_files }}
+          # On schedule events inputs are empty -> notify defaults ON, writes
+          # default OFF (DRY_RUN empty != "false" -> execute=false).
+          NOTIFY: ${{ github.event.inputs.notify || 'true' }}
         run: |
           set -euo pipefail
           if [ -z "$CRON_SECRET" ]; then
@@ -64,7 +82,7 @@ jobs:
           # dry_run=true -> execute=false (no writes); dry_run=false -> execute=true.
           if [ "$DRY_RUN" = "false" ]; then EXECUTE=true; else EXECUTE=false; fi
 
-          QS="execute=$EXECUTE&seed_file_categories=$SEED&seed_defaults=$SEED_DEFAULTS&rehome_foreign_files=$REHOME"
+          QS="execute=$EXECUTE&seed_file_categories=$SEED&seed_defaults=$SEED_DEFAULTS&rehome_foreign_files=$REHOME&notify=$NOTIFY"
 
           STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
             -X POST "$CRON_URL?$QS" \
