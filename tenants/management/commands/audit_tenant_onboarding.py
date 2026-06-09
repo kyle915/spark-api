@@ -85,6 +85,57 @@ class Command(BaseCommand):
             action="store_true",
             help="Actually write. Default: report only.",
         )
+        parser.add_argument(
+            "--notify",
+            action="store_true",
+            help=(
+                "Email the Ignite team when the audit finds a regression "
+                "(seed gaps or cross-tenant files). No email when clean."
+            ),
+        )
+
+    def _write(self, msg: str) -> None:
+        """Write to stdout AND capture for the --notify email body."""
+        self._report.append(str(msg))
+        self.stdout.write(msg)
+
+    def _send_alert(self, gap_count: int, foreign_count: int) -> None:
+        """Best-effort regression alert to the Ignite team — reuses the same
+        recipient resolution the support-ticket notify uses. Never raises."""
+        try:
+            from django.conf import settings
+            from django.core.mail import EmailMessage
+
+            from tenants.support import _resolve_ignite_recipients
+
+            recipients = _resolve_ignite_recipients()
+            if not recipients:
+                self.stdout.write(
+                    "  [notify] No Ignite recipients resolved — alert skipped."
+                )
+                return
+            bits = []
+            if gap_count:
+                bits.append(f"{gap_count} tenant(s) with seed gaps")
+            if foreign_count:
+                bits.append(f"{foreign_count} cross-tenant recap file(s)")
+            subject = "[Spark] Tenant onboarding audit found issues: " + ", ".join(bits)
+            body = (
+                "The weekly tenant-onboarding audit found regressions.\n\n"
+                + "\n".join(self._report)
+                + "\n\nFix from the GitHub Actions tab: run 'Audit tenant "
+                "onboarding (manual)' with dry_run=false and the relevant "
+                "seed/rehome inputs after reviewing the report above."
+            )
+            EmailMessage(
+                subject, body, settings.DEFAULT_FROM_EMAIL, recipients
+            ).send(fail_silently=False)
+            self.stdout.write(
+                f"  [notify] Alert emailed to {len(recipients)} recipient(s)."
+            )
+        except Exception:  # noqa: BLE001 — alerting must never fail the audit
+            logger.exception("Tenant onboarding audit alert email failed")
+            self.stdout.write("  [notify] Alert email FAILED — see logs.")
 
     def handle(self, *args, **opts):
         from ambassadors.models import Skill
@@ -103,10 +154,12 @@ class Command(BaseCommand):
             DEFAULT_TYPES_OF_GOOD,
         )
 
+        self._report: list[str] = []
         seed_defaults = bool(opts.get("seed_defaults"))
         seed_categories = bool(opts.get("seed_file_categories")) or seed_defaults
         rehome = bool(opts.get("rehome_foreign_files"))
         execute = bool(opts.get("execute"))
+        notify = bool(opts.get("notify"))
         actions = [
             label
             for flag, label in [
@@ -121,7 +174,7 @@ class Command(BaseCommand):
             if (actions and execute)
             else "REPORT-ONLY"
         )
-        self.stdout.write(f"Tenant onboarding audit — mode={mode}.")
+        self._write(f"Tenant onboarding audit — mode={mode}.")
 
         tenants = list(Tenant.objects.order_by("id").values("id", "name", "slug"))
 
@@ -142,7 +195,7 @@ class Command(BaseCommand):
                 for row in model.objects.values("tenant_id").annotate(n=Count("id"))
             }
 
-        self.stdout.write(f"\n[1] Seed gaps across {len(tenants)} tenant(s):")
+        self._write(f"\n[1] Seed gaps across {len(tenants)} tenant(s):")
         gap_tenants: list[dict] = []
         for t in tenants:
             zeros = [
@@ -154,15 +207,15 @@ class Command(BaseCommand):
                     f"{label}={counts[label].get(t['id'], 0)}"
                     for label, _ in seed_models
                 )
-                self.stdout.write(
+                self._write(
                     f"  - {t['name']!r} (slug={t['slug']}, id={t['id']}): "
                     f"MISSING {', '.join(zeros)}  [{per}]"
                 )
         if not gap_tenants:
-            self.stdout.write("  All tenants have every seed type. ✔")
+            self._write("  All tenants have every seed type. ✔")
 
         # --- 2. Foreign-category recap files (the cross-tenant leak). ---
-        self.stdout.write("\n[2] Recap files in another tenant's category:")
+        self._write("\n[2] Recap files in another tenant's category:")
         foreign_custom = (
             CustomRecapFile.objects.filter(file_recap_category__isnull=False)
             .exclude(file_recap_category__tenant_id=F("custom_recap__tenant_id"))
@@ -187,22 +240,22 @@ class Command(BaseCommand):
             per_owner[key] = per_owner.get(key, 0) + 1
         for (kind, owner_id), n in sorted(per_owner.items(), key=lambda kv: -kv[1]):
             owner = tenant_by_id.get(owner_id, {})
-            self.stdout.write(
+            self._write(
                 f"  - {kind}: {n} file(s) on tenant "
                 f"{owner.get('name', '?')!r} (id={owner_id}) sit in a "
                 "foreign category"
             )
         for kind, f in foreign_rows[:_MAX_SAMPLE]:
             cat = f.file_recap_category
-            self.stdout.write(
+            self._write(
                 f"      · {kind} id={f.id} cat={cat.name!r}"
                 f"(id={cat.id}, tenant={cat.tenant_id})"
             )
         if not foreign_rows:
-            self.stdout.write("  No cross-tenant recap files. ✔")
+            self._write("  No cross-tenant recap files. ✔")
 
         # --- 3. Duplicate global skills. ---
-        self.stdout.write("\n[3] Duplicate global skills:")
+        self._write("\n[3] Duplicate global skills:")
         dupes = (
             Skill.objects.values("name")
             .annotate(n=Count("id"))
@@ -211,13 +264,13 @@ class Command(BaseCommand):
         )
         if dupes:
             for row in dupes:
-                self.stdout.write(f"  - {row['name']!r}: {row['n']} copies")
-            self.stdout.write(
+                self._write(f"  - {row['name']!r}: {row['n']} copies")
+            self._write(
                 "  (Report-only: deduping needs an FK/M2M reference check "
                 "before deleting rows.)"
             )
         else:
-            self.stdout.write("  No duplicate skill names. ✔")
+            self._write("  No duplicate skill names. ✔")
 
         # --- Optional write: seed defaults for tenants with ZERO of a type.
         #     RateType.created_by is NOT NULL, so those rows are attributed to
@@ -241,7 +294,7 @@ class Command(BaseCommand):
                 if not targets:
                     continue
                 if needs_user and fallback_user is None:
-                    self.stdout.write(
+                    self._write(
                         f"\n[seed:{label}] SKIPPED — created_by is required "
                         "and no superuser exists to attribute it to."
                     )
@@ -249,7 +302,7 @@ class Command(BaseCommand):
                 create_kwargs = (
                     {"created_by": fallback_user} if needs_user else {}
                 )
-                self.stdout.write(
+                self._write(
                     f"\n[seed:{label}] {len(targets)} tenant(s) with zero {label}."
                 )
                 for t in targets:
@@ -260,12 +313,12 @@ class Command(BaseCommand):
                                 name=name,
                                 defaults=create_kwargs,
                             )
-                        self.stdout.write(
+                        self._write(
                             f"  Seeded {t['name']!r} (id={t['id']}): "
                             f"{', '.join(defaults)}"
                         )
                     else:
-                        self.stdout.write(
+                        self._write(
                             f"  Would seed {t['name']!r} (id={t['id']}): "
                             f"{', '.join(defaults)} — pass --execute to write."
                         )
@@ -274,13 +327,13 @@ class Command(BaseCommand):
         #     NAME (what the UI groups by) is preserved exactly; only the
         #     owning tenant of the category row changes. Never deletes. ---
         if rehome and foreign_rows:
-            self.stdout.write(f"\n[rehome] {len(foreign_rows)} foreign file(s):")
+            self._write(f"\n[rehome] {len(foreign_rows)} foreign file(s):")
             moved = 0
             for kind, f in foreign_rows:
                 cat = f.file_recap_category
                 owner_id = f.owner_tenant_id
                 if owner_id is None:
-                    self.stdout.write(
+                    self._write(
                         f"  ! {kind} id={f.id}: recap has no tenant — skipped."
                     )
                     continue
@@ -291,18 +344,24 @@ class Command(BaseCommand):
                     f.file_recap_category = own_cat
                     f.save(update_fields=["file_recap_category", "updated_at"])
                     moved += 1
-                    self.stdout.write(
+                    self._write(
                         f"  Moved {kind} id={f.id}: {cat.name!r}"
                         f"(tenant={cat.tenant_id}) -> same name on tenant "
                         f"{owner_id} (cat id={own_cat.id})."
                     )
                 else:
-                    self.stdout.write(
+                    self._write(
                         f"  Would move {kind} id={f.id}: {cat.name!r}"
                         f"(tenant={cat.tenant_id}) -> same name on tenant "
                         f"{owner_id}."
                     )
             if execute:
-                self.stdout.write(f"  Re-homed {moved} file(s).")
+                self._write(f"  Re-homed {moved} file(s).")
 
-        self.stdout.write(self.style.SUCCESS("\nAudit complete."))
+        # --- Optional alert: email Ignite when something regressed. Quiet
+        #     weeks send nothing (duplicate skills alone don't page — they're
+        #     a known standing item until the dedupe is approved). ---
+        if notify and (gap_tenants or foreign_rows):
+            self._send_alert(len(gap_tenants), len(foreign_rows))
+
+        self._write(self.style.SUCCESS("\nAudit complete."))
