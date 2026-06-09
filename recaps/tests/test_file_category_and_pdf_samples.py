@@ -248,11 +248,11 @@ class TestReceiptSentinelKeywordFallback(_Base):
         assert resolved is not None
         assert resolved.id == photos.id
 
-    def test_no_receipt_category_still_degrades_gracefully(self):
+    def test_no_receipt_category_self_heals_with_own_receipts(self):
         # A tenant with NO receipt-ish category at all: sentinel "2" has no
-        # keyword match and falls through to the legacy PK behavior (here PK 2
-        # = "Table setup"). Documents the one case a DATA fix (add a receipt
-        # category) is still needed — code can't invent a bucket.
+        # name or keyword match — the resolver now SELF-HEALS by creating the
+        # tenant's OWN "Receipts" instead of falling through to the PK path
+        # (which could only land the file in another tenant's category).
         tenant = self.create_tenant(name="No Receipt Co")
         system_user = self.get_system_user()
         for name in ["Sampling photos", "Table setup", "Misc"]:
@@ -262,8 +262,102 @@ class TestReceiptSentinelKeywordFallback(_Base):
         resolved = _resolve_file_recap_category(
             RECEIPTS_SENTINEL, tenant_id=tenant.id
         )
-        # No "receipt" anywhere -> graceful PK/global fallback, never a crash.
-        assert resolved is None or resolved.tenant_id in (tenant.id, None)
+        assert resolved is not None
+        assert resolved.tenant_id == tenant.id
+        assert resolved.name == _RECEIPTS_CATEGORY_NAME
+
+
+@pytest.mark.django_db
+class TestSentinelSelfHealAndTenantIsolation(_Base):
+    """The Girl Beer production incident, pinned at the resolver level.
+
+    Girl Beer was onboarded outside ``createTenant`` and so had ZERO
+    FileRecapCategory rows; receipt sentinel "2" fell through the old PK
+    fallback onto the GLOBAL PK-2 "Table setup" — another tenant's category.
+    The resolver must now (a) self-heal sentinels by creating the tenant's own
+    role category, and (b) never return another tenant's row for an explicit
+    category id either.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self, db):
+        self.system_user = self.get_system_user()
+        # Seeded-first tenant owns the low PKs — the global rows the old
+        # fallback used to leak onto.
+        self.tenant_a = self.create_tenant(name="First Seeded Co")
+        self.cats_a = self._seed_categories(self.tenant_a)
+        # The Girl Beer shape: a tenant with NO categories at all.
+        self.tenant_unseeded = self.create_tenant(name="Unseeded Co")
+
+    def test_receipt_sentinel_self_heals_unseeded_tenant(self):
+        assert not recap_models.FileRecapCategory.objects.filter(
+            tenant_id=self.tenant_unseeded.id
+        ).exists()
+        resolved = _resolve_file_recap_category(
+            RECEIPTS_SENTINEL, tenant_id=self.tenant_unseeded.id
+        )
+        assert resolved is not None
+        assert resolved.tenant_id == self.tenant_unseeded.id
+        assert resolved.name == _RECEIPTS_CATEGORY_NAME
+        # And NOT the foreign low-PK "Table setup" the old fallback leaked to.
+        assert resolved.id != self.cats_a["Table setup"].id
+
+    def test_photos_sentinel_self_heals_unseeded_tenant(self):
+        resolved = _resolve_file_recap_category(
+            PHOTOS_SENTINEL, tenant_id=self.tenant_unseeded.id
+        )
+        assert resolved is not None
+        assert resolved.tenant_id == self.tenant_unseeded.id
+        assert resolved.name == _PHOTOS_CATEGORY_NAME
+
+    def test_self_heal_is_idempotent(self):
+        first = _resolve_file_recap_category(
+            RECEIPTS_SENTINEL, tenant_id=self.tenant_unseeded.id
+        )
+        second = _resolve_file_recap_category(
+            RECEIPTS_SENTINEL, tenant_id=self.tenant_unseeded.id
+        )
+        assert first.id == second.id
+        assert (
+            recap_models.FileRecapCategory.objects.filter(
+                tenant_id=self.tenant_unseeded.id,
+                name=_RECEIPTS_CATEGORY_NAME,
+            ).count()
+            == 1
+        )
+
+    def test_explicit_foreign_pk_resolves_to_none_not_foreign_row(self):
+        # An explicit id pointing at ANOTHER tenant's category, with no
+        # same-name row of our own: resolve to None (uncategorized) — never
+        # cross-tenant.
+        foreign = self.cats_a["Table setup"]
+        resolved = _resolve_file_recap_category(
+            str(foreign.id), tenant_id=self.tenant_unseeded.id
+        )
+        assert resolved is None
+
+    def test_explicit_foreign_pk_maps_onto_own_same_name_row(self):
+        # But when we DO have a category of the same name, the foreign id maps
+        # onto our own row (long-standing behavior, kept).
+        own_table_setup = recap_models.FileRecapCategory.objects.create(
+            name="Table setup",
+            tenant=self.tenant_unseeded,
+            created_by=self.system_user,
+        )
+        foreign = self.cats_a["Table setup"]
+        resolved = _resolve_file_recap_category(
+            str(foreign.id), tenant_id=self.tenant_unseeded.id
+        )
+        assert resolved is not None
+        assert resolved.id == own_table_setup.id
+
+    def test_tenantless_explicit_pk_keeps_legacy_global_lookup(self):
+        # No tenant context (legacy callers): an explicit id still resolves to
+        # the raw row — scoping only applies when we know the tenant.
+        foreign = self.cats_a["Receipts"]
+        resolved = _resolve_file_recap_category(str(foreign.id), tenant_id=None)
+        assert resolved is not None
+        assert resolved.id == foreign.id
 
 
 @pytest.mark.django_db(transaction=True)
