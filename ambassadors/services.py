@@ -403,6 +403,15 @@ class PublicAmbassadorCreationService(BaseAmbassadorService):
                 updated_by=user,
             )
 
+            # BA referral program — best-effort signup attribution. Bad or
+            # blank codes are logged no-ops (see ambassadors.referrals);
+            # nothing here can fail the signup.
+            referral_code = getattr(input, "referral_code", None)
+            if referral_code:
+                from ambassadors.referrals import attribute_signup
+
+                await sync_to_async(attribute_signup)(referral_code, user)
+
             # Generate activation token
             activation_token: str | None = None
             if is_admin_created:
