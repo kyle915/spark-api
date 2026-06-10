@@ -1,0 +1,54 @@
+name: Dedupe global skills (manual)
+
+# Manually fires `/internal/cron/dedupe-skills` on Cloud Run to run the
+# `dedupe_skills` command — merges duplicate global Skill rows
+# (case-insensitive name): AmbassadorSkill links are repointed to the
+# lowest-id keeper (redundant double-links dropped), then the duplicate Skill
+# rows are deleted. The command refuses to run if any relation other than
+# AmbassadorSkill points at Skill. One-off cleanup approved by Kyle — the
+# create-side guard (#772) stops new duplicates; migration adds the unique
+# constraint after this runs clean.
+#
+# SAFE — DRY-RUN IS THE DEFAULT. dry_run=true sends execute=false (no writes)
+# and prints the merge plan. Set dry_run=false to apply.
+#
+# Run from the Actions tab AFTER the endpoint is deployed (ships from
+# develop). Secret-gated via X-Cron-Secret header. Manual one-off — no
+# `schedule:`.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (no DB writes). Leave true to preview the merge plan; set false to apply."
+        required: true
+        default: true
+        type: boolean
+
+jobs:
+  fire-dedupe-skills:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire dedupe-skills cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/dedupe-skills
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+
+          if [ "$DRY_RUN" = "false" ]; then EXECUTE=true; else EXECUTE=false; fi
+
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL?execute=$EXECUTE" \
+            -H "X-Cron-Secret: $CRON_SECRET")
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS — see body above."
+            exit 1
+          fi
