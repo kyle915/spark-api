@@ -422,6 +422,18 @@ class Skill(Asyncable, models.Model):
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     name = models.CharField(max_length=50)
 
+    class Meta:
+        constraints = [
+            # Case-insensitive uniqueness — the DB-level guard behind the
+            # dedupe_skills cleanup (createTenant duplicated the global
+            # defaults per tenant until #772). If this migration fails on an
+            # environment, run `manage.py dedupe_skills --execute` first.
+            models.UniqueConstraint(
+                models.functions.Lower("name"),
+                name="ambassadors_skill_name_ci_unique",
+            )
+        ]
+
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
