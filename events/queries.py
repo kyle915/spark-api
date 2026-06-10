@@ -1190,6 +1190,15 @@ class RequestQueries:
                 )
             if filters.store_number:
                 queryset = queryset.filter(store_number__icontains=filters.store_number)
+            if filters.name:
+                # Palette/tracker text search — a request is findable by its
+                # own name OR its retailer ("Vons" surfaces Vons requests).
+                from django.db.models import Q as _Q
+
+                queryset = queryset.filter(
+                    _Q(name__icontains=filters.name)
+                    | _Q(retailer__name__icontains=filters.name)
+                )
             if filters.date:
                 queryset = queryset.filter(date__date=filters.date)
             else:
