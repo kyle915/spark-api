@@ -134,6 +134,12 @@ class AmbassadorEventType(Node):
     event_id: strawberry.ID
     created_at: str
     updated_at: str
+    # Day-before confirmation stamps (null until set) — the /request/view
+    # roster derives its chip from the pair: confirmed ✓ / asked-but-
+    # silent ⏳ / not asked yet (plain ACCEPTED). Same source of truth as
+    # the send_shift_confirmations cron + confirmShift mutation.
+    confirmation_requested_at: str | None
+    confirmed_at: str | None
 
 
 @strawberry.type
