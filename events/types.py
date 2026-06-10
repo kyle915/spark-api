@@ -694,6 +694,13 @@ class EventAmbassador:
     name: str
     email: str
     is_approved: bool
+    # Day-before confirmation stamps (ISO 8601, null until set):
+    # `confirmation_requested_at` — the T-24h "confirm you're in" push went
+    # out; `confirmed_at` — the BA tapped confirm or arrived/clocked in.
+    # Roster chips derive from the pair: confirmed ✓ / asked-but-silent ⏳ /
+    # not asked yet —.
+    confirmation_requested_at: str | None = None
+    confirmed_at: str | None = None
 
 
 @strawberry_django.type(models.Event)
@@ -869,6 +876,16 @@ class Event(Node):
                         name=full_name or email,
                         email=email,
                         is_approved=ae.is_approved,
+                        confirmation_requested_at=(
+                            ae.confirmation_requested_at.isoformat()
+                            if ae.confirmation_requested_at
+                            else None
+                        ),
+                        confirmed_at=(
+                            ae.confirmed_at.isoformat()
+                            if ae.confirmed_at
+                            else None
+                        ),
                     )
                 )
             return roster

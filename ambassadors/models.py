@@ -297,6 +297,17 @@ class AmbassadorEvent(models.Model):
     activation_reminder_sent_at = models.DateTimeField(null=True, blank=True)
     recap_nudge_sent_at = models.DateTimeField(null=True, blank=True)
 
+    # Day-before confirmation flow ("confirm you're in") — same cron→stamp
+    # pattern as the reminders above (send_shift_confirmations command):
+    #   confirmation_requested_at — the T-24h confirm push went out
+    #   confirmed_at              — BA tapped confirm, or arrived/clocked in
+    #                               (showing up IS confirming)
+    #   unconfirmed_alerted_at    — the morning-of "still unconfirmed" alert
+    #                               email to the Ignite team included this row
+    confirmation_requested_at = models.DateTimeField(null=True, blank=True)
+    confirmed_at = models.DateTimeField(null=True, blank=True)
+    unconfirmed_alerted_at = models.DateTimeField(null=True, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
     updated_at = models.DateTimeField(auto_now=True)
 
