@@ -1757,6 +1757,59 @@ class AuditTenantOnboardingView(View):
         return JsonResponse({"ok": True, "endpoint": "audit-tenant-onboarding"})
 
 
+@method_decorator(csrf_exempt, name="dispatch")
+class DedupeSkillsView(View):
+    """POST `/internal/cron/dedupe-skills`.
+
+    Fires `dedupe_skills` — merges duplicate global Skill rows
+    (case-insensitive name): AmbassadorSkill links are repointed to the
+    lowest-id keeper (redundant double-links dropped), then the duplicate
+    Skill rows are deleted. The command refuses to run if any relation other
+    than AmbassadorSkill points at Skill. One-off manual cleanup approved by
+    Kyle (the create-side guard shipped in #772 stops new duplicates).
+
+    SAFE — DRY-RUN by default; only an explicit `execute=true` writes.
+
+    Body / query params (all optional):
+      - execute: "1"/"true"/"yes" — apply the merge (default OFF → dry-run).
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        raw = (
+            request.GET.get("execute") or request.POST.get("execute") or ""
+        ).lower()
+        execute = raw in ("1", "true", "yes", "on")
+
+        out = io.StringIO()
+        try:
+            call_command("dedupe_skills", stdout=out, execute=execute)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("Skill dedupe cron failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "log": out.getvalue(),
+                },
+                status=500,
+            )
+
+        return JsonResponse(
+            {"ok": True, "executed": execute, "log": out.getvalue()}
+        )
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        return JsonResponse({"ok": True, "endpoint": "dedupe-skills"})
+
+
 def _registered_views() -> dict[str, Any]:
     """Map URL path → view class. Lets `digest/urls.py` mount these
     without each one being re-exported explicitly.
@@ -1784,4 +1837,5 @@ def _registered_views() -> dict[str, Any]:
         "repair-request-activation-time": RepairRequestActivationTimeView,
         "backfill-girlbeer-receipts": BackfillGirlBeerReceiptsView,
         "audit-tenant-onboarding": AuditTenantOnboardingView,
+        "dedupe-skills": DedupeSkillsView,
     }
