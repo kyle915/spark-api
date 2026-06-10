@@ -1920,6 +1920,40 @@ async def _do_attendance(info, input, *, kind: str) -> "ShiftAttendanceResponse"
             success=False, message=msg,
             client_mutation_id=None, kind=None,
         )
+
+    # BA referral program — a clock-out is the "completed a shift" signal.
+    # If this BA was referred and not yet stamped, stamp their first completed
+    # shift and ping the referrer. Best-effort: the helper swallows DB errors
+    # and push errors are caught here, so clock-out is never affected.
+    if kind == "clock_out":
+        try:
+            from ambassadors.push import send_push_to_user
+            from ambassadors.referrals import complete_first_shift_if_referred
+
+            referral = await sync_to_async(complete_first_shift_if_referred)(
+                actor
+            )
+            if referral is not None:
+                friend = (
+                    (getattr(actor, "first_name", "") or "").strip()
+                    or "Your friend"
+                )
+                await send_push_to_user(
+                    referral.referrer,
+                    title="Referral complete 🎉",
+                    body=(
+                        f"{friend} just completed their first shift — "
+                        "your referral bonus is unlocked."
+                    ),
+                    data={"type": "referral_first_shift"},
+                )
+        except Exception:  # noqa: BLE001 — never break clock-out
+            import logging
+
+            logging.getLogger(__name__).exception(
+                "Referral first-shift hook failed (clock-out unaffected)."
+            )
+
     return ShiftAttendanceResponse(
         success=True,
         message=msg,

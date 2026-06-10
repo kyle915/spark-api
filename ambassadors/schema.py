@@ -56,6 +56,7 @@ class AmbassadorQueryMobile(
     queries.AttendanceMobileQueries,
     queries.GroupTypeQueries,
     queries.NotificationQueries,
+    queries.ReferralQueries,
 ):
     pass
 
