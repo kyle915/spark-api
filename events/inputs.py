@@ -86,6 +86,9 @@ class RequestFiltersInput(BaseTenantInput):
     retailer_state_id: strawberry.ID | None = None
     distributor_state_id: strawberry.ID | None = None
     store_number: str | None = None
+    # Free-text search for the command palette / tracker: matches the
+    # request NAME or its RETAILER name, case-insensitive.
+    name: str | None = None
     date: str | None = None
     # Inclusive event-date range (YYYY-MM-DD). Powers the Master Tracker
     # quick-filter chips (This week / Upcoming / Past). `date` (exact)
