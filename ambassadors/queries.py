@@ -493,6 +493,16 @@ class AmbassadorEventQueries:
                         date_label=date_label,
                         start_label=start_label,
                         end_label=end_label,
+                        confirmation_requested_at=(
+                            ae.confirmation_requested_at.isoformat()
+                            if ae.confirmation_requested_at
+                            else None
+                        ),
+                        confirmed_at=(
+                            ae.confirmed_at.isoformat()
+                            if ae.confirmed_at
+                            else None
+                        ),
                     )
                 )
             return out
@@ -612,6 +622,16 @@ class AmbassadorEventQueries:
                         date_label=date_label,
                         start_label=start_label,
                         end_label=end_label,
+                        confirmation_requested_at=(
+                            ae.confirmation_requested_at.isoformat()
+                            if ae.confirmation_requested_at
+                            else None
+                        ),
+                        confirmed_at=(
+                            ae.confirmed_at.isoformat()
+                            if ae.confirmed_at
+                            else None
+                        ),
                     )
                 )
             return out

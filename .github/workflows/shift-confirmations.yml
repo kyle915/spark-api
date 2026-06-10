@@ -1,0 +1,74 @@
+name: Shift confirmations
+
+# Fires `/internal/cron/shift-confirmations` on Cloud Run every hour.
+# Two phases per run (events/management/commands/send_shift_confirmations.py):
+#   A. T-24h "Confirm your shift" push to every BA with an approved shift
+#      starting in the next ~26h (once per shift, deduped via
+#      AmbassadorEvent.confirmation_requested_at; one tap in the app
+#      stamps confirmed_at).
+#   B. Morning-of digest email to the Ignite team for shifts starting in
+#      the next ~4h whose BA still hasn't confirmed (and isn't already on
+#      site per Attendance) — early enough to chase or staff a backup.
+#
+# Secret-gated via `X-Cron-Secret` (shared INTERNAL_CRON_SECRET, set on
+# both the Cloud Run service env and the GitHub repo secret) — see the
+# daily-admin-digest workflow for the full setup notes.
+#
+# Schedule: hourly. Both look-ahead windows are wider than the cadence on
+# purpose so a shift never slips between two runs even with GitHub
+# Actions' cron jitter; the dedup stamps keep it to one ask / one alert.
+
+on:
+  schedule:
+    - cron: "7 * * * *"
+  workflow_dispatch:
+    inputs:
+      lead_hours:
+        description: "Ask for confirmation on shifts starting within this many hours"
+        required: false
+        default: "26"
+      alert_hours:
+        description: "Alert Ignite about unconfirmed shifts starting within this many hours"
+        required: false
+        default: "4"
+      dry_run:
+        description: "Log what would be sent, but send nothing"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+jobs:
+  fire-shift-confirmations:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire shift confirmations cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/shift-confirmations
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          LEAD_HOURS: ${{ github.event.inputs.lead_hours || '26' }}
+          ALERT_HOURS: ${{ github.event.inputs.alert_hours || '4' }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            echo "Generate one with: openssl rand -hex 32"
+            echo "Then set it as INTERNAL_CRON_SECRET in both the repo secrets"
+            echo "and the Cloud Run service env (must match)."
+            exit 1
+          fi
+
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL?lead_hours=$LEAD_HOURS&alert_hours=$ALERT_HOURS&dry_run=$DRY_RUN" \
+            -H "X-Cron-Secret: $CRON_SECRET")
+
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS — see body above."
+            exit 1
+          fi

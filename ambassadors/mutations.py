@@ -1280,6 +1280,24 @@ class ShiftAttendanceResponse:
 
 
 @strawberry.input
+class ConfirmShiftInput:
+    """One-tap "I'm in" from the day-before confirmation push. Either
+    uuid identifies the shift; the server resolves it to the CALLER's
+    own AmbassadorEvent row (same contract as the attendance inputs)."""
+    ambassador_event_uuid: strawberry.ID | None = None
+    event_uuid: strawberry.ID | None = None
+    client_mutation_id: strawberry.ID | None = None
+
+
+@strawberry.type
+class ConfirmShiftResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    confirmed_at: str | None = None
+
+
+@strawberry.input
 class RequestExtensionInput:
     """BA asks for more activation time mid-shift. event_uuid (Shifts tab)
     or ambassador_event_uuid (roster row) identifies the shift; the
@@ -1391,6 +1409,57 @@ class ShiftAttendanceMutations:
     ) -> ShiftAttendanceResponse:
         """End the activation timer."""
         return await _do_attendance(info, input, kind="clock_out")
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def confirm_shift(
+        self, info: strawberry.Info, input: ConfirmShiftInput,
+    ) -> ConfirmShiftResponse:
+        """One-tap "I'm in" for the day-before confirmation push.
+
+        Stamps the caller's AmbassadorEvent.confirmed_at. Idempotent —
+        confirming twice keeps the first stamp and still returns success.
+        """
+        actor = info.context.request.user
+
+        def _go():
+            amb_event = None
+            if getattr(input, "ambassador_event_uuid", None):
+                amb_event = _resolve_amb_event_by_uuid(
+                    str(input.ambassador_event_uuid)
+                )
+            elif getattr(input, "event_uuid", None):
+                amb_event = _resolve_amb_event_for_actor_by_event(
+                    str(input.event_uuid), actor
+                )
+            if not amb_event:
+                return None, "Shift not found."
+            own_user_id = (
+                amb_event.ambassador.user_id if amb_event.ambassador else None
+            )
+            if own_user_id and getattr(actor, "id", None) != own_user_id:
+                return None, "Not your shift."
+            if amb_event.confirmed_at is None:
+                from django.utils import timezone as _dj_tz
+
+                amb_event.confirmed_at = _dj_tz.now()
+                amb_event.save(update_fields=["confirmed_at", "updated_at"])
+            return amb_event, "Confirmed — see you there!"
+
+        amb_event, msg = await sync_to_async(_go)()
+        if amb_event is None:
+            return ConfirmShiftResponse(
+                success=False, message=msg, client_mutation_id=None
+            )
+        return ConfirmShiftResponse(
+            success=True,
+            message=msg,
+            client_mutation_id=None,
+            confirmed_at=(
+                amb_event.confirmed_at.isoformat()
+                if amb_event.confirmed_at
+                else None
+            ),
+        )
 
     @relay.mutation(permission_classes=[StrictIsAuthenticated])
     async def report_shift_status(
@@ -1886,6 +1955,21 @@ def _email_admins_extension_request(
     _ExtMailer().send_now()
 
 
+def _auto_confirm_on_attendance(amb_event, kind: str) -> None:
+    """Showing up IS confirming — arriving or clocking in flips the
+    day-before confirmation stamp so the admin roster goes green even if
+    the BA never tapped the confirmation push. No-op on clock-out (the
+    shift already happened) and when already confirmed."""
+    if kind not in ("arrived", "clock_in"):
+        return
+    if amb_event.confirmed_at is not None:
+        return
+    from django.utils import timezone as _dj_tz
+
+    amb_event.confirmed_at = _dj_tz.now()
+    amb_event.save(update_fields=["confirmed_at", "updated_at"])
+
+
 async def _do_attendance(info, input, *, kind: str) -> "ShiftAttendanceResponse":
     actor = info.context.request.user
 
@@ -1912,6 +1996,7 @@ async def _do_attendance(info, input, *, kind: str) -> "ShiftAttendanceResponse"
             amb_event=amb_event, source_name=kind,
             coordinates=coords, actor=actor,
         )
+        _auto_confirm_on_attendance(amb_event, kind)
         return att, "OK"
 
     att, msg = await sync_to_async(_go)()

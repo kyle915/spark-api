@@ -1004,6 +1004,13 @@ class ShiftOfferDetails:
     date_label: str | None = None
     start_label: str | None = None
     end_label: str | None = None
+    # Day-before confirmation state (AmbassadorEvent stamps, ISO 8601).
+    # Mobile shows the "Confirm you're in" button when requested-but-not-
+    # confirmed and the green confirmed chip once stamped. Defaulted so
+    # callsites that don't populate them (pending offers, single-offer
+    # lookup) keep working unchanged.
+    confirmation_requested_at: str | None = None
+    confirmed_at: str | None = None
 
 
 @strawberry.type

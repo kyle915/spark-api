@@ -1810,6 +1810,87 @@ class DedupeSkillsView(View):
         return JsonResponse({"ok": True, "endpoint": "dedupe-skills"})
 
 
+@method_decorator(csrf_exempt, name="dispatch")
+class SendShiftConfirmationsView(View):
+    """POST `/internal/cron/shift-confirmations`.
+
+    Fires the `send_shift_confirmations` command — the day-before
+    "confirm you're in" push for every approved shift starting within
+    `lead_hours` (default 26, once per shift via
+    confirmation_requested_at), plus the morning-of "still unconfirmed"
+    alert email to the Ignite team for shifts starting within
+    `alert_hours` (default 4, once per row via unconfirmed_alerted_at).
+    Designed for an hourly GHA cron; windows are wider than the cadence
+    so nothing slips between runs.
+
+    Body / query params (all optional):
+      - lead_hours: int (default 26)
+      - alert_hours: int (default 4)
+      - dry_run: "1" / "true" / "yes" — log, send nothing, stamp nothing.
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _bool(name: str, default: bool = False) -> bool:
+            raw = (request.GET.get(name) or request.POST.get(name) or "").lower()
+            if not raw:
+                return default
+            return raw in ("1", "true", "yes", "on")
+
+        def _int(name: str, default: int) -> int | None:
+            raw = request.GET.get(name) or request.POST.get(name)
+            if raw is None or raw == "":
+                return default
+            try:
+                return int(raw)
+            except ValueError:
+                return None
+
+        lead_hours = _int("lead_hours", 26)
+        alert_hours = _int("alert_hours", 4)
+        if lead_hours is None or alert_hours is None:
+            return JsonResponse(
+                {"ok": False, "error": "lead_hours/alert_hours must be integers"},
+                status=400,
+            )
+        dry_run = _bool("dry_run", default=False)
+
+        cmd_args: list[str] = [
+            "--lead-hours", str(lead_hours),
+            "--alert-hours", str(alert_hours),
+        ]
+        if dry_run:
+            cmd_args.append("--dry-run")
+
+        out = io.StringIO()
+        try:
+            call_command("send_shift_confirmations", *cmd_args, stdout=out)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("Shift confirmations cron failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "log": out.getvalue(),
+                },
+                status=500,
+            )
+
+        return JsonResponse(
+            {
+                "ok": True,
+                "lead_hours": lead_hours,
+                "alert_hours": alert_hours,
+                "dry_run": dry_run,
+                "log": out.getvalue(),
+            }
+        )
+
+
 def _registered_views() -> dict[str, Any]:
     """Map URL path → view class. Lets `digest/urls.py` mount these
     without each one being re-exported explicitly.
@@ -1838,4 +1919,5 @@ def _registered_views() -> dict[str, Any]:
         "backfill-girlbeer-receipts": BackfillGirlBeerReceiptsView,
         "audit-tenant-onboarding": AuditTenantOnboardingView,
         "dedupe-skills": DedupeSkillsView,
+        "shift-confirmations": SendShiftConfirmationsView,
     }
