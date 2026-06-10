@@ -16,6 +16,9 @@ class CreatePublicAmbassadorInput(SparkGraphQLInput):
     phone: str | None = None
     about_me: str | None = None
     coordinates: List[float] | None = None  # [latitude, longitude]
+    # BA referral program: the friend types the referrer's code at signup.
+    # Optional and best-effort — a bad/blank code never blocks the signup.
+    referral_code: str | None = None
 
 
 @strawberry.input
