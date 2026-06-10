@@ -1393,3 +1393,66 @@ class OpenShift(models.Model):
     def __str__(self):
         state = "claimed" if self.claimed_at else "open"
         return f"OpenShift(event={self.event_id} {state})"
+
+
+class ReferralCode(models.Model):
+    """One stable invite code per user — the referrer side of the BA
+    referral program. Created lazily the first time a BA opens "Invite
+    friends" (``myReferralCode``); shared as plain text ("join with my
+    code SPK-XXXX") and typed into the sign-up form by the friend."""
+
+    id = models.BigAutoField(primary_key=True)
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="referral_code",
+    )
+    code = models.CharField(max_length=12, unique=True)
+
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+
+    def __str__(self):
+        return f"ReferralCode({self.code} → user={self.user_id})"
+
+
+class AmbassadorReferral(models.Model):
+    """One referred signup, tracked invite → signup → first completed shift.
+
+    Created at signup when the new user enters a valid referral code.
+    ``first_shift_completed_at`` is stamped by the clock-out flow the first
+    time the referred BA completes a shift (and the referrer gets a push).
+    The referred side is a OneToOne — a user can only ever be referred once,
+    which also makes the first-shift stamp naturally idempotent. Bonus
+    payout itself stays manual (Wingspan); this table tells Ignite who
+    earned it.
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+
+    referrer = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="referrals_made",
+    )
+    referred = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="referral_source",
+    )
+    # Snapshot of the code as typed at signup (codes are per-referrer and
+    # stable, but the snapshot keeps history honest if codes ever rotate).
+    code_used = models.CharField(max_length=12)
+
+    signed_up_at = models.DateTimeField(auto_now_add=True, editable=False)
+    first_shift_completed_at = models.DateTimeField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        stage = "completed" if self.first_shift_completed_at else "signed-up"
+        return (
+            f"AmbassadorReferral({self.referrer_id} → {self.referred_id}, "
+            f"{stage})"
+        )

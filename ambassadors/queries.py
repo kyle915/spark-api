@@ -2804,3 +2804,83 @@ class NotificationQueries:
             )
 
         return await sync_to_async(_fetch)()
+
+
+# ---------------------------------------------------------------------------
+# BA referral program — "Invite friends" surface (mobile)
+# ---------------------------------------------------------------------------
+
+@strawberry.type
+class ReferralEntry:
+    """One friend the requesting BA referred, with their stage.
+
+    ``status`` is "signed_up" until the friend completes (clocks out of)
+    their first shift, then "completed". Names come from the referred user's
+    profile; the email is included so the referrer can tell friends apart
+    before they fill in their name.
+    """
+
+    name: str
+    email: str
+    status: str
+    signed_up_at: str
+    first_shift_completed_at: str | None = None
+
+
+@strawberry.type
+class ReferralQueries:
+    """Self-scoped referral lookups for the signed-in BA."""
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def my_referral_code(self, info: strawberry.Info) -> str:
+        """The caller's stable invite code (created on first ask)."""
+        from ambassadors.referrals import get_or_create_code
+
+        user = info.context.request.user
+        return await sync_to_async(get_or_create_code)(user)
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def my_referrals(self, info: strawberry.Info) -> List[ReferralEntry]:
+        """Everyone the caller referred, newest first."""
+        user = info.context.request.user
+
+        def _fetch() -> list[ReferralEntry]:
+            rows = (
+                models.AmbassadorReferral.objects.filter(referrer=user)
+                .select_related("referred")
+                .order_by("-signed_up_at")
+            )
+            out: list[ReferralEntry] = []
+            for r in rows:
+                referred = r.referred
+                name = (
+                    " ".join(
+                        part
+                        for part in (
+                            (getattr(referred, "first_name", "") or "").strip(),
+                            (getattr(referred, "last_name", "") or "").strip(),
+                        )
+                        if part
+                    ).strip()
+                    or (getattr(referred, "email", "") or "")
+                )
+                out.append(
+                    ReferralEntry(
+                        name=name,
+                        email=getattr(referred, "email", "") or "",
+                        status=(
+                            "completed"
+                            if r.first_shift_completed_at
+                            else "signed_up"
+                        ),
+                        signed_up_at=r.signed_up_at.isoformat(),
+                        first_shift_completed_at=(
+                            r.first_shift_completed_at.isoformat()
+                            if r.first_shift_completed_at
+                            else None
+                        ),
+                    )
+                )
+            return out
+
+        return await sync_to_async(_fetch)()

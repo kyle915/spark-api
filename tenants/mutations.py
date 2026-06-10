@@ -134,6 +134,9 @@ class ClientRegisterInput(BaseRegisterInput):
 class AmbassadorRegisterInput(BaseRegisterInput):
     role: UserRoleEnum
     tenant_id: strawberry.ID | None = None
+    # BA referral program: the friend types the referrer's code at signup.
+    # Optional and best-effort — a bad/blank code never blocks registration.
+    referral_code: str | None = None
 
 
 @strawberry.input
@@ -293,6 +296,7 @@ async def register_user_with_role(
     image: str | None = None,
     auto_verify: bool = False,
     client_mutation_id: strawberry.ID | None = None,
+    referral_code: str | None = None,
 ) -> RegisterResponse:
     if password1 != password2:
         return RegisterResponse(
@@ -334,6 +338,15 @@ async def register_user_with_role(
             return user
 
         user = await create_user()
+
+        # BA referral program — attribute the signup to the referrer when a
+        # valid code was supplied. Best-effort by contract: bad codes,
+        # self-referrals, and any failure are logged no-ops, never a signup
+        # error (see ambassadors.referrals.attribute_signup).
+        if user and referral_code:
+            from ambassadors.referrals import attribute_signup
+
+            await sync_to_async(attribute_signup)(referral_code, user)
 
         if user and tenant_id:
             try:
@@ -429,6 +442,7 @@ class AmbassadorsCustomRegister:
             tenant_id=resolved_tenant_id,
             auto_verify=True,
             client_mutation_id=input.client_mutation_id,
+            referral_code=input.referral_code,
         )
 
     @relay.mutation
