@@ -2140,6 +2140,31 @@ class SendTestClientReportResponse:
     client_mutation_id: strawberry.ID | None = None
 
 
+@strawberry.input
+class ExportExpenseReceiptsInput:
+    """Month-end expense receipts export. ``tenant_id`` follows the same
+    admin-honored / client-pinned scoping as the report toggles. Dates
+    are inclusive ``YYYY-MM-DD``."""
+    start_date: str
+    end_date: str
+    tenant_id: strawberry.ID | None = None
+    client_mutation_id: strawberry.ID | None = None
+
+
+@strawberry.type
+class ExportExpenseReceiptsResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    # CSV text — the FE saves it as a Blob download (no extra round trip).
+    csv_text: str | None = None
+    # GCS public URL of the receipt-image PDF bundle.
+    pdf_url: str | None = None
+    recap_count: int = 0
+    receipt_count: int = 0
+    total_spend: float = 0.0
+
+
 @strawberry.type
 class ScheduledReportMutations:
     """Mutation surface for the scheduled monthly client-report controls
@@ -2307,6 +2332,146 @@ class ScheduledReportMutations:
             message=message,
             enabled=bool(new_state),
             client_mutation_id=input.client_mutation_id,
+        )
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def export_expense_receipts(
+        self,
+        info: strawberry.Info,
+        input: ExportExpenseReceiptsInput,
+    ) -> ExportExpenseReceiptsResponse:
+        """Month-end BA expense receipts → bookkeeping CSV + a GCS-hosted
+        PDF bundle of every receipt image, captioned BA · event · amount.
+
+        Collects BOTH recap families (custom receipt-category files /
+        spend fields + legacy ``account_spend_amount``), scoped by event
+        date. Image fetch fans out on a thread pool (same 16-worker
+        sweet spot as the recap PDF) and the WeasyPrint render runs
+        off-thread on pure dicts — no ORM mid-render.
+        """
+        from datetime import date as _date
+
+        from recaps.receipts_export import (
+            build_expense_rows_csv,
+            build_receipts_bundle_pdf,
+            collect_expense_rows,
+        )
+
+        fail = lambda msg: ExportExpenseReceiptsResponse(  # noqa: E731
+            success=False,
+            message=msg,
+            client_mutation_id=input.client_mutation_id,
+        )
+
+        service = _CampaignReportService()
+        try:
+            target_tenant_id = await service.resolve_target_tenant_id(
+                info, input.tenant_id
+            )
+        except Exception:  # noqa: BLE001
+            target_tenant_id = None
+        if target_tenant_id is None:
+            return fail("You do not have access to this brand.")
+
+        try:
+            start = _date.fromisoformat(str(input.start_date))
+            end = _date.fromisoformat(str(input.end_date))
+        except (TypeError, ValueError):
+            return fail("Dates must be YYYY-MM-DD.")
+        if end < start:
+            return fail("End date is before the start date.")
+
+        try:
+            rows = await sync_to_async(collect_expense_rows)(
+                target_tenant_id, start, end
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(
+                "exportExpenseReceipts collect failed tenant=%s: %s",
+                target_tenant_id,
+                exc,
+            )
+            return fail("Couldn't collect receipts for that range.")
+
+        if not rows:
+            return fail("No expense receipts or spend in that range.")
+
+        csv_text = build_expense_rows_csv(rows)
+
+        # Fan out the image downloads, then render + upload.
+        def _fetch_images() -> dict[str, bytes]:
+            import concurrent.futures as _cf
+
+            from utils.gcs import download_blob_bytes
+
+            blobs = [f["blob"] for r in rows for f in r["files"]]
+
+            def _one(blob: str):
+                try:
+                    data = download_blob_bytes(blob)
+                except Exception:  # noqa: BLE001
+                    return None
+                if not data or len(data) > 25 * 1024 * 1024:
+                    return None
+                return (blob, data)
+
+            out: dict[str, bytes] = {}
+            if blobs:
+                with _cf.ThreadPoolExecutor(max_workers=16) as pool:
+                    for entry in pool.map(_one, blobs):
+                        if entry is not None:
+                            out[entry[0]] = entry[1]
+            return out
+
+        @sync_to_async(thread_sensitive=False)
+        def _build_and_upload() -> str | None:
+            from django.utils import timezone as _tz
+
+            from tenants.models import Tenant
+            from utils.gcs import public_url, upload_bytes
+
+            tenant = Tenant.objects.filter(id=target_tenant_id).first()
+            tenant_name = tenant.name if tenant else "Brand"
+            images = _fetch_images()
+            pdf = build_receipts_bundle_pdf(
+                tenant_name=tenant_name,
+                start=start,
+                end=end,
+                rows=rows,
+                images_by_blob=images,
+            )
+            ts = _tz.now().strftime("%Y%m%d%H%M%S")
+            blob = (
+                f"exports/receipts/{target_tenant_id}/"
+                f"{start.isoformat()}_{end.isoformat()}_{ts}.pdf"
+            )
+            upload_bytes(blob, pdf, content_type="application/pdf")
+            return public_url(blob)
+
+        try:
+            pdf_url = await _build_and_upload()
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(
+                "exportExpenseReceipts pdf failed tenant=%s: %s",
+                target_tenant_id,
+                exc,
+            )
+            # CSV still has every number + link — degrade, don't fail.
+            pdf_url = None
+
+        total = sum(r["amount"] for r in rows if r["amount"] is not None)
+        return ExportExpenseReceiptsResponse(
+            success=True,
+            message=(
+                f"{len(rows)} recap(s), ${total:,.2f} total spend."
+                + ("" if pdf_url else " (PDF bundle failed — CSV only.)")
+            ),
+            client_mutation_id=input.client_mutation_id,
+            csv_text=csv_text,
+            pdf_url=pdf_url,
+            recap_count=len(rows),
+            receipt_count=sum(len(r["files"]) for r in rows),
+            total_spend=round(total, 2),
         )
 
     @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
