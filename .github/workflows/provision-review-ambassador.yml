@@ -1,0 +1,45 @@
+name: Provision review ambassador
+
+# One-off, manual-only: (re)provision the app-store review BA login by
+# hitting /internal/cron/provision-review-ambassador on Cloud Run. The
+# endpoint is hard-bounded to a single allow-listed email; the password
+# is supplied here as a run input and is NOT stored in the repo.
+#
+# Secret-gated via X-Cron-Secret (shared INTERNAL_CRON_SECRET). No
+# schedule — workflow_dispatch only.
+
+on:
+  workflow_dispatch:
+    inputs:
+      email:
+        description: "Review account email (must be allow-listed in the view)"
+        required: true
+        default: "kylechristiansen93@gmail.com"
+      password:
+        description: "Password to set for the review login"
+        required: true
+
+jobs:
+  provision:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Hit provisioning endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/provision-review-ambassador
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          REVIEW_EMAIL: ${{ github.event.inputs.email }}
+          REVIEW_PASSWORD: ${{ github.event.inputs.password }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET not set."; exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/resp.json -w '%{http_code}' \
+            -X POST "$CRON_URL" \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            --data-urlencode "email=$REVIEW_EMAIL" \
+            --data-urlencode "password=$REVIEW_PASSWORD")
+          echo "HTTP $STATUS"
+          # Body is the command's summary (no password echoed).
+          cat /tmp/resp.json
+          [ "$STATUS" = "200" ] || { echo "::error::endpoint returned $STATUS"; exit 1; }
