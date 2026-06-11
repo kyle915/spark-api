@@ -250,7 +250,71 @@ class EventQueriesService(BaseEventQueriesService):
 
 
 @strawberry.type
+class DuplicateEventEntry:
+    """One event inside a duplicate cluster — enough context to pick
+    the keeper (the row with the recaps/roster usually wins)."""
+    id: strawberry.ID
+    uuid: str
+    name: str
+    date: str | None
+    address: str
+    recaps_filed: int
+    roster_count: int
+
+
+@strawberry.type
+class DuplicateEventCluster:
+    key: str
+    events: List[DuplicateEventEntry]
+
+
+@strawberry.type
 class EventQueries:
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def duplicate_event_clusters(
+        self, info: strawberry.Info, tenant_id: strawberry.ID
+    ) -> List[DuplicateEventCluster]:
+        """Same-name events on the same/adjacent dates for one tenant —
+        the bulk-upload double-run signature. Admin-only; clients get []
+        (this is an Ignite cleanup tool, not a client surface)."""
+        from utils.graphql.permissions import (
+            _is_admin_access,
+            resolve_request_user_access,
+        )
+
+        user = info.context.request.user
+        role_slug, is_staff, is_super, email = (
+            await resolve_request_user_access(user)
+        )
+        if not _is_admin_access(role_slug, is_staff, is_super, email):
+            return []
+        try:
+            tid = resolve_id_to_int(str(tenant_id))
+        except Exception:  # noqa: BLE001
+            return []
+
+        from events.dedupe import find_duplicate_clusters
+
+        clusters = await sync_to_async(find_duplicate_clusters)(tid)
+        return [
+            DuplicateEventCluster(
+                key=c["key"],
+                events=[
+                    DuplicateEventEntry(
+                        id=strawberry.ID(str(e["id"])),
+                        uuid=e["uuid"],
+                        name=e["name"],
+                        date=e["date"],
+                        address=e["address"],
+                        recaps_filed=e["recaps_filed"],
+                        roster_count=e["roster_count"],
+                    )
+                    for e in c["events"]
+                ],
+            )
+            for c in clusters
+        ]
+
     @staticmethod
     async def _apply_rmm_asigned_filter(
         queryset: QuerySet, rmm_asigned: strawberry.ID

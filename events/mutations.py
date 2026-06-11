@@ -540,8 +540,99 @@ async def _notify_assigned_ambassadors_for_suspended_event(event_id: int) -> Non
         await sync_to_async(mailer.send)()
 
 
+@strawberry.input
+class MergeEventsInput:
+    """Fold duplicate events into a keeper. All ids must belong to
+    ``tenant_id``; the keeper survives, the rest repoint + delete."""
+    tenant_id: strawberry.ID
+    keep_event_id: strawberry.ID
+    merge_event_ids: list[strawberry.ID]
+    client_mutation_id: strawberry.ID | None = None
+
+
+@strawberry.type
+class MergeEventsResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    deleted_events: int = 0
+    deleted_requests: int = 0
+    moved_summary: str = ""
+    warnings: list[str] = strawberry.field(default_factory=list)
+
+
 @strawberry.type
 class EventMutations:
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def merge_events(
+        self, info: strawberry.Info, input: MergeEventsInput
+    ) -> MergeEventsResponse:
+        """Merge duplicate events (admin-only). Repoints every relation
+        that targets Event (roster de-duped: a BA on both keeps the
+        keeper's row), deletes the duplicates, and cleans up orphaned
+        same-shape requests so the repair cron can't resurrect them.
+        Transactional — any conflict rolls the whole merge back."""
+        from utils.graphql.permissions import (
+            _is_admin_access,
+            resolve_request_user_access,
+        )
+
+        fail = lambda msg: MergeEventsResponse(  # noqa: E731
+            success=False,
+            message=msg,
+            client_mutation_id=input.client_mutation_id,
+        )
+
+        user = info.context.request.user
+        role_slug, is_staff, is_super, email = (
+            await resolve_request_user_access(user)
+        )
+        if not _is_admin_access(role_slug, is_staff, is_super, email):
+            return fail("Admins only.")
+
+        try:
+            tid = resolve_id_to_int(str(input.tenant_id))
+            keep_id = resolve_id_to_int(str(input.keep_event_id))
+            merge_ids = [
+                resolve_id_to_int(str(i)) for i in input.merge_event_ids
+            ]
+        except Exception:  # noqa: BLE001
+            return fail("Bad ids.")
+
+        from events.dedupe import merge_events as _merge
+
+        try:
+            report = await sync_to_async(_merge)(
+                tenant_id=tid,
+                keep_event_id=keep_id,
+                merge_event_ids=merge_ids,
+            )
+        except ValueError as exc:
+            return fail(str(exc))
+        except Exception:  # noqa: BLE001
+            logger.exception("mergeEvents failed tenant=%s keep=%s", tid, keep_id)
+            return fail(
+                "Merge failed and was rolled back — nothing was changed."
+            )
+
+        moved = report["moved"]
+        summary = (
+            ", ".join(f"{k}: {v}" for k, v in sorted(moved.items()))
+            or "nothing to move"
+        )
+        return MergeEventsResponse(
+            success=True,
+            message=(
+                f"Merged {report['deleted_events']} duplicate(s) into the "
+                f"keeper — {summary}."
+            ),
+            client_mutation_id=input.client_mutation_id,
+            deleted_events=report["deleted_events"],
+            deleted_requests=report["deleted_requests"],
+            moved_summary=summary,
+            warnings=report["warnings"],
+        )
+
     @relay.mutation(permission_classes=[StrictIsAuthenticated])
     async def create_event(
         self,
