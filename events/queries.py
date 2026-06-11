@@ -288,6 +288,22 @@ class DuplicateEventCluster:
 
 
 @strawberry.type
+class EventAttendanceRow:
+    """One BA's clock log for an event — arrive / clock-in / clock-out
+    (ISO 8601 UTC) plus the coords captured at clock-in/out and the
+    on-site hours between them. Any field is null when that punch is
+    missing (e.g. clocked in but no clock-out yet)."""
+    ambassador_uuid: strawberry.ID
+    ambassador_name: str
+    arrived_at: str | None
+    clock_in_at: str | None
+    clock_out_at: str | None
+    clock_in_coordinates: List[float] | None
+    clock_out_coordinates: List[float] | None
+    hours_on_site: float | None
+
+
+@strawberry.type
 class EventQueries:
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def event_pnl(
@@ -937,6 +953,99 @@ class EventQueries:
                         event_name=p.event.name or "(event)",
                     )
                 )
+            return out
+
+        return await sync_to_async(_fetch, thread_sensitive=True)()
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def event_attendance(
+        self,
+        info: strawberry.Info,
+        event_uuid: strawberry.ID,
+    ) -> List[EventAttendanceRow]:
+        """Per-BA clock log for an event — arrive / clock-in / clock-out
+        times (+ coords) collapsed to one row per ambassador. Powers the
+        admin Attendance table beside the GPS replay on /request/view.
+        Tenant-scoped like event_location_trail."""
+        from ambassadors.models import Attendance as AttendanceModel
+        from events.models import Event as EventModel
+
+        service = EventQueriesService()
+        tenant_id = await service.resolve_tenant_id(info)
+
+        def _coords(att):
+            c = getattr(att, "coordinates", None) or []
+            if len(c) >= 2:
+                return [float(c[0]), float(c[1])]
+            return None
+
+        def _fetch() -> List[EventAttendanceRow]:
+            event = (
+                EventModel.objects.filter(uuid=str(event_uuid))
+                .only("id", "tenant_id")
+                .first()
+            )
+            if not event:
+                return []
+            if tenant_id and event.tenant_id != tenant_id:
+                return []
+
+            rows = list(
+                AttendanceModel.objects.filter(event_id=event.id)
+                .select_related("ambassador", "ambassador__user", "source")
+                .order_by("clock_time")
+            )
+            by_ba: dict = {}
+            for att in rows:
+                amb = att.ambassador
+                key = amb.id if amb else 0
+                slot = by_ba.setdefault(
+                    key,
+                    {"amb": amb, "arrived": None, "clock_in": None,
+                     "clock_out": None},
+                )
+                kind = (getattr(att.source, "name", "") or "").lower()
+                if kind == "arrived" and slot["arrived"] is None:
+                    slot["arrived"] = att
+                elif kind == "clock_in" and slot["clock_in"] is None:
+                    slot["clock_in"] = att
+                elif kind == "clock_out":
+                    slot["clock_out"] = att  # keep latest
+
+            out: List[EventAttendanceRow] = []
+            for slot in by_ba.values():
+                amb = slot["amb"]
+                user = getattr(amb, "user", None) if amb else None
+                name = (
+                    f"{(getattr(user, 'first_name', '') or '').strip()} "
+                    f"{(getattr(user, 'last_name', '') or '').strip()}"
+                ).strip() or (getattr(user, "email", "") or "(BA)")
+                ci, co = slot["clock_in"], slot["clock_out"]
+                hours = None
+                if ci and co and co.clock_time > ci.clock_time:
+                    hours = round(
+                        (co.clock_time - ci.clock_time).total_seconds()
+                        / 3600.0,
+                        2,
+                    )
+                out.append(
+                    EventAttendanceRow(
+                        ambassador_uuid=strawberry.ID(
+                            str(amb.uuid) if amb else "0"
+                        ),
+                        ambassador_name=name,
+                        arrived_at=(
+                            slot["arrived"].clock_time.isoformat()
+                            if slot["arrived"] else None
+                        ),
+                        clock_in_at=ci.clock_time.isoformat() if ci else None,
+                        clock_out_at=co.clock_time.isoformat() if co else None,
+                        clock_in_coordinates=_coords(ci) if ci else None,
+                        clock_out_coordinates=_coords(co) if co else None,
+                        hours_on_site=hours,
+                    )
+                )
+            out.sort(key=lambda r: r.ambassador_name.lower())
             return out
 
         return await sync_to_async(_fetch, thread_sensitive=True)()
