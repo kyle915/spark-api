@@ -250,6 +250,25 @@ class EventQueriesService(BaseEventQueriesService):
 
 
 @strawberry.type
+class EventPnlRow:
+    """One event's cost picture — labor from clock pairs × booked rate
+    (scheduled-duration fallback flags `estimated`), spend from expense
+    receipts. `missingRates` counts BAs with no booked rate so a low
+    number is visibly incomplete rather than silently wrong."""
+    event_id: strawberry.ID
+    uuid: str
+    name: str
+    date: str | None
+    ba_count: int
+    hours: float
+    labor_cost: float
+    spend: float
+    total_cost: float
+    estimated: bool
+    missing_rates: int
+
+
+@strawberry.type
 class DuplicateEventEntry:
     """One event inside a duplicate cluster — enough context to pick
     the keeper (the row with the recaps/roster usually wins)."""
@@ -270,6 +289,56 @@ class DuplicateEventCluster:
 
 @strawberry.type
 class EventQueries:
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def event_pnl(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID,
+        start_date: str,
+        end_date: str,
+    ) -> List[EventPnlRow]:
+        """Per-event labor + spend roll-up for a date range. Admin-only;
+        clients get [] (cost data is Ignite-internal)."""
+        from datetime import date as _date
+
+        from utils.graphql.permissions import (
+            _is_admin_access,
+            resolve_request_user_access,
+        )
+
+        user = info.context.request.user
+        role_slug, is_staff, is_super, email = (
+            await resolve_request_user_access(user)
+        )
+        if not _is_admin_access(role_slug, is_staff, is_super, email):
+            return []
+        try:
+            tid = resolve_id_to_int(str(tenant_id))
+            start = _date.fromisoformat(str(start_date))
+            end = _date.fromisoformat(str(end_date))
+        except Exception:  # noqa: BLE001
+            return []
+
+        from events.pnl import event_pnl_rows
+
+        rows = await sync_to_async(event_pnl_rows)(tid, start, end)
+        return [
+            EventPnlRow(
+                event_id=strawberry.ID(str(r["event_id"])),
+                uuid=r["uuid"],
+                name=r["name"],
+                date=r["date"],
+                ba_count=r["ba_count"],
+                hours=r["hours"],
+                labor_cost=r["labor_cost"],
+                spend=r["spend"],
+                total_cost=r["total_cost"],
+                estimated=r["estimated"],
+                missing_rates=r["missing_rates"],
+            )
+            for r in rows
+        ]
+
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def duplicate_event_clusters(
         self, info: strawberry.Info, tenant_id: strawberry.ID
