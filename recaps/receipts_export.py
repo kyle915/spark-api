@@ -131,6 +131,7 @@ def collect_expense_rows(
             {
                 "kind": "custom",
                 "recap_uuid": str(recap.uuid),
+                "event_uuid": str(ev.uuid) if ev else "",
                 "ba_name": ba_name,
                 "ba_email": ba_email,
                 "event_name": getattr(ev, "name", None) or "(no event)",
@@ -163,6 +164,7 @@ def collect_expense_rows(
             {
                 "kind": "legacy",
                 "recap_uuid": str(recap.uuid),
+                "event_uuid": str(ev.uuid) if ev else "",
                 "ba_name": ba_name,
                 "ba_email": ba_email,
                 "event_name": getattr(ev, "name", None) or "(no event)",
