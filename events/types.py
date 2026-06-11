@@ -893,6 +893,36 @@ class Event(Node):
         return await sync_to_async(_build)()
 
     @strawberry.field
+    async def recaps_filed_count(self) -> int:
+        """Recaps already filed for this event — legacy AND custom
+        families combined (same either-list-counts rule as the Master
+        Tracker chip). The Connecteam import picker badges rows that
+        already have one so nobody double-imports a PDF onto a finished
+        event. Prefetch-aware like the sibling resolvers; the fallback
+        is two indexed COUNTs (the picker pages 25 rows)."""
+        cached_legacy = getattr(self, "_prefetched_objects_cache", {}).get(
+            "recaps"
+        )
+        cached_custom = getattr(self, "_prefetched_objects_cache", {}).get(
+            "custom_recap"
+        )
+
+        def _count() -> int:
+            legacy = (
+                len(cached_legacy)
+                if cached_legacy is not None
+                else self.recaps.count()
+            )
+            custom = (
+                len(cached_custom)
+                if cached_custom is not None
+                else self.custom_recap.count()
+            )
+            return legacy + custom
+
+        return await sync_to_async(_count)()
+
+    @strawberry.field
     async def custom_recaps(
         self,
     ) -> List[Annotated["CustomRecap", strawberry.lazy("recaps.types")]]:
