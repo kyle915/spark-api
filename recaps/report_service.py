@@ -39,6 +39,7 @@ from dataclasses import dataclass, field
 
 from events.models import Request
 from recaps.types import (
+    _samples_given_from_fields,
     _consumers_sampled_from_fields,
     _is_image_url,
     _sold_units_from_fields,
@@ -156,6 +157,9 @@ def _custom_engagement_totals(pairs) -> dict[str, int]:
         "brand_aware_consumers": 0,
         "willing_to_purchase_consumers": 0,
     }
+    from recaps.types import _SAMPLED_TOTAL_RE
+
+    demographic_sampled = 0
     for name, value in pairs:
         label = (name or "").lower()
         val = _leading_int(value)
@@ -163,12 +167,17 @@ def _custom_engagement_totals(pairs) -> dict[str, int]:
             continue
         if "consumers sampled" in label:
             out["total_consumer"] += val
+        elif _SAMPLED_TOTAL_RE.search(label):
+            # Girl Beer style: "Men/Women who sampled (Total)" demographics
+            demographic_sampled += val
         elif "first time" in label:
             out["first_time_consumers"] += val
         elif "knew about" in label:
             out["brand_aware_consumers"] += val
         elif "willing to purchase" in label and "not" not in label:
             out["willing_to_purchase_consumers"] += val
+    if out["total_consumer"] == 0 and demographic_sampled:
+        out["total_consumer"] = demographic_sampled
     return out
 
 
@@ -260,8 +269,12 @@ def _accumulate_custom(custom_recap, kpis: CampaignReportKpis) -> None:
         int(getattr(s, "quantity", 0) or 0)
         for s in _all(custom_recap, "custom_recap_product_sample")
     )
+    samples_given = _samples_given_from_fields(pairs)
     if structured_samples:
         kpis.samples_distributed += structured_samples
+    elif samples_given is not None:
+        # Free-text "Total Samples Given Out" headline (Girl Beer).
+        kpis.samples_distributed += int(samples_given)
     elif consumers_sampled is not None:
         kpis.samples_distributed += int(consumers_sampled)
 

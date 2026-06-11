@@ -56,7 +56,11 @@ from recaps.models import (
     Recap,
 )
 from recaps.report_service import _format_date_range, _leading_int
-from recaps.types import _consumers_sampled_from_fields, _sold_units_from_fields
+from recaps.types import (
+    _consumers_sampled_from_fields,
+    _samples_given_from_fields,
+    _sold_units_from_fields,
+)
 from tenants.models import Tenant
 
 # Hard caps so the prompt stays small no matter how big the tenant is.
@@ -236,7 +240,11 @@ def _legacy_kpis(tenant_id: int, year: int | None = None) -> dict[str, int]:
 # mirror recaps.report_service._custom_engagement_totals +
 # recaps.types._sold_units_from_fields / _consumers_sampled_from_fields.
 _CUSTOM_KPI_NAME_RE = re.compile(
-    r"consumers sampled|first time|knew about|willing to purchase|cans?|packs?",
+    r"consumers sampled|first time|knew about|willing to purchase"
+    r"|cans?|packs?"
+    # Girl Beer vocabulary: demographics sampled totals + free-text
+    # samples headline (see recaps.types._SAMPLED_TOTAL_RE/_SAMPLES_GIVEN_RE)
+    r"|who sampled|samples? (given|distributed|handed)",
     re.IGNORECASE,
 )
 
@@ -313,6 +321,7 @@ def _custom_kpis_window(tenant_id: int, window: tuple | None) -> dict[str, int]:
         per_recap.setdefault(recap_id, []).append((name, value))
 
     sampled_total = 0
+    samples_given_total = 0
     for pairs in per_recap.values():
         for name, value in pairs:
             label = (name or "").lower()
@@ -331,6 +340,10 @@ def _custom_kpis_window(tenant_id: int, window: tuple | None) -> dict[str, int]:
             out["consumers_reached"] += int(consumers_sampled)
             sampled_total += int(consumers_sampled)
 
+        samples_given = _samples_given_from_fields(pairs)
+        if samples_given is not None:
+            samples_given_total += int(samples_given)
+
         sold = _sold_units_from_fields(pairs)
         if sold is not None:
             out["products_sold"] += int(sold)
@@ -344,10 +357,12 @@ def _custom_kpis_window(tenant_id: int, window: tuple | None) -> dict[str, int]:
             elif re.search(r"\bpacks?\b", label):
                 out["packs_sold"] += parsed
 
-    # samplesDistributed prefers structured quantities; fall back to the
-    # summed "consumers sampled" headline when no structured samples exist
-    # (mirrors report_service._accumulate_custom).
-    out["samples_distributed"] = structured_samples or sampled_total
+    # samplesDistributed prefers structured quantities, then the explicit
+    # "samples given out" free-text headline (Girl Beer), then the summed
+    # "consumers sampled" headline (mirrors report_service._accumulate_custom).
+    out["samples_distributed"] = (
+        structured_samples or samples_given_total or sampled_total
+    )
     return out
 
 

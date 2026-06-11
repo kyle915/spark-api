@@ -58,6 +58,21 @@ _SOLD_FIELD_RE = re.compile(r"\b(cans?|packs?)\b", re.IGNORECASE)
 # /consumers?\s+sampled/i.
 _CONSUMERS_SAMPLED_RE = re.compile(r"consumers?\s+sampled", re.IGNORECASE)
 
+# Demographics-style sampled totals — Girl Beer's template counts sampled
+# consumers as "Men who sampled (Total)" / "Women who sampled (Total)"
+# rows instead of one "Consumers Sampled" field. Only "(Total)" rows are
+# summed; the per-age-bracket rows would double count.
+_SAMPLED_TOTAL_RE = re.compile(
+    r"who\s+sampled\s*\(\s*total\s*\)", re.IGNORECASE
+)
+
+# Free-text "samples handed out" headline (Girl Beer: "Total Samples
+# Given Out") — the samples-distributed fallback when a template has no
+# structured product-sample rows.
+_SAMPLES_GIVEN_RE = re.compile(
+    r"samples?\s+(given|distributed|handed)", re.IGNORECASE
+)
+
 # A resolved public URL is treated as a renderable hero image only when it
 # ends in one of these extensions (optionally followed by a query string).
 # Mirrors the frontend isImage = /\.(jpe?g|png|webp|gif)(\?|$)/i — note it
@@ -118,13 +133,44 @@ def _consumers_sampled_from_fields(
     Mirrors customConsumersSampled — returns the first finite parse and
     stops; None when no such field has a numeric value.
     """
-    for name, value in fields:
+    pairs = list(fields)
+    for name, value in pairs:
         if not name or not _CONSUMERS_SAMPLED_RE.search(name):
             continue
         parsed = _parse_recap_int(value)
         if parsed is not None:
             return parsed
-    return None
+    # No "consumers sampled" field — fall back to demographics totals
+    # ("Men/Women who sampled (Total)", Girl Beer style), summed.
+    total = 0
+    matched = False
+    for name, value in pairs:
+        if not name or not _SAMPLED_TOTAL_RE.search(name):
+            continue
+        parsed = _parse_recap_int(value)
+        if parsed is not None:
+            total += parsed
+            matched = True
+    return total if matched else None
+
+
+def _samples_given_from_fields(
+    fields: Iterable[tuple[str | None, str | None]],
+) -> int | None:
+    """Sum of every "samples given/distributed/handed out" field, else
+    None. Girl Beer's "Total Samples Given Out" is the canonical case —
+    a free-text samples headline on templates that don't use structured
+    product-sample rows."""
+    total = 0
+    matched = False
+    for name, value in fields:
+        if not name or not _SAMPLES_GIVEN_RE.search(name):
+            continue
+        parsed = _parse_recap_int(value)
+        if parsed is not None:
+            total += parsed
+            matched = True
+    return total if matched else None
 
 
 def _is_image_url(url: str | None) -> bool:

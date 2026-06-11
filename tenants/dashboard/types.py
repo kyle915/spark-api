@@ -63,8 +63,11 @@ class EventDashboardMetrics:
     """Key metrics for Event Dashboard."""
     total_events: int
     consumers_sampled: int
-    brand_awareness: float  # Percentage
-    purchase_intent: float  # Percentage
+    # Percentages. None = the tenant's recaps carry no awareness/intent
+    # data at all (e.g. Girl Beer's template never asks) — the FE renders
+    # "—" instead of a misleading 0.0%.
+    brand_awareness: float | None
+    purchase_intent: float | None
     comparison_period: str | None = None  # e.g., "Q4 2024"
     comparison_values: ComparisonValues | None = None
 
@@ -97,9 +100,10 @@ class BestMonth:
 class PerformanceInsights:
     """Performance insights section."""
     knew_about_brand: int
-    knew_about_brand_percentage: float
+    # None = no awareness/intent data collected (see EventDashboardMetrics).
+    knew_about_brand_percentage: float | None
     willing_to_purchase: int
-    willing_to_purchase_percentage: float
+    willing_to_purchase_percentage: float | None
     best_month: BestMonth | None = None
     growth_rate: float  # Percentage (events vs last year)
 
@@ -162,7 +166,12 @@ class RecapGlobalKPIs:
     """Global cans/packs sold KPIs for Recap Dashboard."""
     single_cans_sold: int
     multi_packs_sold: int
+    # Cans-equivalent of multi_packs_sold with the pack size parsed from
+    # each custom field label ("6-packs Sold" → ×6; legacy packs keep the
+    # historical ×12). The FE's old client-side ×12 overstated 6-pack
+    # brands by 2× — use this instead.
     by_rmm: List[RecapGlobalKPIByRMM]
+    pack_cans_equivalent: int = 0
 
 
 @strawberry.type
