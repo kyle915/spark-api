@@ -71,6 +71,25 @@ async def insights_model_to_graphql(insights_model) -> types.Insights:
     )
 
 
+
+_PACK_SIZE_RE_STR = r"(\d+)\s*-?\s*pack"
+
+
+def _pack_size_from_label(label: str) -> int:
+    """Cans per pack parsed from a sales-field label ("Peach 6-packs
+    Sold" → 6). Defaults to 12 when the label doesn't say — the legacy
+    Liquid Death assumption the dashboard always made."""
+    import re as _re
+
+    m = _re.search(_PACK_SIZE_RE_STR, label or "", _re.IGNORECASE)
+    if not m:
+        return 12
+    try:
+        return max(1, int(m.group(1)))
+    except ValueError:
+        return 12
+
+
 def _goal_progress_to_graphql(progress_items: list[dict]) -> list[types.GoalProgress]:
     """Map service progress dicts to GraphQL GoalProgress types."""
     return [
@@ -394,11 +413,17 @@ class DashboardQueries:
             # intact, and tenants without custom recaps add 0.
             custom_consumers = custom_brand_aware_n = custom_willing_n = 0
             custom_single_cans = custom_packs = 0
+            custom_brand_rows = custom_willing_rows = custom_pack_cans = 0
             try:
                 def _sum_custom_recap_metrics():
                     import re as _re
                     sums = {"consumers": 0, "brand": 0,
-                            "willing": 0, "cans": 0, "packs": 0}
+                            "willing": 0, "cans": 0, "packs": 0,
+                            # Girl Beer vocabulary + no-data signals:
+                            "sampled_total": 0,   # "who sampled (Total)" rows
+                            "pack_cans": 0,       # packs × label-parsed size
+                            "brand_rows": 0,      # matched awareness fields
+                            "willing_rows": 0}    # matched intent fields
                     rows = recap_models.CustomFieldValue.objects.filter(
                         custom_recap__event__in=base_queryset
                     ).values_list("custom_field__name", "value")
@@ -413,14 +438,27 @@ class DashboardQueries:
                             continue
                         if "consumers sampled" in low:
                             sums["consumers"] += num
+                        elif "who sampled" in low and "total" in low:
+                            # Girl Beer demographics: "Men/Women who
+                            # sampled (Total)" — only Total rows, the age
+                            # brackets would double count.
+                            sums["sampled_total"] += num
                         elif "knew about" in low:
                             sums["brand"] += num
+                            sums["brand_rows"] += 1
                         elif "willing to purchase" in low and "not" not in low:
                             sums["willing"] += num
+                            sums["willing_rows"] += 1
                         elif "single can" in low:
                             sums["cans"] += num
                         elif "pack" in low:
                             sums["packs"] += num
+                            sums["pack_cans"] += num * _pack_size_from_label(low)
+                    # Precedence mirror of recaps.types._consumers_sampled_
+                    # from_fields: explicit headline wins, demographics
+                    # totals fill in when no template has one.
+                    if sums["consumers"] == 0:
+                        sums["consumers"] = sums["sampled_total"]
                     return sums
 
                 _cm = await sync_to_async(_sum_custom_recap_metrics)()
@@ -429,6 +467,9 @@ class DashboardQueries:
                 custom_willing_n = _cm["willing"]
                 custom_single_cans = _cm["cans"]
                 custom_packs = _cm["packs"]
+                custom_brand_rows = _cm["brand_rows"]
+                custom_willing_rows = _cm["willing_rows"]
+                custom_pack_cans = _cm["pack_cans"]
             except Exception:
                 import logging
                 logging.getLogger(__name__).warning(
@@ -444,16 +485,28 @@ class DashboardQueries:
                 consumer_data['total_willing_to_purchase'] or 0
             ) + custom_willing_n
 
-            # Calculate percentages (always clamp to 0-100)
+            # A tenant whose template never asks about awareness/intent
+            # (Girl Beer) has NO data — render "—", not a misleading 0.0%.
+            # Signal = any legacy ConsumerEngagements row OR any matched
+            # custom awareness/intent field.
+            legacy_ce_exists = await sync_to_async(
+                recap_models.ConsumerEngagements.objects.filter(
+                    recap__event__in=events_with_recaps
+                ).exists
+            )()
+            has_brand_signal = legacy_ce_exists or custom_brand_rows > 0
+            has_willing_signal = legacy_ce_exists or custom_willing_rows > 0
+
+            # Calculate percentages (always clamp to 0-100); None = no data
             brand_awareness = clamp_percentage(
                 (total_brand_aware / consumers_sampled * 100)
                 if consumers_sampled > 0 else 0.0
-            )
+            ) if has_brand_signal else None
 
             purchase_intent = clamp_percentage(
                 (total_willing_to_purchase / consumers_sampled * 100)
                 if consumers_sampled > 0 else 0.0
-            )
+            ) if has_willing_signal else None
 
             # Comparison period (same period previous year)
             comparison_period = None
@@ -526,8 +579,14 @@ class DashboardQueries:
             metrics = types.EventDashboardMetrics(
                 total_events=total_events,
                 consumers_sampled=consumers_sampled,
-                brand_awareness=round(brand_awareness, 1),
-                purchase_intent=round(purchase_intent, 1),
+                brand_awareness=(
+                    round(brand_awareness, 1)
+                    if brand_awareness is not None else None
+                ),
+                purchase_intent=(
+                    round(purchase_intent, 1)
+                    if purchase_intent is not None else None
+                ),
                 comparison_period=comparison_period,
                 comparison_values=comparison_values
             )
@@ -633,11 +692,15 @@ class DashboardQueries:
 
             performance_insights = types.PerformanceInsights(
                 knew_about_brand=knew_about_brand,
-                knew_about_brand_percentage=round(
-                    knew_about_brand_percentage, 1),
+                knew_about_brand_percentage=(
+                    round(knew_about_brand_percentage, 1)
+                    if knew_about_brand_percentage is not None else None
+                ),
                 willing_to_purchase=willing_to_purchase_count,
-                willing_to_purchase_percentage=round(
-                    willing_to_purchase_percentage, 1),
+                willing_to_purchase_percentage=(
+                    round(willing_to_purchase_percentage, 1)
+                    if willing_to_purchase_percentage is not None else None
+                ),
                 best_month=best_month_data,
                 growth_rate=round(growth_rate, 1)
             )
@@ -700,6 +763,12 @@ class DashboardQueries:
                     multi_packs_sold=Sum('total_packs_sold', default=0),
                 )
             )()
+            # Cans-equivalent of the packs sold: legacy Recap packs keep the
+            # historical ×12 assumption; custom pack fields use the size
+            # parsed from each label ("6-packs Sold" → ×6, Girl Beer).
+            legacy_packs = global_kpis_data.get('multi_packs_sold') or 0
+            pack_cans_equivalent = legacy_packs * 12 + custom_pack_cans
+
             # Fold custom-recap cans/packs into the global KPIs (legacy
             # Recap aggregate above misses custom-recap tenants like Borjomi).
             global_kpis_data['single_cans_sold'] = (
@@ -746,6 +815,7 @@ class DashboardQueries:
             global_kpis = types.RecapGlobalKPIs(
                 single_cans_sold=global_kpis_data['single_cans_sold'] or 0,
                 multi_packs_sold=global_kpis_data['multi_packs_sold'] or 0,
+                pack_cans_equivalent=pack_cans_equivalent,
                 by_rmm=global_kpis_by_rmm
             )
 

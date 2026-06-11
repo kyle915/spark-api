@@ -841,12 +841,15 @@ def _custom_engagement_totals(recap) -> dict[str, int]:
     campaign report and dashboard report the same numbers. Borjomi/Girl
     Beer store these as CustomFieldValue rows, not consumer_engagements.
     """
+    from recaps.types import _SAMPLED_TOTAL_RE
+
     out = {
         "total_consumer": 0,
         "first_time_consumers": 0,
         "brand_aware_consumers": 0,
         "willing_to_purchase_consumers": 0,
     }
+    demographic_sampled = 0
     for cfv in _related_items(recap, "custom_field_value"):
         cf = getattr(cfv, "custom_field", None)
         label = (getattr(cf, "name", "") or "").lower()
@@ -855,6 +858,9 @@ def _custom_engagement_totals(recap) -> dict[str, int]:
             continue
         if "consumers sampled" in label:
             out["total_consumer"] += val
+        elif _SAMPLED_TOTAL_RE.search(label):
+            # Girl Beer style: "Men/Women who sampled (Total)" demographics
+            demographic_sampled += val
         elif "first time" in label:
             out["first_time_consumers"] += val
         elif "knew about" in label:
@@ -862,6 +868,8 @@ def _custom_engagement_totals(recap) -> dict[str, int]:
         elif "willing to purchase" in label and "not" not in label:
             # excludes "would NOT be willing to purchase"
             out["willing_to_purchase_consumers"] += val
+    if out["total_consumer"] == 0 and demographic_sampled:
+        out["total_consumer"] = demographic_sampled
     return out
 
 
