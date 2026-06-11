@@ -5071,11 +5071,29 @@ class RecapMutations:
 
         match_results = match_fields(parsed, custom_fields)
 
-        # Default name "Imported from Connecteam · <event date>"
+        # Default name → the event's OWN name (+ its date) so a recap list
+        # full of Connecteam imports isn't a wall of identical "Imported
+        # from Connecteam · <today>" rows (Kyle's report: every import was
+        # named the same, which is messy in the recap list). The stamp comes
+        # from the EVENT date — not today — so two same-named stores on
+        # different days stay distinguishable. An explicit input.name (the
+        # import modal's "Recap title" field) always wins; the generic
+        # "Imported from Connecteam" stamp is only the last resort for an
+        # event with no name.
         name = (input.name or "").strip()
         if not name:
-            stamp = django_timezone.now().strftime("%Y-%m-%d")
-            name = f"Imported from Connecteam · {stamp}"
+            ev_name = (getattr(event, "name", "") or "").strip()
+            ev_date = getattr(event, "date", None)
+            stamp = (
+                ev_date.date().isoformat()
+                if ev_date
+                else django_timezone.now().strftime("%Y-%m-%d")
+            )
+            name = (
+                f"{ev_name} · {stamp}"
+                if ev_name
+                else f"Imported from Connecteam · {stamp}"
+            )
 
         def _create() -> models.CustomRecap:
             from django.core.files.base import ContentFile
