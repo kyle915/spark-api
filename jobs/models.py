@@ -965,6 +965,22 @@ class JobApplication(models.Model):
     )
     # Free-text "Why I'd be great for this" from the BA.
     note = models.TextField(blank=True, default="")
+    # Apply-time rate confirmation + contractor-agreement acceptance.
+    # Snapshots are immutable evidence: the rate the BA SAW and agreed to,
+    # and the exact agreement version they accepted — preserved even if
+    # the job's rate or the agreement text later changes.
+    rate_confirmed_amount = models.DecimalField(
+        max_digits=14, decimal_places=4, null=True, blank=True
+    )
+    agreement = models.ForeignKey(
+        "ContractorAgreement",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="applications",
+    )
+    agreement_version = models.CharField(max_length=40, null=True, blank=True)
+    agreement_accepted_at = models.DateTimeField(null=True, blank=True)
     # When the admin made the accept / decline call.
     decided_at = models.DateTimeField(null=True, blank=True)
     decided_by = models.ForeignKey(
@@ -1230,3 +1246,60 @@ class AmbassadorJobPreference(models.Model):
 
     def __str__(self) -> str:
         return f"AmbassadorJobPreference(ambassador={self.ambassador_id})"
+
+
+class ContractorAgreement(models.Model):
+    """A versioned independent-contractor agreement a BA accepts when
+    applying to a job.
+
+    A ``tenant=None`` row is the GLOBAL Ignite default; a row WITH a
+    tenant overrides it for that brand. ``active_for_tenant`` resolves
+    the tenant override first, then the global default. Old versions are
+    kept (never deleted) so historical acceptances stay attributable —
+    new text means a NEW row with a bumped ``version``, the old one
+    flipped ``is_active=False``.
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    version = models.CharField(max_length=40)
+    body = models.TextField()
+    is_active = models.BooleanField(default=True, db_index=True)
+
+    tenant = models.ForeignKey(
+        Tenant,
+        on_delete=models.RESTRICT,
+        null=True,
+        blank=True,
+        related_name="contractor_agreements",
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.RESTRICT,
+        null=True,
+        related_name="contractor_agreements_created_by",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("-created_at",)
+
+    @classmethod
+    def active_for_tenant(cls, tenant_id):
+        """Active agreement for a tenant: the tenant's own active row if
+        one exists, else the active global (tenant=None) default. Returns
+        None when nothing is configured (apply stays un-gated)."""
+        if tenant_id is not None:
+            override = (
+                cls.objects.filter(tenant_id=tenant_id, is_active=True)
+                .order_by("-created_at")
+                .first()
+            )
+            if override:
+                return override
+        return (
+            cls.objects.filter(tenant__isnull=True, is_active=True)
+            .order_by("-created_at")
+            .first()
+        )

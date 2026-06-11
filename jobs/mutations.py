@@ -2354,12 +2354,41 @@ class JobApplicationMutations:
                 if live_count >= job.max_applications:
                     return None, "Application cap reached for this job."
 
+            # Rate + contractor-agreement gate. Only enforced when the
+            # job actually has a rate AND an active agreement is on file —
+            # so brands not yet configured with one aren't blocked.
+            from django.utils import timezone as _dj_tz
+
+            agreement = models.ContractorAgreement.active_for_tenant(
+                job.tenant_id
+            )
+            gate_active = bool(agreement) and bool(job.hourly_rate)
+            if gate_active:
+                if not input.rate_confirmed:
+                    return None, (
+                        "Confirm the shift rate before applying."
+                    )
+                if not input.agreement_accepted:
+                    return None, (
+                        "Accept the contractor agreement before applying."
+                    )
+
+            accept_defaults = {}
+            if gate_active:
+                accept_defaults = {
+                    "rate_confirmed_amount": job.hourly_rate,
+                    "agreement_id": agreement.id,
+                    "agreement_version": agreement.version,
+                    "agreement_accepted_at": _dj_tz.now(),
+                }
+
             app, created = models.JobApplication.objects.get_or_create(
                 job=job, ambassador=amb,
                 defaults={
                     "tenant_id": job.tenant_id,
                     "status": models.JobApplication.STATUS_APPLIED,
                     "note": (input.note or "")[:1000],
+                    **accept_defaults,
                 },
             )
             if not created:
@@ -2371,7 +2400,19 @@ class JobApplicationMutations:
                     app.status = models.JobApplication.STATUS_APPLIED
                     if input.note:
                         app.note = input.note[:1000]
-                    app.save(update_fields=["status", "note", "updated_at"])
+                    fields = ["status", "note", "updated_at"]
+                    if gate_active:
+                        app.rate_confirmed_amount = job.hourly_rate
+                        app.agreement_id = agreement.id
+                        app.agreement_version = agreement.version
+                        app.agreement_accepted_at = _dj_tz.now()
+                        fields += [
+                            "rate_confirmed_amount",
+                            "agreement",
+                            "agreement_version",
+                            "agreement_accepted_at",
+                        ]
+                    app.save(update_fields=fields)
                 else:
                     return app, "Application already on file."
             return app, "Applied."
