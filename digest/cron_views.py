@@ -1891,6 +1891,58 @@ class SendShiftConfirmationsView(View):
         )
 
 
+@method_decorator(csrf_exempt, name="dispatch")
+class ProvisionReviewAmbassadorView(View):
+    """POST `/internal/cron/provision-review-ambassador`.
+
+    One-off, secret-gated provisioning of the app-store review BA login
+    (see ambassadors/management/commands/seed_review_ambassador.py).
+    Bounded HARD to a single allow-listed email so this endpoint can
+    never touch any other account — the password arrives in the POST
+    body (never the URL/logs).
+
+    Body params: email (must be allow-listed), password.
+    """
+
+    # Only this account may be provisioned through the public endpoint.
+    _ALLOWED = {"kylechristiansen93@gmail.com"}
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        email = (
+            request.POST.get("email") or request.GET.get("email") or ""
+        ).strip().lower()
+        password = request.POST.get("password") or request.GET.get("password") or ""
+        if email not in self._ALLOWED:
+            return JsonResponse(
+                {"ok": False, "error": "email not allow-listed"}, status=400
+            )
+        if not password:
+            return JsonResponse(
+                {"ok": False, "error": "password required"}, status=400
+            )
+
+        out = io.StringIO()
+        try:
+            call_command(
+                "seed_review_ambassador",
+                "--email", email,
+                "--password", password,
+                stdout=out,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Review-ambassador provisioning failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc)},
+                status=500,
+            )
+        # Never echo the password back; log is the command's own summary.
+        return JsonResponse({"ok": True, "log": out.getvalue()})
+
+
 def _registered_views() -> dict[str, Any]:
     """Map URL path → view class. Lets `digest/urls.py` mount these
     without each one being re-exported explicitly.
@@ -1920,4 +1972,5 @@ def _registered_views() -> dict[str, Any]:
         "audit-tenant-onboarding": AuditTenantOnboardingView,
         "dedupe-skills": DedupeSkillsView,
         "shift-confirmations": SendShiftConfirmationsView,
+        "provision-review-ambassador": ProvisionReviewAmbassadorView,
     }
