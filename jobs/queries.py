@@ -1754,6 +1754,35 @@ class JobApplicationQueries:
     """Admin-facing view of BA applications for a specific Job."""
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def active_contractor_agreement(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID | None = None,
+    ) -> types.ContractorAgreementType | None:
+        """The contractor agreement a BA accepts when applying — the
+        tenant's active override if set, else the global Ignite default.
+        Null when none is configured (apply isn't gated). The BA passes
+        the job's tenant id so brand-specific terms surface."""
+        from jobs.models import ContractorAgreement
+
+        tid = None
+        if tenant_id is not None:
+            try:
+                tid = resolve_id_to_int(tenant_id)
+            except Exception:  # noqa: BLE001
+                tid = None
+
+        def _load():
+            ag = ContractorAgreement.active_for_tenant(tid)
+            if not ag:
+                return None
+            return types.ContractorAgreementType(
+                uuid=str(ag.uuid), version=ag.version, body=ag.body
+            )
+
+        return await sync_to_async(_load)()
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def my_available_jobs(
         self,
         info: strawberry.Info,

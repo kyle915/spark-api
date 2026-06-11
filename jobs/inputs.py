@@ -426,9 +426,18 @@ class OpenJobToAllInput(SparkGraphQLInput):
 
 @strawberry.input
 class ApplyToJobInput(SparkGraphQLInput):
-    """BA taps Apply on the mobile job board."""
+    """BA taps Apply on the mobile job board.
+
+    ``rate_confirmed`` + ``agreement_accepted`` capture the BA's
+    explicit consent on the apply screen. When the job has an hourly
+    rate and an active contractor agreement exists, BOTH must be true or
+    the apply is rejected — the agreement acceptance is tracked
+    server-side (version + rate snapshot + timestamp on the
+    JobApplication)."""
     job_id: strawberry.ID
     note: str | None = None
+    rate_confirmed: bool = False
+    agreement_accepted: bool = False
 
 
 @strawberry.input

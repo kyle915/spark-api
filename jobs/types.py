@@ -529,6 +529,15 @@ class InviteAmbassadorsToJobResponse:
 # Job lifecycle types
 # -------------------------------------------------------------------
 
+@strawberry.type
+class ContractorAgreementType:
+    """The active contractor agreement a BA must accept to apply —
+    version + full body for the apply screen to render."""
+    uuid: str
+    version: str
+    body: str
+
+
 @strawberry_django.type(models.JobApplication)
 class JobApplication:
     uuid: str
@@ -536,6 +545,10 @@ class JobApplication:
     note: str
     applied_at: str
     decided_at: str | None
+    # Apply-time rate + agreement evidence (admin-facing). Null on
+    # applications filed before the agreement gate, or for un-gated jobs.
+    agreement_version: str | None
+    agreement_accepted_at: str | None
     # Ambassador PK as an ID — lets the admin applicant-review UI pass it
     # straight into assignAmbassadorToJob to accept a specific applicant.
     ambassador_id: strawberry.ID
@@ -545,6 +558,11 @@ class JobApplication:
     # attach the related row via the field-descriptor cache, which
     # __dict__.get misses → empty strings → the admin Applicants list shows
     # the literal "Ambassador" instead of the real name (task #256).
+    @strawberry.field
+    def rate_confirmed_amount(self) -> float | None:
+        v = getattr(self, "rate_confirmed_amount", None)
+        return float(v) if v is not None else None
+
     @strawberry.field
     def ambassador_first_name(self) -> str:
         a = getattr(self, "ambassador", None)
