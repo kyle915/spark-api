@@ -225,6 +225,7 @@ class Product(models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     name = models.CharField(max_length=50)
+    description = models.TextField(null=True, blank=True)
     image = models.ImageField(upload_to="products/", null=True)
 
     product_type = models.ForeignKey(ProductType, on_delete=models.RESTRICT)
