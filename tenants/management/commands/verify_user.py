@@ -44,10 +44,21 @@ class Command(BaseCommand):
 
         user = User.objects.filter(email__iexact=email).order_by("id").first()
         if user is None:
-            raise CommandError(
-                f"No user with email {email!r}. (This command verifies an "
-                "existing account; it never creates one.)"
+            msg = (
+                f"No user with email {email!r} — no account exists. "
+                "(This command verifies an existing account; it never "
+                "creates one.)"
             )
+            if commit:
+                raise CommandError(msg)
+            # Dry-run doubles as a read-only "does this account exist / what
+            # can it access" check — report cleanly instead of erroring.
+            w = self.stdout.write
+            w("")
+            w(self.style.MIGRATE_HEADING(f"verify_user: {email}"))
+            w("  mode        : DRY-RUN")
+            w(self.style.WARNING(f"  {msg}"))
+            return
 
         # Read prior gqlauth status (if a row exists yet).
         prior_verified = None
@@ -73,6 +84,28 @@ class Command(BaseCommand):
             + ("  (no UserStatus row yet)" if prior_verified is None else "")
         )
         w(f"  archived    : {prior_archived}  -> False")
+        w(f"  name        : {(user.get_full_name() or '').strip() or '—'}")
+
+        # Tenant memberships — the actual "what can this user access" answer.
+        # A user can be verified + active but still be a member of NO tenant
+        # (and thus see nothing), so this is the part that confirms access.
+        try:
+            memberships = list(user.tenanted_users.select_related("tenant").all())
+        except Exception as exc:  # noqa: BLE001
+            memberships = []
+            w(f"  [warn] couldn't read tenant memberships: {exc}")
+        if memberships:
+            w(f"  tenants ({len(memberships)}):")
+            for m in memberships:
+                tname = (
+                    getattr(getattr(m, "tenant", None), "name", None) or "(none)"
+                )
+                w(f"    - {tname}  (membership active={m.is_active})")
+        else:
+            w(
+                "  tenants     : NONE — no tenant membership "
+                "(this account can't access any client)"
+            )
 
         if not commit:
             w("")
