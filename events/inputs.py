@@ -315,6 +315,7 @@ class CreateProductInput(BaseNameableInput):
     # "General" product type (resolved in the create_product mutation). Lets a
     # product be added with just a name — no product-type setup required.
     product_type_id: strawberry.ID | None = None
+    description: str | None = None
     image: str | None = None
 
 

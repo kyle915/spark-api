@@ -251,6 +251,7 @@ class ProductTypeDetailResponse:
 class Product(Node):
     uuid: str
     name: str
+    description: str | None = None
     product_type: ProductType | None = None
     tenant_id: strawberry.ID
     created_at: str
