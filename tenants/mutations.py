@@ -1532,6 +1532,18 @@ class ClientsCustomRegister:
             resolve_id_to_int(input.tenant_id) if input.tenant_id else None
         )
 
+        # Auto-verify when an authenticated admin (spark-admin or client) is
+        # creating this client — in the admin "create client" flow they make
+        # AND vouch for the RMM's email, so the activation-email gate only
+        # stranded admin-created clients at "Please verify your account"
+        # (e.g. Stone House Bread — see verify_user PR #803). Anonymous /
+        # self-service registration is NOT auto-verified (still must confirm
+        # the email), so this opens no public self-verify hole.
+        requester = info.context.request.user
+        is_admin_caller, _is_spark, _is_client, _err = (
+            await _check_client_or_spark_admin(requester)
+        )
+
         return await register_user_with_role(
             first_name=input.first_name,
             email=input.email,
@@ -1540,6 +1552,7 @@ class ClientsCustomRegister:
             role_id=resolved_role_id,
             image=input.image,
             tenant_id=resolved_tenant_id,
+            auto_verify=is_admin_caller,
             client_mutation_id=input.client_mutation_id,
         )
 
