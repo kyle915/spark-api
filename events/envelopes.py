@@ -90,6 +90,48 @@ def _request_product_names(request) -> list[str]:
         return []
 
 
+def _full_address(request) -> str | None:
+    """The fullest address we can show: the request's own address line,
+    plus city / state / ZIP pulled from its `location` (or its retailer's
+    location) when the line itself doesn't already carry them.
+
+    New requests store a complete Google-formatted address (street, city,
+    state, ZIP) in `address`, so this returns it as-is. This composition is
+    the safety net for older/partial requests (e.g. a public-form street-
+    only entry like REQ-925) that DO have a linked location — so the
+    request view + approval emails stop showing a bare street.
+    """
+    import re as _re
+
+    street = (getattr(request, "address", None) or "").strip()
+    # Already complete (has a 5-digit ZIP)? Trust it verbatim.
+    if street and _re.search(r"\b\d{5}\b", street):
+        return street
+
+    loc = getattr(request, "location", None)
+    if loc is None:
+        retailer = getattr(request, "retailer", None)
+        loc = getattr(retailer, "location", None) if retailer else None
+
+    city = (getattr(loc, "name", None) or "").strip() if loc else ""
+    zip_code = (getattr(loc, "zip", None) or "").strip() if loc else ""
+    state_obj = getattr(request, "state", None)
+    if state_obj is None and loc is not None:
+        state_obj = getattr(loc, "state", None)
+    state = (getattr(state_obj, "code", None) or "").strip() if state_obj else ""
+
+    tail: list[str] = []
+    if city and city.lower() not in street.lower():
+        tail.append(city)
+    region = " ".join(p for p in [state, zip_code] if p).strip()
+    if region and region.lower() not in street.lower():
+        tail.append(region)
+
+    if not street:
+        return ", ".join(tail) or None
+    return ", ".join([street, *tail]) if tail else street
+
+
 def _state_code_for_tz_fallback(obj) -> str | None:
     """Best-effort 2-letter US state code for the no-TimeZone email fallback.
 
@@ -363,7 +405,7 @@ class RequestorRequestApprovedMailer(Mailer):
                     getattr(self.request, "tenant", None), "name", None
                 ),
                 "account_name": account_name,
-                "full_address": getattr(self.request, "address", None),
+                "full_address": _full_address(self.request),
                 "activation_type": getattr(
                     getattr(self.request, "request_type", None), "name", None
                 ),
@@ -461,7 +503,7 @@ class RequestorRequestDeclinedMailer(Mailer):
                     getattr(self.request, "tenant", None), "name", None
                 ),
                 "account_name": account_name,
-                "full_address": getattr(self.request, "address", None),
+                "full_address": _full_address(self.request),
                 "activation_type": getattr(
                     getattr(self.request, "request_type", None), "name", None
                 ),
@@ -650,7 +692,7 @@ class RmmAssignedRequestMailer(Mailer):
                     getattr(self.request, "tenant", None), "name", None
                 ),
                 "account_name": account_name,
-                "full_address": getattr(self.request, "address", None),
+                "full_address": _full_address(self.request),
                 "activation_type": getattr(
                     getattr(self.request, "request_type", None), "name", None
                 ),
@@ -752,7 +794,7 @@ class RequestorRequestCreatedMailer(Mailer):
                     getattr(self.request, "tenant", None), "name", None
                 ),
                 "account_name": account_name,
-                "full_address": getattr(self.request, "address", None),
+                "full_address": _full_address(self.request),
                 "activation_type": getattr(
                     getattr(self.request, "request_type", None), "name", None
                 ),
