@@ -1707,6 +1707,29 @@ class ProductMutationService(BaseMutationService):
         return models.Product
 
 
+async def _resolve_default_product_type_id(
+    input: inputs.CreateProductInput, info: strawberry.Info
+) -> int:
+    """Get-or-create the per-tenant default "General" product type, returning
+    its id. This lets a product be added with just a name — used by the
+    simplified add-a-product flow and inline-add while building a recap. The
+    tenant is resolved exactly the way the create path resolves it.
+    """
+    service = ProductMutationService.with_input(input)
+    await service.set_user_and_tenant(info)
+
+    @sync_to_async
+    def _get_or_create() -> int:
+        product_type, _ = models.ProductType.objects.get_or_create(
+            tenant_id=service.tenant_id,
+            name="General",
+            defaults={"created_by": service.user},
+        )
+        return product_type.id
+
+    return await _get_or_create()
+
+
 @strawberry.type
 class ProductMutations:
     @relay.mutation(permission_classes=[StrictIsAuthenticated])
@@ -1719,6 +1742,11 @@ class ProductMutations:
         if input.image:
             input.image = extract_blob_name_from_url(input.image)
         try:
+            # Product type is optional — fall back to the tenant's default.
+            if not input.product_type_id:
+                input.product_type_id = await _resolve_default_product_type_id(
+                    input, info
+                )
             product: models.Product = (
                 await ProductMutationService.process_create_or_update(
                     input=input, info=info
@@ -1773,6 +1801,23 @@ class ProductMutations:
                     message="Product not found.",
                     input_obj=input,
                 )
+
+        # product_type_id is optional on the shared input; on update, preserve
+        # the product's current type when the caller omits it (don't null the
+        # required FK). Falls back to the tenant default only if somehow unset.
+        if not input.product_type_id:
+
+            @sync_to_async
+            def _existing_product_type_id() -> int | None:
+                return (
+                    models.Product.objects.filter(id=input.id)
+                    .values_list("product_type_id", flat=True)
+                    .first()
+                )
+
+            input.product_type_id = (
+                await _existing_product_type_id()
+            ) or await _resolve_default_product_type_id(input, info)
 
         try:
             product: models.Product = (
