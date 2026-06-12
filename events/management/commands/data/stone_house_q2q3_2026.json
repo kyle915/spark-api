@@ -1,6 +1,6 @@
 {
   "tenant_name": "Stone House Bread",
-  "event_type": "Retail Sampling",
+  "event_type": "Sampling",
   "request_type": "Retail Sampling",
   "scheduling_status": "already_scheduled",
   "rows": [
