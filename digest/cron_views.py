@@ -1943,6 +1943,91 @@ class ProvisionReviewAmbassadorView(View):
         return JsonResponse({"ok": True, "log": out.getvalue()})
 
 
+@method_decorator(csrf_exempt, name="dispatch")
+class ImportEventScheduleView(View):
+    """POST `/internal/cron/import-event-schedule`.
+
+    Bulk-creates a client's activation schedule (approved Requests + approved
+    Events on the Master Tracker) from a committed JSON file, via the
+    `import_event_schedule` command — which reuses the same importer the admin
+    Bulk Upload UI calls (per-store+start-time DEDUP, atomic rollback). Used to
+    load Stone House Bread's Q2–Q3 2026 Kroger sampling schedule without
+    hand-copying tenant IDs into a sheet (the command resolves tenant +
+    Retail Sampling type + Eastern timezone by name).
+
+    SAFE — DRY-RUN IS THE DEFAULT. A plain trigger NEVER writes the events:
+    the import runs with dry_run=True unless `execute=true` is passed. (The
+    command does idempotent get_or_create on the tenant's EventType /
+    RequestType / approved statuses regardless, since the rows can't validate
+    without them — but that's safe, reusable setup, not the bulk data.)
+
+    Body / query params (all optional):
+      - execute: "1"/"true"/"yes" — perform the writes. Default OFF → dry-run.
+      - schedule: schedule key (default "stone_house_q2q3_2026").
+      - tenant_name: override the tenant name baked into the schedule JSON.
+
+    The command's full stdout report (resolved IDs, timezone sample, per-row
+    outcomes) is captured and returned verbatim under `report`.
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _bool(name: str, default: bool = False) -> bool:
+            raw = (request.GET.get(name) or request.POST.get(name) or "").lower()
+            if not raw:
+                return default
+            return raw in ("1", "true", "yes", "on")
+
+        # DRY-RUN is the default: only an explicit execute=true writes events.
+        execute = _bool("execute", default=False)
+        schedule = (
+            request.GET.get("schedule")
+            or request.POST.get("schedule")
+            or "stone_house_q2q3_2026"
+        )
+        tenant_name = (
+            request.GET.get("tenant_name") or request.POST.get("tenant_name") or None
+        )
+
+        cmd_kwargs: dict[str, Any] = {"schedule": schedule, "commit": execute}
+        if tenant_name:
+            cmd_kwargs["tenant_name"] = tenant_name
+
+        out = io.StringIO()
+        try:
+            call_command("import_event_schedule", stdout=out, **cmd_kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface any error to caller
+            logger.exception("Import event schedule failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "executed": execute,
+                    "schedule": schedule,
+                    "report": out.getvalue(),
+                },
+                status=500,
+            )
+
+        return JsonResponse(
+            {
+                "executed": execute,
+                "schedule": schedule,
+                "report": out.getvalue(),
+            }
+        )
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        return JsonResponse({"ok": True, "endpoint": "import-event-schedule"})
+
+
 def _registered_views() -> dict[str, Any]:
     """Map URL path → view class. Lets `digest/urls.py` mount these
     without each one being re-exported explicitly.
@@ -1973,4 +2058,5 @@ def _registered_views() -> dict[str, Any]:
         "dedupe-skills": DedupeSkillsView,
         "shift-confirmations": SendShiftConfirmationsView,
         "provision-review-ambassador": ProvisionReviewAmbassadorView,
+        "import-event-schedule": ImportEventScheduleView,
     }
