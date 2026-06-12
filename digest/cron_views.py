@@ -2028,6 +2028,66 @@ class ImportEventScheduleView(View):
         return JsonResponse({"ok": True, "endpoint": "import-event-schedule"})
 
 
+@method_decorator(csrf_exempt, name="dispatch")
+class VerifyUserView(View):
+    """POST `/internal/cron/verify-user`.
+
+    Marks a user verified + active (gqlauth `UserStatus.verified=True`,
+    `is_active=True`) so they can sign in — via the `verify_user` command.
+    Unblocks a client/RMM user stuck at "Please verify your account" when the
+    create-client flow left them unverified. Does NOT touch role/password.
+
+    SAFE — DRY-RUN IS THE DEFAULT. A plain trigger only reports the user's
+    current state; pass `execute=true` to apply.
+
+    Body / query params:
+      - email: REQUIRED — the account to verify.
+      - execute: "1"/"true"/"yes" — apply. Default OFF → dry-run.
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _bool(name: str, default: bool = False) -> bool:
+            raw = (request.GET.get(name) or request.POST.get(name) or "").lower()
+            if not raw:
+                return default
+            return raw in ("1", "true", "yes", "on")
+
+        execute = _bool("execute", default=False)
+        email = request.GET.get("email") or request.POST.get("email")
+        if not email:
+            return JsonResponse(
+                {"ok": False, "error": "email-required"}, status=400
+            )
+
+        out = io.StringIO()
+        try:
+            call_command("verify_user", email=email, commit=execute, stdout=out)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("verify_user failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "executed": execute,
+                    "report": out.getvalue(),
+                },
+                status=500,
+            )
+
+        return JsonResponse({"executed": execute, "report": out.getvalue()})
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        return JsonResponse({"ok": True, "endpoint": "verify-user"})
+
+
 def _registered_views() -> dict[str, Any]:
     """Map URL path → view class. Lets `digest/urls.py` mount these
     without each one being re-exported explicitly.
@@ -2059,4 +2119,5 @@ def _registered_views() -> dict[str, Any]:
         "shift-confirmations": SendShiftConfirmationsView,
         "provision-review-ambassador": ProvisionReviewAmbassadorView,
         "import-event-schedule": ImportEventScheduleView,
+        "verify-user": VerifyUserView,
     }
