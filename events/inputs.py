@@ -311,7 +311,10 @@ class UpdateProductTypeInput(CreateProductTypeInput):
 
 @strawberry.input
 class CreateProductInput(BaseNameableInput):
-    product_type_id: strawberry.ID
+    # Optional: when omitted, the product is filed under a per-tenant default
+    # "General" product type (resolved in the create_product mutation). Lets a
+    # product be added with just a name — no product-type setup required.
+    product_type_id: strawberry.ID | None = None
     image: str | None = None
 
 
