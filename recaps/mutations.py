@@ -5161,15 +5161,21 @@ class RecapMutations:
                 # step, Kyle's team has to manually re-upload every
                 # photo even after a successful field-text import.
                 #
-                # Kyle's call: imported photos render as one flat
-                # gallery — no FileRecapCategory tagging. The
-                # preceding-label hint still drives the per-file
-                # `name` so admins can tell receipt-vs-sampling at
-                # a glance, but the recap view doesn't split them
-                # into <details> sections anymore.
+                # Kyle's call: imported photos render as one flat gallery —
+                # NO FileRecapCategory tagging — EXCEPT the receipt, which
+                # groups under the tenant's "Receipts" category so it lands in
+                # "Evidences & Attachments" under a Receipts group (like a
+                # native recap). The preceding-label hint drives both the
+                # per-file `name` and the receipt detection.
                 try:
                     image_filetype, _ = FileType.objects.get_or_create(
                         name="image",
+                    )
+                    # Tenant "Receipts" category (sentinel "2"); get-or-create,
+                    # tenant-scoped. None-safe — a failure just leaves the
+                    # receipt uncategorized rather than blocking the import.
+                    receipts_category = _resolve_file_recap_category(
+                        "2", tenant_id=event.tenant_id,
                     )
                     attached_images: list = []
                     for parsed_img in parsed.images:
@@ -5188,12 +5194,18 @@ class RecapMutations:
                             parsed_img.preceding_label
                             or f"PDF page {parsed_img.page_index + 1}"
                         )
+                        is_receipt = "receipt" in (
+                            parsed_img.preceding_label or ""
+                        ).lower()
                         file_row = models.CustomRecapFile(
                             custom_recap=recap,
                             file_type=image_filetype,
                             name=nice_name,
                             approved=False,
                             created_by=user,
+                            file_recap_category=(
+                                receipts_category if is_receipt else None
+                            ),
                         )
                         file_row.url.save(
                             (
@@ -5206,9 +5218,14 @@ class RecapMutations:
                             save=False,
                         )
                         file_row.save()
-                        attached_images.append(
-                            (parsed_img, file_row.url.name)
-                        )
+                        # Receipts live in Evidences under "Receipts" — NOT
+                        # also routed onto the receipt field (Kyle picked
+                        # Evidences over the dedicated field). Only non-receipt
+                        # images are eligible for single-label field routing.
+                        if not is_receipt:
+                            attached_images.append(
+                                (parsed_img, file_row.url.name)
+                            )
 
                     # Route a single, unambiguously-labeled image (the
                     # receipt) onto its IMAGE field's VALUE so it renders in
