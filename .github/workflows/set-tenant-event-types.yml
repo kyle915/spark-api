@@ -1,0 +1,91 @@
+name: Set tenant event types (standardize)
+
+# Manually fires `/internal/cron/set-tenant-event-types` on Cloud Run to
+# standardize tenant EventTypes to Retail Sampling / On-Premise Sampling /
+# Event — see events/management/commands/set_tenant_event_types.py.
+# "Swap stock, keep custom": ensures the three exist + Retail Sampling default,
+# retires only the legacy stock types (Sampling / Promotion / Launch / Special
+# Event, repointing their events + recap templates onto Retail Sampling first),
+# and leaves client-specific custom types (e.g. Liquid Death's "Event
+# Activation") alone. Jeeter is excluded by default.
+#
+# MANUAL one-off, NOT a recurring cron — only `workflow_dispatch`.
+#
+# SAFE — DRY-RUN IS THE DEFAULT. `dry_run` defaults to true → sends
+# `execute=false`, so the command reports per-tenant what it WOULD do with NO
+# writes. To apply, re-run with dry_run=false (→ execute=true). Idempotent: a
+# second real run is a no-op once tenants already match.
+#
+# Secret-gated via X-Cron-Secret (shared INTERNAL_CRON_SECRET), sent as a
+# HEADER, never in the URL — same setup as the sibling workflows.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (no writes). Leave true to preview; set false to apply."
+        required: true
+        default: true
+        type: boolean
+      tenant_name:
+        description: "Scope to ONE tenant by name (empty = whole fleet)."
+        required: false
+        default: ""
+        type: string
+      exclude:
+        description: "Comma-separated tenant names to skip."
+        required: false
+        default: "Jeeter"
+        type: string
+
+jobs:
+  fire-set-tenant-event-types:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire set-tenant-event-types cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/set-tenant-event-types
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+          TENANT_NAME: ${{ github.event.inputs.tenant_name || '' }}
+          EXCLUDE: ${{ github.event.inputs.exclude || '' }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+
+          # execute is the inverse of dry_run: dry_run=true -> execute=false
+          # (preview, no writes); dry_run=false -> execute=true (apply).
+          if [ "$DRY_RUN" = "false" ]; then
+            EXECUTE="true"
+          else
+            EXECUTE="false"
+          fi
+          echo "dry_run=$DRY_RUN -> execute=$EXECUTE (writes only when execute=true)"
+
+          QS="execute=$EXECUTE"
+          if [ -n "$TENANT_NAME" ]; then
+            ENC_TENANT=$(echo "$TENANT_NAME" | sed 's/ /%20/g')
+            QS="$QS&tenant_name=$ENC_TENANT"
+          fi
+          if [ -n "$EXCLUDE" ]; then
+            ENC_EXCLUDE=$(echo "$EXCLUDE" | sed 's/ /%20/g')
+            QS="$QS&exclude=$ENC_EXCLUDE"
+          fi
+
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL?$QS" \
+            -H "X-Cron-Secret: $CRON_SECRET")
+          echo "HTTP $STATUS"
+
+          echo "----- response body (report) -----"
+          cat /tmp/cron-response.json
+          echo
+          echo "-----------------------------------"
+
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS — see body above."
+            exit 1
+          fi
