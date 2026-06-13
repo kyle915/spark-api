@@ -61,11 +61,16 @@ DEFAULT_ATTENDANCE_STATUS_TEMPLATES = [
     {"name": "Declined", "slug": "declined"},
 ]
 
+# Stock event types every NEW tenant is seeded with. Kyle standardized these
+# (2026-06-13) to the three Ignite actually runs — replacing the old generic
+# set (Sampling / Promotion / Launch / Special Event, several of which were
+# dead weight carried over from old Spark). Existing tenants are migrated to
+# match via the `set_tenant_event_types` command (Jeeter is intentionally
+# excluded — it keeps its own list). Retail Sampling is the default.
 DEFAULT_EVENT_TYPES = [
-    {"name": "Sampling", "slug": "sampling", "is_default": True},
-    {"name": "Promotion", "slug": "promotion", "is_default": False},
-    {"name": "Launch", "slug": "launch", "is_default": False},
-    {"name": "Special Event", "slug": "special-event", "is_default": False},
+    {"name": "Retail Sampling", "slug": "retail-sampling", "is_default": True},
+    {"name": "On-Premise Sampling", "slug": "on-premise-sampling", "is_default": False},
+    {"name": "Event", "slug": "event", "is_default": False},
 ]
 
 DEFAULT_REQUEST_TYPES = [
