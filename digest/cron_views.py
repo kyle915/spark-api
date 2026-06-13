@@ -2088,6 +2088,77 @@ class VerifyUserView(View):
         return JsonResponse({"ok": True, "endpoint": "verify-user"})
 
 
+@method_decorator(csrf_exempt, name="dispatch")
+class SetTenantEventTypesView(View):
+    """POST `/internal/cron/set-tenant-event-types`.
+
+    Standardizes tenant EventTypes to Retail Sampling / On-Premise Sampling /
+    Event — via the `set_tenant_event_types` command. "Swap stock, keep
+    custom": ensures the three exist + Retail Sampling default, retires only
+    the legacy stock types (Sampling / Promotion / Launch / Special Event,
+    repointing their events + recap templates onto Retail Sampling first), and
+    leaves any client-specific custom types alone. Jeeter is excluded.
+
+    SAFE — DRY-RUN IS THE DEFAULT. A plain trigger writes NOTHING: it reports
+    per-tenant what a real run would create / repoint / delete / keep. Pass
+    `execute=true` to apply.
+
+    Body / query params (all optional):
+      - execute: "1"/"true"/"yes" — apply. Default OFF → dry-run.
+      - tenant_name: scope to ONE tenant. Default (empty) → the whole fleet.
+      - exclude: comma-separated tenant names to skip (default "Jeeter").
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _bool(name: str, default: bool = False) -> bool:
+            raw = (request.GET.get(name) or request.POST.get(name) or "").lower()
+            if not raw:
+                return default
+            return raw in ("1", "true", "yes", "on")
+
+        execute = _bool("execute", default=False)
+        tenant_name = (
+            request.GET.get("tenant_name") or request.POST.get("tenant_name") or None
+        )
+        exclude = request.GET.get("exclude") or request.POST.get("exclude") or None
+
+        cmd_kwargs: dict[str, Any] = {"commit": execute}
+        if tenant_name:
+            cmd_kwargs["tenant_name"] = tenant_name
+        else:
+            cmd_kwargs["all_tenants"] = True
+        if exclude:
+            cmd_kwargs["exclude"] = exclude
+
+        out = io.StringIO()
+        try:
+            call_command("set_tenant_event_types", stdout=out, **cmd_kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("set_tenant_event_types failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "executed": execute,
+                    "report": out.getvalue(),
+                },
+                status=500,
+            )
+
+        return JsonResponse({"executed": execute, "report": out.getvalue()})
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        return JsonResponse({"ok": True, "endpoint": "set-tenant-event-types"})
+
+
 def _registered_views() -> dict[str, Any]:
     """Map URL path → view class. Lets `digest/urls.py` mount these
     without each one being re-exported explicitly.
@@ -2120,4 +2191,5 @@ def _registered_views() -> dict[str, Any]:
         "provision-review-ambassador": ProvisionReviewAmbassadorView,
         "import-event-schedule": ImportEventScheduleView,
         "verify-user": VerifyUserView,
+        "set-tenant-event-types": SetTenantEventTypesView,
     }
