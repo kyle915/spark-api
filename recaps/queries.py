@@ -512,7 +512,7 @@ class CustomRecapTemplateQueriesService(SparkGraphQLMixin):
                     queryset=models.CustomField.objects.select_related(
                         "custom_field_type",
                         "recap_section",
-                    ).order_by("id"),
+                    ).order_by("recap_section__order", "recap_section_id", "order", "id"),
                 )
             )
             .all()
@@ -807,7 +807,7 @@ class CustomRecapQueriesService(SparkGraphQLMixin):
                     queryset=models.CustomField.objects.select_related(
                         "custom_field_type",
                         "recap_section",
-                    ).order_by("id"),
+                    ).order_by("recap_section__order", "recap_section_id", "order", "id"),
                 ),
                 Prefetch(
                     "custom_field_value",
