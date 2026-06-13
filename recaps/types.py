@@ -1279,6 +1279,7 @@ class CustomField(Node):
     uuid: str
     name: str
     required: bool
+    order: int
     custom_recap_template_id: strawberry.ID
     custom_field_type_id: strawberry.ID
     custom_field_type: "CustomRecapFieldType"
@@ -1350,6 +1351,7 @@ class CustomRecapFieldTypeDetailResponse:
 class RecapSection(Node):
     uuid: str
     name: str
+    order: int
     tenant_id: strawberry.ID
     created_at: str
     updated_at: str

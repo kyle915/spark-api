@@ -542,6 +542,9 @@ class RecapSection(models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     name = models.TextField(null=False)
+    # Display order within a template (ascending). Ties broken by id, so
+    # legacy rows (all default 0) keep their historical creation order.
+    order = models.IntegerField(default=0)
 
     tenant = models.ForeignKey(
         Tenant, on_delete=models.RESTRICT, null=False, related_name="recap_section"
@@ -569,6 +572,9 @@ class CustomField(models.Model):
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     name = models.TextField(null=False)
     required = models.BooleanField(default=False)
+    # Display order within a section (ascending). Ties broken by id, so
+    # legacy rows (all default 0) keep their historical creation order.
+    order = models.IntegerField(default=0)
 
     custom_recap_template = models.ForeignKey(
         CustomRecapTemplate,

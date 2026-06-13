@@ -438,6 +438,7 @@ class CreateCustomFieldInput(SparkGraphQLInput):
     custom_field_type_id: strawberry.ID
     recap_section_id: strawberry.ID
     required: bool | None = None
+    order: int | None = None
 
 
 @strawberry.input
@@ -452,6 +453,9 @@ class CustomRecapTemplateFieldInput(SparkGraphQLInput):
     recap_section_id: strawberry.ID
     id: strawberry.ID | None = None
     required: bool | None = None
+    # Display order within the section. When omitted, the field's position in
+    # this list is used (preserves the create-builder's top-to-bottom order).
+    order: int | None = None
 
 
 @strawberry.input
@@ -508,6 +512,7 @@ class UpdateCustomRecapFieldTypeInput(CreateCustomRecapFieldTypeInput):
 class CreateRecapSectionInput(SparkGraphQLInput):
     name: str
     tenant_id: strawberry.ID
+    order: int | None = None
 
 
 @strawberry.input
