@@ -27,6 +27,9 @@ from dataclasses import dataclass
 from recaps.connecteam import (
     ParsedImage,
     ParsedRecap,
+    _FIELD_PATTERN,
+    _extract_pairs,
+    _label_only,
     _normalize,
     match_fields,
     route_single_label_images,
@@ -333,3 +336,69 @@ class TestRouteSingleLabelImages:
             self.IMAGE_FIELDS,
         )
         assert routing == {1: "blob/receipt.jpg"}
+
+
+class TestMixedSeparatorParsing:
+    """Connecteam mixes "Label::" and single-colon "Question?:" / image rows
+    in ONE PDF. The single-colon fields used to glue onto the previous "::"
+    field's value — the real "Store Associate Spoken To" mix-up — and the
+    receipt image got tagged with the wrong field. Regression guard for the
+    single-colon-at-EOL label fix + page-footer skip in `recaps.connecteam`.
+    Mirrors the pypdf line order of the real Girl Beer export.
+    """
+
+    TEXT = "\n".join([
+        "Store Associate Spoken To::",
+        "NA",
+        "What flavors were available to taste?:",
+        "Pineapple Yuzu, Blubbery lavender",
+        "Please enter the sales figures below.",
+        "Total Samples Given Out::",
+        "45",
+        "1/3",
+        "How was the setup?:",
+        "Basic but effective near the entrance",
+        "Did the demo influence the store to place a reorder?:",
+        "Na",
+        "Account Spend Amount::",
+        "22.17",
+        "Product purchase receipt:",
+        "3/3",
+    ])
+
+    def _pairs(self):
+        result = ParsedRecap()
+        _extract_pairs(self.TEXT, result, _FIELD_PATTERN)
+        return result.raw_pairs
+
+    def test_single_colon_field_does_not_bleed_into_prior_double_colon(self):
+        # The crux: Store Associate keeps ONLY its own value.
+        pairs = self._pairs()
+        assert pairs["Store Associate Spoken To"] == "NA"
+        assert pairs["What flavors were available to taste?"] == (
+            "Pineapple Yuzu, Blubbery lavender"
+        )
+
+    def test_all_single_colon_question_fields_parse(self):
+        pairs = self._pairs()
+        assert pairs["How was the setup?"] == (
+            "Basic but effective near the entrance"
+        )
+        assert pairs["Did the demo influence the store to place a reorder?"] == "Na"
+
+    def test_page_footers_never_pollute_values(self):
+        pairs = self._pairs()
+        assert pairs["Total Samples Given Out"] == "45"  # not "45 1/3"
+        assert pairs["Product purchase receipt"] == ""  # footer "3/3" skipped
+        assert not any("/3" in v for v in pairs.values())
+
+    def test_label_only_recognizes_single_colon_image_row(self):
+        # The receipt row must read as a label so images on its page get
+        # tagged "Product purchase receipt" (→ routes to the receipt field).
+        assert _label_only("Product purchase receipt:") == (
+            "Product purchase receipt"
+        )
+        assert _label_only("Account Spend Amount::") == "Account Spend Amount"
+        # Value / continuation lines are NOT labels.
+        assert _label_only("Pineapple Yuzu, Blubbery lavender") is None
+        assert _label_only("05/30/2026 | America/Los_Angeles ( -07:00 )") is None

@@ -81,6 +81,39 @@ _FIELD_PATTERN = re.compile(r"^(.+?)::\s*(.*)$")
 # label (under 120 chars) keeps it from devouring sentences.
 _FIELD_PATTERN_FALLBACK = re.compile(r"^(.{1,120}?):\s*(.*)$")
 
+# Connecteam mixes separators within ONE PDF: statement fields render as
+# "Label::" but question fields ("How was the setup?:") and single image
+# rows ("Product purchase receipt:") render with a SINGLE colon and put the
+# value on the next line. The strict `::` pass misses those, so they used to
+# glue onto the previous field's value — e.g. "What flavors…" landing inside
+# "Store Associate Spoken To", and the receipt being labeled by the wrong
+# field. We recognize a single-colon label ONLY when the colon ENDS the line
+# (value follows on the next line). That's safe: value / continuation lines
+# (timestamps, "( -07:00 )", prose, page footers) don't end in a bare colon.
+# Same-line single-colon templates are still covered by the zero-match
+# fallback (_FIELD_PATTERN_FALLBACK) below.
+_LABEL_COLON_EOL = re.compile(r"^(.{1,120}?):$")
+
+# Page footers like "1/3" / "2/3" — pure decoration that otherwise pollutes
+# the value of whatever field was last open on the page.
+_PAGE_FOOTER = re.compile(r"^\d+\s*/\s*\d+$")
+
+
+def _label_only(line: str) -> str | None:
+    """Return the field label if `line` is a label whose value is on the NEXT
+    line — either "Label::" or a single-colon "Question?:" / image row — else
+    None. Used to tag embedded images with the field rendered above them."""
+    m = _FIELD_PATTERN.match(line)
+    if m:
+        return m.group(1).strip() or None
+    if "::" not in line:
+        m = _LABEL_COLON_EOL.match(line)
+        if m:
+            lbl = m.group(1).strip()
+            if lbl and not lbl[0].isdigit():
+                return lbl
+    return None
+
 
 def parse_pdf_bytes(data: bytes) -> ParsedRecap:
     """Extract every `Label:: Value` pair from a Connecteam recap PDF,
@@ -107,10 +140,9 @@ def parse_pdf_bytes(data: bytes) -> ParsedRecap:
         # preceding label for any image extracted from this page.
         last_label_on_page: str | None = None
         for line in reversed(page_text.splitlines()):
-            stripped = line.strip()
-            m = _FIELD_PATTERN.match(stripped)
-            if m:
-                last_label_on_page = m.group(1).strip()
+            lbl = _label_only(line.strip())
+            if lbl:
+                last_label_on_page = lbl
                 break
         try:
             page_images = list(page.images)
@@ -168,6 +200,10 @@ def _extract_pairs(text: str, result: "ParsedRecap", pattern: re.Pattern) -> Non
         if not line:
             continue
 
+        # Page footer ("1/3") — decoration, never a label or value.
+        if _PAGE_FOOTER.match(line):
+            continue
+
         # Section header — flush and skip.
         if _SECTION_HEADER_PATTERN.match(line) and ":" not in line:
             flush()
@@ -193,6 +229,21 @@ def _extract_pairs(text: str, result: "ParsedRecap", pattern: re.Pattern) -> Non
             else:
                 current_value_parts = []
             continue
+
+        # Single-colon label whose value is on the NEXT line ("Question?:",
+        # "Product purchase receipt:"). Connecteam mixes these with "::"
+        # fields in one PDF; without this they glue onto the previous field's
+        # value (the "Store Associate Spoken To" mix-up). Gated to a colon at
+        # end-of-line + a non-digit-led label so timestamps/values don't trip.
+        if "::" not in line:
+            eol = _LABEL_COLON_EOL.match(line)
+            if eol:
+                cand = eol.group(1).strip()
+                if cand and not cand[0].isdigit():
+                    flush()
+                    current_label = cand
+                    current_value_parts = []
+                    continue
 
         # No label — this is either a continuation of the current value
         # or top-of-page decoration (Connecteam often repeats the title
