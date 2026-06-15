@@ -3502,6 +3502,58 @@ class RecapMutationService(SparkGraphQLMixin):
 
         return await remove()
 
+    async def set_custom_recap_file_category(self) -> models.CustomRecap:
+        """Move one CustomRecapFile into a different section.
+
+        Re-files a clumped/miscategorized image — e.g. a receipt the
+        Connecteam import left uncategorized — into the tenant's Receipts
+        (or any) section without re-uploading. The recap view groups files
+        by category, so the file re-groups immediately. Returns the parent
+        custom recap.
+
+        `file_recap_category_id` resolves through the shared tenant-aware
+        resolver (real id, "1"/"2" sentinels, or null → uncategorized).
+        Auth mirrors add_custom_recap_file — foreign-tenant access blocked.
+        """
+        if not isinstance(self.input, inputs.SetCustomRecapFileCategoryInput):
+            raise GraphQLError("Invalid input type.")
+
+        try:
+            recap_file_id = resolve_id_to_int(self.input.id)
+            recap_file = await sync_to_async(
+                models.CustomRecapFile.objects.select_related("custom_recap").get
+            )(id=recap_file_id)
+        except (
+            models.CustomRecapFile.DoesNotExist,
+            TypeError,
+            ValueError,
+            GraphQLError,
+        ):
+            raise GraphQLError("Recap file not found.")
+
+        custom_recap = recap_file.custom_recap
+        if custom_recap is None:
+            raise GraphQLError("This file isn't attached to a custom recap.")
+
+        await self._assert_caller_authorized_for_recap_tenant(
+            custom_recap.tenant_id,
+            action="recategorize files on",
+            record_label="Custom recap",
+        )
+
+        @sync_to_async
+        def apply():
+            with transaction.atomic():
+                category = _resolve_file_recap_category(
+                    self.input.file_recap_category_id,
+                    tenant_id=getattr(custom_recap, "tenant_id", None),
+                )
+                recap_file.file_recap_category = category
+                recap_file.save(update_fields=["file_recap_category"])
+            return models.CustomRecap.objects.get(id=custom_recap.id)
+
+        return await apply()
+
     async def delete_recap_file(self) -> bool:
         """Delete a recap file and its blob from GCS."""
         if not isinstance(self.input, inputs.DeleteRecapFileInput):
@@ -5935,6 +5987,37 @@ class RecapMutations:
                 types.CustomRecapDetailResponse,
                 success=True,
                 message="File removed from recap.",
+                input_obj=input,
+                custom_recap=custom_recap,
+            )
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.CustomRecapDetailResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def set_custom_recap_file_category(
+        self,
+        info: strawberry.Info,
+        input: inputs.SetCustomRecapFileCategoryInput,
+    ) -> types.CustomRecapDetailResponse:
+        """Move a custom-recap file into a different section (e.g. Receipts).
+
+        Re-files a clumped image into the tenant's chosen FileRecapCategory
+        and returns the parent custom recap so the gallery re-groups from the
+        refreshed file list. Tenant-scoped.
+        """
+        try:
+            service = RecapMutationService.with_input(input)
+            await service.set_user(info)
+            custom_recap = await service.set_custom_recap_file_category()
+            return build_mutation_response(
+                types.CustomRecapDetailResponse,
+                success=True,
+                message="File moved.",
                 input_obj=input,
                 custom_recap=custom_recap,
             )

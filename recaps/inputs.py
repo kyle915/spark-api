@@ -215,6 +215,21 @@ class AddCustomRecapFileInput(SparkGraphQLInput):
 
 
 @strawberry.input
+class SetCustomRecapFileCategoryInput(SparkGraphQLInput):
+    """Move one custom-recap file into a different section (FileRecapCategory).
+
+    Lets an admin re-file a clumped/miscategorized image — e.g. drop a
+    receipt the Connecteam import left "Uncategorized" into the tenant's
+    Receipts section, without re-uploading. `file_recap_category_id` accepts
+    a real id, the positional sentinels "1" (Sampling photos) / "2"
+    (Receipts), or null to clear the category (back to Uncategorized).
+    """
+
+    id: strawberry.ID
+    file_recap_category_id: strawberry.ID | None = None
+
+
+@strawberry.input
 class ApproveRecapInput(SparkGraphQLInput):
     id: strawberry.ID
     approved: bool
