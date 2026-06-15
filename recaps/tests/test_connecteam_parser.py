@@ -444,3 +444,35 @@ class TestNormalizePdfImage:
             types.SimpleNamespace(image=None, data=b"not an image")
         )
         assert out is None
+
+
+class TestIsReceiptLabel:
+    """`is_receipt_label` routes the receipt image into Receipts across the
+    varied ways Connecteam templates phrase the receipt-upload row, WITHOUT
+    mis-tagging sampling questions that merely contain the word "purchase"."""
+
+    def test_matches_plain_receipt_label(self):
+        from recaps.connecteam import is_receipt_label
+
+        assert is_receipt_label("Product purchase receipt")
+        assert is_receipt_label("Upload receipt")
+
+    def test_matches_liquid_death_personal_card_question(self):
+        from recaps.connecteam import is_receipt_label
+
+        # LD's receipt row is a question, not a "receipt" label — the bare
+        # "receipt" match used to miss it.
+        assert is_receipt_label(
+            "Did you use your personal card to purchase product?"
+        )
+
+    def test_does_not_match_sampling_purchase_questions(self):
+        from recaps.connecteam import is_receipt_label
+
+        assert not is_receipt_label("How many multipacks did consumers purchase?")
+        assert not is_receipt_label(
+            "What were 2 reasons customers gave when they declined to purchase?"
+        )
+        assert not is_receipt_label("Consumer Sampling Pictures")
+        assert not is_receipt_label(None)
+        assert not is_receipt_label("")

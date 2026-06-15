@@ -150,6 +150,33 @@ def _normalize_pdf_image(image_obj) -> bytes | None:
         return None
 
 
+# Phrases in a PDF image's preceding label that mark it as a purchase
+# receipt. Kept deliberately narrow: Connecteam templates phrase the
+# receipt-upload row differently per client — "Product purchase receipt",
+# or a question like "Did you use your personal card to purchase product?" —
+# so matching just the bare word "receipt" missed Liquid Death's receipt
+# (its label is the personal-card question). We do NOT match plain
+# "purchase": sampling questions contain it too ("How many multipacks did
+# consumers purchase?", "reasons customers declined to purchase"), and
+# matching it would mis-file sampling photos as receipts.
+_RECEIPT_LABEL_HINTS = (
+    "receipt",
+    "proof of purchase",
+    "personal card",
+    "card to purchase",
+)
+
+
+def is_receipt_label(label: str | None) -> bool:
+    """True when a PDF image's preceding label marks it as a purchase receipt.
+
+    Used by the Connecteam importer to route the receipt image into the
+    tenant's Receipts section instead of clumping it with sampling photos.
+    """
+    text = (label or "").lower()
+    return any(hint in text for hint in _RECEIPT_LABEL_HINTS)
+
+
 def parse_pdf_bytes(data: bytes) -> ParsedRecap:
     """Extract every `Label:: Value` pair from a Connecteam recap PDF,
     and pull out any embedded page images so the importer can attach
