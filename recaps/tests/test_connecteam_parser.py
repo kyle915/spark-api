@@ -402,3 +402,45 @@ class TestMixedSeparatorParsing:
         # Value / continuation lines are NOT labels.
         assert _label_only("Pineapple Yuzu, Blubbery lavender") is None
         assert _label_only("05/30/2026 | America/Los_Angeles ( -07:00 )") is None
+
+
+class TestNormalizePdfImage:
+    """`_normalize_pdf_image` re-encodes pypdf images to browser-safe RGB
+    JPEG — the fix for auto-attached Connecteam photos rendering broken
+    (CMYK/exotic colorspaces an <img> can't decode) + undownloadable."""
+
+    def test_converts_cmyk_to_rgb_jpeg(self):
+        import io
+        import types
+        from PIL import Image
+        from recaps.connecteam import _normalize_pdf_image
+
+        cmyk = Image.new("CMYK", (8, 8), (0, 0, 0, 0))
+        out = _normalize_pdf_image(types.SimpleNamespace(image=cmyk))
+        assert out is not None
+        reopened = Image.open(io.BytesIO(out))
+        assert reopened.format == "JPEG"
+        assert reopened.mode == "RGB"
+
+    def test_falls_back_to_raw_data_when_no_pil_image(self):
+        import io
+        import types
+        from PIL import Image
+        from recaps.connecteam import _normalize_pdf_image
+
+        buf = io.BytesIO()
+        Image.new("RGB", (8, 8), (10, 20, 30)).save(buf, format="PNG")
+        out = _normalize_pdf_image(
+            types.SimpleNamespace(image=None, data=buf.getvalue())
+        )
+        assert out is not None
+        assert Image.open(io.BytesIO(out)).format == "JPEG"
+
+    def test_returns_none_for_undecodable(self):
+        import types
+        from recaps.connecteam import _normalize_pdf_image
+
+        out = _normalize_pdf_image(
+            types.SimpleNamespace(image=None, data=b"not an image")
+        )
+        assert out is None
