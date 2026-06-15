@@ -115,6 +115,41 @@ def _label_only(line: str) -> str | None:
     return None
 
 
+def _normalize_pdf_image(image_obj) -> bytes | None:
+    """Re-encode a pypdf-extracted page image as a browser-safe RGB JPEG.
+
+    Browsers can't render CMYK JPEGs, JPEG2000, or several other
+    colorspaces/modes that PDFs legitimately embed, so attaching pypdf's
+    raw bytes produced broken <img> tags and undownloadable files.
+    Converting through Pillow to RGB JPEG yields a photo that renders +
+    downloads exactly like a manually-uploaded one. Returns None when the
+    image can't be decoded at all (so the caller skips it).
+    """
+    from PIL import Image  # Pillow is already a dep (HEIC convert, thumbnails).
+
+    pil = None
+    # pypdf's ImageFile exposes an already-decoded PIL image; fall back to
+    # decoding the raw encoded bytes if that attribute is missing.
+    try:
+        pil = getattr(image_obj, "image", None)
+    except Exception:
+        pil = None
+    if pil is None:
+        try:
+            pil = Image.open(io.BytesIO(bytes(image_obj.data)))
+        except Exception:
+            return None
+    try:
+        pil.load()
+        if pil.mode != "RGB":
+            pil = pil.convert("RGB")
+        out = io.BytesIO()
+        pil.save(out, format="JPEG", quality=88, optimize=True)
+        return out.getvalue()
+    except Exception:
+        return None
+
+
 def parse_pdf_bytes(data: bytes) -> ParsedRecap:
     """Extract every `Label:: Value` pair from a Connecteam recap PDF,
     and pull out any embedded page images so the importer can attach
@@ -150,14 +185,21 @@ def parse_pdf_bytes(data: bytes) -> ParsedRecap:
             # Some PDFs have malformed image streams — skip gracefully.
             page_images = []
         for img_idx, image_obj in enumerate(page_images):
-            try:
-                blob = bytes(image_obj.data)
-            except Exception:
+            # Re-encode to a browser-safe RGB JPEG. pypdf hands images
+            # back in the PDF's native colorspace — frequently CMYK JPEG
+            # (DCTDecode) or an exotic/indexed mode that an <img> tag
+            # can't decode — which is why auto-attached Connecteam photos
+            # rendered broken and wouldn't download, while a manual
+            # re-upload (a clean RGB JPEG) worked. Normalizing here makes
+            # every attached photo viewable + downloadable. Returns None
+            # for an undecodable image so we skip it rather than attach a
+            # broken file.
+            blob = _normalize_pdf_image(image_obj)
+            if blob is None:
                 continue
-            ext = _ext_from_image(image_obj)
             result.images.append(ParsedImage(
                 bytes_=blob,
-                extension=ext,
+                extension=".jpg",
                 page_index=page_idx,
                 image_index=img_idx,
                 preceding_label=last_label_on_page,
