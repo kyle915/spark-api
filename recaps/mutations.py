@@ -5041,6 +5041,7 @@ class RecapMutations:
             parse_pdf_bytes,
             match_fields,
             route_single_label_images,
+            is_receipt_label,
         )
 
         user = info.context.request.user
@@ -5260,9 +5261,9 @@ class RecapMutations:
                             parsed_img.preceding_label
                             or f"PDF page {parsed_img.page_index + 1}"
                         )
-                        is_receipt = "receipt" in (
-                            parsed_img.preceding_label or ""
-                        ).lower()
+                        is_receipt = is_receipt_label(
+                            parsed_img.preceding_label
+                        )
                         file_row = models.CustomRecapFile(
                             custom_recap=recap,
                             file_type=image_filetype,
