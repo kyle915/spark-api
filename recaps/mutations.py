@@ -2101,7 +2101,14 @@ class RecapMutationService(SparkGraphQLMixin):
                 custom_recap.name = self.input.name
                 custom_recap.event = event
                 custom_recap.custom_recap_template = custom_recap_template
-                custom_recap.total_engagements = self.input.total_engagements
+                # Preserve the saved value when the input omits it. A plain
+                # assignment nulled a manually-entered Total Engagements anytime
+                # an edit left this field out of the payload (e.g. toggling
+                # Corporate Card on the detail view) — the "24 disappeared after
+                # I edited/approved" bug. None == "not provided / keep current";
+                # the editor sends a number to change it.
+                if self.input.total_engagements is not None:
+                    custom_recap.total_engagements = self.input.total_engagements
                 custom_recap.updated_by = self.user
                 custom_recap.tenant_id = event.tenant_id
 
