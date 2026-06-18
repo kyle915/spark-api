@@ -15,6 +15,7 @@ tracks the production haversine exactly rather than hard-coding a constant.
 """
 
 from decimal import Decimal
+from unittest.mock import patch
 
 import pytest
 from django.contrib.auth import get_user_model
@@ -46,6 +47,7 @@ mutation Stop($input: StopMileageSessionInput!) {
     session {
       uuid status totalMiles ratePerMile reimbursementAmount
       breadcrumbCount breadcrumbs { lat lng }
+      route routeSource
     }
   }
 }
@@ -130,18 +132,24 @@ class TestMileageTracker(AmbassadorsGraphQLTestCase):
         assert res.errors is None, res.errors
         assert res.data["recordMileageBreadcrumbs"]["success"] is True
 
-        # Stop, sending the trailing point with the stop call
-        res = await self._execute_mutation(
-            STOP,
-            {"input": {"sessionUuid": session_uuid, "points": TRAIL[2:]}},
-            user=self.ba_user,
-        )
+        # Stop, sending the trailing point with the stop call. Force the
+        # haversine fallback (osrm_match -> None) so this asserts the GPS-sum
+        # path deterministically without hitting the live OSRM server.
+        with patch("utils.map_matching.osrm_match", return_value=None):
+            res = await self._execute_mutation(
+                STOP,
+                {"input": {"sessionUuid": session_uuid, "points": TRAIL[2:]}},
+                user=self.ba_user,
+            )
         assert res.errors is None, res.errors
         stopped = res.data["stopMileageSession"]
         assert stopped["success"] is True
         sess = stopped["session"]
         assert sess["status"] == MileageSession.STATUS_COMPLETED
         assert sess["breadcrumbCount"] == 3
+        # Fallback path: route is the raw trail, source flagged "gps".
+        assert sess["routeSource"] == "gps"
+        assert len(sess["route"]) == 3
 
         expected_miles = MileageService._miles_from_points(
             [(p["lat"], p["lng"]) for p in TRAIL]
@@ -184,6 +192,38 @@ class TestMileageTracker(AmbassadorsGraphQLTestCase):
         # panel can render the toggle + rate from this one query.
         assert summary["trackMileage"] is True
         assert summary["mileageRate"] == pytest.approx(0.70, abs=0.001)
+
+    @pytest.mark.asyncio
+    async def test_stop_uses_osrm_match_when_available(self):
+        """When OSRM map-matching succeeds, total_miles + reimbursement come
+        from the matched road distance and the snapped route is stored."""
+        res = await self._execute_mutation(
+            START, {"input": {"eventUuid": str(self.event.uuid)}},
+            user=self.ba_user,
+        )
+        session_uuid = res.data["startMileageSession"]["session"]["uuid"]
+        await self._execute_mutation(
+            RECORD,
+            {"input": {"sessionUuid": session_uuid, "points": TRAIL}},
+            user=self.ba_user,
+        )
+
+        matched = {
+            "miles": 8.4,
+            "route": [[40.0, -105.0], [40.05, -105.0], [40.1, -105.0]],
+        }
+        with patch("utils.map_matching.osrm_match", return_value=matched):
+            res = await self._execute_mutation(
+                STOP, {"input": {"sessionUuid": session_uuid}},
+                user=self.ba_user,
+            )
+        assert res.errors is None, res.errors
+        sess = res.data["stopMileageSession"]["session"]
+        assert sess["routeSource"] == "osrm"
+        assert sess["totalMiles"] == pytest.approx(8.4, abs=0.01)
+        # reimbursement = matched miles * the gig's $0.70/mi
+        assert sess["reimbursementAmount"] == pytest.approx(8.4 * 0.70, abs=0.01)
+        assert sess["route"] == matched["route"]
 
     @pytest.mark.asyncio
     async def test_cannot_start_when_tracking_disabled(self):

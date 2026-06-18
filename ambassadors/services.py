@@ -4188,6 +4188,8 @@ class MileageService:
             ambassador_uuid=str(amb.uuid) if amb else None,
             event_uuid=str(session.event.uuid) if session.event_id else None,
             breadcrumbs=crumbs,
+            route=session.route or [],
+            route_source=session.route_source or None,
         )
 
     @classmethod
@@ -4321,7 +4323,27 @@ class MileageService:
                     "lat", "lng"
                 )
             )
-            miles = cls._miles_from_points(ordered)
+            # Prefer OSRM road map-matching (accurate road miles + the snapped
+            # "where they drove" route). Best-effort + keyless: on any failure
+            # fall back to the haversine sum over the raw breadcrumbs.
+            from utils.map_matching import osrm_match
+
+            matched = None
+            try:
+                matched = osrm_match(ordered)
+            except Exception:  # noqa: BLE001 — matching must never break stop
+                matched = None
+
+            if matched and matched.get("miles") is not None:
+                miles = float(matched["miles"])
+                session.route = matched.get("route") or None
+                session.route_source = "osrm"
+            else:
+                miles = cls._miles_from_points(ordered)
+                # Fall back to the raw GPS trail as the route to draw.
+                session.route = [[float(la), float(ln)] for la, ln in ordered]
+                session.route_source = "gps"
+
             rate = getattr(session.event, "mileage_rate", None)
             reimbursement = None
             if rate is not None:
@@ -4337,6 +4359,7 @@ class MileageService:
             session.save(
                 update_fields=[
                     "total_miles", "rate_per_mile", "reimbursement_amount",
+                    "route", "route_source",
                     "ended_at", "status", "updated_at",
                 ]
             )
