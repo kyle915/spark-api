@@ -186,56 +186,94 @@ class JobApplicationReceivedMailer(Mailer):
         def esc(value: object) -> str:
             return escape(str(value)) if value not in (None, "") else ""
 
-        rows: list[str] = []
+        # Detail rows render inside a light card; each gets a hairline divider
+        # except the last (added after the loop so it's positional-agnostic).
+        pairs: list[tuple[str, object]] = [
+            ("Gig", self.job_name),
+            ("When", self.when_label),
+            ("Location", self.location_label),
+            ("Brand", self.tenant_name),
+        ]
+        if self.event_name and self.event_name != self.job_name:
+            pairs.insert(1, ("Event", self.event_name))
+        visible = [(k, v) for k, v in pairs if v not in (None, "")]
 
-        def row(label: str, value: object) -> None:
-            if value in (None, ""):
-                return
-            rows.append(
+        rows = ""
+        for i, (label, value) in enumerate(visible):
+            border = (
+                "border-bottom:1px solid #eef0f2;" if i < len(visible) - 1 else ""
+            )
+            rows += (
                 '<tr>'
-                '<td style="padding:5px 14px 5px 0;color:#6b7280;font-size:13px;'
-                'white-space:nowrap;vertical-align:top">' + esc(label) + '</td>'
-                '<td style="padding:5px 0;color:#111827;font-size:14px">'
+                '<td style="padding:10px 16px;color:#6b7280;font-size:12px;'
+                "letter-spacing:0.04em;text-transform:uppercase;white-space:nowrap;"
+                'vertical-align:top;' + border + '">' + esc(label) + '</td>'
+                '<td style="padding:10px 16px;color:#111827;font-size:14px;'
+                'font-weight:600;text-align:right;' + border + '">'
                 + esc(value) + '</td>'
                 '</tr>'
             )
 
-        row("Applicant", self.applicant_name)
-        row("Gig", self.job_name)
-        if self.event_name and self.event_name != self.job_name:
-            row("Event", self.event_name)
-        row("When", self.when_label)
-        row("Location", self.location_label)
-        row("Brand", self.tenant_name)
-        row("Note", self.note)
+        note_block = ""
+        if self.note not in (None, ""):
+            note_block = (
+                '<div style="margin:18px 28px 0;padding:14px 16px;'
+                'background:#f9fafb;border:1px solid #eef0f2;border-radius:12px">'
+                '<p style="margin:0 0 4px;font-size:11px;letter-spacing:0.08em;'
+                'text-transform:uppercase;color:#9ca3af">Note from applicant</p>'
+                '<p style="margin:0;font-size:14px;color:#374151;'
+                'line-height:1.5">' + esc(self.note) + '</p></div>'
+            )
 
         button = ""
         if self.applicants_url:
             button = (
+                '<tr><td style="padding:24px 28px 4px">'
                 '<a href="' + esc(self.applicants_url) + '" '
-                'style="display:inline-block;margin-top:20px;padding:11px 20px;'
-                'background:#111827;color:#ffffff;text-decoration:none;'
-                'border-radius:8px;font-size:14px;font-weight:600">'
-                'Review applicants</a>'
+                'style="display:inline-block;background:#111827;color:#ffffff;'
+                'text-decoration:none;border-radius:10px;padding:12px 22px;'
+                'font-size:14px;font-weight:600">Review applicant &rarr;</a>'
+                '</td></tr>'
             )
 
         gig_label = esc(self.event_name or self.job_name)
         html_body = (
-            '<div style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,'
-            'Roboto,Helvetica,Arial,sans-serif;max-width:560px;margin:0 auto;'
-            'padding:8px 4px">'
-            '<p style="font-size:17px;font-weight:600;color:#111827;'
-            'margin:0 0 4px">New application — ' + gig_label + '</p>'
-            '<p style="font-size:14px;color:#6b7280;margin:0 0 18px">'
-            + esc(self.applicant_name) + ' just applied to this gig.</p>'
-            '<table style="border-collapse:collapse;width:100%">'
-            + "".join(rows) +
-            '</table>'
+            '<div style="background:#f4f5f7;padding:28px 12px;'
+            'font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,'
+            'Helvetica,Arial,sans-serif">'
+            '<table role="presentation" align="center" cellpadding="0" '
+            'cellspacing="0" style="width:560px;max-width:100%;background:#ffffff;'
+            'border:1px solid #e5e7eb;border-radius:16px;overflow:hidden">'
+            # lime accent bar (brand)
+            '<tr><td style="height:4px;background:#c4d82e;font-size:0;'
+            'line-height:0">&nbsp;</td></tr>'
+            # header
+            '<tr><td style="padding:26px 28px 0">'
+            '<p style="margin:0;font-size:11px;letter-spacing:0.16em;'
+            'text-transform:uppercase;color:#9ca3af">'
+            'Spark by Ignite &middot; New applicant</p>'
+            '<p style="margin:12px 0 2px;font-size:22px;font-weight:700;'
+            'color:#111827">' + esc(self.applicant_name) + '</p>'
+            '<p style="margin:0;font-size:14px;color:#6b7280">applied to '
+            '<strong style="color:#111827">' + gig_label + '</strong></p>'
+            '</td></tr>'
+            # detail card
+            '<tr><td style="padding:20px 28px 0">'
+            '<table role="presentation" cellpadding="0" cellspacing="0" '
+            'style="width:100%;border-collapse:separate;background:#f9fafb;'
+            'border:1px solid #eef0f2;border-radius:12px">' + rows + '</table>'
+            '</td></tr>'
+            # optional note
+            + ('<tr><td>' + note_block + '</td></tr>' if note_block else '')
+            # CTA
             + button +
-            '<p style="font-size:12px;color:#9ca3af;margin:24px 0 0">'
-            'You\'re receiving this because you manage staffing for this gig.'
-            '</p>'
-            '</div>'
+            # footer
+            '<tr><td style="padding:22px 28px;margin-top:8px;'
+            'border-top:1px solid #eef0f2;background:#fafafa">'
+            '<p style="margin:0;font-size:12px;color:#9ca3af">'
+            "You're receiving this because you manage staffing for this gig."
+            '</p></td></tr>'
+            '</table></div>'
         )
 
         return Envelope(
