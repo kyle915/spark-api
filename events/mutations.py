@@ -663,10 +663,9 @@ class EventMutations:
         if not _is_admin_access(role_slug, is_staff, is_super, email):
             return fail("Admins only.")
 
-        try:
-            eid = resolve_id_to_int(str(event_id))
-        except Exception:  # noqa: BLE001
-            return fail("Invalid event id.")
+        # event_id may be the event UUID (the admin panel passes
+        # event.uuid) or an int relay id — resolve either.
+        ref = str(event_id or "")
 
         rate_value = None
         if track_mileage:
@@ -676,14 +675,23 @@ class EventMutations:
                     "mileage tracking."
                 )
             try:
-                rate_value = Decimal(str(mileage_rate)).quantize(Decimal("0.01"))
+                # 3 decimals so rates like $0.725/mile persist exactly.
+                rate_value = Decimal(str(mileage_rate)).quantize(Decimal("0.001"))
             except (InvalidOperation, ValueError):
                 return fail("Invalid reimbursement rate.")
             if rate_value < 0:
                 return fail("Reimbursement rate can't be negative.")
 
         def _apply():
-            event = models.Event.objects.filter(id=eid).first()
+            event = None
+            try:
+                int_id = resolve_id_to_int(ref)
+            except Exception:  # noqa: BLE001
+                int_id = None
+            if int_id is not None:
+                event = models.Event.objects.filter(id=int_id).first()
+            if event is None:
+                event = models.Event.objects.filter(uuid=ref).first()
             if event is None:
                 return None
             event.track_mileage = bool(track_mileage)
