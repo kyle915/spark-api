@@ -275,11 +275,14 @@ def _booking_push_body(job: "models.Job") -> str:
 def _notify_admins_of_application(application_id: int) -> None:
     """Best-effort staffing alert: a BA just applied to a posted gig.
 
-    Recipients are the *staffing* side only — the event's assigned RMM, the
-    admin who posted the job, and the Ignite events inbox — never the brand
-    client (who applied is an internal staffing concern). Fire-and-forget:
-    the whole body is guarded so a mail/lookup failure never breaks the BA's
-    apply. Synchronous (the caller wraps it in sync_to_async).
+    Recipients are the Ignite admin team ONLY — every recipient must be an
+    ``@igniteproductions.co`` address. We consider the event's assigned RMM
+    and the admin who posted the job, but only when they're on the Ignite
+    domain, plus the Ignite events inbox as the always-on catch-all. A
+    non-Ignite RMM / poster (e.g. a brand client who posted the gig) is never
+    copied — applicant alerts are an internal staffing concern. Fire-and-
+    forget: the whole body is guarded so a mail/lookup failure never breaks
+    the BA's apply. Synchronous (the caller wraps it in sync_to_async).
     """
     try:
         from django.conf import settings
@@ -303,13 +306,19 @@ def _notify_admins_of_application(application_id: int) -> None:
         event = getattr(job, "event", None)
         tenant = getattr(job, "tenant", None)
 
-        # ---- Recipients: staffing side only, case-insensitive dedupe. ----
+        # ---- Recipients: Ignite admin team only (@igniteproductions.co),
+        # case-insensitive dedupe. A non-Ignite RMM / poster is dropped. ----
+        IGNITE_DOMAIN = "@igniteproductions.co"
         recipients: list[str] = []
         seen: set[str] = set()
 
         def add(email: str | None) -> None:
             e = (email or "").strip()
-            if e and "@" in e and e.lower() not in seen:
+            if (
+                e
+                and e.lower().endswith(IGNITE_DOMAIN)
+                and e.lower() not in seen
+            ):
                 seen.add(e.lower())
                 recipients.append(e)
 
