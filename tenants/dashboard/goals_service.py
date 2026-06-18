@@ -153,7 +153,9 @@ def get_current_values_for_user(
     Consumer metrics: aggregated from ConsumerEngagements for recaps of those events.
     """
     date_q = _event_date_range_q(start_date, end_date)
-    events_qs = Event.objects.filter(
+    events_qs = Event.objects.exclude(
+        request__deleted_at__isnull=False
+    ).filter(
         tenant_id=tenant_id,
         rmm_asigned_id=user_id,
     ).filter(date_q)
