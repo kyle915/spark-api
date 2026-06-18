@@ -749,8 +749,9 @@ class Event(models.Model):
     # $/mile reimbursement rate for this gig. Snapshotted onto each session
     # at stop time so later edits don't rewrite past reimbursements. Null =
     # track miles only, no dollar amount.
+    # 3 decimal places so per-mile rates like $0.725 store exactly.
     mileage_rate = models.DecimalField(
-        max_digits=6, decimal_places=2, null=True, blank=True,
+        max_digits=6, decimal_places=3, null=True, blank=True,
     )
     # Leaving these fields nullable, we'll validate them in the schema
     # to avoid conflicts with the migrations

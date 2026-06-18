@@ -1206,8 +1206,9 @@ class MileageSession(models.Model):
         max_digits=8, decimal_places=2, null=True, blank=True,
     )
     # $/mile snapshot at stop (from Event.mileage_rate). Null = miles-only.
+    # 3 decimals to match Event.mileage_rate (e.g. $0.725/mile).
     rate_per_mile = models.DecimalField(
-        max_digits=6, decimal_places=2, null=True, blank=True,
+        max_digits=6, decimal_places=3, null=True, blank=True,
     )
     reimbursement_amount = models.DecimalField(
         max_digits=10, decimal_places=2, null=True, blank=True,
