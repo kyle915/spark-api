@@ -268,18 +268,43 @@ def _send_push_to_user_sync(
     badge: int | None = None,
     priority: str | None = "high",
 ) -> int:
-    """Sync wrapper RQ workers can call. Runs the async send in a loop."""
-    return asyncio.run(
-        send_push_to_user(
-            user_id,
-            title=title,
-            body=body,
-            data=data,
-            sound=sound,
-            badge=badge,
-            priority=priority,
+    """Sync wrapper for the async push send.
+
+    Safe to call from BOTH a plain sync context (an RQ worker) and from
+    *inside a running event loop* — which is exactly the inline-fallback case:
+    on Cloud Run, Redis isn't provisioned, so ``enqueue_push`` falls back to
+    calling this directly from the async GraphQL request. ``asyncio.run()``
+    raises "cannot be called from a running event loop" there, so when a loop
+    is already running we drive the coroutine on a dedicated thread (which
+    gets its own clean loop). Without this, every immediate push (booking,
+    accept, assign…) silently no-ops in prod.
+    """
+
+    def _run() -> int:
+        return asyncio.run(
+            send_push_to_user(
+                user_id,
+                title=title,
+                body=body,
+                data=data,
+                sound=sound,
+                badge=badge,
+                priority=priority,
+            )
         )
-    )
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        # No loop running on this thread — safe to drive our own.
+        return _run()
+
+    # A loop is already running (async request inline fallback): asyncio.run()
+    # would raise, so run the send on a separate thread with its own loop.
+    import concurrent.futures
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        return executor.submit(_run).result()
 
 
 def enqueue_push(

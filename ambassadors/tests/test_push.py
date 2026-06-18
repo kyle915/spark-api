@@ -191,3 +191,27 @@ async def test_send_push_swallows_relay_errors(user, devices):
 
     ok = await send_push_to_user(user, title="t", body="b", client=fake_client)
     assert ok == 0  # never raises
+
+
+@pytest.mark.asyncio
+async def test_send_push_sync_runs_inside_running_loop():
+    """`_send_push_to_user_sync` must work when called from *inside* a running
+    event loop — the inline-fallback path `enqueue_push` takes on Cloud Run
+    (no Redis) from an async GraphQL request. `asyncio.run()` raises there, so
+    the wrapper runs the send on a worker thread instead of silently
+    no-opping (which is what dropped every immediate push — booking / accept /
+    assign — in prod, and Kyle saw as "no push notification")."""
+    from ambassadors.push import _send_push_to_user_sync
+
+    # We are inside this test's running loop. The pre-fix asyncio.run() call
+    # would raise RuntimeError here.
+    with patch(
+        "ambassadors.push.send_push_to_user",
+        new=AsyncMock(return_value=2),
+    ) as mock_send:
+        result = _send_push_to_user_sync(
+            1, title="You got the gig", body="b", data={"kind": "job_assigned"}
+        )
+
+    assert result == 2
+    mock_send.assert_awaited_once()
