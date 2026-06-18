@@ -678,7 +678,12 @@ class JobQueriesService(JobsBaseQueriesService):
                     ),
                 ),
             )
-            .all()
+            # A job whose parent request was soft-deleted (deleted_at set) must
+            # disappear everywhere this queryset feeds — the admin Jobs list AND
+            # the BA job board (both go through here). Jobs on events with no
+            # request (bulk / born-approved) keep showing: the nullable-FK join
+            # leaves deleted_at NULL for them, so they aren't excluded.
+            .exclude(event__request__deleted_at__isnull=False)
         )
 
 

@@ -227,6 +227,65 @@ class TestSparkJobQueries(JobsGraphQLTestCase):
         assert result.data["jobs"]["totalCount"] >= 1
 
     @pytest.mark.asyncio
+    async def test_jobs_query_excludes_soft_deleted_request_jobs(self):
+        """A job whose parent request is soft-deleted drops off the jobs list
+        (deleting a gig on the Master Tracker must remove its job too). A job
+        on an event with no request is unaffected."""
+        from django.utils import timezone as _tz
+        from events.models import Request, RequestType
+
+        def _make_deleted_request_job():
+            sysu = self.get_system_user()
+            rtype = RequestType.objects.create(
+                name="Sampling", tenant=self.tenant, created_by=sysu
+            )
+            req = Request.objects.create(
+                name="Doomed Request",
+                address="9 Gone St",
+                request_type=rtype,
+                tenant=self.tenant,
+                created_by=sysu,
+            )
+            ev = self.create_event(
+                name="Doomed Event",
+                tenant=self.tenant,
+                address="9 Gone St",
+                request=req,
+            )
+            self.create_job(
+                name="Doomed Job",
+                code="DOOM-001",
+                address="9 Gone St",
+                event=ev,
+                job_title=self.job_title,
+                tenant=self.tenant,
+            )
+            return req
+
+        req = await sync_to_async(_make_deleted_request_job)()
+
+        query = "query { jobs(first: 100) { edges { node { name } } } }"
+
+        before = await self._execute_query_authenticated(
+            query, {}, self.spark_user, self.endpoint_path
+        )
+        names_before = [e["node"]["name"] for e in before.data["jobs"]["edges"]]
+        assert "Doomed Job" in names_before
+
+        # Soft-delete the request (what delete_request does).
+        await sync_to_async(
+            lambda: Request.objects.filter(id=req.id).update(deleted_at=_tz.now())
+        )()
+
+        after = await self._execute_query_authenticated(
+            query, {}, self.spark_user, self.endpoint_path
+        )
+        names_after = [e["node"]["name"] for e in after.data["jobs"]["edges"]]
+        assert "Doomed Job" not in names_after
+        # The setup's no-request job is unaffected by the exclusion.
+        assert "Spark Job" in names_after
+
+    @pytest.mark.asyncio
     async def test_job_query_success(self):
         """Test successful single job query (Spark schema)."""
         query = """

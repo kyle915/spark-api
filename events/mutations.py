@@ -3970,6 +3970,21 @@ class RequestMutations:
                 update_fields=["deleted_at", "updated_by", "updated_at"]
             )
 
+            # Close any jobs hanging off this request's events so the deleted
+            # gig also drops off the BA job board (which filters
+            # ongoing=True/closed=False) — the jobs queryset already hides
+            # deleted-request jobs from the admin list, but closing them keeps
+            # the board + job state honest. Best-effort; never fail the delete.
+            try:
+                from jobs.models import Job
+
+                await sync_to_async(
+                    Job.objects.filter(event__request_id=request.id, closed=False)
+                    .update
+                )(closed=True, ongoing=False)
+            except Exception:
+                pass
+
             # Audit log entry — keeps the timeline honest even though the
             # request itself is no longer visible. Uses KIND_UPDATED with a
             # "deleted" metadata flag since there's no dedicated KIND yet.
