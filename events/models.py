@@ -740,6 +740,18 @@ class Event(models.Model):
         null=True,
         db_index=True,
     )
+    # --- GPS mileage tracker (admin opt-in per gig) ---------------------
+    # When True, a BA assigned to this event sees a Start/Stop "Track
+    # mileage" control on the gig and can log driving trips
+    # (ambassadors.MileageSession). Off by default — only the gigs an admin
+    # flags reimburse mileage.
+    track_mileage = models.BooleanField(default=False)
+    # $/mile reimbursement rate for this gig. Snapshotted onto each session
+    # at stop time so later edits don't rewrite past reimbursements. Null =
+    # track miles only, no dollar amount.
+    mileage_rate = models.DecimalField(
+        max_digits=6, decimal_places=2, null=True, blank=True,
+    )
     # Leaving these fields nullable, we'll validate them in the schema
     # to avoid conflicts with the migrations
     event_type = models.ForeignKey(

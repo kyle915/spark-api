@@ -633,6 +633,84 @@ class EventMutations:
             warnings=report["warnings"],
         )
 
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def set_event_mileage_tracking(
+        self,
+        info: strawberry.Info,
+        event_id: strawberry.ID,
+        track_mileage: bool,
+        mileage_rate: float | None = None,
+    ) -> types.EventDetailResponse:
+        """Admin: turn the GPS mileage tracker on/off for a single gig and set
+        the reimbursement rate ($/mile). When enabled, assigned BAs get a
+        Start/Stop "Track mileage" control on the mobile shift screen; miles
+        and reimbursement roll up on the admin event viewer. Toggling off
+        keeps the last rate so re-enabling restores it."""
+        from utils.graphql.permissions import (
+            _is_admin_access,
+            resolve_request_user_access,
+        )
+        from decimal import Decimal, InvalidOperation
+
+        fail = lambda msg: build_mutation_response(  # noqa: E731
+            types.EventDetailResponse, success=False, message=msg
+        )
+
+        user = info.context.request.user
+        role_slug, is_staff, is_super, email = (
+            await resolve_request_user_access(user)
+        )
+        if not _is_admin_access(role_slug, is_staff, is_super, email):
+            return fail("Admins only.")
+
+        try:
+            eid = resolve_id_to_int(str(event_id))
+        except Exception:  # noqa: BLE001
+            return fail("Invalid event id.")
+
+        rate_value = None
+        if track_mileage:
+            if mileage_rate is None:
+                return fail(
+                    "A reimbursement rate ($/mile) is required when enabling "
+                    "mileage tracking."
+                )
+            try:
+                rate_value = Decimal(str(mileage_rate)).quantize(Decimal("0.01"))
+            except (InvalidOperation, ValueError):
+                return fail("Invalid reimbursement rate.")
+            if rate_value < 0:
+                return fail("Reimbursement rate can't be negative.")
+
+        def _apply():
+            event = models.Event.objects.filter(id=eid).first()
+            if event is None:
+                return None
+            event.track_mileage = bool(track_mileage)
+            if track_mileage:
+                event.mileage_rate = rate_value
+                event.save(update_fields=["track_mileage", "mileage_rate"])
+            else:
+                event.save(update_fields=["track_mileage"])
+            return event
+
+        event = await sync_to_async(_apply, thread_sensitive=True)()
+        if event is None:
+            return fail("Event not found.")
+
+        state = "enabled" if track_mileage else "disabled"
+        rate_note = (
+            f" at ${rate_value}/mile"
+            if (track_mileage and rate_value is not None)
+            else ""
+        )
+        return build_mutation_response(
+            types.EventDetailResponse,
+            success=True,
+            message=f"Mileage tracking {state}{rate_note}.",
+            event=event,
+        )
+
     @relay.mutation(permission_classes=[StrictIsAuthenticated])
     async def create_event(
         self,

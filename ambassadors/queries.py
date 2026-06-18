@@ -682,6 +682,13 @@ class AmbassadorEventQueries:
             if event is None:
                 return None
 
+            _mileage_rate = (
+                float(event.mileage_rate)
+                if getattr(event, "mileage_rate", None) is not None
+                else None
+            )
+            _track_mileage = bool(getattr(event, "track_mileage", False))
+
             request = getattr(event, "request", None)
             if request is None:
                 # Event with no parent Request — nothing to surface, but
@@ -690,6 +697,9 @@ class AmbassadorEventQueries:
                     brand_name=None,
                     products=[],
                     project_notes=None,
+                    track_mileage=_track_mileage,
+                    mileage_rate=_mileage_rate,
+                    event_uuid=str(event.uuid),
                 )
 
             # Brand: prefer the linked Client's name, fall back to the
@@ -741,6 +751,92 @@ class AmbassadorEventQueries:
                 brand_name=brand_name,
                 products=products,
                 project_notes=project_notes,
+                track_mileage=_track_mileage,
+                mileage_rate=_mileage_rate,
+                event_uuid=str(event.uuid),
+            )
+
+        return await sync_to_async(_fetch, thread_sensitive=True)()
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def my_mileage_sessions(
+        self,
+        info: strawberry.Info,
+        event_uuid: strawberry.ID,
+    ) -> list[types.MileageSessionType]:
+        """The calling BA's mileage trips for a gig (newest first, with the
+        GPS trail). The mobile tracker reads this to show the running total +
+        resume an active trip after an app restart."""
+        from .services import MileageService
+        from .models import MileageSession
+
+        user = info.context.request.user
+
+        def _fetch():
+            amb = MileageService._ambassador_for(user)
+            event = MileageService._resolve_event(event_uuid)
+            if not amb or not event:
+                return []
+            sessions = (
+                MileageSession.objects.filter(ambassador=amb, event=event)
+                .select_related("ambassador__user", "event")
+                .order_by("-started_at")
+            )
+            return [
+                MileageService._session_type(s, include_breadcrumbs=True)
+                for s in sessions
+            ]
+
+        return await sync_to_async(_fetch, thread_sensitive=True)()
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def event_mileage_summary(
+        self,
+        info: strawberry.Info,
+        event_id: strawberry.ID,
+    ) -> types.EventMileageSummary | None:
+        """Admin viewer: every BA's mileage trips for a gig + total miles and
+        reimbursement. Ignite admins see all trips; anyone else sees only
+        their own (mileage/reimbursement is an internal payout concern)."""
+        from .services import MileageService
+        from .models import MileageSession, Ambassador as _Amb
+
+        user = info.context.request.user
+
+        def _fetch():
+            event = MileageService._resolve_event(event_id)
+            if not event:
+                return None
+            qs = (
+                MileageSession.objects.filter(event=event)
+                .select_related("ambassador__user", "event")
+                .order_by("-started_at")
+            )
+            email = (getattr(user, "email", "") or "").lower()
+            is_admin = bool(
+                getattr(user, "is_staff", False)
+                or getattr(user, "is_superuser", False)
+                or email.endswith("@igniteproductions.co")
+            )
+            if not is_admin:
+                amb = _Amb.objects.filter(user=user).first()
+                qs = qs.filter(ambassador=amb) if amb else qs.none()
+            sessions = list(qs)
+            total_miles = round(
+                sum(float(s.total_miles or 0) for s in sessions), 2
+            )
+            total_reimb = round(
+                sum(float(s.reimbursement_amount or 0) for s in sessions), 2
+            )
+            return types.EventMileageSummary(
+                event_uuid=str(event.uuid),
+                total_miles=total_miles,
+                total_reimbursement=total_reimb,
+                session_count=len(sessions),
+                sessions=[
+                    MileageService._session_type(s, include_breadcrumbs=True)
+                    for s in sessions
+                ],
             )
 
         return await sync_to_async(_fetch, thread_sensitive=True)()

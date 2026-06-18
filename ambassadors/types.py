@@ -287,6 +287,12 @@ class ShiftContext:
     products: list[ShiftProduct] = strawberry.field(default_factory=list)
     # Request.notes — free-form project notes. None / empty when unset.
     project_notes: str | None = None
+    # GPS mileage tracker — when track_mileage is True the mobile shift
+    # screen shows a Start/Stop "Track mileage" control (rate in $/mile).
+    # event_uuid is what the start/stop/breadcrumb mutations key on.
+    track_mileage: bool = False
+    mileage_rate: float | None = None
+    event_uuid: str | None = None
 
 
 @strawberry.type
@@ -1040,6 +1046,58 @@ class LocationPingResponse:
     success: bool
     message: str
     client_mutation_id: strawberry.ID | None = None
+
+
+@strawberry.type
+class MileageBreadcrumbType:
+    """One GPS point on a mileage trip — for rendering the trail on a map."""
+
+    lat: float
+    lng: float
+    accuracy_meters: float | None = None
+    recorded_at: str | None = None
+
+
+@strawberry.type
+class MileageSessionType:
+    """A BA's mileage trip for a gig (Start -> Stop). `breadcrumbs` is the
+    ordered GPS trail; `total_miles` + `reimbursement_amount` are set on stop."""
+
+    uuid: str
+    status: str
+    started_at: str | None = None
+    ended_at: str | None = None
+    total_miles: float | None = None
+    rate_per_mile: float | None = None
+    reimbursement_amount: float | None = None
+    breadcrumb_count: int = 0
+    # Who + which gig — populated on the admin viewer.
+    ambassador_name: str | None = None
+    ambassador_uuid: str | None = None
+    event_uuid: str | None = None
+    breadcrumbs: list[MileageBreadcrumbType] = strawberry.field(
+        default_factory=list
+    )
+
+
+@strawberry.type
+class MileageSessionResponse:
+    success: bool
+    message: str
+    session: MileageSessionType | None = None
+    client_mutation_id: strawberry.ID | None = None
+
+
+@strawberry.type
+class EventMileageSummary:
+    """Per-gig rollup across all BAs' completed trips — for the admin
+    Job/Event view: total miles + total reimbursement + the sessions."""
+
+    event_uuid: str
+    total_miles: float = 0.0
+    total_reimbursement: float = 0.0
+    session_count: int = 0
+    sessions: list[MileageSessionType] = strawberry.field(default_factory=list)
 
 
 @strawberry.type

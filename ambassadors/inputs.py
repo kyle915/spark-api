@@ -700,3 +700,41 @@ class LocationPingInput(SparkGraphQLInput):
     recorded_at: str | None = None
     # "foreground" | "background" | "clock_in" | "clock_out"
     source: str | None = "background"
+
+
+@strawberry.input
+class MileageBreadcrumbInput(SparkGraphQLInput):
+    """One GPS point in a mileage trip. The mobile tracker batches these
+    while a session is active."""
+
+    lat: float
+    lng: float
+    accuracy_meters: float | None = None
+    # ISO-8601; falls back to server clock if omitted.
+    recorded_at: str | None = None
+
+
+@strawberry.input
+class StartMileageSessionInput(SparkGraphQLInput):
+    """BA taps "Start" on the mileage tracker for a gig. event_uuid scopes
+    it to the shift; the gig must have track_mileage enabled."""
+
+    event_uuid: strawberry.ID
+
+
+@strawberry.input
+class RecordMileageBreadcrumbsInput(SparkGraphQLInput):
+    """Append a batch of GPS points to the BA's active mileage session.
+    Fire-and-forget from the mobile tracker."""
+
+    session_uuid: strawberry.ID
+    points: list[MileageBreadcrumbInput]
+
+
+@strawberry.input
+class StopMileageSessionInput(SparkGraphQLInput):
+    """BA taps "Stop" — finalize the trip: sum the miles, snapshot the
+    rate, compute reimbursement. Optionally include any trailing points."""
+
+    session_uuid: strawberry.ID
+    points: list[MileageBreadcrumbInput] | None = None

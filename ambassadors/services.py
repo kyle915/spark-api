@@ -4075,3 +4075,275 @@ class ShiftOfferService(BaseAmbassadorService):
             input_obj=input,
             accepted=False,
         )
+
+
+class MileageService:
+    """Start/Stop a BA's GPS mileage trip for a gig + ingest the breadcrumb
+    trail. BA-scoped and cheap (mirrors LocationPingService) so the mobile
+    tracker can fire-and-forget. Only gigs with Event.track_mileage=True can
+    open a session. Total miles = haversine sum over the ordered breadcrumbs,
+    computed on stop; reimbursement = miles * the event's rate (snapshotted)."""
+
+    _EARTH_RADIUS_MILES = 3958.7613
+
+    @classmethod
+    def _raw_haversine_miles(cls, a, b) -> float:
+        import math
+
+        try:
+            lat1, lng1 = float(a[0]), float(a[1])
+            lat2, lng2 = float(b[0]), float(b[1])
+        except (TypeError, ValueError, IndexError):
+            return 0.0
+        p1, p2 = math.radians(lat1), math.radians(lat2)
+        dphi = math.radians(lat2 - lat1)
+        dlmb = math.radians(lng2 - lng1)
+        h = (
+            math.sin(dphi / 2) ** 2
+            + math.cos(p1) * math.cos(p2) * math.sin(dlmb / 2) ** 2
+        )
+        return cls._EARTH_RADIUS_MILES * 2 * math.asin(min(1.0, math.sqrt(h)))
+
+    @classmethod
+    def _miles_from_points(cls, points) -> float:
+        """points: ordered list of (lat, lng). Sums consecutive legs."""
+        total = 0.0
+        for i in range(1, len(points)):
+            total += cls._raw_haversine_miles(points[i - 1], points[i])
+        return round(total, 2)
+
+    @staticmethod
+    def _parse_dt(value):
+        if not value:
+            return timezone.now()
+        try:
+            dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = timezone.make_aware(dt)
+            return dt
+        except Exception:
+            return timezone.now()
+
+    @staticmethod
+    def _ambassador_for(user):
+        if not getattr(user, "is_authenticated", False):
+            return None
+        from .models import Ambassador as _Amb
+
+        return _Amb.objects.filter(user=user).select_related("user").first()
+
+    @staticmethod
+    def _resolve_event(event_ref):
+        from events.models import Event as _Event
+
+        ref = str(event_ref or "")
+        try:
+            int_id = resolve_id_to_int(ref)
+        except Exception:
+            int_id = None
+        if int_id is not None:
+            return _Event.objects.filter(id=int_id).first()
+        return _Event.objects.filter(uuid=ref).first()
+
+    @classmethod
+    def _session_type(cls, session, *, include_breadcrumbs=False):
+        from .types import MileageSessionType, MileageBreadcrumbType
+
+        amb = getattr(session, "ambassador", None)
+        user = getattr(amb, "user", None) if amb else None
+        name = ""
+        if user is not None:
+            name = (user.get_full_name() or "").strip() or (
+                getattr(user, "email", "") or ""
+            )
+        crumbs = []
+        if include_breadcrumbs:
+            rows = list(session.breadcrumbs.all())
+            count = len(rows)
+            crumbs = [
+                MileageBreadcrumbType(
+                    lat=c.lat,
+                    lng=c.lng,
+                    accuracy_meters=c.accuracy_meters,
+                    recorded_at=c.recorded_at.isoformat() if c.recorded_at else None,
+                )
+                for c in rows
+            ]
+        else:
+            count = session.breadcrumbs.count()
+
+        def _f(v):
+            return float(v) if v is not None else None
+
+        return MileageSessionType(
+            uuid=str(session.uuid),
+            status=session.status,
+            started_at=session.started_at.isoformat() if session.started_at else None,
+            ended_at=session.ended_at.isoformat() if session.ended_at else None,
+            total_miles=_f(session.total_miles),
+            rate_per_mile=_f(session.rate_per_mile),
+            reimbursement_amount=_f(session.reimbursement_amount),
+            breadcrumb_count=count,
+            ambassador_name=name or None,
+            ambassador_uuid=str(amb.uuid) if amb else None,
+            event_uuid=str(session.event.uuid) if session.event_id else None,
+            breadcrumbs=crumbs,
+        )
+
+    @classmethod
+    async def start(cls, input, info):
+        from .types import MileageSessionResponse
+        from .models import MileageSession
+
+        user = info.context.request.user
+
+        def _op():
+            ambassador = cls._ambassador_for(user)
+            if not ambassador:
+                return build_mutation_response(
+                    MileageSessionResponse, success=False,
+                    message="No ambassador profile.", input_obj=input,
+                )
+            event = cls._resolve_event(input.event_uuid)
+            if not event:
+                return build_mutation_response(
+                    MileageSessionResponse, success=False,
+                    message="Gig not found.", input_obj=input,
+                )
+            if not getattr(event, "track_mileage", False):
+                return build_mutation_response(
+                    MileageSessionResponse, success=False,
+                    message="Mileage tracking isn't enabled for this gig.",
+                    input_obj=input,
+                )
+            # Resume an already-active session rather than stack duplicates.
+            existing = (
+                MileageSession.objects.filter(
+                    ambassador=ambassador, event=event,
+                    status=MileageSession.STATUS_ACTIVE,
+                )
+                .select_related("ambassador__user", "event")
+                .first()
+            )
+            session = existing or MileageSession.objects.create(
+                tenant_id=event.tenant_id,
+                ambassador=ambassador,
+                event=event,
+                status=MileageSession.STATUS_ACTIVE,
+            )
+            return build_mutation_response(
+                MileageSessionResponse, success=True,
+                message="Mileage tracking started.", input_obj=input,
+                session=cls._session_type(session),
+            )
+
+        return await sync_to_async(_op)()
+
+    @classmethod
+    async def record_breadcrumbs(cls, input, info):
+        from .types import MileageSessionResponse
+        from .models import MileageSession, MileageBreadcrumb
+
+        user = info.context.request.user
+
+        def _op():
+            ambassador = cls._ambassador_for(user)
+            if not ambassador:
+                return build_mutation_response(
+                    MileageSessionResponse, success=False,
+                    message="No ambassador profile.", input_obj=input,
+                )
+            session = MileageSession.objects.filter(
+                uuid=str(input.session_uuid), ambassador=ambassador,
+                status=MileageSession.STATUS_ACTIVE,
+            ).first()
+            if not session:
+                return build_mutation_response(
+                    MileageSessionResponse, success=False,
+                    message="No active mileage session.", input_obj=input,
+                )
+            crumbs = [
+                MileageBreadcrumb(
+                    session=session, lat=p.lat, lng=p.lng,
+                    accuracy_meters=p.accuracy_meters,
+                    recorded_at=cls._parse_dt(p.recorded_at),
+                )
+                for p in (input.points or [])
+            ]
+            if crumbs:
+                MileageBreadcrumb.objects.bulk_create(crumbs)
+            return build_mutation_response(
+                MileageSessionResponse, success=True,
+                message=f"Recorded {len(crumbs)} point(s).", input_obj=input,
+            )
+
+        return await sync_to_async(_op)()
+
+    @classmethod
+    async def stop(cls, input, info):
+        from .types import MileageSessionResponse
+        from .models import MileageSession, MileageBreadcrumb
+
+        user = info.context.request.user
+
+        def _op():
+            ambassador = cls._ambassador_for(user)
+            if not ambassador:
+                return build_mutation_response(
+                    MileageSessionResponse, success=False,
+                    message="No ambassador profile.", input_obj=input,
+                )
+            session = (
+                MileageSession.objects.filter(
+                    uuid=str(input.session_uuid), ambassador=ambassador,
+                )
+                .select_related("ambassador__user", "event")
+                .first()
+            )
+            if not session:
+                return build_mutation_response(
+                    MileageSessionResponse, success=False,
+                    message="Mileage session not found.", input_obj=input,
+                )
+            trailing = [
+                MileageBreadcrumb(
+                    session=session, lat=p.lat, lng=p.lng,
+                    accuracy_meters=p.accuracy_meters,
+                    recorded_at=cls._parse_dt(p.recorded_at),
+                )
+                for p in (getattr(input, "points", None) or [])
+            ]
+            if trailing:
+                MileageBreadcrumb.objects.bulk_create(trailing)
+
+            ordered = list(
+                session.breadcrumbs.order_by("recorded_at", "id").values_list(
+                    "lat", "lng"
+                )
+            )
+            miles = cls._miles_from_points(ordered)
+            rate = getattr(session.event, "mileage_rate", None)
+            reimbursement = None
+            if rate is not None:
+                reimbursement = (Decimal(str(miles)) * rate).quantize(
+                    Decimal("0.01")
+                )
+
+            session.total_miles = Decimal(str(miles))
+            session.rate_per_mile = rate
+            session.reimbursement_amount = reimbursement
+            session.ended_at = timezone.now()
+            session.status = MileageSession.STATUS_COMPLETED
+            session.save(
+                update_fields=[
+                    "total_miles", "rate_per_mile", "reimbursement_amount",
+                    "ended_at", "status", "updated_at",
+                ]
+            )
+            return build_mutation_response(
+                MileageSessionResponse, success=True,
+                message="Mileage tracking stopped.", input_obj=input,
+                session=cls._session_type(session, include_breadcrumbs=True),
+            )
+
+        return await sync_to_async(_op)()
