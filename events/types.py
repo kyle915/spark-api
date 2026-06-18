@@ -533,12 +533,17 @@ class Request(Node):
     # (legacy OR custom-template), matching /recaps/missing — counted off the
     # prefetch cache, so it is not approval-filtered.
 
-    def _events_from_cache(self):
-        cached = getattr(self, "_prefetched_objects_cache", {}).get("event_set")
-        return list(cached) if cached is not None else None
+    # NOTE: logic is inlined per-resolver on purpose. `self` here is the
+    # Django Request model instance (strawberry_django passes the model as
+    # root), NOT this type — so calling helper METHODS on self throws
+    # AttributeError ('Request' object has no attribute ...). Inlining keeps
+    # every access a real model attribute/manager.
 
     @staticmethod
-    def _recap_total_for_event(ev) -> int:
+    def _recap_total(ev) -> int:
+        """Recaps (legacy + custom) on one event, read from its prefetch
+        cache (no query) when present. Module-style staticmethod called as
+        Request._recap_total(ev) — never via self."""
         ev_pc = getattr(ev, "_prefetched_objects_cache", {})
         r = ev_pc.get("recaps")
         cr = ev_pc.get("custom_recap")
@@ -549,13 +554,13 @@ class Request(Node):
     @strawberry.field
     async def recaps_filed_count(self) -> int:
         """Total recaps (legacy + custom-template) filed across this
-        request's events — powers the Master Tracker RECAP chip count."""
+        request's events — powers the Master Tracker RECAP chip count.
+        Reads the event_set / recaps / custom_recap prefetch caches (no N+1)."""
 
         def _count():
-            events = self._events_from_cache()
-            if events is None:
-                events = list(self.event_set.all())
-            return sum(self._recap_total_for_event(ev) for ev in events)
+            cached = getattr(self, "_prefetched_objects_cache", {}).get("event_set")
+            events = list(cached) if cached is not None else list(self.event_set.all())
+            return sum(Request._recap_total(ev) for ev in events)
 
         return await sync_to_async(_count)()
 
@@ -566,11 +571,10 @@ class Request(Node):
         `event` is the lowest-id event, which may be recap-less)."""
 
         def _find():
-            events = self._events_from_cache()
-            if events is None:
-                events = list(self.event_set.all())
+            cached = getattr(self, "_prefetched_objects_cache", {}).get("event_set")
+            events = list(cached) if cached is not None else list(self.event_set.all())
             for ev in events:
-                if self._recap_total_for_event(ev) > 0:
+                if Request._recap_total(ev) > 0:
                     return str(getattr(ev, "uuid", "")) or None
             return None
 
@@ -582,8 +586,8 @@ class Request(Node):
         events" (none) apart from "events but no recap yet" (due)."""
 
         def _count():
-            events = self._events_from_cache()
-            return len(events) if events is not None else self.event_set.count()
+            cached = getattr(self, "_prefetched_objects_cache", {}).get("event_set")
+            return len(cached) if cached is not None else self.event_set.count()
 
         return await sync_to_async(_count)()
 
