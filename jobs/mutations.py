@@ -1892,10 +1892,16 @@ class JobLifecycleMutations:
             job.lifecycle_status = models.Job.STATUS_POSTED
             job.posted_at = _django_tz.now()
             job.public = True
+            # `ongoing` is the BA job-board visibility gate (my_available_jobs
+            # filters ongoing=True, closed=False, public=True). It defaults to
+            # False at job creation and nothing else flips it on, so a posted
+            # job stayed invisible without this. Posting = live on the board.
+            job.ongoing = True
             job.save(update_fields=[
                 "total_hours", "hourly_rate", "uniform_notes",
                 "description", "max_applications", "favorites_only",
-                "lifecycle_status", "posted_at", "public", "updated_at",
+                "lifecycle_status", "posted_at", "public", "ongoing",
+                "updated_at",
             ])
             # At-post-time geo-proximity push to eligible BAs near the gig
             # (falls back to preferred-state matching when coords are
@@ -2042,10 +2048,13 @@ class JobLifecycleMutations:
             job.lifecycle_status = Job.STATUS_POSTED
             job.posted_at = _django_tz.now()
             job.public = True
+            # ongoing = the BA board visibility gate (see post_job). Without
+            # it a posted event stays off my_available_jobs.
+            job.ongoing = True
             job.save(update_fields=[
                 "total_hours", "hourly_rate", "uniform_notes",
                 "favorites_only", "lifecycle_status", "posted_at",
-                "public", "updated_at",
+                "public", "ongoing", "updated_at",
             ])
             # At-post-time geo-proximity push to eligible BAs near the gig
             # (state fallback when coords are missing). Best-effort.
