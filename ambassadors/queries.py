@@ -837,6 +837,12 @@ class AmbassadorEventQueries:
                     MileageService._session_type(s, include_breadcrumbs=True)
                     for s in sessions
                 ],
+                track_mileage=bool(getattr(event, "track_mileage", False)),
+                mileage_rate=(
+                    float(event.mileage_rate)
+                    if getattr(event, "mileage_rate", None) is not None
+                    else None
+                ),
             )
 
         return await sync_to_async(_fetch, thread_sensitive=True)()

@@ -63,6 +63,7 @@ SUMMARY = """
 query Summary($eventId: ID!) {
   eventMileageSummary(eventId: $eventId) {
     eventUuid totalMiles totalReimbursement sessionCount
+    trackMileage mileageRate
     sessions { uuid status totalMiles }
   }
 }
@@ -179,6 +180,10 @@ class TestMileageTracker(AmbassadorsGraphQLTestCase):
         assert summary["totalReimbursement"] == pytest.approx(
             expected_reimb, abs=0.01
         )
+        # The gig's current config rides along on the summary so the admin
+        # panel can render the toggle + rate from this one query.
+        assert summary["trackMileage"] is True
+        assert summary["mileageRate"] == pytest.approx(0.70, abs=0.001)
 
     @pytest.mark.asyncio
     async def test_cannot_start_when_tracking_disabled(self):

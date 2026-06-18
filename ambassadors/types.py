@@ -1098,6 +1098,10 @@ class EventMileageSummary:
     total_reimbursement: float = 0.0
     session_count: int = 0
     sessions: list[MileageSessionType] = strawberry.field(default_factory=list)
+    # The gig's current mileage config, so the admin panel can render the
+    # enable toggle + rate from this one query (no second lookup).
+    track_mileage: bool = False
+    mileage_rate: float | None = None
 
 
 @strawberry.type
