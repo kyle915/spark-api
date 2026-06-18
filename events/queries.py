@@ -234,18 +234,34 @@ class EventQueriesService(BaseEventQueriesService):
         return models.Event
 
     def get_queryset(self) -> QuerySet:
-        """Get the queryset for the service."""
-        return self.get_model().objects.select_related(
-            "tenant",
-            "timezone",
-            "request",
-            "request__location",
-            "request__state",
-            "custom_recap_template",
-            "retailer",
-            "location",
-            "state",
-            "rmm_asigned",
+        """Get the queryset for the service.
+
+        Excludes events whose parent Request was soft-deleted (deleted_at set
+        by the deleteRequest mutation). Without this, deleting a request hid it
+        from the Master Tracker (request-based) but its EVENTS lingered in every
+        event-based view — Upcoming, Calendar, Today — because those query Event
+        directly. That's the "deleted from the tracker but still in Upcoming,
+        and the associated request 404s" bug. Mirrors RequestQueriesService's
+        own `deleted_at__isnull=True` base filter. Standalone events (no parent
+        request) are kept.
+        """
+        return (
+            self.get_model()
+            .objects.filter(
+                Q(request__isnull=True) | Q(request__deleted_at__isnull=True)
+            )
+            .select_related(
+                "tenant",
+                "timezone",
+                "request",
+                "request__location",
+                "request__state",
+                "custom_recap_template",
+                "retailer",
+                "location",
+                "state",
+                "rmm_asigned",
+            )
         )
 
 
