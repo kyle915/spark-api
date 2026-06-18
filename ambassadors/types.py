@@ -1078,6 +1078,12 @@ class MileageSessionType:
     breadcrumbs: list[MileageBreadcrumbType] = strawberry.field(
         default_factory=list
     )
+    # Road-snapped route from OSRM map-matching: ordered [lat, lng] points
+    # following the streets driven ("where they drove"). Falls back to the
+    # raw GPS trail when matching was unavailable. route_source is "osrm"
+    # (matched road distance) or "gps" (haversine over breadcrumbs).
+    route: list[list[float]] = strawberry.field(default_factory=list)
+    route_source: str | None = None
 
 
 @strawberry.type

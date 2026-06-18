@@ -1213,6 +1213,14 @@ class MileageSession(models.Model):
         max_digits=10, decimal_places=2, null=True, blank=True,
     )
 
+    # Road-snapped route from OSRM map-matching, set on stop: an ordered list
+    # of [lat, lng] points following the streets driven ("where they drove").
+    # Null/empty when matching was unavailable and we fell back to the raw
+    # GPS trail. route_source records which path total_miles came from:
+    # "osrm" (matched road distance) or "gps" (haversine over breadcrumbs).
+    route = models.JSONField(null=True, blank=True)
+    route_source = models.CharField(max_length=12, blank=True, default="")
+
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
