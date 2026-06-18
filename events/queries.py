@@ -11,6 +11,7 @@ from graphql import GraphQLError
 
 from django.db.models import (
     Case,
+    Count,
     DateField,
     DateTimeField,
     DurationField,
@@ -19,8 +20,10 @@ from django.db.models import (
     Func,
     IntegerField,
     Model,
+    OuterRef,
     Q,
     QuerySet,
+    Subquery,
     Value,
     When,
 )
@@ -1244,70 +1247,148 @@ class EventStatusQueries:
 class RequestQueriesService(BaseEventQueriesService):
     """Service for request queries."""
 
+    # When True, get_queryset() returns the lightweight LIST queryset used by
+    # the `requests` connection (Master Tracker): cheap index-backed COUNT /
+    # uuid subquery annotations in place of the full event_set__recaps /
+    # event_set__custom_recap prefetches. The DETAIL path (`request` /
+    # get_record) leaves this False so the /request/view Field Reports panel
+    # keeps the full recap prefetch it renders from. Set per-call on the
+    # service instance — a fresh RequestQueriesService() is built per resolver.
+    list_mode: bool = False
+
+    # Cheap FK joins both the list + detail paths want (market / venue /
+    # address columns). select_related, so one query, no N+1.
+    _SELECT_RELATED = (
+        "tenant",
+        "timezone",
+        "billing_entity__state",
+        "distributor__location__state",
+        "retailer__location__state",
+        "location",
+        "state",
+        "rmm_asigned",
+        "created_by",
+        "updated_by",
+    )
+
     def get_model(self) -> Model:
         """Get the model for the service."""
         return models.Request
 
-    def get_queryset(self) -> QuerySet:
-        """Get the queryset for the service.
+    def _base_queryset(self) -> QuerySet:
+        """Soft-delete-aware base shared by both paths.
 
         Excludes soft-deleted requests (deleted_at IS NOT NULL) so the
-        deleteRequest mutation effectively hides the row from every
-        list, detail, single-fetch, and export path that flows through
-        this base queryset. The row stays in the DB so its activity log
-        + linked events / recaps survive intact.
+        deleteRequest mutation effectively hides the row from every list,
+        detail, single-fetch, and export path that flows through here. The
+        row stays in the DB so its activity log + linked events / recaps
+        survive intact.
         """
         return (
             self.get_model()
             .objects.filter(deleted_at__isnull=True)
-            .select_related(
-                "tenant",
-                "timezone",
-                "billing_entity__state",
-                "distributor__location__state",
-                "retailer__location__state",
-                "location",
-                "state",
-                "rmm_asigned",
-                "created_by",
-                "updated_by",
+            .select_related(*self._SELECT_RELATED)
+        )
+
+    def get_queryset(self) -> QuerySet:
+        """Route to the list (lightweight) or detail (full) queryset.
+
+        Both paths share `_base_queryset`; they differ only in how the
+        per-event recap rollups are materialized — prefetched rows (detail,
+        needs the full recaps) vs. subquery annotations (list, needs only
+        counts + which event holds a recap).
+        """
+        return self._list_queryset() if self.list_mode else self._detail_queryset()
+
+    def _detail_queryset(self) -> QuerySet:
+        """Full queryset for /request/view — every prefetch the detail page
+        needs, including the per-event recaps + custom recaps the Field
+        Reports panel renders. Unchanged from the original behavior."""
+        return self._base_queryset().prefetch_related(
+            "requests_stores_manager",
+            "request_product__product",
+            "event_set",
+            "event_set__tenant",
+            # Detail Field Reports panel traverses Request → events → recaps
+            # and renders the FULL recap, so it keeps the prefetch (the list
+            # path replaces these two with count annotations — see below).
+            "event_set__recaps",
+            "event_set__custom_recap",
+            "event_set__ambassadors_events",
+            "event_set__open_shifts",
+            "event_set__open_shifts__released_by",
+            "event_set__open_shifts__claimed_by",
+        )
+
+    def _list_queryset(self) -> QuerySet:
+        """Lightweight Master Tracker queryset.
+
+        The list view only needs recap COUNTS + which event holds a recap —
+        never the recap rows themselves. Fetching every recap (and its file
+        metadata) for every event of every request was the dominant cost on a
+        ~1,000-row tenant — that's what made the tracker take ~1 min. Replace
+        the two heaviest prefetches (event_set__recaps / event_set__custom_recap)
+        with three cheap, index-backed correlated subqueries that the Request
+        scalar resolvers read instead (recapsFiledCount / recapEventUuid /
+        eventsCount). Each is a scalar subquery — NOT a JOIN — so they don't
+        multiply rows against each other or the other prefetched relations.
+
+        The remaining prefetches (event_set + ambassadors_events + open_shifts)
+        are small and bounded (a request has a handful of events) and are still
+        needed for the row's primary `event`, the BA-assigned chip, and the
+        open-shift chip.
+        """
+        from recaps.models import Recap, CustomRecap
+
+        def _count_over(model):
+            # Correlated COUNT(*) of `model` rows whose event belongs to the
+            # outer request — as a scalar subquery. Coalesce → 0 for requests
+            # with no events/recaps.
+            return Coalesce(
+                Subquery(
+                    model.objects.filter(event__request_id=OuterRef("pk"))
+                    .order_by()
+                    .values("event__request_id")
+                    .annotate(c=Count("pk"))
+                    .values("c")[:1],
+                    output_field=IntegerField(),
+                ),
+                0,
             )
-            .prefetch_related(
-                "requests_stores_manager",
-                "request_product__product",
-                "event_set",
-                "event_set__tenant",
-                # Master Tracker RECAP chip + /request/view Field
-                # Reports panel both traverse Request → events → recaps.
-                # Without this prefetch each row would trigger a
-                # separate `Event.objects.filter(...)` *and* a
-                # `Recap.objects.filter(...)` query (N+1×2 per page).
-                # Limit to id-only fields on Recap since neither
-                # consumer needs the full recap detail at list time.
-                "event_set__recaps",
-                # Custom-template recaps live in a separate table. The
-                # Master Tracker RECAP chip counts an event as "filed" when
-                # EITHER recaps OR custom_recap is non-empty (same rule as
-                # /recaps/missing). Prefetch this too so Event.customRecaps
-                # reads the cache instead of an N+1 per row — and so a filed
-                # custom recap actually clears the DUE chip.
-                "event_set__custom_recap",
-                # Master Tracker "BA assigned" indicator traverses
-                # Request → events → ambassadors_events to count
-                # assigned/confirmed BAs per event. Without this prefetch
-                # Event.assignedAmbassadorsCount /
-                # confirmedAmbassadorsCount would each fire a COUNT query
-                # per event (N+1). The count resolvers read from this
-                # prefetched list when present.
-                "event_set__ambassadors_events",
-                # Admin shift-swap visibility: Request.openShifts traverses
-                # Request → events → open_shifts (+ who dropped / claimed).
-                # Prefetch so the Master Tracker chip + Request View panel read
-                # from cache instead of an N+1 per row.
-                "event_set__open_shifts",
-                "event_set__open_shifts__released_by",
-                "event_set__open_shifts__claimed_by",
-            )
+
+        events_count = Coalesce(
+            Subquery(
+                models.Event.objects.filter(request_id=OuterRef("pk"))
+                .order_by()
+                .values("request_id")
+                .annotate(c=Count("pk"))
+                .values("c")[:1],
+                output_field=IntegerField(),
+            ),
+            0,
+        )
+
+        # UUID of the first event (lowest id) that actually holds a recap —
+        # legacy OR custom — so a "N RECAP" row click lands on a page that
+        # shows one. May legitimately be NULL (no event has a recap yet).
+        recap_event_uuid = Subquery(
+            models.Event.objects.filter(request_id=OuterRef("pk"))
+            .filter(Q(recaps__isnull=False) | Q(custom_recap__isnull=False))
+            .order_by("id")
+            .values("uuid")[:1]
+        )
+
+        return self._base_queryset().prefetch_related(
+            "request_product__product",
+            "event_set",
+            "event_set__ambassadors_events",
+            "event_set__open_shifts",
+            "event_set__open_shifts__released_by",
+            "event_set__open_shifts__claimed_by",
+        ).annotate(
+            _events_count_ann=events_count,
+            _recaps_filed_count_ann=_count_over(Recap) + _count_over(CustomRecap),
+            _recap_event_uuid_ann=recap_event_uuid,
         )
 
 
@@ -1334,6 +1415,9 @@ class RequestQueries:
     ) -> CountableConnection[types.Request]:
         """Get all requests."""
         service = RequestQueriesService()
+        # Master Tracker connection → lightweight queryset: recap rollups come
+        # from subquery annotations, not the heavy per-event recaps prefetch.
+        service.list_mode = True
         tenant_id: strawberry.ID | None = filters.tenant_id if filters else None
         tenant_uuid: strawberry.ID | None = filters.tenant_uuid if filters else None
         resolved_tenant_id = await service.resolve_tenant_id(
