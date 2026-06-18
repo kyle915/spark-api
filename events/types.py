@@ -555,7 +555,13 @@ class Request(Node):
     async def recaps_filed_count(self) -> int:
         """Total recaps (legacy + custom-template) filed across this
         request's events — powers the Master Tracker RECAP chip count.
-        Reads the event_set / recaps / custom_recap prefetch caches (no N+1)."""
+
+        Master Tracker LIST path: reads the `_recaps_filed_count_ann` subquery
+        annotation the list queryset adds (one scalar column, zero extra
+        queries). DETAIL path (no annotation): falls back to the event_set /
+        recaps / custom_recap prefetch caches the detail queryset loads."""
+        if hasattr(self, "_recaps_filed_count_ann"):
+            return int(self._recaps_filed_count_ann or 0)
 
         def _count():
             cached = getattr(self, "_prefetched_objects_cache", {}).get("event_set")
@@ -568,7 +574,14 @@ class Request(Node):
     async def recap_event_uuid(self) -> str | None:
         """UUID of the first event that actually holds a recap, so a "N
         RECAP" row click lands on a page that shows one (the primary
-        `event` is the lowest-id event, which may be recap-less)."""
+        `event` is the lowest-id event, which may be recap-less).
+
+        LIST: reads the `_recap_event_uuid_ann` subquery annotation — which
+        is legitimately NULL when no event holds a recap, so we test attribute
+        PRESENCE (hasattr), not truthiness, to decide list-vs-detail."""
+        if hasattr(self, "_recap_event_uuid_ann"):
+            val = self._recap_event_uuid_ann
+            return str(val) if val else None
 
         def _find():
             cached = getattr(self, "_prefetched_objects_cache", {}).get("event_set")
@@ -583,7 +596,12 @@ class Request(Node):
     @strawberry.field
     async def events_count(self) -> int:
         """Number of events on this request — lets the tracker tell "no
-        events" (none) apart from "events but no recap yet" (due)."""
+        events" (none) apart from "events but no recap yet" (due).
+
+        LIST: reads the `_events_count_ann` subquery annotation; DETAIL: counts
+        the prefetched event_set."""
+        if hasattr(self, "_events_count_ann"):
+            return int(self._events_count_ann or 0)
 
         def _count():
             cached = getattr(self, "_prefetched_objects_cache", {}).get("event_set")
