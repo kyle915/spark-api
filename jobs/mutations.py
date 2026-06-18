@@ -15,6 +15,7 @@ from jobs.envelopes import (
     AmbassadorJobApprovedNotificationMailer,
     AmbassadorJobUpdatedMailer,
     AmbassadorUnassignedFromJobMailer,
+    JobApplicationReceivedMailer,
     JobBookingConfirmationMailer,
 )
 from jobs.notification_rules import should_send_ambassador_event_email
@@ -269,6 +270,112 @@ def _booking_push_body(job: "models.Job") -> str:
     if label:
         return f"You're booked: {label}. Tap to see details."
     return f"You've been booked for {job.name}. Tap to see details."
+
+
+def _notify_admins_of_application(application_id: int) -> None:
+    """Best-effort staffing alert: a BA just applied to a posted gig.
+
+    Recipients are the *staffing* side only — the event's assigned RMM, the
+    admin who posted the job, and the Ignite events inbox — never the brand
+    client (who applied is an internal staffing concern). Fire-and-forget:
+    the whole body is guarded so a mail/lookup failure never breaks the BA's
+    apply. Synchronous (the caller wraps it in sync_to_async).
+    """
+    try:
+        from django.conf import settings
+
+        app = (
+            models.JobApplication.objects.select_related(
+                "job",
+                "job__event",
+                "job__event__rmm_asigned",
+                "job__created_by",
+                "job__tenant",
+                "ambassador",
+                "ambassador__user",
+            )
+            .filter(id=application_id)
+            .first()
+        )
+        if app is None or app.job is None:
+            return
+        job = app.job
+        event = getattr(job, "event", None)
+        tenant = getattr(job, "tenant", None)
+
+        # ---- Recipients: staffing side only, case-insensitive dedupe. ----
+        recipients: list[str] = []
+        seen: set[str] = set()
+
+        def add(email: str | None) -> None:
+            e = (email or "").strip()
+            if e and "@" in e and e.lower() not in seen:
+                seen.add(e.lower())
+                recipients.append(e)
+
+        rmm_user = getattr(event, "rmm_asigned", None) if event else None
+        add(getattr(rmm_user, "email", None))
+        add(getattr(getattr(job, "created_by", None), "email", None))
+        # Always include the Ignite staffing inbox so the team sees every
+        # applicant even when no RMM is assigned / the poster was a system user.
+        add("events@igniteproductions.co")
+        if not recipients:
+            return
+
+        amb_user = getattr(getattr(app, "ambassador", None), "user", None)
+        applicant_name = ""
+        if amb_user is not None:
+            applicant_name = (amb_user.get_full_name() or "").strip() or (
+                getattr(amb_user, "email", None) or ""
+            ).strip()
+
+        when = (
+            (getattr(event, "start_time", None) or getattr(event, "date", None))
+            if event
+            else None
+        )
+        when_label = None
+        if when is not None:
+            try:
+                when_label = when.strftime("%b %-d, %Y")
+            except (ValueError, AttributeError):
+                when_label = None
+
+        location_label = (
+            (getattr(event, "address", None) if event else None)
+            or getattr(job, "address", None)
+            or None
+        )
+
+        base = (getattr(settings, "ADMIN_FRONTEND_URL", "") or "").rstrip("/")
+        job_uuid = getattr(job, "uuid", None)
+        applicants_url = None
+        if base and job_uuid:
+            applicants_url = f"{base}/job/view/{job_uuid}"
+        elif base:
+            applicants_url = f"{base}/jobs"
+
+        note = (getattr(app, "note", None) or "").strip()
+        if len(note) > 300:
+            note = note[:297] + "…"
+
+        JobApplicationReceivedMailer(
+            to_emails=recipients,
+            applicant_name=applicant_name,
+            job_name=getattr(job, "name", None) or "a gig",
+            event_name=getattr(event, "name", None) if event else None,
+            when_label=when_label,
+            location_label=location_label,
+            tenant_name=getattr(tenant, "name", None),
+            note=note or None,
+            applicants_url=applicants_url,
+            reply_to_email=(getattr(rmm_user, "email", None) or "").strip() or None,
+        ).send()
+    except Exception:
+        logger.exception(
+            "apply-to-job admin notification failed for application_id=%s",
+            application_id,
+        )
 
 
 async def _notify_booked_ambassador_by_email(job: "models.Job", ambassador_pk: int) -> None:
@@ -978,6 +1085,12 @@ class AmbassadorJobMutationService(BaseMutationService):
         job = await models.Job.objects.only("id", "event_id").aget(
             id=ambassador_job.job_id
         )
+        # Direct admin assignment IS the hire (AmbassadorJob.status=approved
+        # above), so the event booking must be approved too. With is_approved
+        # False the BA's upcoming-shifts + clock-in — which both require
+        # AmbassadorEvent.is_approved=True — never see the gig, so the BA can't
+        # view or clock into the shift they were just hired for. Mirrors
+        # assign_ambassador_to_job / approve_ambassador_job.
         if not await AmbassadorEvent.objects.filter(
             ambassador_id=ambassador_job.ambassador_id,
             event_id=job.event_id,
@@ -986,12 +1099,35 @@ class AmbassadorJobMutationService(BaseMutationService):
                 ambassador_id=ambassador_job.ambassador_id,
                 event_id=job.event_id,
                 tenant_id=ambassador_job.tenant_id,
-                is_approved=False,
+                is_approved=True,
                 created_by_id=ambassador_job.created_by_id,
                 updated_by_id=ambassador_job.updated_by_id,
             )
 
         await _notify_assigned_ambassador_by_email(ambassador_job)
+
+        # "You got the gig" push — best-effort, mirrors assign_ambassador_to_job
+        # so a directly-assigned BA is actually notified (email alone left them
+        # unaware). Never fail the assignment on a push error.
+        try:
+            from ambassadors.push import enqueue_push
+
+            ba_user_id = getattr(ambassador_job.ambassador, "user_id", None)
+            assigned_job = ambassador_job.job
+            if ba_user_id and assigned_job is not None:
+                event = getattr(assigned_job, "event", None)
+                enqueue_push(
+                    ba_user_id,
+                    title="You got the gig",
+                    body=_booking_push_body(assigned_job),
+                    data={
+                        "kind": "job_assigned",
+                        "jobUuid": str(assigned_job.uuid),
+                        "eventUuid": str(getattr(event, "uuid", "")),
+                    },
+                )
+        except Exception:
+            pass
 
         return response
 
@@ -2330,6 +2466,11 @@ class JobApplicationMutations:
 
         actor = info.context.request.user
 
+        # Set inside _apply() only on a *fresh* application (newly created or a
+        # re-apply from withdrawn/declined) — drives the staffing email so an
+        # "already on file" no-op or any error path doesn't re-notify admins.
+        notify_holder = {"value": False}
+
         def _apply():
             try:
                 job = models.Job.objects.get(pk=job_pk)
@@ -2424,9 +2565,15 @@ class JobApplicationMutations:
                     app.save(update_fields=fields)
                 else:
                     return app, "Application already on file."
+            notify_holder["value"] = True
             return app, "Applied."
 
         app, msg = await sync_to_async(_apply)()
+        if app is not None and notify_holder["value"]:
+            # Best-effort staffing alert (RMM + job poster + Ignite inbox).
+            # _notify_admins_of_application swallows its own errors, so this
+            # can never break the BA's apply.
+            await sync_to_async(_notify_admins_of_application)(app.id)
         return types.JobApplicationResponse(
             success=app is not None,
             message=msg,
