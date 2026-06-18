@@ -210,6 +210,10 @@ class TestJobsTenantIsolationGraphQL(JobsGraphQLTestCase):
         assert result.data["postJob"]["success"] is True
         refreshed = await sync_to_async(models.Job.objects.get)(pk=mine.pk)
         assert refreshed.lifecycle_status == models.Job.STATUS_POSTED
+        # Posting must flip the BA-board visibility gates, or the gig never
+        # shows on my_available_jobs (which filters ongoing+public).
+        assert refreshed.public is True
+        assert refreshed.ongoing is True
 
     @pytest.mark.asyncio
     async def test_admin_can_post_any_tenant_job(self):
