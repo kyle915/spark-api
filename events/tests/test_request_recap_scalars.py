@@ -122,41 +122,52 @@ class TestRequestRecapScalars(EventsGraphQLTestCase):
         assert total == 3
 
     def test_list_vs_detail_queryset_split(self):
-        """The list path drops the heavy recaps prefetches in favor of count
-        annotations; the detail path keeps the full recaps prefetch the Field
-        Reports panel renders from."""
+        """Both paths prefetch recaps, but differently: DETAIL pulls the full
+        recap rows (Field Reports renders them) as a plain string lookup; LIST
+        pulls a COUNT-ONLY Prefetch (id/event_id) so the scalar resolvers count
+        in memory. Neither uses the per-row correlated subquery annotations that
+        made the LD list query ~35s (#831) — that's the regression this guards."""
+        from django.db.models import Prefetch
         from events.queries import RequestQueriesService
+
+        def lookups(qs):
+            # _prefetch_related_lookups mixes plain strings (full prefetch) and
+            # Prefetch objects (custom, limited queryset). Map lookup → kind.
+            out = {}
+            for p in qs._prefetch_related_lookups:
+                if isinstance(p, Prefetch):
+                    out[p.prefetch_to] = "prefetch_obj"
+                else:
+                    out[p] = "str"
+            return out
 
         detail = RequestQueriesService()  # list_mode defaults False
         listsvc = RequestQueriesService()
         listsvc.list_mode = True
 
-        detail_pf = set(detail.get_queryset()._prefetch_related_lookups)
-        list_pf = set(listsvc.get_queryset()._prefetch_related_lookups)
+        detail_lk = lookups(detail.get_queryset())
+        list_lk = lookups(listsvc.get_queryset())
 
-        # Detail keeps the full recap prefetches (Field Reports needs them).
-        assert "event_set__recaps" in detail_pf
-        assert "event_set__custom_recap" in detail_pf
-        # List drops them — replaced by subquery annotations — but keeps the
-        # small bounded prefetches the row chips still read from.
-        assert "event_set__recaps" not in list_pf
-        assert "event_set__custom_recap" not in list_pf
-        assert "event_set__open_shifts" in list_pf
-        assert "event_set__ambassadors_events" in list_pf
+        # Detail keeps the FULL recap prefetches (plain string → all columns).
+        assert detail_lk.get("event_set__recaps") == "str"
+        assert detail_lk.get("event_set__custom_recap") == "str"
+        # List uses count-only Prefetch OBJECTS (limited queryset), not full
+        # rows and NOT correlated subqueries.
+        assert list_lk.get("event_set__recaps") == "prefetch_obj"
+        assert list_lk.get("event_set__custom_recap") == "prefetch_obj"
+        assert "event_set__open_shifts" in list_lk
+        assert "event_set__ambassadors_events" in list_lk
 
-        # The three rollup annotations live ONLY on the list queryset.
-        ann = {"_events_count_ann", "_recaps_filed_count_ann", "_recap_event_uuid_ann"}
-        list_ann = set(listsvc.get_queryset().query.annotations)
-        detail_ann = set(detail.get_queryset().query.annotations)
-        assert ann <= list_ann, list_ann
-        assert not (ann & detail_ann), detail_ann
+        # NEITHER queryset carries per-row subquery annotations anymore.
+        assert not listsvc.get_queryset().query.annotations
+        assert not detail.get_queryset().query.annotations
 
     def test_list_queryset_is_constant_query_count(self):
         """The list path must not issue per-row recap queries: adding a second
-        request (with its own events + recaps) must NOT increase the number of
-        queries to load the page + read all three scalar annotations. This is
-        the regression guard against re-introducing the per-event recap N+1
-        that the subquery annotations replaced."""
+        request (with its own events + recaps) must NOT increase the query count
+        to load the page + count recaps off the prefetch caches. Batched
+        prefetches are O(1) queries regardless of row count — this guards
+        against an accidental return to a per-row N+1 (or per-row subqueries)."""
         from events.queries import RequestQueriesService
 
         svc = RequestQueriesService()
@@ -164,15 +175,19 @@ class TestRequestRecapScalars(EventsGraphQLTestCase):
 
         def fetch():
             qs = svc.get_queryset().filter(tenant=self.tenant).order_by("id")
-            rows = list(qs)  # 1 main query (annotations inline) + bounded prefetch
-            return {
-                str(r.uuid): (
-                    int(r._recaps_filed_count_ann or 0),
-                    int(r._events_count_ann or 0),
-                    str(r._recap_event_uuid_ann) if r._recap_event_uuid_ann else None,
+            rows = list(qs)  # 1 main query + a fixed set of batched prefetch queries
+            out = {}
+            for r in rows:
+                cache = r._prefetched_objects_cache.get("event_set")
+                events = list(cache) if cache is not None else []
+                recaps = sum(RequestGQL._recap_total_cached(ev) for ev in events)
+                ev_uuid = next(
+                    (str(ev.uuid) for ev in events
+                     if RequestGQL._recap_total_cached(ev) > 0),
+                    None,
                 )
-                for r in rows
-            }
+                out[str(r.uuid)] = (recaps, len(events), ev_uuid)
+            return out
 
         with CaptureQueriesContext(connection) as ctx1:
             data1 = fetch()
