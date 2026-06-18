@@ -521,6 +521,72 @@ class Request(Node):
             return list(cached)
         return await sync_to_async(list)(self.event_set.order_by("start_time"))
 
+    # --- Scalar recap rollups for the Master Tracker list ---
+    #
+    # The tracker LIST view used to select `events { recaps { id }
+    # customRecaps { id } }` per request purely to compute a recap COUNT +
+    # find which event holds a recap — thousands of nested id objects over
+    # the wire + into the Relay store for a big tenant. These three scalars
+    # collapse that to flat numbers, computed from the SAME event_set /
+    # event_set__recaps / event_set__custom_recap prefetch caches the detail
+    # view already loads (no N+1, prefetch untouched). "Filed" = recap EXISTS
+    # (legacy OR custom-template), matching /recaps/missing — counted off the
+    # prefetch cache, so it is not approval-filtered.
+
+    def _events_from_cache(self):
+        cached = getattr(self, "_prefetched_objects_cache", {}).get("event_set")
+        return list(cached) if cached is not None else None
+
+    @staticmethod
+    def _recap_total_for_event(ev) -> int:
+        ev_pc = getattr(ev, "_prefetched_objects_cache", {})
+        r = ev_pc.get("recaps")
+        cr = ev_pc.get("custom_recap")
+        rc = len(r) if r is not None else ev.recaps.count()
+        crc = len(cr) if cr is not None else ev.custom_recap.count()
+        return rc + crc
+
+    @strawberry.field
+    async def recaps_filed_count(self) -> int:
+        """Total recaps (legacy + custom-template) filed across this
+        request's events — powers the Master Tracker RECAP chip count."""
+
+        def _count():
+            events = self._events_from_cache()
+            if events is None:
+                events = list(self.event_set.all())
+            return sum(self._recap_total_for_event(ev) for ev in events)
+
+        return await sync_to_async(_count)()
+
+    @strawberry.field
+    async def recap_event_uuid(self) -> str | None:
+        """UUID of the first event that actually holds a recap, so a "N
+        RECAP" row click lands on a page that shows one (the primary
+        `event` is the lowest-id event, which may be recap-less)."""
+
+        def _find():
+            events = self._events_from_cache()
+            if events is None:
+                events = list(self.event_set.all())
+            for ev in events:
+                if self._recap_total_for_event(ev) > 0:
+                    return str(getattr(ev, "uuid", "")) or None
+            return None
+
+        return await sync_to_async(_find)()
+
+    @strawberry.field
+    async def events_count(self) -> int:
+        """Number of events on this request — lets the tracker tell "no
+        events" (none) apart from "events but no recap yet" (due)."""
+
+        def _count():
+            events = self._events_from_cache()
+            return len(events) if events is not None else self.event_set.count()
+
+        return await sync_to_async(_count)()
+
     request_type: RequestType | None = None
     status: RequestStatus | None = None
     tenant_id: strawberry.ID
