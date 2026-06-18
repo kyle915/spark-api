@@ -79,13 +79,28 @@ def notify_nearby_bas_of_new_gig(job) -> None:
         # fresh row in the worker — mirrors how enqueue_push passes user_id.
         Queues().default.add(_run_notify_nearby_bas_task, job_id)
     except Exception:
-        # Never run _notify inline as a fallback: blocking the post is worse
-        # than dropping one at-post push (the daily digest still covers it).
-        logger.exception(
-            "new-gig-nearby enqueue failed for job=%s; skipping at-post push "
-            "(daily digest still covers these BAs)",
-            job_id,
-        )
+        # Cloud Run has no Redis/RQ worker, so the enqueue fails every time —
+        # which previously meant the "new gig near you" push was silently
+        # dropped (BAs never got told a gig dropped). Don't run the fan-out
+        # INLINE (it would block the post — that's the postJob-freeze we already
+        # fixed), but don't drop it either: run it on a detached daemon thread.
+        # The post returns immediately; the per-BA pushes still go out (each
+        # push's own inline-send handles the missing worker). Daily digest stays
+        # the backstop if the thread can't finish.
+        import threading
+
+        try:
+            threading.Thread(
+                target=_run_notify_nearby_bas_task,
+                args=(job_id,),
+                daemon=True,
+            ).start()
+        except Exception:
+            logger.exception(
+                "new-gig-nearby thread fallback failed for job=%s; skipping "
+                "at-post push (daily digest still covers these BAs)",
+                job_id,
+            )
 
 
 def _run_notify_nearby_bas_task(job_id: int) -> int:
