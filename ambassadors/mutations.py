@@ -63,6 +63,7 @@ from .types import (
     RegisterPushTokenResponse,
     OAuthSignInResponse,
     LocationPingResponse,
+    MileageSessionResponse,
     RespondToShiftOfferResponse,
     InviteAmbassadorToShiftResponse,
     CancelShiftInviteResponse,
@@ -100,6 +101,7 @@ from .services import (
     RegisterPushTokenService,
     OAuthSignInService,
     LocationPingService,
+    MileageService,
     ShiftOfferService,
     set_ambassador_job_real_amount_from_clock_out,
 )
@@ -1199,6 +1201,33 @@ class AmbassadorMobileMutations:
         input: inputs.LocationPingInput,
     ) -> LocationPingResponse:
         return await LocationPingService.record(input, info)
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def start_mileage_session(
+        self,
+        info: strawberry.Info,
+        input: inputs.StartMileageSessionInput,
+    ) -> MileageSessionResponse:
+        """BA taps Start on the mileage tracker for a gig."""
+        return await MileageService.start(input, info)
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def record_mileage_breadcrumbs(
+        self,
+        info: strawberry.Info,
+        input: inputs.RecordMileageBreadcrumbsInput,
+    ) -> MileageSessionResponse:
+        """Append a batch of GPS points to the active mileage session."""
+        return await MileageService.record_breadcrumbs(input, info)
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def stop_mileage_session(
+        self,
+        info: strawberry.Info,
+        input: inputs.StopMileageSessionInput,
+    ) -> MileageSessionResponse:
+        """BA taps Stop — finalize miles + reimbursement for the trip."""
+        return await MileageService.stop(input, info)
 
     @relay.mutation(permission_classes=[StrictIsAuthenticated])
     async def respond_to_shift_offer(

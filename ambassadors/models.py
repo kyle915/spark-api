@@ -1144,6 +1144,116 @@ class LocationPing(models.Model):
         return f"ping {self.ambassador_id}@{self.event_id} {self.recorded_at}"
 
 
+class MileageSession(models.Model):
+    """One BA-tracked driving trip for a gig — a single Start -> Stop.
+
+    A BA can log MULTIPLE sessions per event (drive out, drive back,
+    store-to-store); each is its own row and the per-gig total is the sum of
+    completed sessions' `total_miles`. The GPS trail hangs off
+    `MileageBreadcrumb`; `total_miles` is the haversine sum over those points,
+    computed on stop. Only created when the event has `track_mileage=True`.
+
+    Reimbursement = total_miles * rate_per_mile, where the rate is snapshotted
+    from the event at stop time so later rate edits don't rewrite history.
+    Separate from LocationPing (clock-in presence) on purpose — this is the
+    drive, not on-site attendance.
+    """
+
+    STATUS_ACTIVE = "active"
+    STATUS_COMPLETED = "completed"
+    STATUS_CANCELED = "canceled"
+    STATUS_CHOICES = (
+        (STATUS_ACTIVE, "Active"),
+        (STATUS_COMPLETED, "Completed"),
+        (STATUS_CANCELED, "Canceled"),
+    )
+
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+
+    tenant = models.ForeignKey(
+        Tenant,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="mileage_sessions",
+    )
+    ambassador = models.ForeignKey(
+        Ambassador,
+        on_delete=models.CASCADE,
+        null=False,
+        related_name="mileage_sessions",
+    )
+    event = models.ForeignKey(
+        Event,
+        on_delete=models.CASCADE,
+        null=False,
+        related_name="mileage_sessions",
+    )
+
+    status = models.CharField(
+        max_length=12, choices=STATUS_CHOICES,
+        default=STATUS_ACTIVE, db_index=True,
+    )
+    # auto_now_add doubles as the start time — a session row is created the
+    # moment the BA taps Start.
+    started_at = models.DateTimeField(auto_now_add=True, editable=False)
+    ended_at = models.DateTimeField(null=True, blank=True)
+
+    # Great-circle miles summed across this session's breadcrumbs, set on
+    # stop. Null while active.
+    total_miles = models.DecimalField(
+        max_digits=8, decimal_places=2, null=True, blank=True,
+    )
+    # $/mile snapshot at stop (from Event.mileage_rate). Null = miles-only.
+    rate_per_mile = models.DecimalField(
+        max_digits=6, decimal_places=2, null=True, blank=True,
+    )
+    reimbursement_amount = models.DecimalField(
+        max_digits=10, decimal_places=2, null=True, blank=True,
+    )
+
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["ambassador", "event", "status"]),
+            models.Index(fields=["event", "-started_at"]),
+        ]
+
+    def __str__(self):
+        return f"mileage {self.ambassador_id}@{self.event_id} {self.status}"
+
+
+class MileageBreadcrumb(models.Model):
+    """A single GPS point in a MileageSession's trail. The mobile app pushes
+    these (batched) while a session is active; `total_miles` is the haversine
+    sum over the ordered points."""
+
+    id = models.BigAutoField(primary_key=True)
+    session = models.ForeignKey(
+        MileageSession,
+        on_delete=models.CASCADE,
+        null=False,
+        related_name="breadcrumbs",
+    )
+    lat = models.FloatField()
+    lng = models.FloatField()
+    accuracy_meters = models.FloatField(null=True, blank=True)
+    # Device clock when the reading was taken — ordering key for the trail.
+    recorded_at = models.DateTimeField(db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+
+    class Meta:
+        ordering = ["recorded_at", "id"]
+        indexes = [
+            models.Index(fields=["session", "recorded_at"]),
+        ]
+
+    def __str__(self):
+        return f"crumb {self.session_id} {self.recorded_at}"
+
+
 class AmbassadorRating(models.Model):
     """A 1-5 star rating (with optional comment) for a BA's work on a gig.
 
