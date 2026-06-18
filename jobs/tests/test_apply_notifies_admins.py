@@ -103,9 +103,41 @@ class TestApplyNotifiesAdmins(JobsGraphQLTestCase):
         assert "events@igniteproductions.co" in recipients
         # The applicant (BA) is never a recipient of the staffing alert.
         assert self.ba_user.email.lower() not in recipients
+        # EVERY recipient is an Ignite admin address — applicant alerts go to
+        # the Ignite team only.
+        assert all(r.endswith("@igniteproductions.co") for r in recipients)
         assert kwargs["applicant_name"] == "Casey BA"
         assert kwargs["job_name"] == "Sampling Gig"
         MockMailer.return_value.send.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_non_ignite_rmm_is_excluded(self):
+        """A non-Ignite RMM (e.g. a brand-side contact) must NOT be emailed —
+        only @igniteproductions.co addresses. The Ignite inbox still gets it."""
+        outsider = await sync_to_async(self.create_user)(
+            username=f"outsider_{uuid.uuid4().hex[:6]}@brandclient.com",
+            email=f"outsider_{uuid.uuid4().hex[:6]}@brandclient.com",
+            role=self.roles["spark_admin"],
+            password="x",
+        )
+
+        def _repoint_rmm():
+            self.event.rmm_asigned = outsider
+            self.event.save(update_fields=["rmm_asigned"])
+
+        await sync_to_async(_repoint_rmm)()
+
+        with patch(MAILER_PATH) as MockMailer:
+            MockMailer.return_value = MagicMock()
+            res = await self._apply()
+
+        assert res.data["applyToJob"]["success"] is True
+        assert MockMailer.called
+        recipients = [r.lower() for r in MockMailer.call_args.kwargs["to_emails"]]
+        # The non-Ignite RMM is filtered out; only Ignite addresses remain.
+        assert outsider.email.lower() not in recipients
+        assert "events@igniteproductions.co" in recipients
+        assert all(r.endswith("@igniteproductions.co") for r in recipients)
 
     @pytest.mark.asyncio
     async def test_duplicate_apply_does_not_renotify(self):
