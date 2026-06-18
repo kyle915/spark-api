@@ -360,7 +360,13 @@ class DashboardQueries:
 
             # Build base queryset. Admins see all tenants (the global admin
             # dashboard); a non-admin is constrained to their own tenant(s).
-            base_queryset = event_models.Event.objects.all()
+            # Exclude events whose parent request was soft-deleted — a deleted
+            # gig must stop counting toward "Events run" / KPIs. Events with no
+            # request (bulk / born-approved) keep counting (nullable-FK join
+            # leaves deleted_at NULL for them).
+            base_queryset = event_models.Event.objects.exclude(
+                request__deleted_at__isnull=False
+            )
             if allowed_tenant_ids is not None:
                 base_queryset = base_queryset.filter(
                     tenant_id__in=allowed_tenant_ids
@@ -526,7 +532,9 @@ class DashboardQueries:
                     comparison_period = prev_quarter
 
                     # Get previous period data (apply same filters but for previous period)
-                    prev_events = event_models.Event.objects.all()
+                    prev_events = event_models.Event.objects.exclude(
+                        request__deleted_at__isnull=False
+                    )
                     # Apply same filters but with previous period dates
                     prev_events = service._apply_event_dashboard_filters(
                         prev_events, filters
