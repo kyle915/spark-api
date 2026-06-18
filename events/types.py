@@ -541,8 +541,9 @@ class Request(Node):
 
     @staticmethod
     def _recap_total(ev) -> int:
-        """Recaps (legacy + custom) on one event, read from its prefetch
-        cache (no query) when present. Module-style staticmethod called as
+        """Recaps (legacy + custom) on one event. DB-fallback variant: counts
+        the prefetch cache when present, else issues a COUNT query. Only call
+        this inside sync_to_async (it may touch the ORM). Called as
         Request._recap_total(ev) — never via self."""
         ev_pc = getattr(ev, "_prefetched_objects_cache", {})
         r = ev_pc.get("recaps")
@@ -551,42 +552,52 @@ class Request(Node):
         crc = len(cr) if cr is not None else ev.custom_recap.count()
         return rc + crc
 
+    @staticmethod
+    def _recap_total_cached(ev) -> int:
+        """Recaps (legacy + custom) on one event, counted ONLY from the
+        prefetch cache — never touches the DB, so it is safe to call directly
+        in an async resolver with NO sync_to_async thread hop. The list +
+        detail querysets always prefetch both `recaps` and `custom_recap`, so
+        in practice this is the true count; a missing cache yields 0 rather
+        than risking a SynchronousOnlyOperation throw mid-render."""
+        ev_pc = getattr(ev, "_prefetched_objects_cache", {})
+        r = ev_pc.get("recaps")
+        cr = ev_pc.get("custom_recap")
+        return (len(r) if r is not None else 0) + (len(cr) if cr is not None else 0)
+
+    # These three scalars are resolved once PER ROW — ~1,000× on the Master
+    # Tracker. The event_set / recaps / custom_recap prefetch caches are always
+    # present there, so we count straight off them IN MEMORY (no query, and —
+    # critically — no sync_to_async, which at 3×1,000 thread hops was seconds of
+    # the load). sync_to_async is used ONLY on the rare no-prefetch fallback.
+
     @strawberry.field
     async def recaps_filed_count(self) -> int:
-        """Total recaps (legacy + custom-template) filed across this
-        request's events — powers the Master Tracker RECAP chip count.
-
-        Master Tracker LIST path: reads the `_recaps_filed_count_ann` subquery
-        annotation the list queryset adds (one scalar column, zero extra
-        queries). DETAIL path (no annotation): falls back to the event_set /
-        recaps / custom_recap prefetch caches the detail queryset loads."""
-        if hasattr(self, "_recaps_filed_count_ann"):
-            return int(self._recaps_filed_count_ann or 0)
+        """Total recaps (legacy + custom-template) filed across this request's
+        events — powers the Master Tracker RECAP chip count."""
+        cached = getattr(self, "_prefetched_objects_cache", {}).get("event_set")
+        if cached is not None:
+            return sum(Request._recap_total_cached(ev) for ev in cached)
 
         def _count():
-            cached = getattr(self, "_prefetched_objects_cache", {}).get("event_set")
-            events = list(cached) if cached is not None else list(self.event_set.all())
-            return sum(Request._recap_total(ev) for ev in events)
+            return sum(Request._recap_total(ev) for ev in self.event_set.all())
 
         return await sync_to_async(_count)()
 
     @strawberry.field
     async def recap_event_uuid(self) -> str | None:
-        """UUID of the first event that actually holds a recap, so a "N
-        RECAP" row click lands on a page that shows one (the primary
-        `event` is the lowest-id event, which may be recap-less).
-
-        LIST: reads the `_recap_event_uuid_ann` subquery annotation — which
-        is legitimately NULL when no event holds a recap, so we test attribute
-        PRESENCE (hasattr), not truthiness, to decide list-vs-detail."""
-        if hasattr(self, "_recap_event_uuid_ann"):
-            val = self._recap_event_uuid_ann
-            return str(val) if val else None
+        """UUID of the first event that actually holds a recap, so a "N RECAP"
+        row click lands on a page that shows one (the primary `event` is the
+        lowest-id event, which may be recap-less)."""
+        cached = getattr(self, "_prefetched_objects_cache", {}).get("event_set")
+        if cached is not None:
+            for ev in cached:
+                if Request._recap_total_cached(ev) > 0:
+                    return str(getattr(ev, "uuid", "")) or None
+            return None
 
         def _find():
-            cached = getattr(self, "_prefetched_objects_cache", {}).get("event_set")
-            events = list(cached) if cached is not None else list(self.event_set.all())
-            for ev in events:
+            for ev in self.event_set.all():
                 if Request._recap_total(ev) > 0:
                     return str(getattr(ev, "uuid", "")) or None
             return None
@@ -595,19 +606,12 @@ class Request(Node):
 
     @strawberry.field
     async def events_count(self) -> int:
-        """Number of events on this request — lets the tracker tell "no
-        events" (none) apart from "events but no recap yet" (due).
-
-        LIST: reads the `_events_count_ann` subquery annotation; DETAIL: counts
-        the prefetched event_set."""
-        if hasattr(self, "_events_count_ann"):
-            return int(self._events_count_ann or 0)
-
-        def _count():
-            cached = getattr(self, "_prefetched_objects_cache", {}).get("event_set")
-            return len(cached) if cached is not None else self.event_set.count()
-
-        return await sync_to_async(_count)()
+        """Number of events on this request — lets the tracker tell "no events"
+        (none) apart from "events but no recap yet" (due)."""
+        cached = getattr(self, "_prefetched_objects_cache", {}).get("event_set")
+        if cached is not None:
+            return len(cached)
+        return await sync_to_async(self.event_set.count)()
 
     request_type: RequestType | None = None
     status: RequestStatus | None = None

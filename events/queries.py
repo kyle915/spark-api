@@ -11,7 +11,6 @@ from graphql import GraphQLError
 
 from django.db.models import (
     Case,
-    Count,
     DateField,
     DateTimeField,
     DurationField,
@@ -20,10 +19,8 @@ from django.db.models import (
     Func,
     IntegerField,
     Model,
-    OuterRef,
     Q,
     QuerySet,
-    Subquery,
     Value,
     When,
 )
@@ -1323,72 +1320,43 @@ class RequestQueriesService(BaseEventQueriesService):
     def _list_queryset(self) -> QuerySet:
         """Lightweight Master Tracker queryset.
 
-        The list view only needs recap COUNTS + which event holds a recap —
-        never the recap rows themselves. Fetching every recap (and its file
-        metadata) for every event of every request was the dominant cost on a
-        ~1,000-row tenant — that's what made the tracker take ~1 min. Replace
-        the two heaviest prefetches (event_set__recaps / event_set__custom_recap)
-        with three cheap, index-backed correlated subqueries that the Request
-        scalar resolvers read instead (recapsFiledCount / recapEventUuid /
-        eventsCount). Each is a scalar subquery — NOT a JOIN — so they don't
-        multiply rows against each other or the other prefetched relations.
+        The list only needs recap COUNTS + which event holds a recap — never the
+        recap rows themselves. Two earlier attempts both went too far one way:
+        the original loaded the FULL recap rows (huge for a big tenant), and
+        #831 swapped them for THREE per-row correlated subqueries — which, over
+        ~1,000 rows, turned the Liquid Death list query into a ~35s nested-loop
+        nightmare (measured in the Network tab).
 
-        The remaining prefetches (event_set + ambassadors_events + open_shifts)
-        are small and bounded (a request has a handful of events) and are still
-        needed for the row's primary `event`, the BA-assigned chip, and the
-        open-shift chip.
+        The right shape is a BATCHED prefetch limited to id/event_id: one indexed
+        `... WHERE event_id IN (…)` per relation (recaps + custom_recap), not
+        1,000 correlated subqueries and not the full recap bodies. The scalar
+        resolvers count straight off these prefetch caches in memory (see the
+        cache-only path in events/types.py — no per-row query, no thread hop).
+
+        event_set / ambassadors_events / open_shifts stay prefetched for the
+        row's primary `event`, the BA-assigned chip, and the open-shift chip.
         """
+        from django.db.models import Prefetch
         from recaps.models import Recap, CustomRecap
-
-        def _count_over(model):
-            # Correlated COUNT(*) of `model` rows whose event belongs to the
-            # outer request — as a scalar subquery. Coalesce → 0 for requests
-            # with no events/recaps.
-            return Coalesce(
-                Subquery(
-                    model.objects.filter(event__request_id=OuterRef("pk"))
-                    .order_by()
-                    .values("event__request_id")
-                    .annotate(c=Count("pk"))
-                    .values("c")[:1],
-                    output_field=IntegerField(),
-                ),
-                0,
-            )
-
-        events_count = Coalesce(
-            Subquery(
-                models.Event.objects.filter(request_id=OuterRef("pk"))
-                .order_by()
-                .values("request_id")
-                .annotate(c=Count("pk"))
-                .values("c")[:1],
-                output_field=IntegerField(),
-            ),
-            0,
-        )
-
-        # UUID of the first event (lowest id) that actually holds a recap —
-        # legacy OR custom — so a "N RECAP" row click lands on a page that
-        # shows one. May legitimately be NULL (no event has a recap yet).
-        recap_event_uuid = Subquery(
-            models.Event.objects.filter(request_id=OuterRef("pk"))
-            .filter(Q(recaps__isnull=False) | Q(custom_recap__isnull=False))
-            .order_by("id")
-            .values("uuid")[:1]
-        )
 
         return self._base_queryset().prefetch_related(
             "request_product__product",
             "event_set",
+            # Count-only: id + event_id is all recapsFiledCount / recapEventUuid
+            # need. Batched IN-query, minimal columns — NOT the full recap rows
+            # the detail Field Reports panel loads, NOT correlated subqueries.
+            Prefetch(
+                "event_set__recaps",
+                queryset=Recap.objects.only("id", "event_id"),
+            ),
+            Prefetch(
+                "event_set__custom_recap",
+                queryset=CustomRecap.objects.only("id", "event_id"),
+            ),
             "event_set__ambassadors_events",
             "event_set__open_shifts",
             "event_set__open_shifts__released_by",
             "event_set__open_shifts__claimed_by",
-        ).annotate(
-            _events_count_ann=events_count,
-            _recaps_filed_count_ann=_count_over(Recap) + _count_over(CustomRecap),
-            _recap_event_uuid_ann=recap_event_uuid,
         )
 
 
@@ -1554,7 +1522,15 @@ class RequestQueries:
         # landing view is unchanged; "asc" flips to soonest-first.
         date_sort = (getattr(filters, "date_sort", None) or "desc").lower() if filters else "desc"
         order_field = "date" if date_sort == "asc" else "-date"
-        queryset = queryset.order_by(order_field).distinct()
+        queryset = queryset.order_by(order_field)
+        # .distinct() is only needed when the rmm_asigned filter is active — it
+        # adds to-many notification_group joins that can duplicate rows. Every
+        # other filter is an equality / to-one join (no row multiplication), so
+        # for the default full-tenant load we skip DISTINCT, whose sort over
+        # ~1,000 wide rows (10 select_related joins) was itself a measurable
+        # slice of the Liquid Death load time.
+        if filters and filters.rmm_asigned:
+            queryset = queryset.distinct()
 
         # The Master Tracker loads the whole tenant in one page (it does
         # status bucketing, counts and date grouping client-side), so it
