@@ -146,6 +146,113 @@ class AmbassadorAssignedToJobMailer(Mailer):
         )
 
 
+class JobApplicationReceivedMailer(Mailer):
+    """Internal staffing alert: a BA just applied to a posted gig.
+
+    Goes to the *staffing* side only — the event's assigned RMM, the admin
+    who posted the job, and the Ignite events inbox — never the brand client
+    (who applied is an internal staffing concern, not something to forward to
+    the client). Self-contained inline HTML so it needs no template file.
+    """
+
+    def __init__(
+        self,
+        *,
+        to_emails: list[str],
+        applicant_name: str,
+        job_name: str,
+        event_name: str | None = None,
+        when_label: str | None = None,
+        location_label: str | None = None,
+        tenant_name: str | None = None,
+        note: str | None = None,
+        applicants_url: str | None = None,
+        reply_to_email: str | None = None,
+    ) -> None:
+        self.to_emails = to_emails
+        self.applicant_name = (applicant_name or "").strip() or "A brand ambassador"
+        self.job_name = (job_name or "").strip() or "a gig"
+        self.event_name = event_name
+        self.when_label = when_label
+        self.location_label = location_label
+        self.tenant_name = tenant_name
+        self.note = note
+        self.applicants_url = applicants_url
+        self.reply_to_email = reply_to_email or "events@igniteproductions.co"
+
+    def envelope(self) -> Envelope:
+        from html import escape
+
+        def esc(value: object) -> str:
+            return escape(str(value)) if value not in (None, "") else ""
+
+        rows: list[str] = []
+
+        def row(label: str, value: object) -> None:
+            if value in (None, ""):
+                return
+            rows.append(
+                '<tr>'
+                '<td style="padding:5px 14px 5px 0;color:#6b7280;font-size:13px;'
+                'white-space:nowrap;vertical-align:top">' + esc(label) + '</td>'
+                '<td style="padding:5px 0;color:#111827;font-size:14px">'
+                + esc(value) + '</td>'
+                '</tr>'
+            )
+
+        row("Applicant", self.applicant_name)
+        row("Gig", self.job_name)
+        if self.event_name and self.event_name != self.job_name:
+            row("Event", self.event_name)
+        row("When", self.when_label)
+        row("Location", self.location_label)
+        row("Brand", self.tenant_name)
+        row("Note", self.note)
+
+        button = ""
+        if self.applicants_url:
+            button = (
+                '<a href="' + esc(self.applicants_url) + '" '
+                'style="display:inline-block;margin-top:20px;padding:11px 20px;'
+                'background:#111827;color:#ffffff;text-decoration:none;'
+                'border-radius:8px;font-size:14px;font-weight:600">'
+                'Review applicants</a>'
+            )
+
+        gig_label = esc(self.event_name or self.job_name)
+        html_body = (
+            '<div style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,'
+            'Roboto,Helvetica,Arial,sans-serif;max-width:560px;margin:0 auto;'
+            'padding:8px 4px">'
+            '<p style="font-size:17px;font-weight:600;color:#111827;'
+            'margin:0 0 4px">New application — ' + gig_label + '</p>'
+            '<p style="font-size:14px;color:#6b7280;margin:0 0 18px">'
+            + esc(self.applicant_name) + ' just applied to this gig.</p>'
+            '<table style="border-collapse:collapse;width:100%">'
+            + "".join(rows) +
+            '</table>'
+            + button +
+            '<p style="font-size:12px;color:#9ca3af;margin:24px 0 0">'
+            'You\'re receiving this because you manage staffing for this gig.'
+            '</p>'
+            '</div>'
+        )
+
+        return Envelope(
+            subject=(
+                "New applicant: " + self.applicant_name + " → " + self.job_name
+            ),
+            to_emails=self.to_emails,
+            html=html_body,
+            headers={"Reply-To": self.reply_to_email},
+            from_email=getattr(
+                settings,
+                "DEFAULT_FROM_EMAIL",
+                "Spark by Ignite <no-reply@igniteproductions.co>",
+            ),
+        )
+
+
 def _build_job_booking_email_context(job: "models.Job") -> dict[str, object]:
     """Booking-confirmation context built straight from a Job + its Event.
 

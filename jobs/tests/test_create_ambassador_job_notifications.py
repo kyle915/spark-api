@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from unittest.mock import patch
 
 import pytest
+from asgiref.sync import sync_to_async
 
 from jobs.tests.base import JobsGraphQLTestCase
 
@@ -88,7 +89,9 @@ class TestCreateAmbassadorJobNotifications(JobsGraphQLTestCase):
         with patch(
             "jobs.notification_rules.timezone.now",
             return_value=datetime(2026, 3, 20, 12, 0, tzinfo=timezone.utc),
-        ), patch("jobs.mutations.AmbassadorAssignedToJobMailer.send") as mock_send:
+        ), patch("jobs.mutations.AmbassadorAssignedToJobMailer.send") as mock_send, patch(
+            "ambassadors.push._send_push_to_user_sync"
+        ):
             result = await self._execute_mutation_authenticated(
                 mutation,
                 variables,
@@ -128,7 +131,9 @@ class TestCreateAmbassadorJobNotifications(JobsGraphQLTestCase):
         with patch(
             "jobs.notification_rules.timezone.now",
             return_value=datetime(2026, 3, 21, 12, 0, tzinfo=timezone.utc),
-        ), patch("jobs.mutations.AmbassadorAssignedToJobMailer.send") as mock_send:
+        ), patch("jobs.mutations.AmbassadorAssignedToJobMailer.send") as mock_send, patch(
+            "ambassadors.push._send_push_to_user_sync"
+        ):
             result = await self._execute_mutation_authenticated(
                 mutation,
                 variables,
@@ -165,23 +170,86 @@ class TestCreateAmbassadorJobNotifications(JobsGraphQLTestCase):
             }
         }
 
-        first_result = await self._execute_mutation_authenticated(
-            mutation,
-            variables,
-            self.spark_user,
-            self.endpoint_path,
-        )
-        assert first_result.errors is None
-        assert first_result.data["createAmbassadorJob"]["success"] is True
+        with patch("jobs.mutations.AmbassadorAssignedToJobMailer.send"), patch(
+            "ambassadors.push._send_push_to_user_sync"
+        ):
+            first_result = await self._execute_mutation_authenticated(
+                mutation,
+                variables,
+                self.spark_user,
+                self.endpoint_path,
+            )
+            assert first_result.errors is None
+            assert first_result.data["createAmbassadorJob"]["success"] is True
 
-        second_result = await self._execute_mutation_authenticated(
-            mutation,
-            variables,
-            self.spark_user,
-            self.endpoint_path,
-        )
+            second_result = await self._execute_mutation_authenticated(
+                mutation,
+                variables,
+                self.spark_user,
+                self.endpoint_path,
+            )
         assert second_result.errors is None
         assert second_result.data["createAmbassadorJob"]["success"] is False
         assert "already assigned to this job" in second_result.data["createAmbassadorJob"][
             "message"
         ].lower()
+
+    @pytest.mark.asyncio
+    async def test_create_ambassador_job_creates_approved_booking(self):
+        """Regression: admin direct-assign (createAmbassadorJob) IS the hire,
+        so it must create an ``is_approved=True`` AmbassadorEvent. The BA's
+        upcoming-shifts + clock-in both gate on AmbassadorEvent.is_approved=True
+        — before the fix the booking was created is_approved=False, so a BA who
+        was hired this way never saw the gig and couldn't clock in.
+
+        (The is_approved=True → surfaces-in-myUpcomingShifts + clock-in mechanic
+        is covered end-to-end by test_assign_creates_booking; here we assert the
+        booking row this entry point produces is approved.)
+        """
+        from ambassadors.models import AmbassadorEvent
+
+        mutation = """
+        mutation CreateAmbassadorJob($input: CreateAmbassadorJobInput!) {
+            createAmbassadorJob(input: $input) {
+                success
+                message
+            }
+        }
+        """
+        variables = {
+            "input": {
+                "tenantId": str(self.tenant.id),
+                "ambassadorId": str(self.ambassador.id),
+                "jobId": str(self.job.id),
+                "statusId": str(self.pending_status.id),
+                "rateId": str(self.rate.id),
+                "appearAsRfp": True,
+            }
+        }
+
+        # Email + push are best-effort side-effects; stub them so the test
+        # doesn't reach the mail driver / the push's asyncio.run path.
+        with patch("jobs.mutations.AmbassadorAssignedToJobMailer.send"), patch(
+            "ambassadors.push._send_push_to_user_sync"
+        ):
+            result = await self._execute_mutation_authenticated(
+                mutation,
+                variables,
+                self.spark_user,
+                self.endpoint_path,
+            )
+
+        assert result.errors is None, f"errors: {result.errors}"
+        assert result.data["createAmbassadorJob"]["success"] is True
+
+        booking = await sync_to_async(
+            lambda: AmbassadorEvent.objects.filter(
+                ambassador=self.ambassador, event=self.event
+            ).first()
+        )()
+        assert booking is not None, "expected an AmbassadorEvent booking row"
+        assert await sync_to_async(lambda: booking.is_approved)() is True, (
+            "the hire booking must be is_approved=True or the BA can't see / "
+            "clock into the shift"
+        )
+        assert await sync_to_async(lambda: booking.tenant_id)() == self.tenant.id
