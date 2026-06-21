@@ -51,8 +51,17 @@ def _resolve_event_date(event):
 
 # Matches the whole word can(s) or pack(s) in a field NAME — e.g. "Single
 # Cans", "Packs Sold" — while excluding "willing to purchase"-style fields.
-# Mirrors SOLD_FIELD_RE = /\b(cans?|packs?)\b/i.
+# Mirrors SOLD_FIELD_RE = /\b(cans?|packs?)\b/i. This is the PRIMARY (granular
+# SKU) matcher used by drink tenants (Girl Beer, Total Wireless).
 _SOLD_FIELD_RE = re.compile(r"\b(cans?|packs?)\b", re.IGNORECASE)
+
+# Generic "<x> sold" FALLBACK for templates that don't break sales into
+# cans/packs — e.g. Stone House Bread (bread units: "Products Sold", "Units
+# Sold", "Loaves Sold", "Total Sold"). Only consulted when NO cans/packs field
+# is present, so cans/packs templates are unaffected and a separate "total"
+# can't double-count. Non-numeric matches (e.g. a "Sold out?" yes/no) are
+# dropped by the int parse, so a bare \bsold\b is safe.
+_SOLD_FALLBACK_RE = re.compile(r"\bsold\b", re.IGNORECASE)
 
 # First field whose NAME contains "consumer(s) sampled". Mirrors
 # /consumers?\s+sampled/i.
@@ -106,23 +115,38 @@ def _parse_recap_int(value: str | None) -> int | None:
 def _sold_units_from_fields(
     fields: Iterable[tuple[str | None, str | None]],
 ) -> int | None:
-    """Sum the parsed values of every field whose NAME matches cans/packs.
+    """Sum the parsed values of the template's "sold" fields.
 
-    `fields` is an iterable of (name, value) pairs. Returns the running
-    total only if at least one cans/packs field parsed to a finite int;
-    otherwise None — so non-unit templates show "—" rather than a
-    misleading 0. Mirrors customSoldUnits.
+    `fields` is an iterable of (name, value) pairs. Two tiers:
+      1. PRIMARY — fields whose NAME matches cans/packs (the granular SKU
+         breakdown drink tenants use). If any parse to a finite int, return
+         their sum.
+      2. FALLBACK — only when NO cans/packs field exists: fields whose NAME
+         contains "sold" (e.g. Stone House Bread's "Products Sold" /
+         "Loaves Sold"). Lets bread/other-unit templates populate SOLD
+         instead of showing "—".
+
+    Returns None when neither tier finds a numeric match, so non-sales
+    templates show "—" rather than a misleading 0.
     """
-    total = 0
-    matched = False
-    for name, value in fields:
-        if not name or not _SOLD_FIELD_RE.search(name):
-            continue
-        parsed = _parse_recap_int(value)
-        if parsed is not None:
-            total += parsed
-            matched = True
-    return total if matched else None
+    pairs = list(fields)
+
+    def _sum(pattern):
+        total = 0
+        matched = False
+        for name, value in pairs:
+            if not name or not pattern.search(name):
+                continue
+            parsed = _parse_recap_int(value)
+            if parsed is not None:
+                total += parsed
+                matched = True
+        return total if matched else None
+
+    primary = _sum(_SOLD_FIELD_RE)
+    if primary is not None:
+        return primary
+    return _sum(_SOLD_FALLBACK_RE)
 
 
 def _consumers_sampled_from_fields(
