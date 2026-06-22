@@ -430,7 +430,10 @@ class DashboardQueries:
                     # class: this resolver had its OWN cans/packs-only matcher
                     # that silently showed 0 for bread tenants like Stone House
                     # Bread, whose template says "...did consumers PURCHASE...").
-                    from recaps.types import _sold_units_from_fields
+                    from recaps.types import (
+                        _consumers_sampled_from_fields,
+                        _sold_units_from_fields,
+                    )
                     sums = {"consumers": 0, "brand": 0,
                             "willing": 0, "cans": 0, "packs": 0,
                             # Girl Beer vocabulary + no-data signals:
@@ -459,14 +462,7 @@ class DashboardQueries:
                             num = int(digits)
                         except ValueError:
                             continue
-                        if "consumers sampled" in low:
-                            sums["consumers"] += num
-                        elif "who sampled" in low and "total" in low:
-                            # Girl Beer demographics: "Men/Women who
-                            # sampled (Total)" — only Total rows, the age
-                            # brackets would double count.
-                            sums["sampled_total"] += num
-                        elif "knew about" in low:
+                        if "knew about" in low:
                             sums["brand"] += num
                             sums["brand_rows"] += 1
                         elif "willing to purchase" in low and "not" not in low:
@@ -477,21 +473,24 @@ class DashboardQueries:
                         elif "pack" in low:
                             sums["packs"] += num
                             sums["pack_cans"] += num * _pack_size_from_label(low)
-                    # SOLD: per-recap two-tier matcher (shared helper), summed
-                    # across recaps. Cans/packs templates return their granular
-                    # sum (already shown as the Cans/Multi-packs tiles); bread/
-                    # other-unit templates return the sold/purchased fallback —
-                    # e.g. Stone House Bread's "...did consumers PURCHASE..." —
-                    # which the FE surfaces as a single "Products sold" tile.
+                    # SOLD + CONSUMERS-SAMPLED: per-recap via the SHARED matchers
+                    # (recaps.types), summed across recaps — ONE source of truth
+                    # with the recap list AND the Program-KPIs rollup, so the
+                    # hero strip can't drift from them. Consumers in particular
+                    # MUST go through the shared matcher (not an inline
+                    # "consumers sampled" name check): that's what skips a
+                    # free-text "General demographics of consumers sampled (age
+                    # range...)" field whose prose ("...19 to 60s...") would
+                    # otherwise digit-strip into a phantom 1960 and inflate the
+                    # headline (the recurring duplicate-matcher class — see the
+                    # SOLD note above; this is the same trap for consumers).
                     for pairs in by_recap.values():
                         sold = _sold_units_from_fields(pairs)
                         if sold is not None:
                             sums["products_sold"] += sold
-                    # Precedence mirror of recaps.types._consumers_sampled_
-                    # from_fields: explicit headline wins, demographics
-                    # totals fill in when no template has one.
-                    if sums["consumers"] == 0:
-                        sums["consumers"] = sums["sampled_total"]
+                        cs = _consumers_sampled_from_fields(pairs)
+                        if cs is not None:
+                            sums["consumers"] += cs
                     return sums
 
                 _cm = await sync_to_async(_sum_custom_recap_metrics)()
