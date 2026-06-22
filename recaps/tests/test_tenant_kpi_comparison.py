@@ -255,6 +255,81 @@ class TestTenantKpiComparison(AmbassadorsGraphQLTestCase):
             )
         return recap
 
+    def _custom_recap_with_fields(self, tenant, when, fields):
+        """Create an approved CustomRecap on ``tenant`` dated to ``when`` with
+        the given (field_name, value) custom-field rows. Every row is
+        back-dated so the KPI window filter (on ``created_at``) picks it up.
+        """
+        suffix = when.strftime("%Y%m%d%f")
+        event_type = event_models.EventType.objects.create(
+            name=f"et {suffix}", slug=f"et-{suffix}",
+            tenant=tenant, created_by=self.system_user,
+        )
+        template = recap_models.CustomRecapTemplate.objects.create(
+            name=f"tmpl {suffix}", event_type=event_type,
+            tenant=tenant, created_by=self.system_user,
+        )
+        field_type = recap_models.CustomRecapFieldType.objects.create(
+            name=f"Number {suffix}", created_by=self.system_user,
+        )
+        section = recap_models.RecapSection.objects.create(
+            name="Sampling", tenant=tenant, created_by=self.system_user,
+        )
+        event = self.create_event(name=f"cev {suffix}", tenant=tenant)
+        event_models.Event.objects.filter(id=event.id).update(created_at=when)
+        recap = recap_models.CustomRecap.objects.create(
+            name=f"custom recap {suffix}", approved=True, event=event,
+            tenant=tenant, custom_recap_template=template,
+            created_by=self.system_user,
+        )
+        recap_models.CustomRecap.objects.filter(id=recap.id).update(
+            created_at=when
+        )
+        for name, value in fields:
+            cf = recap_models.CustomField.objects.create(
+                name=name, required=False, custom_recap_template=template,
+                custom_field_type=field_type, recap_section=section,
+                created_by=self.system_user,
+            )
+            cfv = recap_models.CustomFieldValue.objects.create(
+                custom_recap=recap, custom_field=cf, value=value,
+                created_by=self.system_user,
+            )
+            recap_models.CustomFieldValue.objects.filter(id=cfv.id).update(
+                created_at=when
+            )
+        return recap
+
+    def test_custom_recap_purchase_field_counts_as_products_sold(self):
+        """Stone House Bread regression: the SQL pre-filter gate
+        (``_CUSTOM_KPI_NAME_RE``) must fetch "...did consumers PURCHASE..."
+        rows so ``_sold_units_from_fields`` can count them as Products Sold.
+        The "willing to purchase" INTENT row must be fetched too (it already
+        was) but bucketed as intent, never as a sale.
+
+        Before the gate included the sold/purchase vocabulary, the purchase
+        field was dropped in SQL and Products Sold showed 0 even though Willing
+        To Purchase populated — exactly the dashboard symptom kyle reported.
+        Uses the empty tenant for a clean (no legacy recaps) baseline.
+        """
+        self._custom_recap_with_fields(
+            self.empty_tenant,
+            _at(2026, 5),
+            [
+                ("Total number of consumers sampled", "45"),
+                ("How many consumers would be willing to purchase the "
+                 "product after tasting it?", "20"),
+                ("How many products did consumers purchase during the "
+                 "event?", "12"),
+            ],
+        )
+        totals = tenant_kpi_totals(self.empty_tenant.id, year=2026)
+        # The purchase field (12) is counted; the willing-to-purchase intent
+        # (20) is excluded from the sale but still reported as intent.
+        assert totals.products_sold == 12
+        assert totals.willing_to_purchase == 20
+        assert totals.consumers_reached == 45
+
     # -- helper-level tests (pinned clock) ------------------------------
 
     def test_month_selects_two_complete_months_with_labels(self):

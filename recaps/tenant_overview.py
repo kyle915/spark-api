@@ -242,6 +242,15 @@ def _legacy_kpis(tenant_id: int, year: int | None = None) -> dict[str, int]:
 _CUSTOM_KPI_NAME_RE = re.compile(
     r"consumers sampled|first time|knew about|willing to purchase"
     r"|cans?|packs?"
+    # SOLD fallback vocabulary (mirror of recaps.types._SOLD_FALLBACK_RE):
+    # non-drink tenants log sales as "...did consumers PURCHASE...",
+    # "...bought...", or "...sold" with no cans/packs. This gate runs in SQL
+    # BEFORE the per-recap matchers, so it MUST stay a SUPERSET of every
+    # downstream matcher's vocabulary — otherwise rows are dropped before
+    # _sold_units_from_fields sees them, which silently zeroed "Products Sold"
+    # for Stone House Bread (bread). Intent rows ("willing to purchase") are
+    # still fetched here but excluded from the sold total by _SOLD_EXCLUDE_RE.
+    r"|sold|bought|purchase[ds]?"
     # Girl Beer vocabulary: demographics sampled totals + free-text
     # samples headline (see recaps.types._SAMPLED_TOTAL_RE/_SAMPLES_GIVEN_RE)
     r"|who sampled|samples? (given|distributed|handed)",
