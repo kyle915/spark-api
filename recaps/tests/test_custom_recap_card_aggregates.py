@@ -24,9 +24,12 @@ test_heic_display_url.py.
 """
 
 from recaps.types import (
+    _account_spend_from_fields,
+    _ba_name_from_fields,
     _consumers_sampled_from_fields,
     _is_image_url,
     _parse_recap_int,
+    _parse_recap_money,
     _sold_units_from_fields,
 )
 
@@ -227,3 +230,104 @@ def test_is_image_url_non_image_is_false():
 def test_is_image_url_none_is_false():
     assert _is_image_url(None) is False
     assert _is_image_url("") is False
+
+
+# ---------------------------------------------------------------------------
+# _parse_recap_money — keeps the decimal point (account spend is a $ amount)
+# ---------------------------------------------------------------------------
+
+
+def test_money_parses_currency_and_commas():
+    assert _parse_recap_money("$1,234.50") == 1234.5
+
+
+def test_money_parses_plain_decimal():
+    assert _parse_recap_money("152.30") == 152.3
+
+
+def test_money_parses_integer_string():
+    assert _parse_recap_money("80") == 80.0
+
+
+def test_money_zero_is_zero_not_none():
+    # A real "$0" spend is a value, not a missing field.
+    assert _parse_recap_money("$0") == 0.0
+
+
+def test_money_non_numeric_is_none():
+    # "Yes"/"No" corporate-card flag -> no fake amount.
+    assert _parse_recap_money("Yes") is None
+    assert _parse_recap_money("") is None
+    assert _parse_recap_money(None) is None
+
+
+def test_money_punctuation_only_is_none():
+    assert _parse_recap_money("$") is None
+    assert _parse_recap_money(".") is None
+    assert _parse_recap_money("-") is None
+
+
+# ---------------------------------------------------------------------------
+# _account_spend_from_fields — export "Account Spend" column
+# ---------------------------------------------------------------------------
+
+
+def test_account_spend_basic():
+    fields = [("Account Spend", "$152.30"), ("Notes", "great event")]
+    assert _account_spend_from_fields(fields) == 152.3
+
+
+def test_account_spend_matches_amount_spent_and_total_spend():
+    assert _account_spend_from_fields([("Amount Spent", "40")]) == 40.0
+    assert _account_spend_from_fields([("Total Spend", "12.5")]) == 12.5
+
+
+def test_account_spend_sums_multiple_spend_fields():
+    fields = [("Account Spend", "100"), ("Corporate Card Spend", "25.50")]
+    assert _account_spend_from_fields(fields) == 125.5
+
+
+def test_account_spend_corporate_card_yesno_is_skipped():
+    # "Corporate Card Used?" matches the name but its boolean value parses
+    # to None, so it never contributes a fake amount. With no other spend
+    # field, the result is None (blank cell), not 0.
+    assert _account_spend_from_fields([("Corporate Card Used?", "Yes")]) is None
+
+
+def test_account_spend_none_when_no_spend_field():
+    assert _account_spend_from_fields([("Consumers Sampled", "30")]) is None
+
+
+def test_account_spend_does_not_match_time_spent():
+    # Bare "spent" is intentionally NOT matched (avoids "time spent setting
+    # up"); only explicit spend phrasings count.
+    assert _account_spend_from_fields([("Time spent setting up", "30")]) is None
+
+
+# ---------------------------------------------------------------------------
+# _ba_name_from_fields — export BA-name custom-field fallback
+# ---------------------------------------------------------------------------
+
+
+def test_ba_name_brand_ambassador_field():
+    fields = [("Brand Ambassador", "Jamie Rivera"), ("Notes", "x")]
+    assert _ba_name_from_fields(fields) == "Jamie Rivera"
+
+
+def test_ba_name_matches_ba_name_and_rep_name():
+    assert _ba_name_from_fields([("BA Name", "Sam Lee")]) == "Sam Lee"
+    assert _ba_name_from_fields([("Rep Name", "Pat Doe")]) == "Pat Doe"
+
+
+def test_ba_name_first_match_wins():
+    fields = [("Brand Ambassador", "First BA"), ("BA Name", "Second BA")]
+    assert _ba_name_from_fields(fields) == "First BA"
+
+
+def test_ba_name_blank_value_skipped():
+    fields = [("Brand Ambassador", "   "), ("BA Name", "Real Name")]
+    assert _ba_name_from_fields(fields) == "Real Name"
+
+
+def test_ba_name_none_when_no_match():
+    assert _ba_name_from_fields([("Store Manager", "Chris")]) is None
