@@ -214,7 +214,11 @@ class TestTenantKpiComparison(AmbassadorsGraphQLTestCase):
         label = when.strftime("%Y-%m-%d-%f")
 
         event = self.create_event(name=f"ev {label}", tenant=tenant)
-        event_models.Event.objects.filter(id=event.id).update(created_at=when)
+        # KPI windows now scope by EVENT date (not created_at), matching the
+        # hero — so the event must be dated into the target window too.
+        event_models.Event.objects.filter(id=event.id).update(
+            created_at=when, date=when
+        )
 
         recap = recap_models.Recap.objects.create(
             name=f"recap {label}",
@@ -276,7 +280,9 @@ class TestTenantKpiComparison(AmbassadorsGraphQLTestCase):
             name="Sampling", tenant=tenant, created_by=self.system_user,
         )
         event = self.create_event(name=f"cev {suffix}", tenant=tenant)
-        event_models.Event.objects.filter(id=event.id).update(created_at=when)
+        event_models.Event.objects.filter(id=event.id).update(
+            created_at=when, date=when
+        )
         recap = recap_models.CustomRecap.objects.create(
             name=f"custom recap {suffix}", approved=True, event=event,
             tenant=tenant, custom_recap_template=template,
@@ -329,6 +335,69 @@ class TestTenantKpiComparison(AmbassadorsGraphQLTestCase):
         assert totals.products_sold == 12
         assert totals.willing_to_purchase == 20
         assert totals.consumers_reached == 45
+
+    def test_kpis_window_by_event_date_not_created_at(self):
+        """Re-base regression (the hero ↔ Program-KPIs reconciliation): KPI
+        windows scope by EVENT date, not recap ``created_at``.
+
+        A recap whose EVENT happened in 2026 but whose row was CREATED in 2025
+        (backfilled / imported — exactly Stone House Bread's situation, which
+        made "this year" read LOWER than a 30-day window) must count toward
+        2026, the period its event happened in — never 2025.
+        """
+        from events import models as event_models
+        from recaps import models as recap_models
+
+        system = self.system_user
+        event_when = _at(2026, 3)      # event happened March 2026
+        created_when = _at(2025, 11)   # but the row was created Nov 2025
+
+        et = event_models.EventType.objects.create(
+            name="bread-et", slug="bread-et",
+            tenant=self.empty_tenant, created_by=system,
+        )
+        template = recap_models.CustomRecapTemplate.objects.create(
+            name="bread-tmpl", event_type=et,
+            tenant=self.empty_tenant, created_by=system,
+        )
+        field_type = recap_models.CustomRecapFieldType.objects.create(
+            name="num", created_by=system,
+        )
+        section = recap_models.RecapSection.objects.create(
+            name="Sampling", tenant=self.empty_tenant, created_by=system,
+        )
+        event = self.create_event(name="bread-ev", tenant=self.empty_tenant)
+        event_models.Event.objects.filter(id=event.id).update(
+            created_at=created_when, date=event_when
+        )
+        recap = recap_models.CustomRecap.objects.create(
+            name="bread-recap", approved=True, event=event,
+            tenant=self.empty_tenant, custom_recap_template=template,
+            created_by=system,
+        )
+        recap_models.CustomRecap.objects.filter(id=recap.id).update(
+            created_at=created_when
+        )
+        field = recap_models.CustomField.objects.create(
+            name="Total number of consumers sampled", required=False,
+            custom_recap_template=template, custom_field_type=field_type,
+            recap_section=section, created_by=system,
+        )
+        cfv = recap_models.CustomFieldValue.objects.create(
+            custom_recap=recap, custom_field=field, value="50",
+            created_by=system,
+        )
+        recap_models.CustomFieldValue.objects.filter(id=cfv.id).update(
+            created_at=created_when
+        )
+
+        # Counted in 2026 (event date), NOT 2025 (created date).
+        assert tenant_kpi_totals(
+            self.empty_tenant.id, year=2026
+        ).consumers_reached == 50
+        assert tenant_kpi_totals(
+            self.empty_tenant.id, year=2025
+        ).consumers_reached == 0
 
     # -- helper-level tests (pinned clock) ------------------------------
 
