@@ -55,13 +55,23 @@ def _resolve_event_date(event):
 # SKU) matcher used by drink tenants (Girl Beer, Total Wireless).
 _SOLD_FIELD_RE = re.compile(r"\b(cans?|packs?)\b", re.IGNORECASE)
 
-# Generic "<x> sold" FALLBACK for templates that don't break sales into
-# cans/packs — e.g. Stone House Bread (bread units: "Products Sold", "Units
-# Sold", "Loaves Sold", "Total Sold"). Only consulted when NO cans/packs field
-# is present, so cans/packs templates are unaffected and a separate "total"
-# can't double-count. Non-numeric matches (e.g. a "Sold out?" yes/no) are
-# dropped by the int parse, so a bare \bsold\b is safe.
-_SOLD_FALLBACK_RE = re.compile(r"\bsold\b", re.IGNORECASE)
+# "Units moved" FALLBACK for templates that don't break sales into cans/packs.
+# Covers "sold", "bought", and "purchase/purchased" phrasings — Stone House
+# Bread (bread) logs actual sales as "How many products did consumers PURCHASE
+# during the event?", with no "sold" in the label (an earlier \bsold\b-only
+# matcher missed it). Only consulted when NO cans/packs field exists, so
+# cans/packs (drink) templates are unaffected. Non-numeric matches (e.g. a
+# "Sold out?" yes/no) are dropped by the int parse.
+_SOLD_FALLBACK_RE = re.compile(r"\b(sold|bought|purchase[ds]?)\b", re.IGNORECASE)
+
+# Intent/likelihood phrasing that must NEVER be counted as actual sales even
+# though it contains "purchase" — e.g. "willing to purchase", "would not be
+# willing to purchase", "likely to purchase". The same Stone House Bread
+# template has both "...would be willing to purchase..." (intent) and "...did
+# consumers purchase during the event" (actual); only the latter is a sale.
+_SOLD_EXCLUDE_RE = re.compile(
+    r"willing|intent|would|interested|likely|plan\s+to", re.IGNORECASE
+)
 
 # First field whose NAME contains "consumer(s) sampled". Mirrors
 # /consumers?\s+sampled/i.
@@ -122,20 +132,24 @@ def _sold_units_from_fields(
          breakdown drink tenants use). If any parse to a finite int, return
          their sum.
       2. FALLBACK — only when NO cans/packs field exists: fields whose NAME
-         contains "sold" (e.g. Stone House Bread's "Products Sold" /
-         "Loaves Sold"). Lets bread/other-unit templates populate SOLD
-         instead of showing "—".
+         says sold/bought/purchased (e.g. Stone House Bread's "How many
+         products did consumers PURCHASE during the event?"), EXCLUDING
+         intent phrasing ("willing to purchase", "would purchase") so
+         purchase intent is never counted as a sale. Lets bread/other-unit
+         templates populate SOLD instead of showing "—".
 
     Returns None when neither tier finds a numeric match, so non-sales
     templates show "—" rather than a misleading 0.
     """
     pairs = list(fields)
 
-    def _sum(pattern):
+    def _sum(pattern, exclude=None):
         total = 0
         matched = False
         for name, value in pairs:
             if not name or not pattern.search(name):
+                continue
+            if exclude is not None and exclude.search(name):
                 continue
             parsed = _parse_recap_int(value)
             if parsed is not None:
@@ -146,7 +160,7 @@ def _sold_units_from_fields(
     primary = _sum(_SOLD_FIELD_RE)
     if primary is not None:
         return primary
-    return _sum(_SOLD_FALLBACK_RE)
+    return _sum(_SOLD_FALLBACK_RE, exclude=_SOLD_EXCLUDE_RE)
 
 
 def _consumers_sampled_from_fields(
