@@ -92,6 +92,28 @@ _SAMPLES_GIVEN_RE = re.compile(
     r"samples?\s+(given|distributed|handed)", re.IGNORECASE
 )
 
+# Account / corporate-card SPEND fields — the dollar amount a BA put on the
+# account card at the event. Drives the export's "Account Spend" column.
+# Matches "Account Spend", "Amount Spent", "Total Spend", "Corporate Card
+# Spend", "Spend ($)". Deliberately avoids a bare "spent" (would catch "time
+# spent setting up"); the boolean "Corporate Card Used?" matches but its
+# yes/no value parses to None and is skipped, so it never fakes a $ amount.
+_ACCOUNT_SPEND_RE = re.compile(
+    r"account\s*spend|corporate\s*card|amount\s*spent|total\s*spend|\bspend\b",
+    re.IGNORECASE,
+)
+
+# Custom field that names the brand ambassador — the export's BA-name
+# fallback for recaps with no linked Spark ambassador and no typed
+# external_ba_name (imported / form-entered BAs). Conservative on purpose:
+# only fields that clearly name the BA, not a free "your name" that could be
+# a store-contact field.
+_BA_NAME_FIELD_RE = re.compile(
+    r"brand\s*ambassador|ambassador'?s?\s*name|\bba\s*name\b|"
+    r"rep\s*name|promoter\s*name|field\s*rep",
+    re.IGNORECASE,
+)
+
 # A resolved public URL is treated as a renderable hero image only when it
 # ends in one of these extensions (optionally followed by a query string).
 # Mirrors the frontend isImage = /\.(jpe?g|png|webp|gif)(\?|$)/i — note it
@@ -209,6 +231,57 @@ def _samples_given_from_fields(
             total += parsed
             matched = True
     return total if matched else None
+
+
+def _parse_recap_money(value: str | None) -> float | None:
+    """Parse a custom-field value as a money amount (float).
+
+    Like `_parse_recap_int` but keeps the decimal point so "$152.30" and
+    "1,234.50" parse to 152.3 / 1234.5. Strips every char that isn't a
+    digit, '.', or '-'. Returns None when nothing numeric remains (so a
+    "Yes"/"No" corporate-card flag yields no fake amount)."""
+    if value is None:
+        return None
+    cleaned = re.sub(r"[^0-9.\-]", "", str(value))
+    if not cleaned or cleaned in ("-", ".", "-.", "."):
+        return None
+    try:
+        return float(cleaned)
+    except ValueError:
+        return None
+
+
+def _account_spend_from_fields(
+    fields: Iterable[tuple[str | None, str | None]],
+) -> float | None:
+    """Sum of every account/corporate-card SPEND field's money value, else
+    None. None (not 0) when the template has no spend field, so the export
+    shows a blank cell rather than a misleading $0."""
+    total = 0.0
+    matched = False
+    for name, value in fields:
+        if not name or not _ACCOUNT_SPEND_RE.search(name):
+            continue
+        parsed = _parse_recap_money(value)
+        if parsed is not None:
+            total += parsed
+            matched = True
+    return total if matched else None
+
+
+def _ba_name_from_fields(
+    fields: Iterable[tuple[str | None, str | None]],
+) -> str | None:
+    """First non-empty value of a custom field that names the BA, else None.
+    The export's last-resort BA attribution when neither a linked Spark
+    ambassador nor a typed external_ba_name is present."""
+    for name, value in fields:
+        if not name or not _BA_NAME_FIELD_RE.search(name):
+            continue
+        text = (value or "").strip()
+        if text:
+            return text
+    return None
 
 
 def _is_image_url(url: str | None) -> bool:
@@ -823,6 +896,56 @@ class CustomRecap(Node):
                 for v in values
             ]
             return _consumers_sampled_from_fields(pairs)
+
+        cached = _prefetched(self, "custom_field_value")
+        if cached is not None:
+            return _compute(cached)
+        return await sync_to_async(
+            lambda: _compute(self.custom_field_value.all()),
+            thread_sensitive=True,
+        )()
+
+    @strawberry.field
+    async def account_spend(self) -> float | None:
+        """Account / corporate-card SPEND logged on this recap, as a number
+        for the export's "Account Spend" column. Sum of every custom field
+        whose NAME matches account-spend phrasing and whose value parses as
+        money. None (blank cell) when the template has no spend field."""
+
+        def _compute(values):
+            pairs = [
+                (getattr(v.custom_field, "name", None), v.value)
+                for v in values
+            ]
+            return _account_spend_from_fields(pairs)
+
+        cached = _prefetched(self, "custom_field_value")
+        if cached is not None:
+            return _compute(cached)
+        return await sync_to_async(
+            lambda: _compute(self.custom_field_value.all()),
+            thread_sensitive=True,
+        )()
+
+    @strawberry.field
+    async def ba_display_name(self) -> str | None:
+        """BA name for the export when no Spark ambassador is linked. The
+        linked ambassador (when present) is preferred client-side via the
+        `ambassador` edge; this scalar covers external / imported recaps:
+        the typed external_ba_name first, else a custom field that names the
+        BA. None when nothing identifies the BA. Reads only the loaded
+        column + the already-prefetched field values — no per-row I/O, so no
+        ambassador N+1."""
+        external = (self.external_ba_name or "").strip()
+        if external:
+            return external
+
+        def _compute(values):
+            pairs = [
+                (getattr(v.custom_field, "name", None), v.value)
+                for v in values
+            ]
+            return _ba_name_from_fields(pairs)
 
         cached = _prefetched(self, "custom_field_value")
         if cached is not None:
