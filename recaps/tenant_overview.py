@@ -254,16 +254,20 @@ def _legacy_kpis_window(tenant_id: int, window: tuple | None) -> dict[str, int]:
         "recap__event__",
         window,
     )
+    consumers_reached = _sum(engagements, "total_consumer")
     return {
         "total_engagements": _sum(recaps, "total_engagements"),
         "products_sold": _sum(recaps, "products_sold"),
         "cans_sold": _sum(recaps, "total_cans_sold"),
         "packs_sold": _sum(recaps, "total_packs_sold"),
-        "consumers_reached": _sum(engagements, "total_consumer"),
+        "consumers_reached": consumers_reached,
         "first_time_consumers": _sum(engagements, "first_time_consumers"),
         "brand_aware_consumers": _sum(engagements, "brand_aware_consumers"),
         "willing_to_purchase": _sum(engagements, "willing_to_purchase_consumers"),
-        "samples_distributed": _sum(samples, "quantity"),
+        # Samples distributed = consumers sampled (kyle's rule: one sample per
+        # person sampled). Fall back to the structured ProductSamples quantity
+        # only for a tenant that logs no consumer count.
+        "samples_distributed": consumers_reached or _sum(samples, "quantity"),
     }
 
 
@@ -412,11 +416,13 @@ def _custom_kpis_window(tenant_id: int, window: tuple | None) -> dict[str, int]:
             elif re.search(r"\bpacks?\b", label):
                 out["packs_sold"] += parsed
 
-    # samplesDistributed prefers structured quantities, then the explicit
-    # "samples given out" free-text headline (Girl Beer), then the summed
-    # "consumers sampled" headline (mirrors report_service._accumulate_custom).
+    # Samples distributed = consumers sampled (kyle's rule: one sample per
+    # person sampled, fleet-wide). `out["consumers_reached"]` is the summed
+    # "consumers sampled" headline; fall back to the explicit "samples given
+    # out" free-text headline, then structured per-SKU quantities, only when a
+    # template logs no consumers-sampled count.
     out["samples_distributed"] = (
-        structured_samples or samples_given_total or sampled_total
+        out["consumers_reached"] or samples_given_total or structured_samples
     )
     return out
 
@@ -494,16 +500,24 @@ def _tenant_event_recap_counts_window(
     and trend use), or ``None`` to leave every count unfiltered. The period
     comparison passes a month / quarter / year window here.
     """
-    event_count = _filter_event_window(
-        Event.objects.filter(tenant_id=tenant_id), "", window
-    ).count()
-    legacy_recap_count = _filter_event_window(
+    legacy_recaps = _filter_event_window(
         Recap.objects.filter(event__tenant_id=tenant_id), "event__", window
-    ).count()
-    custom_recap_count = _filter_event_window(
+    )
+    custom_recaps = _filter_event_window(
         CustomRecap.objects.filter(tenant_id=tenant_id), "event__", window
-    ).count()
-    return event_count, legacy_recap_count + custom_recap_count
+    )
+    legacy_recap_count = legacy_recaps.count()
+    custom_recap_count = custom_recaps.count()
+    # "Events" = events that actually produced a recap (kyle: "we only did 6
+    # events" = the 6 with recaps), NOT every scheduled event — a tenant whose
+    # season was bulk-imported (Stone House Bread, 75 scheduled) should show
+    # the events it ran, not its calendar. Distinct event ids across both recap
+    # shapes; the id sets are small (bounded by recap count), so no recap row
+    # is materialized.
+    event_ids = set(
+        legacy_recaps.values_list("event_id", flat=True)
+    ) | set(custom_recaps.values_list("event_id", flat=True))
+    return len(event_ids), legacy_recap_count + custom_recap_count
 
 
 def tenant_event_recap_counts(

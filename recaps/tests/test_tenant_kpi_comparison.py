@@ -414,7 +414,9 @@ class TestTenantKpiComparison(AmbassadorsGraphQLTestCase):
         # May 2026 numbers exactly (the other tenant's May row is excluded).
         assert cur["total_engagements"] == 120
         assert cur["consumers_reached"] == 300
-        assert cur["samples_distributed"] == 80
+        # Samples distributed now = consumers sampled (kyle's rule), so it
+        # equals May's consumer count (300), not the ProductSamples qty (80).
+        assert cur["samples_distributed"] == 300
         assert cur["products_sold"] == 12
         assert cur["cans_sold"] == 8
         assert cur["packs_sold"] == 4
@@ -426,7 +428,7 @@ class TestTenantKpiComparison(AmbassadorsGraphQLTestCase):
         # April 2026 numbers exactly.
         assert prev["total_engagements"] == 90
         assert prev["consumers_reached"] == 200
-        assert prev["samples_distributed"] == 50
+        assert prev["samples_distributed"] == 200  # = April consumers
         assert prev["events"] == 1
         assert prev["recaps"] == 1
 
@@ -527,7 +529,9 @@ class TestTenantKpiComparison(AmbassadorsGraphQLTestCase):
         cur = result["current"]
         assert cur["total_engagements"] == totals_2025.total_engagements == 33
         assert cur["consumers_reached"] == totals_2025.consumers_reached == 44
-        assert cur["samples_distributed"] == totals_2025.samples_distributed == 22
+        # samples distributed = consumers sampled (44), not the ProductSamples
+        # quantity (22).
+        assert cur["samples_distributed"] == totals_2025.samples_distributed == 44
         # 2024 had no activity -> previous is all zeros.
         assert result["previous"]["total_engagements"] == 0
 
