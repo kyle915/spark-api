@@ -27,6 +27,7 @@ from recaps.types import (
     _account_spend_from_fields,
     _ba_name_from_fields,
     _consumers_sampled_from_fields,
+    _is_clean_count,
     _is_image_url,
     _parse_recap_int,
     _parse_recap_money,
@@ -199,6 +200,52 @@ def test_consumers_sampled_skips_unparseable_first_then_takes_next():
         ("Consumers Sampled total", "275"),
     ]
     assert _consumers_sampled_from_fields(fields) == 275
+
+
+def test_consumers_sampled_ignores_demographics_prose_field():
+    # The exact Stone House Bread bug: a "General demographics of consumers
+    # sampled (age range...)" field matches /consumers sampled/, and its prose
+    # answer "...19 to ...60s..." digit-strips to a bogus 1960. The real count
+    # field "Total number of consumers sampled" = 30 must win — even when the
+    # prose field is iterated FIRST.
+    fields = [
+        (
+            "General demographics of consumers sampled (age range, gender, ethnicity)",
+            "Ranged from 19 to mid-to-late 60s; even male/female mix.",
+        ),
+        ("Total number of consumers sampled", "30"),
+    ]
+    assert _consumers_sampled_from_fields(fields) == 30
+
+
+def test_consumers_sampled_skips_prose_value_even_without_demographic_name():
+    # Belt-and-suspenders: a "consumers sampled" field whose value is free text
+    # (not a clean number) is skipped, so prose never becomes a count.
+    fields = [
+        ("Consumers sampled notes", "about thirty, mostly families"),
+        ("Consumers sampled", "30"),
+    ]
+    assert _consumers_sampled_from_fields(fields) == 30
+
+
+def test_consumers_sampled_none_when_only_prose_match():
+    fields = [
+        (
+            "General demographics of consumers sampled",
+            "A diverse crowd, 19 to 60s.",
+        )
+    ]
+    assert _consumers_sampled_from_fields(fields) is None
+
+
+def test_is_clean_count():
+    assert _is_clean_count("30") is True
+    assert _is_clean_count("1,234") is True
+    assert _is_clean_count(" 42 ") is True
+    assert _is_clean_count("19 to mid-to-late 60s") is False
+    assert _is_clean_count("about 30") is False
+    assert _is_clean_count("") is False
+    assert _is_clean_count(None) is False
 
 
 # ---------------------------------------------------------------------------
