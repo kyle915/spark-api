@@ -393,8 +393,17 @@ class DashboardQueries:
                 recaps__isnull=False).distinct()
 
             # Key Metrics
-            # Total Events
-            total_events = await sync_to_async(base_queryset.count)()
+            # "Events Run" = events that have a recap (legacy OR custom),
+            # matching the Program-KPIs event count. Was base_queryset.count()
+            # (every event in the window, including ones with no recap yet),
+            # which read higher than Program KPIs and confused the dashboard
+            # (e.g. SHB showed 8 up top vs 6 below). custom_recap is the
+            # Event->CustomRecap reverse relation; recaps is Event->Recap.
+            total_events = await sync_to_async(
+                lambda: base_queryset.filter(
+                    Q(recaps__isnull=False) | Q(custom_recap__isnull=False)
+                ).distinct().count()
+            )()
 
             # Aggregate ConsumerEngagements data
             consumer_data = await sync_to_async(
@@ -573,7 +582,13 @@ class DashboardQueries:
                           request__date__date__lte=prev_end)
                     )
 
-                    prev_total_events = await sync_to_async(prev_events.count)()
+                    # Same "events with a recap" basis as total_events, so the
+                    # period-over-period comparison stays apples-to-apples.
+                    prev_total_events = await sync_to_async(
+                        lambda: prev_events.filter(
+                            Q(recaps__isnull=False) | Q(custom_recap__isnull=False)
+                        ).distinct().count()
+                    )()
                     prev_events_with_recaps = prev_events.filter(
                         recaps__isnull=False).distinct()
 
@@ -708,13 +723,17 @@ class DashboardQueries:
                     prev_events = service._apply_event_dashboard_filters(
                         prev_events, filters
                     )
+                    # Growth rate compares against total_events, so use the
+                    # same "events with a recap" basis here too.
                     prev_events_count = await sync_to_async(
-                        prev_events.filter(
+                        lambda: prev_events.filter(
                             Q(date__date__gte=prev_start, date__date__lte=prev_end) |
                             Q(start_time__date__gte=prev_start, start_time__date__lte=prev_end) |
                             Q(request__date__date__gte=prev_start,
                               request__date__date__lte=prev_end)
-                        ).count
+                        ).filter(
+                            Q(recaps__isnull=False) | Q(custom_recap__isnull=False)
+                        ).distinct().count()
                     )()
 
                     if prev_events_count > 0:
