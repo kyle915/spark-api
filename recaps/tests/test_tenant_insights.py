@@ -26,6 +26,7 @@ import pytest
 from django.utils import timezone
 
 from ambassadors.tests.base import AmbassadorsGraphQLTestCase
+from events import models as event_models
 from recaps import models as recap_models
 from recaps.tenant_insights import build_insight_buckets
 from recaps.tenant_overview import tenant_kpi_totals, tenant_monthly_trend
@@ -125,6 +126,9 @@ class TestTenantInsightBuckets(AmbassadorsGraphQLTestCase):
         when = _month_first(year, mm)
 
         event = self.create_event(name=f"ev {month_key}", tenant=self.tenant)
+        # Trend/KPI windows now scope by EVENT date (not created_at), so date
+        # the event into the target month too.
+        event_models.Event.objects.filter(id=event.id).update(date=when)
         recap = recap_models.Recap.objects.create(
             name=f"recap {month_key}",
             event=event,

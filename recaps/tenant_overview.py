@@ -42,7 +42,7 @@ import re
 from dataclasses import dataclass, fields as dataclass_fields
 
 from django.db.models import Count, Max, Min, Sum
-from django.db.models.functions import TruncMonth
+from django.db.models.functions import Coalesce, TruncMonth
 from django.utils import timezone
 
 from events.models import Event, Request
@@ -179,6 +179,51 @@ def _filter_year(queryset, date_field: str, year: int | None):
     return _filter_window(queryset, date_field, window)
 
 
+def _event_date_expr(prefix: str):
+    """The effective EVENT datetime used to window a row, as a DB expression.
+
+    Coalesces the event's own ``date``, then its ``start_time``, then its
+    request's ``date`` — the SAME three fields, in the same priority, the
+    Event Dashboard hero windows on (``tenants/dashboard/queries.py``). Using
+    it here puts the tenant-KPI rollup on the same basis as the hero and the
+    per-campaign reports: a row counts toward the period its EVENT happened
+    in, not the period its recap row was created/imported in (``created_at``,
+    which drifts for backfilled data and made "this year" read lower than a
+    30-day window).
+
+    ``prefix`` is the ORM path from the row to its Event:
+      * ``""``                       on Event itself
+      * ``"event__"``                on Recap / CustomRecap
+      * ``"recap__event__"``         on ConsumerEngagements / ProductSamples
+      * ``"custom_recap__event__"``  on CustomRecap children / CustomFieldValue
+    """
+    return Coalesce(
+        f"{prefix}date", f"{prefix}start_time", f"{prefix}request__date"
+    )
+
+
+def _filter_event_window(queryset, prefix: str, window: tuple | None):
+    """Narrow ``queryset`` to rows whose effective EVENT date is in ``window``.
+
+    ``window`` is a half-open ``(start, end)`` pair of tz-aware datetimes (or
+    ``(start, None)`` for an open-ended floor, which the trailing trend uses).
+    ``window=None`` returns the queryset UNTOUCHED — the all-time path, so
+    all-time totals are unchanged by the event-date basis; only WINDOWED
+    (year / quarter / month / week) queries move off ``created_at``. Rows
+    whose event has none of date/start_time/request.date are excluded (no
+    date to place them in a period — same as the hero).
+    """
+    if window is None:
+        return queryset
+    start, end = window
+    qs = queryset.annotate(_evtdate=_event_date_expr(prefix)).filter(
+        _evtdate__gte=start
+    )
+    if end is not None:
+        qs = qs.filter(_evtdate__lt=end)
+    return qs
+
+
 def _legacy_kpis_window(tenant_id: int, window: tuple | None) -> dict[str, int]:
     """Sum the legacy :class:`recaps.models.Recap` KPIs over a ``[start, end)``.
 
@@ -188,24 +233,25 @@ def _legacy_kpis_window(tenant_id: int, window: tuple | None) -> dict[str, int]:
     ``tenants.insights`` and the recap lists use. Each line is a single
     aggregate query; no Recap row is loaded into Python.
 
-    ``window`` is a ``(start, end)`` half-open pair applied per-source to
-    that source's OWN ``created_at`` (the same field/lookup
-    :func:`_filter_window` uses), or ``None`` for the all-time path that
-    leaves every queryset untouched. The period comparison passes a month /
+    ``window`` is a ``(start, end)`` half-open pair applied per-source on the
+    effective EVENT date (see :func:`_filter_event_window` — event date /
+    start_time / request date, the same basis as the hero), or ``None`` for
+    the all-time path that leaves every queryset untouched. The period
+    comparison passes a month /
     quarter / year window here so its figures reconcile with
     :func:`tenant_kpi_totals` for the matching window.
     """
-    recaps = _filter_window(
-        Recap.objects.filter(event__tenant_id=tenant_id), "created_at", window
+    recaps = _filter_event_window(
+        Recap.objects.filter(event__tenant_id=tenant_id), "event__", window
     )
-    engagements = _filter_window(
+    engagements = _filter_event_window(
         ConsumerEngagements.objects.filter(recap__event__tenant_id=tenant_id),
-        "created_at",
+        "recap__event__",
         window,
     )
-    samples = _filter_window(
+    samples = _filter_event_window(
         ProductSamples.objects.filter(recap__event__tenant_id=tenant_id),
-        "created_at",
+        "recap__event__",
         window,
     )
     return {
@@ -270,19 +316,19 @@ def _custom_kpis_window(tenant_id: int, window: tuple | None) -> dict[str, int]:
     We never load a CustomRecap object — only the matched (recap_id, name,
     value) value rows.
 
-    ``window`` is a ``(start, end)`` half-open pair applied per-source to
-    that source's OWN ``created_at`` (the custom value rows are filtered on
-    their own ``created_at``, consistent with the structured sums and the
-    monthly trend), or ``None`` for the all-time path that leaves every
-    queryset untouched. The period comparison passes a month / quarter /
-    year window here so its figures reconcile with :func:`tenant_kpi_totals`
-    for the matching window.
+    ``window`` is a ``(start, end)`` half-open pair applied per-source on the
+    effective EVENT date (see :func:`_filter_event_window`; the custom value
+    rows are windowed via ``custom_recap__event__``, consistent with the
+    structured sums and the monthly trend), or ``None`` for the all-time path
+    that leaves every queryset untouched. The period comparison passes a month
+    / quarter / year window here so its figures reconcile with
+    :func:`tenant_kpi_totals` for the matching window.
     """
     out = {
         "total_engagements": _sum(
-            _filter_window(
+            _filter_event_window(
                 CustomRecap.objects.filter(tenant_id=tenant_id),
-                "created_at",
+                "event__",
                 window,
             ),
             "total_engagements",
@@ -299,11 +345,11 @@ def _custom_kpis_window(tenant_id: int, window: tuple | None) -> dict[str, int]:
 
     # Structured custom samples sum cleanly in SQL.
     structured_samples = _sum(
-        _filter_window(
+        _filter_event_window(
             CustomRecapProductSample.objects.filter(
                 custom_recap__tenant_id=tenant_id
             ),
-            "created_at",
+            "custom_recap__event__",
             window,
         ),
         "quantity",
@@ -313,12 +359,12 @@ def _custom_kpis_window(tenant_id: int, window: tuple | None) -> dict[str, int]:
     # the per-recap "consumers sampled" fallback (sold units + samples)
     # matches the campaign report's per-recap accumulation.
     rows = (
-        _filter_window(
+        _filter_event_window(
             CustomFieldValue.objects.filter(
                 custom_recap__tenant_id=tenant_id,
                 custom_field__name__iregex=_CUSTOM_KPI_NAME_RE.pattern,
             ),
-            "created_at",
+            "custom_recap__event__",
             window,
         )
         .values_list("custom_recap_id", "custom_field__name", "value")
@@ -442,20 +488,20 @@ def _tenant_event_recap_counts_window(
     the overview's headline. Each line is a single ``COUNT(*)``; no rows
     enter Python.
 
-    ``window`` is a ``(start, end)`` half-open pair applied per-source to
-    that source's OWN ``created_at`` (events by ``Event.created_at``, each
-    recap shape by its own ``created_at`` — the same anchor the trend uses),
-    or ``None`` to leave every count unfiltered. The period comparison
-    passes a month / quarter / year window here.
+    ``window`` is a ``(start, end)`` half-open pair applied per-source on the
+    effective EVENT date (see :func:`_filter_event_window` — events by their
+    own date, each recap shape via ``event__`` — the same basis the totals
+    and trend use), or ``None`` to leave every count unfiltered. The period
+    comparison passes a month / quarter / year window here.
     """
-    event_count = _filter_window(
-        Event.objects.filter(tenant_id=tenant_id), "created_at", window
+    event_count = _filter_event_window(
+        Event.objects.filter(tenant_id=tenant_id), "", window
     ).count()
-    legacy_recap_count = _filter_window(
-        Recap.objects.filter(event__tenant_id=tenant_id), "created_at", window
+    legacy_recap_count = _filter_event_window(
+        Recap.objects.filter(event__tenant_id=tenant_id), "event__", window
     ).count()
-    custom_recap_count = _filter_window(
-        CustomRecap.objects.filter(tenant_id=tenant_id), "created_at", window
+    custom_recap_count = _filter_event_window(
+        CustomRecap.objects.filter(tenant_id=tenant_id), "event__", window
     ).count()
     return event_count, legacy_recap_count + custom_recap_count
 
@@ -833,42 +879,50 @@ def tenant_monthly_trend(
     """
     start, end, num_months = _trend_window(year)
 
-    def _windowed(queryset):
-        """Floor to ``start``; cap at ``end`` only when a year was given.
-
-        Leaving the upper bound off for the trailing (``year=None``) window
-        keeps that query's SQL exactly ``created_at >= start`` as before.
+    def _windowed(queryset, prefix):
+        """Floor to ``start`` (cap at ``end`` for a year window) on the
+        effective EVENT date, annotating ``_evtdate`` so the per-month
+        ``TruncMonth`` buckets group by event date too — the same basis the
+        headline totals and the hero use. Leaving the upper bound off for the
+        trailing (``year=None``) window keeps it open-ended.
         """
-        queryset = queryset.filter(created_at__gte=start)
+        queryset = queryset.annotate(_evtdate=_event_date_expr(prefix))
+        queryset = queryset.filter(_evtdate__gte=start)
         if end is not None:
-            queryset = queryset.filter(created_at__lt=end)
+            queryset = queryset.filter(_evtdate__lt=end)
         return queryset
 
-    legacy_recaps = _windowed(Recap.objects.filter(event__tenant_id=tenant_id))
-    custom_recaps = _windowed(CustomRecap.objects.filter(tenant_id=tenant_id))
+    legacy_recaps = _windowed(
+        Recap.objects.filter(event__tenant_id=tenant_id), "event__"
+    )
+    custom_recaps = _windowed(
+        CustomRecap.objects.filter(tenant_id=tenant_id), "event__"
+    )
     legacy_samples = _windowed(
-        ProductSamples.objects.filter(recap__event__tenant_id=tenant_id)
+        ProductSamples.objects.filter(recap__event__tenant_id=tenant_id),
+        "recap__event__",
     )
     custom_samples = _windowed(
-        CustomRecapProductSample.objects.filter(custom_recap__tenant_id=tenant_id)
+        CustomRecapProductSample.objects.filter(custom_recap__tenant_id=tenant_id),
+        "custom_recap__event__",
     )
 
     recap_counts: dict[str, int] = {}
     for src in (legacy_recaps, custom_recaps):
-        for key, val in _bucket_counts(src, "created_at", count=True).items():
+        for key, val in _bucket_counts(src, "_evtdate", count=True).items():
             recap_counts[key] = recap_counts.get(key, 0) + val
 
     engagement_counts: dict[str, int] = {}
     for src in (legacy_recaps, custom_recaps):
         for key, val in _bucket_counts(
-            src, "created_at", sum_field="total_engagements"
+            src, "_evtdate", sum_field="total_engagements"
         ).items():
             engagement_counts[key] = engagement_counts.get(key, 0) + val
 
     sample_counts: dict[str, int] = {}
     for src in (legacy_samples, custom_samples):
         for key, val in _bucket_counts(
-            src, "created_at", sum_field="quantity"
+            src, "_evtdate", sum_field="quantity"
         ).items():
             sample_counts[key] = sample_counts.get(key, 0) + val
 
