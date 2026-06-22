@@ -42,3 +42,32 @@ def test_no_sold_field_returns_none():
     assert _sold_units_from_fields(
         [("Consumers Sampled", "100"), ("Corporate Card Used", "Yes")]
     ) is None
+
+
+def test_stone_house_bread_purchase_field_excludes_intent():
+    # Stone House Bread's real template: actual sales are logged as
+    # "...did consumers PURCHASE during the event?" (no "sold"), alongside two
+    # "...willing to purchase..." INTENT fields. Count only the real purchase
+    # (12), never the intent (20 / 1).
+    pairs = [
+        ("Total number of consumers sampled", "45"),
+        ("# of females sampled:", "25"),
+        ("How many consumers would be willing to purchase the product "
+         "after tasting it?", "20"),
+        ("How many consumers would not be willing to purchase after "
+         "tasting?", "1"),
+        ("How many products did consumers purchase during the event?", "12"),
+    ]
+    assert _sold_units_from_fields(pairs) == 12
+
+
+def test_bought_and_purchased_phrasings_match():
+    assert _sold_units_from_fields([("Units bought", "8")]) == 8
+    assert _sold_units_from_fields([("Products purchased", "9")]) == 9
+
+
+def test_willing_to_purchase_alone_is_not_a_sale():
+    # A template with ONLY purchase-intent fields (no actual sale) → "—".
+    assert _sold_units_from_fields(
+        [("Willing to purchase after tasting?", "30")]
+    ) is None
