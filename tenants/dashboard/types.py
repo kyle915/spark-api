@@ -172,6 +172,13 @@ class RecapGlobalKPIs:
     # brands by 2× — use this instead.
     by_rmm: List[RecapGlobalKPIByRMM]
     pack_cans_equivalent: int = 0
+    # Total units sold for tenants that DON'T break sales into cans/packs
+    # (bread, etc.) — derived from the same two-tier matcher the recap list
+    # uses (recaps.types._sold_units_from_fields). The FE shows this as a
+    # single "Products sold" tile when single_cans_sold + multi_packs_sold
+    # is 0, so non-drink tenants get a real number instead of empty drink
+    # tiles. 0 for drink tenants (they show the cans/packs tiles instead).
+    products_sold: int = 0
 
 
 @strawberry.type

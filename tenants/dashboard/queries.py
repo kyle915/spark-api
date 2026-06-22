@@ -420,20 +420,37 @@ class DashboardQueries:
             custom_consumers = custom_brand_aware_n = custom_willing_n = 0
             custom_single_cans = custom_packs = 0
             custom_brand_rows = custom_willing_rows = custom_pack_cans = 0
+            custom_products_sold = 0
             try:
                 def _sum_custom_recap_metrics():
                     import re as _re
+                    # Reuse the recap list's two-tier SOLD matcher so the
+                    # dashboard "Products sold" headline can never drift from
+                    # the recap list again (the recurring duplicate-matcher
+                    # class: this resolver had its OWN cans/packs-only matcher
+                    # that silently showed 0 for bread tenants like Stone House
+                    # Bread, whose template says "...did consumers PURCHASE...").
+                    from recaps.types import _sold_units_from_fields
                     sums = {"consumers": 0, "brand": 0,
                             "willing": 0, "cans": 0, "packs": 0,
                             # Girl Beer vocabulary + no-data signals:
                             "sampled_total": 0,   # "who sampled (Total)" rows
                             "pack_cans": 0,       # packs × label-parsed size
                             "brand_rows": 0,      # matched awareness fields
-                            "willing_rows": 0}    # matched intent fields
+                            "willing_rows": 0,    # matched intent fields
+                            "products_sold": 0}   # two-tier SOLD (shared helper)
                     rows = recap_models.CustomFieldValue.objects.filter(
                         custom_recap__event__in=base_queryset
-                    ).values_list("custom_field__name", "value")
-                    for name, value in rows:
+                    ).values_list(
+                        "custom_recap_id", "custom_field__name", "value"
+                    )
+                    # Group (name, value) by recap so products_sold can run the
+                    # shared per-recap two-tier matcher (cans/packs primary,
+                    # sold/bought/purchased fallback minus intent) — one source
+                    # of truth with the recap list's soldUnits.
+                    by_recap: dict = {}
+                    for recap_id, name, value in rows:
+                        by_recap.setdefault(recap_id, []).append((name, value))
                         low = (name or "").lower()
                         digits = _re.sub(r"[^\d-]", "", str(value or ""))
                         if not digits or digits == "-":
@@ -460,6 +477,16 @@ class DashboardQueries:
                         elif "pack" in low:
                             sums["packs"] += num
                             sums["pack_cans"] += num * _pack_size_from_label(low)
+                    # SOLD: per-recap two-tier matcher (shared helper), summed
+                    # across recaps. Cans/packs templates return their granular
+                    # sum (already shown as the Cans/Multi-packs tiles); bread/
+                    # other-unit templates return the sold/purchased fallback —
+                    # e.g. Stone House Bread's "...did consumers PURCHASE..." —
+                    # which the FE surfaces as a single "Products sold" tile.
+                    for pairs in by_recap.values():
+                        sold = _sold_units_from_fields(pairs)
+                        if sold is not None:
+                            sums["products_sold"] += sold
                     # Precedence mirror of recaps.types._consumers_sampled_
                     # from_fields: explicit headline wins, demographics
                     # totals fill in when no template has one.
@@ -476,6 +503,7 @@ class DashboardQueries:
                 custom_brand_rows = _cm["brand_rows"]
                 custom_willing_rows = _cm["willing_rows"]
                 custom_pack_cans = _cm["pack_cans"]
+                custom_products_sold = _cm["products_sold"]
             except Exception:
                 import logging
                 logging.getLogger(__name__).warning(
@@ -769,6 +797,7 @@ class DashboardQueries:
                 lambda: recap_queryset.aggregate(
                     single_cans_sold=Sum('total_cans_sold', default=0),
                     multi_packs_sold=Sum('total_packs_sold', default=0),
+                    products_sold=Sum('products_sold', default=0),
                 )
             )()
             # Cans-equivalent of the packs sold: legacy Recap packs keep the
@@ -820,10 +849,21 @@ class DashboardQueries:
                 for item in global_by_rmm_data
             ]
 
+            # Total units sold for tenants that don't break sales into
+            # cans/packs (legacy Recap.products_sold + custom-recap two-tier
+            # matcher). Disjoint sources: legacy Recaps store products_sold on
+            # the row; custom recaps store it in CustomFieldValue — so summing
+            # both never double-counts. The FE shows this as "Products sold"
+            # only when there's no can/pack breakdown.
+            products_sold_total = (
+                global_kpis_data.get('products_sold') or 0
+            ) + custom_products_sold
+
             global_kpis = types.RecapGlobalKPIs(
                 single_cans_sold=global_kpis_data['single_cans_sold'] or 0,
                 multi_packs_sold=global_kpis_data['multi_packs_sold'] or 0,
                 pack_cans_equivalent=pack_cans_equivalent,
+                products_sold=products_sold_total,
                 by_rmm=global_kpis_by_rmm
             )
 

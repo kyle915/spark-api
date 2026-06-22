@@ -145,6 +145,100 @@ class TestEventDashboardQueries(DashboardGraphQLTestCase):
         assert data['performanceInsights'] is not None
 
     @pytest.mark.asyncio
+    async def test_event_dashboard_products_sold_custom_recap_purchase_vocab(self):
+        """globalKpis.productsSold folds in custom-recap sales via the SAME
+        two-tier matcher the recap list uses (recaps.types
+        ._sold_units_from_fields) — one source of truth.
+
+        Regression guard for the dashboard's OLD cans/packs-only inline matcher,
+        which showed 0 "Products sold" for bread tenants (Stone House Bread)
+        whose template logs sales as "...did consumers PURCHASE..." (no "sold"),
+        right next to a "willing to purchase" INTENT field that must NOT count.
+        """
+        from recaps import models as recap_models
+
+        @sync_to_async
+        def add_custom_recap():
+            system_user = self.get_system_user()
+            template = recap_models.CustomRecapTemplate.objects.create(
+                name="Bread recap template",
+                event_type=self.event_type,
+                tenant=self.tenant,
+                created_by=system_user,
+            )
+            field_type = recap_models.CustomRecapFieldType.objects.create(
+                name="Number", created_by=system_user,
+            )
+            section = recap_models.RecapSection.objects.create(
+                name="Sampling", tenant=self.tenant, created_by=system_user,
+            )
+
+            def _field(name):
+                return recap_models.CustomField.objects.create(
+                    name=name, required=False,
+                    custom_recap_template=template,
+                    custom_field_type=field_type,
+                    recap_section=section,
+                    created_by=system_user,
+                )
+
+            purchase_field = _field(
+                "How many products did consumers purchase during the event?"
+            )
+            intent_field = _field(
+                "How many consumers would be willing to purchase the "
+                "product after tasting it?"
+            )
+            sampled_field = _field("Total number of consumers sampled")
+
+            custom_recap = recap_models.CustomRecap.objects.create(
+                name="Stone House Bread recap",
+                approved=True,
+                event=self.event1,
+                tenant=self.tenant,
+                custom_recap_template=template,
+                ambassador=self.ambassador,
+                created_by=system_user,
+            )
+            for field, value in (
+                (purchase_field, "12"),
+                (intent_field, "20"),
+                (sampled_field, "45"),
+            ):
+                recap_models.CustomFieldValue.objects.create(
+                    custom_recap=custom_recap, custom_field=field,
+                    value=value, created_by=system_user,
+                )
+
+        await add_custom_recap()
+        cache.clear()
+
+        query = """
+        query {
+            eventDashboard {
+                globalKpis {
+                    singleCansSold
+                    multiPacksSold
+                    productsSold
+                }
+            }
+        }
+        """
+        result = await self._execute_query_authenticated(
+            query, {}, self.client_user
+        )
+
+        assert result.errors is None
+        kpis = result.data["eventDashboard"]["globalKpis"]
+        # Legacy recaps (products_sold 50 + 40 + 60 = 150) + the custom-recap
+        # PURCHASE field (12). The "willing to purchase" INTENT (20) is excluded.
+        assert kpis["productsSold"] == 162
+        # The custom recap has no cans/packs fields, so the drink tiles are
+        # unchanged at the legacy sums (24+18+30 / 12+9+15).
+        assert kpis["singleCansSold"] == 72
+        assert kpis["multiPacksSold"] == 36
+
+    @pytest.mark.asyncio
     async def test_event_dashboard_with_quarter_filter(self):
         """Test event_dashboard query with quarter filter."""
         from tenants.dashboard.services import DashboardQueriesService
