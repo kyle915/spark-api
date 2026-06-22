@@ -1,0 +1,75 @@
+name: Set custom recap field
+
+# Manually fires `/internal/cron/set-custom-recap-field` on Cloud Run to run
+# the `set_custom_recap_field` command — a TARGETED, REVERSIBLE correction of
+# ONE custom-recap field value (e.g. a "Consumers Sampled" typed as 1960 -> 30).
+# See recaps/management/commands/set_custom_recap_field.py.
+#
+# SAFE BY DEFAULT: leave `apply` unchecked for a DRY-RUN (prints what WOULD
+# change, writes nothing). Set `apply: true` only after the dry-run looks
+# right. Use `expect_current` so the write only happens if the value is still
+# what you saw (idempotent; re-runs are no-ops). Ships from develop;
+# secret-gated via X-Cron-Secret (the secret is a HEADER, never in the URL).
+
+on:
+  workflow_dispatch:
+    inputs:
+      recap:
+        description: "CustomRecap id or uuid (e.g. 95)."
+        required: true
+        type: string
+      field_contains:
+        description: "Substring of the field NAME to target (e.g. 'consumers sampled')."
+        required: true
+        type: string
+      value:
+        description: "New value to set (e.g. 30)."
+        required: true
+        type: string
+      expect_current:
+        description: "Only write if the current value equals this (e.g. 1960). Strongly recommended."
+        required: false
+        type: string
+      apply:
+        description: "Actually write. Leave UNCHECKED for a safe dry-run."
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  fire-set-custom-recap-field:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire set-custom-recap-field cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/set-custom-recap-field
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          RECAP: ${{ github.event.inputs.recap }}
+          FIELD_CONTAINS: ${{ github.event.inputs.field_contains }}
+          VALUE: ${{ github.event.inputs.value }}
+          EXPECT_CURRENT: ${{ github.event.inputs.expect_current }}
+          APPLY: ${{ github.event.inputs.apply }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+
+          enc() { python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$1"; }
+          QS="recap=$(enc "$RECAP")&field_contains=$(enc "$FIELD_CONTAINS")&value=$(enc "$VALUE")&apply=$(enc "$APPLY")"
+          if [ -n "$EXPECT_CURRENT" ]; then QS="$QS&expect_current=$(enc "$EXPECT_CURRENT")"; fi
+
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL?$QS" \
+            -H "X-Cron-Secret: $CRON_SECRET")
+          echo "HTTP $STATUS"
+          if command -v jq >/dev/null 2>&1; then
+            jq -r '.log // .' /tmp/cron-response.json || cat /tmp/cron-response.json
+          else
+            cat /tmp/cron-response.json
+          fi
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS — see body above."
+            exit 1
+          fi
