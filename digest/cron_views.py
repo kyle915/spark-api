@@ -2159,6 +2159,73 @@ class SetTenantEventTypesView(View):
         return JsonResponse({"ok": True, "endpoint": "set-tenant-event-types"})
 
 
+@method_decorator(csrf_exempt, name="dispatch")
+class AuditTenantConsumersView(View):
+    """GET/POST `/internal/cron/audit-tenant-consumers`.
+
+    READ-ONLY per-recap "consumers sampled" breakdown for ONE tenant — explains
+    the dashboard's "Consumers reached" total: which recaps contribute, and
+    whether any event has BOTH a legacy + custom recap (double-counting). Fires
+    the `audit_tenant_consumers` command; the response `log` is the table.
+
+    Query params:
+      - tenant: id / request-url-name / name (required)
+      - year: int (optional; default current calendar year)
+      - all_time: "1"/"true"/"yes" — ignore the year window
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        tenant = request.GET.get("tenant") or request.POST.get("tenant")
+        if not tenant:
+            return JsonResponse(
+                {"ok": False, "error": "tenant-required (id / name / url-name)"},
+                status=400,
+            )
+        raw = (
+            request.GET.get("all_time") or request.POST.get("all_time") or ""
+        ).lower()
+        kwargs: dict = {
+            "tenant": str(tenant),
+            "all_time": raw in ("1", "true", "yes", "on"),
+        }
+        year = request.GET.get("year") or request.POST.get("year")
+        if year:
+            try:
+                kwargs["year"] = int(year)
+            except ValueError:
+                return JsonResponse(
+                    {"ok": False, "error": "year-must-be-int"}, status=400
+                )
+
+        out = io.StringIO()
+        try:
+            call_command("audit_tenant_consumers", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("Tenant consumers audit cron failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "log": out.getvalue(),
+                },
+                status=500,
+            )
+        return JsonResponse(
+            {"ok": True, "tenant": str(tenant), "log": out.getvalue()}
+        )
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
 def _registered_views() -> dict[str, Any]:
     """Map URL path → view class. Lets `digest/urls.py` mount these
     without each one being re-exported explicitly.
@@ -2186,6 +2253,7 @@ def _registered_views() -> dict[str, Any]:
         "repair-request-activation-time": RepairRequestActivationTimeView,
         "backfill-girlbeer-receipts": BackfillGirlBeerReceiptsView,
         "audit-tenant-onboarding": AuditTenantOnboardingView,
+        "audit-tenant-consumers": AuditTenantConsumersView,
         "dedupe-skills": DedupeSkillsView,
         "shift-confirmations": SendShiftConfirmationsView,
         "provision-review-ambassador": ProvisionReviewAmbassadorView,
