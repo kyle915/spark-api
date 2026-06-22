@@ -76,22 +76,37 @@ class Command(BaseCommand):
         expect = opts["expect_current"]
         apply = opts["apply"]
 
-        matches = list(
-            CustomFieldValue.objects.filter(
-                custom_recap_id=recap.id,
-                custom_field__name__icontains=needle,
-            ).select_related("custom_field")
-        )
-
         tenant_name = getattr(getattr(recap, "tenant", None), "name", "?")
         self.stdout.write(
             f"Recap {recap.id} (uuid {recap.uuid}) · {recap.name or '—'} · tenant {tenant_name}"
         )
         self.stdout.write("=" * 64)
 
+        # Always list every field on the recap (name + current value) so the
+        # output is self-diagnosing: if the substring matches nothing, the
+        # caller sees the real field names and re-runs with the right one.
+        all_values = list(
+            CustomFieldValue.objects.filter(custom_recap_id=recap.id)
+            .select_related("custom_field")
+            .order_by("custom_field__name")
+        )
+        self.stdout.write(f"Fields on this recap ({len(all_values)}):")
+        for v in all_values:
+            self.stdout.write(
+                f"  [{v.id}] {(v.custom_field.name or '')!r} = {v.value!r}"
+            )
+        self.stdout.write("-" * 64)
+
+        matches = [
+            v
+            for v in all_values
+            if v.custom_field.name and needle.lower() in v.custom_field.name.lower()
+        ]
+
         if not matches:
             raise CommandError(
-                f"No field on recap {recap.id} has a name containing {needle!r}."
+                f"No field on recap {recap.id} has a name containing {needle!r} "
+                f"(see the field list above)."
             )
         if len(matches) > 1:
             names = "; ".join(f"[{m.id}] {m.custom_field.name!r}={m.value!r}" for m in matches)
