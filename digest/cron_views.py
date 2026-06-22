@@ -2226,6 +2226,7 @@ class AuditTenantConsumersView(View):
         return self._run(request)
 
 
+@method_decorator(csrf_exempt, name="dispatch")
 class SetCustomRecapFieldView(View):
     """GET/POST `/internal/cron/set-custom-recap-field`.
 
