@@ -253,9 +253,10 @@ class TestTenantInsightBuckets(AmbassadorsGraphQLTestCase):
         # consumers = 200 + 150 = 350 -> formatted with a comma.
         assert totals.consumers_reached == 350
         assert by["reach"]["metric"] == "350"
-        # samples = 50 + 30 = 80; 2 events -> ~40/event.
-        assert totals.samples_distributed == 80
-        assert "~40/event" in by["sampling"]["detail"]
+        # Samples distributed now = consumers sampled (kyle's rule): 200 + 150
+        # = 350 across 2 events -> ~175/event (not the ProductSamples qty 80).
+        assert totals.samples_distributed == 350
+        assert "~175/event" in by["sampling"]["detail"]
         # sales detail shows the cans/packs breakdown (12 cans · 3 packs).
         assert "12 cans" in by["sales"]["detail"]
         assert "3 packs" in by["sales"]["detail"]
@@ -268,7 +269,9 @@ class TestTenantInsightBuckets(AmbassadorsGraphQLTestCase):
         by = {b["key"]: b for b in build_insight_buckets(self.tenant.id)}
         assert by["reach"]["metric"] == "12,400"
         assert "12,400 consumers reached" in by["reach"]["detail"]
-        assert by["sampling"]["metric"] == "3,400"
+        # Samples distributed = consumers sampled (kyle's rule), so it mirrors
+        # the 12,400 reach, not the ProductSamples qty (3,400).
+        assert by["sampling"]["metric"] == "12,400"
 
     # -- THE Momentum fix ------------------------------------------------
 

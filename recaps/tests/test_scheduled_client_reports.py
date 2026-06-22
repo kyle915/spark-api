@@ -198,10 +198,12 @@ class TestScheduledClientReports(AmbassadorsGraphQLTestCase):
         # Header label + brand name present.
         assert "May 2026 Performance" in html
         assert "Girl Beer" in html
-        # The May numbers are rendered (300 consumers, 80 samples, 120 eng).
+        # The May numbers are rendered: 300 consumers (samples distributed now
+        # mirrors consumers per kyle's rule, also 300), 120 engagements, and 75
+        # willing-to-purchase.
         assert "300" in html
-        assert "80" in html
         assert "120" in html
+        assert "75" in html
 
     def test_pdf_missing_tenant_raises_clean_error(self):
         with pytest.raises(client_report.ClientMonthlyReportError):
