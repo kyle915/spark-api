@@ -1,0 +1,68 @@
+name: Audit tenant consumers
+
+# Manually fires `/internal/cron/audit-tenant-consumers` on Cloud Run to run
+# the READ-ONLY `audit_tenant_consumers` command — a per-recap "consumers
+# sampled" breakdown for ONE tenant that explains the dashboard's "Consumers
+# reached" total (which recaps contribute + any event with BOTH a legacy and
+# custom recap double-counting). See
+# recaps/management/commands/audit_tenant_consumers.py.
+#
+# READ-ONLY — never writes. Run it from the Actions tab; the breakdown prints
+# in the step log. Ships from develop. Secret-gated via X-Cron-Secret (shared
+# INTERNAL_CRON_SECRET) — the secret is a HEADER, never in the URL.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tenant:
+        description: "Tenant: id, request-url-name, or name (e.g. 'stone house bread')."
+        required: true
+        type: string
+      year:
+        description: "Calendar year to scope to (blank = current year)."
+        required: false
+        type: string
+      all_time:
+        description: "Ignore the year window — sum every recap ever."
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  fire-audit-tenant-consumers:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire audit-tenant-consumers cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/audit-tenant-consumers
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          TENANT: ${{ github.event.inputs.tenant }}
+          YEAR: ${{ github.event.inputs.year }}
+          ALL_TIME: ${{ github.event.inputs.all_time }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+
+          # URL-encode the tenant (it may contain spaces).
+          TENANT_ENC=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$TENANT")
+          QS="tenant=$TENANT_ENC&all_time=$ALL_TIME"
+          if [ -n "$YEAR" ]; then QS="$QS&year=$YEAR"; fi
+
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL?$QS" \
+            -H "X-Cron-Secret: $CRON_SECRET")
+          echo "HTTP $STATUS"
+          # Pretty-print the `log` field (the breakdown table) if jq is present,
+          # else dump the raw JSON.
+          if command -v jq >/dev/null 2>&1; then
+            jq -r '.log // .' /tmp/cron-response.json || cat /tmp/cron-response.json
+          else
+            cat /tmp/cron-response.json
+          fi
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS — see body above."
+            exit 1
+          fi
