@@ -77,6 +77,16 @@ _SOLD_EXCLUDE_RE = re.compile(
 # /consumers?\s+sampled/i.
 _CONSUMERS_SAMPLED_RE = re.compile(r"consumers?\s+sampled", re.IGNORECASE)
 
+# A field can MENTION "consumers sampled" in its label yet be a free-text
+# DESCRIPTION, not a count — e.g. Stone House Bread's "General demographics of
+# consumers sampled (age range, gender, ethnicity)". Its prose answer
+# ("...ranged from 19 to ...60s...") would digit-strip into a bogus 1960 and
+# blow up the consumers-sampled total. Names matching this are descriptive, so
+# they're never treated as the count.
+_SAMPLED_DESC_EXCLUDE_RE = re.compile(
+    r"demographic|age\s*range|ethnicit|gender", re.IGNORECASE
+)
+
 # Demographics-style sampled totals — Girl Beer's template counts sampled
 # consumers as "Men who sampled (Total)" / "Women who sampled (Total)"
 # rows instead of one "Consumers Sampled" field. Only "(Total)" rows are
@@ -185,18 +195,36 @@ def _sold_units_from_fields(
     return _sum(_SOLD_FALLBACK_RE, exclude=_SOLD_EXCLUDE_RE)
 
 
+def _is_clean_count(value: str | None) -> bool:
+    """True when the value is just a number (digits, commas, spaces), not
+    prose. Guards the consumers-sampled matcher: a free-text field that merely
+    mentions 'consumers sampled' (a demographics answer like '...19 to 60s...')
+    must NOT be digit-mashed into a count (that produced a bogus 1960). A real
+    count field is always a clean number."""
+    if value is None:
+        return False
+    return bool(re.fullmatch(r"\s*\d[\d,\s]*", str(value)))
+
+
 def _consumers_sampled_from_fields(
     fields: Iterable[tuple[str | None, str | None]],
 ) -> int | None:
-    """Parsed value of the FIRST 'consumers sampled' field, else None.
+    """Parsed value of the FIRST 'consumers sampled' COUNT field, else None.
 
-    Mirrors customConsumersSampled — returns the first finite parse and
-    stops; None when no such field has a numeric value.
+    Mirrors customConsumersSampled — returns the first finite parse and stops;
+    None when no such field has a numeric value. Skips fields that only
+    DESCRIBE the sampled consumers (demographics / age range / gender /
+    ethnicity) or whose value is free text rather than a clean number, so a
+    prose answer can't be digit-mashed into a bogus total.
     """
     pairs = list(fields)
     for name, value in pairs:
         if not name or not _CONSUMERS_SAMPLED_RE.search(name):
             continue
+        if _SAMPLED_DESC_EXCLUDE_RE.search(name):
+            continue  # descriptive field, not a count
+        if not _is_clean_count(value):
+            continue  # free-text value — don't mash prose into a number
         parsed = _parse_recap_int(value)
         if parsed is not None:
             return parsed
