@@ -159,8 +159,17 @@ class BaseMutationService(SparkGraphQLMixin):
                 id=self.input.id
             )
             self.tenant_id = getattr(existing_obj, "tenant_id", None)
+        elif self.is_spark_schema:
+            # Admin CREATING without an explicit tenant_id — e.g. a global,
+            # tenant-less catalog entity like Location (towns), which the FE
+            # submits with no tenant. Skip the membership lookup (admins aren't
+            # TenantUser members of client tenants). tenant_id stays None and
+            # is only applied in save() to models that actually have a
+            # tenant_id column, so tenant-scoped models still effectively
+            # require one (a NOT NULL save fails loudly rather than orphaning).
+            self.tenant_id = None
         else:
-            # Non-spark user or spark user creating without tenant_id
+            # Non-spark user creating/updating without tenant_id.
             tenant = await self.get_tenant(self.user, tenant_id)
             self.tenant_id = tenant.id
         return self
