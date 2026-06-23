@@ -122,9 +122,28 @@ class BaseMutationService(SparkGraphQLMixin):
 
     async def set_user_and_tenant(self, info: strawberry.Info) -> "BaseMutationService":
         """Set the user and tenant for the service."""
+        from utils.graphql.permissions import (
+            _is_admin_access,
+            resolve_request_user_access,
+        )
+
         self.info = info
         self.user = await self.get_user(info)
-        self.is_spark_schema = self.is_spark_schema_request(info, user=self.user)
+        # Treat any Ignite admin (staff / superuser / spark-admin role /
+        # @igniteproductions.co email) as a spark-schema request, so they can
+        # manage catalog entities (Locations/Retailers/Distributors/types) for
+        # ANY tenant without being a literal TenantUser member — matching the
+        # read side (_is_admin_access). is_spark_schema_request alone reads
+        # user.role synchronously, which does NOT hydrate inside async
+        # resolvers (the documented gotcha resolve_request_user_access exists
+        # to fix), so a genuine spark-admin was denied with "not a member of
+        # this tenant" when adding a town.
+        role_slug, is_staff, is_super, email = await resolve_request_user_access(
+            self.user
+        )
+        self.is_spark_schema = self.is_spark_schema_request(
+            info, user=self.user
+        ) or _is_admin_access(role_slug, is_staff, is_super, email)
         tenant_id = getattr(self.input, "tenant_id", None)
         is_update = hasattr(self.input, "id") and self.input.id is not None
         if is_update:
