@@ -1,0 +1,69 @@
+name: Daily Liquid Death Recaps export
+
+# Writes Liquid Death's raw recap data into a branded "Spark Recaps" tab (one
+# row per recap: event/BA metadata + every recap field). Only that tab is
+# created/cleared/written; every other tab is left untouched. Recaps also
+# refresh this tab on save (Tenant.recap_export_on_submit); this daily run is
+# the backstop that also catches edits/deletions.
+#
+# REQUIRED: share the sheet with the Cloud Run runtime service account
+# spark-api-new-sa@spark-479222.iam.gserviceaccount.com (Editor).
+
+on:
+  schedule:
+    - cron: "0 11 * * *" # 11:00 UTC daily (~15 min before the summary rebuild)
+  workflow_dispatch:
+    inputs:
+      tenant_slug:
+        description: "Liquid Death tenant slug"
+        required: false
+        default: "ighn-liquid-death"
+      sheet_url:
+        description: "LD sheet URL"
+        required: false
+        default: "https://docs.google.com/spreadsheets/d/1P1k5bpGuce_qAeh1qg9kNI4QjzRYLZhHTDm2vnQQKi0/edit"
+      tab:
+        description: "Recaps tab name"
+        required: false
+        default: "Spark Recaps"
+      year:
+        description: "Only this event-year (blank = all)"
+        required: false
+        default: ""
+      dry_run:
+        description: "Compute + report counts, write nothing"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+jobs:
+  export-ld-recaps:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire LD recaps export endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/export-ld-recaps
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          TENANT_SLUG: ${{ github.event.inputs.tenant_slug || 'ighn-liquid-death' }}
+          SHEET_URL: ${{ github.event.inputs.sheet_url || 'https://docs.google.com/spreadsheets/d/1P1k5bpGuce_qAeh1qg9kNI4QjzRYLZhHTDm2vnQQKi0/edit' }}
+          TAB: ${{ github.event.inputs.tab || 'Spark Recaps' }}
+          YEAR: ${{ github.event.inputs.year || '' }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL" \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            --data-urlencode "tenant_slug=$TENANT_SLUG" \
+            --data-urlencode "sheet_url=$SHEET_URL" \
+            --data-urlencode "tab=$TAB" \
+            --data-urlencode "year=$YEAR" \
+            --data-urlencode "dry_run=$DRY_RUN")
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          echo ""
+          [ "$STATUS" != "200" ] && exit 1 || exit 0
