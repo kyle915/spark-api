@@ -2548,6 +2548,7 @@ class BackfillLdMasterTrackerView(View):
         return self._run(request)
 
 
+@method_decorator(csrf_exempt, name="dispatch")
 class LdDataCensusView(View):
     """GET/POST `/internal/cron/ld-data-census` — READ-ONLY, writes nothing.
 
