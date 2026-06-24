@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import re
 from io import BytesIO
 from typing import Iterable
@@ -181,6 +182,26 @@ def _event_retailer(recap):
     return name or None
 
 
+def _format_field_value(value):
+    """Render a stored custom-field value for display.
+
+    A multiselect answer is persisted as a JSON array of the chosen option
+    strings (e.g. '["Detroit", "Lansing"]'); show it as a readable comma
+    list rather than raw JSON. Everything else (text / number / single
+    select) is already display-ready and passes through untouched.
+    """
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            try:
+                parsed = json.loads(stripped)
+            except (ValueError, TypeError):
+                return value
+            if isinstance(parsed, list):
+                return ", ".join(str(v) for v in parsed)
+    return value
+
+
 def _custom_field_sections(recap) -> dict[str, list[tuple[str, str]]]:
     sections: dict[str, list[tuple[str, str]]] = {}
     for custom_field_value in _related_items(recap, "custom_field_value"):
@@ -189,7 +210,7 @@ def _custom_field_sections(recap) -> dict[str, list[tuple[str, str]]]:
         section_name = getattr(recap_section, "name", None) or "Custom Fields"
         field_name = getattr(custom_field, "name", None) or "Custom field"
         sections.setdefault(section_name, []).append(
-            (field_name, custom_field_value.value)
+            (field_name, _format_field_value(custom_field_value.value))
         )
     return sections
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from io import BytesIO
 from typing import Iterable
 from openpyxl import Workbook
@@ -30,6 +31,25 @@ def _safe(value) -> str:
     if value is None:
         return ""
     return str(value)
+
+
+def _format_field_value(value) -> str:
+    """Display a custom-field value for the export.
+
+    Multiselect answers are stored as a JSON array of option strings
+    (e.g. '["Detroit", "Lansing"]'); render them as a readable comma list
+    instead of raw JSON. Single-select / text / number pass through _safe.
+    """
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            try:
+                parsed = json.loads(stripped)
+            except (ValueError, TypeError):
+                return _safe(value)
+            if isinstance(parsed, list):
+                return ", ".join(str(v) for v in parsed)
+    return _safe(value)
 
 
 def _format_recap_status(approved: bool) -> str:
@@ -435,7 +455,7 @@ def build_recaps_xlsx(
 
         if section_sheets:
             value_by_field_id = {
-                getattr(getattr(custom_field_value, "custom_field", None), "id", None): _safe(
+                getattr(getattr(custom_field_value, "custom_field", None), "id", None): _format_field_value(
                     getattr(custom_field_value, "value", None)
                 )
                 for custom_field_value in _related_items(recap, "custom_field_value")
