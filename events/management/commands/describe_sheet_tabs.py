@@ -22,6 +22,13 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument("--sheet-url", type=str, default=None)
         parser.add_argument("--tenant-slug", type=str, default=None)
+        parser.add_argument(
+            "--peek-tab",
+            type=str,
+            default=None,
+            help="Dump this tab's header + sample rows + a year histogram (read-only).",
+        )
+        parser.add_argument("--peek-rows", type=int, default=4)
 
     def handle(self, *args, **opts):
         url = opts.get("sheet_url")
@@ -75,3 +82,58 @@ class Command(BaseCommand):
                 self.stdout.write(f"  '{title}' → {row1[:18]}")
             except Exception as e:  # pragma: no cover - diagnostic
                 self.stdout.write(f"  '{title}' → (read failed: {e})")
+
+        peek = opts.get("peek_tab")
+        if peek:
+            self._peek(svc, sheet_id, peek, max(1, opts.get("peek_rows") or 4))
+
+    def _peek(self, svc, sheet_id: str, tab: str, n: int):
+        """Dump a tab's header + first n data rows, and a year histogram for any
+        column whose header contains 'date'. Read-only."""
+        import re
+        from collections import Counter
+
+        self.stdout.write(f"\nPeek '{tab}' (header + {n} sample rows):")
+        try:
+            resp = (
+                svc.spreadsheets()
+                .values()
+                .get(spreadsheetId=sheet_id, range=f"'{tab}'!1:{n + 1}")
+                .execute()
+            )
+        except Exception as e:
+            self.stdout.write(f"  (read failed: {e})")
+            return
+        values = resp.get("values") or []
+        if not values:
+            self.stdout.write("  (empty)")
+            return
+        header = values[0]
+        for i, h in enumerate(header):
+            self.stdout.write(f"  col[{i}] {h!r}")
+        for r_i, row in enumerate(values[1:], start=2):
+            self.stdout.write(f"  row{r_i}: {row}")
+
+        # Year histogram for each date-like column (read the full column once).
+        date_cols = [i for i, h in enumerate(header) if "date" in str(h).lower()]
+        for ci in date_cols:
+            col_letter = chr(ord("A") + ci) if ci < 26 else None
+            if not col_letter:
+                continue
+            try:
+                cresp = (
+                    svc.spreadsheets()
+                    .values()
+                    .get(spreadsheetId=sheet_id, range=f"'{tab}'!{col_letter}2:{col_letter}100000")
+                    .execute()
+                )
+            except Exception as e:
+                self.stdout.write(f"  year histogram col[{ci}] failed: {e}")
+                continue
+            years: Counter = Counter()
+            for cr in cresp.get("values") or []:
+                cell = (cr[0] if cr else "") or ""
+                m = re.search(r"(20\d\d)", str(cell))
+                years[m.group(1) if m else "?"] += 1
+            top = dict(sorted(years.items(), key=lambda kv: str(kv[0])))
+            self.stdout.write(f"  year histogram col[{ci}] {header[ci]!r}: {top}")
