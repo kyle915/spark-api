@@ -177,20 +177,42 @@ def test_read_recaps_tab_by_year_aggregates():
     assert by_year["2026"].consumers == 100
 
 
-def test_build_grid_with_years_headline_and_section():
-    from recaps.ld_summary_export import _Bucket
+def test_build_grid_program_matches_app():
+    from recaps.ld_summary_export import ProgramKpis
 
-    years = {
-        "2025": _Bucket(demos=1668, consumers=100000, cans=5000, packs=4000),
-        "2026": _Bucket(demos=89, consumers=8000, cans=400, packs=300),
+    program_all = ProgramKpis(
+        events_run=866, consumers=148687, brand_aware=71200, willing=63936,
+        single_cans=7169, multi_packs=4936, pack_cans_equiv=59232,
+    )
+    program_years = {
+        "2026": ProgramKpis(
+            events_run=865, consumers=148617, single_cans=7169,
+            multi_packs=4936, pack_cans_equiv=59232,
+        ),
+        "2025": ProgramKpis(events_run=1, consumers=70),
     }
-    grid, layout = build_summary_grid(LdSummary(total_demos=47, consumers=2075, cans=300, packs=209), years=years)
+    grid, layout = build_summary_grid(
+        LdSummary(total_demos=47), program_all=program_all, program_years=program_years
+    )
     flat = [str(c) for row in grid for c in row]
-    # Headline = all-years totals (1668 + 89 demos).
-    assert "1757" in flat
-    # The two-years-separate view + the labeled Spark detail.
+    assert "EVENTS RUN" in flat
     assert "PERFORMANCE BY YEAR" in flat
-    assert any("SPARK-TRACKED DETAIL" in c for c in flat)
-    assert "2025" in flat and "2026" in flat
-    # KPI value row holds the combined demo total.
-    assert grid[layout["kpi_value"]][0] == 1757
+    assert any("SPARK APP-RECAP DETAIL" in c for c in flat)
+    assert layout["kpi_cols"] == 6
+    # KPI value row: events run + cans-sold-total (single + pack-equivalent).
+    kpi = grid[layout["kpi_value"]]
+    assert kpi[0] == 866
+    assert kpi[1] == 148687
+    assert kpi[2] == 66401  # 7169 single + 59232 pack-equivalent
+    assert kpi[3] == 4936
+    # Brand awareness % rendered.
+    assert any(c.endswith("%") for c in kpi if isinstance(c, str))
+
+
+def test_program_kpis_cans_and_pct_properties():
+    from recaps.ld_summary_export import ProgramKpis
+
+    p = ProgramKpis(consumers=100, brand_aware=48, willing=43, single_cans=10, pack_cans_equiv=120)
+    assert p.cans_sold_total == 130
+    assert round(p.brand_awareness_pct, 1) == 48.0
+    assert round(p.purchase_intent_pct, 1) == 43.0
