@@ -216,3 +216,27 @@ def test_program_kpis_cans_and_pct_properties():
     assert p.cans_sold_total == 130
     assert round(p.brand_awareness_pct, 1) == 48.0
     assert round(p.purchase_intent_pct, 1) == 43.0
+
+
+def test_build_grid_breakdowns_use_full_dataset_not_47_slice():
+    from recaps.ld_summary_export import ProgramKpis
+
+    program_all = ProgramKpis(events_run=866, consumers=148687, single_cans=7169,
+                              multi_packs=4936, pack_cans_equiv=59232)
+    program_years = {"2026": ProgramKpis(events_run=866, consumers=148687)}
+    breakdowns = {
+        "by_rmm": {"Kristyn": {"events": 250, "consumers": 40000, "cans": 2000, "packs": 1500}},
+        "by_state": {"CA": {"events": 200, "consumers": 35000}},
+        "by_ba": {"Alice": {"events": 30, "consumers": 5000}},
+    }
+    grid, layout = build_summary_grid(
+        LdSummary(total_demos=47), program_all=program_all,
+        program_years=program_years, breakdowns=breakdowns,
+    )
+    flat = [str(c) for row in grid for c in row]
+    assert "PERFORMANCE BY RMM" in flat
+    assert "Kristyn" in flat
+    assert "40000" in flat  # full-dataset consumers, not the 2,075 slice
+    assert "35000" in flat  # by-state consumers
+    # The "47 custom-template recaps" caveat banner is suppressed for full data.
+    assert not any("custom-template recaps" in c for c in flat)
