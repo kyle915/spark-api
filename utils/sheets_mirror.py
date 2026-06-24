@@ -353,24 +353,38 @@ def _tab_gid(svc, sheet_id: str, tab: str | None) -> int | None:
     return None
 
 
+def _row_date(cells: list) -> "object | None":
+    """The date for a tracker row, scanning col B then col C.
+
+    Mirror rows put the date in col C (B = Status). But LD's hand-curated rows
+    are inconsistent: day-first rows ("Sunday | 7/12/2026 | Walmart…") carry the
+    date in col B, while state-first rows ("NY | Tuesday | 7/7/2026 | …") carry
+    it in col C. Trying B then C handles all three; non-date cells (Status, a
+    weekday name, a retailer) parse to None and fall through."""
+    col_b = cells[0] if len(cells) > 0 else ""
+    col_c = cells[1] if len(cells) > 1 else ""
+    return _parse_sheet_date(col_b) or _parse_sheet_date(col_c)
+
+
 def _date_descending_insert_index(svc, sheet_id: str, tab: str | None, new_date) -> int | None:
-    """1-based row to insert a new row *before* so the Date column (col C) stays
-    DESCENDING (newest first). None → append at end. Rows with blank/unparseable
-    dates (section dividers, manual rows) are skipped, never the insertion point."""
+    """1-based row to insert a new row *before* so the schedule stays DESCENDING
+    (newest first). None → append at end. Rows with no parseable date (section
+    dividers, blanks) are skipped, never the insertion point. The date is read
+    from col B or col C per row (see _row_date)."""
     if new_date is None:
         return None
     try:
         resp = (
             svc.spreadsheets()
             .values()
-            .get(spreadsheetId=sheet_id, range=_qualify(tab, "C2:C100000"))
+            .get(spreadsheetId=sheet_id, range=_qualify(tab, "B2:C100000"))
             .execute()
         )
     except HttpError as e:
         logger.warning("sheets_mirror: date-column read failed: %s", e)
         return None
     for i, r in enumerate(resp.get("values") or [], start=2):
-        d = _parse_sheet_date(r[0] if r else "")
+        d = _row_date(r)
         if d is not None and d < new_date:
             return i
     return None
