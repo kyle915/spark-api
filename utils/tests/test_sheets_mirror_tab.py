@@ -8,9 +8,19 @@ columns (BA Notes, Contract Sent, …) past "Spark Link" are never clobbered.
 """
 from __future__ import annotations
 
+from datetime import date
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from utils.sheets_mirror import HEADER, _col_letter, _ensure_header, _qualify
+from utils.sheets_mirror import (
+    HEADER,
+    _append_or_insert_new,
+    _col_letter,
+    _date_descending_insert_index,
+    _ensure_header,
+    _parse_sheet_date,
+    _qualify,
+)
 
 
 def test_qualify_unqualified_when_no_tab():
@@ -58,3 +68,107 @@ def test_ensure_header_unqualified_range_when_no_tab():
     _ensure_header(svc, "sid")  # tab=None → first worksheet, bare range
     update = svc.spreadsheets.return_value.values.return_value.update
     assert update.call_args.kwargs["range"] == "A1:O1"
+
+
+# --- date-positioned new-row insertion (master_tracker_insert_by_date) ---
+
+
+def test_parse_sheet_date_formats():
+    assert _parse_sheet_date("7/12/2026") == date(2026, 7, 12)
+    assert _parse_sheet_date("07/05/2026") == date(2026, 7, 5)
+    assert _parse_sheet_date("2026-07-12") == date(2026, 7, 12)
+    assert _parse_sheet_date("") is None
+    assert _parse_sheet_date(None) is None
+    assert _parse_sheet_date("All below are pending") is None
+
+
+def _mock_date_column(col_c_values):
+    """svc whose values().get() returns the given column-C rows."""
+    svc = MagicMock()
+    svc.spreadsheets.return_value.values.return_value.get.return_value.execute.return_value = {
+        "values": [[v] for v in col_c_values]
+    }
+    return svc
+
+
+# A live tracker sorted DESCENDING (newest first), with a blank divider row.
+_DESC_DATES = ["7/15/2026", "7/12/2026", "", "7/01/2026", "6/20/2026"]
+
+
+def test_insert_index_middle_lands_above_first_older_date():
+    svc = _mock_date_column(_DESC_DATES)
+    # 7/05 is newer than 7/01 (row 5) → insert before row 5.
+    assert _date_descending_insert_index(svc, "sid", "MASTER_Tracker", date(2026, 7, 5)) == 5
+
+
+def test_insert_index_newest_goes_to_top():
+    svc = _mock_date_column(_DESC_DATES)
+    # Newer than every row → before the first data row (row 2 = top).
+    assert _date_descending_insert_index(svc, "sid", "MASTER_Tracker", date(2026, 8, 1)) == 2
+
+
+def test_insert_index_oldest_appends():
+    svc = _mock_date_column(_DESC_DATES)
+    # Older than every row → None → caller appends at the bottom.
+    assert _date_descending_insert_index(svc, "sid", "MASTER_Tracker", date(2026, 6, 1)) is None
+
+
+def test_insert_index_skips_blank_divider_rows():
+    # New date falls exactly in the blank-row gap; the blank is skipped and the
+    # next parseable older date (7/01 at row 5) is the anchor.
+    svc = _mock_date_column(_DESC_DATES)
+    assert _date_descending_insert_index(svc, "sid", "MASTER_Tracker", date(2026, 7, 6)) == 5
+
+
+def test_insert_index_none_when_new_date_unparseable():
+    svc = _mock_date_column(_DESC_DATES)
+    assert _date_descending_insert_index(svc, "sid", "MASTER_Tracker", None) is None
+
+
+def _row_with_date(d):
+    """A 15-col mirror row whose col C (index 2) is the date string."""
+    row = ["uuid", "Approved", d] + [""] * 12
+    return row
+
+
+def test_append_or_insert_falls_back_to_append_when_flag_off():
+    svc = MagicMock()
+    tenant = SimpleNamespace(master_tracker_insert_by_date=False)
+    _append_or_insert_new(svc, "sid", "MASTER_Tracker", tenant, _row_with_date("7/05/2026"), "O")
+    values = svc.spreadsheets.return_value.values.return_value
+    values.append.assert_called_once()
+    values.update.assert_not_called()
+
+
+def test_append_or_insert_appends_when_no_tab_even_if_flag_on():
+    svc = MagicMock()
+    tenant = SimpleNamespace(master_tracker_insert_by_date=True)
+    _append_or_insert_new(svc, "sid", None, tenant, _row_with_date("7/05/2026"), "O")
+    svc.spreadsheets.return_value.values.return_value.append.assert_called_once()
+
+
+def test_append_or_insert_inserts_at_date_slot_when_enabled():
+    svc = MagicMock()
+    spreadsheets = svc.spreadsheets.return_value
+    # _tab_gid → metadata with the named tab's sheetId.
+    spreadsheets.get.return_value.execute.return_value = {
+        "sheets": [{"properties": {"title": "MASTER_Tracker", "sheetId": 999, "index": 0}}]
+    }
+    # _date_descending_insert_index → column C (descending).
+    spreadsheets.values.return_value.get.return_value.execute.return_value = {
+        "values": [[v] for v in _DESC_DATES]
+    }
+    tenant = SimpleNamespace(master_tracker_insert_by_date=True)
+    _append_or_insert_new(svc, "sid", "MASTER_Tracker", tenant, _row_with_date("7/05/2026"), "O")
+
+    # Inserted a blank row (batchUpdate insertDimension) then wrote the row.
+    batch = spreadsheets.batchUpdate
+    batch.assert_called_once()
+    req = batch.call_args.kwargs["body"]["requests"][0]["insertDimension"]
+    assert req["range"]["sheetId"] == 999
+    assert req["range"]["startIndex"] == 4 and req["range"]["endIndex"] == 5  # row 5
+    update = spreadsheets.values.return_value.update
+    update.assert_called_once()
+    assert update.call_args.kwargs["range"] == "'MASTER_Tracker'!A5:O5"
+    # And it did NOT fall back to append.
+    spreadsheets.values.return_value.append.assert_not_called()
