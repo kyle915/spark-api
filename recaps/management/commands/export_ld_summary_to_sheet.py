@@ -45,11 +45,13 @@ class Command(BaseCommand):
             return
 
         self.stdout.write(
-            f"  demos={result['demos']} consumers={result['consumers']} "
-            f"cans={result['cans']} packs={result['packs']} "
-            f"conversion={result['conversion_pct']}%"
+            f"  events_run={result.get('events_run')} consumers={result.get('consumers')} "
+            f"cans_sold={result.get('cans_sold')} multi_packs={result.get('multi_packs')} "
+            f"brand_awareness={result.get('brand_awareness_pct')}% "
+            f"purchase_intent={result.get('purchase_intent_pct')}%"
         )
-        self.stdout.write(f"  by RMM: {result.get('rmms')}")
+        self.stdout.write(f"  app custom-recaps: {result.get('app_recaps')}")
+        self.stdout.write(f"  by year: {result.get('by_year')}")
         if result.get("dry_run"):
             self.stdout.write("  (dry run — pass --apply to write the Summary tab)")
         else:

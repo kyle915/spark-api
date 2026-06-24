@@ -264,6 +264,139 @@ def _conv(b: _Bucket) -> str:
     return f"{((b.cans + b.packs) / b.consumers * 100):.1f}%" if b.consumers else "0.0%"
 
 
+# ── Match the in-app Event Dashboard ────────────────────────────────────────
+# The in-app dashboard (tenants/dashboard/queries.py) sums LEGACY
+# ConsumerEngagements + Recap (where LD's bulk demo data lives) PLUS the
+# custom-recap fold-in. compute_ld_program_kpis replicates that EXACT math so
+# the sheet ties to the app (148,687 consumers / 66,401 cans / 866 events …).
+# Reuses the same shared custom matchers (recaps.types) to avoid drift.
+_PACK_SIZE_RE = re.compile(r"(\d+)\s*-?\s*pack", re.IGNORECASE)
+
+
+def _pack_size(label: str) -> int:
+    """Cans per pack from a label ("6-packs Sold" → 6); default 12 (the legacy
+    Liquid Death assumption), matching tenants.dashboard.queries."""
+    m = _PACK_SIZE_RE.search(label or "")
+    if not m:
+        return 12
+    try:
+        return max(1, int(m.group(1)))
+    except ValueError:
+        return 12
+
+
+@dataclass
+class ProgramKpis:
+    events_run: int = 0
+    consumers: int = 0
+    brand_aware: int = 0
+    willing: int = 0
+    single_cans: int = 0
+    multi_packs: int = 0
+    pack_cans_equiv: int = 0
+    products_sold: int = 0
+
+    @property
+    def cans_sold_total(self) -> int:
+        # The app's "Cans sold" headline = single cans + pack-equivalent cans.
+        return self.single_cans + self.pack_cans_equiv
+
+    @property
+    def brand_awareness_pct(self) -> float:
+        return (self.brand_aware / self.consumers * 100) if self.consumers else 0.0
+
+    @property
+    def purchase_intent_pct(self) -> float:
+        return (self.willing / self.consumers * 100) if self.consumers else 0.0
+
+
+def compute_ld_program_kpis(tenant, year: int | None = None) -> ProgramKpis:
+    """Replica of the in-app Event Dashboard KPI aggregation for `tenant`,
+    optionally windowed to a calendar year. Legacy ConsumerEngagements + Recap
+    sums + the custom-recap fold-in (same matchers as the dashboard)."""
+    from datetime import date
+
+    from django.db.models import Q, Sum
+
+    from events.models import Event
+    from recaps.models import ConsumerEngagements, CustomFieldValue, Recap
+    from recaps.types import _consumers_sampled_from_fields, _sold_units_from_fields
+
+    k = ProgramKpis()
+    base = Event.objects.exclude(request__deleted_at__isnull=False).filter(tenant=tenant)
+    if year:
+        s, e = date(year, 1, 1), date(year, 12, 31)
+        base = base.filter(
+            Q(date__date__gte=s, date__date__lte=e)
+            | Q(start_time__date__gte=s, start_time__date__lte=e)
+            | Q(request__date__date__gte=s, request__date__date__lte=e)
+        )
+    events_with_recaps = base.filter(recaps__isnull=False).distinct()
+
+    k.events_run = (
+        base.filter(Q(recaps__isnull=False) | Q(custom_recap__isnull=False)).distinct().count()
+    )
+    ce = ConsumerEngagements.objects.filter(recap__event__in=events_with_recaps).aggregate(
+        c=Sum("total_consumer", default=0),
+        b=Sum("brand_aware_consumers", default=0),
+        w=Sum("willing_to_purchase_consumers", default=0),
+    )
+    sales = Recap.objects.filter(event__in=events_with_recaps).aggregate(
+        cans=Sum("total_cans_sold", default=0),
+        packs=Sum("total_packs_sold", default=0),
+        products=Sum("products_sold", default=0),
+    )
+
+    cust = {"consumers": 0, "brand": 0, "willing": 0, "cans": 0, "packs": 0, "pack_cans": 0, "products": 0}
+    try:
+        rows = CustomFieldValue.objects.filter(custom_recap__event__in=base).values_list(
+            "custom_recap_id", "custom_field__name", "value"
+        )
+        by_recap: dict = {}
+        for rid, name, value in rows:
+            by_recap.setdefault(rid, []).append((name, value))
+            low = (name or "").lower()
+            digits = re.sub(r"[^\d-]", "", str(value or ""))
+            if not digits or digits == "-":
+                continue
+            try:
+                num = int(digits)
+            except ValueError:
+                continue
+            if "knew about" in low:
+                cust["brand"] += num
+            elif "willing to purchase" in low and "not" not in low:
+                cust["willing"] += num
+            elif "single can" in low:
+                cust["cans"] += num
+            elif "pack" in low:
+                cust["packs"] += num
+                cust["pack_cans"] += num * _pack_size(low)
+        for pairs in by_recap.values():
+            sold = _sold_units_from_fields(pairs)
+            if sold is not None:
+                cust["products"] += sold
+            cs = _consumers_sampled_from_fields(pairs)
+            if cs is not None:
+                cust["consumers"] += cs
+    except Exception:  # pragma: no cover - defensive (matches dashboard's add-only fold-in)
+        logger.warning("compute_ld_program_kpis: custom fold-in failed", exc_info=True)
+
+    k.consumers = (ce["c"] or 0) + cust["consumers"]
+    k.brand_aware = (ce["b"] or 0) + cust["brand"]
+    k.willing = (ce["w"] or 0) + cust["willing"]
+    k.single_cans = (sales["cans"] or 0) + cust["cans"]
+    k.multi_packs = (sales["packs"] or 0) + cust["packs"]
+    k.pack_cans_equiv = (sales["packs"] or 0) * 12 + cust["pack_cans"]
+    k.products_sold = (sales["products"] or 0) + cust["products"]
+    return k
+
+
+def compute_ld_program_years(tenant, years: list[int]) -> dict:
+    """{year: ProgramKpis} for each requested calendar year."""
+    return {str(y): compute_ld_program_kpis(tenant, year=y) for y in years}
+
+
 def _pct(n: int, total: int) -> str:
     return f"{(n / total * 100):.1f}%" if total else "0.0%"
 
@@ -277,22 +410,27 @@ _GRAYTEXT = {"red": 0.5, "green": 0.5, "blue": 0.5}
 SUMMARY_WIDTH = 8  # widest section (the RMM table)
 
 
-def build_summary_grid(summary: LdSummary, years: dict | None = None) -> tuple[list[list], dict]:
+def build_summary_grid(
+    summary: LdSummary,
+    program_all: "ProgramKpis | None" = None,
+    program_years: dict | None = None,
+) -> tuple[list[list], dict]:
     """Return (rows, layout). `layout` records which rows are the title /
     subtitle / KPI strip / section headers / table headers, so the caller can
     apply branded cell formatting.
 
-    When `years` (a {year: _Bucket} map from the OnBrand RECAPS tab) is given,
-    the headline + a PERFORMANCE BY YEAR table reflect ALL demos across every
-    year (Kyle's "capture all 2025 & 2026 events"), and the Spark-recap
-    breakdowns below are clearly labeled as Spark-tracked. Without it the
-    headline is the Spark-recap totals (back-compat)."""
+    When `program_all` (a ProgramKpis from compute_ld_program_kpis) is given,
+    the headline + PERFORMANCE BY YEAR mirror the IN-APP Event Dashboard
+    (legacy ConsumerEngagements + Recap + custom) so the sheet ties to the app
+    exactly; the custom-template recap breakdowns sit below, clearly labeled.
+    Without it the headline is the Spark custom-recap totals (back-compat)."""
     rows: list[list] = []
     layout = {
         "title": 0,
         "subtitle": 1,
         "kpi_header": None,
         "kpi_value": None,
+        "kpi_cols": 5,
         "sections": [],
         "table_headers": [],
         "ncols": SUMMARY_WIDTH,
@@ -302,53 +440,60 @@ def build_summary_grid(summary: LdSummary, years: dict | None = None) -> tuple[l
         rows.append(list(row) if row else [])
         return len(rows) - 1
 
-    # Headline: all-demo totals from the RECAPS tab when available, else Spark.
-    if years:
-        head = _Bucket()
-        for b in years.values():
-            head.demos += b.demos
-            head.consumers += b.consumers
-            head.cans += b.cans
-            head.packs += b.packs
-        head_demos, head_consumers, head_cans, head_packs = (
-            head.demos, head.consumers, head.cans, head.packs
-        )
-        head_conv = _conv(head)
-        yrs_present = sorted(years.keys())
-        span = f"{yrs_present[0]}–{yrs_present[-1]}" if len(yrs_present) > 1 else (yrs_present[0] if yrs_present else "")
-        subtitle = f"Auto-updated daily · all retail sampling demos {span}".strip()
-    else:
-        head_demos = summary.total_demos
-        head_consumers, head_cans, head_packs = summary.consumers, summary.cans, summary.packs
-        head_conv = f"{summary.conversion_pct:.1f}%"
-        subtitle = "Auto-updated daily from Spark — Retail Samplings"
-
     add(["LIQUID DEATH · RETAIL SAMPLING SUMMARY"])
-    add([subtitle])
-    add()
 
-    layout["kpi_header"] = add(
-        ["DEMOS DONE", "CONSUMERS SAMPLED", "SINGLE CANS SOLD", "MULTIPACKS SOLD", "CONVERSION %"]
-    )
-    layout["kpi_value"] = add(
-        [head_demos, head_consumers, head_cans, head_packs, head_conv]
-    )
-    add()
+    if program_all is not None:
+        # ── Match the in-app Spark dashboard ──
+        add(["Auto-updated daily from Spark — matches the in-app dashboard"])
+        add()
+        layout["kpi_cols"] = 6
+        layout["kpi_header"] = add(
+            ["EVENTS RUN", "CONSUMERS SAMPLED", "CANS SOLD", "MULTI-PACKS SOLD",
+             "BRAND AWARENESS", "PURCHASE INTENT"]
+        )
+        layout["kpi_value"] = add(
+            [
+                program_all.events_run,
+                program_all.consumers,
+                program_all.cans_sold_total,
+                program_all.multi_packs,
+                f"{program_all.brand_awareness_pct:.1f}%",
+                f"{program_all.purchase_intent_pct:.1f}%",
+            ]
+        )
+        add()
 
-    # Performance by year — the two-years-separate view Kyle asked for.
-    if years:
         layout["sections"].append(add(["PERFORMANCE BY YEAR"]))
         layout["table_headers"].append(
-            add(["Year", "Demos", "Consumers Sampled", "Single Cans", "MultiPacks", "Conversion %"])
+            add(["Year", "Events Run", "Consumers", "Cans Sold", "Multi-Packs",
+                 "Brand Aware %", "Purchase Intent %"])
         )
-        for yr in sorted(years.keys(), reverse=True):
-            b = years[yr]
-            add([yr, b.demos, b.consumers, b.cans, b.packs, _conv(b)])
+        for yr in sorted((program_years or {}).keys(), reverse=True):
+            p = program_years[yr]
+            add([
+                yr, p.events_run, p.consumers, p.cans_sold_total, p.multi_packs,
+                f"{p.brand_awareness_pct:.1f}%", f"{p.purchase_intent_pct:.1f}%",
+            ])
+        add(["Note: Spark dates most imported history to 2026; the deeper 2025 demo "
+             "dates live in the OnBrand RECAPS tab."])
         add()
-        # Everything below is Spark-app data (2026 only today).
-        layout["sections"].append(add(["SPARK-TRACKED DETAIL · 2026 (live app submissions)"]))
-        add([f"{summary.total_demos} recaps submitted in Spark · {summary.consumers} consumers · "
-             f"{summary.cans} single cans · {summary.packs} multipacks · {summary.conversion_pct:.1f}% conversion"])
+
+        # The custom-template app recaps (a small recent slice) feed the
+        # detailed RMM / State / Month / BA breakdowns below.
+        layout["sections"].append(
+            add([f"SPARK APP-RECAP DETAIL · {summary.total_demos} custom-template recaps"])
+        )
+        add()
+    else:
+        add(["Auto-updated daily from Spark — Retail Samplings"])
+        add()
+        layout["kpi_header"] = add(
+            ["DEMOS DONE", "CONSUMERS SAMPLED", "SINGLE CANS SOLD", "MULTIPACKS SOLD", "CONVERSION %"]
+        )
+        layout["kpi_value"] = add(
+            [summary.total_demos, summary.consumers, summary.cans, summary.packs,
+             f"{summary.conversion_pct:.1f}%"]
+        )
         add()
 
     total = summary.total_demos
@@ -496,11 +641,11 @@ def summary_format_requests(gid: int, layout: dict) -> list[dict]:
                 _cell(bg=_BLACK, fg=_WHITE, bold=True, size=16, align="CENTER")),
         _repeat(gid, layout["subtitle"], layout["subtitle"] + 1, 0, n,
                 _cell(bg=_WHITE, fg=_GRAYTEXT, italic=True, size=10, align="CENTER")),
-        # KPI strip.
-        _repeat(gid, layout["kpi_header"], layout["kpi_header"] + 1, 0, 5,
+        # KPI strip (kpi_cols wide — 6 for the app-matching headline, else 5).
+        _repeat(gid, layout["kpi_header"], layout["kpi_header"] + 1, 0, layout.get("kpi_cols", 5),
                 _cell(bg=_DARK, fg=_WHITE, bold=True, size=10, align="CENTER")),
-        _repeat(gid, layout["kpi_value"], layout["kpi_value"] + 1, 0, 5,
-                _cell(bg=_LIGHT, fg=_BLACK, bold=True, size=14, align="CENTER")),
+        _repeat(gid, layout["kpi_value"], layout["kpi_value"] + 1, 0, layout.get("kpi_cols", 5),
+                _cell(bg=_LIGHT, fg=_BLACK, bold=True, size=13, align="CENTER")),
     ]
     for sr in layout["sections"]:
         reqs.append(_merge(gid, sr, n))
@@ -533,10 +678,39 @@ def write_ld_summary(
     raises. `target_tab` (e.g. "Summary (staging)") writes to a scratch tab,
     creating it if missing, for eyeball before swapping to the live `tab`.
     """
-    summary = compute_ld_summary(tenant)
+    from django.utils import timezone
 
-    # Resolve the sheet + client up front so we can read the OnBrand RECAPS tab
-    # (the all-years demo source) before building the grid.
+    summary = compute_ld_summary(tenant)  # custom-recap detail (RMM/State/Month/BA)
+
+    # Program KPIs mirror the in-app Event Dashboard (legacy ConsumerEngagements
+    # + Recap + custom) so the headline + by-year tie to the app exactly.
+    program_all = compute_ld_program_kpis(tenant)
+    cur = timezone.now().year
+    program_years = compute_ld_program_years(tenant, [cur, cur - 1])
+
+    grid, layout = build_summary_grid(summary, program_all=program_all, program_years=program_years)
+    stats = {
+        "events_run": program_all.events_run,
+        "consumers": program_all.consumers,
+        "cans_sold": program_all.cans_sold_total,
+        "single_cans": program_all.single_cans,
+        "multi_packs": program_all.multi_packs,
+        "brand_awareness_pct": round(program_all.brand_awareness_pct, 1),
+        "purchase_intent_pct": round(program_all.purchase_intent_pct, 1),
+        "app_recaps": summary.total_demos,
+        "by_year": {
+            y: {
+                "events_run": p.events_run,
+                "consumers": p.consumers,
+                "cans_sold": p.cans_sold_total,
+                "multi_packs": p.multi_packs,
+            }
+            for y, p in sorted(program_years.items())
+        },
+    }
+    if dry_run:
+        return {"ok": True, "dry_run": True, "rows": len(grid), **stats}
+
     url = (
         sheet_url
         or getattr(tenant, "recap_export_sheet_url", None)
@@ -544,30 +718,6 @@ def write_ld_summary(
     )
     sheet_id = extract_sheet_id(url) if url else None
     svc = _service()
-
-    years = read_recaps_tab_by_year(svc, sheet_id) if (svc and sheet_id) else {}
-    grid, layout = build_summary_grid(summary, years=years or None)
-    stats = {
-        "demos": summary.total_demos,
-        "consumers": summary.consumers,
-        "cans": summary.cans,
-        "packs": summary.packs,
-        "conversion_pct": round(summary.conversion_pct, 2),
-        "rmms": {n: summary.by_rmm[n].demos for n in summary.by_rmm},
-        "by_year": {
-            yr: {
-                "demos": b.demos,
-                "consumers": b.consumers,
-                "cans": b.cans,
-                "packs": b.packs,
-                "conversion_pct": round((b.cans + b.packs) / b.consumers * 100, 2) if b.consumers else 0.0,
-            }
-            for yr, b in sorted(years.items())
-        },
-    }
-    if dry_run:
-        return {"ok": True, "dry_run": True, "rows": len(grid), **stats}
-
     if not url:
         return {"ok": False, "error": "no-sheet-url", "tenant": getattr(tenant, "slug", None)}
     if not sheet_id:
