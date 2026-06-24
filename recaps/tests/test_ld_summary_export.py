@@ -82,8 +82,8 @@ class TestLdSummary(AmbassadorsGraphQLTestCase):
         assert s.cans == 22
         assert s.packs == 10
         assert s.willing == 54
-        # Conversion = willing/consumers.
-        assert round(s.conversion_pct, 1) == round(54 / 230 * 100, 1)
+        # Conversion = (cans + packs) sold / consumers sampled.
+        assert round(s.conversion_pct, 1) == round((22 + 10) / 230 * 100, 1)
 
         # RMM attribution by state.
         assert s.by_rmm["Kristyn"].demos == 2
