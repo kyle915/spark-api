@@ -2299,6 +2299,84 @@ class SetCustomRecapFieldView(View):
         return self._run(request)
 
 
+@method_decorator(csrf_exempt, name="dispatch")
+class ExportRecapsToSheetView(View):
+    """POST `/internal/cron/export-recaps-to-sheet`.
+
+    Full-refreshes a tenant's recap data ("demo info" — every custom-template
+    field value per recap, including the demographic breakdowns) into their
+    `recap_export_sheet_url`. Fired daily by GitHub Actions.
+
+    Params (query or POST, all optional):
+      - tenant_slug: restrict to one tenant (default: every tenant that has a
+        recap_export_sheet_url set — i.e. --all-linked)
+      - sheet_url: with tenant_slug, persist this URL onto the tenant first,
+        so the scheduled workflow can seed the sheet without DB access
+      - tab: worksheet name (default "Recap Data")
+      - dry_run: "1"/"true"/"yes" — report row/column counts, write nothing
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _get(name: str) -> str:
+            return (request.GET.get(name) or request.POST.get(name) or "").strip()
+
+        def _bool(name: str, default: bool = False) -> bool:
+            raw = _get(name).lower()
+            if not raw:
+                return default
+            return raw in ("1", "true", "yes", "on")
+
+        tenant_slug = _get("tenant_slug")
+        sheet_url = _get("sheet_url")
+        tab = _get("tab")
+        dry_run = _bool("dry_run", default=False)
+
+        cmd_args: list[str] = []
+        if tenant_slug:
+            cmd_args += ["--tenant-slug", tenant_slug]
+            if sheet_url:
+                cmd_args += ["--sheet-url", sheet_url]
+        else:
+            cmd_args += ["--all-linked"]
+        if tab:
+            cmd_args += ["--tab", tab]
+        if not dry_run:
+            cmd_args += ["--apply"]
+
+        out = io.StringIO()
+        try:
+            call_command("export_recaps_to_sheet", *cmd_args, stdout=out)
+        except Exception as exc:
+            logger.exception("export-recaps-to-sheet cron failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "exception": _concise_exc(exc),
+                    "log": out.getvalue(),
+                },
+                status=500,
+            )
+        return JsonResponse(
+            {
+                "ok": True,
+                "tenant_slug": tenant_slug or "(all-linked)",
+                "dry_run": dry_run,
+                "log": out.getvalue(),
+            }
+        )
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
 def _registered_views() -> dict[str, Any]:
     """Map URL path → view class. Lets `digest/urls.py` mount these
     without each one being re-exported explicitly.
@@ -2334,4 +2412,5 @@ def _registered_views() -> dict[str, Any]:
         "verify-user": VerifyUserView,
         "set-tenant-event-types": SetTenantEventTypesView,
         "set-custom-recap-field": SetCustomRecapFieldView,
+        "export-recaps-to-sheet": ExportRecapsToSheetView,
     }

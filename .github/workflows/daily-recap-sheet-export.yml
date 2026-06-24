@@ -1,0 +1,67 @@
+name: Daily recap → Google Sheet export
+
+# Full-refreshes a tenant's recap "demo data" (one row per recap: event/BA
+# metadata + every custom-template field value, including the demographic
+# breakdowns) into their linked Google Sheet, once a day.
+#
+# The default inputs target Girl Beer and pass its sheet URL, so the first run
+# seeds Tenant.recap_export_sheet_url and every run re-affirms it — no DB access
+# needed to wire up the sheet. Add more tenants by setting their
+# recap_export_sheet_url (then a tenant_slug-less manual run, or the daily run,
+# picks them all up via --all-linked).
+#
+# REQUIRED ONE-TIME SETUP: share the target sheet with the Cloud Run runtime
+# service account — spark-api-new-sa@spark-479222.iam.gserviceaccount.com — as
+# an Editor (same account the Master-Tracker mirror uses). Until then the run
+# reports a 403 with that instruction.
+
+on:
+  schedule:
+    - cron: "0 11 * * *" # 11:00 UTC daily ≈ 7:00am ET / 4:00am PT
+  workflow_dispatch:
+    inputs:
+      tenant_slug:
+        description: "Tenant slug to export (blank = every tenant with a recap_export_sheet_url set)"
+        required: false
+        default: "girl-beer"
+      sheet_url:
+        description: "Sheet URL to use (only applied when a single tenant_slug is given; persisted to the tenant)"
+        required: false
+        default: "https://docs.google.com/spreadsheets/d/1gp0N1MOJ98Sx9MtAhwRYCMKQ5qATVfQkgr9zxZSxWgA/edit"
+      dry_run:
+        description: "Report row/column counts but write nothing"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+jobs:
+  export-recaps-to-sheet:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire recap → sheet export cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/export-recaps-to-sheet
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          # On the daily schedule there are no inputs, so fall back to the
+          # Girl Beer defaults (matching the workflow_dispatch defaults).
+          TENANT_SLUG: ${{ github.event.inputs.tenant_slug || 'girl-beer' }}
+          SHEET_URL: ${{ github.event.inputs.sheet_url || 'https://docs.google.com/spreadsheets/d/1gp0N1MOJ98Sx9MtAhwRYCMKQ5qATVfQkgr9zxZSxWgA/edit' }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL" \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            --data-urlencode "tenant_slug=$TENANT_SLUG" \
+            --data-urlencode "sheet_url=$SHEET_URL" \
+            --data-urlencode "dry_run=$DRY_RUN")
+
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          echo ""
+          [ "$STATUS" != "200" ] && exit 1 || exit 0

@@ -59,6 +59,15 @@ class Tenant(Asyncable, models.Model):
     # same link from any device, and Phase 2 sync workers know which
     # sheet to write back to.
     linked_sheet_url = models.URLField(max_length=512, null=True, blank=True)
+    # Per-tenant Google Sheet that receives a daily full-refresh dump of
+    # every recap's data (one row per recap: event/BA metadata + every
+    # custom-template field value, including the demographic breakdowns).
+    # Distinct from linked_sheet_url (which mirrors the Master Tracker of
+    # Requests) — this is the recap-level "demo data" export the daily
+    # cron writes to. The runtime service account
+    # (spark-api-new-sa@spark-479222.iam.gserviceaccount.com) needs Editor
+    # access on the target sheet. See recaps/recap_sheet_export.py.
+    recap_export_sheet_url = models.URLField(max_length=512, null=True, blank=True)
     # When set, ALL external (public-form) requests for this tenant route
     # to this user as the assigned RMM/approver, overriding territory
     # logic. Chosen on the Team page. SET_NULL so removing the user from
