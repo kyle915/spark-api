@@ -105,10 +105,20 @@ class TestLdSummary(AmbassadorsGraphQLTestCase):
 
     def test_grid_is_branded_and_has_sections(self):
         self._recap(1, self.ca, "Alice", consumers=100, cans=10, packs=5, willing=20)
-        grid = build_summary_grid(compute_ld_summary(self.tenant))
+        grid, layout = build_summary_grid(compute_ld_summary(self.tenant))
         flat = [str(c) for row in grid for c in row]
         assert any("LIQUID DEATH" in c for c in flat)
         assert "PERFORMANCE BY RMM" in flat
         assert "PERFORMANCE BY STATE" in flat
         assert "PERFORMANCE BY BRAND AMBASSADOR" in flat
         assert "Kristyn" in flat  # the CA recap's RMM row
+        # Layout drives formatting: 4 section headers + their table headers.
+        assert len(layout["sections"]) == 4
+        assert len(layout["table_headers"]) == 4
+        # Format requests build without error and reference the sheet id.
+        from recaps.ld_summary_export import summary_format_requests
+
+        reqs = summary_format_requests(123, layout)
+        assert reqs and all(
+            isinstance(r, dict) for r in reqs
+        )

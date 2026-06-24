@@ -207,49 +207,63 @@ def _pct(n: int, total: int) -> str:
     return f"{(n / total * 100):.1f}%" if total else "0.0%"
 
 
-def build_summary_grid(summary: LdSummary) -> list[list]:
-    """2-D values block for the rebuilt Summary tab, branded Liquid Death:
-    KPI cards, then Performance by RMM / State / Month / Brand Ambassador."""
+# Restrained LD palette (black/white, no rainbow — per Kyle's design pref).
+_BLACK = {"red": 0.05, "green": 0.05, "blue": 0.05}
+_DARK = {"red": 0.16, "green": 0.16, "blue": 0.16}
+_LIGHT = {"red": 0.91, "green": 0.91, "blue": 0.91}
+_WHITE = {"red": 1.0, "green": 1.0, "blue": 1.0}
+_GRAYTEXT = {"red": 0.5, "green": 0.5, "blue": 0.5}
+SUMMARY_WIDTH = 8  # widest section (the RMM table)
+
+
+def build_summary_grid(summary: LdSummary) -> tuple[list[list], dict]:
+    """Return (rows, layout). `layout` records which rows are the title /
+    subtitle / KPI strip / section headers / table headers, so the caller can
+    apply branded cell formatting. Branded Liquid Death; KPI strip, then
+    Performance by RMM / State / Month / Brand Ambassador."""
     total = summary.total_demos
     rows: list[list] = []
-    rows.append(["LIQUID DEATH · RETAIL SAMPLING SUMMARY"])
-    rows.append(["Auto-updated daily from Spark — Retail Samplings"])
-    rows.append([])
+    layout = {
+        "title": 0,
+        "subtitle": 1,
+        "kpi_header": None,
+        "kpi_value": None,
+        "sections": [],
+        "table_headers": [],
+        "ncols": SUMMARY_WIDTH,
+    }
 
-    # KPI cards
-    rows.append(
-        [
-            "DEMOS DONE",
-            "CONSUMERS SAMPLED",
-            "SINGLE CANS SOLD",
-            "MULTIPACKS SOLD",
-            "CONVERSION %",
-        ]
+    def add(row=None) -> int:
+        rows.append(list(row) if row else [])
+        return len(rows) - 1
+
+    add(["LIQUID DEATH · RETAIL SAMPLING SUMMARY"])
+    add(["Auto-updated daily from Spark — Retail Samplings"])
+    add()
+
+    layout["kpi_header"] = add(
+        ["DEMOS DONE", "CONSUMERS SAMPLED", "SINGLE CANS SOLD", "MULTIPACKS SOLD", "CONVERSION %"]
     )
-    rows.append(
-        [
-            total,
-            summary.consumers,
-            summary.cans,
-            summary.packs,
-            f"{summary.conversion_pct:.2f}%",
-        ]
+    layout["kpi_value"] = add(
+        [total, summary.consumers, summary.cans, summary.packs, f"{summary.conversion_pct:.1f}%"]
     )
-    rows.append([])
+    add()
 
     # Performance by RMM (Kyle's explicit ask)
-    rows.append(["PERFORMANCE BY RMM"])
-    rows.append(
-        [
-            "RMM",
-            "Mapped States",
-            "Retail Samplings Done",
-            "% of Total",
-            "Consumers Sampled",
-            "Single Cans",
-            "MultiPacks",
-            "Conversion %",
-        ]
+    layout["sections"].append(add(["PERFORMANCE BY RMM"]))
+    layout["table_headers"].append(
+        add(
+            [
+                "RMM",
+                "Mapped States",
+                "Retail Samplings",
+                "% of Total",
+                "Consumers Sampled",
+                "Single Cans",
+                "MultiPacks",
+                "Conversion %",
+            ]
+        )
     )
     rmm_names = [n for n in RMM_ORDER if n in summary.by_rmm]
     if summary.by_rmm.get(UNASSIGNED):
@@ -257,9 +271,9 @@ def build_summary_grid(summary: LdSummary) -> list[list]:
     for name in rmm_names:
         b = summary.by_rmm[name]
         conv = (
-            f"{((b.cans + b.packs) / b.consumers * 100):.2f}%" if b.consumers else "0.00%"
+            f"{((b.cans + b.packs) / b.consumers * 100):.1f}%" if b.consumers else "0.0%"
         )
-        rows.append(
+        add(
             [
                 name,
                 RMM_MAPPED_STATES.get(name, ""),
@@ -271,32 +285,129 @@ def build_summary_grid(summary: LdSummary) -> list[list]:
                 conv,
             ]
         )
-    rows.append([])
+    add()
 
-    # Performance by State
-    rows.append(["PERFORMANCE BY STATE"])
-    rows.append(["State", "Demos Done", "% of Total"])
-    for code, demos in sorted(
-        summary.by_state.items(), key=lambda kv: (-kv[1], kv[0])
-    ):
-        rows.append([code, demos, _pct(demos, total)])
-    rows.append([])
+    layout["sections"].append(add(["PERFORMANCE BY STATE"]))
+    layout["table_headers"].append(add(["State", "Demos Done", "% of Total"]))
+    for code, demos in sorted(summary.by_state.items(), key=lambda kv: (-kv[1], kv[0])):
+        add([code, demos, _pct(demos, total)])
+    add()
 
-    # Performance by Month
-    rows.append(["PERFORMANCE BY MONTH"])
-    rows.append(["Month", "Demos", "Consumers Sampled", "Single Cans", "MultiPacks"])
+    layout["sections"].append(add(["PERFORMANCE BY MONTH"]))
+    layout["table_headers"].append(
+        add(["Month", "Demos", "Consumers Sampled", "Single Cans", "MultiPacks"])
+    )
     for month in sorted(summary.by_month.keys()):
         b = summary.by_month[month]
-        rows.append([month, b.demos, b.consumers, b.cans, b.packs])
-    rows.append([])
+        add([month, b.demos, b.consumers, b.cans, b.packs])
+    add()
 
-    # Performance by Brand Ambassador
-    rows.append(["PERFORMANCE BY BRAND AMBASSADOR"])
-    rows.append(["Brand Ambassador", "Demos Done"])
+    layout["sections"].append(add(["PERFORMANCE BY BRAND AMBASSADOR"]))
+    layout["table_headers"].append(add(["Brand Ambassador", "Demos Done"]))
     for ba, demos in sorted(summary.by_ba.items(), key=lambda kv: (-kv[1], kv[0])):
-        rows.append([ba, demos])
+        add([ba, demos])
 
-    return rows
+    return rows, layout
+
+
+def _cell(bg=None, fg=None, bold=False, italic=False, size=None, align="LEFT") -> dict:
+    return {
+        "userEnteredFormat": {
+            "backgroundColor": bg or _WHITE,
+            "horizontalAlignment": align,
+            "verticalAlignment": "MIDDLE",
+            "textFormat": {
+                "foregroundColor": fg or _BLACK,
+                "bold": bold,
+                "italic": italic,
+                "fontSize": size or 10,
+            },
+        }
+    }
+
+
+def _repeat(gid: int, r0: int, r1: int, c0: int, c1: int, cell: dict) -> dict:
+    return {
+        "repeatCell": {
+            "range": {
+                "sheetId": gid,
+                "startRowIndex": r0,
+                "endRowIndex": r1,
+                "startColumnIndex": c0,
+                "endColumnIndex": c1,
+            },
+            "cell": cell,
+            "fields": "userEnteredFormat(backgroundColor,horizontalAlignment,verticalAlignment,textFormat)",
+        }
+    }
+
+
+def _merge(gid: int, row: int, ncols: int) -> dict:
+    return {
+        "mergeCells": {
+            "range": {
+                "sheetId": gid,
+                "startRowIndex": row,
+                "endRowIndex": row + 1,
+                "startColumnIndex": 0,
+                "endColumnIndex": ncols,
+            },
+            "mergeType": "MERGE_ALL",
+        }
+    }
+
+
+def summary_format_requests(gid: int, layout: dict) -> list[dict]:
+    """Sheets batchUpdate requests to brand the Spark Summary tab."""
+    n = layout["ncols"]
+    reqs: list[dict] = [
+        # Clear any prior merges (idempotent re-runs).
+        {"unmergeCells": {"range": {"sheetId": gid}}},
+        # Freeze the title + subtitle.
+        {
+            "updateSheetProperties": {
+                "properties": {"sheetId": gid, "gridProperties": {"frozenRowCount": 2}},
+                "fields": "gridProperties.frozenRowCount",
+            }
+        },
+        # Column widths: wide first column (names / mapped states), rest medium.
+        {
+            "updateDimensionProperties": {
+                "range": {"sheetId": gid, "dimension": "COLUMNS", "startIndex": 0, "endIndex": 1},
+                "properties": {"pixelSize": 230},
+                "fields": "pixelSize",
+            }
+        },
+        {
+            "updateDimensionProperties": {
+                "range": {"sheetId": gid, "dimension": "COLUMNS", "startIndex": 1, "endIndex": n},
+                "properties": {"pixelSize": 130},
+                "fields": "pixelSize",
+            }
+        },
+        # Title bar + subtitle.
+        _merge(gid, layout["title"], n),
+        _merge(gid, layout["subtitle"], n),
+        _repeat(gid, layout["title"], layout["title"] + 1, 0, n,
+                _cell(bg=_BLACK, fg=_WHITE, bold=True, size=16, align="CENTER")),
+        _repeat(gid, layout["subtitle"], layout["subtitle"] + 1, 0, n,
+                _cell(bg=_WHITE, fg=_GRAYTEXT, italic=True, size=10, align="CENTER")),
+        # KPI strip.
+        _repeat(gid, layout["kpi_header"], layout["kpi_header"] + 1, 0, 5,
+                _cell(bg=_DARK, fg=_WHITE, bold=True, size=10, align="CENTER")),
+        _repeat(gid, layout["kpi_value"], layout["kpi_value"] + 1, 0, 5,
+                _cell(bg=_LIGHT, fg=_BLACK, bold=True, size=14, align="CENTER")),
+    ]
+    for sr in layout["sections"]:
+        reqs.append(_merge(gid, sr, n))
+        reqs.append(
+            _repeat(gid, sr, sr + 1, 0, n, _cell(bg=_DARK, fg=_WHITE, bold=True, size=11, align="LEFT"))
+        )
+    for tr in layout["table_headers"]:
+        reqs.append(
+            _repeat(gid, tr, tr + 1, 0, n, _cell(bg=_LIGHT, fg=_BLACK, bold=True, size=10, align="LEFT"))
+        )
+    return reqs
 
 
 def _resolve_tab(titles: list[str], wanted: str) -> str | None:
@@ -319,7 +430,7 @@ def write_ld_summary(
     creating it if missing, for eyeball before swapping to the live `tab`.
     """
     summary = compute_ld_summary(tenant)
-    grid = build_summary_grid(summary)
+    grid, layout = build_summary_grid(summary)
     stats = {
         "demos": summary.total_demos,
         "consumers": summary.consumers,
@@ -362,14 +473,46 @@ def write_ld_summary(
         svc.spreadsheets().values().clear(
             spreadsheetId=sheet_id, range=f"'{actual}'!A:ZZ"
         ).execute()
-        width = max((len(r) for r in grid), default=1)
         svc.spreadsheets().values().update(
             spreadsheetId=sheet_id,
-            range=f"'{actual}'!A1:{_col_letter(width)}{len(grid)}",
+            range=f"'{actual}'!A1",
             valueInputOption="USER_ENTERED",
             body={"values": grid},
         ).execute()
-        return {"ok": True, "tab": actual, "rows": len(grid), "sheet_id": sheet_id, **stats}
+
+        # Apply branded formatting (non-fatal — values are already written).
+        formatted = False
+        try:
+            meta = (
+                svc.spreadsheets()
+                .get(spreadsheetId=sheet_id, fields="sheets.properties(title,sheetId)")
+                .execute()
+            )
+            gid = next(
+                (
+                    s["properties"]["sheetId"]
+                    for s in meta.get("sheets", [])
+                    if s.get("properties", {}).get("title") == actual
+                ),
+                None,
+            )
+            if gid is not None:
+                svc.spreadsheets().batchUpdate(
+                    spreadsheetId=sheet_id,
+                    body={"requests": summary_format_requests(gid, layout)},
+                ).execute()
+                formatted = True
+        except Exception as fe:  # pragma: no cover - formatting is best-effort
+            logger.warning("ld_summary_export: formatting failed (values written): %s", fe)
+
+        return {
+            "ok": True,
+            "tab": actual,
+            "rows": len(grid),
+            "formatted": formatted,
+            "sheet_id": sheet_id,
+            **stats,
+        }
     except HttpError as e:
         status = getattr(getattr(e, "resp", None), "status", None)
         if str(status) == "403":
