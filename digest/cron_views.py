@@ -2474,7 +2474,8 @@ class BackfillLdMasterTrackerView(View):
     backfill all of the tenant's requests into it. Writes only columns A-O —
     manual columns past "Spark Link" are preserved. dry_run by default; pass
     execute=1 to write. Params: tenant_slug, sheet_url (sets linked_sheet_url),
-    tab_name (default "MASTER_Tracker"), execute.
+    tab_name (default "MASTER_Tracker"), insert_by_date (default 1 — new rows
+    land at their date-sorted slot, descending, instead of appended), execute.
     """
 
     def _run(self, request: HttpRequest) -> HttpResponse:
@@ -2494,6 +2495,7 @@ class BackfillLdMasterTrackerView(View):
         slug = _get("tenant_slug") or "ighn-liquid-death"
         sheet_url = _get("sheet_url")
         tab_name = _get("tab_name") or "MASTER_Tracker"
+        insert_by_date = _bool("insert_by_date", default=True)
         execute = _bool("execute", default=False)
 
         tenant = Tenant.objects.filter(slug=slug).first()
@@ -2509,6 +2511,9 @@ class BackfillLdMasterTrackerView(View):
         if sheet_url and (tenant.linked_sheet_url or "") != sheet_url:
             tenant.linked_sheet_url = sheet_url
             changes["linked_sheet_url"] = sheet_url
+        if bool(tenant.master_tracker_insert_by_date) != insert_by_date:
+            tenant.master_tracker_insert_by_date = insert_by_date
+            changes["master_tracker_insert_by_date"] = str(insert_by_date)
         if changes:
             tenant.save(update_fields=list(changes.keys()))
 
@@ -2531,6 +2536,7 @@ class BackfillLdMasterTrackerView(View):
                 "changes": changes,
                 "execute": execute,
                 "master_tracker_tab_name": tenant.master_tracker_tab_name,
+                "master_tracker_insert_by_date": tenant.master_tracker_insert_by_date,
                 "log": out.getvalue(),
             }
         )

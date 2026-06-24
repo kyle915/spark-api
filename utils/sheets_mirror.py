@@ -316,6 +316,113 @@ def _row_for_request(request) -> list | None:
     ]
 
 
+def _parse_sheet_date(value):
+    """Parse a Date cell ('M/D/YYYY' or 'YYYY-MM-DD') to a date; None if blank/bad."""
+    if not value:
+        return None
+    from datetime import datetime
+
+    s = str(value).strip()
+    for fmt in ("%m/%d/%Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except (ValueError, TypeError):
+            continue
+    return None
+
+
+def _tab_gid(svc, sheet_id: str, tab: str | None) -> int | None:
+    """Resolve a worksheet's numeric sheetId (gid). None tab → first worksheet."""
+    try:
+        meta = (
+            svc.spreadsheets()
+            .get(spreadsheetId=sheet_id, fields="sheets.properties(title,sheetId,index)")
+            .execute()
+        )
+        sheets = meta.get("sheets", [])
+        if not sheets:
+            return None
+        if not tab:
+            sheets = sorted(sheets, key=lambda s: s.get("properties", {}).get("index", 0))
+            return sheets[0]["properties"]["sheetId"]
+        for s in sheets:
+            if s.get("properties", {}).get("title") == tab:
+                return s["properties"]["sheetId"]
+    except HttpError as e:
+        logger.warning("sheets_mirror: gid lookup failed: %s", e)
+    return None
+
+
+def _date_descending_insert_index(svc, sheet_id: str, tab: str | None, new_date) -> int | None:
+    """1-based row to insert a new row *before* so the Date column (col C) stays
+    DESCENDING (newest first). None → append at end. Rows with blank/unparseable
+    dates (section dividers, manual rows) are skipped, never the insertion point."""
+    if new_date is None:
+        return None
+    try:
+        resp = (
+            svc.spreadsheets()
+            .values()
+            .get(spreadsheetId=sheet_id, range=_qualify(tab, "C2:C100000"))
+            .execute()
+        )
+    except HttpError as e:
+        logger.warning("sheets_mirror: date-column read failed: %s", e)
+        return None
+    for i, r in enumerate(resp.get("values") or [], start=2):
+        d = _parse_sheet_date(r[0] if r else "")
+        if d is not None and d < new_date:
+            return i
+    return None
+
+
+def _insert_dated_row(svc, sheet_id, tab, gid, at_row, row, end_col) -> None:
+    """Insert a blank row at `at_row` (1-based) and write `row` into it."""
+    svc.spreadsheets().batchUpdate(
+        spreadsheetId=sheet_id,
+        body={
+            "requests": [
+                {
+                    "insertDimension": {
+                        "range": {
+                            "sheetId": gid,
+                            "dimension": "ROWS",
+                            "startIndex": at_row - 1,
+                            "endIndex": at_row,
+                        },
+                        "inheritFromBefore": False,
+                    }
+                }
+            ]
+        },
+    ).execute()
+    svc.spreadsheets().values().update(
+        spreadsheetId=sheet_id,
+        range=_qualify(tab, f"A{at_row}:{end_col}{at_row}"),
+        valueInputOption="RAW",
+        body={"values": [row]},
+    ).execute()
+
+
+def _append_or_insert_new(svc, sheet_id, tab, tenant, row, end_col) -> None:
+    """Add a NEW request row: date-positioned insert when the tenant opts in
+    (master_tracker_insert_by_date + a named tab), else plain append."""
+    if getattr(tenant, "master_tracker_insert_by_date", False) and tab:
+        at = _date_descending_insert_index(svc, sheet_id, tab, _parse_sheet_date(row[2]))
+        if at is not None:
+            gid = _tab_gid(svc, sheet_id, tab)
+            if gid is not None:
+                _insert_dated_row(svc, sheet_id, tab, gid, at, row, end_col)
+                return
+    svc.spreadsheets().values().append(
+        spreadsheetId=sheet_id,
+        range=_qualify(tab, f"A2:{end_col}"),
+        valueInputOption="RAW",
+        insertDataOption="INSERT_ROWS",
+        body={"values": [row]},
+    ).execute()
+
+
 def upsert_request_row(request) -> bool:
     """Sync one Request row into its tenant's linked Sheet.
 
@@ -356,13 +463,7 @@ def upsert_request_row(request) -> bool:
                 body={"values": [row]},
             ).execute()
         else:
-            svc.spreadsheets().values().append(
-                spreadsheetId=sheet_id,
-                range=_qualify(tab, f"A2:{end_col}"),
-                valueInputOption="RAW",
-                insertDataOption="INSERT_ROWS",
-                body={"values": [row]},
-            ).execute()
+            _append_or_insert_new(svc, sheet_id, tab, tenant, row, end_col)
         return True
     except HttpError as e:
         logger.warning(
@@ -444,23 +545,51 @@ def bulk_sync_requests(requests) -> int:
         else:
             appends.append(row)
 
+    insert_by_date = bool(getattr(tenant, "master_tracker_insert_by_date", False)) and tab
+
     written = 0
     try:
-        for chunk in _chunks(appends, 500):
-            svc.spreadsheets().values().append(
-                spreadsheetId=sheet_id,
-                range=_qualify(tab, f"A2:{end_col}"),
-                valueInputOption="RAW",
-                insertDataOption="INSERT_ROWS",
-                body={"values": chunk},
-            ).execute()
-            written += len(chunk)
+        # Updates first: they target absolute row indices from the column-A
+        # read above, so they must run BEFORE any date-insert shifts rows.
         for chunk in _chunks(updates, 500):
             svc.spreadsheets().values().batchUpdate(
                 spreadsheetId=sheet_id,
                 body={"valueInputOption": "RAW", "data": chunk},
             ).execute()
             written += len(chunk)
+
+        if insert_by_date and appends:
+            # Place each new row at its date-sorted slot (descending). Each
+            # call re-reads col C, so sequential inserts stay correct and the
+            # final order is independent of insertion order.
+            gid = _tab_gid(svc, sheet_id, tab)
+            for row in appends:
+                at = (
+                    _date_descending_insert_index(svc, sheet_id, tab, _parse_sheet_date(row[2]))
+                    if gid is not None
+                    else None
+                )
+                if at is not None:
+                    _insert_dated_row(svc, sheet_id, tab, gid, at, row, end_col)
+                else:
+                    svc.spreadsheets().values().append(
+                        spreadsheetId=sheet_id,
+                        range=_qualify(tab, f"A2:{end_col}"),
+                        valueInputOption="RAW",
+                        insertDataOption="INSERT_ROWS",
+                        body={"values": [row]},
+                    ).execute()
+                written += 1
+        else:
+            for chunk in _chunks(appends, 500):
+                svc.spreadsheets().values().append(
+                    spreadsheetId=sheet_id,
+                    range=_qualify(tab, f"A2:{end_col}"),
+                    valueInputOption="RAW",
+                    insertDataOption="INSERT_ROWS",
+                    body={"values": chunk},
+                ).execute()
+                written += len(chunk)
     except HttpError as e:
         logger.warning(
             "sheets_mirror: bulk write failed after %s rows: %s", written, e

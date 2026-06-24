@@ -74,6 +74,11 @@ class Tenant(Asyncable, models.Model):
     # first tab — e.g. Liquid Death, whose first tab is "backup_MASTER_Tracker".
     # Leave blank to keep the first-worksheet default (Girl Beer + all others).
     master_tracker_tab_name = models.CharField(max_length=128, null=True, blank=True)
+    # When True, a NEW Master-Tracker row is inserted at its date-sorted
+    # position (descending — newest first, matching LD's schedule) instead of
+    # appended at the bottom. Existing rows are never reordered. Only honored
+    # when master_tracker_tab_name is set. See utils/sheets_mirror.
+    master_tracker_insert_by_date = models.BooleanField(default=False)
     # When set, ALL external (public-form) requests for this tenant route
     # to this user as the assigned RMM/approver, overriding territory
     # logic. Chosen on the Team page. SET_NULL so removing the user from
