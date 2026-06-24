@@ -1,8 +1,10 @@
 name: Backfill LD Master Tracker (one-time)
 
-# Pins the Liquid Death tenant's Master-Tracker tab name and backfills all of
-# its requests into that tab (columns A-O only; manual columns preserved).
-# Dry-run by default; set execute=true to write. Manual only.
+# Pins the Liquid Death tenant's Master-Tracker tab name (and the
+# insert-by-date flag) and backfills all of its requests into that tab
+# (columns A-O only; manual columns preserved). The flag is pinned on every
+# run, even a dry run (execute=false), since pinning it touches no sheet rows.
+# Dry-run by default; set execute=true to write rows. Manual only.
 
 on:
   workflow_dispatch:
@@ -19,8 +21,14 @@ on:
         description: "Master Tracker tab name to pin"
         required: false
         default: "MASTER_Tracker"
+      insert_by_date:
+        description: "New rows land at their date slot (descending) instead of appended"
+        required: false
+        default: "true"
+        type: choice
+        options: ["true", "false"]
       execute:
-        description: "Actually write (false = dry run, counts only)"
+        description: "Actually write rows (false = dry run; the flag is still pinned)"
         required: false
         default: "false"
         type: choice
@@ -37,6 +45,7 @@ jobs:
           TENANT_SLUG: ${{ github.event.inputs.tenant_slug }}
           SHEET_URL: ${{ github.event.inputs.sheet_url }}
           TAB_NAME: ${{ github.event.inputs.tab_name }}
+          INSERT_BY_DATE: ${{ github.event.inputs.insert_by_date }}
           EXECUTE: ${{ github.event.inputs.execute }}
         run: |
           if [ -z "$CRON_SECRET" ]; then
@@ -49,6 +58,7 @@ jobs:
             --data-urlencode "tenant_slug=$TENANT_SLUG" \
             --data-urlencode "sheet_url=$SHEET_URL" \
             --data-urlencode "tab_name=$TAB_NAME" \
+            --data-urlencode "insert_by_date=$INSERT_BY_DATE" \
             --data-urlencode "execute=$EXECUTE")
           echo "HTTP $STATUS"
           cat /tmp/cron-response.json
