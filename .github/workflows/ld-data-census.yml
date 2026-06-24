@@ -1,0 +1,36 @@
+name: LD Data Census (read-only)
+
+# Read-only: reports the Liquid Death tenant's Spark data coverage (recap/event
+# counts by year + recap field names) so the Summary year-split + recaps export
+# can be designed against real data. Writes nothing. Manual only.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tenant_slug:
+        description: "LD tenant slug"
+        required: false
+        default: "ighn-liquid-death"
+
+jobs:
+  ld-data-census:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire census endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/ld-data-census
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          TENANT_SLUG: ${{ github.event.inputs.tenant_slug }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/census.json -w '%{http_code}' \
+            -X POST "$CRON_URL" \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            --data-urlencode "tenant_slug=$TENANT_SLUG")
+          echo "HTTP $STATUS"
+          cat /tmp/census.json
+          echo ""
+          [ "$STATUS" != "200" ] && exit 1 || exit 0
