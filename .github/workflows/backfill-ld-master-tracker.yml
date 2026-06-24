@@ -1,0 +1,56 @@
+name: Backfill LD Master Tracker (one-time)
+
+# Pins the Liquid Death tenant's Master-Tracker tab name and backfills all of
+# its requests into that tab (columns A-O only; manual columns preserved).
+# Dry-run by default; set execute=true to write. Manual only.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tenant_slug:
+        description: "LD tenant slug"
+        required: false
+        default: "ighn-liquid-death"
+      sheet_url:
+        description: "Set linked_sheet_url to this (the LD sheet)"
+        required: false
+        default: "https://docs.google.com/spreadsheets/d/1P1k5bpGuce_qAeh1qg9kNI4QjzRYLZhHTDm2vnQQKi0/edit"
+      tab_name:
+        description: "Master Tracker tab name to pin"
+        required: false
+        default: "MASTER_Tracker"
+      execute:
+        description: "Actually write (false = dry run, counts only)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+jobs:
+  backfill-ld-master-tracker:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire backfill endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/backfill-ld-master-tracker
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          TENANT_SLUG: ${{ github.event.inputs.tenant_slug }}
+          SHEET_URL: ${{ github.event.inputs.sheet_url }}
+          TAB_NAME: ${{ github.event.inputs.tab_name }}
+          EXECUTE: ${{ github.event.inputs.execute }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL" \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            --data-urlencode "tenant_slug=$TENANT_SLUG" \
+            --data-urlencode "sheet_url=$SHEET_URL" \
+            --data-urlencode "tab_name=$TAB_NAME" \
+            --data-urlencode "execute=$EXECUTE")
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          echo ""
+          [ "$STATUS" != "200" ] && exit 1 || exit 0
