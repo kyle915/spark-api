@@ -2377,6 +2377,94 @@ class ExportRecapsToSheetView(View):
         return self._run(request)
 
 
+@method_decorator(csrf_exempt, name="dispatch")
+class ExportLdSummaryView(View):
+    """POST `/internal/cron/export-ld-summary`.
+
+    Rebuilds the Liquid Death "Summary" tab from Spark recaps (branded LD).
+    Params (query or POST): tenant_slug, sheet_url, tab (default "Summary"),
+    target_tab (stage to a scratch tab), dry_run.
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _get(name: str) -> str:
+            return (request.GET.get(name) or request.POST.get(name) or "").strip()
+
+        def _bool(name: str, default: bool = False) -> bool:
+            raw = _get(name).lower()
+            return raw in ("1", "true", "yes", "on") if raw else default
+
+        cmd_args: list[str] = []
+        for flag in ("tenant_slug", "sheet_url", "tab", "target_tab"):
+            val = _get(flag)
+            if val:
+                cmd_args += [f"--{flag.replace('_', '-')}", val]
+        if not _bool("dry_run", default=False):
+            cmd_args.append("--apply")
+
+        out = io.StringIO()
+        try:
+            call_command("export_ld_summary_to_sheet", *cmd_args, stdout=out)
+        except Exception as exc:
+            logger.exception("export-ld-summary cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "exception": _concise_exc(exc), "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "log": out.getvalue()})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class DescribeSheetTabsView(View):
+    """GET/POST `/internal/cron/describe-sheet-tabs` — read-only.
+
+    Lists a sheet's tab titles + row/col counts + row 1 of tracker/summary
+    tabs, so we can confirm exact tab names in prod before any write. Params:
+    sheet_url or tenant_slug.
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _get(name: str) -> str:
+            return (request.GET.get(name) or request.POST.get(name) or "").strip()
+
+        cmd_args: list[str] = []
+        for flag in ("sheet_url", "tenant_slug"):
+            val = _get(flag)
+            if val:
+                cmd_args += [f"--{flag.replace('_', '-')}", val]
+
+        out = io.StringIO()
+        try:
+            call_command("describe_sheet_tabs", *cmd_args, stdout=out)
+        except Exception as exc:
+            logger.exception("describe-sheet-tabs cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "exception": _concise_exc(exc), "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "log": out.getvalue()})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
 def _registered_views() -> dict[str, Any]:
     """Map URL path → view class. Lets `digest/urls.py` mount these
     without each one being re-exported explicitly.
@@ -2413,4 +2501,6 @@ def _registered_views() -> dict[str, Any]:
         "set-tenant-event-types": SetTenantEventTypesView,
         "set-custom-recap-field": SetCustomRecapFieldView,
         "export-recaps-to-sheet": ExportRecapsToSheetView,
+        "export-ld-summary": ExportLdSummaryView,
+        "describe-sheet-tabs": DescribeSheetTabsView,
     }

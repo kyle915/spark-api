@@ -1,0 +1,42 @@
+name: Describe sheet tabs (read-only)
+
+# Manual, read-only: list a Google Sheet's tab titles + row/col counts + row 1
+# of any tracker/summary-looking tab. Used to confirm exact tab names before
+# enabling writes (e.g. the Liquid Death sheet whose first tab is a backup).
+
+on:
+  workflow_dispatch:
+    inputs:
+      sheet_url:
+        description: "Sheet URL to describe"
+        required: false
+        default: "https://docs.google.com/spreadsheets/d/1P1k5bpGuce_qAeh1qg9kNI4QjzRYLZhHTDm2vnQQKi0/edit"
+      tenant_slug:
+        description: "Or a tenant slug (uses its linked_sheet_url)"
+        required: false
+        default: ""
+
+jobs:
+  describe-tabs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire describe-sheet-tabs endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/describe-sheet-tabs
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          SHEET_URL: ${{ github.event.inputs.sheet_url }}
+          TENANT_SLUG: ${{ github.event.inputs.tenant_slug }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL" \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            --data-urlencode "sheet_url=$SHEET_URL" \
+            --data-urlencode "tenant_slug=$TENANT_SLUG")
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          echo ""
+          [ "$STATUS" != "200" ] && exit 1 || exit 0

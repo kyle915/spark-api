@@ -68,6 +68,12 @@ class Tenant(Asyncable, models.Model):
     # (spark-api-new-sa@spark-479222.iam.gserviceaccount.com) needs Editor
     # access on the target sheet. See recaps/recap_sheet_export.py.
     recap_export_sheet_url = models.URLField(max_length=512, null=True, blank=True)
+    # When set, the Master-Tracker request mirror (utils/sheets_mirror) writes
+    # to THIS worksheet (by name) on linked_sheet_url instead of the
+    # spreadsheet's first worksheet. Needed when the live tracker isn't the
+    # first tab — e.g. Liquid Death, whose first tab is "backup_MASTER_Tracker".
+    # Leave blank to keep the first-worksheet default (Girl Beer + all others).
+    master_tracker_tab_name = models.CharField(max_length=128, null=True, blank=True)
     # When set, ALL external (public-form) requests for this tenant route
     # to this user as the assigned RMM/approver, overriding territory
     # logic. Chosen on the Team page. SET_NULL so removing the user from
