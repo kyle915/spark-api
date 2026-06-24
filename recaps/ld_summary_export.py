@@ -20,6 +20,7 @@ must have Editor access on the sheet.
 from __future__ import annotations
 
 import logging
+import re
 from collections import defaultdict
 from dataclasses import dataclass, field
 
@@ -203,6 +204,66 @@ def compute_ld_summary(tenant) -> LdSummary:
     return summary
 
 
+# ── OnBrand "RECAPS" tab — the sheet's comprehensive demo dataset spanning
+#    2025–2026 (1.7k+ rows). Column indices confirmed via describe_sheet_tabs
+#    --peek-tab RECAPS. We read it for the all-years headline + by-year split
+#    (Spark only has 2026, so 2025 must come from here).
+ONBRAND_RECAPS_TAB = "RECAPS"
+_RC_DATE = 2
+_RC_CONSUMERS = 10
+_RC_WILLING = 13
+_RC_CANS = 15
+_RC_PACKS = 16
+
+
+def _num(cell) -> int:
+    """Parse a recap numeric cell → int; blanks / '-' / 'N/A' / junk → 0."""
+    if cell is None:
+        return 0
+    s = str(cell).strip().replace(",", "")
+    if not s or s.lower() in ("-", "—", "n/a", "na", "none"):
+        return 0
+    m = re.search(r"-?\d+", s)
+    return int(m.group(0)) if m else 0
+
+
+def _year_of(cell) -> str | None:
+    m = re.search(r"(20\d\d)", str(cell or ""))
+    return m.group(1) if m else None
+
+
+def read_recaps_tab_by_year(svc, sheet_id: str, tab: str = ONBRAND_RECAPS_TAB) -> dict:
+    """Aggregate the OnBrand RECAPS tab into per-year buckets (demos +
+    consumers/cans/packs/willing). Returns {year: _Bucket}; empty dict if the
+    tab is missing/unreadable (the summary then falls back to Spark-only)."""
+    by_year: dict[str, _Bucket] = defaultdict(_Bucket)
+    try:
+        resp = (
+            svc.spreadsheets()
+            .values()
+            .get(spreadsheetId=sheet_id, range=f"'{tab}'!A2:Q100000")
+            .execute()
+        )
+    except HttpError as e:
+        logger.warning("ld_summary_export: RECAPS tab read failed: %s", e)
+        return {}
+    for row in resp.get("values") or []:
+        yr = _year_of(row[_RC_DATE] if len(row) > _RC_DATE else "")
+        if not yr:
+            continue
+        b = by_year[yr]
+        b.demos += 1
+        b.consumers += _num(row[_RC_CONSUMERS]) if len(row) > _RC_CONSUMERS else 0
+        b.willing += _num(row[_RC_WILLING]) if len(row) > _RC_WILLING else 0
+        b.cans += _num(row[_RC_CANS]) if len(row) > _RC_CANS else 0
+        b.packs += _num(row[_RC_PACKS]) if len(row) > _RC_PACKS else 0
+    return dict(by_year)
+
+
+def _conv(b: _Bucket) -> str:
+    return f"{((b.cans + b.packs) / b.consumers * 100):.1f}%" if b.consumers else "0.0%"
+
+
 def _pct(n: int, total: int) -> str:
     return f"{(n / total * 100):.1f}%" if total else "0.0%"
 
@@ -216,12 +277,16 @@ _GRAYTEXT = {"red": 0.5, "green": 0.5, "blue": 0.5}
 SUMMARY_WIDTH = 8  # widest section (the RMM table)
 
 
-def build_summary_grid(summary: LdSummary) -> tuple[list[list], dict]:
+def build_summary_grid(summary: LdSummary, years: dict | None = None) -> tuple[list[list], dict]:
     """Return (rows, layout). `layout` records which rows are the title /
     subtitle / KPI strip / section headers / table headers, so the caller can
-    apply branded cell formatting. Branded Liquid Death; KPI strip, then
-    Performance by RMM / State / Month / Brand Ambassador."""
-    total = summary.total_demos
+    apply branded cell formatting.
+
+    When `years` (a {year: _Bucket} map from the OnBrand RECAPS tab) is given,
+    the headline + a PERFORMANCE BY YEAR table reflect ALL demos across every
+    year (Kyle's "capture all 2025 & 2026 events"), and the Spark-recap
+    breakdowns below are clearly labeled as Spark-tracked. Without it the
+    headline is the Spark-recap totals (back-compat)."""
     rows: list[list] = []
     layout = {
         "title": 0,
@@ -237,17 +302,56 @@ def build_summary_grid(summary: LdSummary) -> tuple[list[list], dict]:
         rows.append(list(row) if row else [])
         return len(rows) - 1
 
+    # Headline: all-demo totals from the RECAPS tab when available, else Spark.
+    if years:
+        head = _Bucket()
+        for b in years.values():
+            head.demos += b.demos
+            head.consumers += b.consumers
+            head.cans += b.cans
+            head.packs += b.packs
+        head_demos, head_consumers, head_cans, head_packs = (
+            head.demos, head.consumers, head.cans, head.packs
+        )
+        head_conv = _conv(head)
+        yrs_present = sorted(years.keys())
+        span = f"{yrs_present[0]}–{yrs_present[-1]}" if len(yrs_present) > 1 else (yrs_present[0] if yrs_present else "")
+        subtitle = f"Auto-updated daily · all retail sampling demos {span}".strip()
+    else:
+        head_demos = summary.total_demos
+        head_consumers, head_cans, head_packs = summary.consumers, summary.cans, summary.packs
+        head_conv = f"{summary.conversion_pct:.1f}%"
+        subtitle = "Auto-updated daily from Spark — Retail Samplings"
+
     add(["LIQUID DEATH · RETAIL SAMPLING SUMMARY"])
-    add(["Auto-updated daily from Spark — Retail Samplings"])
+    add([subtitle])
     add()
 
     layout["kpi_header"] = add(
         ["DEMOS DONE", "CONSUMERS SAMPLED", "SINGLE CANS SOLD", "MULTIPACKS SOLD", "CONVERSION %"]
     )
     layout["kpi_value"] = add(
-        [total, summary.consumers, summary.cans, summary.packs, f"{summary.conversion_pct:.1f}%"]
+        [head_demos, head_consumers, head_cans, head_packs, head_conv]
     )
     add()
+
+    # Performance by year — the two-years-separate view Kyle asked for.
+    if years:
+        layout["sections"].append(add(["PERFORMANCE BY YEAR"]))
+        layout["table_headers"].append(
+            add(["Year", "Demos", "Consumers Sampled", "Single Cans", "MultiPacks", "Conversion %"])
+        )
+        for yr in sorted(years.keys(), reverse=True):
+            b = years[yr]
+            add([yr, b.demos, b.consumers, b.cans, b.packs, _conv(b)])
+        add()
+        # Everything below is Spark-app data (2026 only today).
+        layout["sections"].append(add(["SPARK-TRACKED DETAIL · 2026 (live app submissions)"]))
+        add([f"{summary.total_demos} recaps submitted in Spark · {summary.consumers} consumers · "
+             f"{summary.cans} single cans · {summary.packs} multipacks · {summary.conversion_pct:.1f}% conversion"])
+        add()
+
+    total = summary.total_demos
 
     # Performance by RMM (Kyle's explicit ask)
     layout["sections"].append(add(["PERFORMANCE BY RMM"]))
@@ -430,7 +534,19 @@ def write_ld_summary(
     creating it if missing, for eyeball before swapping to the live `tab`.
     """
     summary = compute_ld_summary(tenant)
-    grid, layout = build_summary_grid(summary)
+
+    # Resolve the sheet + client up front so we can read the OnBrand RECAPS tab
+    # (the all-years demo source) before building the grid.
+    url = (
+        sheet_url
+        or getattr(tenant, "recap_export_sheet_url", None)
+        or getattr(tenant, "linked_sheet_url", None)
+    )
+    sheet_id = extract_sheet_id(url) if url else None
+    svc = _service()
+
+    years = read_recaps_tab_by_year(svc, sheet_id) if (svc and sheet_id) else {}
+    grid, layout = build_summary_grid(summary, years=years or None)
     stats = {
         "demos": summary.total_demos,
         "consumers": summary.consumers,
@@ -438,21 +554,24 @@ def write_ld_summary(
         "packs": summary.packs,
         "conversion_pct": round(summary.conversion_pct, 2),
         "rmms": {n: summary.by_rmm[n].demos for n in summary.by_rmm},
+        "by_year": {
+            yr: {
+                "demos": b.demos,
+                "consumers": b.consumers,
+                "cans": b.cans,
+                "packs": b.packs,
+                "conversion_pct": round((b.cans + b.packs) / b.consumers * 100, 2) if b.consumers else 0.0,
+            }
+            for yr, b in sorted(years.items())
+        },
     }
     if dry_run:
         return {"ok": True, "dry_run": True, "rows": len(grid), **stats}
 
-    url = (
-        sheet_url
-        or getattr(tenant, "recap_export_sheet_url", None)
-        or getattr(tenant, "linked_sheet_url", None)
-    )
     if not url:
         return {"ok": False, "error": "no-sheet-url", "tenant": getattr(tenant, "slug", None)}
-    sheet_id = extract_sheet_id(url)
     if not sheet_id:
         return {"ok": False, "error": "bad-sheet-url", "url": url}
-    svc = _service()
     if svc is None:
         return {"ok": False, "error": "no-credentials"}
 
