@@ -2549,6 +2549,56 @@ class BackfillLdMasterTrackerView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class ExportLdRecapsView(View):
+    """POST `/internal/cron/export-ld-recaps`.
+
+    Writes Liquid Death's raw recap data into a branded "Spark Recaps" tab and
+    (on a write) pins the tenant's recap-export config so the on-save signal +
+    daily cron target that tab. Params: tenant_slug, sheet_url, tab (default
+    "Spark Recaps"), year (optional), no_on_submit, dry_run.
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _get(name: str) -> str:
+            return (request.GET.get(name) or request.POST.get(name) or "").strip()
+
+        def _bool(name: str, default: bool = False) -> bool:
+            raw = _get(name).lower()
+            return raw in ("1", "true", "yes", "on") if raw else default
+
+        cmd_args: list[str] = []
+        for flag in ("tenant_slug", "sheet_url", "tab", "year"):
+            val = _get(flag)
+            if val:
+                cmd_args += [f"--{flag.replace('_', '-')}", val]
+        if _bool("no_on_submit", default=False):
+            cmd_args.append("--no-on-submit")
+        if not _bool("dry_run", default=False):
+            cmd_args.append("--apply")
+
+        out = io.StringIO()
+        try:
+            call_command("export_ld_recaps_to_sheet", *cmd_args, stdout=out)
+        except Exception as exc:
+            logger.exception("export-ld-recaps cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "exception": _concise_exc(exc), "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "log": out.getvalue()})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class LdDataCensusView(View):
     """GET/POST `/internal/cron/ld-data-census` — READ-ONLY, writes nothing.
 
@@ -2666,4 +2716,5 @@ def _registered_views() -> dict[str, Any]:
         "describe-sheet-tabs": DescribeSheetTabsView,
         "backfill-ld-master-tracker": BackfillLdMasterTrackerView,
         "ld-data-census": LdDataCensusView,
+        "export-ld-recaps": ExportLdRecapsView,
     }

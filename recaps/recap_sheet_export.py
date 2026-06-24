@@ -295,6 +295,21 @@ def _read_header(svc, sheet_id: str, tab: str) -> list[str]:
     return [str(c) for c in values[0]] if values else []
 
 
+def refresh_recap_export(tenant) -> dict:
+    """Dispatch a tenant's recap-data export.
+
+    If the tenant has a `recap_export_tab_name` set, use the branded, self-built
+    export into that tab (recaps.ld_recaps_export — Liquid Death). Otherwise use
+    the legacy map-into-existing-tab export (the "Demo Recaps" tab whose Summary
+    formulas Girl Beer relies on). Returns a result dict; never raises."""
+    tab = (getattr(tenant, "recap_export_tab_name", "") or "").strip()
+    if tab:
+        from recaps.ld_recaps_export import write_ld_recaps
+
+        return write_ld_recaps(tenant, tab=tab)
+    return export_tenant_recaps_to_sheet(tenant)
+
+
 def export_tenant_recaps_to_sheet(tenant, *, tab: str = DEFAULT_TAB, sheet_url: str | None = None) -> dict:
     """Refresh a tenant's recap data into their export sheet, preserving the
     existing layout. Returns a result dict; never raises.

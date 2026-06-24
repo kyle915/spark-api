@@ -79,6 +79,15 @@ class Tenant(Asyncable, models.Model):
     # appended at the bottom. Existing rows are never reordered. Only honored
     # when master_tracker_tab_name is set. See utils/sheets_mirror.
     master_tracker_insert_by_date = models.BooleanField(default=False)
+    # Which worksheet the recap "demo data" export writes into. Null/blank =
+    # "Demo Recaps" (the Girl Beer default, which feeds an existing Summary).
+    # Liquid Death sets "Spark Recaps" — a dedicated branded raw-recaps tab on
+    # its main sheet. See recaps/ld_recaps_export.py / recap_sheet_export.py.
+    recap_export_tab_name = models.CharField(max_length=128, null=True, blank=True)
+    # When True, the recap export refreshes on every recap save (post_save),
+    # not only on the daily cron — so a submitted/edited recap shows up in the
+    # sheet right away. Off by default (Girl Beer stays daily). LD = True.
+    recap_export_on_submit = models.BooleanField(default=False)
     # When set, ALL external (public-form) requests for this tenant route
     # to this user as the assigned RMM/approver, overriding territory
     # logic. Chosen on the Team page. SET_NULL so removing the user from
