@@ -575,6 +575,12 @@ class CustomField(models.Model):
     # Display order within a section (ascending). Ties broken by id, so
     # legacy rows (all default 0) keep their historical creation order.
     order = models.IntegerField(default=0)
+    # Allowed choices for "select" / "multiselect" field types — the admin-
+    # defined fixed list of options (e.g. ["Detroit", "Grand Rapids"]). Empty
+    # for every other field type. The submitted answer lands in
+    # CustomFieldValue.value: a single option string for "select", or a JSON
+    # array of option strings for "multiselect".
+    options = models.JSONField(default=list, blank=True)
 
     custom_recap_template = models.ForeignKey(
         CustomRecapTemplate,
