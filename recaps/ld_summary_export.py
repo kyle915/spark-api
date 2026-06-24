@@ -79,6 +79,14 @@ RMM_MAPPED_STATES = {
 }
 
 
+def _event_rmm_name(event) -> str | None:
+    """The RMM display name for an event via its assigned RMM user's email —
+    the in-app dashboard's by-RMM basis. None if unassigned / not an LD RMM."""
+    user = getattr(event, "rmm_asigned", None)
+    email = (getattr(user, "email", "") or "").strip().lower()
+    return RMM_EMAIL_TO_NAME.get(email)
+
+
 @dataclass
 class _Bucket:
     demos: int = 0
@@ -434,13 +442,19 @@ def compute_ld_program_breakdowns(tenant) -> dict:
         ce_map[row["recap_id"]] = row["c"] or 0
 
     for r in Recap.objects.filter(event__in=ewr).select_related(
-        "state", "event", "event__state", "ambassador", "ambassador__user"
+        "state", "event", "event__state", "event__rmm_asigned",
+        "ambassador", "ambassador__user",
     ):
         code = getattr(getattr(r, "state", None), "code", None) or getattr(
             getattr(getattr(r, "event", None), "state", None), "code", None
         )
         code = (str(code).strip().upper()[:2] or None) if code else None
-        rmm = STATE_TO_RMM.get(code, UNASSIGNED) if code else UNASSIGNED
+        # RMM: the assigned RMM user (the in-app dashboard's basis) first —
+        # legacy Recap.state is mostly null — then state→territory, else
+        # Unassigned. `code` still feeds the by-state table.
+        rmm = _event_rmm_name(getattr(r, "event", None)) or (
+            STATE_TO_RMM.get(code, UNASSIGNED) if code else UNASSIGNED
+        )
         cons = ce_map.get(r.id, 0)
         cans = r.total_cans_sold or 0
         packs = r.total_packs_sold or 0
