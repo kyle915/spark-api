@@ -8,6 +8,7 @@ aggregation + RMM attribution; the underlying matcher is report_service's job.
 from __future__ import annotations
 
 from datetime import timedelta
+from unittest.mock import MagicMock
 
 import pytest
 from django.utils import timezone
@@ -15,7 +16,13 @@ from django.utils import timezone
 from ambassadors.tests.base import AmbassadorsGraphQLTestCase
 from events.models import State
 from recaps import models as recap_models
-from recaps.ld_summary_export import build_summary_grid, compute_ld_summary
+from recaps.ld_summary_export import (
+    LdSummary,
+    _num,
+    build_summary_grid,
+    compute_ld_summary,
+    read_recaps_tab_by_year,
+)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -122,3 +129,68 @@ class TestLdSummary(AmbassadorsGraphQLTestCase):
         assert reqs and all(
             isinstance(r, dict) for r in reqs
         )
+
+
+def test_num_parses_recap_numeric_cells():
+    assert _num("70") == 70
+    assert _num("1,234") == 1234
+    assert _num("-") == 0
+    assert _num("N/A") == 0
+    assert _num("") == 0
+    assert _num(None) == 0
+    assert _num("12 cases") == 12
+
+
+def _recaps_tab_svc(rows):
+    """svc whose values().get() returns the given RECAPS-tab data rows."""
+    svc = MagicMock()
+    svc.spreadsheets.return_value.values.return_value.get.return_value.execute.return_value = {
+        "values": rows
+    }
+    return svc
+
+
+def _rc_row(date, consumers, cans, packs):
+    """A 17-col RECAPS row: date=col2, consumers=col10, cans=col15, packs=col16."""
+    row = [""] * 17
+    row[2] = date
+    row[10] = str(consumers)
+    row[15] = str(cans)
+    row[16] = str(packs)
+    return row
+
+
+def test_read_recaps_tab_by_year_aggregates():
+    svc = _recaps_tab_svc([
+        _rc_row("01/11/2025", 70, 8, 10),
+        _rc_row("02/02/2025", 30, 2, 0),
+        _rc_row("05/05/2026", 100, 10, 5),
+        _rc_row("", 999, 9, 9),          # no date → skipped
+    ])
+    by_year = read_recaps_tab_by_year(svc, "sid", tab="RECAPS")
+    assert set(by_year.keys()) == {"2025", "2026"}
+    assert by_year["2025"].demos == 2
+    assert by_year["2025"].consumers == 100
+    assert by_year["2025"].cans == 10
+    assert by_year["2025"].packs == 10
+    assert by_year["2026"].demos == 1
+    assert by_year["2026"].consumers == 100
+
+
+def test_build_grid_with_years_headline_and_section():
+    from recaps.ld_summary_export import _Bucket
+
+    years = {
+        "2025": _Bucket(demos=1668, consumers=100000, cans=5000, packs=4000),
+        "2026": _Bucket(demos=89, consumers=8000, cans=400, packs=300),
+    }
+    grid, layout = build_summary_grid(LdSummary(total_demos=47, consumers=2075, cans=300, packs=209), years=years)
+    flat = [str(c) for row in grid for c in row]
+    # Headline = all-years totals (1668 + 89 demos).
+    assert "1757" in flat
+    # The two-years-separate view + the labeled Spark detail.
+    assert "PERFORMANCE BY YEAR" in flat
+    assert any("SPARK-TRACKED DETAIL" in c for c in flat)
+    assert "2025" in flat and "2026" in flat
+    # KPI value row holds the combined demo total.
+    assert grid[layout["kpi_value"]][0] == 1757
