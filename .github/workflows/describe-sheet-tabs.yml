@@ -15,6 +15,14 @@ on:
         description: "Or a tenant slug (uses its linked_sheet_url)"
         required: false
         default: ""
+      peek_tab:
+        description: "Dump this tab's header + sample rows + year histogram (e.g. RECAPS)"
+        required: false
+        default: ""
+      peek_rows:
+        description: "How many sample rows to dump"
+        required: false
+        default: "4"
 
 jobs:
   describe-tabs:
@@ -26,6 +34,8 @@ jobs:
           CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
           SHEET_URL: ${{ github.event.inputs.sheet_url }}
           TENANT_SLUG: ${{ github.event.inputs.tenant_slug }}
+          PEEK_TAB: ${{ github.event.inputs.peek_tab }}
+          PEEK_ROWS: ${{ github.event.inputs.peek_rows }}
         run: |
           if [ -z "$CRON_SECRET" ]; then
             echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
@@ -35,7 +45,9 @@ jobs:
             -X POST "$CRON_URL" \
             -H "X-Cron-Secret: $CRON_SECRET" \
             --data-urlencode "sheet_url=$SHEET_URL" \
-            --data-urlencode "tenant_slug=$TENANT_SLUG")
+            --data-urlencode "tenant_slug=$TENANT_SLUG" \
+            --data-urlencode "peek_tab=$PEEK_TAB" \
+            --data-urlencode "peek_rows=$PEEK_ROWS")
           echo "HTTP $STATUS"
           cat /tmp/cron-response.json
           echo ""
