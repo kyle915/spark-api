@@ -2703,6 +2703,9 @@ class LdDataCensusView(View):
                 "recaps_by_year": _ord(recap_year),
                 "recaps_by_month": _ord(recap_month),
                 "events_by_year": _ord(event_year),
+                "legacy_recaps_by_year": _ord(legacy_recaps_by_year),
+                "ce_consumers_by_year": _ord(ce_consumers_by_year),
+                "legacy": legacy,
                 "recap_field_count": len(field_names),
                 "recap_field_names": field_names,
             }
