@@ -454,6 +454,9 @@ class CreateCustomFieldInput(SparkGraphQLInput):
     recap_section_id: strawberry.ID
     required: bool | None = None
     order: int | None = None
+    # Allowed choices for select / multiselect field types. None = leave the
+    # existing options untouched (on update); [] clears them.
+    options: List[str] | None = None
 
 
 @strawberry.input
@@ -471,6 +474,8 @@ class CustomRecapTemplateFieldInput(SparkGraphQLInput):
     # Display order within the section. When omitted, the field's position in
     # this list is used (preserves the create-builder's top-to-bottom order).
     order: int | None = None
+    # Allowed choices for select / multiselect field types (admin-defined).
+    options: List[str] | None = None
 
 
 @strawberry.input

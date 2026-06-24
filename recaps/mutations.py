@@ -725,6 +725,7 @@ class RecapMutationService(SparkGraphQLMixin):
                 recap_section=recap_section,
                 created_by=self.user,
                 required=bool(field_input.required),
+                options=list(field_input.options or []),
                 order=(
                     field_input.order if field_input.order is not None else idx
                 ),
@@ -784,6 +785,7 @@ class RecapMutationService(SparkGraphQLMixin):
                     recap_section=recap_section,
                     created_by=self.user,
                     required=bool(field_input.required),
+                    options=list(field_input.options or []),
                     order=order_val,
                 )
                 final_field_ids.add(custom_field.id)
@@ -802,6 +804,8 @@ class RecapMutationService(SparkGraphQLMixin):
             custom_field.updated_by = self.user
             if field_input.required is not None:
                 custom_field.required = field_input.required
+            if field_input.options is not None:
+                custom_field.options = list(field_input.options)
             custom_field.order = order_val
             custom_field.save()
             final_field_ids.add(custom_field.id)
@@ -2594,6 +2598,7 @@ class RecapMutationService(SparkGraphQLMixin):
                     recap_section=recap_section,
                     created_by=self.user,
                     required=bool(self.input.required),
+                    options=list(self.input.options or []),
                     order=self.input.order if self.input.order is not None else 0,
                 )
                 return custom_field
@@ -2662,6 +2667,8 @@ class RecapMutationService(SparkGraphQLMixin):
                 custom_field.updated_by = self.user
                 if self.input.required is not None:
                     custom_field.required = self.input.required
+                if self.input.options is not None:
+                    custom_field.options = list(self.input.options)
                 if self.input.order is not None:
                     custom_field.order = self.input.order
                 custom_field.save()

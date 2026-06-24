@@ -1478,6 +1478,14 @@ class CustomField(Node):
     updated_at: str
 
     @strawberry.field
+    def options(self) -> list[str]:
+        """Admin-defined choices for 'select' / 'multiselect' fields; [] for
+        every other field type. Read from the model's JSON column via
+        __dict__ to avoid shadowing this resolver name."""
+        raw = self.__dict__.get("options")
+        return [str(o) for o in raw] if isinstance(raw, list) else []
+
+    @strawberry.field
     def value(self) -> str | None:
         """Value for this field in a specific custom recap context, if present."""
         return getattr(self, "_custom_recap_value", None)
