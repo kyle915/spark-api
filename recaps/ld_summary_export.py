@@ -38,7 +38,7 @@ from utils.sheets_mirror import _col_letter, _service, extract_sheet_id
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_SUMMARY_TAB = "Summary"
+DEFAULT_SUMMARY_TAB = "Spark Summary"
 
 # RMM email (from the territory map) → the first name shown in the sheet.
 RMM_EMAIL_TO_NAME = {
@@ -344,20 +344,13 @@ def write_ld_summary(
         wanted = (target_tab or tab).strip()
         actual = _resolve_tab(titles, wanted)
         if actual is None:
-            if target_tab:
-                # staging tab: create it
-                svc.spreadsheets().batchUpdate(
-                    spreadsheetId=sheet_id,
-                    body={"requests": [{"addSheet": {"properties": {"title": wanted}}}]},
-                ).execute()
-                actual = wanted
-            else:
-                return {
-                    "ok": False,
-                    "error": "summary-tab-not-found",
-                    "wanted": wanted,
-                    "tabs": titles,
-                }
+            # "Spark Summary" is a dedicated, Spark-owned tab — create it if it
+            # doesn't exist yet. Creating a new tab never touches existing tabs.
+            svc.spreadsheets().batchUpdate(
+                spreadsheetId=sheet_id,
+                body={"requests": [{"addSheet": {"properties": {"title": wanted}}}]},
+            ).execute()
+            actual = wanted
 
         # Clear the whole tab then write the rebuilt block. Only this tab.
         svc.spreadsheets().values().clear(
