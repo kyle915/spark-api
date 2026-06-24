@@ -397,6 +397,84 @@ def compute_ld_program_years(tenant, years: list[int]) -> dict:
     return {str(y): compute_ld_program_kpis(tenant, year=y) for y in years}
 
 
+def compute_ld_program_breakdowns(tenant) -> dict:
+    """Full-dataset by-RMM / by-State / by-BA breakdowns (legacy Recap +
+    ConsumerEngagements + the custom-template recaps), so these tables tie to
+    the in-app dashboard headline instead of the 47-recap slice. RMM is
+    attributed by the recap's state via routing.LIQUID_DEATH_TERRITORY (the
+    sheet's market→RMM model); state falls back recap.state → event.state."""
+    from collections import defaultdict
+
+    from django.db.models import Count, Sum
+
+    from events.models import Event
+    from recaps.models import ConsumerEngagements, Recap
+    from recaps.recap_sheet_export import _ba_name
+
+    ewr = (
+        Event.objects.exclude(request__deleted_at__isnull=False)
+        .filter(tenant=tenant, recaps__isnull=False)
+        .distinct()
+    )
+
+    def _bucket():
+        return {"events": 0, "consumers": 0, "cans": 0, "packs": 0}
+
+    by_rmm: dict = defaultdict(_bucket)
+    by_state: dict = defaultdict(_bucket)
+    by_ba: dict = defaultdict(_bucket)
+
+    # Per-recap consumer totals (legacy), summed from ConsumerEngagements.
+    ce_map: dict = {}
+    for row in (
+        ConsumerEngagements.objects.filter(recap__event__in=ewr)
+        .values("recap_id")
+        .annotate(c=Sum("total_consumer", default=0))
+    ):
+        ce_map[row["recap_id"]] = row["c"] or 0
+
+    for r in Recap.objects.filter(event__in=ewr).select_related(
+        "state", "event", "event__state", "ambassador", "ambassador__user"
+    ):
+        code = getattr(getattr(r, "state", None), "code", None) or getattr(
+            getattr(getattr(r, "event", None), "state", None), "code", None
+        )
+        code = (str(code).strip().upper()[:2] or None) if code else None
+        rmm = STATE_TO_RMM.get(code, UNASSIGNED) if code else UNASSIGNED
+        cons = ce_map.get(r.id, 0)
+        cans = r.total_cans_sold or 0
+        packs = r.total_packs_sold or 0
+
+        b = by_rmm[rmm]
+        b["events"] += 1
+        b["consumers"] += cons
+        b["cans"] += cans
+        b["packs"] += packs
+        if code:
+            s = by_state[code]
+            s["events"] += 1
+            s["consumers"] += cons
+        ba = _ba_name(r) or "Unknown"
+        ba_b = by_ba[ba]
+        ba_b["events"] += 1
+        ba_b["consumers"] += cons
+
+    # Fold the custom-template recaps (the 47) into the same buckets.
+    cs = compute_ld_summary(tenant)
+    for name, cb in cs.by_rmm.items():
+        b = by_rmm[name]
+        b["events"] += cb.demos
+        b["consumers"] += cb.consumers
+        b["cans"] += cb.cans
+        b["packs"] += cb.packs
+    for code, n in cs.by_state.items():
+        by_state[code]["events"] += n
+    for ba, n in cs.by_ba.items():
+        by_ba[ba]["events"] += n
+
+    return {"by_rmm": dict(by_rmm), "by_state": dict(by_state), "by_ba": dict(by_ba)}
+
+
 def _pct(n: int, total: int) -> str:
     return f"{(n / total * 100):.1f}%" if total else "0.0%"
 
@@ -414,6 +492,7 @@ def build_summary_grid(
     summary: LdSummary,
     program_all: "ProgramKpis | None" = None,
     program_years: dict | None = None,
+    breakdowns: dict | None = None,
 ) -> tuple[list[list], dict]:
     """Return (rows, layout). `layout` records which rows are the title /
     subtitle / KPI strip / section headers / table headers, so the caller can
@@ -478,12 +557,13 @@ def build_summary_grid(
              "dates live in the OnBrand RECAPS tab."])
         add()
 
-        # The custom-template app recaps (a small recent slice) feed the
-        # detailed RMM / State / Month / BA breakdowns below.
-        layout["sections"].append(
-            add([f"SPARK APP-RECAP DETAIL · {summary.total_demos} custom-template recaps"])
-        )
-        add()
+        if breakdowns is None:
+            # No full breakdowns supplied → the sections below are the
+            # custom-template slice only; label them so they're not misread.
+            layout["sections"].append(
+                add([f"SPARK APP-RECAP DETAIL · {summary.total_demos} custom-template recaps"])
+            )
+            add()
     else:
         add(["Auto-updated daily from Spark — Retail Samplings"])
         add()
@@ -495,6 +575,45 @@ def build_summary_grid(
              f"{summary.conversion_pct:.1f}%"]
         )
         add()
+
+    if breakdowns is not None:
+        # Full-dataset breakdowns (legacy + custom) — tie to the headline.
+        bd_rmm = breakdowns.get("by_rmm", {})
+        bd_state = breakdowns.get("by_state", {})
+        bd_ba = breakdowns.get("by_ba", {})
+        total_events = sum(b["events"] for b in bd_rmm.values()) or 0
+
+        layout["sections"].append(add(["PERFORMANCE BY RMM"]))
+        layout["table_headers"].append(
+            add(["RMM", "Mapped States", "Demos", "% of Total", "Consumers",
+                 "Single Cans", "Multi-Packs", "Conversion %"])
+        )
+        rmm_names = [n for n in RMM_ORDER if n in bd_rmm]
+        if UNASSIGNED in bd_rmm:
+            rmm_names.append(UNASSIGNED)
+        for name in rmm_names:
+            b = bd_rmm[name]
+            conv = (
+                f"{((b['cans'] + b['packs']) / b['consumers'] * 100):.1f}%"
+                if b["consumers"] else "0.0%"
+            )
+            add([name, RMM_MAPPED_STATES.get(name, ""), b["events"],
+                 _pct(b["events"], total_events), b["consumers"], b["cans"],
+                 b["packs"], conv])
+        add()
+
+        layout["sections"].append(add(["PERFORMANCE BY STATE"]))
+        layout["table_headers"].append(add(["State", "Demos", "% of Total", "Consumers"]))
+        for code, b in sorted(bd_state.items(), key=lambda kv: (-kv[1]["events"], kv[0])):
+            add([code, b["events"], _pct(b["events"], total_events), b["consumers"]])
+        add()
+
+        layout["sections"].append(add(["PERFORMANCE BY BRAND AMBASSADOR"]))
+        layout["table_headers"].append(add(["Brand Ambassador", "Demos", "Consumers"]))
+        for ba, b in sorted(bd_ba.items(), key=lambda kv: (-kv[1]["events"], kv[0]))[:50]:
+            add([ba, b["events"], b["consumers"]])
+
+        return rows, layout
 
     total = summary.total_demos
 
@@ -687,8 +806,11 @@ def write_ld_summary(
     program_all = compute_ld_program_kpis(tenant)
     cur = timezone.now().year
     program_years = compute_ld_program_years(tenant, [cur, cur - 1])
+    breakdowns = compute_ld_program_breakdowns(tenant)
 
-    grid, layout = build_summary_grid(summary, program_all=program_all, program_years=program_years)
+    grid, layout = build_summary_grid(
+        summary, program_all=program_all, program_years=program_years, breakdowns=breakdowns
+    )
     stats = {
         "events_run": program_all.events_run,
         "consumers": program_all.consumers,
