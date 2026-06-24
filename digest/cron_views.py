@@ -2645,6 +2645,45 @@ class LdDataCensusView(View):
         for e in Event.objects.filter(tenant=tenant).only("date"):
             event_year[e.date.year if e.date else "no-date"] += 1
 
+        # Legacy Recap / ConsumerEngagements — the source the in-app dashboard
+        # SUMS alongside CustomRecap. LD's bulk demo data lives here, not in
+        # CustomRecap, which is why the CustomRecap-only counts above read tiny.
+        from django.db.models import Sum
+
+        legacy = {"error": None}
+        legacy_recaps_by_year: Counter = Counter()
+        ce_consumers_by_year: dict = {}
+        try:
+            from recaps.models import ConsumerEngagements, Recap
+
+            for r in Recap.objects.filter(event__tenant=tenant).select_related("event"):
+                ev = r.event
+                legacy_recaps_by_year[ev.date.year if ev and ev.date else "no-date"] += 1
+            ce_qs = ConsumerEngagements.objects.filter(recap__event__tenant=tenant)
+            ce_agg = ce_qs.aggregate(
+                c=Sum("total_consumer"),
+                b=Sum("brand_aware_consumers"),
+                w=Sum("willing_to_purchase_consumers"),
+            )
+            consumers_by_year: Counter = Counter()
+            for ce in ce_qs.select_related("recap__event").only(
+                "total_consumer", "recap__event__date"
+            ):
+                ev = getattr(getattr(ce, "recap", None), "event", None)
+                yr = ev.date.year if ev and ev.date else "no-date"
+                consumers_by_year[yr] += ce.total_consumer or 0
+            ce_consumers_by_year = dict(consumers_by_year)
+            legacy = {
+                "error": None,
+                "legacy_recap_total": Recap.objects.filter(event__tenant=tenant).count(),
+                "consumer_engagements_rows": ce_qs.count(),
+                "ce_total_consumers": ce_agg.get("c") or 0,
+                "ce_total_brand_aware": ce_agg.get("b") or 0,
+                "ce_total_willing": ce_agg.get("w") or 0,
+            }
+        except Exception as exc:  # noqa: BLE001
+            legacy = {"error": _concise_exc(exc)}
+
         field_names = sorted(
             set(
                 CustomField.objects.filter(
