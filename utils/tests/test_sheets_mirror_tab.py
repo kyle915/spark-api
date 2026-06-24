@@ -20,6 +20,7 @@ from utils.sheets_mirror import (
     _ensure_header,
     _parse_sheet_date,
     _qualify,
+    _row_date,
 )
 
 
@@ -83,16 +84,29 @@ def test_parse_sheet_date_formats():
 
 
 def _mock_date_column(col_c_values):
-    """svc whose values().get() returns the given column-C rows."""
+    """svc whose values().get() returns B:C rows with the date in col C
+    (col B blank) — the mirror-row shape (B = Status, C = Date)."""
     svc = MagicMock()
     svc.spreadsheets.return_value.values.return_value.get.return_value.execute.return_value = {
-        "values": [[v] for v in col_c_values]
+        "values": [["", v] for v in col_c_values]
     }
     return svc
 
 
 # A live tracker sorted DESCENDING (newest first), with a blank divider row.
 _DESC_DATES = ["7/15/2026", "7/12/2026", "", "7/01/2026", "6/20/2026"]
+
+
+def test_row_date_reads_col_b_then_col_c():
+    # Mirror row: B = Status, C = Date.
+    assert _row_date(["Approved", "6/20/2026"]) == date(2026, 6, 20)
+    # State-first manual row: B = weekday, C = date.
+    assert _row_date(["Tuesday", "7/7/2026"]) == date(2026, 7, 7)
+    # Day-first manual row: B = date, C = retailer.
+    assert _row_date(["7/12/2026", "Walmart Supercenter"]) == date(2026, 7, 12)
+    # Divider / unknown: neither parses.
+    assert _row_date(["All below", ""]) is None
+    assert _row_date([]) is None
 
 
 def test_insert_index_middle_lands_above_first_older_date():
@@ -125,6 +139,25 @@ def test_insert_index_none_when_new_date_unparseable():
     assert _date_descending_insert_index(svc, "sid", "MASTER_Tracker", None) is None
 
 
+def test_insert_index_honors_col_b_dates_in_manual_rows():
+    # Hand-curated region: day-first rows carry the date in col B; a mirror row
+    # below carries it in col C. Descending overall.
+    svc = MagicMock()
+    svc.spreadsheets.return_value.values.return_value.get.return_value.execute.return_value = {
+        "values": [
+            ["7/20/2026", "Walmart · 2026-07-20"],  # row 2 — date in B
+            ["7/12/2026", "Vons · 2026-07-12"],      # row 3 — date in B
+            ["Approved", "7/01/2026"],               # row 4 — mirror row, date in C
+        ]
+    }
+    # 7/15 is newer than 7/12 (row 3) → insert before row 3.
+    assert _date_descending_insert_index(svc, "sid", "MASTER_Tracker", date(2026, 7, 15)) == 3
+    # 7/25 is newer than everything → insert before row 2 (top of schedule).
+    assert _date_descending_insert_index(svc, "sid", "MASTER_Tracker", date(2026, 7, 25)) == 2
+    # 6/01 is older than all → append.
+    assert _date_descending_insert_index(svc, "sid", "MASTER_Tracker", date(2026, 6, 1)) is None
+
+
 def _row_with_date(d):
     """A 15-col mirror row whose col C (index 2) is the date string."""
     row = ["uuid", "Approved", d] + [""] * 12
@@ -154,9 +187,9 @@ def test_append_or_insert_inserts_at_date_slot_when_enabled():
     spreadsheets.get.return_value.execute.return_value = {
         "sheets": [{"properties": {"title": "MASTER_Tracker", "sheetId": 999, "index": 0}}]
     }
-    # _date_descending_insert_index → column C (descending).
+    # _date_descending_insert_index → B:C rows, date in col C (descending).
     spreadsheets.values.return_value.get.return_value.execute.return_value = {
-        "values": [[v] for v in _DESC_DATES]
+        "values": [["", v] for v in _DESC_DATES]
     }
     tenant = SimpleNamespace(master_tracker_insert_by_date=True)
     _append_or_insert_new(svc, "sid", "MASTER_Tracker", tenant, _row_with_date("7/05/2026"), "O")
