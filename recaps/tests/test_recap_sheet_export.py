@@ -20,7 +20,11 @@ from django.utils import timezone
 
 from ambassadors.tests.base import AmbassadorsGraphQLTestCase
 from recaps import models as recap_models
-from recaps.recap_sheet_export import META_HEADER, build_export_grid
+from recaps.recap_sheet_export import (
+    META_HEADER,
+    build_export_grid,
+    rows_for_header,
+)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -133,3 +137,34 @@ class TestRecapSheetExportGrid(AmbassadorsGraphQLTestCase):
         assert col["Total Samples Given Out"] == "99"
         assert col["Men who sampled (21-29)"] == ""
         assert col["What market is this?"] == ""
+
+    def test_rows_for_header_maps_into_existing_layout(self):
+        # Mimic the client's existing "Demo Recaps" header (meta columns +
+        # field-name columns + an unmatched "Note" column). rows_for_header
+        # must map values into those exact positions, leaving row 1 alone.
+        self._recap(
+            7,
+            [
+                (self.samples, "120"),
+                (self.market, '["Detroit", "Lansing"]'),
+            ],
+        )
+        header = [
+            "Brand Ambassador",
+            "Date",
+            "Retailer",
+            "Total Samples Given Out",
+            "What market is this?",
+            "Note",
+        ]
+        rows = rows_for_header(self.tenant, header)
+        assert len(rows) == 1
+        row = rows[0]
+        assert len(row) == len(header)
+        # Date column rendered MM/DD/YYYY.
+        assert row[1].count("/") == 2
+        # Field columns match by name (multiselect → comma list).
+        assert row[3] == "120"
+        assert row[4] == "Detroit, Lansing"
+        # Unmatched column stays blank — we never invent data.
+        assert row[5] == ""
