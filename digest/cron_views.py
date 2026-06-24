@@ -2465,6 +2465,83 @@ class DescribeSheetTabsView(View):
         return self._run(request)
 
 
+@method_decorator(csrf_exempt, name="dispatch")
+class BackfillLdMasterTrackerView(View):
+    """POST `/internal/cron/backfill-ld-master-tracker`.
+
+    One-time/maintenance: pin the Liquid Death tenant's Master-Tracker tab name
+    (so the request mirror targets the live tab, not the first worksheet) and
+    backfill all of the tenant's requests into it. Writes only columns A-O —
+    manual columns past "Spark Link" are preserved. dry_run by default; pass
+    execute=1 to write. Params: tenant_slug, sheet_url (sets linked_sheet_url),
+    tab_name (default "MASTER_Tracker"), execute.
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _get(name: str) -> str:
+            return (request.GET.get(name) or request.POST.get(name) or "").strip()
+
+        def _bool(name: str, default: bool = False) -> bool:
+            raw = _get(name).lower()
+            return raw in ("1", "true", "yes", "on") if raw else default
+
+        from tenants.models import Tenant
+
+        slug = _get("tenant_slug") or "ighn-liquid-death"
+        sheet_url = _get("sheet_url")
+        tab_name = _get("tab_name") or "MASTER_Tracker"
+        execute = _bool("execute", default=False)
+
+        tenant = Tenant.objects.filter(slug=slug).first()
+        if tenant is None:
+            tenant = Tenant.objects.filter(name__icontains="liquid death").first()
+        if tenant is None:
+            return JsonResponse({"ok": False, "error": "no-tenant", "slug": slug}, status=404)
+
+        changes: dict[str, str] = {}
+        if tab_name and (tenant.master_tracker_tab_name or "") != tab_name:
+            tenant.master_tracker_tab_name = tab_name
+            changes["master_tracker_tab_name"] = tab_name
+        if sheet_url and (tenant.linked_sheet_url or "") != sheet_url:
+            tenant.linked_sheet_url = sheet_url
+            changes["linked_sheet_url"] = sheet_url
+        if changes:
+            tenant.save(update_fields=list(changes.keys()))
+
+        out = io.StringIO()
+        cmd_args = ["--tenant-slug", tenant.slug]
+        if execute:
+            cmd_args.append("--apply")
+        try:
+            call_command("sync_tenant_to_sheet", *cmd_args, stdout=out)
+        except Exception as exc:
+            logger.exception("backfill-ld-master-tracker cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "exception": _concise_exc(exc), "changes": changes, "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse(
+            {
+                "ok": True,
+                "tenant": tenant.slug,
+                "changes": changes,
+                "execute": execute,
+                "master_tracker_tab_name": tenant.master_tracker_tab_name,
+                "log": out.getvalue(),
+            }
+        )
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
 def _registered_views() -> dict[str, Any]:
     """Map URL path → view class. Lets `digest/urls.py` mount these
     without each one being re-exported explicitly.
@@ -2503,4 +2580,5 @@ def _registered_views() -> dict[str, Any]:
         "export-recaps-to-sheet": ExportRecapsToSheetView,
         "export-ld-summary": ExportLdSummaryView,
         "describe-sheet-tabs": DescribeSheetTabsView,
+        "backfill-ld-master-tracker": BackfillLdMasterTrackerView,
     }
