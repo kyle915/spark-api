@@ -588,10 +588,37 @@ def write_ld_summary(
             ).execute()
             actual = wanted
 
-        # Clear the whole tab then write the rebuilt block. Only this tab.
+        # Resolve the tab's gid up front (needed to wipe stale formatting).
+        meta = (
+            svc.spreadsheets()
+            .get(spreadsheetId=sheet_id, fields="sheets.properties(title,sheetId)")
+            .execute()
+        )
+        gid = next(
+            (
+                s["properties"]["sheetId"]
+                for s in meta.get("sheets", [])
+                if s.get("properties", {}).get("title") == actual
+            ),
+            None,
+        )
+
+        # Clear values, then WIPE all cell formatting before writing. clear()
+        # only clears values — leftover formats from a prior layout (e.g. an
+        # old "% of Total" column now sitting under "Single Cans") would force
+        # a wrong percent display onto the new numbers. Resetting userEntered
+        # format to default first, then USER_ENTERED writes, lets Sheets
+        # auto-format each value (plain numbers; "22.6%" strings → percent).
         svc.spreadsheets().values().clear(
             spreadsheetId=sheet_id, range=f"'{actual}'!A:ZZ"
         ).execute()
+        if gid is not None:
+            svc.spreadsheets().batchUpdate(
+                spreadsheetId=sheet_id,
+                body={"requests": [
+                    {"repeatCell": {"range": {"sheetId": gid}, "cell": {}, "fields": "userEnteredFormat"}}
+                ]},
+            ).execute()
         svc.spreadsheets().values().update(
             spreadsheetId=sheet_id,
             range=f"'{actual}'!A1",
@@ -602,19 +629,6 @@ def write_ld_summary(
         # Apply branded formatting (non-fatal — values are already written).
         formatted = False
         try:
-            meta = (
-                svc.spreadsheets()
-                .get(spreadsheetId=sheet_id, fields="sheets.properties(title,sheetId)")
-                .execute()
-            )
-            gid = next(
-                (
-                    s["properties"]["sheetId"]
-                    for s in meta.get("sheets", [])
-                    if s.get("properties", {}).get("title") == actual
-                ),
-                None,
-            )
             if gid is not None:
                 svc.spreadsheets().batchUpdate(
                     spreadsheetId=sheet_id,
