@@ -2548,6 +2548,83 @@ class BackfillLdMasterTrackerView(View):
         return self._run(request)
 
 
+class LdDataCensusView(View):
+    """GET/POST `/internal/cron/ld-data-census` — READ-ONLY, writes nothing.
+
+    Reports the Liquid Death tenant's Spark data coverage so the Summary
+    year-split + recaps export can be designed against real data: CustomRecap
+    counts by event-year and month, Event counts by year, and the distinct
+    recap field names (future recaps-tab columns). Secret-gated.
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        from collections import Counter
+
+        from events.models import Event
+        from recaps.models import CustomField, CustomRecap
+        from recaps.pdf import _event_date
+        from tenants.models import Tenant
+
+        slug = (
+            request.GET.get("tenant_slug") or request.POST.get("tenant_slug") or ""
+        ).strip() or "ighn-liquid-death"
+        tenant = Tenant.objects.filter(slug=slug).first()
+        if tenant is None:
+            tenant = Tenant.objects.filter(name__icontains="liquid death").first()
+        if tenant is None:
+            return JsonResponse({"ok": False, "error": "no-tenant", "slug": slug}, status=404)
+
+        recap_year: Counter = Counter()
+        recap_month: Counter = Counter()
+        total_recaps = 0
+        for r in CustomRecap.objects.filter(tenant=tenant).select_related("event"):
+            total_recaps += 1
+            d = _event_date(r)
+            if d:
+                recap_year[d.year] += 1
+                recap_month[d.strftime("%Y-%m")] += 1
+            else:
+                recap_year["no-date"] += 1
+
+        event_year: Counter = Counter()
+        for e in Event.objects.filter(tenant=tenant).only("date"):
+            event_year[e.date.year if e.date else "no-date"] += 1
+
+        field_names = sorted(
+            set(
+                CustomField.objects.filter(
+                    custom_recap_template__tenant=tenant
+                ).values_list("name", flat=True)
+            )
+        )
+
+        def _ord(d: dict) -> dict:
+            return {str(k): v for k, v in sorted(d.items(), key=lambda kv: str(kv[0]))}
+
+        return JsonResponse(
+            {
+                "ok": True,
+                "tenant": tenant.slug,
+                "total_recaps": total_recaps,
+                "recaps_by_year": _ord(recap_year),
+                "recaps_by_month": _ord(recap_month),
+                "events_by_year": _ord(event_year),
+                "recap_field_count": len(field_names),
+                "recap_field_names": field_names,
+            }
+        )
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
 def _registered_views() -> dict[str, Any]:
     """Map URL path → view class. Lets `digest/urls.py` mount these
     without each one being re-exported explicitly.
@@ -2587,4 +2664,5 @@ def _registered_views() -> dict[str, Any]:
         "export-ld-summary": ExportLdSummaryView,
         "describe-sheet-tabs": DescribeSheetTabsView,
         "backfill-ld-master-tracker": BackfillLdMasterTrackerView,
+        "ld-data-census": LdDataCensusView,
     }
