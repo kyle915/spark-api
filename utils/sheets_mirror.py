@@ -114,22 +114,40 @@ def _service():
         return None
 
 
-def _ensure_header(svc, sheet_id: str) -> None:
-    """Read row 1; if it doesn't match HEADER, overwrite it. Lets a
-    brand-new sheet bootstrap on first sync."""
+def _qualify(tab: str | None, a1: str) -> str:
+    """Prefix an A1 range with a worksheet name when targeting a specific tab.
+
+    When ``tab`` is None we return the bare range, which the Sheets API
+    resolves against the spreadsheet's FIRST worksheet — the long-standing
+    default for every tenant whose linked Sheet has the Master Tracker as its
+    first tab (e.g. Girl Beer). When a tenant sets ``master_tracker_tab_name``
+    (e.g. Liquid Death, whose first tab is a backup), we target that tab by
+    name so the mirror never writes to the wrong sheet.
+    """
+    return f"'{tab}'!{a1}" if tab else a1
+
+
+def _ensure_header(svc, sheet_id: str, tab: str | None = None) -> None:
+    """Read row 1; if its first columns don't match HEADER, overwrite just
+    those columns. Bootstraps a brand-new sheet on first sync, while NEVER
+    touching manual columns past the 15 mirror columns — a tenant's Master
+    Tracker may keep hand-maintained columns after "Spark Link" (Liquid Death
+    has BA Notes, Contract Sent, …), and those must survive every sync."""
     try:
         resp = (
             svc.spreadsheets()
             .values()
-            .get(spreadsheetId=sheet_id, range="A1:Z1")
+            .get(spreadsheetId=sheet_id, range=_qualify(tab, "A1:Z1"))
             .execute()
         )
         existing = (resp.get("values") or [[]])[0]
-        if existing == HEADER:
+        # Compare/write only the first 15 (mirror) columns. If they already
+        # match, do nothing (manual columns P+ are left alone).
+        if existing[: len(HEADER)] == HEADER:
             return
         svc.spreadsheets().values().update(
             spreadsheetId=sheet_id,
-            range=f"A1:{_col_letter(len(HEADER))}1",
+            range=_qualify(tab, f"A1:{_col_letter(len(HEADER))}1"),
             valueInputOption="RAW",
             body={"values": [HEADER]},
         ).execute()
@@ -145,13 +163,13 @@ def _col_letter(n: int) -> str:
     return s
 
 
-def _find_row_for_uuid(svc, sheet_id: str, uuid: str) -> int | None:
+def _find_row_for_uuid(svc, sheet_id: str, uuid: str, tab: str | None = None) -> int | None:
     """Scan column A for the UUID. Returns 1-based row index, or None."""
     try:
         resp = (
             svc.spreadsheets()
             .values()
-            .get(spreadsheetId=sheet_id, range="A2:A10000")
+            .get(spreadsheetId=sheet_id, range=_qualify(tab, "A2:A10000"))
             .execute()
         )
         rows = resp.get("values") or []
@@ -321,22 +339,26 @@ def upsert_request_row(request) -> bool:
         if row is None:
             return False
 
-        _ensure_header(svc, sheet_id)
+        # Optional per-tenant Master Tracker tab (None = first worksheet,
+        # the default for every tenant whose tracker is the first tab).
+        tab = (getattr(tenant, "master_tracker_tab_name", "") or "").strip() or None
 
-        existing_row = _find_row_for_uuid(svc, sheet_id, str(request.uuid))
+        _ensure_header(svc, sheet_id, tab)
+
+        existing_row = _find_row_for_uuid(svc, sheet_id, str(request.uuid), tab)
         end_col = _col_letter(len(row))
 
         if existing_row:
             svc.spreadsheets().values().update(
                 spreadsheetId=sheet_id,
-                range=f"A{existing_row}:{end_col}{existing_row}",
+                range=_qualify(tab, f"A{existing_row}:{end_col}{existing_row}"),
                 valueInputOption="RAW",
                 body={"values": [row]},
             ).execute()
         else:
             svc.spreadsheets().values().append(
                 spreadsheetId=sheet_id,
-                range=f"A2:{end_col}",
+                range=_qualify(tab, f"A2:{end_col}"),
                 valueInputOption="RAW",
                 insertDataOption="INSERT_ROWS",
                 body={"values": [row]},
@@ -385,7 +407,10 @@ def bulk_sync_requests(requests) -> int:
     if not svc:
         return 0
 
-    _ensure_header(svc, sheet_id)
+    # Optional per-tenant Master Tracker tab (None = first worksheet).
+    tab = (getattr(tenant, "master_tracker_tab_name", "") or "").strip() or None
+
+    _ensure_header(svc, sheet_id, tab)
 
     # One read of column A → {uuid: 1-based row index} so we can tell
     # appends from in-place updates without a per-row lookup.
@@ -394,7 +419,7 @@ def bulk_sync_requests(requests) -> int:
         resp = (
             svc.spreadsheets()
             .values()
-            .get(spreadsheetId=sheet_id, range="A2:A100000")
+            .get(spreadsheetId=sheet_id, range=_qualify(tab, "A2:A100000"))
             .execute()
         )
         for i, r in enumerate(resp.get("values") or [], start=2):
@@ -413,7 +438,9 @@ def bulk_sync_requests(requests) -> int:
             continue
         idx = existing.get(str(req.uuid))
         if idx:
-            updates.append({"range": f"A{idx}:{end_col}{idx}", "values": [row]})
+            updates.append(
+                {"range": _qualify(tab, f"A{idx}:{end_col}{idx}"), "values": [row]}
+            )
         else:
             appends.append(row)
 
@@ -422,7 +449,7 @@ def bulk_sync_requests(requests) -> int:
         for chunk in _chunks(appends, 500):
             svc.spreadsheets().values().append(
                 spreadsheetId=sheet_id,
-                range=f"A2:{end_col}",
+                range=_qualify(tab, f"A2:{end_col}"),
                 valueInputOption="RAW",
                 insertDataOption="INSERT_ROWS",
                 body={"values": chunk},
