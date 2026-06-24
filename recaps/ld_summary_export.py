@@ -102,7 +102,11 @@ class LdSummary:
 
     @property
     def conversion_pct(self) -> float:
-        return (self.willing / self.consumers * 100) if self.consumers else 0.0
+        # Units sold (single cans + multipacks) per consumer sampled — matches
+        # the LD sheet's "Conversion %" KPI, which sits alongside the cans +
+        # packs columns. (Not willing/sampled, which can exceed 100%.)
+        units = self.cans + self.packs
+        return (units / self.consumers * 100) if self.consumers else 0.0
 
 
 def _recap_state_code(recap) -> str | None:
@@ -252,7 +256,9 @@ def build_summary_grid(summary: LdSummary) -> list[list]:
         rmm_names.append(UNASSIGNED)
     for name in rmm_names:
         b = summary.by_rmm[name]
-        conv = f"{(b.willing / b.consumers * 100):.2f}%" if b.consumers else "0.00%"
+        conv = (
+            f"{((b.cans + b.packs) / b.consumers * 100):.2f}%" if b.consumers else "0.00%"
+        )
         rows.append(
             [
                 name,
