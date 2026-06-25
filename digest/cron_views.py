@@ -3105,6 +3105,43 @@ class BuildPoliTabView(View):
 
         try:
             props = _props()
+
+            # Delete-tabs mode: remove named redundant tabs (e.g. the pre-wire
+            # MASTER backup snapshot + the abandoned "WIP (Poli)" stub once the
+            # real Poli tab is live). Guarded — refuses to delete the live
+            # MASTER / source / new tabs even if named. Honors dry-run (apply=0).
+            del_names_raw = _get("delete_tabs")
+            if del_names_raw:
+                requested = [t.strip() for t in del_names_raw.split(",") if t.strip()]
+                protected = {master_tab, source_tab, new_tab}
+                to_delete, skipped_protected, not_found = [], [], []
+                for name in requested:
+                    if name in protected:
+                        skipped_protected.append(name)
+                    elif name in props:
+                        to_delete.append(name)
+                    else:
+                        not_found.append(name)
+                del_plan = {"requested": requested, "to_delete": to_delete,
+                            "skipped_protected": skipped_protected,
+                            "not_found": not_found, "protected": sorted(protected)}
+                if not apply:
+                    return JsonResponse({"ok": True, "dry_run": True,
+                                         "delete_plan": del_plan})
+                if not to_delete:
+                    return JsonResponse({"ok": True, "deleted": [], **del_plan})
+                svc.spreadsheets().batchUpdate(
+                    spreadsheetId=sheet_id,
+                    body={"requests": [
+                        {"deleteSheet": {"sheetId": props[name]["sheetId"]}}
+                        for name in to_delete
+                    ]},
+                ).execute()
+                return JsonResponse({"ok": True, "deleted": to_delete,
+                                     "skipped_protected": skipped_protected,
+                                     "not_found": not_found,
+                                     "remaining_tabs": list(_props())})
+
             if source_tab not in props:
                 return JsonResponse({"ok": False, "error": "source-tab-not-found",
                                      "source_tab": source_tab, "tabs": list(props)}, status=404)
