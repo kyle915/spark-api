@@ -2661,6 +2661,108 @@ class ExportLdRecapsView(View):
         return self._run(request)
 
 
+def _ld_rmm_unassigned_audit(tenant) -> dict:
+    """Enumerate the demos that land in the LD Summary's 'Unassigned' RMM
+    bucket and WHY. Mirrors recaps.ld_summary_export.compute_ld_program_breakdowns
+    exactly (legacy Recap: assigned-RMM-then-state; custom: state-only). A demo
+    is Unassigned when its event has no LD RMM assigned AND no state that maps to
+    an RMM territory (routing.LIQUID_DEATH_TERRITORY). Read-only."""
+    from collections import Counter
+
+    from events.models import Event
+    from recaps.ld_summary_export import (
+        RMM_EMAIL_TO_NAME,
+        STATE_TO_RMM,
+        _event_rmm_name,
+        _recap_state_code,
+    )
+    from recaps.models import CustomRecap, Recap
+
+    ewr = (
+        Event.objects.exclude(request__deleted_at__isnull=False)
+        .filter(tenant=tenant, recaps__isnull=False)
+        .distinct()
+    )
+    reasons: Counter = Counter()
+    unmapped_states: Counter = Counter()
+    nonld_emails: Counter = Counter()
+    samples: list = []
+
+    def _evd(ev) -> str:
+        v = getattr(ev, "date", None)
+        try:
+            return v.strftime("%Y-%m-%d") if v else ""
+        except Exception:
+            return str(v)[:10] if v else ""
+
+    def _email(ev) -> str:
+        u = getattr(ev, "rmm_asigned", None)
+        return (getattr(u, "email", "") or "").strip().lower()
+
+    legacy_unassigned = 0
+    for r in Recap.objects.filter(event__in=ewr).select_related(
+        "state", "event", "event__state", "event__rmm_asigned"
+    ):
+        ev = getattr(r, "event", None)
+        code = getattr(getattr(r, "state", None), "code", None) or getattr(
+            getattr(ev, "state", None), "code", None
+        )
+        code = (str(code).strip().upper()[:2] or None) if code else None
+        if _event_rmm_name(ev) or (STATE_TO_RMM.get(code) if code else None):
+            continue
+        legacy_unassigned += 1
+        email = _email(ev)
+        if email and email not in RMM_EMAIL_TO_NAME:
+            nonld_emails[email] += 1
+        if code:
+            unmapped_states[code] += 1
+        rkey = ("rmm_set_non_ld" if email else "no_rmm_on_event") + " + " + (
+            "state_unmapped" if code else "no_state"
+        )
+        reasons["legacy: " + rkey] += 1
+        if len(samples) < 60:
+            samples.append({
+                "src": "legacy", "event": (getattr(ev, "name", "") or "")[:70],
+                "date": _evd(ev), "state": code or "—", "rmm_email": email or "—",
+            })
+
+    custom_unassigned = 0
+    for cr in CustomRecap.objects.filter(tenant=tenant).select_related(
+        "state", "event", "event__state", "event__rmm_asigned"
+    ):
+        state = _recap_state_code(cr)
+        if state and STATE_TO_RMM.get(state):
+            continue
+        custom_unassigned += 1
+        ev = getattr(cr, "event", None)
+        email = _email(ev)
+        if state:
+            unmapped_states[state] += 1
+        if email in RMM_EMAIL_TO_NAME:
+            # would map if the custom path used the event's assigned RMM (it
+            # only uses state) — a fixable attribution gap.
+            reasons["custom: event_has_rmm_but_state_only_attribution"] += 1
+        elif not state:
+            reasons["custom: no_state"] += 1
+        else:
+            reasons["custom: state_unmapped"] += 1
+        if len(samples) < 60:
+            samples.append({
+                "src": "custom", "event": (getattr(ev, "name", "") or "")[:70],
+                "date": _evd(ev), "state": state or "—", "rmm_email": email or "—",
+            })
+
+    return {
+        "total_unassigned": legacy_unassigned + custom_unassigned,
+        "legacy_unassigned": legacy_unassigned,
+        "custom_unassigned": custom_unassigned,
+        "reasons": dict(reasons),
+        "top_unmapped_states": unmapped_states.most_common(20),
+        "non_ld_rmm_emails": nonld_emails.most_common(20),
+        "samples": samples,
+    }
+
+
 @method_decorator(csrf_exempt, name="dispatch")
 class LdDataCensusView(View):
     """GET/POST `/internal/cron/ld-data-census` — READ-ONLY, writes nothing.
@@ -2758,10 +2860,18 @@ class LdDataCensusView(View):
         def _ord(d: dict) -> dict:
             return {str(k): v for k, v in sorted(d.items(), key=lambda kv: str(kv[0]))}
 
+        # Audit the Summary's "Unassigned" RMM bucket (which demos don't map to
+        # an RMM, and why). Always included — this is a manual, read-only endpoint.
+        try:
+            rmm_audit = _ld_rmm_unassigned_audit(tenant)
+        except Exception as exc:  # noqa: BLE001
+            rmm_audit = {"error": _concise_exc(exc)}
+
         return JsonResponse(
             {
                 "ok": True,
                 "tenant": tenant.slug,
+                "rmm_audit": rmm_audit,
                 "total_recaps": total_recaps,
                 "recaps_by_year": _ord(recap_year),
                 "recaps_by_month": _ord(recap_month),
