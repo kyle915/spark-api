@@ -1,0 +1,55 @@
+name: Backfill event state from address (manual)
+
+# Stamp event.state for a tenant's events with a NULL state, parsed from the
+# event address (then name) via extract_state_code, with an optional Photon
+# geocode fallback. Fixes demos that can't map to an RMM territory because they
+# have no state. Dry-run by default — writes nothing unless apply=true.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tenant_slug:
+        description: "Tenant slug"
+        required: false
+        default: "liquid-death"
+      apply:
+        description: "Write event.state (false = dry run)"
+        required: false
+        default: "false"
+      geocode:
+        description: "Add Photon geocode fallback for addresses with no parseable state code"
+        required: false
+        default: "false"
+      limit:
+        description: "Max events to process (0 = all; use to batch geocode runs)"
+        required: false
+        default: "0"
+
+jobs:
+  backfill-event-state:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire backfill-event-state endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/backfill-event-state
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          TENANT_SLUG: ${{ github.event.inputs.tenant_slug }}
+          APPLY: ${{ github.event.inputs.apply }}
+          GEOCODE: ${{ github.event.inputs.geocode }}
+          LIMIT: ${{ github.event.inputs.limit }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/resp.json -w '%{http_code}' \
+            -X POST "$CRON_URL" \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            --data-urlencode "tenant_slug=$TENANT_SLUG" \
+            --data-urlencode "apply=$APPLY" \
+            --data-urlencode "geocode=$GEOCODE" \
+            --data-urlencode "limit=$LIMIT")
+          echo "HTTP $STATUS"
+          cat /tmp/resp.json
+          echo ""
+          [ "$STATUS" != "200" ] && exit 1 || exit 0
