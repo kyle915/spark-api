@@ -3182,6 +3182,69 @@ class BuildPoliTabView(View):
                 return JsonResponse({"ok": True, "reverted": True,
                                      "deleted_col": _col_letter(del_idx + 1)})
 
+            # Repair-only: close the blank gap a column insert opened in the YTD
+            # summary rows (shares columns with the grid) WITHOUT re-inserting.
+            # Finds the new-tab column (= the gap) and shifts the YTD metrics to
+            # its right back by one. Self-detecting; idempotent (no-op if no gap).
+            if _bool("repair_ytd"):
+                gap_idx = None
+                for row in band:
+                    for c_i, cell in enumerate(row):
+                        if isinstance(cell, str) and f"{new_tab}!" in cell:
+                            gap_idx = c_i
+                            break
+                    if gap_idx is not None:
+                        break
+                if gap_idx is None:
+                    return JsonResponse({"ok": True, "repaired": False,
+                                         "note": "no new-tab column found"})
+                hdr = (
+                    svc.spreadsheets().values()
+                    .get(spreadsheetId=sheet_id,
+                         range=f"'{master_tab}'!{ytd_header_row}:{ytd_header_row}",
+                         valueRenderOption="FORMULA")
+                    .execute().get("values", [[]])
+                )
+                cells = hdr[0] if hdr else []
+                last = max((i for i, c in enumerate(cells) if c not in ("", None)),
+                           default=-1)
+                gap_at = bool(gap_idx < len(cells) and cells[gap_idx] in ("", None))
+                if last <= gap_idx or not gap_at:
+                    return JsonResponse({"ok": True, "repaired": False,
+                                         "note": "no gap at the new-tab column",
+                                         "ytd_header": cells})
+                for r in (ytd_header_row, ytd_header_row + 1):
+                    rv = (
+                        svc.spreadsheets().values()
+                        .get(spreadsheetId=sheet_id,
+                             range=f"'{master_tab}'!{_col_letter(gap_idx + 2)}{r}:"
+                                   f"{_col_letter(last + 1)}{r}",
+                             valueRenderOption="FORMULA")
+                        .execute().get("values", [[]])
+                    )
+                    block = (rv[0] if rv else [])
+                    block = block + [""] * ((last - gap_idx) - len(block))
+                    svc.spreadsheets().values().update(
+                        spreadsheetId=sheet_id,
+                        range=f"'{master_tab}'!{_col_letter(gap_idx + 1)}{r}",
+                        valueInputOption="USER_ENTERED", body={"values": [block]},
+                    ).execute()
+                    svc.spreadsheets().values().update(
+                        spreadsheetId=sheet_id,
+                        range=f"'{master_tab}'!{_col_letter(last + 1)}{r}",
+                        valueInputOption="USER_ENTERED", body={"values": [[""]]},
+                    ).execute()
+                after = (
+                    svc.spreadsheets().values()
+                    .get(spreadsheetId=sheet_id,
+                         range=f"'{master_tab}'!{ytd_header_row}:{ytd_header_row}",
+                         valueRenderOption="FORMULA")
+                    .execute().get("values", [[]])
+                )
+                return JsonResponse({"ok": True, "repaired": True,
+                                     "gap_col": _col_letter(gap_idx + 1),
+                                     "ytd_header_after": after[0] if after else None})
+
             actions = []
             # 1) Duplicate the source scorecard tab → new tab.
             if not poli_exists:
