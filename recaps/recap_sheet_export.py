@@ -216,8 +216,23 @@ def rows_for_header(tenant, header: list[str]) -> list[list]:
     (Note, receipt-image columns, …) is left blank.
     """
     norm_header = [_normalize(h) for h in header]
+
+    def _date_key(recap):
+        d = _event_date(recap)
+        try:
+            return (d.year, d.month, d.day)
+        except Exception:
+            return (0, 0, 0)
+
+    # Newest recap first (by event date, then id) so the latest demos sit at
+    # the top of the tab.
+    recaps = sorted(
+        _tenant_recaps(tenant),
+        key=lambda r: (_date_key(r), getattr(r, "id", 0)),
+        reverse=True,
+    )
     rows: list[list] = []
-    for recap in _tenant_recaps(tenant):
+    for recap in recaps:
         meta = _recap_meta(recap)
         by_name = _values_by_field_name(recap)
         row = []
@@ -383,6 +398,37 @@ def export_tenant_recaps_to_sheet(tenant, *, tab: str = DEFAULT_TAB, sheet_url: 
                 valueInputOption="USER_ENTERED",
                 body={"values": rows},
             ).execute()
+
+        # Make every data row share the first row's look. New recaps that grew
+        # past the client's originally-formatted range would otherwise render
+        # plain; copy row 2's per-column formatting down across all data rows so
+        # they all match. Best-effort — values are already written.
+        if matched_existing and len(rows) > 1:
+            try:
+                props = (
+                    svc.spreadsheets()
+                    .get(spreadsheetId=sheet_id, fields="sheets.properties(title,sheetId)")
+                    .execute()
+                )
+                gid = next(
+                    (s["properties"]["sheetId"] for s in props.get("sheets", [])
+                     if s.get("properties", {}).get("title") == tab),
+                    None,
+                )
+                if gid is not None:
+                    svc.spreadsheets().batchUpdate(
+                        spreadsheetId=sheet_id,
+                        body={"requests": [{"copyPaste": {
+                            "source": {"sheetId": gid, "startRowIndex": 1, "endRowIndex": 2,
+                                       "startColumnIndex": 0, "endColumnIndex": ncols},
+                            "destination": {"sheetId": gid, "startRowIndex": 1,
+                                            "endRowIndex": 1 + len(rows),
+                                            "startColumnIndex": 0, "endColumnIndex": ncols},
+                            "pasteType": "PASTE_FORMAT",
+                        }}]},
+                    ).execute()
+            except Exception:  # pragma: no cover - formatting is best-effort
+                logger.warning("recap_sheet_export: row-format copy failed (non-fatal)", exc_info=True)
 
         return {
             "ok": True,
