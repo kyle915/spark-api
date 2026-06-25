@@ -29,6 +29,12 @@ class Command(BaseCommand):
             help="Dump this tab's header + sample rows + a year histogram (read-only).",
         )
         parser.add_argument("--peek-rows", type=int, default=4)
+        parser.add_argument(
+            "--peek-render",
+            type=str,
+            default="FORMATTED_VALUE",
+            help="Sheets valueRenderOption: FORMATTED_VALUE (default) or FORMULA.",
+        )
 
     def handle(self, *args, **opts):
         url = opts.get("sheet_url")
@@ -85,20 +91,28 @@ class Command(BaseCommand):
 
         peek = opts.get("peek_tab")
         if peek:
-            self._peek(svc, sheet_id, peek, max(1, opts.get("peek_rows") or 4))
+            self._peek(
+                svc, sheet_id, peek, max(1, opts.get("peek_rows") or 4),
+                (opts.get("peek_render") or "FORMATTED_VALUE").strip().upper(),
+            )
 
-    def _peek(self, svc, sheet_id: str, tab: str, n: int):
+    def _peek(self, svc, sheet_id: str, tab: str, n: int, render: str = "FORMATTED_VALUE"):
         """Dump a tab's header + first n data rows, and a year histogram for any
-        column whose header contains 'date'. Read-only."""
+        column whose header contains 'date'. render=FORMULA shows cell formulas
+        (so #REF!/QUERY references are visible). Read-only."""
         import re
         from collections import Counter
 
-        self.stdout.write(f"\nPeek '{tab}' (header + {n} sample rows):")
+        self.stdout.write(f"\nPeek '{tab}' (header + {n} rows, render={render}):")
         try:
             resp = (
                 svc.spreadsheets()
                 .values()
-                .get(spreadsheetId=sheet_id, range=f"'{tab}'!1:{n + 1}")
+                .get(
+                    spreadsheetId=sheet_id,
+                    range=f"'{tab}'!1:{n + 1}",
+                    valueRenderOption=render,
+                )
                 .execute()
             )
         except Exception as e:
