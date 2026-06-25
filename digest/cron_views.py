@@ -3112,6 +3112,7 @@ class BuildPoliTabView(View):
                 return JsonResponse({"ok": False, "error": "master-tab-not-found",
                                      "master_tab": master_tab, "tabs": list(props)}, status=404)
             src_gid = props[source_tab]["sheetId"]
+            master_gid = props[master_tab]["sheetId"]
             src_cols = props[source_tab]["gridProperties"].get("columnCount", 65)
             src_rows = props[source_tab]["gridProperties"].get("rowCount", 1011)
 
