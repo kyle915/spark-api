@@ -32,6 +32,10 @@ on:
         description: "Revert: delete the new tab's MASTER column (undo a partial wire)"
         required: false
         default: "false"
+      repair_ytd:
+        description: "Repair: close the YTD-table gap left by the column insert"
+        required: false
+        default: "false"
 
 jobs:
   build-poli-tab:
@@ -47,6 +51,7 @@ jobs:
           APPLY: ${{ github.event.inputs.apply }}
           WIRE_MASTER: ${{ github.event.inputs.wire_master }}
           REVERT: ${{ github.event.inputs.revert }}
+          REPAIR_YTD: ${{ github.event.inputs.repair_ytd }}
         run: |
           if [ -z "$CRON_SECRET" ]; then echo "::error::secret missing"; exit 1; fi
           STATUS=$(curl -sS -o /tmp/resp.json -w '%{http_code}' -X POST "$CRON_URL" \
@@ -56,6 +61,7 @@ jobs:
             --data-urlencode "new_tab=$NEW_TAB" \
             --data-urlencode "apply=$APPLY" \
             --data-urlencode "wire_master=$WIRE_MASTER" \
-            --data-urlencode "revert=$REVERT")
+            --data-urlencode "revert=$REVERT" \
+            --data-urlencode "repair_ytd=$REPAIR_YTD")
           echo "HTTP $STATUS"; cat /tmp/resp.json; echo ""
           [ "$STATUS" != "200" ] && exit 1 || exit 0
