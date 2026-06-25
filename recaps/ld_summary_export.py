@@ -45,13 +45,17 @@ DEFAULT_SUMMARY_TAB = "Spark Summary"
 RMM_EMAIL_TO_NAME = {
     "l.giaccio@liquiddeath.com": "Lauren",
     "k.williams@liquiddeath.com": "Kristyn",
+    # Poli shares Kristyn's territory (per Kyle). Mapped so demos assigned to
+    # poli@ surface under her own row instead of Unassigned; her state-based
+    # demos still fall to Kristyn (first-wins by RMM_ORDER), so no double-count.
+    "poli@liquiddeath.com": "Poli",
     "m.cristancho@liquiddeath.com": "Manuela",
     "ross@liquiddeath.com": "Ross",
     "pat@liquiddeath.com": "Pat",
     "t.reed@liquiddeath.com": "Timothy",
 }
 # Fixed display order for the RMM table (matches the sheet); Unassigned last.
-RMM_ORDER = ["Lauren", "Kristyn", "Manuela", "Ross", "Pat", "Timothy"]
+RMM_ORDER = ["Lauren", "Kristyn", "Poli", "Manuela", "Ross", "Pat", "Timothy"]
 UNASSIGNED = "Unassigned"
 
 
@@ -77,6 +81,9 @@ RMM_MAPPED_STATES = {
     name: ", ".join(LIQUID_DEATH_TERRITORY.get(email, []))
     for email, name in RMM_EMAIL_TO_NAME.items()
 }
+# Poli isn't in the territory map (no routing change); display her territory as
+# Kristyn's for the "Mapped States" column.
+RMM_MAPPED_STATES["Poli"] = RMM_MAPPED_STATES.get("Kristyn", "")
 
 
 def _event_rmm_name(event) -> str | None:
