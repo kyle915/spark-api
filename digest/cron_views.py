@@ -2891,6 +2891,135 @@ class LdDataCensusView(View):
         return self._run(request)
 
 
+@method_decorator(csrf_exempt, name="dispatch")
+class BackfillEventStateView(View):
+    """POST `/internal/cron/backfill-event-state`.
+
+    Stamp `event.state` for a tenant's events that have a NULL state FK, parsed
+    from the event's address (then its name) via events.routing.extract_state_code,
+    with an optional Photon geocode fallback for addresses with no parseable
+    code. Fixes demos that can't map to an RMM territory (the Summary's
+    'Unassigned' bucket) because they have no state.
+
+    Params: tenant_slug (default liquid-death), apply (write; default dry-run),
+    geocode (add the slower geocode fallback), limit (cap events processed —
+    use to batch geocode runs and avoid timeouts).
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        from collections import Counter
+
+        from django.utils import timezone as djtz
+
+        from events.models import Event, State
+        from events.routing import extract_state_code
+        from tenants.models import Tenant
+
+        def _get(n: str) -> str:
+            return (request.GET.get(n) or request.POST.get(n) or "").strip()
+
+        def _bool(n: str) -> bool:
+            return _get(n).lower() in ("1", "true", "yes", "on")
+
+        slug = _get("tenant_slug") or "liquid-death"
+        apply = _bool("apply")
+        geocode = _bool("geocode")
+        try:
+            limit = int(_get("limit") or 0)
+        except ValueError:
+            limit = 0
+
+        tenant = (
+            Tenant.objects.filter(slug=slug).first()
+            or Tenant.objects.filter(name__icontains="liquid death").first()
+        )
+        if tenant is None:
+            return JsonResponse({"ok": False, "error": "no-tenant", "slug": slug}, status=404)
+
+        states_by_code: dict = {}
+        states_by_name: dict = {}
+        for s in State.objects.all():
+            if getattr(s, "code", None):
+                states_by_code[s.code.upper()] = s
+            if getattr(s, "name", None):
+                states_by_name[s.name.lower()] = s
+
+        photon = None
+        if geocode:
+            try:
+                from utils.geocoding import photon_state_for_address as photon
+            except Exception:
+                photon = None
+
+        qs = Event.objects.filter(tenant=tenant, state__isnull=True).only(
+            "id", "name", "address"
+        ).order_by("id")
+        if limit:
+            qs = qs[:limit]
+
+        total = resolved = geocoded = unresolved = written = 0
+        by_state: Counter = Counter()
+        samples: list = []
+        unresolved_samples: list = []
+
+        for ev in qs:
+            total += 1
+            code = extract_state_code(getattr(ev, "address", None)) or extract_state_code(
+                getattr(ev, "name", None)
+            )
+            st = states_by_code.get(code.upper()) if code else None
+            via_geocode = False
+            if st is None and photon is not None:
+                try:
+                    nm = photon(getattr(ev, "address", None))
+                    if nm and nm.lower() in states_by_name:
+                        st = states_by_name[nm.lower()]
+                        via_geocode = True
+                except Exception:
+                    st = None
+            if st is not None:
+                resolved += 1
+                if via_geocode:
+                    geocoded += 1
+                by_state[st.code.upper()] += 1
+                if len(samples) < 40:
+                    samples.append({
+                        "event": (ev.name or "")[:55], "addr": (ev.address or "")[:60],
+                        "state": st.code.upper(), "via": "geocode" if via_geocode else "address",
+                    })
+                if apply:
+                    try:
+                        ev.state = st
+                        ev.save(update_fields=["state", "updated_at"])
+                        written += 1
+                    except Exception:
+                        pass
+            else:
+                unresolved += 1
+                if len(unresolved_samples) < 40:
+                    unresolved_samples.append({
+                        "event": (ev.name or "")[:55], "addr": (ev.address or "")[:75],
+                    })
+
+        return JsonResponse({
+            "ok": True, "tenant": tenant.slug, "apply": apply, "geocode": geocode,
+            "null_state_events": total, "resolved": resolved,
+            "resolved_via_geocode": geocoded, "unresolved": unresolved, "written": written,
+            "by_state": dict(by_state.most_common()),
+            "resolved_samples": samples, "unresolved_samples": unresolved_samples,
+        })
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
 def _registered_views() -> dict[str, Any]:
     """Map URL path → view class. Lets `digest/urls.py` mount these
     without each one being re-exported explicitly.
@@ -2915,6 +3044,7 @@ def _registered_views() -> dict[str, Any]:
         "backfill-event-coordinates": BackfillEventCoordinatesView,
         "backfill-ambassador-coordinates": BackfillAmbassadorCoordinatesView,
         "backfill-request-rmm-routing": BackfillRequestRmmRoutingView,
+        "backfill-event-state": BackfillEventStateView,
         "repair-request-activation-time": RepairRequestActivationTimeView,
         "backfill-girlbeer-receipts": BackfillGirlBeerReceiptsView,
         "audit-tenant-onboarding": AuditTenantOnboardingView,
