@@ -219,8 +219,12 @@ def compute_girlbeer_summary(tenant) -> GBSummary:
             _g(vals, "# of RED Variety Packs sold")
         )
         six = sum(_i(_g(vals, col)) for _, col in FLAVORS)
-        men_bought = _i(_g(vals, "Men who bought (Total)"))
-        women_bought = _i(_g(vals, "Women who bought (Total)"))
+        # Buyers come from the age bands (21-29 / 30-39 / 40+) so the TOTAL
+        # BUYERS KPI and every buyer breakdown reconcile exactly with the
+        # "Buyers & samplers by age" matrix. The standalone "(Total)" fields
+        # are redundant and occasionally disagree with the bands (BA entry).
+        men_bought = sum(_i(_g(vals, f"Men who bought ({b})")) for b in _AGE_BANDS)
+        women_bought = sum(_i(_g(vals, f"Women who bought ({b})")) for b in _AGE_BANDS)
         buyers = men_bought + women_bought
         spend = _num(_g(vals, "Account Spend Amount"))
         reorder = _is_yes(_g(vals, "Did the demo influence the store to place a reorder?",
