@@ -3020,6 +3020,239 @@ class BackfillEventStateView(View):
         return self._run(request)
 
 
+@method_decorator(csrf_exempt, name="dispatch")
+class BuildPoliTabView(View):
+    """POST `/internal/cron/build-poli-tab`.
+
+    On the LD RMM planning workbook: duplicate the per-person scorecard tab
+    (default 'Pat') as a new tab (default 'Poli') with its data-entry rows
+    cleared, and add a parallel column to the MASTER monthly grid that mirrors
+    the source's column (the National FM / Pat column) but points at the new
+    tab — so it rolls into the existing MONTHLY TOTAL + YTD logic.
+
+    The new column is inserted immediately BEFORE the source column so the
+    MONTHLY TOTAL `SUM(C:H)` ranges and the YTD references auto-extend to
+    include it (Sheets shifts in-range refs on column insert). The column is
+    then copy/pasted from the source column (formulas + formatting) and a
+    column-scoped find/replace repoints '<source>!' → '<new>!' and the header.
+
+    Params: sheet_url, source_tab (default Pat), new_tab (default Poli),
+    master_tab (default MASTER), data_start_row (default 19), apply (dry-run
+    default). Idempotent: skips the duplicate if the tab exists and skips the
+    MASTER column if a column already references the new tab.
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        from utils.sheets_mirror import _col_letter, _service, extract_sheet_id
+
+        def _get(n: str) -> str:
+            return (request.GET.get(n) or request.POST.get(n) or "").strip()
+
+        def _bool(n: str) -> bool:
+            return _get(n).lower() in ("1", "true", "yes", "on")
+
+        sheet_url = _get("sheet_url") or (
+            "https://docs.google.com/spreadsheets/d/"
+            "1W4F7X_vdW7d0SmthUvdxujBH2CahG0DaB53xBVr5q04/edit"
+        )
+        source_tab = _get("source_tab") or "Pat"
+        new_tab = _get("new_tab") or "Poli"
+        master_tab = _get("master_tab") or "MASTER"
+        try:
+            data_start = int(_get("data_start_row") or 19)
+        except ValueError:
+            data_start = 19
+        apply = _bool("apply")
+        # The MASTER header text for the source column (Pat's column is labeled
+        # "NATIONAL FM"); the new column's header.
+        source_header = _get("source_header") or "NATIONAL FM"
+        new_header = _get("new_header") or new_tab.upper()
+        # MASTER wiring is OFF by default: the MASTER monthly grid shares its
+        # columns with the YTD table stacked above it, so inserting a region
+        # column needs a layout call. Build the tab first; wire MASTER only when
+        # explicitly asked (wire_master=1).
+        wire_master = _bool("wire_master")
+
+        sheet_id = extract_sheet_id(sheet_url)
+        if not sheet_id:
+            return JsonResponse({"ok": False, "error": "bad-sheet-url"}, status=400)
+        svc = _service()
+        if svc is None:
+            return JsonResponse({"ok": False, "error": "no-credentials"}, status=503)
+
+        def _props():
+            meta = (
+                svc.spreadsheets()
+                .get(spreadsheetId=sheet_id,
+                     fields="sheets.properties(title,sheetId,gridProperties)")
+                .execute()
+            )
+            return {
+                s["properties"]["title"]: s["properties"]
+                for s in meta.get("sheets", [])
+            }
+
+        try:
+            props = _props()
+            if source_tab not in props:
+                return JsonResponse({"ok": False, "error": "source-tab-not-found",
+                                     "source_tab": source_tab, "tabs": list(props)}, status=404)
+            if master_tab not in props:
+                return JsonResponse({"ok": False, "error": "master-tab-not-found",
+                                     "master_tab": master_tab, "tabs": list(props)}, status=404)
+            src_gid = props[source_tab]["sheetId"]
+            src_cols = props[source_tab]["gridProperties"].get("columnCount", 65)
+            src_rows = props[source_tab]["gridProperties"].get("rowCount", 1011)
+
+            # Locate the source column in MASTER (the one whose formulas
+            # reference '<source_tab>!') by scanning the header band.
+            band = (
+                svc.spreadsheets().values()
+                .get(spreadsheetId=sheet_id, range=f"'{master_tab}'!1:30",
+                     valueRenderOption="FORMULA")
+                .execute().get("values", [])
+            )
+            ref_token = f"{source_tab}!"
+            src_col_idx = None
+            ref_row_no = None
+            for r_i, row in enumerate(band):
+                for c_i, cell in enumerate(row):
+                    if isinstance(cell, str) and ref_token in cell:
+                        src_col_idx, ref_row_no = c_i, r_i + 1
+                        break
+                if src_col_idx is not None:
+                    break
+
+            poli_exists = new_tab in props
+            already_wired = any(
+                isinstance(c, str) and f"{new_tab}!" in c
+                for row in band for c in row
+            )
+
+            plan = {
+                "sheet_id": sheet_id, "source_tab": source_tab, "new_tab": new_tab,
+                "master_tab": master_tab,
+                "source_col_in_master": _col_letter(src_col_idx + 1) if src_col_idx is not None else None,
+                "ref_row_sample": band[ref_row_no - 1] if ref_row_no else None,
+                "poli_tab_exists": poli_exists, "master_already_wired": already_wired,
+                "clear_range": f"'{new_tab}'!A{data_start}:{_col_letter(src_cols)}{src_rows}",
+            }
+            plan["wire_master"] = wire_master
+            if wire_master and src_col_idx is None:
+                return JsonResponse({"ok": False, "error": "source-col-not-found-in-master",
+                                     "hint": f"no MASTER cell referenced '{ref_token}'", **plan}, status=422)
+
+            if not apply:
+                return JsonResponse({"ok": True, "dry_run": True, "plan": plan})
+
+            actions = []
+            # 1) Duplicate the source scorecard tab → new tab.
+            if not poli_exists:
+                svc.spreadsheets().batchUpdate(
+                    spreadsheetId=sheet_id,
+                    body={"requests": [{"duplicateSheet": {
+                        "sourceSheetId": src_gid, "newSheetName": new_tab,
+                    }}]},
+                ).execute()
+                actions.append(f"duplicated '{source_tab}' → '{new_tab}'")
+                props = _props()
+            new_gid = props[new_tab]["sheetId"]
+
+            # 2) Clear the duplicated data-entry rows so it starts empty.
+            svc.spreadsheets().values().clear(
+                spreadsheetId=sheet_id,
+                range=f"'{new_tab}'!A{data_start}:{_col_letter(src_cols)}{src_rows}",
+            ).execute()
+            actions.append(f"cleared data rows {data_start}+ in '{new_tab}'")
+
+            # 3) Wire MASTER — insert a blank column immediately BEFORE the
+            #    source column (so MONTHLY TOTAL SUM ranges + YTD refs auto-extend
+            #    to include it), then fill it with the source column's formulas
+            #    re-pointed to the new tab. We read+rewrite the formulas as TEXT
+            #    (not copyPaste) so relative cell refs like F3 are NOT shifted —
+            #    only the tab name + header are swapped.
+            if wire_master and not already_wired:
+                master_rows = props[master_tab]["gridProperties"].get("rowCount", 1036)
+                svc.spreadsheets().batchUpdate(
+                    spreadsheetId=sheet_id,
+                    body={"requests": [{"insertDimension": {
+                        "range": {"sheetId": master_gid, "dimension": "COLUMNS",
+                                  "startIndex": src_col_idx, "endIndex": src_col_idx + 1},
+                        "inheritFromBefore": True,
+                    }}]},
+                ).execute()
+                new_col = src_col_idx          # the blank inserted column
+                src_now = src_col_idx + 1       # source column shifted right by 1
+                src_letter = _col_letter(src_now + 1)
+                new_letter = _col_letter(new_col + 1)
+
+                col_vals = (
+                    svc.spreadsheets().values()
+                    .get(spreadsheetId=sheet_id,
+                         range=f"'{master_tab}'!{src_letter}1:{src_letter}{master_rows}",
+                         valueRenderOption="FORMULA")
+                    .execute().get("values", [])
+                )
+                # Only carry the region-grid cells into the new column: the
+                # source-tab refs (=Pat!…) and the block header. Everything else
+                # in that column (e.g. the YTD-section formulas that share the
+                # column) is left blank so we don't duplicate them.
+                out_vals = []
+                refs = 0
+                for row in col_vals:
+                    v = row[0] if row else ""
+                    if isinstance(v, str) and (
+                        f"{source_tab}!" in v or f"'{source_tab}'!" in v
+                    ):
+                        out_vals.append([
+                            v.replace(f"'{source_tab}'!", f"'{new_tab}'!").replace(
+                                f"{source_tab}!", f"{new_tab}!")
+                        ])
+                        refs += 1
+                    elif isinstance(v, str) and v.strip().upper() == source_header.upper():
+                        out_vals.append([new_header])
+                    else:
+                        out_vals.append([""])
+                svc.spreadsheets().values().update(
+                    spreadsheetId=sheet_id,
+                    range=f"'{master_tab}'!{new_letter}1",
+                    valueInputOption="USER_ENTERED",
+                    body={"values": out_vals},
+                ).execute()
+                # Copy formatting from the source column for a visual match.
+                svc.spreadsheets().batchUpdate(
+                    spreadsheetId=sheet_id,
+                    body={"requests": [{"copyPaste": {
+                        "source": {"sheetId": master_gid, "startColumnIndex": src_now,
+                                   "endColumnIndex": src_now + 1},
+                        "destination": {"sheetId": master_gid, "startColumnIndex": new_col,
+                                        "endColumnIndex": new_col + 1},
+                        "pasteType": "PASTE_FORMAT",
+                    }}]},
+                ).execute()
+                actions.append(
+                    f"inserted MASTER col {new_letter} mirroring {src_letter} "
+                    f"→ '{new_tab}' ({refs} refs repointed)"
+                )
+
+            return JsonResponse({"ok": True, "apply": True, "new_gid": new_gid,
+                                 "actions": actions, "plan": plan})
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("build-poli-tab failed")
+            return JsonResponse({"ok": False, "error": "failed",
+                                 "exception": _concise_exc(exc)}, status=500)
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
 def _registered_views() -> dict[str, Any]:
     """Map URL path → view class. Lets `digest/urls.py` mount these
     without each one being re-exported explicitly.
@@ -3045,6 +3278,7 @@ def _registered_views() -> dict[str, Any]:
         "backfill-ambassador-coordinates": BackfillAmbassadorCoordinatesView,
         "backfill-request-rmm-routing": BackfillRequestRmmRoutingView,
         "backfill-event-state": BackfillEventStateView,
+        "build-poli-tab": BuildPoliTabView,
         "repair-request-activation-time": RepairRequestActivationTimeView,
         "backfill-girlbeer-receipts": BackfillGirlBeerReceiptsView,
         "audit-tenant-onboarding": AuditTenantOnboardingView,
