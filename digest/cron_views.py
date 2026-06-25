@@ -3157,6 +3157,31 @@ class BuildPoliTabView(View):
             if not apply:
                 return JsonResponse({"ok": True, "dry_run": True, "plan": plan})
 
+            # Revert: delete the MASTER column that holds the new tab's refs
+            # (cleanly auto-reverts the SUM/YTD shifts + closes any gap). Used to
+            # undo a partial wire. Does not touch the new tab.
+            if _bool("revert"):
+                del_idx = None
+                for row in band:
+                    for c_i, cell in enumerate(row):
+                        if isinstance(cell, str) and f"{new_tab}!" in cell:
+                            del_idx = c_i
+                            break
+                    if del_idx is not None:
+                        break
+                if del_idx is None:
+                    return JsonResponse({"ok": True, "reverted": False,
+                                         "note": "no MASTER column referenced the new tab"})
+                svc.spreadsheets().batchUpdate(
+                    spreadsheetId=sheet_id,
+                    body={"requests": [{"deleteDimension": {
+                        "range": {"sheetId": master_gid, "dimension": "COLUMNS",
+                                  "startIndex": del_idx, "endIndex": del_idx + 1},
+                    }}]},
+                ).execute()
+                return JsonResponse({"ok": True, "reverted": True,
+                                     "deleted_col": _col_letter(del_idx + 1)})
+
             actions = []
             # 1) Duplicate the source scorecard tab → new tab.
             if not poli_exists:
@@ -3242,17 +3267,9 @@ class BuildPoliTabView(View):
                     valueInputOption="USER_ENTERED",
                     body={"values": out_vals},
                 ).execute()
-                # Copy formatting from the source column for a visual match.
-                svc.spreadsheets().batchUpdate(
-                    spreadsheetId=sheet_id,
-                    body={"requests": [{"copyPaste": {
-                        "source": {"sheetId": master_gid, "startColumnIndex": src_now,
-                                   "endColumnIndex": src_now + 1},
-                        "destination": {"sheetId": master_gid, "startColumnIndex": new_col,
-                                        "endColumnIndex": new_col + 1},
-                        "pasteType": "PASTE_FORMAT",
-                    }}]},
-                ).execute()
+                # (The inserted column inherits formatting from its left neighbor
+                # via inheritFromBefore; we skip a copyPaste PASTE_FORMAT because
+                # it can't paste across the merged header cells in this sheet.)
                 actions.append(
                     f"inserted MASTER col {new_letter} mirroring {src_letter} "
                     f"→ '{new_tab}' ({refs} refs repointed)"
