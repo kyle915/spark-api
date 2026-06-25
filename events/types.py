@@ -1018,6 +1018,7 @@ class Event(Node):
     @strawberry.field
     async def custom_recaps(
         self,
+        info: strawberry.Info,
     ) -> List[Annotated["CustomRecap", strawberry.lazy("recaps.types")]]:
         """Custom-template recaps (per-tenant schemas) tied to this event.
 
@@ -1025,15 +1026,32 @@ class Event(Node):
         builder (Borjomi, Carbliss, etc.). The Master Tracker chip
         considers an event "recap filed" if EITHER list is non-empty,
         so this needs to be queryable alongside `recaps`.
+
+        Client-only users (tenant-side, no Ignite escalation) see only
+        approved recaps — same gate as `recaps`. Without this, an
+        unapproved custom recap leaks to the client through the event
+        even though the customRecaps query resolver filters them out
+        (e.g. a Connecteam-imported draft visible on a Request page).
         """
+        # Local import to avoid circular import at module load time
+        # (events.types ⇄ recaps.queries pull in each other).
+        from recaps.queries import _is_client_only_user
+
+        is_client_only = await _is_client_only_user(info)
+
         cached = getattr(self, "_prefetched_objects_cache", {}).get(
             "custom_recap"
         )
         if cached is not None:
-            return list(cached)
-        return await sync_to_async(list)(
-            self.custom_recap.order_by("-created_at")
-        )
+            recaps = list(cached)
+            if is_client_only:
+                recaps = [r for r in recaps if getattr(r, "approved", False)]
+            return recaps
+
+        qs = self.custom_recap.order_by("-created_at")
+        if is_client_only:
+            qs = qs.filter(approved=True)
+        return await sync_to_async(list)(qs)
 
 
 @strawberry.type
