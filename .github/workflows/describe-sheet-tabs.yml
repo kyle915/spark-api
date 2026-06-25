@@ -23,6 +23,10 @@ on:
         description: "How many sample rows to dump"
         required: false
         default: "4"
+      peek_render:
+        description: "Render: FORMATTED_VALUE (default) or FORMULA"
+        required: false
+        default: "FORMATTED_VALUE"
 
 jobs:
   describe-tabs:
@@ -36,6 +40,7 @@ jobs:
           TENANT_SLUG: ${{ github.event.inputs.tenant_slug }}
           PEEK_TAB: ${{ github.event.inputs.peek_tab }}
           PEEK_ROWS: ${{ github.event.inputs.peek_rows }}
+          PEEK_RENDER: ${{ github.event.inputs.peek_render }}
         run: |
           if [ -z "$CRON_SECRET" ]; then
             echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
@@ -47,7 +52,8 @@ jobs:
             --data-urlencode "sheet_url=$SHEET_URL" \
             --data-urlencode "tenant_slug=$TENANT_SLUG" \
             --data-urlencode "peek_tab=$PEEK_TAB" \
-            --data-urlencode "peek_rows=$PEEK_ROWS")
+            --data-urlencode "peek_rows=$PEEK_ROWS" \
+            --data-urlencode "peek_render=$PEEK_RENDER")
           echo "HTTP $STATUS"
           cat /tmp/cron-response.json
           echo ""
