@@ -3076,6 +3076,13 @@ class BuildPoliTabView(View):
         # column needs a layout call. Build the tab first; wire MASTER only when
         # explicitly asked (wire_master=1).
         wire_master = _bool("wire_master")
+        # The YTD summary table's header row (shares columns with the monthly
+        # grid). After the column insert it gets a blank gap; we shift its
+        # displaced metrics back. The value row is assumed to be the next row.
+        try:
+            ytd_header_row = int(_get("ytd_header_row") or 15)
+        except ValueError:
+            ytd_header_row = 15
 
         sheet_id = extract_sheet_id(sheet_url)
         if not sheet_id:
@@ -3177,6 +3184,17 @@ class BuildPoliTabView(View):
             #    only the tab name + header are swapped.
             if wire_master and not already_wired:
                 master_rows = props[master_tab]["gridProperties"].get("rowCount", 1036)
+                # Safety net: snapshot MASTER before the structural surgery so a
+                # mistake on the live dashboard is one-click recoverable.
+                backup_name = f"{master_tab} (pre-{new_tab} backup)"
+                if backup_name not in props:
+                    svc.spreadsheets().batchUpdate(
+                        spreadsheetId=sheet_id,
+                        body={"requests": [{"duplicateSheet": {
+                            "sourceSheetId": master_gid, "newSheetName": backup_name,
+                        }}]},
+                    ).execute()
+                    actions.append(f"backed up '{master_tab}' → '{backup_name}'")
                 svc.spreadsheets().batchUpdate(
                     spreadsheetId=sheet_id,
                     body={"requests": [{"insertDimension": {
@@ -3238,6 +3256,62 @@ class BuildPoliTabView(View):
                     f"inserted MASTER col {new_letter} mirroring {src_letter} "
                     f"→ '{new_tab}' ({refs} refs repointed)"
                 )
+
+                # 4) Repair the YTD summary table: the insert opened a blank gap
+                #    in its header/value rows (it shares columns with the grid).
+                #    Determine the span from the HEADER row, then shift BOTH the
+                #    header and value rows by the same amount to close the gap.
+                hdr = (
+                    svc.spreadsheets().values()
+                    .get(spreadsheetId=sheet_id,
+                         range=f"'{master_tab}'!{ytd_header_row}:{ytd_header_row}",
+                         valueRenderOption="FORMULA")
+                    .execute().get("values", [[]])
+                )
+                hdr_cells = hdr[0] if hdr else []
+                last = max((i for i, c in enumerate(hdr_cells) if c not in ("", None)),
+                           default=-1)
+                if last > new_col:  # there is a gap at new_col to close
+                    for r in (ytd_header_row, ytd_header_row + 1):
+                        rv = (
+                            svc.spreadsheets().values()
+                            .get(spreadsheetId=sheet_id,
+                                 range=f"'{master_tab}'!{_col_letter(new_col + 2)}{r}:"
+                                       f"{_col_letter(last + 1)}{r}",
+                                 valueRenderOption="FORMULA")
+                            .execute().get("values", [[]])
+                        )
+                        block = rv[0] if rv else []
+                        block = block + [""] * ((last - new_col) - len(block))
+                        svc.spreadsheets().values().update(
+                            spreadsheetId=sheet_id,
+                            range=f"'{master_tab}'!{_col_letter(new_col + 1)}{r}",
+                            valueInputOption="USER_ENTERED",
+                            body={"values": [block]},
+                        ).execute()
+                        svc.spreadsheets().values().update(
+                            spreadsheetId=sheet_id,
+                            range=f"'{master_tab}'!{_col_letter(last + 1)}{r}",
+                            valueInputOption="USER_ENTERED",
+                            body={"values": [[""]]},
+                        ).execute()
+                    actions.append(
+                        f"closed YTD gap: shifted cols {_col_letter(new_col + 2)}-"
+                        f"{_col_letter(last + 1)} ← 1 on rows "
+                        f"{ytd_header_row}-{ytd_header_row + 1}")
+
+                # 5) Read back the key MASTER rows so the result is verifiable.
+                verify = (
+                    svc.spreadsheets().values()
+                    .get(spreadsheetId=sheet_id,
+                         range=f"'{master_tab}'!{ytd_header_row}:{ref_row_no}",
+                         valueRenderOption="FORMULA")
+                    .execute().get("values", [])
+                )
+                plan["verify_rows"] = {
+                    "ytd_header": verify[0] if verify else None,
+                    "ref_row": verify[-1] if verify else None,
+                }
 
             return JsonResponse({"ok": True, "apply": True, "new_gid": new_gid,
                                  "actions": actions, "plan": plan})
