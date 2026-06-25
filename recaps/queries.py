@@ -1150,6 +1150,12 @@ class RecapQueries:
         end_date = filters.end_date if filters else None
         event_address = filters.event_address if filters else None
         approved = filters.approved if filters else None
+        # Client-role users must never see unapproved recaps — they only
+        # become visible to the client after an admin approves them. Force
+        # the filter regardless of what the client passed. Admins /
+        # ambassadors keep full visibility.
+        if service.get_role_slug(user) == "client":
+            approved = True
         queryset = service.get_ordered_queryset(
             tenant_id=tenant_id,
             event_id=event_id,
@@ -1214,6 +1220,10 @@ class RecapQueries:
                 user_tenant = await service.get_user_tenant(info)
                 if recap.tenant_id != user_tenant.id:
                     return None
+                # Unapproved recaps are invisible to the client until an
+                # admin approves — return "not found" rather than leak it.
+                if not recap.approved:
+                    return None
             return recap
         except GraphQLError:
             return None
@@ -1235,7 +1245,7 @@ class RecapQueries:
         pattern as the recaps resolver above.
         """
         service = CustomRecapQueriesService()
-        await service.get_user(info)
+        user = await service.get_user(info)
 
         filters_tenant_id_raw = (
             resolve_id_to_int(filters.tenant_id)
@@ -1291,6 +1301,12 @@ class RecapQueries:
         event_address = filters.event_address if filters else None
         approved = filters.approved if filters else None
         edited = filters.edited if filters else None
+        # Client-role users must never see unapproved recaps — they only
+        # become visible to the client after an admin approves them. Force
+        # the filter regardless of what the client passed. Admins /
+        # ambassadors keep full visibility.
+        if service.get_role_slug(user) == "client":
+            approved = True
 
         queryset = service.get_ordered_queryset(
             tenant_id=resolved_tenant_id,
@@ -1360,6 +1376,10 @@ class RecapQueries:
             if service.get_role_slug(user) == "client":
                 user_tenant = await service.get_user_tenant(info)
                 if record.tenant_id != user_tenant.id:
+                    return None
+                # Unapproved recaps are invisible to the client until an
+                # admin approves — return "not found" rather than leak it.
+                if not record.approved:
                     return None
             return record
         except GraphQLError:

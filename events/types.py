@@ -14,6 +14,22 @@ from utils.gcs import extract_blob_name_from_url, public_url
 
 from . import models
 
+
+def _is_client_request(info: strawberry.Info) -> bool:
+    """True when the GraphQL request is made by a client-role user.
+
+    Clients must only ever see approved recaps. This gates the nested
+    Event.recaps / Event.custom_recaps fields the same way the top-level
+    recap resolvers do — otherwise a client could read unapproved recaps
+    by querying them through an event. Role is read off the
+    request-cached user (same pattern the query resolvers use), so there's
+    no extra DB hit.
+    """
+    request = getattr(info.context, "request", None)
+    user = getattr(request, "user", None) if request else None
+    role = getattr(user, "role", None)
+    return (getattr(role, "slug", None) or "").lower() == "client"
+
 if TYPE_CHECKING:
     from recaps.types import CustomRecapTemplate
 
@@ -624,21 +640,31 @@ class Event(Node):
     @strawberry.field
     async def recaps(
         self,
+        info: strawberry.Info,
     ) -> List[Annotated["Recap", strawberry.lazy("recaps.types")]]:
         """All recaps filed against this event, newest first.
 
         Used by the front-end Field Reports panel on /request/view to
         surface what BAs reported in for the activation. Empty list
         is normal — recap is filed post-event.
+
+        Clients only see approved recaps — the same rule the top-level
+        recap resolvers enforce — so they can't read unapproved recaps
+        through an event. Admins / ambassadors keep full visibility.
         """
         cached = getattr(self, "_prefetched_objects_cache", {}).get("recaps")
         if cached is not None:
-            return list(cached)
-        return await sync_to_async(list)(self.recaps.order_by("-created_at"))
+            items = list(cached)
+        else:
+            items = await sync_to_async(list)(self.recaps.order_by("-created_at"))
+        if _is_client_request(info):
+            items = [r for r in items if getattr(r, "approved", False)]
+        return items
 
     @strawberry.field
     async def custom_recaps(
         self,
+        info: strawberry.Info,
     ) -> List[Annotated["CustomRecap", strawberry.lazy("recaps.types")]]:
         """Custom-template recaps (per-tenant schemas) tied to this event.
 
@@ -646,15 +672,21 @@ class Event(Node):
         builder (Borjomi, Carbliss, etc.). The Master Tracker chip
         considers an event "recap filed" if EITHER list is non-empty,
         so this needs to be queryable alongside `recaps`.
+
+        Clients only see approved recaps (same rule as `recaps`).
         """
         cached = getattr(self, "_prefetched_objects_cache", {}).get(
             "custom_recap"
         )
         if cached is not None:
-            return list(cached)
-        return await sync_to_async(list)(
-            self.custom_recap.order_by("-created_at")
-        )
+            items = list(cached)
+        else:
+            items = await sync_to_async(list)(
+                self.custom_recap.order_by("-created_at")
+            )
+        if _is_client_request(info):
+            items = [r for r in items if getattr(r, "approved", False)]
+        return items
 
 
 @strawberry.type
