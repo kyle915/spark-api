@@ -562,6 +562,17 @@ def write_girlbeer_summary(tenant, *, tab: str = DEFAULT_SUMMARY_TAB,
             None,
         )
 
+        # Best-effort: drop any pre-existing merges (the old formula layout had
+        # a merged title bar / section headers) so our re-merges can't collide.
+        if gid is not None:
+            try:
+                svc.spreadsheets().batchUpdate(
+                    spreadsheetId=sheet_id,
+                    body={"requests": [{"unmergeCells": {"range": {"sheetId": gid}}}]},
+                ).execute()
+            except Exception:  # pragma: no cover - no merges present
+                pass
+
         # Clear values, wipe stale formatting, write fresh values, re-format.
         svc.spreadsheets().values().clear(
             spreadsheetId=sheet_id, range=f"'{actual}'!A:ZZ"
