@@ -1,0 +1,49 @@
+name: Export Girl Beer Summary (manual)
+
+# Rebuild the Girl Beer "Summary" dashboard tab from Spark recaps as plain
+# values (KPIs + per-ambassador / date / store / flavor / age). Manual trigger
+# for an immediate rebuild / dry-run; the daily recap export keeps it fresh once
+# Tenant.recap_summary_tab_name is set (an apply run sets it).
+
+on:
+  workflow_dispatch:
+    inputs:
+      tenant_slug:
+        description: "Tenant slug"
+        required: false
+        default: "girl-beer"
+      tab:
+        description: "Summary tab name"
+        required: false
+        default: "Summary"
+      dry_run:
+        description: "Dry run (compute + report, write nothing)"
+        required: false
+        default: "false"
+
+jobs:
+  export-girlbeer-summary:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire export-girlbeer-summary endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/export-girlbeer-summary
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          TENANT_SLUG: ${{ github.event.inputs.tenant_slug }}
+          TAB: ${{ github.event.inputs.tab }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL" \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            --data-urlencode "tenant_slug=$TENANT_SLUG" \
+            --data-urlencode "tab=$TAB" \
+            --data-urlencode "dry_run=$DRY_RUN")
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          echo ""
+          [ "$STATUS" != "200" ] && exit 1 || exit 0
