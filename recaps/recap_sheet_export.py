@@ -306,8 +306,22 @@ def refresh_recap_export(tenant) -> dict:
     if tab:
         from recaps.ld_recaps_export import write_ld_recaps
 
-        return write_ld_recaps(tenant, tab=tab)
-    return export_tenant_recaps_to_sheet(tenant)
+        result = write_ld_recaps(tenant, tab=tab)
+    else:
+        result = export_tenant_recaps_to_sheet(tenant)
+
+    # Optionally rebuild a computed "Summary" dashboard (values, never #REF!)
+    # for tenants that opt in (Girl Beer = "Summary"). Best-effort: a Summary
+    # failure never affects the raw-data export result.
+    summary_tab = (getattr(tenant, "recap_summary_tab_name", "") or "").strip()
+    if summary_tab and result.get("ok"):
+        try:
+            from recaps.girlbeer_summary_export import write_girlbeer_summary
+
+            result["summary"] = write_girlbeer_summary(tenant, tab=summary_tab)
+        except Exception as e:  # pragma: no cover - defensive
+            result["summary"] = {"ok": False, "error": "unexpected", "detail": str(e)[:300]}
+    return result
 
 
 def export_tenant_recaps_to_sheet(tenant, *, tab: str = DEFAULT_TAB, sheet_url: str | None = None) -> dict:

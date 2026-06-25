@@ -88,6 +88,11 @@ class Tenant(Asyncable, models.Model):
     # not only on the daily cron — so a submitted/edited recap shows up in the
     # sheet right away. Off by default (Girl Beer stays daily). LD = True.
     recap_export_on_submit = models.BooleanField(default=False)
+    # When set, the recap export ALSO rebuilds a computed "Summary" dashboard
+    # tab (KPIs + per-ambassador/date/store/flavor/age) as plain values — no
+    # fragile in-sheet formulas. Girl Beer = "Summary". See
+    # recaps/girlbeer_summary_export.py.
+    recap_summary_tab_name = models.CharField(max_length=128, null=True, blank=True)
     # When set, ALL external (public-form) requests for this tenant route
     # to this user as the assigned RMM/approver, overriding territory
     # logic. Chosen on the Team page. SET_NULL so removing the user from

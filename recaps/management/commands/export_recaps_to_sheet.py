@@ -22,6 +22,7 @@ from recaps.recap_sheet_export import (
     DEFAULT_TAB,
     build_export_grid,
     export_tenant_recaps_to_sheet,
+    refresh_recap_export,
 )
 from tenants.models import Tenant
 
@@ -72,13 +73,35 @@ class Command(BaseCommand):
                 self.stdout.write("  (dry run — pass --apply to write)")
                 continue
 
-            result = export_tenant_recaps_to_sheet(tenant, tab=tab)
+            # Default tab → central dispatcher (raw-data export + optional
+            # branded recaps tab + optional computed Summary dashboard). A
+            # non-default --tab targets the raw export directly.
+            if tab == DEFAULT_TAB:
+                result = refresh_recap_export(tenant)
+            else:
+                result = export_tenant_recaps_to_sheet(tenant, tab=tab)
             if result.get("ok"):
                 self.stdout.write(
                     self.style.SUCCESS(
                         f"  wrote {result['rows']} row(s) to tab '{result['tab']}'."
                     )
                 )
+                summary = result.get("summary")
+                if summary is not None:
+                    if summary.get("ok"):
+                        self.stdout.write(
+                            self.style.SUCCESS(
+                                f"  Summary '{summary.get('tab')}' rebuilt: "
+                                f"{summary.get('demos')} demos, "
+                                f"{summary.get('ambassadors')} BAs, "
+                                f"{summary.get('locations')} locations, "
+                                f"{summary.get('dates')} dates."
+                            )
+                        )
+                    else:
+                        self.stdout.write(
+                            self.style.WARNING(f"  Summary FAILED: {summary}")
+                        )
             else:
                 self.stdout.write(self.style.ERROR(f"  FAILED: {result}"))
 

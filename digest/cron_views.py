@@ -2425,6 +2425,69 @@ class ExportLdSummaryView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class ExportGirlbeerSummaryView(View):
+    """POST `/internal/cron/export-girlbeer-summary`.
+
+    Rebuilds the Girl Beer "Summary" dashboard tab from Spark recaps as plain
+    VALUES (KPIs + per-ambassador / date / store / flavor / age), so it never
+    #REF!s and stays current. On apply, also persists
+    `tenant.recap_summary_tab_name` so the daily recap export keeps it fresh.
+
+    Params (query or POST): tenant_slug (default "girl-beer"),
+    tab (default "Summary"), sheet_url, dry_run.
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        from recaps.girlbeer_summary_export import write_girlbeer_summary
+        from tenants.models import Tenant
+
+        def _get(name: str) -> str:
+            return (request.GET.get(name) or request.POST.get(name) or "").strip()
+
+        def _bool(name: str, default: bool = False) -> bool:
+            raw = _get(name).lower()
+            return raw in ("1", "true", "yes", "on") if raw else default
+
+        slug = _get("tenant_slug") or "girl-beer"
+        tab = _get("tab") or "Summary"
+        sheet_url = _get("sheet_url")
+        dry_run = _bool("dry_run", default=False)
+
+        tenant = Tenant.objects.filter(slug=slug).first()
+        if tenant is None:
+            return JsonResponse({"ok": False, "error": "tenant-not-found", "slug": slug}, status=404)
+
+        # On a real run, persist the opt-in so the daily export keeps the
+        # Summary fresh going forward.
+        if not dry_run and (getattr(tenant, "recap_summary_tab_name", "") or "") != tab:
+            tenant.recap_summary_tab_name = tab
+            tenant.save(update_fields=["recap_summary_tab_name"])
+
+        try:
+            result = write_girlbeer_summary(
+                tenant, tab=tab, sheet_url=sheet_url or None, dry_run=dry_run
+            )
+        except Exception as exc:
+            logger.exception("export-girlbeer-summary cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "exception": _concise_exc(exc)},
+                status=500,
+            )
+        return JsonResponse({"ok": result.get("ok", False), "tenant_slug": slug,
+                             "dry_run": dry_run, "result": result})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class DescribeSheetTabsView(View):
     """GET/POST `/internal/cron/describe-sheet-tabs` — read-only.
 
@@ -2755,6 +2818,7 @@ def _registered_views() -> dict[str, Any]:
         "set-custom-recap-field": SetCustomRecapFieldView,
         "export-recaps-to-sheet": ExportRecapsToSheetView,
         "export-ld-summary": ExportLdSummaryView,
+        "export-girlbeer-summary": ExportGirlbeerSummaryView,
         "describe-sheet-tabs": DescribeSheetTabsView,
         "backfill-ld-master-tracker": BackfillLdMasterTrackerView,
         "ld-data-census": LdDataCensusView,
