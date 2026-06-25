@@ -1,0 +1,55 @@
+name: Build Poli tab (manual)
+
+# On the LD RMM planning workbook: duplicate a per-person scorecard tab
+# (default 'Pat') as a new tab (default 'Poli') with data rows cleared, and
+# optionally wire a parallel MASTER region column (wire_master). Dry-run by
+# default.
+
+on:
+  workflow_dispatch:
+    inputs:
+      sheet_url:
+        description: "Workbook URL"
+        required: false
+        default: "https://docs.google.com/spreadsheets/d/1W4F7X_vdW7d0SmthUvdxujBH2CahG0DaB53xBVr5q04/edit"
+      source_tab:
+        description: "Template tab to duplicate"
+        required: false
+        default: "Pat"
+      new_tab:
+        description: "New tab name"
+        required: false
+        default: "Poli"
+      apply:
+        description: "Apply (false = dry run)"
+        required: false
+        default: "false"
+      wire_master:
+        description: "Also add a MASTER region column (advanced)"
+        required: false
+        default: "false"
+
+jobs:
+  build-poli-tab:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire build-poli-tab endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/build-poli-tab
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          SHEET_URL: ${{ github.event.inputs.sheet_url }}
+          SOURCE_TAB: ${{ github.event.inputs.source_tab }}
+          NEW_TAB: ${{ github.event.inputs.new_tab }}
+          APPLY: ${{ github.event.inputs.apply }}
+          WIRE_MASTER: ${{ github.event.inputs.wire_master }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then echo "::error::secret missing"; exit 1; fi
+          STATUS=$(curl -sS -o /tmp/resp.json -w '%{http_code}' -X POST "$CRON_URL" \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            --data-urlencode "sheet_url=$SHEET_URL" \
+            --data-urlencode "source_tab=$SOURCE_TAB" \
+            --data-urlencode "new_tab=$NEW_TAB" \
+            --data-urlencode "apply=$APPLY" \
+            --data-urlencode "wire_master=$WIRE_MASTER")
+          echo "HTTP $STATUS"; cat /tmp/resp.json; echo ""
+          [ "$STATUS" != "200" ] && exit 1 || exit 0
