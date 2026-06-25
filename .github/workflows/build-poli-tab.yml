@@ -28,6 +28,10 @@ on:
         description: "Also add a MASTER region column (advanced)"
         required: false
         default: "false"
+      revert:
+        description: "Revert: delete the new tab's MASTER column (undo a partial wire)"
+        required: false
+        default: "false"
 
 jobs:
   build-poli-tab:
@@ -42,6 +46,7 @@ jobs:
           NEW_TAB: ${{ github.event.inputs.new_tab }}
           APPLY: ${{ github.event.inputs.apply }}
           WIRE_MASTER: ${{ github.event.inputs.wire_master }}
+          REVERT: ${{ github.event.inputs.revert }}
         run: |
           if [ -z "$CRON_SECRET" ]; then echo "::error::secret missing"; exit 1; fi
           STATUS=$(curl -sS -o /tmp/resp.json -w '%{http_code}' -X POST "$CRON_URL" \
@@ -50,6 +55,7 @@ jobs:
             --data-urlencode "source_tab=$SOURCE_TAB" \
             --data-urlencode "new_tab=$NEW_TAB" \
             --data-urlencode "apply=$APPLY" \
-            --data-urlencode "wire_master=$WIRE_MASTER")
+            --data-urlencode "wire_master=$WIRE_MASTER" \
+            --data-urlencode "revert=$REVERT")
           echo "HTTP $STATUS"; cat /tmp/resp.json; echo ""
           [ "$STATUS" != "200" ] && exit 1 || exit 0
