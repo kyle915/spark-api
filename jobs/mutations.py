@@ -838,6 +838,45 @@ class JobMutationService(BaseMutationService):
         if relevant_fields_before != relevant_fields_after:
             await _notify_updated_ambassadors_for_job(updated_job.id)
 
+        # Keep the linked Event's dates in lock-step with the job's. The mobile
+        # shift screens (my_active_shifts / my_upcoming_shifts) key off
+        # event.start_time / event.date — NOT the job's start_date — so without
+        # this an edited gig's approved booking silently fails to appear on the
+        # BA's Today/Upcoming (the job says one date, the event another). Only
+        # fires when the dates actually changed.
+        if (
+            relevant_fields_before["start_date"] != relevant_fields_after["start_date"]
+            or relevant_fields_before["end_date"] != relevant_fields_after["end_date"]
+        ):
+            def _sync_event_dates() -> None:
+                if not updated_job.event_id:
+                    return
+                from events.models import Event
+                event = Event.objects.filter(id=updated_job.event_id).first()
+                if event is None:
+                    return
+                fields: list[str] = []
+                if updated_job.start_date is not None:
+                    if hasattr(event, "start_time"):
+                        event.start_time = updated_job.start_date
+                        fields.append("start_time")
+                    if hasattr(event, "date"):
+                        event.date = updated_job.start_date.date()
+                        fields.append("date")
+                if updated_job.end_date is not None and hasattr(event, "end_time"):
+                    event.end_time = updated_job.end_date
+                    fields.append("end_time")
+                if fields:
+                    event.save(update_fields=fields)
+
+            try:
+                await sync_to_async(_sync_event_dates)()
+            except Exception as exc:  # noqa: BLE001 — never fail the job update
+                logger.warning(
+                    "Failed to sync event dates for job=%s: %s",
+                    updated_job.id, exc,
+                )
+
         return response
 
 

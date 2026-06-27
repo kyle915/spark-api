@@ -2235,12 +2235,21 @@ class EnsureAmbassadorProfileView(View):
 
     Body / query params:
       - email: REQUIRED — the existing user to give a BA profile.
+      - remove: optional ("1"/"true") — REMOVE the user's BA profile instead.
+        Hard-deletes the Ambassador row when it has no protected children
+        (the common case for a never-used test profile); if FK-protected
+        because it carries bookings, it soft-disables (is_active=False).
+        Still NEVER touches the user's password, role, or staff flags.
     """
 
     def post(self, request: HttpRequest) -> HttpResponse:
         deny = _check_secret(request)
         if deny is not None:
             return deny
+
+        def _bool(name: str) -> bool:
+            raw = (request.GET.get(name) or request.POST.get(name) or "").lower()
+            return raw in ("1", "true", "yes", "on")
 
         email = (
             request.GET.get("email") or request.POST.get("email") or ""
@@ -2249,6 +2258,7 @@ class EnsureAmbassadorProfileView(View):
             return JsonResponse({"ok": False, "error": "email-required"}, status=400)
 
         from django.contrib.auth import get_user_model
+        from django.db import transaction
         from ambassadors.models import Ambassador
 
         User = get_user_model()
@@ -2256,6 +2266,44 @@ class EnsureAmbassadorProfileView(View):
         if user is None:
             return JsonResponse(
                 {"ok": False, "error": "user-not-found", "email": email}, status=404
+            )
+
+        # Removal mode: take away the (stray) BA profile.
+        if _bool("remove"):
+            amb = Ambassador.objects.filter(user=user).first()
+            if amb is None:
+                return JsonResponse(
+                    {
+                        "ok": True,
+                        "email": user.email,
+                        "removed": False,
+                        "note": "no ambassador profile to remove",
+                        "role_unchanged": getattr(user.role, "slug", None),
+                    }
+                )
+            amb_uuid = str(amb.uuid)
+            try:
+                with transaction.atomic():
+                    amb.delete()
+                action = "deleted"
+            except Exception as exc:  # noqa: BLE001 — FK-protected → soft-disable
+                logger.warning(
+                    "Hard-delete of ambassador %s blocked (%s); deactivating",
+                    amb_uuid, exc,
+                )
+                amb.is_active = False
+                amb.save(update_fields=["is_active"])
+                action = "deactivated"
+            return JsonResponse(
+                {
+                    "ok": True,
+                    "email": user.email,
+                    "removed": True,
+                    "action": action,
+                    "ambassador_uuid": amb_uuid,
+                    "role_unchanged": getattr(user.role, "slug", None),
+                    "note": "password/role/flags untouched",
+                }
             )
 
         amb, created = Ambassador.objects.get_or_create(
@@ -2286,6 +2334,185 @@ class EnsureAmbassadorProfileView(View):
         if deny is not None:
             return deny
         return JsonResponse({"ok": True, "endpoint": "ensure-ambassador-profile"})
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class SetEventDateView(View):
+    """POST `/internal/cron/set-event-date`.
+
+    Move a single Event to a new calendar date (default: TODAY, server-local),
+    shifting its ``start_time`` / ``end_time`` / ``date`` by the same whole-day
+    delta so the time-of-day and duration are preserved. The mobile BA shift
+    screens (my_active_shifts / my_upcoming_shifts) key off ``event.start_time``
+    / ``event.date`` — so this is how you make an accepted booking appear on a
+    BA's Today/Upcoming (handy for testing, or to fix a stale gig date).
+
+    Resolve the target event by exactly ONE of:
+      - event_uuid: the Event uuid directly, OR
+      - job_uuid:   a Job uuid → its linked event, OR
+      - ba_email:   a BA's email → their single APPROVED booking's event
+                    (refuses + lists them if they have 0 or >1).
+
+    Params:
+      - date: YYYY-MM-DD (optional; default = today, server-local).
+      - execute: "1"/"true" to write. DRY-RUN by default (reports only).
+    """
+
+    def _resolve_event(self, request: HttpRequest):
+        """Return (event, meta_dict) or (None, error_dict)."""
+        from events.models import Event
+        from jobs.models import Job
+        from ambassadors.models import Ambassador, AmbassadorEvent
+
+        def _p(name: str) -> str:
+            return (request.GET.get(name) or request.POST.get(name) or "").strip()
+
+        event_uuid = _p("event_uuid")
+        job_uuid = _p("job_uuid")
+        ba_email = _p("ba_email")
+
+        if event_uuid:
+            ev = Event.objects.filter(uuid=event_uuid).first()
+            if ev is None:
+                return None, {"error": "event-not-found", "event_uuid": event_uuid}
+            return ev, {"resolved_by": "event_uuid"}
+
+        if job_uuid:
+            job = Job.objects.filter(uuid=job_uuid).select_related("event").first()
+            if job is None:
+                return None, {"error": "job-not-found", "job_uuid": job_uuid}
+            if not job.event_id:
+                return None, {"error": "job-has-no-event", "job_uuid": job_uuid}
+            return job.event, {"resolved_by": "job_uuid"}
+
+        if ba_email:
+            amb = Ambassador.objects.filter(user__email__iexact=ba_email).first()
+            if amb is None:
+                return None, {"error": "ba-not-found", "ba_email": ba_email}
+            bookings = list(
+                AmbassadorEvent.objects.filter(
+                    ambassador=amb, is_approved=True
+                ).select_related("event")
+            )
+            events = [b.event for b in bookings if b.event_id]
+            if len(events) == 0:
+                return None, {"error": "no-approved-bookings", "ba_email": ba_email}
+            if len(events) > 1:
+                return None, {
+                    "error": "multiple-approved-bookings",
+                    "ba_email": ba_email,
+                    "events": [
+                        {"uuid": str(e.uuid), "name": e.name} for e in events
+                    ],
+                    "hint": "pass event_uuid to pick one",
+                }
+            return events[0], {"resolved_by": "ba_email"}
+
+        return None, {"error": "no-target", "hint": "pass event_uuid, job_uuid, or ba_email"}
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        from datetime import datetime, time as dtime, timedelta
+        from django.utils import timezone
+        from ambassadors.models import AmbassadorEvent
+
+        def _bool(name: str) -> bool:
+            raw = (request.GET.get(name) or request.POST.get(name) or "").lower()
+            return raw in ("1", "true", "yes", "on")
+
+        execute = _bool("execute")
+
+        date_raw = (
+            request.GET.get("date") or request.POST.get("date") or ""
+        ).strip()
+        if date_raw:
+            try:
+                target = datetime.strptime(date_raw, "%Y-%m-%d").date()
+            except ValueError:
+                return JsonResponse(
+                    {"ok": False, "error": "bad-date", "date": date_raw,
+                     "hint": "use YYYY-MM-DD"},
+                    status=400,
+                )
+        else:
+            target = timezone.localdate()
+
+        event, meta = self._resolve_event(request)
+        if event is None:
+            return JsonResponse({"ok": False, **meta}, status=400)
+
+        # Anchor the shift on the event's current start (fall back to date).
+        anchor = event.start_time or event.date
+        before = {
+            "start_time": event.start_time.isoformat() if event.start_time else None,
+            "end_time": event.end_time.isoformat() if event.end_time else None,
+            "date": event.date.isoformat() if event.date else None,
+        }
+
+        changed_fields: list[str] = []
+        if anchor is None:
+            # No basis to shift — seat the event at noon on the target day.
+            seat = timezone.make_aware(datetime.combine(target, dtime(12, 0)))
+            event.start_time = seat
+            event.date = seat
+            changed_fields = ["start_time", "date"]
+            delta_days = 0
+        else:
+            old_local = timezone.localdate(anchor)
+            delta_days = (target - old_local).days
+            for f in ("start_time", "end_time", "date"):
+                v = getattr(event, f, None)
+                if v is not None:
+                    setattr(event, f, v + timedelta(days=delta_days))
+                    changed_fields.append(f)
+
+        after = {
+            "start_time": event.start_time.isoformat() if event.start_time else None,
+            "end_time": event.end_time.isoformat() if event.end_time else None,
+            "date": event.date.isoformat() if event.date else None,
+        }
+
+        # Who's booked on it (so the caller can confirm it's the right event).
+        bookings = [
+            {
+                "ba_email": getattr(getattr(b.ambassador, "user", None), "email", None),
+                "is_approved": b.is_approved,
+            }
+            for b in AmbassadorEvent.objects.filter(event=event).select_related(
+                "ambassador__user"
+            )
+        ]
+
+        if execute and changed_fields:
+            event.save(update_fields=changed_fields)
+
+        return JsonResponse(
+            {
+                "ok": True,
+                "executed": execute,
+                "resolved_by": meta.get("resolved_by"),
+                "event_uuid": str(event.uuid),
+                "event_name": event.name,
+                "target_date": target.isoformat(),
+                "delta_days": delta_days,
+                "before": before,
+                "after": after,
+                "bookings": bookings,
+                "note": (
+                    "wrote changes" if (execute and changed_fields)
+                    else "dry-run — pass execute=true to write"
+                ),
+            }
+        )
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        return JsonResponse({"ok": True, "endpoint": "set-event-date"})
 
 
 @method_decorator(csrf_exempt, name="dispatch")
@@ -3682,6 +3909,7 @@ def _registered_views() -> dict[str, Any]:
         "verify-user": VerifyUserView,
         "demote-admin": DemoteAdminView,
         "ensure-ambassador-profile": EnsureAmbassadorProfileView,
+        "set-event-date": SetEventDateView,
         "set-tenant-event-types": SetTenantEventTypesView,
         "set-custom-recap-field": SetCustomRecapFieldView,
         "export-recaps-to-sheet": ExportRecapsToSheetView,
