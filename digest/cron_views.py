@@ -2219,6 +2219,76 @@ class DemoteAdminView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class EnsureAmbassadorProfileView(View):
+    """POST `/internal/cron/ensure-ambassador-profile`.
+
+    Give an EXISTING user a BA (Ambassador) profile so the mobile BA flows
+    ("my gigs / today", apply, accept shift offers — all keyed on
+    `Ambassador.objects.get(user=...)`) resolve for them. Used to let a
+    staff/admin use their own account as a test BA.
+
+    SAFE: only `get_or_create`s the Ambassador row (+ reactivates it if it
+    was soft-disabled). It NEVER touches the user's password, role, staff
+    flags, or verification — unlike seed_review_ambassador, which repurposes
+    an account into a pure reviewer BA. So an admin keeps their admin access
+    and login; they just additionally gain a BA profile.
+
+    Body / query params:
+      - email: REQUIRED — the existing user to give a BA profile.
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        email = (
+            request.GET.get("email") or request.POST.get("email") or ""
+        ).strip()
+        if not email:
+            return JsonResponse({"ok": False, "error": "email-required"}, status=400)
+
+        from django.contrib.auth import get_user_model
+        from ambassadors.models import Ambassador
+
+        User = get_user_model()
+        user = User.objects.filter(email__iexact=email).first()
+        if user is None:
+            return JsonResponse(
+                {"ok": False, "error": "user-not-found", "email": email}, status=404
+            )
+
+        amb, created = Ambassador.objects.get_or_create(
+            user=user,
+            defaults={"created_by": user, "updated_by": user, "is_active": True},
+        )
+        reactivated = False
+        if not created and not amb.is_active:
+            amb.is_active = True
+            amb.save(update_fields=["is_active"])
+            reactivated = True
+
+        return JsonResponse(
+            {
+                "ok": True,
+                "email": user.email,
+                "ambassador_uuid": str(amb.uuid),
+                "created": created,
+                "reactivated": reactivated,
+                "already_existed": (not created and not reactivated),
+                "role_unchanged": getattr(user.role, "slug", None),
+                "note": "password/role/flags untouched",
+            }
+        )
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        return JsonResponse({"ok": True, "endpoint": "ensure-ambassador-profile"})
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class SetTenantEventTypesView(View):
     """POST `/internal/cron/set-tenant-event-types`.
 
@@ -3611,6 +3681,7 @@ def _registered_views() -> dict[str, Any]:
         "import-event-schedule": ImportEventScheduleView,
         "verify-user": VerifyUserView,
         "demote-admin": DemoteAdminView,
+        "ensure-ambassador-profile": EnsureAmbassadorProfileView,
         "set-tenant-event-types": SetTenantEventTypesView,
         "set-custom-recap-field": SetCustomRecapFieldView,
         "export-recaps-to-sheet": ExportRecapsToSheetView,
