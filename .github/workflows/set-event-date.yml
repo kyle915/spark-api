@@ -57,7 +57,7 @@ jobs:
           DATE: ${{ github.event.inputs.date || '' }}
           EXECUTE: ${{ github.event.inputs.execute }}
         run: |
-          set -euo pipefail
+          set -uo pipefail
           if [ -z "$CRON_SECRET" ]; then echo "::error::secret missing"; exit 1; fi
 
           QS="execute=$EXECUTE"
@@ -70,15 +70,24 @@ jobs:
           if [ -n "$DATE" ]; then QS="$QS&date=$DATE"; fi
           echo "query: $QS"
 
-          STATUS=$(curl -sS -o /tmp/resp.json -w '%{http_code}' \
-            -X POST "$CRON_URL?$QS" \
-            -H "X-Cron-Secret: $CRON_SECRET")
-          echo "HTTP $STATUS"
-          echo "----- response body -----"
-          cat /tmp/resp.json
-          echo
-          echo "-------------------------"
-          if [ "$STATUS" != "200" ]; then
-            echo "::error::Cron endpoint returned $STATUS — see body above."
-            exit 1
-          fi
+          # Idempotent (always targets an absolute date), so retry transient
+          # gateway / cold-start responses (502/503/504/000) — a warm second
+          # attempt returns 200. A 4xx (e.g. ambiguous BA → "pick one", or
+          # not-found) is an expected dispatch result, not a run failure.
+          STATUS=000
+          for attempt in 1 2 3; do
+            STATUS=$(curl -sS -o /tmp/resp.json -w '%{http_code}' \
+              -X POST "$CRON_URL?$QS" \
+              -H "X-Cron-Secret: $CRON_SECRET" || echo 000)
+            echo "attempt $attempt -> HTTP $STATUS"
+            case "$STATUS" in
+              502|503|504|000) echo "transient — retrying in $((attempt*10))s"; sleep $((attempt*10));;
+              *) break;;
+            esac
+          done
+          echo "----- response body -----"; cat /tmp/resp.json 2>/dev/null; echo; echo "-------------------------"
+          case "$STATUS" in
+            2*) echo "OK ($STATUS)"; exit 0;;
+            4*) echo "::warning::Endpoint returned $STATUS (expected/input condition — e.g. ambiguous BA or not-found). See body above; this is NOT a run failure."; exit 0;;
+            *) echo "::error::Endpoint returned $STATUS after retries — see body above."; exit 1;;
+          esac
