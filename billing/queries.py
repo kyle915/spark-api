@@ -28,6 +28,7 @@ from utils.graphql.mixins import SparkGraphQLMixin, resolve_id_to_int
 from utils.graphql.permissions import (
     IGNITE_EMAIL_DOMAIN,
     StrictIsAuthenticated,
+    email_grants_ignite_admin,
     resolve_request_user_access,
 )
 
@@ -69,7 +70,7 @@ async def _require_admin_or_client(info: strawberry.Info) -> None:
         is_staff
         or is_super
         or role_slug in {"spark-admin", "client"}
-        or (email or "").lower().endswith(IGNITE_EMAIL_DOMAIN)
+        or email_grants_ignite_admin(email)
     ):
         return
     raise GraphQLError("You do not have permission to view invoices.")

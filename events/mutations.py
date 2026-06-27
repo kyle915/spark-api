@@ -2903,7 +2903,11 @@ def _get_spark_admin_emails() -> list[str]:
     is automatically copied on every request approval — no settings
     file edit, no code change. Hardcoded `IGNITE_REVIEW_CC` still
     fronts the list (consistency for the historical ops team), this
-    just folds in anyone else with role=spark-admin."""
+    just folds in anyone else with role=spark-admin.
+
+    The result is run through ``suppress_cc`` so a removed team member on
+    CC_SUPPRESS_EMAILS is dropped even if their DB row still carries the
+    spark-admin role (every consumer of this roll-up inherits the suppression)."""
     from tenants.models import Role
     from django.contrib.auth import get_user_model
 
@@ -2920,7 +2924,7 @@ def _get_spark_admin_emails() -> list[str]:
         )
     except Exception:
         return []
-    return [e.strip() for e in emails if (e or "").strip()]
+    return suppress_cc([e.strip() for e in emails if (e or "").strip()])
 
 
 async def _get_spark_admin_emails_async() -> list[str]:

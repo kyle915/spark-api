@@ -9,11 +9,50 @@ logger = logging.getLogger(__name__)
 # Every @igniteproductions.co user is an Ignite admin and gets full access.
 IGNITE_EMAIL_DOMAIN = "@igniteproductions.co"
 
+# Individual @igniteproductions.co addresses explicitly REMOVED from the
+# automatic Ignite-admin grant. The domain above normally confers full
+# platform-admin access (see _is_admin_access + the inline endswith() checks
+# across the schema); listing an address here demotes just that one person to
+# a normal user, without changing the domain rule for everyone else.
+# Lower-cased. Fully reversible — delete the entry to restore access.
+# (The DB side — is_staff / is_superuser for Django /admin/ — is cleared
+# separately via the demote-admin cron endpoint.)
+IGNITE_ADMIN_EXCLUDE: set[str] = {
+    "madison@igniteproductions.co",
+}
+
+
+def email_grants_ignite_admin(email) -> bool:
+    """True if this email confers Ignite-admin access by domain — i.e. it ends
+    in @igniteproductions.co AND is not on the explicit exclude list. Use this
+    everywhere instead of a bare ``endswith()`` so the exclude list is honored
+    uniformly across the schema."""
+    email = (email or "").lower()
+    return email.endswith(IGNITE_EMAIL_DOMAIN) and email not in IGNITE_ADMIN_EXCLUDE
+
+
+def _demote_if_excluded(role_slug, is_staff, is_super, email):
+    """If ``email`` is on IGNITE_ADMIN_EXCLUDE, strip every elevated signal
+    (role, is_staff, is_superuser) so each downstream permission check treats
+    them as a plain authenticated user — even if their DB row still carries a
+    spark-admin role or a stale staff flag. The email itself is returned
+    unchanged (the domain-admin condition is neutralized separately via
+    ``email_grants_ignite_admin`` / ``_is_admin_access``)."""
+    if (email or "").lower() in IGNITE_ADMIN_EXCLUDE:
+        return (None, False, False, email)
+    return (role_slug, is_staff, is_super, email)
+
 
 def _is_admin_access(role_slug, is_staff, is_super, email) -> bool:
     """True for anyone who should see everything: platform admins
-    (is_staff/superuser), spark-admins, or any @igniteproductions.co email."""
+    (is_staff/superuser), spark-admins, or any @igniteproductions.co email.
+
+    An address on IGNITE_ADMIN_EXCLUDE is denied outright, overriding every
+    other signal (incl. a stale is_staff/spark-admin role), so a removed
+    admin can't slip back in through any single grant."""
     email = (email or "").lower()
+    if email in IGNITE_ADMIN_EXCLUDE:
+        return False
     return bool(
         is_staff
         or is_super
@@ -56,7 +95,7 @@ async def resolve_request_user_access(user):
             db_user = None
 
         if db_user is not None:
-            return (
+            return _demote_if_excluded(
                 (getattr(db_user.role, "slug", "") or "").lower()
                 if db_user.role
                 else None,
@@ -75,7 +114,7 @@ async def resolve_request_user_access(user):
             type(user).__name__,
             getattr(user, "is_authenticated", None),
         )
-        return (
+        return _demote_if_excluded(
             (getattr(getattr(user, "role", None), "slug", "") or "").lower()
             or None,
             bool(getattr(user, "is_staff", False)),

@@ -13,6 +13,7 @@ from utils.gcs import extract_blob_name_from_url, public_url
 from utils.graphql.permissions import (
     StrictIsAuthenticated,
     _is_admin_access,
+    email_grants_ignite_admin,
     resolve_request_user_access,
 )
 from strawberry.relay import Node
@@ -290,7 +291,7 @@ class QuerySpark(GoogleCalendarQueries, TenantThemingQuery):
         )
         is_client = role_slug == Role.CLIENT_SLUG
         is_platform_admin = bool(
-            is_staff or is_super or (email or "").endswith("@igniteproductions.co")
+            is_staff or is_super or email_grants_ignite_admin(email)
         )
         is_spark_admin = role_slug == Role.SPARK_ADMIN_SLUG or is_platform_admin
 
@@ -374,7 +375,7 @@ class QuerySpark(GoogleCalendarQueries, TenantThemingQuery):
             is_staff
             or is_super
             or role_slug == Role.SPARK_ADMIN_SLUG
-            or (email or "").endswith("@igniteproductions.co")
+            or email_grants_ignite_admin(email)
         )
 
         if not (see_all or is_client):
@@ -569,7 +570,7 @@ class QueryClients(
         )
         is_client = role_slug == Role.CLIENT_SLUG
         is_platform_admin = bool(
-            is_staff or is_super or (email or "").endswith("@igniteproductions.co")
+            is_staff or is_super or email_grants_ignite_admin(email)
         )
         is_spark_admin = role_slug == Role.SPARK_ADMIN_SLUG or is_platform_admin
 
@@ -655,7 +656,7 @@ class QueryClients(
             is_staff
             or is_super
             or role_slug == Role.SPARK_ADMIN_SLUG
-            or (email or "").endswith("@igniteproductions.co")
+            or email_grants_ignite_admin(email)
         )
 
         if not (see_all or is_client):

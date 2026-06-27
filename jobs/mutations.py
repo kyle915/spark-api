@@ -307,7 +307,10 @@ def _notify_admins_of_application(application_id: int) -> None:
         tenant = getattr(job, "tenant", None)
 
         # ---- Recipients: Ignite admin team only (@igniteproductions.co),
-        # case-insensitive dedupe. A non-Ignite RMM / poster is dropped. ----
+        # case-insensitive dedupe. A non-Ignite RMM / poster is dropped, as is
+        # any address on the shared CC suppression list (removed team members). ----
+        from events.routing import CC_SUPPRESS_EMAILS
+
         IGNITE_DOMAIN = "@igniteproductions.co"
         recipients: list[str] = []
         seen: set[str] = set()
@@ -318,6 +321,7 @@ def _notify_admins_of_application(application_id: int) -> None:
                 e
                 and e.lower().endswith(IGNITE_DOMAIN)
                 and e.lower() not in seen
+                and e.lower() not in CC_SUPPRESS_EMAILS
             ):
                 seen.add(e.lower())
                 recipients.append(e)

@@ -42,6 +42,7 @@ from utils.graphql.mixins import SparkGraphQLMixin
 from utils.graphql.permissions import (
     IGNITE_EMAIL_DOMAIN,
     StrictIsAuthenticated,
+    email_grants_ignite_admin,
     resolve_request_user_access,
 )
 
@@ -188,7 +189,7 @@ class _StaffingService(SparkGraphQLMixin):
             is_staff
             or is_super
             or role_slug == "spark-admin"
-            or (email or "").lower().endswith(IGNITE_EMAIL_DOMAIN)
+            or email_grants_ignite_admin(email)
         )
         if is_admin:
             return None

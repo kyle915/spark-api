@@ -11,7 +11,11 @@ from ambassadors import types
 from ambassadors import models
 from ambassadors import inputs
 from jobs import models as job_models
-from utils.graphql.permissions import StrictIsAuthenticated, IsClientOrSparkAdmin
+from utils.graphql.permissions import (
+    StrictIsAuthenticated,
+    IsClientOrSparkAdmin,
+    email_grants_ignite_admin,
+)
 from utils.gcs import public_url, extract_blob_name_from_url
 from events import models as event_models
 from events import types as event_types
@@ -816,7 +820,7 @@ class AmbassadorEventQueries:
             is_admin = bool(
                 getattr(user, "is_staff", False)
                 or getattr(user, "is_superuser", False)
-                or email.endswith("@igniteproductions.co")
+                or email_grants_ignite_admin(email)
             )
             if not is_admin:
                 amb = _Amb.objects.filter(user=user).first()

@@ -48,7 +48,6 @@ IGNITE_REVIEW_CC: list[str] = [
     "myriant@igniteproductions.co",
     "kyle@igniteproductions.co",
     "nevena@igniteproductions.co",
-    "madison@igniteproductions.co",
 ]
 
 # Addresses to strip from EVERY composed CC list, no matter where they
@@ -56,9 +55,12 @@ IGNITE_REVIEW_CC: list[str] = [
 # or the dynamic active-Spark-admin roll-up). nevina@ (note the "i") is a
 # stray/typo account that was getting CC'd via the active-Spark-admin
 # roll-up; Kyle asked to drop it. nevena@ (the real ops account) stays
-# CC'd on every Spark email. Lower-cased for case-insensitive matching.
+# CC'd on every Spark email. madison@ was removed from the Ignite team
+# (2026-06-26) — dropped from all Spark email here. Lower-cased for
+# case-insensitive matching.
 CC_SUPPRESS_EMAILS: set[str] = {
     "nevina@igniteproductions.co",
+    "madison@igniteproductions.co",
 }
 
 

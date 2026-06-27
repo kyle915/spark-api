@@ -520,7 +520,7 @@ class AmbassadorMutations:
             )
 
         from utils.graphql.permissions import (
-            IGNITE_EMAIL_DOMAIN,
+            email_grants_ignite_admin,
             resolve_request_user_access,
         )
 
@@ -529,7 +529,7 @@ class AmbassadorMutations:
             is_staff
             or is_super
             or role_slug == "spark-admin"
-            or (email or "").lower().endswith(IGNITE_EMAIL_DOMAIN)
+            or email_grants_ignite_admin(email)
         )
 
         try:

@@ -29,6 +29,7 @@ from utils.gcs import extract_blob_name_from_url
 from utils.graphql.permissions import (
     resolve_request_user_access,
     IGNITE_EMAIL_DOMAIN,
+    email_grants_ignite_admin,
 )
 
 logger = logging.getLogger(__name__)
@@ -97,7 +98,7 @@ def _is_admin_role(role_slug: str | None, is_staff: bool, is_super: bool, email:
     `_is_admin_access` shape used elsewhere in the codebase."""
     if is_staff or is_super:
         return True
-    if (email or "").lower().endswith(IGNITE_EMAIL_DOMAIN):
+    if email_grants_ignite_admin(email):
         return True
     return (role_slug or "").lower() == "spark-admin"
 

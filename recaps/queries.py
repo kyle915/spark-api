@@ -22,6 +22,8 @@ from utils.graphql.permissions import (
     resolve_request_user_access,
     _is_admin_access,
     IGNITE_EMAIL_DOMAIN,
+    IGNITE_ADMIN_EXCLUDE,
+    email_grants_ignite_admin,
 )
 from utils.graphql.mixins import SparkGraphQLMixin, resolve_id_to_int
 from utils.graphql.relay import (
@@ -1140,9 +1142,15 @@ async def _is_client_only_user(info: strawberry.Info) -> bool:
     role_slug, is_staff, is_super, email = await resolve_request_user_access(
         user
     )
+    # A removed Ignite admin (on IGNITE_ADMIN_EXCLUDE) is no longer privileged:
+    # treat them as a restricted user here so they get the approved-only view,
+    # never the admin "see drafts" path below. Checked first since this is an
+    # inverted gate (False = unrestricted/admin).
+    if (email or "").lower() in IGNITE_ADMIN_EXCLUDE:
+        return True
     if is_staff or is_super:
         return False
-    if (email or "").lower().endswith(IGNITE_EMAIL_DOMAIN):
+    if email_grants_ignite_admin(email):
         return False
     return role_slug == "client"
 

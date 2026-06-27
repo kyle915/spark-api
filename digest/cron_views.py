@@ -2089,6 +2089,103 @@ class VerifyUserView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class DemoteAdminView(View):
+    """POST `/internal/cron/demote-admin`.
+
+    Strip platform-admin access from a user by email: clears `is_staff` and
+    `is_superuser` (this is what removes Django `/admin/` access). The
+    in-app GraphQL admin surfaces are removed in CODE via
+    `utils.graphql.permissions.IGNITE_ADMIN_EXCLUDE` (the @igniteproductions.co
+    domain otherwise auto-grants admin), so this endpoint handles only the
+    DB-flag side.
+
+    The `role` FK is NOT NULL and has no clean "no-role" target, so it is
+    reported but left untouched — the permissions layer already neutralizes a
+    leftover spark-admin role for excluded emails, and the email roll-up runs
+    through `suppress_cc`. Reassign the role manually if desired.
+
+    SAFE — DRY-RUN IS THE DEFAULT. A plain trigger only reports the user's
+    current flags; pass `apply=true` to write.
+
+    Body / query params:
+      - email: REQUIRED — the account to demote.
+      - apply: "1"/"true"/"yes" — apply. Default OFF → dry-run.
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _bool(name: str, default: bool = False) -> bool:
+            raw = (request.GET.get(name) or request.POST.get(name) or "").lower()
+            return raw in ("1", "true", "yes", "on") if raw else default
+
+        email = (request.GET.get("email") or request.POST.get("email") or "").strip()
+        if not email:
+            return JsonResponse({"ok": False, "error": "email-required"}, status=400)
+        apply = _bool("apply", default=False)
+
+        from django.contrib.auth import get_user_model
+
+        User = get_user_model()
+        user = (
+            User.objects.select_related("role").filter(email__iexact=email).first()
+        )
+        if user is None:
+            return JsonResponse(
+                {"ok": False, "error": "user-not-found", "email": email}, status=404
+            )
+
+        before = {
+            "email": user.email,
+            "is_staff": user.is_staff,
+            "is_superuser": user.is_superuser,
+            "role": getattr(user.role, "slug", None),
+            "is_active": user.is_active,
+        }
+        if not apply:
+            return JsonResponse(
+                {
+                    "ok": True,
+                    "dry_run": True,
+                    "before": before,
+                    "planned": {"is_staff": False, "is_superuser": False},
+                    "note": "role left untouched (NOT NULL); cleared in-app via IGNITE_ADMIN_EXCLUDE",
+                }
+            )
+
+        changed: list[str] = []
+        if user.is_staff:
+            user.is_staff = False
+            changed.append("is_staff")
+        if user.is_superuser:
+            user.is_superuser = False
+            changed.append("is_superuser")
+        if changed:
+            user.save(update_fields=changed)
+
+        fresh = User.objects.select_related("role").filter(pk=user.pk).first()
+        after = {
+            "email": fresh.email,
+            "is_staff": fresh.is_staff,
+            "is_superuser": fresh.is_superuser,
+            "role": getattr(fresh.role, "slug", None),
+            "is_active": fresh.is_active,
+        }
+        return JsonResponse(
+            {"ok": True, "applied": True, "changed_fields": changed,
+             "before": before, "after": after}
+        )
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        return JsonResponse({"ok": True, "endpoint": "demote-admin"})
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class SetTenantEventTypesView(View):
     """POST `/internal/cron/set-tenant-event-types`.
 
@@ -3480,6 +3577,7 @@ def _registered_views() -> dict[str, Any]:
         "provision-review-ambassador": ProvisionReviewAmbassadorView,
         "import-event-schedule": ImportEventScheduleView,
         "verify-user": VerifyUserView,
+        "demote-admin": DemoteAdminView,
         "set-tenant-event-types": SetTenantEventTypesView,
         "set-custom-recap-field": SetCustomRecapFieldView,
         "export-recaps-to-sheet": ExportRecapsToSheetView,
