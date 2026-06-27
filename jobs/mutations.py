@@ -329,9 +329,12 @@ def _notify_admins_of_application(application_id: int) -> None:
         rmm_user = getattr(event, "rmm_asigned", None) if event else None
         add(getattr(rmm_user, "email", None))
         add(getattr(getattr(job, "created_by", None), "email", None))
-        # Always include the Ignite staffing inbox so the team sees every
-        # applicant even when no RMM is assigned / the poster was a system user.
+        # Always include the Ignite staffing inbox + the standing staffing
+        # recipients so the team sees every applicant even when no RMM is
+        # assigned / the poster was a system user.
         add("events@igniteproductions.co")
+        add("keis@igniteproductions.co")
+        add("myriant@igniteproductions.co")
         if not recipients:
             return
 
