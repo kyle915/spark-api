@@ -75,7 +75,20 @@ class SparkGraphQLMixin:
 
     @staticmethod
     def get_role_slug(user: User | None) -> str:
-        """Return normalized role slug for a user."""
+        """Return normalized role slug for a user.
+
+        A user on IGNITE_ADMIN_EXCLUDE (a removed Ignite admin) is reported as
+        "client" rather than their stored "spark-admin" role: this is the
+        inverted-gate-safe value — every ``role == "spark-admin"`` admin check
+        sees a non-admin, and the ``role == "client"`` gates restrict them to
+        their own tenant (they have none) instead of falling through to the
+        admin "see everything" branch. The authoritative resolver
+        (resolve_request_user_access) already denies them on the query side;
+        this keeps the direct-read mutation paths safe too. Reversible: drop the
+        entry from IGNITE_ADMIN_EXCLUDE."""
+        from utils.graphql.permissions import IGNITE_ADMIN_EXCLUDE
+        if (getattr(user, "email", "") or "").lower() in IGNITE_ADMIN_EXCLUDE:
+            return "client"
         role = getattr(user, "role", None)
         return (getattr(role, "slug", None) or "").lower()
 
@@ -520,9 +533,13 @@ class BaseMutationService(SparkGraphQLMixin):
         tenant_id = getattr(self.input, "tenant_id", None)
         if self.is_public and not tenant_id:
             raise GraphQLError("Tenant ID is required.")
+        from utils.graphql.permissions import IGNITE_ADMIN_EXCLUDE
+        _excluded = (
+            getattr(self.user, "email", "") or ""
+        ).lower() in IGNITE_ADMIN_EXCLUDE
         is_spark_admin = (
             await self.user.role.is_spark_admin
-            if self.user and self.user.role
+            if self.user and self.user.role and not _excluded
             else False
         )
         if (

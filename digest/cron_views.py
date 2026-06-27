@@ -2099,10 +2099,12 @@ class DemoteAdminView(View):
     domain otherwise auto-grants admin), so this endpoint handles only the
     DB-flag side.
 
-    The `role` FK is NOT NULL and has no clean "no-role" target, so it is
-    reported but left untouched — the permissions layer already neutralizes a
-    leftover spark-admin role for excluded emails, and the email roll-up runs
-    through `suppress_cc`. Reassign the role manually if desired.
+    A `role` of "spark-admin" is reassigned to a non-admin role (the FK is NOT
+    NULL, so we reassign rather than clear). Default target is "client", the
+    only safe demotion target — the inverted `role == "client"` gates restrict
+    it to the user's own tenant (a removed admin has none → no data), whereas
+    "ambassador" would fall through those gates to the admin branch. A
+    non-spark-admin role is left as-is.
 
     SAFE — DRY-RUN IS THE DEFAULT. A plain trigger only reports the user's
     current flags; pass `apply=true` to write.
@@ -2110,6 +2112,7 @@ class DemoteAdminView(View):
     Body / query params:
       - email: REQUIRED — the account to demote.
       - apply: "1"/"true"/"yes" — apply. Default OFF → dry-run.
+      - demote_to: target role slug for a spark-admin (default "client").
     """
 
     def post(self, request: HttpRequest) -> HttpResponse:
@@ -2137,21 +2140,42 @@ class DemoteAdminView(View):
                 {"ok": False, "error": "user-not-found", "email": email}, status=404
             )
 
+        from tenants.models import Role
+
+        # Target non-admin role for a spark-admin (the role FK is NOT NULL, so
+        # we reassign rather than clear). "client" is the only safe demotion
+        # target: the inverted `role == "client"` gates restrict it to the
+        # user's own tenant (a removed admin has none → no data), whereas
+        # "ambassador" would fall through those gates to the admin branch.
+        demote_to = (
+            request.GET.get("demote_to") or request.POST.get("demote_to") or "client"
+        ).strip().lower()
+        cur_role = getattr(user.role, "slug", None)
+
         before = {
             "email": user.email,
             "is_staff": user.is_staff,
             "is_superuser": user.is_superuser,
-            "role": getattr(user.role, "slug", None),
+            "role": cur_role,
             "is_active": user.is_active,
         }
+        will_reassign_role = cur_role == Role.SPARK_ADMIN_SLUG
         if not apply:
             return JsonResponse(
                 {
                     "ok": True,
                     "dry_run": True,
                     "before": before,
-                    "planned": {"is_staff": False, "is_superuser": False},
-                    "note": "role left untouched (NOT NULL); cleared in-app via IGNITE_ADMIN_EXCLUDE",
+                    "planned": {
+                        "is_staff": False,
+                        "is_superuser": False,
+                        "role": demote_to if will_reassign_role else cur_role,
+                    },
+                    "note": (
+                        "clears Django /admin/ flags; reassigns a spark-admin "
+                        "role to the demote_to role; @ignite domain admin is "
+                        "cleared in-app via IGNITE_ADMIN_EXCLUDE"
+                    ),
                 }
             )
 
@@ -2162,6 +2186,15 @@ class DemoteAdminView(View):
         if user.is_superuser:
             user.is_superuser = False
             changed.append("is_superuser")
+        if will_reassign_role:
+            target = Role.objects.filter(slug=demote_to).first()
+            if target is None:
+                return JsonResponse(
+                    {"ok": False, "error": "demote-to-role-not-found",
+                     "demote_to": demote_to, "before": before}, status=422
+                )
+            user.role = target
+            changed.append("role")
         if changed:
             user.save(update_fields=changed)
 

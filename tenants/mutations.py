@@ -1916,7 +1916,13 @@ class SparkTenantMutations(LinkedSheetMutations):
 
         # Check if user is spark-admin
         try:
-            is_spark_admin = await user.role.is_spark_admin
+            from utils.graphql.permissions import IGNITE_ADMIN_EXCLUDE
+            _excluded = (
+                getattr(user, "email", "") or ""
+            ).lower() in IGNITE_ADMIN_EXCLUDE
+            is_spark_admin = (
+                False if _excluded else await user.role.is_spark_admin
+            )
             if not is_spark_admin:
                 return CreateTenantResponse(
                     success=False,
@@ -2070,7 +2076,13 @@ class SparkTenantMutations(LinkedSheetMutations):
 
         # Check if user is spark-admin
         try:
-            is_spark_admin = await user.role.is_spark_admin
+            from utils.graphql.permissions import IGNITE_ADMIN_EXCLUDE
+            _excluded = (
+                getattr(user, "email", "") or ""
+            ).lower() in IGNITE_ADMIN_EXCLUDE
+            is_spark_admin = (
+                False if _excluded else await user.role.is_spark_admin
+            )
             if not is_spark_admin:
                 return UpdateTenantResponse(
                     success=False,
