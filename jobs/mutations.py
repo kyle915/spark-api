@@ -2256,6 +2256,46 @@ class JobLifecycleMutations:
         return _build_lifecycle_response(job is not None, msg, job=job, input_obj=input)
 
     @relay.mutation(permission_classes=[_StrictIsAuth])
+    async def delete_job(
+        self,
+        info: strawberry.Info,
+        input: inputs.DeleteJobInput,
+    ) -> types.JobLifecycleResponse:
+        """Soft-delete a job posting (sets Job.deleted_at) so it drops off the
+        admin Jobs board + the BA board. Works for ANY job — request-backed or
+        not. Recoverable (NULL deleted_at). Leaves the parent request/event on
+        the Master Tracker; use the tracker's delete to remove the whole gig.
+
+        Tenant-gated exactly like assign_ambassador_to_job: a client may only
+        delete their own tenant's jobs; a job in another tenant reads as
+        'not found'. Admins may delete any tenant's job."""
+        try:
+            job_pk = _resolve_id(input.id)
+        except (TypeError, ValueError, GraphQLError):
+            return _build_lifecycle_response(False, "Invalid job id.", input_obj=input)
+
+        try:
+            allowed = await JobScope().accessible_tenant_ids(info)
+        except Exception:  # noqa: BLE001
+            return _build_lifecycle_response(False, "Job not found.", input_obj=input)
+
+        def _delete():
+            try:
+                job = models.Job.objects.get(pk=job_pk)
+            except models.Job.DoesNotExist:
+                return None, "Job not found."
+            if allowed is not None and job.tenant_id not in allowed:
+                return None, "Job not found."
+            if job.deleted_at is not None:
+                return job, "Job already deleted."
+            job.deleted_at = _django_tz.now()
+            job.save(update_fields=["deleted_at", "updated_at"])
+            return job, "Job deleted."
+
+        job, msg = await sync_to_async(_delete)()
+        return _build_lifecycle_response(job is not None, msg, job=job, input_obj=input)
+
+    @relay.mutation(permission_classes=[_StrictIsAuth])
     async def assign_ambassador_to_job(
         self,
         info: strawberry.Info,

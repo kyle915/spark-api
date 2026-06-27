@@ -386,6 +386,12 @@ class InviteAmbassadorsToJobInput(BaseTenantInput):
 # -------------------------------------------------------------------
 
 @strawberry.input
+class DeleteJobInput(SparkGraphQLInput):
+    """Admin removes a job posting from the Jobs board (soft delete)."""
+    id: strawberry.ID
+
+
+@strawberry.input
 class PostJobInput(SparkGraphQLInput):
     """Admin transitions a Pending job → Posted.
 

@@ -684,6 +684,9 @@ class JobQueriesService(JobsBaseQueriesService):
             # request (bulk / born-approved) keep showing: the nullable-FK join
             # leaves deleted_at NULL for them, so they aren't excluded.
             .exclude(event__request__deleted_at__isnull=False)
+            # Job-level soft delete (deleteJob) — hides the posting from the
+            # admin Jobs board + BA board regardless of whether it has a request.
+            .filter(deleted_at__isnull=True)
         )
 
 

@@ -466,6 +466,12 @@ class Job(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
     updated_at = models.DateTimeField(auto_now=True)
+    # Soft-delete: set by the deleteJob mutation so the job drops off the
+    # admin Jobs board (and BA board) without a hard delete (Job has several
+    # RESTRICT children — AmbassadorJob/JobFile — that block a real delete).
+    # Recoverable by NULLing this. Distinct from the parent request's
+    # deleted_at, which removes the whole gig from the tracker too.
+    deleted_at = models.DateTimeField(null=True, blank=True, db_index=True)
 
     objects = JobManager()
 
