@@ -2516,6 +2516,153 @@ class SetEventDateView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class BookAmbassadorOnEventView(View):
+    """POST `/internal/cron/book-ambassador-on-event`.
+
+    Create (or approve) an ``AmbassadorEvent`` linking a BA to an Event so the
+    booking shows on that BA's mobile shift screens (my_active_shifts /
+    my_upcoming_shifts read APPROVED AmbassadorEvents). This mirrors the
+    accept-flow's `_confirm_booking` helper (jobs/mutations.py): it
+    get_or_creates the row with is_approved=True, and flips an existing
+    unapproved row to approved.
+
+    Use this when an admin "assigned a BA to a gig" but no booking landed on
+    the event (e.g. the assignment only created a job-level row, or the
+    approve path that calls `_confirm_booking` never fired), so the gig is
+    missing from the BA's app.
+
+    Resolve the event by ONE of: event_uuid OR job_uuid → its linked event.
+    Resolve the BA by ba_email.
+
+    Params:
+      - ba_email: REQUIRED — the BA to book.
+      - event_uuid OR job_uuid: REQUIRED — which event.
+      - execute: "1"/"true" to write. DRY-RUN by default.
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        from django.utils import timezone
+        from events.models import Event
+        from jobs.models import Job
+        from ambassadors.models import Ambassador, AmbassadorEvent
+
+        def _p(name: str) -> str:
+            return (request.GET.get(name) or request.POST.get(name) or "").strip()
+
+        def _bool(name: str) -> bool:
+            return _p(name).lower() in ("1", "true", "yes", "on")
+
+        execute = _bool("execute")
+        ba_email = _p("ba_email")
+        event_uuid = _p("event_uuid")
+        job_uuid = _p("job_uuid")
+
+        if not ba_email:
+            return JsonResponse(
+                {"ok": False, "error": "ba_email-required"}, status=400
+            )
+
+        # Resolve the event.
+        event = None
+        if event_uuid:
+            event = Event.objects.filter(uuid=event_uuid).first()
+            if event is None:
+                return JsonResponse(
+                    {"ok": False, "error": "event-not-found",
+                     "event_uuid": event_uuid}, status=400
+                )
+        elif job_uuid:
+            job = Job.objects.filter(uuid=job_uuid).select_related("event").first()
+            if job is None:
+                return JsonResponse(
+                    {"ok": False, "error": "job-not-found",
+                     "job_uuid": job_uuid}, status=400
+                )
+            if not job.event_id:
+                return JsonResponse(
+                    {"ok": False, "error": "job-has-no-event",
+                     "job_uuid": job_uuid}, status=400
+                )
+            event = job.event
+        else:
+            return JsonResponse(
+                {"ok": False, "error": "no-event-target",
+                 "hint": "pass event_uuid or job_uuid"}, status=400
+            )
+
+        amb = Ambassador.objects.filter(user__email__iexact=ba_email).first()
+        if amb is None:
+            return JsonResponse(
+                {"ok": False, "error": "ba-not-found", "ba_email": ba_email},
+                status=400,
+            )
+
+        existing = AmbassadorEvent.objects.filter(
+            ambassador=amb, event=event
+        ).first()
+        before = {
+            "exists": existing is not None,
+            "is_approved": getattr(existing, "is_approved", None),
+        }
+
+        action = "noop"
+        if not execute:
+            action = "would-create" if existing is None else (
+                "already-approved" if existing.is_approved else "would-approve"
+            )
+        else:
+            if existing is None:
+                AmbassadorEvent.objects.create(
+                    ambassador=amb,
+                    event=event,
+                    tenant_id=event.tenant_id,
+                    is_approved=True,
+                    created_by=amb.user,
+                    updated_by=amb.user,
+                )
+                action = "created"
+            elif not existing.is_approved:
+                existing.is_approved = True
+                existing.updated_by = amb.user
+                existing.save(
+                    update_fields=["is_approved", "updated_by", "updated_at"]
+                )
+                action = "approved"
+            else:
+                action = "already-approved"
+
+        return JsonResponse(
+            {
+                "ok": True,
+                "executed": execute,
+                "action": action,
+                "ba_email": ba_email,
+                "ambassador_uuid": str(amb.uuid),
+                "event_uuid": str(event.uuid),
+                "event_name": event.name,
+                "event_start_time": (
+                    event.start_time.isoformat() if event.start_time else None
+                ),
+                "before": before,
+                "note": (
+                    "wrote booking" if execute
+                    else "dry-run — pass execute=true to write"
+                ),
+            }
+        )
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        return JsonResponse({"ok": True, "endpoint": "book-ambassador-on-event"})
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class SetTenantEventTypesView(View):
     """POST `/internal/cron/set-tenant-event-types`.
 
@@ -3910,6 +4057,7 @@ def _registered_views() -> dict[str, Any]:
         "demote-admin": DemoteAdminView,
         "ensure-ambassador-profile": EnsureAmbassadorProfileView,
         "set-event-date": SetEventDateView,
+        "book-ambassador-on-event": BookAmbassadorOnEventView,
         "set-tenant-event-types": SetTenantEventTypesView,
         "set-custom-recap-field": SetCustomRecapFieldView,
         "export-recaps-to-sheet": ExportRecapsToSheetView,
