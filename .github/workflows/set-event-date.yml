@@ -1,0 +1,84 @@
+name: Set event date (move a gig to a new day)
+
+# Manually fires `/internal/cron/set-event-date` on Cloud Run to move ONE
+# Event to a target date (default: today, server-local), shifting its
+# start_time / end_time / date by the same whole-day delta so the time-of-day
+# and duration are preserved. The mobile BA shift screens key off
+# event.start_time / event.date — so this is how you make an accepted booking
+# show on a BA's Today/Upcoming (testing), or fix a stale gig date.
+#
+# Identify the event by exactly ONE of: event_uuid, job_uuid, or ba_email
+# (a BA email resolves to their single approved booking's event).
+#
+# Dispatch-only. SAFE — DRY-RUN IS THE DEFAULT: a plain run reports the
+# before/after + bookings and writes nothing. Set execute=true to apply.
+# Secret-gated via the X-Cron-Secret HEADER (never in the URL).
+
+on:
+  workflow_dispatch:
+    inputs:
+      ba_email:
+        description: "BA email — moves their single approved booking's event. (Pick ONE of ba_email / job_uuid / event_uuid.)"
+        required: false
+        default: ""
+        type: string
+      job_uuid:
+        description: "Job uuid — moves its linked event."
+        required: false
+        default: ""
+        type: string
+      event_uuid:
+        description: "Event uuid — moves this event directly."
+        required: false
+        default: ""
+        type: string
+      date:
+        description: "Target date YYYY-MM-DD. Empty = today (server-local)."
+        required: false
+        default: ""
+        type: string
+      execute:
+        description: "Apply the change. Leave false to preview (no writes)."
+        required: true
+        default: false
+        type: boolean
+
+jobs:
+  fire-set-event-date:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire set-event-date cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/set-event-date
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          BA_EMAIL: ${{ github.event.inputs.ba_email || '' }}
+          JOB_UUID: ${{ github.event.inputs.job_uuid || '' }}
+          EVENT_UUID: ${{ github.event.inputs.event_uuid || '' }}
+          DATE: ${{ github.event.inputs.date || '' }}
+          EXECUTE: ${{ github.event.inputs.execute }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then echo "::error::secret missing"; exit 1; fi
+
+          QS="execute=$EXECUTE"
+          if [ -n "$EVENT_UUID" ]; then QS="$QS&event_uuid=$EVENT_UUID"; fi
+          if [ -n "$JOB_UUID" ]; then QS="$QS&job_uuid=$JOB_UUID"; fi
+          if [ -n "$BA_EMAIL" ]; then
+            ENC=$(echo "$BA_EMAIL" | sed 's/+/%2B/g')
+            QS="$QS&ba_email=$ENC"
+          fi
+          if [ -n "$DATE" ]; then QS="$QS&date=$DATE"; fi
+          echo "query: $QS"
+
+          STATUS=$(curl -sS -o /tmp/resp.json -w '%{http_code}' \
+            -X POST "$CRON_URL?$QS" \
+            -H "X-Cron-Secret: $CRON_SECRET")
+          echo "HTTP $STATUS"
+          echo "----- response body -----"
+          cat /tmp/resp.json
+          echo
+          echo "-------------------------"
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS — see body above."
+            exit 1
+          fi
