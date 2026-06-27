@@ -1,0 +1,71 @@
+name: Book ambassador on event (create missing approved booking)
+
+# Manually fires `/internal/cron/book-ambassador-on-event` on Cloud Run to
+# create (or approve) an AmbassadorEvent linking a BA to an Event, so the gig
+# shows on that BA's mobile shift screens. Mirrors the accept-flow's
+# _confirm_booking helper. Use when an admin "assigned a BA to a gig" but no
+# booking landed on the event.
+#
+# Identify the event by ba_email + ONE of (event_uuid | job_uuid).
+# Dispatch-only. SAFE — DRY-RUN IS THE DEFAULT: a plain run reports what it
+# WOULD do and writes nothing. Set execute=true to actually create the
+# booking. Secret-gated via the X-Cron-Secret HEADER (never in the URL).
+
+on:
+  workflow_dispatch:
+    inputs:
+      ba_email:
+        description: "BA email to book onto the event."
+        required: true
+        type: string
+      job_uuid:
+        description: "Job uuid → its linked event. (Pick ONE of job_uuid / event_uuid.)"
+        required: false
+        default: ""
+        type: string
+      event_uuid:
+        description: "Event uuid to book onto directly."
+        required: false
+        default: ""
+        type: string
+      execute:
+        description: "Apply the booking. Leave false to preview (no writes)."
+        required: true
+        default: false
+        type: boolean
+
+jobs:
+  fire-book-ambassador-on-event:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire book-ambassador-on-event cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/book-ambassador-on-event
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          BA_EMAIL: ${{ github.event.inputs.ba_email }}
+          JOB_UUID: ${{ github.event.inputs.job_uuid || '' }}
+          EVENT_UUID: ${{ github.event.inputs.event_uuid || '' }}
+          EXECUTE: ${{ github.event.inputs.execute }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then echo "::error::secret missing"; exit 1; fi
+          if [ -z "$BA_EMAIL" ]; then echo "::error::ba_email required"; exit 1; fi
+
+          ENC=$(echo "$BA_EMAIL" | sed 's/+/%2B/g')
+          QS="execute=$EXECUTE&ba_email=$ENC"
+          if [ -n "$EVENT_UUID" ]; then QS="$QS&event_uuid=$EVENT_UUID"; fi
+          if [ -n "$JOB_UUID" ]; then QS="$QS&job_uuid=$JOB_UUID"; fi
+          echo "query: $QS"
+
+          STATUS=$(curl -sS -o /tmp/resp.json -w '%{http_code}' \
+            -X POST "$CRON_URL?$QS" \
+            -H "X-Cron-Secret: $CRON_SECRET")
+          echo "HTTP $STATUS"
+          echo "----- response body -----"
+          cat /tmp/resp.json
+          echo
+          echo "-------------------------"
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS — see body above."
+            exit 1
+          fi
