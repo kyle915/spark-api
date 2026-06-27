@@ -4,15 +4,24 @@ name: Ensure ambassador profile (existing user → test BA)
 # resolve for them — without touching their password, role, or flags
 # (unlike the review-BA seeder). Lets a staff/admin use their own account
 # as a test BA while keeping admin access. Dispatch-only.
+#
+# Set `remove` = true to REMOVE that user's BA profile instead (hard-delete,
+# or soft-disable if it's FK-protected by bookings). Still never touches the
+# user's password/role/flags. Used to clear a stray/duplicate test profile.
 
 on:
   workflow_dispatch:
     inputs:
       email:
-        description: "Email of the existing user to give a BA profile."
+        description: "Email of the existing user to give (or remove) a BA profile."
         required: true
         default: "kyle@igniteproductions.co"
         type: string
+      remove:
+        description: "Remove the BA profile instead of creating it."
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   fire-ensure-ambassador-profile:
@@ -23,13 +32,17 @@ jobs:
           CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/ensure-ambassador-profile
           CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
           EMAIL: ${{ github.event.inputs.email }}
+          REMOVE: ${{ github.event.inputs.remove }}
         run: |
           set -euo pipefail
           if [ -z "$CRON_SECRET" ]; then echo "::error::secret missing"; exit 1; fi
           if [ -z "$EMAIL" ]; then echo "::error::email required"; exit 1; fi
           ENC_EMAIL=$(echo "$EMAIL" | sed 's/+/%2B/g')
+          QS="email=$ENC_EMAIL"
+          if [ "$REMOVE" = "true" ]; then QS="$QS&remove=true"; fi
+          echo "remove=$REMOVE -> $QS"
           STATUS=$(curl -sS -o /tmp/resp.json -w '%{http_code}' \
-            -X POST "$CRON_URL?email=$ENC_EMAIL" \
+            -X POST "$CRON_URL?$QS" \
             -H "X-Cron-Secret: $CRON_SECRET")
           echo "HTTP $STATUS"; cat /tmp/resp.json; echo ""
           [ "$STATUS" != "200" ] && exit 1 || exit 0
