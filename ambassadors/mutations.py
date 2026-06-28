@@ -1554,6 +1554,21 @@ class ShiftAttendanceMutations:
                     logging.getLogger(__name__).exception(
                         "shift-status push failed user=%s", uid,
                     )
+
+            # Email the Spark admin team too (parity with the extension
+            # request) — best-effort, never blocks the status report.
+            try:
+                _email_admins_shift_status(
+                    ba_name=ba_name,
+                    venue=venue,
+                    status=status,
+                    eta_minutes=input.eta_minutes,
+                    note=input.note or "",
+                )
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "shift-status admin email failed",
+                )
             return amb_event, "Your team has been notified.", sent
 
         amb_event, msg, sent = await sync_to_async(_go)()
@@ -1984,6 +1999,60 @@ def _email_admins_extension_request(
             )
 
     _ExtMailer().send_now()
+
+
+def _email_admins_shift_status(
+    *, ba_name: str, venue: str, status: str,
+    eta_minutes: int | None, note: str,
+) -> None:
+    """Email every active Spark admin that a BA reported running-late /
+    can't-make-it. Mirrors _email_admins_extension_request: synchronous
+    send_now (no RQ worker dependency), HTML-escaped, best-effort — the
+    caller wraps it in try/except so a mail failure never blocks the report."""
+    from html import escape as _esc
+    from events.mutations import _get_spark_admin_emails
+    from utils.mailer import Envelope, Mailer
+
+    admins = _get_spark_admin_emails()
+    if not admins:
+        return
+    ba_e, venue_e = _esc(ba_name or "A BA"), _esc(venue or "their shift")
+    cant = status == "cant_make_it"
+    headline = (
+        f"<strong>{ba_e}</strong> can't make their shift."
+        if cant
+        else f"<strong>{ba_e}</strong> is running late."
+    )
+    eta_html = (
+        f"<br><strong>ETA:</strong> ~{int(eta_minutes)} min late"
+        if (not cant and eta_minutes)
+        else ""
+    )
+    note_html = (
+        f"<p style='margin:8px 0 0;color:#444'>“{_esc(note[:500])}”</p>"
+        if note
+        else ""
+    )
+    html = (
+        '<div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;'
+        'color:#111;line-height:1.5">'
+        f"<p style='margin:0 0 8px'>{headline}</p>"
+        f"<p style='margin:0'><strong>Venue:</strong> {venue_e}{eta_html}</p>"
+        f"{note_html}"
+        "<p style='margin:16px 0 0;color:#666;font-size:13px'>Sent from the "
+        "Spark BA app so the team can backfill or adjust coverage.</p></div>"
+    )
+    subject = (
+        f"🚫 Can't make it — {ba_name} @ {venue}"
+        if cant
+        else f"⏱ Running late — {ba_name} @ {venue}"
+    )
+
+    class _StatusMailer(Mailer):
+        def envelope(self) -> "Envelope":
+            return Envelope(subject=subject, html=html, to_emails=admins)
+
+    _StatusMailer().send_now()
 
 
 def _auto_confirm_on_attendance(amb_event, kind: str) -> None:
