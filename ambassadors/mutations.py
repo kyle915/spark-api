@@ -1427,6 +1427,26 @@ class ShiftExtensionAdminMutations:
                 message="Extension request not found.",
                 client_mutation_id=input.client_mutation_id,
             )
+
+        # Notify the BA — native async send from the running loop (NOT the sync
+        # wrapper from inside sync_to_async, which deadlocks). Best-effort.
+        push = (result or {}).get("push")
+        if push:
+            try:
+                from ambassadors.push import send_push_to_user
+
+                await send_push_to_user(
+                    push["user_id"],
+                    title=push["title"],
+                    body=push["body"],
+                    data=push["data"],
+                )
+            except Exception as exc:  # noqa: BLE001
+                logging.getLogger(__name__).warning(
+                    "extension decision push failed ext=%s: %s",
+                    getattr(ext, "id", None), exc,
+                )
+
         return RequestExtensionResponse(
             success=True,
             message=(result or {}).get("message", "Done."),

@@ -186,6 +186,26 @@ class ExtensionApprovalView(View):
                 "</p><p class='row'>Try the Spark dashboard.</p>",
                 status=500,
             )
+        # Fire the BA's decision push on a detached daemon thread — this is a
+        # sync (thread-sensitive) Django view, so calling the sync push wrapper
+        # inline would deadlock the way the GraphQL mutation did. Fire-and-forget
+        # so the page returns immediately regardless of push latency.
+        push = (result or {}).get("push")
+        if push:
+            import threading
+            from ambassadors.push import _send_push_to_user_sync
+
+            def _fire() -> None:
+                try:
+                    _send_push_to_user_sync(
+                        push["user_id"], title=push["title"],
+                        body=push["body"], data=push["data"],
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.warning("extension public-page push failed")
+
+            threading.Thread(target=_fire, daemon=True).start()
+
         ba_name = escape(result.get("ba_name") or "The BA")
         venue = escape(result.get("venue") or "their shift")
         if result.get("already"):

@@ -134,36 +134,35 @@ def resolve_extension(
         ]
     )
 
-    # Tell the BA. Best-effort — never fail the decision on a push hiccup.
-    try:
-        from ambassadors.push import _send_push_to_user_sync
-
-        if ba_user and getattr(ba_user, "id", None):
-            if approve:
-                title = "✅ Extension approved"
-                body = (
-                    f"You're cleared for +{ext.approved_minutes} min at {venue}."
-                )
-            else:
-                title = "Extension not approved"
-                body = (
-                    f"Your extra-time request for {venue} wasn't approved. "
-                    "Wrap up at your scheduled end time."
-                )
-            if clean_reason:
-                body += f" — “{clean_reason}”"
-            _send_push_to_user_sync(
-                ba_user.id,
-                title=title,
-                body=body,
-                data={
-                    "screen": "shifts",
-                    "eventUuid": str(getattr(event, "uuid", "")),
-                    "kind": "extension_decision",
-                },
+    # Build the BA's decision push, but DON'T send it here. This function runs
+    # in BOTH a pure-sync Django view and inside sync_to_async (the GraphQL
+    # mutation); sending the push here means bridging sync→async from within a
+    # sync_to_async/thread-sensitive thread, which deadlocks. So return the
+    # payload and let each caller deliver it the safe way for its context
+    # (mutation: native `await send_push_to_user`; view: a detached thread).
+    push = None
+    if ba_user and getattr(ba_user, "id", None):
+        if approve:
+            title = "✅ Extension approved"
+            body = f"You're cleared for +{ext.approved_minutes} min at {venue}."
+        else:
+            title = "Extension not approved"
+            body = (
+                f"Your extra-time request for {venue} wasn't approved. "
+                "Wrap up at your scheduled end time."
             )
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("extension decision push failed ext=%s: %s", ext.id, exc)
+        if clean_reason:
+            body += f" — “{clean_reason}”"
+        push = {
+            "user_id": ba_user.id,
+            "title": title,
+            "body": body,
+            "data": {
+                "screen": "shifts",
+                "eventUuid": str(getattr(event, "uuid", "")),
+                "kind": "extension_decision",
+            },
+        }
 
     return {
         "ok": True,
@@ -174,5 +173,6 @@ def resolve_extension(
             f"Approved +{ext.approved_minutes} min." if approve
             else "Extension declined."
         ),
+        "push": push,
         **base,
     }
