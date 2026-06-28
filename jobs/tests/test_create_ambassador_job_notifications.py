@@ -253,3 +253,74 @@ class TestCreateAmbassadorJobNotifications(JobsGraphQLTestCase):
             "clock into the shift"
         )
         assert await sync_to_async(lambda: booking.tenant_id)() == self.tenant.id
+
+    @pytest.mark.asyncio
+    async def test_create_ambassador_job_flips_existing_unapproved_booking(self):
+        """Regression: the direct hire (createAmbassadorJob) must FLIP an
+        already-existing is_approved=False AmbassadorEvent to approved — not
+        leave it untouched.
+
+        Before the fix the inline block only created a booking when none
+        existed (``filter(...).exists()`` guard), so a pre-existing unapproved
+        row — e.g. from a prior event-level invite (ambassadors invite creates
+        is_approved=False) — was left unapproved and the freshly-hired BA still
+        never saw the gig / couldn't clock in. Routing every assign/hire path
+        through the shared _ensure_approved_booking helper get-or-creates AND
+        flips. There must be exactly one row and it must be approved.
+        """
+        from ambassadors.models import AmbassadorEvent
+
+        # Pre-existing UNAPPROVED booking (a prior invite that was never
+        # approved) for this (ambassador, event).
+        await sync_to_async(AmbassadorEvent.objects.create)(
+            ambassador=self.ambassador,
+            event=self.event,
+            tenant=self.tenant,
+            is_approved=False,
+            created_by=self.spark_user,
+            updated_by=self.spark_user,
+        )
+
+        mutation = """
+        mutation CreateAmbassadorJob($input: CreateAmbassadorJobInput!) {
+            createAmbassadorJob(input: $input) {
+                success
+                message
+            }
+        }
+        """
+        variables = {
+            "input": {
+                "tenantId": str(self.tenant.id),
+                "ambassadorId": str(self.ambassador.id),
+                "jobId": str(self.job.id),
+                "statusId": str(self.pending_status.id),
+                "rateId": str(self.rate.id),
+                "appearAsRfp": True,
+            }
+        }
+
+        with patch("jobs.mutations.AmbassadorAssignedToJobMailer.send"), patch(
+            "ambassadors.push._send_push_to_user_sync"
+        ):
+            result = await self._execute_mutation_authenticated(
+                mutation,
+                variables,
+                self.spark_user,
+                self.endpoint_path,
+            )
+
+        assert result.errors is None, f"errors: {result.errors}"
+        assert result.data["createAmbassadorJob"]["success"] is True
+
+        # Exactly one row, and it is now approved (flipped, not duplicated).
+        rows = await sync_to_async(
+            lambda: list(
+                AmbassadorEvent.objects.filter(
+                    ambassador=self.ambassador, event=self.event
+                ).values_list("is_approved", flat=True)
+            )
+        )()
+        assert rows == [True], (
+            f"expected a single approved booking row after the hire, got {rows}"
+        )

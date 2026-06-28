@@ -129,44 +129,91 @@ async def _notify_approval_to_rmm_or_clients(
         await sync_to_async(mailer.send)()
 
 
+def _ensure_approved_booking(
+    *,
+    ambassador_id: int | None,
+    event_id: int | None,
+    tenant_id: int | None,
+    creator_id: int | None,
+) -> str:
+    """Idempotently guarantee an is_approved=True AmbassadorEvent for an
+    (ambassador, event) — the SINGLE place every admin assign/hire/approve
+    path books the shift through.
+
+    Get-or-creates the row approved, and flips an existing is_approved=False
+    invite/accept row to True. The mobile "What's on the books" screens
+    (myActiveShifts / myUpcomingShifts) and clock-in all gate on
+    is_approved=True, so the flip matters: a BA who already had an unapproved
+    event invite must end up approved, not left invisible. Returns an action
+    string ("created" | "approved" | "already-approved" | "no-event") for
+    logging/tests.
+
+    SYNC — call inside an already-sync resolver path or wrap with
+    sync_to_async.
+
+    On "creating the event first if the job has none": Job.event and
+    AmbassadorEvent.event are both non-null FKs (on_delete=RESTRICT), so a
+    persisted Job — and therefore any AmbassadorJob.job — ALWAYS has an event;
+    an event-less booking cannot be persisted. If event_id is somehow falsy we
+    log loudly and no-op rather than fabricate a dateless Event (which would
+    not surface on the shift screens anyway). This unifies the three
+    previously-divergent inline copies that caused the unreliable booking.
+    """
+    if not ambassador_id or not event_id:
+        logger.warning(
+            "Skipped booking confirmation: ambassador_id=%s event_id=%s "
+            "(both required; an event-less job cannot be booked).",
+            ambassador_id,
+            event_id,
+        )
+        return "no-event"
+
+    booking, created = AmbassadorEvent.objects.get_or_create(
+        ambassador_id=ambassador_id,
+        event_id=event_id,
+        defaults={
+            "tenant_id": tenant_id,
+            "is_approved": True,
+            "created_by_id": creator_id,
+            "updated_by_id": creator_id,
+        },
+    )
+    if created:
+        return "created"
+    if not booking.is_approved:
+        # A prior invite/accept left an is_approved=False row — flip it to
+        # approved so the shift surfaces, and re-stamp the updater.
+        booking.is_approved = True
+        booking.updated_by_id = creator_id
+        booking.save(
+            update_fields=["is_approved", "updated_by", "updated_at"]
+        )
+        return "approved"
+    return "already-approved"
+
+
 async def _confirm_booking_for_ambassador_job(
     ambassador_job: models.AmbassadorJob,
     actor,
 ) -> None:
     """Ensure an is_approved=True AmbassadorEvent exists for an approved
-    AmbassadorJob's (ambassador, event). Get-or-creates, and flips an
-    existing is_approved=False invite/accept row to True so the shift
-    surfaces on the mobile shift screens. Best-effort: a booking failure
-    must not undo the approval that already committed."""
+    AmbassadorJob's (ambassador, event). Thin async wrapper over
+    `_ensure_approved_booking`. Best-effort: a booking failure must not undo
+    the approval/hire that already committed."""
     job = getattr(ambassador_job, "job", None)
     event_id = getattr(job, "event_id", None)
     ambassador_id = getattr(ambassador_job, "ambassador_id", None)
-    if not event_id or not ambassador_id:
-        return
 
     actor_id = getattr(actor, "id", None)
     creator_id = actor_id or getattr(ambassador_job, "created_by_id", None)
 
-    def _confirm() -> None:
-        booking, created = AmbassadorEvent.objects.get_or_create(
+    try:
+        await sync_to_async(_ensure_approved_booking)(
             ambassador_id=ambassador_id,
             event_id=event_id,
-            defaults={
-                "tenant_id": ambassador_job.tenant_id,
-                "is_approved": True,
-                "created_by_id": creator_id,
-                "updated_by_id": creator_id,
-            },
+            tenant_id=getattr(ambassador_job, "tenant_id", None),
+            creator_id=creator_id,
         )
-        if not created and not booking.is_approved:
-            booking.is_approved = True
-            booking.updated_by_id = creator_id
-            booking.save(
-                update_fields=["is_approved", "updated_by", "updated_at"]
-            )
-
-    try:
-        await sync_to_async(_confirm)()
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "Failed to confirm booking for ambassador_job=%s: %s",
@@ -1137,27 +1184,16 @@ class AmbassadorJobMutationService(BaseMutationService):
             ).get
         )(id=ambassador_job.id)
 
-        job = await models.Job.objects.only("id", "event_id").aget(
-            id=ambassador_job.job_id
-        )
         # Direct admin assignment IS the hire (AmbassadorJob.status=approved
-        # above), so the event booking must be approved too. With is_approved
-        # False the BA's upcoming-shifts + clock-in — which both require
-        # AmbassadorEvent.is_approved=True — never see the gig, so the BA can't
-        # view or clock into the shift they were just hired for. Mirrors
-        # assign_ambassador_to_job / approve_ambassador_job.
-        if not await AmbassadorEvent.objects.filter(
-            ambassador_id=ambassador_job.ambassador_id,
-            event_id=job.event_id,
-        ).aexists():
-            await AmbassadorEvent.objects.acreate(
-                ambassador_id=ambassador_job.ambassador_id,
-                event_id=job.event_id,
-                tenant_id=ambassador_job.tenant_id,
-                is_approved=True,
-                created_by_id=ambassador_job.created_by_id,
-                updated_by_id=ambassador_job.updated_by_id,
-            )
+        # above), so the event booking must end is_approved=True too. The
+        # shared helper get-or-creates approved AND flips an existing
+        # is_approved=False invite/accept row to True — without the flip a BA
+        # who already had an unapproved event invite stays invisible on the
+        # mobile shift screens and can't clock in. Mirrors
+        # assign_ambassador_to_job / approve_ambassador_job. created_by_id (the
+        # acting admin, set by super().create above) is used as the booking
+        # creator via the helper's fallback.
+        await _confirm_booking_for_ambassador_job(ambassador_job, None)
 
         await _notify_assigned_ambassador_by_email(ambassador_job)
 
@@ -2430,22 +2466,14 @@ class JobLifecycleMutations:
                 actor_for_event.id if actor_for_event else job.created_by_id
             )
             event = job.event
-            booking, booking_created = AmbassadorEvent.objects.get_or_create(
-                ambassador=amb,
-                event=event,
-                defaults={
-                    "tenant_id": job.tenant_id,
-                    "is_approved": True,
-                    "created_by_id": booking_creator_id,
-                    "updated_by_id": booking_creator_id,
-                },
+            # Single source of truth: get-or-create the approved booking and
+            # flip any existing is_approved=False invite/accept row to True.
+            _ensure_approved_booking(
+                ambassador_id=amb.id,
+                event_id=job.event_id,
+                tenant_id=job.tenant_id,
+                creator_id=booking_creator_id,
             )
-            if not booking_created and not booking.is_approved:
-                # A prior invite/accept left an is_approved=False row — flip
-                # it to approved so the shift surfaces, and re-stamp updater.
-                booking.is_approved = True
-                booking.updated_by_id = booking_creator_id
-                booking.save(update_fields=["is_approved", "updated_by", "updated_at"])
 
             # The mobile shift screens key off event.start_time / event.date.
             # If both are null the booking won't surface there yet — still
