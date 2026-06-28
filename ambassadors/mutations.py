@@ -1836,7 +1836,8 @@ class ShiftAttendanceMutations:
             )
             ev_name = getattr(ev, "name", None) or "a shift"
             ev_date = getattr(ev, "date", None) or start
-            watchers = _event_watcher_user_ids(ev)
+            # Ignite admin team only — never the client / assigned RMM.
+            watchers = _spark_admin_user_ids()
 
             ae.delete()
             # Reopen the freed slot for self-serve claim by another eligible BA
@@ -1967,7 +1968,8 @@ class ShiftAttendanceMutations:
                 )
                 ev_name = getattr(ev, "name", None) or "a shift"
                 ev_date = getattr(ev, "date", None) or start
-                watchers = _event_watcher_user_ids(ev)
+                # Ignite admin team only — never the client / assigned RMM.
+                watchers = _spark_admin_user_ids()
                 return (
                     True,
                     "You're booked — see you there!",
