@@ -1496,7 +1496,8 @@ class ShiftAttendanceMutations:
     async def report_shift_status(
         self, info: strawberry.Info, input: ReportShiftStatusInput,
     ) -> ReportShiftStatusResponse:
-        """BA reports running-late / can't-make-it → push the RMM + admins."""
+        """BA reports running-late / can't-make-it → notify the Ignite admin
+        team only (push + email). The client / assigned RMM is NOT notified."""
         actor = info.context.request.user
         status = (input.status or "").strip().lower()
         if status not in ("running_late", "cant_make_it"):
@@ -1541,7 +1542,8 @@ class ShiftAttendanceMutations:
             if input.note:
                 body += f" — “{input.note[:120]}”"
 
-            watcher_ids = _event_watcher_user_ids(event)
+            # Ignite admin team only — never the client / assigned RMM.
+            watcher_ids = _spark_admin_user_ids()
             sent = 0
             for uid in watcher_ids:
                 try:
@@ -1583,9 +1585,9 @@ class ShiftAttendanceMutations:
     async def request_extension(
         self, info: strawberry.Info, input: RequestExtensionInput,
     ) -> RequestExtensionResponse:
-        """BA requests more activation time mid-shift. Records the request,
-        pushes the assigned RMM + location admins (the dashboard flag), and
-        emails every Spark admin for approval."""
+        """BA requests more activation time mid-shift. Records the request and
+        notifies the Ignite admin team only (push + email) — the client /
+        assigned RMM is NOT notified."""
         actor = info.context.request.user
         minutes = int(input.minutes_requested or 0)
         if minutes <= 0:
@@ -1637,12 +1639,12 @@ class ShiftAttendanceMutations:
             ).strip() or "A BA"
             venue = getattr(event, "name", None) or "their shift"
 
-            # 1) Dashboard flag — push the assigned RMM + location admins.
+            # 1) Push the Ignite admin team (dashboard flag) — NOT the RMM/client.
             title = "⏱ Extension requested"
             body = f"{ba_name} is requesting +{minutes} min at {venue}."
             if input.reason:
                 body += f" — “{input.reason[:120]}”"
-            for uid in _event_watcher_user_ids(event):
+            for uid in _spark_admin_user_ids():
                 try:
                     _send_push_to_user_sync(
                         uid, title=title, body=body,
@@ -1953,6 +1955,31 @@ def _event_watcher_user_ids(event) -> list[int]:
                 ).values_list("user_id", flat=True)
             )
     return [i for i in ids if i]
+
+
+def _spark_admin_user_ids() -> list[int]:
+    """Active Ignite (Spark-admin) user ids — the push counterpart to
+    _get_spark_admin_emails(). Shift-status (running-late / can't-make-it)
+    and extension-request notifications go to the IGNITE ADMIN TEAM ONLY,
+    never the client / assigned RMM. Honors the same CC suppression list."""
+    from django.contrib.auth import get_user_model
+    from tenants.models import Role
+    from events.routing import CC_SUPPRESS_EMAILS
+
+    User = get_user_model()
+    try:
+        rows = list(
+            User.objects.filter(
+                role__slug=Role.SPARK_ADMIN_SLUG, is_active=True,
+            ).values_list("id", "email")
+        )
+    except Exception:
+        return []
+    return [
+        uid
+        for (uid, email) in rows
+        if uid and (email or "").strip().lower() not in CC_SUPPRESS_EMAILS
+    ]
 
 
 def _email_admins_extension_request(
