@@ -52,7 +52,10 @@ class TestBatchRequestNames(EventsGraphQLTestCase):
             created_by=self.system_user,
         )
 
-    def test_parse_row_builds_name_with_excel_name_retailer_date_and_store_number(self):
+    def test_parse_row_uses_excel_name_verbatim_when_present(self):
+        # As of #578 the client's "name" column is used verbatim — their import
+        # files already contain a fully-composed name. Retailer / date / store
+        # are NOT appended when a name is present.
         parsed = _parse_row(
             row={
                 "name": "PromoRequest",
@@ -75,12 +78,41 @@ class TestBatchRequestNames(EventsGraphQLTestCase):
             default_request_type_id=None,
         )
 
-        assert parsed["name"] == "PromoRequest-Target-02/20/2026-102"
+        assert parsed["name"] == "PromoRequest"
 
-    def test_parse_row_omits_retailer_segment_when_retailer_and_distributor_are_missing(self):
+    def test_parse_row_composes_name_with_retailer_when_name_blank(self):
+        # Only when the name column is blank do we compose one from the
+        # identifying fields: "Request-<retailer>-<date>-<store>".
         parsed = _parse_row(
             row={
-                "name": "PromoRequest",
+                "name": "",
+                "date": "02/20/2026",
+                "start_time": "10:00",
+                "end_time": "14:00",
+                "address": "123 Main St",
+                "store_number": "102",
+                "retailer_name": self.retailer.name,
+                "city": self.location.name,
+                "state": self.state.code,
+                "timezone_code": self.timezone.code,
+                "request_type_id": self.request_type.id,
+                "event_type_id": self.event_type.id,
+                "scheduling_status": "already_scheduled",
+            },
+            tenant_id=self.tenant.id,
+            tenant_name=self.tenant.name,
+            default_timezone_id=None,
+            default_request_type_id=None,
+        )
+
+        assert parsed["name"] == "Request-Target-02/20/2026-102"
+
+    def test_parse_row_composed_name_omits_retailer_segment_when_missing(self):
+        # Composed (blank name) + no retailer/distributor → retailer segment is
+        # omitted: "Request-<date>-<store>".
+        parsed = _parse_row(
+            row={
+                "name": "",
                 "date": "03/15/2026",
                 "start_time": "10:00",
                 "end_time": "14:00",
@@ -99,7 +131,7 @@ class TestBatchRequestNames(EventsGraphQLTestCase):
             default_request_type_id=None,
         )
 
-        assert parsed["name"] == "PromoRequest-03/15/2026-102"
+        assert parsed["name"] == "Request-03/15/2026-102"
 
     def test_parse_row_accepts_optional_billing_entity_id(self):
         parsed = _parse_row(
