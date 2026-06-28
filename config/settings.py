@@ -334,6 +334,13 @@ AMBASSADOR_FRONTEND_URL = env(
     "AMBASSADOR_FRONTEND_URL", default="http://localhost:3000"
 )
 ADMIN_FRONTEND_URL = env("ADMIN_FRONTEND_URL", default="http://localhost:3000")
+# Absolute base for backend-rendered public pages linked from emails (e.g. the
+# one-click shift-extension approval page under /api/public/). Falls back to the
+# Cloud Run service URL so prod emails work without extra config.
+PUBLIC_API_BASE_URL = env(
+    "PUBLIC_API_BASE_URL",
+    default="https://spark-api-new-490085168610.us-central1.run.app",
+)
 EMAIL_LOGO_CID = env("EMAIL_LOGO_CID", default="spark-logo")
 EMAIL_LOGO_PATH = env(
     "EMAIL_LOGO_PATH",

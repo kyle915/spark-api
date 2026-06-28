@@ -1358,6 +1358,81 @@ class RequestExtensionResponse:
     client_mutation_id: strawberry.ID | None = None
 
 
+@strawberry.input
+class ResolveShiftExtensionInput:
+    extension_uuid: strawberry.ID
+    decision: str  # "approve" | "decline"
+    approved_minutes: int | None = None
+    client_mutation_id: strawberry.ID | None = None
+
+
+@strawberry.type
+class ShiftExtensionAdminMutations:
+    """Admin (Ignite) approve/decline of a BA's mid-shift extension request.
+    Mirrors the public one-click email page, but for the in-dashboard flow."""
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def resolve_shift_extension(
+        self, info: strawberry.Info, input: ResolveShiftExtensionInput,
+    ) -> RequestExtensionResponse:
+        from ambassadors.extensions import resolve_extension, user_is_ignite_admin
+        from ambassadors.models import ShiftExtensionRequest
+
+        actor = info.context.request.user
+        if not user_is_ignite_admin(actor):
+            return RequestExtensionResponse(
+                success=False,
+                message="Not authorized.",
+                client_mutation_id=input.client_mutation_id,
+            )
+        decision = (input.decision or "").strip().lower()
+        if decision not in ("approve", "decline", "deny"):
+            return RequestExtensionResponse(
+                success=False,
+                message="decision must be approve or decline.",
+                client_mutation_id=input.client_mutation_id,
+            )
+        approve = decision == "approve"
+
+        def _go():
+            ext = (
+                ShiftExtensionRequest.objects.select_related(
+                    "event", "ambassador", "ambassador__user"
+                )
+                .filter(uuid=str(input.extension_uuid))
+                .first()
+            )
+            if ext is None:
+                return None, None
+            result = resolve_extension(
+                ext,
+                approve=approve,
+                approved_minutes=input.approved_minutes,
+                actor_user=actor,
+            )
+            return ext, result
+
+        ext, result = await sync_to_async(_go)()
+        if ext is None:
+            return RequestExtensionResponse(
+                success=False,
+                message="Extension request not found.",
+                client_mutation_id=input.client_mutation_id,
+            )
+        return RequestExtensionResponse(
+            success=True,
+            message=(result or {}).get("message", "Done."),
+            extension=ShiftExtensionType(
+                id=str(ext.uuid),
+                event_id=str(getattr(ext.event, "uuid", "")),
+                minutes_requested=ext.minutes_requested,
+                status=ext.status,
+                approved_minutes=ext.approved_minutes,
+            ),
+            client_mutation_id=input.client_mutation_id,
+        )
+
+
 def _resolve_amb_event_by_uuid(uuid: str):
     from ambassadors.models import AmbassadorEvent
     try:
@@ -1549,7 +1624,12 @@ class ShiftAttendanceMutations:
                 try:
                     _send_push_to_user_sync(
                         uid, title=title, body=body,
-                        data={"screen": "tracker", "eventUuid": str(getattr(event, "uuid", ""))},
+                        data={
+                            "screen": "tracker",
+                            "eventUuid": str(getattr(event, "uuid", "")),
+                            "kind": "shift_status",
+                            "shiftStatus": status,
+                        },
                     )
                     sent += 1
                 except Exception:
@@ -1651,6 +1731,10 @@ class ShiftAttendanceMutations:
                         data={
                             "screen": "tracker",
                             "eventUuid": str(getattr(event, "uuid", "")),
+                            # Lets the admin notification feed render inline
+                            # Approve / Decline for this extension request.
+                            "kind": "extension_request",
+                            "extensionUuid": str(ext.uuid),
                         },
                     )
                 except Exception:
@@ -1658,7 +1742,8 @@ class ShiftAttendanceMutations:
                         "extension push failed user=%s", uid,
                     )
 
-            # 2) Email every Spark admin (best-effort — never blocks).
+            # 2) Email every Spark admin (best-effort — never blocks). The
+            # email carries one-click Approve / Decline links (extension_id).
             try:
                 _email_admins_extension_request(
                     ba_name=ba_name,
@@ -1666,6 +1751,7 @@ class ShiftAttendanceMutations:
                     minutes=minutes,
                     reason=input.reason or "",
                     event_uuid=str(getattr(event, "uuid", "")),
+                    extension_id=ext.id,
                 )
             except Exception:
                 logging.getLogger(__name__).exception(
@@ -1984,13 +2070,16 @@ def _spark_admin_user_ids() -> list[int]:
 
 def _email_admins_extension_request(
     *, ba_name: str, venue: str, minutes: int, reason: str, event_uuid: str,
+    extension_id: int | None = None,
 ) -> None:
     """Email every active Spark admin that a BA requested an extension.
 
     Synchronous (send_now) so it fires in-request rather than depending on
     an RQ worker. All interpolated values are HTML-escaped. Best-effort:
     the caller wraps this in try/except so a mail failure never blocks the
-    extension request itself."""
+    extension request itself. When ``extension_id`` is set the email carries
+    one-click Approve / Decline buttons (a signed token → the public approval
+    page), so an admin can decide straight from their inbox."""
     from html import escape as _esc
     from events.mutations import _get_spark_admin_emails
     from utils.mailer import Envelope, Mailer
@@ -2004,6 +2093,31 @@ def _email_admins_extension_request(
         if reason
         else ""
     )
+
+    # One-click Approve / Decline buttons → the public token-gated page.
+    action_html = ""
+    if extension_id:
+        try:
+            from ambassadors.extensions import (
+                make_extension_token,
+                public_extension_url,
+            )
+
+            url = public_extension_url(make_extension_token(int(extension_id)))
+            action_html = (
+                "<div style='margin:18px 0 4px'>"
+                f"<a href='{url}' style='display:inline-block;background:#c5f546;"
+                "color:#0a0d09;text-decoration:none;font-weight:700;"
+                "padding:12px 20px;border-radius:10px'>"
+                f"Approve +{int(minutes)} min</a>"
+                f"<a href='{url}' style='display:inline-block;margin-left:10px;"
+                "color:#b23b14;text-decoration:none;font-weight:700;"
+                "padding:12px 20px;border-radius:10px;border:1px solid #e2c8be'>"
+                "Review / Decline</a></div>"
+            )
+        except Exception:  # noqa: BLE001 — never block the email on link build
+            action_html = ""
+
     html = (
         '<div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;'
         'color:#111;line-height:1.5">'
@@ -2012,8 +2126,9 @@ def _email_admins_extension_request(
         f"<p style='margin:0'><strong>Venue:</strong> {venue_e}<br>"
         f"<strong>Extra time requested:</strong> {int(minutes)} minutes</p>"
         f"{reason_html}"
-        "<p style='margin:16px 0 0;color:#666;font-size:13px'>Review &amp; "
-        "approve in the Spark dashboard — the BA keeps working until you "
+        f"{action_html}"
+        "<p style='margin:16px 0 0;color:#666;font-size:13px'>You can also "
+        "review in the Spark dashboard — the BA keeps working until you "
         "decide.</p></div>"
     )
 

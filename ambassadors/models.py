@@ -1391,6 +1391,16 @@ class ShiftExtensionRequest(models.Model):
         null=True,
         related_name="extension_requests_created_by",
     )
+    # Who approved/denied it + when (null while pending). resolved_by is null
+    # when the decision came from the one-click email link (no logged-in user).
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    resolved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="extension_requests_resolved_by",
+    )
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
     updated_at = models.DateTimeField(auto_now=True)
 

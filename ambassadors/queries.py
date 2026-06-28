@@ -2849,6 +2849,70 @@ class AttendanceMobileQueries:
 
 
 @strawberry.type
+class PendingExtensionItem:
+    uuid: strawberry.ID
+    ba_name: str
+    ba_uuid: str | None = None
+    event_uuid: str | None = None
+    venue: str = ""
+    minutes_requested: int = 0
+    reason: str = ""
+    created_at: str = ""
+
+
+@strawberry.type
+class ShiftExtensionAdminQueries:
+    """Admin (Ignite) view of pending mid-shift extension requests — drives the
+    notification center's actionable Approve / Decline list."""
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def pending_shift_extensions(
+        self, info: strawberry.Info, limit: int = 50
+    ) -> list[PendingExtensionItem]:
+        from ambassadors.extensions import user_is_ignite_admin
+
+        user = info.context.request.user
+        if not user_is_ignite_admin(user):
+            return []
+        capped = max(1, min(int(limit or 50), 200))
+
+        def _fetch() -> list:
+            rows = list(
+                models.ShiftExtensionRequest.objects.select_related(
+                    "event", "ambassador", "ambassador__user"
+                )
+                .filter(status="pending")
+                .order_by("-created_at")[:capped]
+            )
+            out: list = []
+            for ext in rows:
+                ba = ext.ambassador
+                ba_user = getattr(ba, "user", None)
+                ba_name = (
+                    f"{getattr(ba_user, 'first_name', '') or ''} "
+                    f"{getattr(ba_user, 'last_name', '') or ''}"
+                ).strip() or "A BA"
+                out.append(
+                    PendingExtensionItem(
+                        uuid=strawberry.ID(str(ext.uuid)),
+                        ba_name=ba_name,
+                        ba_uuid=str(getattr(ba, "uuid", "")) if ba else None,
+                        event_uuid=(
+                            str(getattr(ext.event, "uuid", ""))
+                            if ext.event_id else None
+                        ),
+                        venue=getattr(ext.event, "name", None) or "their shift",
+                        minutes_requested=ext.minutes_requested,
+                        reason=ext.reason or "",
+                        created_at=ext.created_at.isoformat() if ext.created_at else "",
+                    )
+                )
+            return out
+
+        return await sync_to_async(_fetch)()
+
+
+@strawberry.type
 class NotificationQueries:
     """Mobile Notifications inbox — the per-user log of pushes we've sent.
 

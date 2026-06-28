@@ -19,6 +19,10 @@ class AmbassadorQuerySpark(
     queries.AttendanceQueries,
     queries.GroupTypeQueries,
     queries.AmbassadorGroupQueries,
+    # Admin notification center (web): the per-user push log + pending
+    # shift-extension requests with inline approve/decline.
+    queries.NotificationQueries,
+    queries.ShiftExtensionAdminQueries,
 ):
     pass
 
@@ -92,5 +96,9 @@ class AmbassadorMutationsClient(
 @strawberry.type
 class AmbassadorMutationsSpark(
     AmbassadorMutationsClient,
+    # Admin notification center (web): mark notifications read + resolve
+    # (approve/decline) a BA's shift-extension request.
+    mutations.NotificationMutations,
+    mutations.ShiftExtensionAdminMutations,
 ):
     pass

@@ -76,6 +76,9 @@ urlpatterns = [
     # token resolves to one invoice (camelCase JSON) and the branded invoice
     # PDF. See `billing/views.py`.
     path("api/public/", include("billing.urls")),
+    # Public, token-authenticated one-click shift-extension approval (no JWT).
+    # The admin "Extension requested" email links here. See `ambassadors/views.py`.
+    path("api/public/", include("ambassadors.urls")),
     # On-demand recap photo thumbnails (utils/thumb_views.py).
     path("api/public/img/", include("utils.thumb_urls")),
     # Cloud Tasks handler endpoints (no JWT, `X-Tasks-Secret` shared-secret
