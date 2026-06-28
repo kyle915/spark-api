@@ -1,3 +1,5 @@
+import logging
+
 import strawberry
 from strawberry import relay
 from strawberry.types import Info
