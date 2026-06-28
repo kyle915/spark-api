@@ -56,6 +56,44 @@ def _page(title: str, inner: str, *, status: int = 200) -> HttpResponse:
     return HttpResponse(html, status=status, content_type="text/html; charset=utf-8")
 
 
+def _confirm_form(ext, ba_name: str, venue: str, error: str = "") -> str:
+    """The pending-request confirmation form: details + a REQUIRED reason
+    textarea + Approve / Decline submit buttons (one form so they share the
+    reason). Re-rendered with `error` when a reason is missing on POST."""
+    ba_reason = (
+        f"<div class='note'>“{escape(ext.reason[:400])}”</div>"
+        if ext.reason else ""
+    )
+    err_html = (
+        f"<p class='row' style='color:#ef5a2a;margin-top:8px'>{escape(error)}</p>"
+        if error else ""
+    )
+    return (
+        f"<h1>{escape(ba_name)} needs more time</h1>"
+        f"<p class='row'><span class='label'>Venue</span><br><b>{escape(venue)}</b></p>"
+        f"<p class='row'><span class='label'>Extra time requested</span><br>"
+        f"<b>{ext.minutes_requested} minutes</b></p>"
+        f"{ba_reason}"
+        f"<form method='post'>"
+        f"<label class='label' style='display:block;margin-top:18px'>"
+        f"Your note to the BA (required)</label>"
+        f"<textarea name='reason' rows='3' required "
+        f"placeholder='e.g. Approved — finish the demo. / Can&#39;t extend, store closes at 8.' "
+        f"style='width:100%;box-sizing:border-box;margin-top:6px;padding:10px;"
+        f"border-radius:10px;background:#0a0d09;border:1px solid #1f2418;"
+        f"color:#f2f3ee;font-size:14px'>{escape(ext.decision_reason or '')}</textarea>"
+        f"{err_html}"
+        f"<div class='actions'>"
+        f"<button class='approve' type='submit' name='action' value='approve'>"
+        f"Approve +{ext.minutes_requested} min</button>"
+        f"<button class='decline' type='submit' name='action' value='decline'>"
+        f"Decline</button>"
+        f"</div></form>"
+        f"<p class='muted'>The BA keeps working until you decide. You can also "
+        f"manage this in the Spark dashboard.</p>"
+    )
+
+
 @method_decorator(csrf_exempt, name="dispatch")
 class ExtensionApprovalView(View):
     """GET → confirmation page with Approve/Decline. POST → resolve."""
@@ -99,26 +137,7 @@ class ExtensionApprovalView(View):
                 f"+{ext.minutes_requested} min request for "
                 f"<b>{escape(venue)}</b> was already {escape(ext.status)}.</p>",
             )
-        reason = (
-            f"<div class='note'>“{escape(ext.reason[:400])}”</div>"
-            if ext.reason else ""
-        )
-        inner = (
-            f"<h1>{escape(ba_name)} needs more time</h1>"
-            f"<p class='row'><span class='label'>Venue</span><br><b>{escape(venue)}</b></p>"
-            f"<p class='row'><span class='label'>Extra time requested</span><br>"
-            f"<b>{ext.minutes_requested} minutes</b></p>"
-            f"{reason}"
-            f"<div class='actions'>"
-            f"<form method='post'><input type='hidden' name='action' value='approve'>"
-            f"<button class='approve' type='submit'>Approve +{ext.minutes_requested} min</button></form>"
-            f"<form method='post'><input type='hidden' name='action' value='decline'>"
-            f"<button class='decline' type='submit'>Decline</button></form>"
-            f"</div>"
-            f"<p class='muted'>The BA keeps working until you decide. You can "
-            f"also manage this in the Spark dashboard.</p>"
-        )
-        return _page("Extension requested", inner)
+        return _page("Extension requested", _confirm_form(ext, ba_name, venue))
 
     def post(self, request: HttpRequest, token: str) -> HttpResponse:
         ext = self._load(token)
@@ -137,8 +156,28 @@ class ExtensionApprovalView(View):
                 "Approve or Decline button.</p>",
                 status=400,
             )
+        decision_reason = (request.POST.get("reason") or "").strip()
+        if not decision_reason:
+            # Re-render the form with the request still pending + an error.
+            ba = getattr(ext, "ambassador", None)
+            ba_user = getattr(ba, "user", None)
+            ba_name = (
+                f"{getattr(ba_user, 'first_name', '') or ''} "
+                f"{getattr(ba_user, 'last_name', '') or ''}"
+            ).strip() or "A BA"
+            venue = getattr(getattr(ext, "event", None), "name", None) or "their shift"
+            return _page(
+                "Extension requested",
+                _confirm_form(
+                    ext, ba_name, venue,
+                    error="Add a quick note for the BA before you decide.",
+                ),
+                status=400,
+            )
         try:
-            result = resolve_extension(ext, approve=(action == "approve"))
+            result = resolve_extension(
+                ext, approve=(action == "approve"), reason=decision_reason,
+            )
         except Exception as exc:  # noqa: BLE001
             logger.exception("public extension resolve failed token-ext=%s", ext.id)
             return _page(

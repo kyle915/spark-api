@@ -75,6 +75,7 @@ def resolve_extension(
     approve: bool,
     approved_minutes: int | None = None,
     actor_user=None,
+    reason: str = "",
 ) -> dict:
     """Approve or deny a ShiftExtensionRequest. SYNC + idempotent.
 
@@ -124,10 +125,12 @@ def resolve_extension(
     ext.resolved_at = _tz.now()
     if actor_user is not None and getattr(actor_user, "id", None):
         ext.resolved_by = actor_user
+    clean_reason = (reason or "").strip()[:2000]
+    ext.decision_reason = clean_reason
     ext.save(
         update_fields=[
             "status", "approved_minutes", "resolved_at", "resolved_by",
-            "updated_at",
+            "decision_reason", "updated_at",
         ]
     )
 
@@ -147,6 +150,8 @@ def resolve_extension(
                     f"Your extra-time request for {venue} wasn't approved. "
                     "Wrap up at your scheduled end time."
                 )
+            if clean_reason:
+                body += f" — “{clean_reason}”"
             _send_push_to_user_sync(
                 ba_user.id,
                 title=title,

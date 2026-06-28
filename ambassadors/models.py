@@ -1401,6 +1401,9 @@ class ShiftExtensionRequest(models.Model):
         blank=True,
         related_name="extension_requests_resolved_by",
     )
+    # The admin's note when approving/declining (required at the UI layer).
+    # Shown to the BA in the decision push.
+    decision_reason = models.TextField(blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
     updated_at = models.DateTimeField(auto_now=True)
 

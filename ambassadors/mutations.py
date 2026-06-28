@@ -1362,6 +1362,7 @@ class RequestExtensionResponse:
 class ResolveShiftExtensionInput:
     extension_uuid: strawberry.ID
     decision: str  # "approve" | "decline"
+    reason: str = ""  # required — the admin's note, shown to the BA
     approved_minutes: int | None = None
     client_mutation_id: strawberry.ID | None = None
 
@@ -1390,6 +1391,13 @@ class ShiftExtensionAdminMutations:
             return RequestExtensionResponse(
                 success=False,
                 message="decision must be approve or decline.",
+                client_mutation_id=input.client_mutation_id,
+            )
+        reason = (input.reason or "").strip()
+        if not reason:
+            return RequestExtensionResponse(
+                success=False,
+                message="Add a quick reason for the BA before you decide.",
                 client_mutation_id=input.client_mutation_id,
             )
         approve = decision == "approve"
