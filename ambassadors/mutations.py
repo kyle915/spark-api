@@ -1619,12 +1619,12 @@ class ShiftAttendanceMutations:
                     str(input.event_uuid), actor
                 )
             if not amb_event:
-                return None, "Shift not found.", 0
+                return None, "Shift not found.", [], None
             own_user_id = (
                 amb_event.ambassador.user_id if amb_event.ambassador else None
             )
             if own_user_id and getattr(actor, "id", None) != own_user_id:
-                return None, "Not your shift.", 0
+                return None, "Not your shift.", [], None
 
             event = amb_event.event
             ba = amb_event.ambassador
@@ -1645,28 +1645,26 @@ class ShiftAttendanceMutations:
             if input.note:
                 body += f" — “{input.note[:120]}”"
 
-            # Ignite admin team only — never the client / assigned RMM.
+            # Ignite admin team only — never the client / assigned RMM. Collect
+            # the recipients + payload here but DON'T send: this runs inside
+            # sync_to_async, and bridging sync→async to the push wrapper from a
+            # no-running-loop thread deadlocks (see resolve_extension / api
+            # 378d829). The async resolver body delivers natively below.
             watcher_ids = _spark_admin_user_ids()
-            sent = 0
-            for uid in watcher_ids:
-                try:
-                    _send_push_to_user_sync(
-                        uid, title=title, body=body,
-                        data={
-                            "screen": "tracker",
-                            "eventUuid": str(getattr(event, "uuid", "")),
-                            "kind": "shift_status",
-                            "shiftStatus": status,
-                        },
-                    )
-                    sent += 1
-                except Exception:
-                    logging.getLogger(__name__).exception(
-                        "shift-status push failed user=%s", uid,
-                    )
+            push = {
+                "title": title,
+                "body": body,
+                "data": {
+                    "screen": "tracker",
+                    "eventUuid": str(getattr(event, "uuid", "")),
+                    "kind": "shift_status",
+                    "shiftStatus": status,
+                },
+            }
 
             # Email the Spark admin team too (parity with the extension
-            # request) — best-effort, never blocks the status report.
+            # request) — best-effort, never blocks the status report. Plain
+            # sync send; safe to keep inside sync_to_async.
             try:
                 _email_admins_shift_status(
                     ba_name=ba_name,
@@ -1679,9 +1677,31 @@ class ShiftAttendanceMutations:
                 logging.getLogger(__name__).exception(
                     "shift-status admin email failed",
                 )
-            return amb_event, "Your team has been notified.", sent
+            return amb_event, "Your team has been notified.", watcher_ids, push
 
-        amb_event, msg, sent = await sync_to_async(_go)()
+        amb_event, msg, watcher_ids, push = await sync_to_async(_go)()
+
+        # Deliver the admin pushes with a native `await` from the running loop
+        # (NOT the sync wrapper from inside sync_to_async, which deadlocks).
+        # Best-effort per recipient — a push hiccup never fails the report.
+        sent = 0
+        if push and watcher_ids:
+            from ambassadors.push import send_push_to_user
+
+            for uid in watcher_ids:
+                try:
+                    await send_push_to_user(
+                        uid,
+                        title=push["title"],
+                        body=push["body"],
+                        data=push["data"],
+                    )
+                    sent += 1
+                except Exception:
+                    logging.getLogger(__name__).exception(
+                        "shift-status push failed user=%s", uid,
+                    )
+
         return ReportShiftStatusResponse(
             success=amb_event is not None,
             message=msg,
@@ -1720,12 +1740,12 @@ class ShiftAttendanceMutations:
                     str(input.event_uuid), actor
                 )
             if not amb_event:
-                return None, "Shift not found.", None
+                return None, "Shift not found.", None, [], None
             own_user_id = (
                 amb_event.ambassador.user_id if amb_event.ambassador else None
             )
             if own_user_id and getattr(actor, "id", None) != own_user_id:
-                return None, "Not your shift.", None
+                return None, "Not your shift.", None, [], None
 
             event = amb_event.event
             ba = amb_event.ambassador
@@ -1747,31 +1767,32 @@ class ShiftAttendanceMutations:
             ).strip() or "A BA"
             venue = getattr(event, "name", None) or "their shift"
 
-            # 1) Push the Ignite admin team (dashboard flag) — NOT the RMM/client.
+            # 1) Build the Ignite admin push (dashboard flag) — NOT the RMM/client.
+            # Collect recipients + payload here but DON'T send: this runs inside
+            # sync_to_async, and bridging sync→async to the push wrapper from a
+            # no-running-loop thread deadlocks (see resolve_extension / api
+            # 378d829). The async resolver body delivers natively below.
             title = "⏱ Extension requested"
             body = f"{ba_name} is requesting +{minutes} min at {venue}."
             if input.reason:
                 body += f" — “{input.reason[:120]}”"
-            for uid in _spark_admin_user_ids():
-                try:
-                    _send_push_to_user_sync(
-                        uid, title=title, body=body,
-                        data={
-                            "screen": "tracker",
-                            "eventUuid": str(getattr(event, "uuid", "")),
-                            # Lets the admin notification feed render inline
-                            # Approve / Decline for this extension request.
-                            "kind": "extension_request",
-                            "extensionUuid": str(ext.uuid),
-                        },
-                    )
-                except Exception:
-                    logging.getLogger(__name__).exception(
-                        "extension push failed user=%s", uid,
-                    )
+            watcher_ids = _spark_admin_user_ids()
+            push = {
+                "title": title,
+                "body": body,
+                "data": {
+                    "screen": "tracker",
+                    "eventUuid": str(getattr(event, "uuid", "")),
+                    # Lets the admin notification feed render inline
+                    # Approve / Decline for this extension request.
+                    "kind": "extension_request",
+                    "extensionUuid": str(ext.uuid),
+                },
+            }
 
             # 2) Email every Spark admin (best-effort — never blocks). The
             # email carries one-click Approve / Decline links (extension_id).
+            # Plain sync send; safe to keep inside sync_to_async.
             try:
                 _email_admins_extension_request(
                     ba_name=ba_name,
@@ -1786,15 +1807,35 @@ class ShiftAttendanceMutations:
                     "extension admin email failed",
                 )
 
-            return ext, "Your team has been notified.", event
+            return ext, "Your team has been notified.", event, watcher_ids, push
 
-        ext, msg, event = await sync_to_async(_go)()
+        ext, msg, event, watcher_ids, push = await sync_to_async(_go)()
         if ext is None:
             return RequestExtensionResponse(
                 success=False,
                 message=msg,
                 client_mutation_id=input.client_mutation_id,
             )
+
+        # Deliver the admin pushes with a native `await` from the running loop
+        # (NOT the sync wrapper from inside sync_to_async, which deadlocks).
+        # Best-effort per recipient — a push hiccup never fails the request.
+        if push and watcher_ids:
+            from ambassadors.push import send_push_to_user
+
+            for uid in watcher_ids:
+                try:
+                    await send_push_to_user(
+                        uid,
+                        title=push["title"],
+                        body=push["body"],
+                        data=push["data"],
+                    )
+                except Exception:
+                    logging.getLogger(__name__).exception(
+                        "extension push failed user=%s", uid,
+                    )
+
         return RequestExtensionResponse(
             success=True,
             message=msg,
