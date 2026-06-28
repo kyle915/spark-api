@@ -44,6 +44,10 @@ class AmbassadorQueryClient(
     queries.AmbassadorGroupQueries,
     StaffingQueries,
     StaffingSuggestionQueries,
+    # Admin notification center (the web app uses the CLIENTS schema): the
+    # per-user push log + pending shift-extension requests.
+    queries.NotificationQueries,
+    queries.ShiftExtensionAdminQueries,
 ):
     pass
 
@@ -89,6 +93,10 @@ class AmbassadorMutationsClient(
     AmbassadorMutations,
     mutations.GroupTypeMutations,
     mutations.AmbassadorGroupMutations,
+    # Admin notification center (the web app uses the CLIENTS schema): mark
+    # notifications read + resolve (approve/decline) a shift-extension request.
+    mutations.NotificationMutations,
+    mutations.ShiftExtensionAdminMutations,
 ):
     pass
 
@@ -96,9 +104,5 @@ class AmbassadorMutationsClient(
 @strawberry.type
 class AmbassadorMutationsSpark(
     AmbassadorMutationsClient,
-    # Admin notification center (web): mark notifications read + resolve
-    # (approve/decline) a BA's shift-extension request.
-    mutations.NotificationMutations,
-    mutations.ShiftExtensionAdminMutations,
 ):
     pass
