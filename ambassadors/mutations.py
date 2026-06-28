@@ -2597,6 +2597,31 @@ class NotificationMutations:
         return await sync_to_async(_mark)()
 
     @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def dismiss_notifications(
+        self,
+        info: strawberry.Info,
+        uuids: list[strawberry.ID] | None = None,
+    ) -> int:
+        """Clear (delete) the caller's notifications — the given uuids, or ALL
+        of theirs when none are passed ("clear all"). Self-scoped: only the
+        caller's own rows are ever touched. Returns the count deleted."""
+        from .models import PushNotification
+
+        user = info.context.request.user
+        if not getattr(user, "is_authenticated", False):
+            return 0
+
+        def _clear() -> int:
+            qs = PushNotification.objects.filter(user=user)
+            if uuids:
+                qs = qs.filter(uuid__in=[str(u) for u in uuids])
+            count = qs.count()
+            qs.delete()
+            return count
+
+        return await sync_to_async(_clear)()
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
     async def set_push_preferences(
         self,
         info: strawberry.Info,
