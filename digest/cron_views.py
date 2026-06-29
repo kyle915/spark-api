@@ -3062,6 +3062,61 @@ class ExportGirlbeerSummaryView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class BackfillRecapRetailersView(View):
+    """POST `/internal/cron/backfill-recap-retailers`.
+
+    Fires `backfill_recap_retailers` — sets `CustomRecap.retailer` on specific
+    recaps whose Retailer was blank (so they grouped by city in the summary) or
+    wrong, so the "PERFORMANCE BY RETAILER" table folds them into the right
+    store. Per-recap + idempotent; the shared Event is untouched.
+
+    SAFE — DRY-RUN by default; only `apply=true` (alias execute=true) writes.
+
+    Params (query or POST, all optional): apply/execute, tenant_slug
+    (default girl-beer), targets_json (override the built-in 4 Girl Beer fixes).
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _bool(name: str, default: bool = False) -> bool:
+            raw = (request.GET.get(name) or request.POST.get(name) or "").lower()
+            return raw in ("1", "true", "yes", "on") if raw else default
+
+        def _str(name: str):
+            return request.GET.get(name) or request.POST.get(name) or None
+
+        apply = _bool("apply", default=False) or _bool("execute", default=False)
+        kwargs = {"apply": apply, "tenant_slug": _str("tenant_slug") or "girl-beer"}
+        targets_json = _str("targets_json")
+        if targets_json:
+            kwargs["targets_json"] = targets_json
+
+        out = io.StringIO()
+        try:
+            call_command("backfill_recap_retailers", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("backfill-recap-retailers cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc),
+                 "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse(
+            {"ok": True, "applied": apply, "tenant_slug": kwargs["tenant_slug"],
+             "log": out.getvalue()}
+        )
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class DescribeSheetTabsView(View):
     """GET/POST `/internal/cron/describe-sheet-tabs` — read-only.
 
@@ -4063,6 +4118,7 @@ def _registered_views() -> dict[str, Any]:
         "export-recaps-to-sheet": ExportRecapsToSheetView,
         "export-ld-summary": ExportLdSummaryView,
         "export-girlbeer-summary": ExportGirlbeerSummaryView,
+        "backfill-recap-retailers": BackfillRecapRetailersView,
         "describe-sheet-tabs": DescribeSheetTabsView,
         "backfill-ld-master-tracker": BackfillLdMasterTrackerView,
         "ld-data-census": LdDataCensusView,
