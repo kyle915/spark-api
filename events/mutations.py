@@ -2820,11 +2820,18 @@ async def _notify_rmm_for_request_created(
         or (assigned_rmm.email.split("@")[0] if assigned_rmm else "team")
     )
     state_code = extract_state_code(getattr(request, "address", None))
+    # CC the whole Ignite team (ops CC + every spark-admin + every active
+    # @igniteproductions.co user) on the incoming-request routing email, minus
+    # anyone already on the To: line so they aren't doubled up.
+    to_lower = {(t or "").strip().lower() for t in to_emails}
+    cc_emails = [
+        e for e in await _get_request_cc_emails_async() if e.lower() not in to_lower
+    ]
     mailer = RmmAssignedRequestMailer(
         request=request,
         location=location,
         to_emails=to_emails,
-        cc_emails=IGNITE_REVIEW_CC,
+        cc_emails=cc_emails or list(IGNITE_REVIEW_CC),
         rmm_first_name=rmm_first,
         state_code=state_code,
     )
@@ -2845,10 +2852,11 @@ async def _notify_ignite_for_unroutable_request(
     `unroutable_reason` context flag is read by the template to show
     a yellow callout above the buttons.
     """
+    ignite_team = await _get_request_cc_emails_async()
     mailer = RmmAssignedRequestMailer(
         request=request,
         location=location,
-        to_emails=IGNITE_REVIEW_CC,
+        to_emails=ignite_team or list(IGNITE_REVIEW_CC),
         cc_emails=[],
         rmm_first_name="team",
         state_code=None,
@@ -2931,6 +2939,64 @@ async def _get_spark_admin_emails_async() -> list[str]:
     return await sync_to_async(_get_spark_admin_emails)()
 
 
+def _get_ignite_domain_emails() -> list[str]:
+    """Every active user whose email is @igniteproductions.co — the broad
+    "Ignite team" set. A superset of the role=spark-admin roll-up: a teammate
+    who is an Ignite admin by DOMAIN (the admin-access model treats any
+    @igniteproductions.co address as an admin) but doesn't carry the
+    spark-admin role slug is still copied. So adding a new Ignite person needs
+    no settings edit or code change — an @igniteproductions.co login is enough."""
+    from django.contrib.auth import get_user_model
+
+    User = get_user_model()
+    try:
+        emails = list(
+            User.objects.filter(is_active=True)
+            .filter(email__iendswith="@igniteproductions.co")
+            .exclude(email__isnull=True)
+            .exclude(email__exact="")
+            .values_list("email", flat=True)
+        )
+    except Exception:
+        return []
+    return [e.strip() for e in emails if (e or "").strip()]
+
+
+def _get_request_cc_emails(exclude_email: str | None = None) -> list[str]:
+    """The full CC set copied on EVERY request + approval/decline email: the
+    configured review-copy list, the hardcoded Ignite ops CC, every active
+    role=spark-admin, AND every active @igniteproductions.co user. Deduped
+    (case-insensitive), suppression-filtered, and with ``exclude_email``
+    (usually the To: recipient) dropped so no one CC's themselves.
+
+    Single source of truth so the whole Ignite team is looped in on every
+    request that comes in and every approval/decline that goes out — instead
+    of each flow assembling its own narrower list."""
+    normalized_exclude = (exclude_email or "").strip().lower()
+    combined = (
+        list(_get_request_review_copy_emails(exclude_email=exclude_email))
+        + list(IGNITE_REVIEW_CC)
+        + _get_spark_admin_emails()
+        + _get_ignite_domain_emails()
+    )
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for email in combined:
+        normalized = (email or "").strip()
+        if not normalized:
+            continue
+        key = normalized.lower()
+        if key == normalized_exclude or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(normalized)
+    return suppress_cc(deduped)
+
+
+async def _get_request_cc_emails_async(exclude_email: str | None = None) -> list[str]:
+    return await sync_to_async(_get_request_cc_emails)(exclude_email)
+
+
 async def _notify_requestor_for_request_approved(
     request: models.Request,
     location: models.Location | None,
@@ -2942,30 +3008,11 @@ async def _notify_requestor_for_request_approved(
         return
 
     request.requestor_email = requestor_email
-    # CC the Ignite ops team on every approval — events@, kyle@,
-    # myriant@, nevena@, madison@ — plus every active Spark admin in
-    # the DB so new admins get the paper trail automatically without
-    # editing settings. Dedupes against the requestor's address so no
-    # one CC's themselves.
-    admin_emails = await _get_spark_admin_emails_async()
-    normalized_exclude = requestor_email.strip().lower()
-    copy_emails = suppress_cc(
-        list(
-            dict.fromkeys(
-                _get_request_review_copy_emails(exclude_email=requestor_email)
-                + [
-                    e
-                    for e in IGNITE_REVIEW_CC
-                    if (e or "").strip().lower() != normalized_exclude
-                ]
-                + [
-                    e
-                    for e in admin_emails
-                    if (e or "").strip().lower() != normalized_exclude
-                ]
-            )
-        )
-    )
+    # CC the whole Ignite team on every approval — configured review CC, the
+    # ops CC, every active spark-admin, AND every active @igniteproductions.co
+    # user — deduped against the requestor so no one CC's themselves. New
+    # Ignite teammates are picked up automatically (no settings/code change).
+    copy_emails = await _get_request_cc_emails_async(exclude_email=requestor_email)
     mailer = RequestorRequestApprovedMailer(
         request=request,
         location=location,
@@ -2988,9 +3035,9 @@ async def _notify_requestor_for_request_declined(
         return
 
     request.requestor_email = requestor_email
-    copy_emails = suppress_cc(
-        _get_request_review_copy_emails(exclude_email=requestor_email)
-    )
+    # Loop the whole Ignite team in on declines too (was: review-copy only) so
+    # the same recipients see the request come in, get approved, or declined.
+    copy_emails = await _get_request_cc_emails_async(exclude_email=requestor_email)
     mailer = RequestorRequestDeclinedMailer(
         request=request,
         location=location,
