@@ -260,8 +260,14 @@ def compute_girlbeer_summary(tenant) -> GBSummary:
         d["six_packs"] += six
         d["spend"] += spend
 
-        # By store / location
-        label = _retailer_label(meta.get("store") or "")
+        # By retailer — prefer the event's Retailer over the (usually city-only)
+        # Store/Location. Both are normalised through the chain matcher so
+        # "Frys"/"Fry's" and "HEB"/"H-E-B" collapse together, and the few rows
+        # with a blank Retailer still resolve a chain embedded in the location
+        # string ("Whole Foods · 2026-06-20"). Only rows with no retailer
+        # captured anywhere fall back to the raw location (a city).
+        retailer = (meta.get("retailer") or "").strip()
+        label = _retailer_label(retailer or meta.get("store") or "")
         d = bucket(loc, label.lower(), label)
         d["demos"] += 1
         d["samples"] += samples
@@ -386,8 +392,8 @@ def build_grid(summary: GBSummary, refreshed: str = ""):
         loc_rows.append([d["label"], d["demos"], d["samples"], round(avg, 1),
                          d["engaged"], d["buyers"], rate, round(d["spend"], 2)])
     _emit_table(
-        cells, fmt, r, _LEFT0, "PERFORMANCE BY STORE / LOCATION",
-        ["Store / Location", "Demos", "Samples", "Avg / Demo", "Engaged",
+        cells, fmt, r, _LEFT0, "PERFORMANCE BY RETAILER",
+        ["Retailer", "Demos", "Samples", "Avg / Demo", "Engaged",
          "Buyers", "Purchase Rate", "Spend"],
         loc_rows, currency_cols=[7], pct_cols=[6], dec_cols=[3],
     )
