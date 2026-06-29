@@ -944,6 +944,15 @@ class SparkUserMutations:
             # invite lists immediately.
             TenantedUser = __import__("tenants.models", fromlist=["TenantedUser"]).TenantedUser
             TenantedUser.objects.filter(user_id=uid).update(is_active=False)
+            # If the user is a Brand Ambassador, deactivate the BA profile too
+            # so a removed BA drops out of rosters / staffing / eligible lists
+            # — not just loses sign-in. No-op for admins/clients (no profile).
+            Ambassador = __import__(
+                "ambassadors.models", fromlist=["Ambassador"]
+            ).Ambassador
+            Ambassador.objects.filter(user_id=uid, is_active=True).update(
+                is_active=False
+            )
             return target
 
         target = await _deactivate()
