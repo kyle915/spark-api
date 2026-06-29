@@ -1757,6 +1757,7 @@ class LinkedSheetMutations:
         admin UI's endpoint); tenant membership verified via get_tenant.
         """
         from tenants.models import TenantedUser
+        from django.core.exceptions import MultipleObjectsReturned
 
         user = info.context.request.user
         if not user.is_authenticated:
@@ -1779,6 +1780,19 @@ class LinkedSheetMutations:
                     client_mutation_id=input.client_mutation_id,
                 )
             tenant = await sync_to_async(Tenant.objects.get)(pk=tenant_id)
+        except MultipleObjectsReturned:
+            # Multi-tenant admin (e.g. Ignite) with no tenant_id passed — the
+            # user.get_tenant() fallback can't disambiguate among their many
+            # memberships. The UI sends tenantId; this just turns any caller
+            # that doesn't into a clean error instead of a 500.
+            return UpdateTenantResponse(
+                success=False,
+                message=(
+                    "Couldn't determine which workspace to update — "
+                    "reload the page and try again."
+                ),
+                client_mutation_id=input.client_mutation_id,
+            )
         except (Tenant.DoesNotExist, GraphQLError, ValueError, TypeError):
             return UpdateTenantResponse(
                 success=False,
