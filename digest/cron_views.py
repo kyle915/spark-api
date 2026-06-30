@@ -3188,6 +3188,10 @@ class BackfillLdMasterTrackerView(View):
         sheet_url = _get("sheet_url")
         tab_name = _get("tab_name") or "MASTER_Tracker"
         insert_by_date = _bool("insert_by_date", default=True)
+        # Column layout: "ld_retail" = write only A–I in LD's client format
+        # (the fix). The flag is persisted ONLY on execute, so a dry-run preview
+        # never flips the live per-row mirror onto the LD path before review.
+        layout = (_get("layout") or "ld_retail").strip()
         execute = _bool("execute", default=False)
 
         tenant = Tenant.objects.filter(slug=slug).first()
@@ -3206,8 +3210,42 @@ class BackfillLdMasterTrackerView(View):
         if bool(tenant.master_tracker_insert_by_date) != insert_by_date:
             tenant.master_tracker_insert_by_date = insert_by_date
             changes["master_tracker_insert_by_date"] = str(insert_by_date)
+        # Persist the layout flag ONLY on execute — flipping it changes how the
+        # live per-row mirror writes, so a dry-run stays a true no-op preview.
+        if execute and layout and (tenant.master_tracker_layout or "") != layout:
+            tenant.master_tracker_layout = layout
+            changes["master_tracker_layout"] = layout
         if changes:
             tenant.save(update_fields=list(changes.keys()))
+
+        # Dry-run: build a read-only PREVIEW of the LD A–I rows for a sample of
+        # this tenant's requests (no write, no flag change) so the mapping can
+        # be eyeballed before going live.
+        preview: list = []
+        if not execute:
+            try:
+                from utils import sheets_mirror as _sm
+                from events import models as _em
+
+                sample = (
+                    _em.Request.objects.filter(
+                        tenant=tenant, deleted_at__isnull=True
+                    )
+                    .select_related("state", "retailer", "timezone")
+                    .prefetch_related("request_product__product")
+                    .order_by("-date")[:12]
+                )
+                header = [
+                    "State", "Date(wkday)", "Date", "Store Name", "Start",
+                    "End", "Address", "Notes", "SKUs to sample",
+                ]
+                preview.append(header)
+                for r in sample:
+                    row = _sm._ld_retail_row(r)
+                    if row:
+                        preview.append(row)
+            except Exception as exc:
+                preview = [["preview-failed", _concise_exc(exc)]]
 
         out = io.StringIO()
         cmd_args = ["--tenant-slug", tenant.slug]
@@ -3229,6 +3267,8 @@ class BackfillLdMasterTrackerView(View):
                 "execute": execute,
                 "master_tracker_tab_name": tenant.master_tracker_tab_name,
                 "master_tracker_insert_by_date": tenant.master_tracker_insert_by_date,
+                "master_tracker_layout": tenant.master_tracker_layout,
+                "preview": preview,
                 "log": out.getvalue(),
             }
         )

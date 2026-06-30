@@ -79,6 +79,15 @@ class Tenant(Asyncable, models.Model):
     # appended at the bottom. Existing rows are never reordered. Only honored
     # when master_tracker_tab_name is set. See utils/sheets_mirror.
     master_tracker_insert_by_date = models.BooleanField(default=False)
+    # Column layout the Master-Tracker mirror writes. Blank = Spark's generic
+    # 15-column layout (Request UUID, Status, Date, Brand, … Spark Link) keyed
+    # by UUID in column A — the default for Girl Beer + everyone. "ld_retail" =
+    # Liquid Death's hand-built MASTER_Tracker columns: write ONLY A–I (State,
+    # weekday, date, Store Name, Start, End, Address, Notes, SKUs to sample) in
+    # their order/format, key Spark's own rows by a UUID stashed in a far-right
+    # column, and never touch row 1 or the client's manual columns (J onward:
+    # BA Name, Rate, Recap, Email …). See utils/sheets_mirror LD_RETAIL_LAYOUT.
+    master_tracker_layout = models.CharField(max_length=32, default="", blank=True)
     # Which worksheet the recap "demo data" export writes into. Null/blank =
     # "Demo Recaps" (the Girl Beer default, which feeds an existing Summary).
     # Liquid Death sets "Spark Recaps" — a dedicated branded raw-recaps tab on

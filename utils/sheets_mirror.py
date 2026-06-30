@@ -437,6 +437,200 @@ def _append_or_insert_new(svc, sheet_id, tab, tenant, row, end_col) -> None:
     ).execute()
 
 
+# ----------------------------------------------------------------------------
+# Liquid Death "MASTER_Tracker" client layout — opt-in via
+# Tenant.master_tracker_layout == "ld_retail".
+#
+# LD's tracker is hand-built with THEIR columns: A State · B Date (weekday) ·
+# C Date (M/D/YYYY) · D Store Name · E Start Time ("10a") · F End Time ("1p") ·
+# G Address · H Notes · I SKUs to sample — then ~18 manually-maintained columns
+# (Recap Received, BA Name, Rate, Email …). The generic 15-column mirror would
+# scramble all of that, so this layout writes ONLY columns A–I in LD's format
+# and stashes the Spark request UUID in a far-right key column, so we find /
+# update our OWN rows in place and NEVER read or touch row 1 (their header) or
+# the client's manual columns.
+# ----------------------------------------------------------------------------
+LD_RETAIL_LAYOUT = "ld_retail"
+# Spark UUID key column — far past LD's used grid (61 cols) so it can't collide
+# with a client column. _col_letter(70) == "BR".
+_LD_KEY_COL_INDEX = 70
+
+
+def _tenant_layout(tenant) -> str:
+    return (getattr(tenant, "master_tracker_layout", "") or "").strip()
+
+
+def _fmt_time_ld(dt, offset_min: int) -> str:
+    """LD clock style: '10a', '1p', '5:30p' — minutes omitted on the hour."""
+    loc = _local(dt, offset_min)
+    if not loc:
+        return ""
+    suffix = "a" if loc.hour < 12 else "p"
+    hour12 = loc.strftime("%-I")
+    return f"{hour12}{suffix}" if loc.minute == 0 else f"{hour12}:{loc.strftime('%M')}{suffix}"
+
+
+def _weekday_ld(dt, offset_min: int) -> str:
+    loc = _local(dt, offset_min)
+    return loc.strftime("%A") if loc else ""
+
+
+def _skus_for_request(request) -> str:
+    """'SKUs to sample' — comma-joined product names on the request, de-duped
+    in order. Empty on none / any error (a Sheets miss must never break a save)."""
+    try:
+        out: list[str] = []
+        seen: set[str] = set()
+        for rp in request.request_product.all():
+            product = getattr(rp, "product", None)
+            name = (getattr(product, "name", "") or "").strip() if product else ""
+            key = name.lower()
+            if name and key not in seen:
+                seen.add(key)
+                out.append(name)
+        return ", ".join(out)
+    except Exception:
+        return ""
+
+
+def _ld_retail_row(request) -> list | None:
+    """LD MASTER_Tracker columns A–I for a Request, in the client's format.
+    None when the request has no tenant."""
+    tenant = getattr(request, "tenant", None)
+    if tenant is None:
+        return None
+    off = _tz_offset_minutes(request)
+
+    def _attr(getter):
+        try:
+            return getter() or ""
+        except Exception:
+            return ""
+
+    state_code = _attr(lambda: getattr(getattr(request, "state", None), "code", ""))
+    store = _attr(lambda: getattr(getattr(request, "retailer", None), "name", "")) or (
+        getattr(request, "retailer_name", "") or ""
+    )
+    return [
+        state_code,                                               # A State
+        _weekday_ld(getattr(request, "date", None), off),         # B Date (weekday)
+        _fmt_date(getattr(request, "date", None), off),           # C Date
+        store,                                                    # D Store Name
+        _fmt_time_ld(getattr(request, "start_time", None), off),  # E Start Time
+        _fmt_time_ld(getattr(request, "end_time", None), off),    # F End Time
+        getattr(request, "address", "") or "",                    # G Address
+        getattr(request, "notes", "") or "",                      # H Notes
+        _skus_for_request(request),                               # I SKUs to sample
+    ]
+
+
+def _ld_key_col() -> str:
+    return _col_letter(_LD_KEY_COL_INDEX)
+
+
+def _ld_existing_rows(svc, sheet_id, tab) -> dict:
+    """Map {spark_uuid: 1-based row} from the far-right key column."""
+    col = _ld_key_col()
+    out: dict[str, int] = {}
+    try:
+        resp = (
+            svc.spreadsheets()
+            .values()
+            .get(spreadsheetId=sheet_id, range=_qualify(tab, f"{col}2:{col}100000"))
+            .execute()
+        )
+        for i, r in enumerate(resp.get("values") or [], start=2):
+            if r and str(r[0]).strip():
+                out[str(r[0]).strip()] = i
+    except HttpError as e:
+        logger.warning("sheets_mirror[ld]: key-column read failed: %s", e)
+    return out
+
+
+def _ld_next_row(svc, sheet_id, tab) -> int:
+    """First free row to append at: 1 + the furthest non-empty row across the
+    Store-Name column (every real client row has one) and the Spark key column.
+    Spark rows always land BELOW the client's existing content — never inserted
+    among their manual rows."""
+    last = 1
+    col = _ld_key_col()
+    for rng in (_qualify(tab, "D1:D100000"), _qualify(tab, f"{col}1:{col}100000")):
+        try:
+            vals = (
+                svc.spreadsheets()
+                .values()
+                .get(spreadsheetId=sheet_id, range=rng)
+                .execute()
+                .get("values")
+                or []
+            )
+        except HttpError as e:
+            logger.warning("sheets_mirror[ld]: extent read failed: %s", e)
+            continue
+        for i in range(len(vals), 0, -1):
+            if vals[i - 1] and str(vals[i - 1][0]).strip():
+                last = max(last, i)
+                break
+    return last + 1
+
+
+def _ld_write(svc, sheet_id, tab, row_idx, data9, uuid) -> None:
+    """Write A:I (data) + the key cell as two ranges, so columns J..key-1 (the
+    client's manual columns) and row 1 (their header) are never touched."""
+    col = _ld_key_col()
+    svc.spreadsheets().values().batchUpdate(
+        spreadsheetId=sheet_id,
+        body={
+            "valueInputOption": "USER_ENTERED",
+            "data": [
+                {"range": _qualify(tab, f"A{row_idx}:I{row_idx}"), "values": [data9]},
+                {"range": _qualify(tab, f"{col}{row_idx}"), "values": [[uuid]]},
+            ],
+        },
+    ).execute()
+
+
+def _ld_upsert_request_row(svc, sheet_id, tab, request) -> bool:
+    data9 = _ld_retail_row(request)
+    if data9 is None:
+        return False
+    uuid = str(request.uuid)
+    existing = _ld_existing_rows(svc, sheet_id, tab)
+    row_idx = existing.get(uuid) or _ld_next_row(svc, sheet_id, tab)
+    _ld_write(svc, sheet_id, tab, row_idx, data9, uuid)
+    return True
+
+
+def _ld_bulk_sync(svc, sheet_id, tab, requests) -> int:
+    existing = _ld_existing_rows(svc, sheet_id, tab)
+    next_row = _ld_next_row(svc, sheet_id, tab)
+    col = _ld_key_col()
+    payload: list = []
+    written = 0
+    for req in requests:
+        row9 = _ld_retail_row(req)
+        if row9 is None:
+            continue
+        uuid = str(req.uuid)
+        idx = existing.get(uuid)
+        if idx is None:
+            idx = next_row
+            next_row += 1
+        payload.append({"range": _qualify(tab, f"A{idx}:I{idx}"), "values": [row9]})
+        payload.append({"range": _qualify(tab, f"{col}{idx}"), "values": [[uuid]]})
+        written += 1
+    try:
+        for chunk in _chunks(payload, 1000):
+            svc.spreadsheets().values().batchUpdate(
+                spreadsheetId=sheet_id,
+                body={"valueInputOption": "USER_ENTERED", "data": chunk},
+            ).execute()
+    except HttpError as e:
+        logger.warning("sheets_mirror[ld]: bulk write failed after %s rows: %s", written, e)
+        return 0
+    return written
+
+
 def upsert_request_row(request) -> bool:
     """Sync one Request row into its tenant's linked Sheet.
 
@@ -463,6 +657,12 @@ def upsert_request_row(request) -> bool:
         # Optional per-tenant Master Tracker tab (None = first worksheet,
         # the default for every tenant whose tracker is the first tab).
         tab = (getattr(tenant, "master_tracker_tab_name", "") or "").strip() or None
+
+        # Client-specific column layout (Liquid Death): write only A–I in their
+        # format, keyed by a far-right Spark-UUID column; never touch the header
+        # or their manual columns. Returns before the generic 15-col path.
+        if _tenant_layout(tenant) == LD_RETAIL_LAYOUT:
+            return _ld_upsert_request_row(svc, sheet_id, tab, request)
 
         _ensure_header(svc, sheet_id, tab)
 
@@ -524,6 +724,10 @@ def bulk_sync_requests(requests) -> int:
 
     # Optional per-tenant Master Tracker tab (None = first worksheet).
     tab = (getattr(tenant, "master_tracker_tab_name", "") or "").strip() or None
+
+    # Client-specific column layout (Liquid Death) — see _ld_bulk_sync.
+    if _tenant_layout(tenant) == LD_RETAIL_LAYOUT:
+        return _ld_bulk_sync(svc, sheet_id, tab, requests)
 
     _ensure_header(svc, sheet_id, tab)
 
