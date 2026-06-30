@@ -3193,6 +3193,10 @@ class BackfillLdMasterTrackerView(View):
         # never flips the live per-row mirror onto the LD path before review.
         layout = (_get("layout") or "ld_retail").strip()
         execute = _bool("execute", default=False)
+        # Whether to ALSO write all existing requests now. Default off so
+        # execute=1 just enables the layout going forward (the per-row mirror
+        # picks it up on the next save/edit) without a historical bulk dump.
+        backfill = _bool("backfill", default=False)
 
         tenant = Tenant.objects.filter(slug=slug).first()
         if tenant is None:
@@ -3217,6 +3221,26 @@ class BackfillLdMasterTrackerView(View):
             changes["master_tracker_layout"] = layout
         if changes:
             tenant.save(update_fields=list(changes.keys()))
+
+        # Going-forward only (execute, no backfill): the layout flag is now set,
+        # so the live per-row mirror writes LD's A–I format on the next request
+        # save/edit. Stop here — no historical bulk write.
+        if execute and not backfill:
+            return JsonResponse(
+                {
+                    "ok": True,
+                    "tenant": tenant.slug,
+                    "changes": changes,
+                    "execute": True,
+                    "backfill": False,
+                    "master_tracker_layout": tenant.master_tracker_layout,
+                    "master_tracker_tab_name": tenant.master_tracker_tab_name,
+                    "note": (
+                        "Layout enabled; new/edited requests now sync into "
+                        "columns A–I. No historical backfill performed."
+                    ),
+                }
+            )
 
         # Dry-run: build a read-only PREVIEW of the LD A–I rows for a sample of
         # this tenant's requests (no write, no flag change) so the mapping can
@@ -3249,7 +3273,7 @@ class BackfillLdMasterTrackerView(View):
 
         out = io.StringIO()
         cmd_args = ["--tenant-slug", tenant.slug]
-        if execute:
+        if execute and backfill:
             cmd_args.append("--apply")
         try:
             call_command("sync_tenant_to_sheet", *cmd_args, stdout=out)
