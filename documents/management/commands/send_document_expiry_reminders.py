@@ -61,6 +61,10 @@ class Command(BaseCommand):
             expired_count = newly_expired.count()
 
         # 2) Find docs expiring within the window (today..horizon inclusive).
+        # `ambassador__user__isnull=False` forces the join through to a real BA
+        # user — so a document with a dangling/orphaned ambassador (or whose BA
+        # user was hard-deleted) is skipped instead of crashing the run on
+        # `doc.ambassador.user_id` below.
         expiring = list(
             dm.AmbassadorDocument.objects
             .select_related("ambassador", "ambassador__user")
@@ -69,6 +73,7 @@ class Command(BaseCommand):
                 expires_on__isnull=False,
                 expires_on__gte=today,
                 expires_on__lte=horizon,
+                ambassador__user__isnull=False,
             )
         )
         if not expiring:
@@ -86,19 +91,26 @@ class Command(BaseCommand):
         # Group expiring docs by BA user.
         by_user: dict[int, list] = {}
         for doc in expiring:
-            uid = doc.ambassador.user_id
-            if uid not in device_user_ids:
+            try:
+                uid = doc.ambassador.user_id
+            except Exception:
+                # Defensive: a dangling ambassador that slips past the query
+                # filter must not abort the run.
+                continue
+            if not uid or uid not in device_user_ids:
                 continue
             by_user.setdefault(uid, []).append(doc)
 
         sent = 0
         for uid, docs in by_user.items():
-            title, body = self._compose(docs, today)
-            if dry:
-                self.stdout.write(f"[dry-run] user={uid} docs={len(docs)} :: {body}")
-                sent += 1
-                continue
+            # Best-effort per BA: a bad row / compose / push must never abort
+            # the whole daily run (it just emails Kyle a red X otherwise).
             try:
+                title, body = self._compose(docs, today)
+                if dry:
+                    self.stdout.write(f"[dry-run] user={uid} docs={len(docs)} :: {body}")
+                    sent += 1
+                    continue
                 _send_push_to_user_sync(
                     uid,
                     title=title,
@@ -110,7 +122,7 @@ class Command(BaseCommand):
                 )
                 sent += 1
             except Exception:
-                logger.exception("document expiry push failed user=%s", uid)
+                logger.exception("document expiry notify failed user=%s", uid)
 
         self.stdout.write(
             f"document expiry: notified {sent} BA(s) about docs expiring "
