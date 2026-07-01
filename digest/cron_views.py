@@ -3225,6 +3225,53 @@ class DescribeSheetTabsView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class FixLdKpiTotalsView(View):
+    """POST `/internal/cron/fix-ld-kpi-totals`.
+
+    One-off: widen the LD RMM KPI workbook's per-tab annual Total Cans
+    Sampled / Total Sales formulas to include the "Others" column (they
+    were written before that column existed and stop one column short).
+    Dry-run by default; pass apply=1 to write. Params: sheet_url, tabs
+    (comma-separated), apply. See fix_ld_kpi_totals for details.
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _get(name: str) -> str:
+            return (request.GET.get(name) or request.POST.get(name) or "").strip()
+
+        apply = _get("apply").lower() in ("1", "true", "yes", "on")
+        cmd_args: list[str] = []
+        for flag in ("sheet_url", "tabs"):
+            val = _get(flag)
+            if val:
+                cmd_args += [f"--{flag.replace('_', '-')}", val]
+        if apply:
+            cmd_args.append("--apply")
+
+        out = io.StringIO()
+        try:
+            call_command("fix_ld_kpi_totals", *cmd_args, stdout=out)
+        except Exception as exc:
+            logger.exception("fix-ld-kpi-totals cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed",
+                 "exception": _concise_exc(exc), "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "apply": apply, "log": out.getvalue()})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class BackfillLdMasterTrackerView(View):
     """POST `/internal/cron/backfill-ld-master-tracker`.
 
@@ -4264,6 +4311,7 @@ def _registered_views() -> dict[str, Any]:
         "export-girlbeer-summary": ExportGirlbeerSummaryView,
         "backfill-recap-retailers": BackfillRecapRetailersView,
         "describe-sheet-tabs": DescribeSheetTabsView,
+        "fix-ld-kpi-totals": FixLdKpiTotalsView,
         "backfill-ld-master-tracker": BackfillLdMasterTrackerView,
         "ld-data-census": LdDataCensusView,
         "export-ld-recaps": ExportLdRecapsView,
