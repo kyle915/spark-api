@@ -17,6 +17,7 @@ import re
 import logging
 from asgiref.sync import sync_to_async
 from django.db.models import Q
+from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
@@ -237,15 +238,28 @@ def assign_rmm_for_request(request, tenant_slug: str) -> tuple[object | None, li
     1. Try every state signal on the request (address, request.state,
        location.state, retailer.location.state).
     2. Map to one or more reviewer emails per the territory table.
-    3. Look up the user row for the first match, set rmm_asigned, save.
+    3. Look up the user row for the first match, set rmm_asigned.
     4. Return that user plus the full list of TO addresses so the
        mailer can address everyone in the territory.
 
     When no state can be determined, returns (None, []) — the caller is
     responsible for falling back to Ignite-only with a note in the
     email subject so the team knows to re-route manually.
+
+    Persists via a queryset ``.update()`` (no post_save signal) — same
+    reasoning as ``route_request_sync``: the external-form create mutation
+    that calls this always runs ``route_request_sync`` + one explicit
+    ``upsert_request_row`` right after, and that final call is what should
+    reach the sheet. Firing the sheet-mirror signal here too meant every
+    external request wrote the sheet row twice in quick succession (once
+    with rmm set but state still blank, once fully populated) — harmless
+    on its own, but on a routed tenant with real traffic it burns 2x the
+    Sheets API calls per request and occasionally cost the final, correct
+    write its turn under the per-minute quota, so the request silently
+    never got a row at all.
     """
     from tenants.models import User, Tenant
+    from events import models as event_models
 
     # Tenant-level override: when an admin has set a "default recipient for
     # external requests" on the Team page, route EVERY public-form request
@@ -261,7 +275,9 @@ def assign_rmm_for_request(request, tenant_slug: str) -> tuple[object | None, li
     if tenant and tenant.default_external_rmm_id and tenant.default_external_rmm:
         rmm = tenant.default_external_rmm
         request.rmm_asigned_id = rmm.id
-        request.save(update_fields=["rmm_asigned_id", "updated_at"])
+        event_models.Request.objects.filter(pk=request.pk).update(
+            rmm_asigned_id=rmm.id, updated_at=timezone.now()
+        )
         return rmm, ([rmm.email] if rmm.email else [])
 
     if tenant_slug not in ROUTED_TENANT_SLUGS:
@@ -277,7 +293,9 @@ def assign_rmm_for_request(request, tenant_slug: str) -> tuple[object | None, li
     )
     if user:
         request.rmm_asigned_id = user.id
-        request.save(update_fields=["rmm_asigned_id", "updated_at"])
+        event_models.Request.objects.filter(pk=request.pk).update(
+            rmm_asigned_id=user.id, updated_at=timezone.now()
+        )
     return user, emails
 
 
