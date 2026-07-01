@@ -33,7 +33,6 @@ import logging
 from urllib.parse import urlparse
 
 import httpx
-from django.core.files.base import ContentFile
 from django.core.management.base import BaseCommand
 from django.db import transaction
 
@@ -132,16 +131,27 @@ class Command(BaseCommand):
         except Exception as e:
             self.stdout.write(self.style.ERROR(f"  - logo: download failed: {e}"))
             return
-        filename = f"{tenant.uuid}-logo{self._extension_for_url(LOGO_URL)}"
+        ext = self._extension_for_url(LOGO_URL)
+        # Raw upload_bytes() + plain string assignment, NOT
+        # tenant.image.save(...) (Django's ImageField high-level save):
+        # the latter silently wrote a DB value with no matching GCS object
+        # on Cloud Run (no private key — see the GS_* comment in
+        # config/settings.py). upload_bytes() is the same call
+        # _apply_campaign_images uses below (verified working), and
+        # `tenant.image = <blob path>` mirrors update_tenant's own
+        # assignment in tenants/mutations.py.
+        blob_name = f"tenants/images/{tenant.uuid}-logo{ext}"
         try:
+            content_type = "image/png" if ext == ".png" else "image/jpeg"
             with transaction.atomic():
-                tenant.image.save(filename, ContentFile(blob), save=False)
+                upload_bytes(blob_name, blob, content_type=content_type)
+                tenant.image = blob_name
                 tenant.save(update_fields=["image", "updated_at"])
         except Exception as e:
             self.stdout.write(self.style.ERROR(f"  - logo: save failed: {e}"))
             return
         self.stdout.write(self.style.SUCCESS(
-            f"  + logo: saved {len(blob) // 1024}KB -> {filename}"
+            f"  + logo: saved {len(blob) // 1024}KB -> {blob_name}"
         ))
 
     # ------------------------------------------------------------------
