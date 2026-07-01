@@ -316,7 +316,7 @@ class ReceiptMutations:
     ) -> types.ReviewReceiptResponse:
         """Stamp the payout audit on a validated receipt.
 
-        Spark moves no money — the admin sends the Venmo payment (via the
+        Spark moves no money — the admin sends the PayPal payment (via the
         `payoutLink`) and confirms here, which records paid_at/paid_by and
         locks the paid reward amount.
         """

@@ -93,7 +93,7 @@ class MarkReceiptPaidInput(SparkGraphQLInput):
 
     Stamps the payout audit on a *validated* receipt. `amount` optionally
     overrides the reward (else the receipt's snapshot, else the campaign
-    reward); `payout_handle` optionally corrects the consumer's Venmo handle.
+    reward); `payout_handle` optionally corrects the consumer's PayPal handle.
     """
 
     id: strawberry.ID

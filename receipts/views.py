@@ -270,15 +270,15 @@ def _build_receipt_fields(request: HttpRequest) -> dict[str, Any]:
         "product": _clean_str(pick("product"), 10000),
     }
 
-    # Consumer payout details. payout_handle is the consumer's Venmo username
-    # (a public identifier, NOT a credential); strip a leading "@".
-    # payout_method defaults to "venmo". Harmless on the legacy event flow,
+    # Consumer payout details. payout_handle is the consumer's PayPal.me
+    # handle (a public identifier, NOT a credential); strip a leading "@".
+    # payout_method defaults to "paypal". Harmless on the legacy event flow,
     # which simply never sends these.
     handle = _clean_str(pick("payoutHandle", "payout_handle"), 255)
     if handle:
         fields["payout_handle"] = handle.lstrip("@")
     method = _clean_str(pick("payoutMethod", "payout_method"), 16)
-    fields["payout_method"] = method or "venmo"
+    fields["payout_method"] = method or "paypal"
 
     # purchase_date — accept an ISO date string; ignore anything unparseable
     # rather than 400 (the field is optional, best-effort).
@@ -372,7 +372,7 @@ def public_receipt_submit_view(request: HttpRequest, token: str) -> HttpResponse
 # Campaign public surface (GoToAisle-style). A campaign is addressed by its
 # slug (no token — the link is meant to be public / QR'd / printed on signage)
 # and is gated only by `is_active`. New consumer submissions attach to the
-# campaign and capture the consumer's Venmo handle for later payout.
+# campaign and capture the consumer's PayPal handle for later payout.
 # ---------------------------------------------------------------------------
 def _load_campaign_or_404(slug: str):
     """Return an ACTIVE ReceiptCampaign for the slug, or a 4xx JsonResponse."""

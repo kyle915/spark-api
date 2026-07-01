@@ -22,7 +22,7 @@ urlpatterns = [
         views.public_campaign_view,
         name="receipts.public_campaign",
     ),
-    # POST — submit a receipt image + optional consumer/Venmo fields.
+    # POST — submit a receipt image + optional consumer/PayPal fields.
     path(
         "campaigns/<slug:slug>/submit",
         views.public_campaign_submit_view,

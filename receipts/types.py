@@ -13,14 +13,13 @@ The derived scalars (`publicUrl`, `amount`, `rewardAmount`, `eventName`,
 column the optimizer deferred degrades to a single safe reload rather than
 raising SynchronousOnlyOperation.
 
-`payoutLink` is a Venmo web deep-link pre-filled with the consumer's handle,
-the reward amount, and the campaign note. Spark never moves money — the link
-just opens Venmo for the admin to send (and then mark paid).
+`payoutLink` is a PayPal.Me web link pre-filled with the consumer's handle and
+the reward amount. Spark never moves money — the link just opens PayPal for
+the admin to send (and then mark paid).
 """
 
 from __future__ import annotations
 
-import urllib.parse
 from decimal import Decimal
 
 import strawberry
@@ -139,7 +138,7 @@ class ConsumerReceiptType(Node):
     purchase_date: str | None
     product: str | None
 
-    # Consumer payout details (v1: Venmo).
+    # Consumer payout details (v1: PayPal).
     payout_method: str | None
     payout_handle: str | None
     paid_at: str | None
@@ -241,12 +240,13 @@ class ConsumerReceiptType(Node):
 
     @strawberry.field
     async def payout_link(self) -> str | None:
-        """A Venmo web deep-link pre-filled to pay this consumer.
+        """A PayPal.Me link pre-filled to pay this consumer.
 
-        Spark never moves money — this just opens Venmo with the recipient
-        handle, reward amount, and campaign note pre-filled, so the admin can
-        send the payment and then mark the receipt paid. Null when the
-        consumer left no payout handle.
+        Spark never moves money — this just opens PayPal.Me with the
+        recipient handle and reward amount pre-filled, so the admin can send
+        the payment and then mark the receipt paid. Null when the consumer
+        left no payout handle. PayPal.Me links don't support a memo
+        parameter, so (unlike the old Venmo link) no note is appended.
         """
         handle = str(
             self.__dict__.get("payout_handle")
@@ -260,33 +260,25 @@ class ConsumerReceiptType(Node):
         if amt is None:
             amt = getattr(self, "reward_amount", None)
 
-        note = ""
-        campaign = self.__dict__.get("campaign")
-        if campaign is None and getattr(self, "campaign_id", None):
-            def _reload():
-                try:
-                    return self.campaign
-                except Exception:
-                    return None
-            campaign = await sync_to_async(_reload, thread_sensitive=True)()
-        if campaign is not None:
-            if amt is None:
+        if amt is None and getattr(self, "campaign_id", None):
+            campaign = self.__dict__.get("campaign")
+            if campaign is None:
+                def _reload():
+                    try:
+                        return self.campaign
+                    except Exception:
+                        return None
+                campaign = await sync_to_async(_reload, thread_sensitive=True)()
+            if campaign is not None:
                 amt = getattr(campaign, "reward_amount", None)
-            note = (
-                getattr(campaign, "payout_note", "")
-                or getattr(campaign, "name", "")
-                or ""
-            )
 
-        params: dict[str, str] = {"txn": "pay"}
-        if amt is not None:
-            try:
-                params["amount"] = f"{amt:.2f}"
-            except (TypeError, ValueError):
-                params["amount"] = str(amt)
-        if note:
-            params["note"] = note
-        return f"https://venmo.com/{handle}?{urllib.parse.urlencode(params)}"
+        if amt is None:
+            return f"https://paypal.me/{handle}"
+        try:
+            amt_str = f"{amt:.2f}"
+        except (TypeError, ValueError):
+            amt_str = str(amt)
+        return f"https://paypal.me/{handle}/{amt_str}"
 
 
 @strawberry.type

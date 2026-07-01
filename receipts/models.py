@@ -27,7 +27,7 @@ class ReceiptCampaign(models.Model):
 
     A brand (tenant) runs a campaign: consumers buy the product, upload a
     receipt via the campaign's public page (`/c/<slug>`, no login), and after
-    an admin validates it the consumer is paid a fixed reward via Venmo.
+    an admin validates it the consumer is paid a fixed reward via PayPal.
     Unlike the old per-event upload link, a campaign is NOT tied to any single
     sampling event — it's a standing program for the client. New
     `ConsumerReceipt` rows attach to a campaign; `event` is kept only for
@@ -55,12 +55,13 @@ class ReceiptCampaign(models.Model):
     description = models.TextField(blank=True, default="")
     product = models.TextField(blank=True, default="")
 
-    # Fixed reward paid per validated receipt; pre-fills the Venmo amount.
+    # Fixed reward paid per validated receipt; pre-fills the PayPal.Me amount.
     reward_amount = models.DecimalField(
         max_digits=10, decimal_places=2, default=0
     )
-    # Memo pre-filled into the Venmo payment note (defaults to the campaign
-    # name when blank).
+    # Internal reference note for this campaign's payouts (defaults to the
+    # campaign name when blank). Not sent to PayPal — PayPal.Me links don't
+    # support a pre-filled memo, so this is admin-facing only.
     payout_note = models.CharField(max_length=255, blank=True, default="")
 
     # Only active campaigns accept public submissions + render publicly.
@@ -187,10 +188,10 @@ class ConsumerReceipt(models.Model):
     )
     product = models.TextField(null=True, blank=True)
 
-    # Consumer payout details. v1 pays via Venmo; `payout_handle` is the
-    # consumer's Venmo username (a public identifier, NOT a credential).
-    # `payout_method` is kept as a column for future providers.
-    payout_method = models.CharField(max_length=16, blank=True, default="venmo")
+    # Consumer payout details. v1 pays via PayPal; `payout_handle` is the
+    # consumer's PayPal.me handle or PayPal email (a public identifier, NOT
+    # a credential). `payout_method` is kept as a column for future providers.
+    payout_method = models.CharField(max_length=16, blank=True, default="paypal")
     payout_handle = models.CharField(max_length=255, null=True, blank=True)
     # Reward locked onto the receipt at validation/payout time so a later
     # change to the campaign's reward_amount doesn't rewrite history.
@@ -239,8 +240,8 @@ class ConsumerReceipt(models.Model):
     reviewed_at = models.DateTimeField(null=True, blank=True)
 
     # Payout audit. `paid_at` is stamped when an admin confirms they sent the
-    # Venmo payment. Spark does NOT move money — the admin pays in Venmo, then
-    # marks it paid here. A receipt is "awaiting payout" when validated with
+    # PayPal payment. Spark does NOT move money — the admin pays in PayPal,
+    # then marks it paid here. A receipt is "awaiting payout" when validated with
     # paid_at NULL, and "paid" once paid_at is set.
     paid_at = models.DateTimeField(null=True, blank=True)
     paid_by = models.ForeignKey(
