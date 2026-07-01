@@ -25,6 +25,12 @@ on:
         default: "false"
         type: choice
         options: ["false", "true"]
+      backfill:
+        description: "Also write ALL existing requests now (false = just enable the layout going forward)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
 
 jobs:
   backfill-ld-master-tracker:
@@ -38,6 +44,7 @@ jobs:
           SHEET_URL: ${{ github.event.inputs.sheet_url }}
           TAB_NAME: ${{ github.event.inputs.tab_name }}
           EXECUTE: ${{ github.event.inputs.execute }}
+          BACKFILL: ${{ github.event.inputs.backfill }}
         run: |
           if [ -z "$CRON_SECRET" ]; then
             echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
@@ -49,7 +56,8 @@ jobs:
             --data-urlencode "tenant_slug=$TENANT_SLUG" \
             --data-urlencode "sheet_url=$SHEET_URL" \
             --data-urlencode "tab_name=$TAB_NAME" \
-            --data-urlencode "execute=$EXECUTE")
+            --data-urlencode "execute=$EXECUTE" \
+            --data-urlencode "backfill=$BACKFILL")
           echo "HTTP $STATUS"
           cat /tmp/cron-response.json
           echo ""
