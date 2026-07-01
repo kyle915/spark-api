@@ -116,13 +116,14 @@ class Command(BaseCommand):
 
             # Batched write — a handful of API calls for the whole tenant,
             # vs. ~3/row, so we stay well under the Sheets 60-req/min quota.
-            ok = bulk_sync_requests(list(qs))
+            ok, error = bulk_sync_requests(list(qs))
             grand_total_ok += ok
             self.stdout.write(self.style.SUCCESS(f"  ✓ synced {ok}/{count}"))
             if ok < count:
+                detail = f": {error}" if error else " — see logs."
                 self.stdout.write(
                     self.style.WARNING(
-                        f"  ! {count - ok} row(s) not written — see logs."
+                        f"  ! {count - ok} row(s) not written{detail}"
                     )
                 )
 

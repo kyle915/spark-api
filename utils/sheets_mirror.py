@@ -601,12 +601,18 @@ def _ld_upsert_request_row(svc, sheet_id, tab, request) -> bool:
     return True
 
 
-def _ld_bulk_sync(svc, sheet_id, tab, requests) -> int:
+def _ld_bulk_sync(svc, sheet_id, tab, requests) -> tuple[int, str | None]:
+    """Returns (rows_written, error_message). error_message is None on a
+    clean run; a partial failure still reports whatever DID land in
+    rows_written instead of discarding it (see the per-chunk try below —
+    this used to be one try/except around the whole loop, so a failure on
+    the last chunk reported 0 written even if earlier chunks had already
+    landed, and the actual API error was logged server-side only, never
+    surfaced to whoever ran the backfill)."""
     existing = _ld_existing_rows(svc, sheet_id, tab)
     next_row = _ld_next_row(svc, sheet_id, tab)
     col = _ld_key_col()
     payload: list = []
-    written = 0
     for req in requests:
         row9 = _ld_retail_row(req)
         if row9 is None:
@@ -618,17 +624,21 @@ def _ld_bulk_sync(svc, sheet_id, tab, requests) -> int:
             next_row += 1
         payload.append({"range": _qualify(tab, f"A{idx}:I{idx}"), "values": [row9]})
         payload.append({"range": _qualify(tab, f"{col}{idx}"), "values": [[uuid]]})
-        written += 1
-    try:
-        for chunk in _chunks(payload, 1000):
+
+    written = 0
+    for chunk in _chunks(payload, 1000):
+        try:
             svc.spreadsheets().values().batchUpdate(
                 spreadsheetId=sheet_id,
                 body={"valueInputOption": "USER_ENTERED", "data": chunk},
             ).execute()
-    except HttpError as e:
-        logger.warning("sheets_mirror[ld]: bulk write failed after %s rows: %s", written, e)
-        return 0
-    return written
+        except HttpError as e:
+            logger.warning(
+                "sheets_mirror[ld]: bulk write failed after %s rows: %s", written, e
+            )
+            return written // 2, str(e)
+        written += len(chunk)
+    return written // 2, None
 
 
 def upsert_request_row(request) -> bool:
@@ -695,7 +705,7 @@ def upsert_request_row(request) -> bool:
         return False
 
 
-def bulk_sync_requests(requests) -> int:
+def bulk_sync_requests(requests) -> tuple[int, str | None]:
     """Batched backfill for many Requests that share ONE tenant/sheet.
 
     The per-row upsert makes ~3 Sheets API calls (header check + UUID
@@ -707,20 +717,24 @@ def bulk_sync_requests(requests) -> int:
         + ⌈new/500⌉ append calls + ⌈existing/500⌉ batchUpdate calls.
 
     Assumes every request belongs to the same tenant (the management
-    command groups by tenant). Returns the number of rows written.
+    command groups by tenant). Returns (rows_written, error_message) —
+    error_message is None on a clean run; on a failure it carries the
+    actual Sheets API error instead of only logging it server-side, so
+    whoever ran the backfill (a one-off cron dispatch, usually) can see
+    why without needing Cloud Run log access.
     """
     requests = list(requests)
     if not requests:
-        return 0
+        return 0, None
 
     tenant = getattr(requests[0], "tenant", None)
     sheet_url = getattr(tenant, "linked_sheet_url", None) if tenant else None
     sheet_id = extract_sheet_id(sheet_url or "")
     if not sheet_id:
-        return 0
+        return 0, "tenant has no linked_sheet_url (or it isn't a valid Sheets URL)"
     svc = _service()
     if not svc:
-        return 0
+        return 0, "Sheets API service unavailable (credentials not configured)"
 
     # Optional per-tenant Master Tracker tab (None = first worksheet).
     tab = (getattr(tenant, "master_tracker_tab_name", "") or "").strip() or None
@@ -746,7 +760,7 @@ def bulk_sync_requests(requests) -> int:
                 existing[str(r[0]).strip()] = i
     except HttpError as e:
         logger.warning("sheets_mirror: bulk column-A read failed: %s", e)
-        return 0
+        return 0, str(e)
 
     end_col = _col_letter(len(HEADER))
     appends: list[list] = []
@@ -766,6 +780,7 @@ def bulk_sync_requests(requests) -> int:
     insert_by_date = bool(getattr(tenant, "master_tracker_insert_by_date", False)) and tab
 
     written = 0
+    error = None
     try:
         # Updates first: they target absolute row indices from the column-A
         # read above, so they must run BEFORE any date-insert shifts rows.
@@ -812,8 +827,9 @@ def bulk_sync_requests(requests) -> int:
         logger.warning(
             "sheets_mirror: bulk write failed after %s rows: %s", written, e
         )
+        error = str(e)
 
-    return written
+    return written, error
 
 
 def upsert_many(requests: Iterable) -> int:
