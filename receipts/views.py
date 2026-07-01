@@ -49,7 +49,7 @@ from receipts.tokens import (
     verify_event_receipt_token,
 )
 from tenants.models import Tenant
-from utils.gcs import public_url, upload_bytes
+from utils.gcs import extract_blob_name_from_url, public_url, upload_bytes
 
 logger = logging.getLogger(__name__)
 
@@ -411,6 +411,8 @@ def _campaign_display_payload(campaign) -> dict[str, Any]:
         tenant_request_url_name = (
             getattr(campaign.tenant, "request_url_name", "") or ""
         )
+    hero_image = getattr(campaign, "hero_image", None)
+    product_image = getattr(campaign, "product_image", None)
     return {
         "name": campaign.name or "",
         "brandName": brand,
@@ -421,6 +423,12 @@ def _campaign_display_payload(campaign) -> dict[str, Any]:
         "rewardAmount": f"{reward:.2f}",
         "rewardLabel": f"${reward:.2f}",
         "isActive": campaign.is_active,
+        "heroImage": public_url(extract_blob_name_from_url(hero_image))
+        if hero_image
+        else None,
+        "productImage": public_url(extract_blob_name_from_url(product_image))
+        if product_image
+        else None,
     }
 
 

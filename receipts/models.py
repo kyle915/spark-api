@@ -55,6 +55,15 @@ class ReceiptCampaign(models.Model):
     description = models.TextField(blank=True, default="")
     product = models.TextField(blank=True, default="")
 
+    # Public-facing imagery for the upload page. GCS blob paths (NOT signed
+    # URLs) — same convention as ConsumerReceipt.image / Tenant.image;
+    # resolved to a public URL at read time. hero_image is a wide banner
+    # shown above the fold; product_image is a smaller decorative product
+    # shot (e.g. a can photo). Both optional — a campaign with neither
+    # falls back to the tenant's own logo + neutral styling.
+    hero_image = models.CharField(max_length=1024, null=True, blank=True)
+    product_image = models.CharField(max_length=1024, null=True, blank=True)
+
     # Fixed reward paid per validated receipt; pre-fills the PayPal.Me amount.
     reward_amount = models.DecimalField(
         max_digits=10, decimal_places=2, default=0

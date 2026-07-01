@@ -1811,6 +1811,72 @@ class DedupeSkillsView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class ApplyGirlBeerBrandingView(View):
+    """POST `/internal/cron/apply-girl-beer-branding`.
+
+    Fires `apply_girl_beer_branding` — sets Tenant.image (logo), a light
+    TenantTheme (brand purple #830DFF, sampled from the live girlbeer.com
+    stylesheet), and the "girlbeer" ReceiptCampaign's hero_image /
+    product_image, all downloaded from the official girlbeer.com storefront.
+    Requested by Kyle to make /c/girlbeer look like the real Girl Beer
+    brand instead of Spark's neutral default. One-off manual apply —
+    idempotent (each of the three writes skips if already set, unless
+    `force=true`).
+
+    SAFE — DRY-RUN IS THE DEFAULT. dry_run=true → no writes, just narrates
+    what would happen. Set dry_run=false to apply.
+
+    Body / query params (all optional):
+      - dry_run: "1"/"true"/"yes" — preview only (default ON → dry-run).
+      - force: "1"/"true"/"yes" — re-download + overwrite already-set values.
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        dry_run_raw = (
+            request.GET.get("dry_run") or request.POST.get("dry_run") or "1"
+        ).lower()
+        dry_run = dry_run_raw in ("1", "true", "yes", "on")
+        force_raw = (
+            request.GET.get("force") or request.POST.get("force") or ""
+        ).lower()
+        force = force_raw in ("1", "true", "yes", "on")
+
+        out = io.StringIO()
+        try:
+            call_command(
+                "apply_girl_beer_branding",
+                stdout=out,
+                dry_run=dry_run,
+                force=force,
+            )
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("apply-girl-beer-branding cron failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "log": out.getvalue(),
+                },
+                status=500,
+            )
+
+        return JsonResponse(
+            {"ok": True, "dry_run": dry_run, "force": force, "log": out.getvalue()}
+        )
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        return JsonResponse({"ok": True, "endpoint": "apply-girl-beer-branding"})
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class SendShiftConfirmationsView(View):
     """POST `/internal/cron/shift-confirmations`.
 
@@ -4169,6 +4235,7 @@ def _registered_views() -> dict[str, Any]:
         "audit-tenant-onboarding": AuditTenantOnboardingView,
         "audit-tenant-consumers": AuditTenantConsumersView,
         "dedupe-skills": DedupeSkillsView,
+        "apply-girl-beer-branding": ApplyGirlBeerBrandingView,
         "shift-confirmations": SendShiftConfirmationsView,
         "provision-review-ambassador": ProvisionReviewAmbassadorView,
         "import-event-schedule": ImportEventScheduleView,

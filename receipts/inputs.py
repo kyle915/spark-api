@@ -68,6 +68,10 @@ class CreateReceiptCampaignInput(SparkGraphQLInput):
     payout_note: str | None = None
     is_active: bool | None = None
     slug: str | None = None
+    # GCS blob paths (from getUploadUrl), not signed URLs — see
+    # ReceiptCampaign.hero_image / product_image.
+    hero_image: str | None = None
+    product_image: str | None = None
 
 
 @strawberry.input
@@ -85,6 +89,10 @@ class UpdateReceiptCampaignInput(SparkGraphQLInput):
     payout_note: str | None = None
     is_active: bool | None = None
     slug: str | None = None
+    # GCS blob paths (from getUploadUrl), not signed URLs. None = no change;
+    # "" explicitly clears the image.
+    hero_image: str | None = None
+    product_image: str | None = None
 
 
 @strawberry.input

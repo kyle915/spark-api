@@ -46,6 +46,20 @@ def _anno_decimal(instance, key: str) -> Decimal:
     return value if value is not None else Decimal("0")
 
 
+def _resolve_blob_url(instance, key: str) -> str | None:
+    """Resolve a GCS blob-path field to a public URL (None if unset).
+
+    Same async-safe __dict__-first read as ConsumerReceiptType.publicUrl —
+    the blob path is a plain column, not a relation, so no reload needed.
+    """
+    blob = instance.__dict__.get(key, None)
+    if blob is None:
+        blob = getattr(instance, key, None)
+    if not blob:
+        return None
+    return public_url(extract_blob_name_from_url(blob))
+
+
 @strawberry_django.type(models.ReceiptCampaign)
 class ReceiptCampaignType(Node):
     """A per-tenant consumer rebate campaign (GoToAisle-style)."""
@@ -68,6 +82,16 @@ class ReceiptCampaignType(Node):
         if value is None:
             value = getattr(self, "reward_amount", None)
         return str(value) if value is not None else "0"
+
+    @strawberry.field(name="heroImage")
+    def hero_image_field(self) -> str | None:
+        """Public URL for the campaign's hero banner image, or null."""
+        return _resolve_blob_url(self, "hero_image")
+
+    @strawberry.field(name="productImage")
+    def product_image_field(self) -> str | None:
+        """Public URL for the campaign's product/can photo, or null."""
+        return _resolve_blob_url(self, "product_image")
 
     # Aggregate counts for the dashboard cards. Populated by the
     # `receiptCampaigns` resolver's `.annotate()`; default to 0 when the

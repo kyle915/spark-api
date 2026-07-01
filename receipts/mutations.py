@@ -198,6 +198,8 @@ class ReceiptMutations:
                     is_active=(
                         True if input.is_active is None else bool(input.is_active)
                     ),
+                    hero_image=(input.hero_image or "").strip() or None,
+                    product_image=(input.product_image or "").strip() or None,
                     created_by=user,
                     updated_by=user,
                 )
@@ -274,6 +276,12 @@ class ReceiptMutations:
             if input.is_active is not None:
                 campaign.is_active = bool(input.is_active)
                 update_fields.append("is_active")
+            if input.hero_image is not None:
+                campaign.hero_image = input.hero_image.strip() or None
+                update_fields.append("hero_image")
+            if input.product_image is not None:
+                campaign.product_image = input.product_image.strip() or None
+                update_fields.append("product_image")
             if input.slug is not None and input.slug.strip():
                 base = (slugify(input.slug) or "campaign")[:72]
 
