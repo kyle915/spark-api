@@ -401,11 +401,20 @@ def _campaign_display_payload(campaign) -> dict[str, Any]:
     """The subset of campaign/brand info the public upload page renders."""
     reward = campaign.reward_amount or Decimal("0")
     brand = ""
+    tenant_request_url_name = ""
     if getattr(campaign, "tenant_id", None):
         brand = getattr(campaign.tenant, "name", "") or ""
+        # Lets the public page fetch the tenant's logo + CSS-variable theme
+        # via the existing no-auth tenantPublic/tenantThemePublic GraphQL
+        # queries (same ones the external-request form already uses) —
+        # keyed on request_url_name, not the campaign's own slug.
+        tenant_request_url_name = (
+            getattr(campaign.tenant, "request_url_name", "") or ""
+        )
     return {
         "name": campaign.name or "",
         "brandName": brand,
+        "tenantRequestUrlName": tenant_request_url_name,
         "headline": campaign.headline or "",
         "description": campaign.description or "",
         "product": campaign.product or "",
