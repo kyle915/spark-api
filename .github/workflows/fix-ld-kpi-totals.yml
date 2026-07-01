@@ -1,0 +1,52 @@
+name: Fix LD KPI totals (one-off)
+
+# Widens the LD RMM KPI workbook's per-tab annual "Total Cans Sampled" /
+# "Total Sales" formulas to include the "Others" column (they were written
+# before that column existed and stop one column short, so each tab's
+# annual total disagrees with its own monthly breakdown). Dry-run by
+# default; set apply=true to write. Manual only.
+
+on:
+  workflow_dispatch:
+    inputs:
+      sheet_url:
+        description: "KPI workbook URL"
+        required: false
+        default: "https://docs.google.com/spreadsheets/d/1W4F7X_vdW7d0SmthUvdxujBH2CahG0DaB53xBVr5q04/edit"
+      tabs:
+        description: "Comma-separated scorecard tabs to fix"
+        required: false
+        default: "Northeast,Florida,South,Central,West,Poli,Pat"
+      apply:
+        description: "Actually write (false = dry run, report only)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+jobs:
+  fix-ld-kpi-totals:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire fix endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/fix-ld-kpi-totals
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          SHEET_URL: ${{ github.event.inputs.sheet_url }}
+          TABS: ${{ github.event.inputs.tabs }}
+          APPLY: ${{ github.event.inputs.apply }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL" \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            --data-urlencode "sheet_url=$SHEET_URL" \
+            --data-urlencode "tabs=$TABS" \
+            --data-urlencode "apply=$APPLY")
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          echo ""
+          [ "$STATUS" != "200" ] && exit 1 || exit 0
