@@ -1,0 +1,58 @@
+name: Apply Girl Beer branding (manual)
+
+# Manually fires `/internal/cron/apply-girl-beer-branding` on Cloud Run to
+# run the `apply_girl_beer_branding` command — sets Tenant.image (logo), a
+# light TenantTheme (brand purple #830DFF, sampled from the live
+# girlbeer.com stylesheet), and the "girlbeer" ReceiptCampaign's
+# hero_image / product_image, all downloaded from the official girlbeer.com
+# storefront. Requested by Kyle to make /c/girlbeer look like the real
+# Girl Beer brand instead of Spark's neutral default.
+#
+# SAFE — DRY-RUN IS THE DEFAULT. dry_run=true previews with no writes; set
+# dry_run=false to apply. Each of the three writes is independently
+# idempotent (skips if already set unless force=true).
+#
+# Run from the Actions tab AFTER the endpoint is deployed (ships from
+# develop). Secret-gated via X-Cron-Secret header. Manual one-off — no
+# `schedule:`.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (no DB writes). Leave true to preview; set false to apply."
+        required: true
+        default: true
+        type: boolean
+      force:
+        description: "Re-download + overwrite even if already set."
+        required: true
+        default: false
+        type: boolean
+
+jobs:
+  fire-apply-girl-beer-branding:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire apply-girl-beer-branding cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/apply-girl-beer-branding
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+          FORCE: ${{ github.event.inputs.force }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL?dry_run=$DRY_RUN&force=$FORCE" \
+            -H "X-Cron-Secret: $CRON_SECRET")
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS — see body above."
+            exit 1
+          fi
