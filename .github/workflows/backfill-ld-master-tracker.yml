@@ -34,11 +34,19 @@ on:
         type: choice
         options: ["false", "true"]
       backfill:
-        description: "Also write ALL existing requests now (false = just enable the layout going forward)"
+        description: "Also write existing requests now (false = just enable the layout going forward)"
         required: false
         default: "false"
         type: choice
         options: ["false", "true"]
+      since_date:
+        description: "Backfill scope: only requests dated this (YYYY-MM-DD) or later. Blank = no date floor."
+        required: false
+        default: ""
+      status_slug:
+        description: "Backfill scope: only requests with this status slug (e.g. 'pending'). Blank = any status."
+        required: false
+        default: ""
 
 jobs:
   backfill-ld-master-tracker:
@@ -54,6 +62,8 @@ jobs:
           INSERT_BY_DATE: ${{ github.event.inputs.insert_by_date }}
           EXECUTE: ${{ github.event.inputs.execute }}
           BACKFILL: ${{ github.event.inputs.backfill }}
+          SINCE_DATE: ${{ github.event.inputs.since_date }}
+          STATUS_SLUG: ${{ github.event.inputs.status_slug }}
         run: |
           if [ -z "$CRON_SECRET" ]; then
             echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
@@ -67,7 +77,9 @@ jobs:
             --data-urlencode "tab_name=$TAB_NAME" \
             --data-urlencode "insert_by_date=$INSERT_BY_DATE" \
             --data-urlencode "execute=$EXECUTE" \
-            --data-urlencode "backfill=$BACKFILL")
+            --data-urlencode "backfill=$BACKFILL" \
+            --data-urlencode "since_date=$SINCE_DATE" \
+            --data-urlencode "status_slug=$STATUS_SLUG")
           echo "HTTP $STATUS"
           cat /tmp/cron-response.json
           echo ""

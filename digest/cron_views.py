@@ -3263,6 +3263,11 @@ class BackfillLdMasterTrackerView(View):
         # execute=1 just enables the layout going forward (the per-row mirror
         # picks it up on the next save/edit) without a historical bulk dump.
         backfill = _bool("backfill", default=False)
+        # Optional scope for that backfill — e.g. only requests dated today
+        # forward, or only a specific status (pending = submitted but not
+        # yet approved), instead of the tenant's full history.
+        since_date = _get("since_date")
+        status_slug = _get("status_slug")
 
         tenant = Tenant.objects.filter(slug=slug).first()
         if tenant is None:
@@ -3341,6 +3346,10 @@ class BackfillLdMasterTrackerView(View):
         cmd_args = ["--tenant-slug", tenant.slug]
         if execute and backfill:
             cmd_args.append("--apply")
+            if since_date:
+                cmd_args += ["--since-date", since_date]
+            if status_slug:
+                cmd_args += ["--status-slug", status_slug]
         try:
             call_command("sync_tenant_to_sheet", *cmd_args, stdout=out)
         except Exception as exc:
@@ -3355,6 +3364,9 @@ class BackfillLdMasterTrackerView(View):
                 "tenant": tenant.slug,
                 "changes": changes,
                 "execute": execute,
+                "backfill": backfill,
+                "since_date": since_date or None,
+                "status_slug": status_slug or None,
                 "master_tracker_tab_name": tenant.master_tracker_tab_name,
                 "master_tracker_insert_by_date": tenant.master_tracker_insert_by_date,
                 "master_tracker_layout": tenant.master_tracker_layout,

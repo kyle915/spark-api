@@ -590,13 +590,60 @@ def _ld_write(svc, sheet_id, tab, row_idx, data9, uuid) -> None:
     ).execute()
 
 
+def _ld_insert_dated_row(svc, sheet_id, tab, gid, at_row, row9, uuid) -> None:
+    """LD-layout counterpart to _insert_dated_row: insert a blank row at
+    at_row (1-based, pushing everything from there down) and write the A:I
+    data + Spark key column into it. _insert_dated_row only knows the
+    generic contiguous layout, hence the separate function."""
+    svc.spreadsheets().batchUpdate(
+        spreadsheetId=sheet_id,
+        body={
+            "requests": [
+                {
+                    "insertDimension": {
+                        "range": {
+                            "sheetId": gid,
+                            "dimension": "ROWS",
+                            "startIndex": at_row - 1,
+                            "endIndex": at_row,
+                        },
+                        "inheritFromBefore": False,
+                    }
+                }
+            ]
+        },
+    ).execute()
+    _ld_write(svc, sheet_id, tab, at_row, row9, uuid)
+
+
 def _ld_upsert_request_row(svc, sheet_id, tab, request) -> bool:
     data9 = _ld_retail_row(request)
     if data9 is None:
         return False
     uuid = str(request.uuid)
     existing = _ld_existing_rows(svc, sheet_id, tab)
-    row_idx = existing.get(uuid) or _ld_next_row(svc, sheet_id, tab)
+    row_idx = existing.get(uuid)
+    if row_idx is not None:
+        _ld_write(svc, sheet_id, tab, row_idx, data9, uuid)
+        return True
+
+    # Brand-new row: LD wants fresh submissions surfaced at the top of the
+    # sheet, not appended below ~4,500 rows of history — the same
+    # master_tracker_insert_by_date opt-in the generic (non-LD) layout
+    # already honors for its own appends (see _append_or_insert_new).
+    tenant = getattr(request, "tenant", None)
+    if getattr(tenant, "master_tracker_insert_by_date", False) and tab:
+        gid = _tab_gid(svc, sheet_id, tab)
+        at = (
+            _date_descending_insert_index(svc, sheet_id, tab, _parse_sheet_date(data9[2]))
+            if gid is not None
+            else None
+        )
+        if at is not None:
+            _ld_insert_dated_row(svc, sheet_id, tab, gid, at, data9, uuid)
+            return True
+
+    row_idx = _ld_next_row(svc, sheet_id, tab)
     _ld_write(svc, sheet_id, tab, row_idx, data9, uuid)
     return True
 
@@ -608,25 +655,37 @@ def _ld_bulk_sync(svc, sheet_id, tab, requests) -> tuple[int, str | None]:
     this used to be one try/except around the whole loop, so a failure on
     the last chunk reported 0 written even if earlier chunks had already
     landed, and the actual API error was logged server-side only, never
-    surfaced to whoever ran the backfill)."""
+    surfaced to whoever ran the backfill).
+
+    Existing rows (already in the sheet, keyed by UUID) are batched — their
+    row index never moves, so it's safe to write them all in one shot.
+    Brand-new rows go one at a time when master_tracker_insert_by_date is
+    set: an insertDimension shifts every row below it, so the next
+    insertion point has to be resolved fresh each time, not pre-computed.
+    """
+    requests = list(requests)
+    if not requests:
+        return 0, None
+    tenant = getattr(requests[0], "tenant", None)
     existing = _ld_existing_rows(svc, sheet_id, tab)
-    next_row = _ld_next_row(svc, sheet_id, tab)
     col = _ld_key_col()
-    payload: list = []
+
+    update_payload: list = []
+    new_rows: list[tuple[str, list]] = []
     for req in requests:
         row9 = _ld_retail_row(req)
         if row9 is None:
             continue
         uuid = str(req.uuid)
         idx = existing.get(uuid)
-        if idx is None:
-            idx = next_row
-            next_row += 1
-        payload.append({"range": _qualify(tab, f"A{idx}:I{idx}"), "values": [row9]})
-        payload.append({"range": _qualify(tab, f"{col}{idx}"), "values": [[uuid]]})
+        if idx is not None:
+            update_payload.append({"range": _qualify(tab, f"A{idx}:I{idx}"), "values": [row9]})
+            update_payload.append({"range": _qualify(tab, f"{col}{idx}"), "values": [[uuid]]})
+        else:
+            new_rows.append((uuid, row9))
 
     written = 0
-    for chunk in _chunks(payload, 1000):
+    for chunk in _chunks(update_payload, 1000):
         try:
             svc.spreadsheets().values().batchUpdate(
                 spreadsheetId=sheet_id,
@@ -634,11 +693,34 @@ def _ld_bulk_sync(svc, sheet_id, tab, requests) -> tuple[int, str | None]:
             ).execute()
         except HttpError as e:
             logger.warning(
-                "sheets_mirror[ld]: bulk write failed after %s rows: %s", written, e
+                "sheets_mirror[ld]: bulk update failed after %s rows: %s", written // 2, e
             )
             return written // 2, str(e)
         written += len(chunk)
-    return written // 2, None
+    written //= 2
+
+    insert_by_date = bool(getattr(tenant, "master_tracker_insert_by_date", False)) and tab
+    gid = _tab_gid(svc, sheet_id, tab) if (insert_by_date and new_rows) else None
+    for uuid, row9 in new_rows:
+        at = (
+            _date_descending_insert_index(svc, sheet_id, tab, _parse_sheet_date(row9[2]))
+            if gid is not None
+            else None
+        )
+        try:
+            if at is not None:
+                _ld_insert_dated_row(svc, sheet_id, tab, gid, at, row9, uuid)
+            else:
+                idx = _ld_next_row(svc, sheet_id, tab)
+                _ld_write(svc, sheet_id, tab, idx, row9, uuid)
+        except HttpError as e:
+            logger.warning(
+                "sheets_mirror[ld]: new-row write failed after %s rows: %s", written, e
+            )
+            return written, str(e)
+        written += 1
+
+    return written, None
 
 
 def upsert_request_row(request) -> bool:

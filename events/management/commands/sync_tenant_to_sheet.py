@@ -16,6 +16,12 @@ Usage:
 
     # All tenants that have a linked_sheet_url set
     python manage.py sync_tenant_to_sheet --all-linked --apply
+
+    # Scoped: only pending requests dated today or later (skip the
+    # historical backlog when the client's sheet already has its own
+    # history for everything before that)
+    python manage.py sync_tenant_to_sheet --tenant-slug liquid-death \\
+        --since-date 2026-07-01 --status-slug pending --apply
 """
 from django.core.management.base import BaseCommand, CommandError
 
@@ -68,6 +74,22 @@ class Command(BaseCommand):
             help="Cap the number of requests processed per tenant. "
             "Useful for smoke-testing the pipeline before a big run.",
         )
+        parser.add_argument(
+            "--since-date",
+            type=str,
+            default=None,
+            help="Only sync requests with date >= this (YYYY-MM-DD). "
+            "Skips the historical backlog — useful when a tenant's sheet "
+            "already carries its own history and only recent/future "
+            "activity needs to land in Spark's tracked rows.",
+        )
+        parser.add_argument(
+            "--status-slug",
+            type=str,
+            default=None,
+            help="Only sync requests whose status slug matches exactly "
+            "(e.g. 'pending' for submitted-but-not-yet-approved requests).",
+        )
 
     def handle(self, *args, **opts):
         tenants = self._resolve_tenants(opts)
@@ -79,6 +101,8 @@ class Command(BaseCommand):
 
         apply = opts["apply"]
         limit = opts.get("limit")
+        since_date = opts.get("since_date")
+        status_slug = opts.get("status_slug")
 
         if not apply:
             self.stdout.write(
@@ -98,16 +122,27 @@ class Command(BaseCommand):
                 )
                 continue
 
-            qs = Request.objects.filter(tenant_id=tenant.id).order_by("date", "id")
+            qs = Request.objects.filter(tenant_id=tenant.id)
+            if since_date:
+                qs = qs.filter(date__gte=since_date)
+            if status_slug:
+                qs = qs.filter(status__slug=status_slug)
+            qs = qs.order_by("date", "id")
             if limit:
                 qs = qs[:limit]
 
             count = qs.count()
             grand_total += count
+            scope = []
+            if since_date:
+                scope.append(f"date>={since_date}")
+            if status_slug:
+                scope.append(f"status={status_slug}")
+            scope_note = f" ({', '.join(scope)})" if scope else ""
             self.stdout.write("")
             self.stdout.write(
                 self.style.NOTICE(
-                    f"[{tenant.name}] {count} request(s) → {sheet}"
+                    f"[{tenant.name}] {count} request(s){scope_note} → {sheet}"
                 )
             )
 
