@@ -16,17 +16,21 @@ on:
         required: false
         default: ""
       peek_tab:
-        description: "Dump this tab's header + sample rows + year histogram (e.g. RECAPS)"
+        description: "Also dump this tab's rows (read-only)"
         required: false
         default: ""
       peek_rows:
-        description: "How many sample rows to dump"
+        description: "How many rows to dump after the first"
         required: false
-        default: "4"
+        default: ""
       peek_render:
-        description: "Render: FORMATTED_VALUE (default) or FORMULA"
+        description: "FORMATTED_VALUE or FORMULA"
         required: false
-        default: "FORMATTED_VALUE"
+        default: ""
+      peek_start:
+        description: "First row of the peek window (1-based)"
+        required: false
+        default: ""
 
 jobs:
   describe-tabs:
@@ -41,6 +45,7 @@ jobs:
           PEEK_TAB: ${{ github.event.inputs.peek_tab }}
           PEEK_ROWS: ${{ github.event.inputs.peek_rows }}
           PEEK_RENDER: ${{ github.event.inputs.peek_render }}
+          PEEK_START: ${{ github.event.inputs.peek_start }}
         run: |
           if [ -z "$CRON_SECRET" ]; then
             echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
@@ -53,7 +58,8 @@ jobs:
             --data-urlencode "tenant_slug=$TENANT_SLUG" \
             --data-urlencode "peek_tab=$PEEK_TAB" \
             --data-urlencode "peek_rows=$PEEK_ROWS" \
-            --data-urlencode "peek_render=$PEEK_RENDER")
+            --data-urlencode "peek_render=$PEEK_RENDER" \
+            --data-urlencode "peek_start=$PEEK_START")
           echo "HTTP $STATUS"
           cat /tmp/cron-response.json
           echo ""
