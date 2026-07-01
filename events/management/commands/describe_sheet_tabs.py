@@ -35,6 +35,13 @@ class Command(BaseCommand):
             default="FORMATTED_VALUE",
             help="Sheets valueRenderOption: FORMATTED_VALUE (default) or FORMULA.",
         )
+        parser.add_argument(
+            "--peek-start",
+            type=int,
+            default=1,
+            help="First row of the peek window (1-based). Lets the peek reach a "
+            "summary block that sits far below a long data table.",
+        )
 
     def handle(self, *args, **opts):
         url = opts.get("sheet_url")
@@ -94,23 +101,26 @@ class Command(BaseCommand):
             self._peek(
                 svc, sheet_id, peek, max(1, opts.get("peek_rows") or 4),
                 (opts.get("peek_render") or "FORMATTED_VALUE").strip().upper(),
+                max(1, opts.get("peek_start") or 1),
             )
 
-    def _peek(self, svc, sheet_id: str, tab: str, n: int, render: str = "FORMATTED_VALUE"):
-        """Dump a tab's header + first n data rows, and a year histogram for any
-        column whose header contains 'date'. render=FORMULA shows cell formulas
-        (so #REF!/QUERY references are visible). Read-only."""
+    def _peek(self, svc, sheet_id: str, tab: str, n: int,
+              render: str = "FORMATTED_VALUE", start: int = 1):
+        """Dump a tab's rows start..start+n (first shown row treated as the
+        header), and a year histogram for any column whose header contains
+        'date'. render=FORMULA shows cell formulas (so #REF!/QUERY references
+        are visible). Read-only."""
         import re
         from collections import Counter
 
-        self.stdout.write(f"\nPeek '{tab}' (header + {n} rows, render={render}):")
+        self.stdout.write(f"\nPeek '{tab}' (rows {start}-{start + n}, render={render}):")
         try:
             resp = (
                 svc.spreadsheets()
                 .values()
                 .get(
                     spreadsheetId=sheet_id,
-                    range=f"'{tab}'!1:{n + 1}",
+                    range=f"'{tab}'!{start}:{start + n}",
                     valueRenderOption=render,
                 )
                 .execute()
@@ -125,7 +135,7 @@ class Command(BaseCommand):
         header = values[0]
         for i, h in enumerate(header):
             self.stdout.write(f"  col[{i}] {h!r}")
-        for r_i, row in enumerate(values[1:], start=2):
+        for r_i, row in enumerate(values[1:], start=start + 1):
             self.stdout.write(f"  row{r_i}: {row}")
 
         # Year histogram for each date-like column (read the full column once).

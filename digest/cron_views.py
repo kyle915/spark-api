@@ -3200,7 +3200,8 @@ class DescribeSheetTabsView(View):
             return (request.GET.get(name) or request.POST.get(name) or "").strip()
 
         cmd_args: list[str] = []
-        for flag in ("sheet_url", "tenant_slug", "peek_tab", "peek_rows", "peek_render"):
+        for flag in ("sheet_url", "tenant_slug", "peek_tab", "peek_rows",
+                     "peek_render", "peek_start"):
             val = _get(flag)
             if val:
                 cmd_args += [f"--{flag.replace('_', '-')}", val]
