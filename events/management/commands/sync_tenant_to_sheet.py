@@ -100,6 +100,8 @@ class Command(BaseCommand):
             "ld_retail layout only, rows 2-40 only, never a row carrying "
             "a Spark key, and only with --apply.",
         )
+
+    def handle(self, *args, **opts):
         tenants = self._resolve_tenants(opts)
         if not tenants:
             raise CommandError(
