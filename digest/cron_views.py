@@ -3279,6 +3279,98 @@ class FixLdKpiTotalsView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class ResendBaWelcomeView(View):
+    """POST `/internal/cron/resend-ba-welcome`.
+
+    Reset an EXISTING user onto admin-created-BA rails (new temp password
+    with forced change, verified + active, active Ambassador profile) and
+    re-send the "Welcome to Spark by Ignite" email with the app buttons —
+    for BAs whose account predated a staffing run so the bulk path skipped
+    their welcome email. Dry-run (default) prints last_login/password state
+    so an actively-used account isn't blindly reset. Params: email, execute.
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _get(name: str) -> str:
+            return (request.GET.get(name) or request.POST.get(name) or "").strip()
+
+        execute = _get("execute").lower() in ("1", "true", "yes", "on")
+        email = _get("email")
+        if not email:
+            return JsonResponse({"ok": False, "error": "email-required"}, status=400)
+        cmd_args = ["--email", email] + (["--apply"] if execute else [])
+
+        out = io.StringIO()
+        try:
+            call_command("resend_ba_welcome", *cmd_args, stdout=out)
+        except Exception as exc:
+            logger.exception("resend-ba-welcome cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed",
+                 "exception": _concise_exc(exc), "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "execute": execute, "log": out.getvalue()})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class RetextTenantEventsView(View):
+    """POST `/internal/cron/retext-tenant-events`.
+
+    Literal find/replace in Event.notes + Request.notes + Job.description
+    for one tenant/event-type — for facts baked into imported text that
+    changed later (Feel Free 5.5h → 5h billable). Dry-run by default with
+    per-model match counts. Params: tenant_name, event_type, find, replace,
+    execute. See retext_tenant_events.
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _get(name: str) -> str:
+            return (request.GET.get(name) or request.POST.get(name) or "").strip()
+
+        execute = _get("execute").lower() in ("1", "true", "yes", "on")
+        cmd_args: list[str] = []
+        for flag in ("tenant_name", "event_type", "find", "replace"):
+            val = _get(flag)
+            if val:
+                cmd_args += [f"--{flag.replace('_', '-')}", val]
+        if execute:
+            cmd_args.append("--apply")
+
+        out = io.StringIO()
+        try:
+            call_command("retext_tenant_events", *cmd_args, stdout=out)
+        except Exception as exc:
+            logger.exception("retext-tenant-events cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed",
+                 "exception": _concise_exc(exc), "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "execute": execute, "log": out.getvalue()})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class StaffTenantEventsView(View):
     """POST `/internal/cron/staff-tenant-events`.
 
@@ -4429,6 +4521,8 @@ def _registered_views() -> dict[str, Any]:
         "fix-ld-kpi-totals": FixLdKpiTotalsView,
         "set-tenant-mileage-tracking": SetTenantMileageTrackingView,
         "staff-tenant-events": StaffTenantEventsView,
+        "resend-ba-welcome": ResendBaWelcomeView,
+        "retext-tenant-events": RetextTenantEventsView,
         "backfill-ld-master-tracker": BackfillLdMasterTrackerView,
         "ld-data-census": LdDataCensusView,
         "export-ld-recaps": ExportLdRecapsView,

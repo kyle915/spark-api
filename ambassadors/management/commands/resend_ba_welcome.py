@@ -1,0 +1,89 @@
+"""Re-send the "Welcome to Spark by Ignite" email to an EXISTING user.
+
+The admin Add-a-BA flow only emails brand-new accounts — a BA whose user
+already existed (created long ago, another program, etc.) gets booked but
+never receives credentials or the app-download buttons. This resets them
+onto the same rails as a fresh admin-created BA: new generated temp
+password (requires_password_change on first sign-in), verified + active
+user, active Ambassador profile, and the same welcome email.
+
+DESTRUCTIVE to the existing password — the dry-run prints last_login and
+whether a usable password exists so the operator can spot an actively
+used account before overwriting it.
+
+Dry-run by default; --apply writes + sends. Prod: ResendBaWelcomeView
+(/internal/cron/resend-ba-welcome) + the resend-ba-welcome workflow.
+"""
+
+from __future__ import annotations
+
+from django.contrib.auth import get_user_model
+from django.core.management.base import BaseCommand, CommandError
+
+User = get_user_model()
+
+
+class Command(BaseCommand):
+    help = (
+        "Reset an existing user onto admin-created-BA rails (temp password, "
+        "verified, active BA profile) and re-send the welcome/app email. "
+        "Dry-run by default."
+    )
+
+    def add_arguments(self, parser):
+        parser.add_argument("--email", required=True, help="The BA's email.")
+        parser.add_argument(
+            "--apply",
+            action="store_true",
+            help="Actually reset the password + send. Dry-run without it.",
+        )
+
+    def handle(self, *args, **opts):
+        from ambassadors.models import Ambassador
+
+        email = (opts["email"] or "").strip()
+        user = User.objects.filter(email__iexact=email).order_by("id").first()
+        if user is None:
+            raise CommandError(f"User not found: {email}")
+        amb = Ambassador.objects.filter(user=user).first()
+
+        w = self.stdout.write
+        w("")
+        w(f"user        : {user.id} {user.email} ({user.first_name} {user.last_name or ''})".rstrip())
+        w(f"last_login  : {user.last_login or 'NEVER'}")
+        w(f"is_active   : {user.is_active} · usable password: {user.has_usable_password()}")
+        w(f"ba profile  : {'active' if (amb and amb.is_active) else ('inactive' if amb else 'MISSING')}")
+
+        if not opts["apply"]:
+            w(self.style.MIGRATE_LABEL(
+                "DRY-RUN — nothing changed, nothing sent. Re-run with --apply "
+                "(execute=true) to reset the password + send the welcome email."
+            ))
+            return
+
+        from gqlauth.models import UserStatus
+
+        from ambassadors.envelopes import AmbassadorGeneratedPasswordMailer
+        from ambassadors.services import generate_random_password
+
+        password = generate_random_password()
+        user.set_password(password)
+        user.is_active = True
+        user.requires_password_change = True
+        user.save(update_fields=["password", "is_active", "requires_password_change"])
+        UserStatus.objects.update_or_create(
+            user=user, defaults={"verified": True, "archived": False}
+        )
+        if amb is None:
+            amb = Ambassador.objects.create(
+                user=user, is_active=True, created_by=user, updated_by=user,
+            )
+        elif not amb.is_active:
+            amb.is_active = True
+            amb.save(update_fields=["is_active"])
+
+        AmbassadorGeneratedPasswordMailer(user, password).send()
+        w(self.style.SUCCESS(
+            f"Reset + welcome email sent to {user.email} "
+            "(temp password, change forced on first sign-in)."
+        ))
