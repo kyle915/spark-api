@@ -3279,6 +3279,58 @@ class FixLdKpiTotalsView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class SetTenantMileageTrackingView(View):
+    """POST `/internal/cron/set-tenant-mileage-tracking`.
+
+    Bulk-toggle GPS mileage tracking (Event.track_mileage + mileage_rate)
+    on a tenant's events — the per-gig admin panel doesn't scale to an
+    imported season. Dry-run by default; pass execute=1 to write. Params:
+    tenant_name (required), event_type, since_date, rate (default 0.725;
+    'none' = miles only), disable, execute. See set_tenant_mileage_tracking.
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _get(name: str) -> str:
+            return (request.GET.get(name) or request.POST.get(name) or "").strip()
+
+        def _flag(name: str) -> bool:
+            return _get(name).lower() in ("1", "true", "yes", "on")
+
+        execute = _flag("execute")
+        cmd_args: list[str] = []
+        for flag in ("tenant_name", "event_type", "since_date", "rate"):
+            val = _get(flag)
+            if val:
+                cmd_args += [f"--{flag.replace('_', '-')}", val]
+        if _flag("disable"):
+            cmd_args.append("--off")
+        if execute:
+            cmd_args.append("--apply")
+
+        out = io.StringIO()
+        try:
+            call_command("set_tenant_mileage_tracking", *cmd_args, stdout=out)
+        except Exception as exc:
+            logger.exception("set-tenant-mileage-tracking cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed",
+                 "exception": _concise_exc(exc), "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "execute": execute, "log": out.getvalue()})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class BackfillLdMasterTrackerView(View):
     """POST `/internal/cron/backfill-ld-master-tracker`.
 
@@ -4326,6 +4378,7 @@ def _registered_views() -> dict[str, Any]:
         "backfill-recap-retailers": BackfillRecapRetailersView,
         "describe-sheet-tabs": DescribeSheetTabsView,
         "fix-ld-kpi-totals": FixLdKpiTotalsView,
+        "set-tenant-mileage-tracking": SetTenantMileageTrackingView,
         "backfill-ld-master-tracker": BackfillLdMasterTrackerView,
         "ld-data-census": LdDataCensusView,
         "export-ld-recaps": ExportLdRecapsView,
