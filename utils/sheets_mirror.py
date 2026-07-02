@@ -737,6 +737,100 @@ def _ld_remove_blank_rows(svc, sheet_id, tab, gid, last_row: int = 40) -> int:
     return len(to_delete)
 
 
+def delete_ld_rows(tenant, rows: list[int]) -> tuple[int, list[str]]:
+    """Delete specific 1-based rows from an LD-layout tracker — a guarded
+    one-off for pruning a client's hand-entered duplicates after Spark's
+    keyed rows for the same events landed. Refuses the header, anything
+    outside the top section (rows 2..40), and — the hard guard — any row
+    that carries a Spark key: mirror-managed rows can only be removed by
+    deleting the request in Spark, never by this pruner. Returns
+    (deleted_count, notes) where notes records, per row, either the A:I
+    content that was deleted (audit trail) or why it was refused.
+    """
+    notes: list[str] = []
+    if _tenant_layout(tenant) != LD_RETAIL_LAYOUT:
+        return 0, ["tenant is not on the ld_retail layout — refusing"]
+    sheet_id = extract_sheet_id(getattr(tenant, "linked_sheet_url", "") or "")
+    if not sheet_id:
+        return 0, ["tenant has no linked_sheet_url"]
+    svc = _service()
+    if not svc:
+        return 0, ["Sheets API service unavailable"]
+    tab = (getattr(tenant, "master_tracker_tab_name", "") or "").strip() or None
+
+    gid = _ld_ensure_grid(svc, sheet_id, tab)
+    if gid is None:
+        return 0, ["tab not found"]
+    col = _ld_key_col()
+    targets = sorted({r for r in rows if 2 <= r <= 40})
+    refused = sorted(set(rows) - set(targets))
+    if refused:
+        notes.append(f"refused (outside rows 2-40): {refused}")
+    if not targets:
+        return 0, notes
+    lo, hi = targets[0], targets[-1]
+    try:
+        resp = (
+            svc.spreadsheets()
+            .values()
+            .batchGet(
+                spreadsheetId=sheet_id,
+                ranges=[
+                    _qualify(tab, f"A{lo}:I{hi}"),
+                    _qualify(tab, f"{col}{lo}:{col}{hi}"),
+                ],
+            )
+            .execute()
+        )
+    except HttpError as e:
+        return 0, notes + [f"pre-delete read failed: {e}"]
+    ranges = resp.get("valueRanges", [])
+    data = (ranges[0].get("values") if len(ranges) > 0 else None) or []
+    keys = (ranges[1].get("values") if len(ranges) > 1 else None) or []
+
+    deletable: list[int] = []
+    for r in targets:
+        i = r - lo
+        key_cells = keys[i] if i < len(keys) else []
+        key = str(key_cells[0]).strip() if key_cells else ""
+        if key:
+            notes.append(f"refused row {r}: carries Spark key {key}")
+            continue
+        row_cells = data[i] if i < len(data) else []
+        notes.append(
+            f"deleting row {r}: " + " | ".join(str(c) for c in row_cells[:9])
+        )
+        deletable.append(r)
+    if not deletable:
+        return 0, notes
+    try:
+        svc.spreadsheets().batchUpdate(
+            spreadsheetId=sheet_id,
+            body={
+                "requests": [
+                    {
+                        "deleteDimension": {
+                            "range": {
+                                "sheetId": gid,
+                                "dimension": "ROWS",
+                                "startIndex": r - 1,
+                                "endIndex": r,
+                            }
+                        }
+                    }
+                    # bottom-up so earlier deletes don't shift later indexes
+                    for r in sorted(deletable, reverse=True)
+                ]
+            },
+        ).execute()
+    except HttpError as e:
+        return 0, notes + [f"delete failed: {e}"]
+    logger.info(
+        "sheets_mirror[ld]: pruned %s row(s) at %s", len(deletable), deletable
+    )
+    return len(deletable), notes
+
+
 def _ld_insert_dated_row(svc, sheet_id, tab, gid, at_row, row9, uuid) -> None:
     """LD-layout counterpart to _insert_dated_row: insert a blank row at
     at_row (1-based, pushing everything from there down) and write the A:I

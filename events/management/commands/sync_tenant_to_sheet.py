@@ -27,7 +27,7 @@ from django.core.management.base import BaseCommand, CommandError
 
 from events.models import Request
 from tenants.models import Tenant
-from utils.sheets_mirror import bulk_sync_requests
+from utils.sheets_mirror import bulk_sync_requests, delete_ld_rows
 
 
 class Command(BaseCommand):
@@ -90,8 +90,16 @@ class Command(BaseCommand):
             help="Only sync requests whose status slug matches exactly "
             "(e.g. 'pending' for submitted-but-not-yet-approved requests).",
         )
-
-    def handle(self, *args, **opts):
+        parser.add_argument(
+            "--delete-rows",
+            type=str,
+            default=None,
+            help="Comma-separated 1-based sheet row numbers to delete BEFORE "
+            "syncing — prunes a client's hand-entered duplicates once "
+            "Spark's keyed rows for the same events exist. Guarded: "
+            "ld_retail layout only, rows 2-40 only, never a row carrying "
+            "a Spark key, and only with --apply.",
+        )
         tenants = self._resolve_tenants(opts)
         if not tenants:
             raise CommandError(
@@ -148,6 +156,21 @@ class Command(BaseCommand):
 
             if not apply:
                 continue
+
+            delete_rows = opts.get("delete_rows")
+            if delete_rows:
+                try:
+                    row_nums = [int(x) for x in delete_rows.split(",") if x.strip()]
+                except ValueError:
+                    raise CommandError(
+                        f"--delete-rows must be comma-separated integers, got {delete_rows!r}"
+                    )
+                pruned, prune_notes = delete_ld_rows(tenant, row_nums)
+                for note in prune_notes:
+                    self.stdout.write(f"  · {note}")
+                self.stdout.write(
+                    self.style.SUCCESS(f"  ✓ pruned {pruned} duplicate row(s)")
+                )
 
             # Batched write — a handful of API calls for the whole tenant,
             # vs. ~3/row, so we stay well under the Sheets 60-req/min quota.

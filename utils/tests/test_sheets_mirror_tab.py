@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import date
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from utils.sheets_mirror import (
     HEADER,
@@ -278,3 +278,51 @@ def test_ld_insert_dated_row_deletes_inserted_row_when_write_fails():
     calls = svc.spreadsheets.return_value.batchUpdate.call_args_list
     assert "insertDimension" in str(calls[0])
     assert "deleteDimension" in str(calls[1])
+
+
+def test_delete_ld_rows_refuses_keyed_rows_and_deletes_keyless():
+    from utils.sheets_mirror import delete_ld_rows
+
+    svc = MagicMock()
+    meta = svc.spreadsheets.return_value
+    meta.get.return_value.execute.return_value = {
+        "sheets": [
+            {"properties": {"title": "MASTER_Tracker", "sheetId": 9, "index": 0,
+                            "gridProperties": {"columnCount": 80}}}
+        ]
+    }
+    # Targets rows 4-5: row 4 keyless (client dupe), row 5 carries a Spark key.
+    meta.values.return_value.batchGet.return_value.execute.return_value = {
+        "valueRanges": [
+            {"values": [["NH", "Friday", "7/17/2026", "Walmart"], ["NH"]]},
+            {"values": [[], ["spark-uuid-1"]]},
+        ]
+    }
+    tenant = SimpleNamespace(
+        master_tracker_layout="ld_retail",
+        linked_sheet_url="https://docs.google.com/spreadsheets/d/sid123/edit",
+        master_tracker_tab_name="MASTER_Tracker",
+    )
+    with patch("utils.sheets_mirror._service", return_value=svc):
+        deleted, notes = delete_ld_rows(tenant, [4, 5, 1, 99])
+    assert deleted == 1
+    joined = "\n".join(notes)
+    assert "refused (outside rows 2-40): [1, 99]" in joined
+    assert "refused row 5" in joined and "spark-uuid-1" in joined
+    assert "deleting row 4" in joined and "Walmart" in joined
+    body = meta.batchUpdate.call_args.kwargs["body"]
+    rng = body["requests"][0]["deleteDimension"]["range"]
+    assert (rng["startIndex"], rng["endIndex"]) == (3, 4)
+
+
+def test_delete_ld_rows_refuses_non_ld_layout():
+    from utils.sheets_mirror import delete_ld_rows
+
+    tenant = SimpleNamespace(
+        master_tracker_layout="",
+        linked_sheet_url="https://docs.google.com/spreadsheets/d/sid123/edit",
+        master_tracker_tab_name=None,
+    )
+    deleted, notes = delete_ld_rows(tenant, [4])
+    assert deleted == 0
+    assert "not on the ld_retail layout" in notes[0]

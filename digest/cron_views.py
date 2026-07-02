@@ -3316,6 +3316,10 @@ class BackfillLdMasterTrackerView(View):
         # yet approved), instead of the tenant's full history.
         since_date = _get("since_date")
         status_slug = _get("status_slug")
+        # One-off pruning of a client's hand-entered duplicate rows (comma-
+        # separated 1-based row numbers). Guarded in delete_ld_rows: never a
+        # row carrying a Spark key, rows 2-40 only, ld_retail layout only.
+        delete_rows = _get("delete_rows")
 
         tenant = Tenant.objects.filter(slug=slug).first()
         if tenant is None:
@@ -3398,6 +3402,8 @@ class BackfillLdMasterTrackerView(View):
                 cmd_args += ["--since-date", since_date]
             if status_slug:
                 cmd_args += ["--status-slug", status_slug]
+            if delete_rows:
+                cmd_args += ["--delete-rows", delete_rows]
         try:
             call_command("sync_tenant_to_sheet", *cmd_args, stdout=out)
         except Exception as exc:
@@ -3415,6 +3421,7 @@ class BackfillLdMasterTrackerView(View):
                 "backfill": backfill,
                 "since_date": since_date or None,
                 "status_slug": status_slug or None,
+                "delete_rows": delete_rows or None,
                 "master_tracker_tab_name": tenant.master_tracker_tab_name,
                 "master_tracker_insert_by_date": tenant.master_tracker_insert_by_date,
                 "master_tracker_layout": tenant.master_tracker_layout,
