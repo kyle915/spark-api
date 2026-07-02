@@ -3279,6 +3279,55 @@ class FixLdKpiTotalsView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class StaffTenantEventsView(View):
+    """POST `/internal/cron/staff-tenant-events`.
+
+    Bulk-staff a tenant's imported events from a committed spec: ensure the
+    BAs exist (NEW ones get the Welcome-to-Spark email with the app-store
+    download buttons), create per-event Jobs at the spec's hourly rate, and
+    book every group BA on every group event (AmbassadorJob + approved
+    AmbassadorEvent — direct writes, no per-booking notification fan-out).
+    Dry-run by default; pass execute=1 to write. Params: spec (default
+    feel_free_staffing), owner_email, execute. See staff_tenant_events.
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _get(name: str) -> str:
+            return (request.GET.get(name) or request.POST.get(name) or "").strip()
+
+        execute = _get("execute").lower() in ("1", "true", "yes", "on")
+        cmd_args: list[str] = []
+        for flag in ("spec", "owner_email"):
+            val = _get(flag)
+            if val:
+                cmd_args += [f"--{flag.replace('_', '-')}", val]
+        if execute:
+            cmd_args.append("--apply")
+
+        out = io.StringIO()
+        try:
+            call_command("staff_tenant_events", *cmd_args, stdout=out)
+        except Exception as exc:
+            logger.exception("staff-tenant-events cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed",
+                 "exception": _concise_exc(exc), "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "execute": execute, "log": out.getvalue()})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class SetTenantMileageTrackingView(View):
     """POST `/internal/cron/set-tenant-mileage-tracking`.
 
@@ -4379,6 +4428,7 @@ def _registered_views() -> dict[str, Any]:
         "describe-sheet-tabs": DescribeSheetTabsView,
         "fix-ld-kpi-totals": FixLdKpiTotalsView,
         "set-tenant-mileage-tracking": SetTenantMileageTrackingView,
+        "staff-tenant-events": StaffTenantEventsView,
         "backfill-ld-master-tracker": BackfillLdMasterTrackerView,
         "ld-data-census": LdDataCensusView,
         "export-ld-recaps": ExportLdRecapsView,
