@@ -27,7 +27,10 @@ Schedules live in events/management/commands/data/<key>.json with shape:
     {"tenant_name", "event_type", "request_type", "scheduling_status",
      "rows": [{name, date(mm/dd/yyyy), start_time(HH:MM), end_time(HH:MM),
                address, store_number, retailer_name, city, state,
-               store_manager_phone, notes}, ...]}
+               store_manager_phone, notes,
+               timezone_code (optional — per-row override for schedules
+               that span time zones; rows without it use the command-level
+               timezone)}, ...]}
 """
 
 from __future__ import annotations
@@ -101,6 +104,14 @@ class Command(BaseCommand):
             action="store_true",
             help="Actually write. Without this flag the import is a dry-run.",
         )
+        parser.add_argument(
+            "--create-tenant",
+            action="store_true",
+            help="If no tenant matches the name, create one (name + slug, "
+            "owned by --owner-email) instead of failing. Like the EventType "
+            "setup, this happens even on a dry-run — it's idempotent tenant "
+            "config the rows can't validate without.",
+        )
 
     def handle(self, *args, **opts):
         commit = bool(opts["commit"])
@@ -128,12 +139,31 @@ class Command(BaseCommand):
         w(f"  rows      : {len(rows)}")
         w(f"  tenant    : {tenant_name!r}")
 
+        # ---- Resolve owner -------------------------------------------------
+        # (Before the tenant: --create-tenant needs it as created_by.)
+        owner = User.objects.filter(email__iexact=opts["owner_email"]).order_by("id").first()
+        if not owner:
+            raise CommandError(f"Owner user not found: {opts['owner_email']}")
+        w(f"  owner     : {owner.id} ({owner.email})")
+
         # ---- Resolve tenant ------------------------------------------------
         tenant = (
             Tenant.objects.filter(name__iexact=tenant_name).order_by("id").first()
             if tenant_name
             else None
         )
+        if not tenant and tenant_name and opts["create_tenant"]:
+            tenant = Tenant.objects.create(
+                name=tenant_name,
+                slug=_slugify(tenant_name)[:50],
+                created_by=owner,
+            )
+            w(
+                self.style.SUCCESS(
+                    f"  tenant    : CREATED {tenant.id} "
+                    f"({tenant.name}, slug={tenant.slug})"
+                )
+            )
         if not tenant:
             candidates = list(
                 Tenant.objects.order_by("name").values_list("name", flat=True)[:40]
@@ -143,12 +173,6 @@ class Command(BaseCommand):
                 f"Existing tenants: {', '.join(candidates) or '(none)'}"
             )
         w(f"  tenant id : {tenant.id} ({tenant.name})")
-
-        # ---- Resolve owner -------------------------------------------------
-        owner = User.objects.filter(email__iexact=opts["owner_email"]).order_by("id").first()
-        if not owner:
-            raise CommandError(f"Owner user not found: {opts['owner_email']}")
-        w(f"  owner     : {owner.id} ({owner.email})")
 
         # ---- Ensure tenant setup (idempotent get_or_create) ----------------
         # These rows MUST exist for the importer to validate the event rows.
@@ -343,7 +367,9 @@ def _build_xlsx(
             "notes": r.get("notes"),
             "retailer_name": r.get("retailer_name"),
             "store_manager_phone": r.get("store_manager_phone"),
-            "timezone_code": timezone_code,
+            # A row may carry its own timezone (multi-market schedules span
+            # ET/CT); the command-level code is the fallback for the rest.
+            "timezone_code": r.get("timezone_code") or timezone_code,
             "request_type_id": request_type_id,
             "event_type_id": event_type_id,
         }

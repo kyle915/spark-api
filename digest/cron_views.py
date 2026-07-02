@@ -2058,9 +2058,16 @@ class ImportEventScheduleView(View):
             request.GET.get("tenant_name") or request.POST.get("tenant_name") or None
         )
 
+        # Opt-in: create the tenant when the schedule is for a brand-new
+        # client (name + slug, owned by the command's owner-email). Happens
+        # even on dry-run — same idempotent-setup rationale as EventType.
+        create_tenant = _bool("create_tenant", default=False)
+
         cmd_kwargs: dict[str, Any] = {"schedule": schedule, "commit": execute}
         if tenant_name:
             cmd_kwargs["tenant_name"] = tenant_name
+        if create_tenant:
+            cmd_kwargs["create_tenant"] = True
 
         out = io.StringIO()
         try:

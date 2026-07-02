@@ -138,3 +138,69 @@ class TestImportEventSchedule(EventsGraphQLTestCase):
         assert second.success_count == 0
         assert second.skipped_count == 2
         assert Event.objects.filter(tenant=self.tenant).count() == 2
+
+    # ---------- per-row timezone + Feel Free schedule ----------
+
+    def test_row_level_timezone_overrides_command_default(self):
+        # Multi-market schedules (FL + TX) carry timezone_code per row; the
+        # command-level code is only the fallback.
+        cdt = TimeZone.objects.create(
+            name="Central Daylight Time", code="CDT", offset=-300,
+            created_by=self.system_user,
+        )
+        rows = [dict(_ROWS[0]), dict(_ROWS[1], timezone_code="CDT")]
+        xlsx = _build_xlsx(
+            rows=rows,
+            scheduling_status="already_scheduled",
+            timezone_code=self.edt.code,
+            request_type_id=self.request_type.id,
+            event_type_id=self.event_type.id,
+        )
+        result = import_requests_from_excel_bytes(
+            file_bytes=xlsx,
+            tenant_id=self.tenant.id,
+            created_by_id=self.system_user.id,
+            default_timezone_id=self.edt.id,
+            default_request_type_id=self.request_type.id,
+            sheet_name="Requests",
+            dry_run=False,
+            rollback_on_error=True,
+        )
+        assert result.failed_count == 0, [r.message for r in result.rows if not r.success]
+        by_name = {e.name: e for e in Event.objects.filter(tenant=self.tenant)}
+        # EDT row: 15:00 local → 19:00 UTC. CDT row: 10:00 local → 15:00 UTC.
+        assert by_name["Kroger #409 — Grand Blanc · 6/19"].start_time.hour == 19
+        assert by_name["Kroger #526 — Milford · 6/20"].start_time.hour == 15
+
+    def test_feel_free_schedule_dry_runs_clean_with_create_tenant(self):
+        # End-to-end dry-run of the committed Feel Free schedule — the exact
+        # prod invocation: creates the tenant, validates all 249 rows across
+        # both time zones, writes no events.
+        import io as _io
+
+        from django.core.management import call_command
+
+        from events.models import Request
+        from tenants.models import Tenant
+
+        TimeZone.objects.create(
+            name="Central Daylight Time", code="CDT", offset=-300,
+            created_by=self.system_user,
+        )
+        out = _io.StringIO()
+        call_command(
+            "import_event_schedule",
+            "--schedule", "feel_free_summer2026",
+            "--create-tenant",
+            "--owner-email", self.system_user.email,
+            stdout=out,
+        )
+        report = out.getvalue()
+        tenant = Tenant.objects.filter(name__iexact="Feel Free").first()
+        assert tenant is not None and tenant.slug == "feel-free"
+        assert "CREATED" in report
+        assert "failed     : 0" in report, report[-2000:]
+        assert "would create : 249" in report or ": 249" in report
+        # dry-run: no events/requests written
+        assert not Event.objects.filter(tenant=tenant).exists()
+        assert not Request.objects.filter(tenant=tenant).exists()
