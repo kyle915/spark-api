@@ -47,6 +47,10 @@ on:
         description: "Backfill scope: only requests with this status slug (e.g. 'pending'). Blank = any status."
         required: false
         default: ""
+      delete_rows:
+        description: "Prune these 1-based sheet rows first (comma-separated). Guarded: rows 2-40 only, never a Spark-keyed row."
+        required: false
+        default: ""
 
 jobs:
   backfill-ld-master-tracker:
@@ -64,6 +68,7 @@ jobs:
           BACKFILL: ${{ github.event.inputs.backfill }}
           SINCE_DATE: ${{ github.event.inputs.since_date }}
           STATUS_SLUG: ${{ github.event.inputs.status_slug }}
+          DELETE_ROWS: ${{ github.event.inputs.delete_rows }}
         run: |
           if [ -z "$CRON_SECRET" ]; then
             echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
@@ -79,7 +84,8 @@ jobs:
             --data-urlencode "execute=$EXECUTE" \
             --data-urlencode "backfill=$BACKFILL" \
             --data-urlencode "since_date=$SINCE_DATE" \
-            --data-urlencode "status_slug=$STATUS_SLUG")
+            --data-urlencode "status_slug=$STATUS_SLUG" \
+            --data-urlencode "delete_rows=$DELETE_ROWS")
           echo "HTTP $STATUS"
           cat /tmp/cron-response.json
           echo ""
