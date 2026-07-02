@@ -36,6 +36,11 @@ on:
         required: false
         default: ""
         type: string
+      create_tenant:
+        description: "Create the tenant if it doesn't exist (new-client schedules)."
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   fire-import-event-schedule:
@@ -48,6 +53,7 @@ jobs:
           DRY_RUN: ${{ github.event.inputs.dry_run }}
           SCHEDULE: ${{ github.event.inputs.schedule }}
           TENANT_NAME: ${{ github.event.inputs.tenant_name || '' }}
+          CREATE_TENANT: ${{ github.event.inputs.create_tenant }}
         run: |
           set -euo pipefail
           if [ -z "$CRON_SECRET" ]; then
@@ -67,6 +73,9 @@ jobs:
           # URL-encode the schedule key (it's [a-z0-9_], so safe as-is) and
           # only add tenant_name when supplied.
           QS="execute=$EXECUTE&schedule=$SCHEDULE"
+          if [ "$CREATE_TENANT" = "true" ]; then
+            QS="$QS&create_tenant=true"
+          fi
           if [ -n "$TENANT_NAME" ]; then
             # Spaces -> %20 so "Stone House Bread" survives the query string.
             ENC_TENANT=$(echo "$TENANT_NAME" | sed 's/ /%20/g')
