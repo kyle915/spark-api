@@ -71,6 +71,9 @@ class TestStaffTenantEvents(EventsGraphQLTestCase):
         # Every event got a job at the spec rate; Tampa (no BAs) stays pending.
         assert Job.objects.count() == 4
         mia_job = Job.objects.get(event=self.mia1)
+        # rate FK must be set: the GraphQL JobType declares it non-null,
+        # so a rate-less Job breaks the whole admin JobsQuery.
+        assert mia_job.rate is not None and mia_job.rate.amount == Decimal("30.00")
         assert mia_job.hourly_rate == Decimal("30.00")
         assert mia_job.total_hours == Decimal("5")
         assert mia_job.lifecycle_status == Job.STATUS_FILLED
@@ -94,6 +97,14 @@ class TestStaffTenantEvents(EventsGraphQLTestCase):
         # AmbassadorJob assignment rows exist for every booking.
         assert AmbassadorJob.objects.count() == AmbassadorEvent.objects.count()
         assert "assignments=6" in report and "bookings=6" in report
+
+    def test_reapply_heals_rateless_jobs(self):
+        # Jobs created by the pre-fix run had rate=NULL — a re-apply must
+        # backfill the FK instead of skipping existing jobs.
+        self._run("--apply")
+        Job.objects.all().update(rate=None)
+        self._run("--apply")
+        assert not Job.objects.filter(rate__isnull=True).exists()
 
     def test_reapply_is_idempotent_and_sends_no_new_email(self):
         self._run("--apply")

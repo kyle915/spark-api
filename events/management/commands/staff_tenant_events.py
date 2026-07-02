@@ -162,6 +162,7 @@ class Command(BaseCommand):
                     defaults={
                         "tenant": tenant,
                         "job_title": job_title,
+                        "rate": rate_row,
                         "name": event.name,
                         "description": event.notes or "",
                         "address": event.address or "",
@@ -180,10 +181,20 @@ class Command(BaseCommand):
                 )
                 if job_created:
                     totals["jobs_created"] += 1
-                elif job.hourly_rate is None:
-                    job.hourly_rate = hourly_rate
-                    job.total_hours = total_hours
-                    job.save(update_fields=["hourly_rate", "total_hours", "updated_at"])
+                else:
+                    # Self-heal jobs from earlier runs: the GraphQL JobType
+                    # declares rate non-null, so a rate-less Job breaks the
+                    # whole admin JobsQuery.
+                    patch = []
+                    if job.rate_id is None:
+                        job.rate = rate_row
+                        patch.append("rate")
+                    if job.hourly_rate is None:
+                        job.hourly_rate = hourly_rate
+                        job.total_hours = total_hours
+                        patch += ["hourly_rate", "total_hours"]
+                    if patch:
+                        job.save(update_fields=patch + ["updated_at"])
 
                 for amb in ambassadors:
                     _, aj_created = AmbassadorJob.objects.get_or_create(
