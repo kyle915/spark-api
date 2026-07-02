@@ -72,7 +72,7 @@ class TestStaffTenantEvents(EventsGraphQLTestCase):
         assert Job.objects.count() == 4
         mia_job = Job.objects.get(event=self.mia1)
         assert mia_job.hourly_rate == Decimal("30.00")
-        assert mia_job.total_hours == Decimal("5.5")
+        assert mia_job.total_hours == Decimal("5")
         assert mia_job.lifecycle_status == Job.STATUS_FILLED
         tpa_job = Job.objects.get(event=self.tpa1)
         assert tpa_job.lifecycle_status == Job.STATUS_PENDING

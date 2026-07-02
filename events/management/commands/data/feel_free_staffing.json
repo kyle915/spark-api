@@ -2,34 +2,74 @@
  "tenant_name": "Feel Free",
  "event_type": "Field Sampling",
  "hourly_rate": "30.00",
- "total_hours": "5.5",
+ "total_hours": "5",
  "groups": [
   {
    "event_name_prefix": "Miami — ",
    "bas": [
-    {"first_name": "Alicia", "last_name": "Archie", "email": "aarchie00@gmail.com", "phone": "3059007912"},
-    {"first_name": "Maria", "last_name": "Iglesias", "email": "gabyiglesiaspr@gmail.com", "phone": "9542616737"}
+    {
+     "first_name": "Alicia",
+     "last_name": "Archie",
+     "email": "aarchie00@gmail.com",
+     "phone": "3059007912"
+    },
+    {
+     "first_name": "Maria",
+     "last_name": "Iglesias",
+     "email": "gabyiglesiaspr@gmail.com",
+     "phone": "9542616737"
+    }
    ]
   },
   {
    "event_name_prefix": "Ft. Lauderdale — ",
    "bas": [
-    {"first_name": "Lakeita", "last_name": "Simpkins", "email": "lakeita1@hotmail.com", "phone": "(646) 831-6820"},
-    {"first_name": "Carissa", "last_name": "Cardona", "email": "carissa8133@gmail.com", "phone": "7866834580"}
+    {
+     "first_name": "Lakeita",
+     "last_name": "Simpkins",
+     "email": "lakeita1@hotmail.com",
+     "phone": "(646) 831-6820"
+    },
+    {
+     "first_name": "Carissa",
+     "last_name": "Cardona",
+     "email": "carissa8133@gmail.com",
+     "phone": "7866834580"
+    }
    ]
   },
   {
    "event_name_prefix": "Austin — ",
    "bas": [
-    {"first_name": "Tara", "last_name": "Davis", "email": "imtaradavis@gmail.com", "phone": "4698341471"},
-    {"first_name": "Rocio", "last_name": "Matta", "email": "rocio.12_virgo1996@hotmail.com", "phone": "(737) 330-8458"}
+    {
+     "first_name": "Tara",
+     "last_name": "Davis",
+     "email": "imtaradavis@gmail.com",
+     "phone": "4698341471"
+    },
+    {
+     "first_name": "Rocio",
+     "last_name": "Matta",
+     "email": "rocio.12_virgo1996@hotmail.com",
+     "phone": "(737) 330-8458"
+    }
    ]
   },
   {
    "event_name_prefix": "San Antonio — ",
    "bas": [
-    {"first_name": "Felicia", "last_name": "Riojas", "email": "felicia.riojas@gmail.com", "phone": "2106839162"},
-    {"first_name": "Samantha", "last_name": "Riojas", "email": "riojassamantha@yahoo.com", "phone": "(210) 981-8319"}
+    {
+     "first_name": "Felicia",
+     "last_name": "Riojas",
+     "email": "felicia.riojas@gmail.com",
+     "phone": "2106839162"
+    },
+    {
+     "first_name": "Samantha",
+     "last_name": "Riojas",
+     "email": "riojassamantha@yahoo.com",
+     "phone": "(210) 981-8319"
+    }
    ]
   },
   {
