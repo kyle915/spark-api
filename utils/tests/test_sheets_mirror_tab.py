@@ -245,8 +245,10 @@ def test_ld_remove_blank_rows_deletes_gap_but_not_tail():
     from utils.sheets_mirror import _ld_remove_blank_rows
 
     svc = MagicMock()
-    # Rows 2-5 content, row 6 blank (the debris), rows 7-8 content, rest tail.
-    data = [["NH", "Friday"]] * 4 + [[]] + [["NY"], ["TX"]]
+    # Rows 2-5 content; row 6 is the debris — no data, but inherited
+    # checkbox validation renders FALSE in J/K; rows 7-8 content, rest tail.
+    debris = ["", "", "", "", "", "", "", "", "", "FALSE", "FALSE"]
+    data = [["NH", "Friday"]] * 4 + [debris] + [["NY"], ["TX"]]
     svc.spreadsheets.return_value.values.return_value.batchGet.return_value.execute.return_value = {
         "valueRanges": [{"values": data}, {"values": []}]
     }

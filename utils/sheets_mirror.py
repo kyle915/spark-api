@@ -684,7 +684,12 @@ def _ld_remove_blank_rows(svc, sheet_id, tab, gid, last_row: int = 40) -> int:
     keys = (ranges[1].get("values") if len(ranges) > 1 else None) or []
 
     def _blank(cells) -> bool:
-        return not any(str(c).strip() for c in cells)
+        # An inserted row inherits its neighbors' checkbox data-validation,
+        # so an orphaned row reads as FALSE in those cells, not "" — treat
+        # unchecked checkboxes as blank. A checked box (TRUE) is real input.
+        return not any(
+            str(c).strip() and str(c).strip().upper() != "FALSE" for c in cells
+        )
 
     to_delete = []
     for i in range(last_row - 1):  # 0-based offset from row 2
