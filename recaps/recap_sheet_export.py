@@ -179,12 +179,56 @@ def _store_location(recap) -> str:
     return str(getattr(event, "name", "") or "")
 
 
-def _recap_meta(recap) -> dict:
+def _retailer_inferrer(tenant):
+    """Fallback Retailer matcher for rows whose recap/event/request retailer
+    FKs are all unset — common for Girl Beer, where events created off the
+    schedule sheet carry the store in the event NAME (e.g. "Whole Foods Los
+    Angeles · 2026-06-21") but no Retailer link, leaving the export's
+    Retailer column blank. Matches the tenant's known Retailer names against
+    the row's store/event text — longest name first, on word boundaries — and
+    returns the canonical Retailer.name. Purely presentational: nothing is
+    written back to the recap or event, and an explicit FK always wins
+    (see _retailer_for_row)."""
+    from events.models import Retailer
+
+    names = Retailer.objects.filter(tenant=tenant).values_list("name", flat=True)
+    patterns = [
+        (
+            re.compile(
+                rf"(?<![a-z0-9]){re.escape(_normalize(n))}(?![a-z0-9])"
+            ),
+            n,
+        )
+        for n in sorted(
+            {n.strip() for n in names if n and n.strip()}, key=len, reverse=True
+        )
+    ]
+
+    def infer(text: str) -> str:
+        t = _normalize(text)
+        if not t:
+            return ""
+        for pat, name in patterns:
+            if pat.search(t):
+                return name
+        return ""
+
+    return infer
+
+
+def _retailer_for_row(recap, infer_retailer=None) -> str:
+    retailer = _name_of(_event_retailer(recap))
+    if not retailer and infer_retailer is not None:
+        retailer = infer_retailer(f"{_store_location(recap)} {_event_name(recap)}")
+    return retailer
+
+
+def _recap_meta(recap, infer_retailer=None) -> dict:
     return {
         "ba": _ba_name(recap),
         "date": _fmt_mdy(_event_date(recap)),
         "store": _store_location(recap),
-        "retailer": _name_of(_event_retailer(recap)),
+        "retailer": _retailer_for_row(recap, infer_retailer),
         "status": "Approved" if getattr(recap, "approved", False) else "Submitted",
     }
 
@@ -231,9 +275,10 @@ def rows_for_header(tenant, header: list[str]) -> list[list]:
         key=lambda r: (_date_key(r), getattr(r, "id", 0)),
         reverse=True,
     )
+    infer_retailer = _retailer_inferrer(tenant)
     rows: list[list] = []
     for recap in recaps:
-        meta = _recap_meta(recap)
+        meta = _recap_meta(recap, infer_retailer)
         by_name = _values_by_field_name(recap)
         row = []
         for nh in norm_header:
@@ -267,6 +312,7 @@ def build_export_grid(tenant) -> tuple[list[str], list[list]]:
     field_ids = [f.id for f in fields]
     header = list(META_HEADER) + [f.name for f in fields]
 
+    infer_retailer = _retailer_inferrer(tenant)
     rows: list[list] = []
     for recap in _tenant_recaps(tenant):
         values_by_field: dict[int, str] = {}
@@ -281,7 +327,7 @@ def build_export_grid(tenant) -> tuple[list[str], list[list]]:
             _fmt_dt(getattr(recap, "submitted_at", None)),
             _fmt_date(_event_date(recap)),
             _ba_name(recap),
-            _name_of(_event_retailer(recap)),
+            _retailer_for_row(recap, infer_retailer),
             _name_of(_event_state(recap)),
             _event_name(recap),
             recap.total_engagements if recap.total_engagements is not None else "",

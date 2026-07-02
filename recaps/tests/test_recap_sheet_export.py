@@ -168,3 +168,66 @@ class TestRecapSheetExportGrid(AmbassadorsGraphQLTestCase):
         assert row[4] == "Detroit, Lansing"
         # Unmatched column stays blank — we never invent data.
         assert row[5] == ""
+
+    # ── Retailer inference (fallback when the FK chain is unset) ─────────
+
+    def _retailer(self, name):
+        from events.models import Retailer
+
+        return Retailer.objects.create(
+            tenant=self.tenant, name=name, created_by=self.system_user
+        )
+
+    def test_retailer_inferred_from_event_name_when_fk_unset(self):
+        # Girl Beer events created off the schedule sheet carry the store in
+        # the event NAME ("Whole Foods Los Angeles · 2026-06-21") but no
+        # Retailer FK anywhere — the column must still populate by matching
+        # the tenant's known Retailer names against that text.
+        self._retailer("Whole Foods")
+        event = self.create_event(
+            name="Whole Foods Los Angeles · 2026-06-21",
+            tenant=self.tenant,
+            date=self.now,
+        )
+        recap_models.CustomRecap.objects.create(
+            name="wf recap", approved=True, event=event, tenant=self.tenant,
+            custom_recap_template=self.template,
+            created_by=self.system_user, updated_by=self.system_user,
+        )
+        rows = rows_for_header(self.tenant, ["Retailer", "Store/Location"])
+        assert rows[0][0] == "Whole Foods"
+
+    def test_retailer_fk_wins_over_inference(self):
+        vons = self._retailer("Vons")
+        self._retailer("Whole Foods")
+        event = self.create_event(
+            name="Whole Foods Fullerton · 2026-06-23",
+            tenant=self.tenant,
+            date=self.now,
+        )
+        recap = recap_models.CustomRecap.objects.create(
+            name="fk recap", approved=True, event=event, tenant=self.tenant,
+            custom_recap_template=self.template,
+            created_by=self.system_user, updated_by=self.system_user,
+        )
+        recap.retailer = vons
+        recap.save(update_fields=["retailer"])
+        rows = rows_for_header(self.tenant, ["Retailer"])
+        assert rows[0][0] == "Vons"
+
+    def test_retailer_blank_when_nothing_matches(self):
+        # No known retailer appears in the text (a bare city), and partial
+        # word overlaps must not match ("Vons" inside "Avonsdale").
+        self._retailer("Vons")
+        event = self.create_event(
+            name="Avonsdale Market · 2026-06-29",
+            tenant=self.tenant,
+            date=self.now,
+        )
+        recap_models.CustomRecap.objects.create(
+            name="city recap", approved=True, event=event, tenant=self.tenant,
+            custom_recap_template=self.template,
+            created_by=self.system_user, updated_by=self.system_user,
+        )
+        rows = rows_for_header(self.tenant, ["Retailer"])
+        assert rows[0][0] == ""
