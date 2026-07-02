@@ -590,11 +590,157 @@ def _ld_write(svc, sheet_id, tab, row_idx, data9, uuid) -> None:
     ).execute()
 
 
+def _ld_grid_info(svc, sheet_id, tab) -> tuple[int | None, int | None]:
+    """(gid, columnCount) for a tab (None tab = first worksheet)."""
+    try:
+        meta = (
+            svc.spreadsheets()
+            .get(
+                spreadsheetId=sheet_id,
+                fields="sheets.properties(title,sheetId,index,gridProperties(columnCount))",
+            )
+            .execute()
+        )
+    except HttpError as e:
+        logger.warning("sheets_mirror[ld]: grid-info read failed: %s", e)
+        return None, None
+    sheets = meta.get("sheets", [])
+    if not sheets:
+        return None, None
+    if not tab:
+        sheets = sorted(sheets, key=lambda s: s.get("properties", {}).get("index", 0))
+        p = sheets[0]["properties"]
+        return p["sheetId"], p.get("gridProperties", {}).get("columnCount")
+    for s in sheets:
+        p = s.get("properties", {})
+        if p.get("title") == tab:
+            return p["sheetId"], p.get("gridProperties", {}).get("columnCount")
+    return None, None
+
+
+def _ld_ensure_grid(svc, sheet_id, tab) -> int | None:
+    """Make sure the tab is wide enough for the far-right Spark key column
+    (BR = col 70). Client-built sheets are usually narrower, and a too-narrow
+    grid makes every key write fail with 'exceeds grid limits' — which once
+    left an inserted-but-never-filled blank row behind (REQ-1208). Appending
+    empty columns is purely additive: it never touches existing data or the
+    client's manual columns. Returns the tab's gid (reusable by callers), or
+    None when the tab wasn't found."""
+    gid, cols = _ld_grid_info(svc, sheet_id, tab)
+    if gid is None:
+        return None
+    need = _LD_KEY_COL_INDEX + 2  # key column + one spare
+    if cols is not None and cols < need:
+        try:
+            svc.spreadsheets().batchUpdate(
+                spreadsheetId=sheet_id,
+                body={
+                    "requests": [
+                        {
+                            "appendDimension": {
+                                "sheetId": gid,
+                                "dimension": "COLUMNS",
+                                "length": need - cols,
+                            }
+                        }
+                    ]
+                },
+            ).execute()
+            logger.info(
+                "sheets_mirror[ld]: widened tab %r from %s to %s columns",
+                tab, cols, need,
+            )
+        except HttpError as e:
+            logger.warning("sheets_mirror[ld]: column append failed: %s", e)
+    return gid
+
+
+def _ld_remove_blank_rows(svc, sheet_id, tab, gid, last_row: int = 40) -> int:
+    """Delete fully-blank rows in the top section (rows 2..last_row) — debris
+    from a past insert whose content write then failed on the too-narrow grid
+    (see _ld_ensure_grid). A row only qualifies when BOTH its data block
+    (A:O) and its Spark key cell are empty, and the scan stays in the top
+    slice where Spark inserts land, so a client's intentional spacer rows
+    deeper in the sheet are never touched."""
+    col = _ld_key_col()
+    try:
+        resp = (
+            svc.spreadsheets()
+            .values()
+            .batchGet(
+                spreadsheetId=sheet_id,
+                ranges=[
+                    _qualify(tab, f"A2:O{last_row}"),
+                    _qualify(tab, f"{col}2:{col}{last_row}"),
+                ],
+            )
+            .execute()
+        )
+    except HttpError as e:
+        logger.warning("sheets_mirror[ld]: blank-row scan failed: %s", e)
+        return 0
+    ranges = resp.get("valueRanges", [])
+    data = (ranges[0].get("values") if len(ranges) > 0 else None) or []
+    keys = (ranges[1].get("values") if len(ranges) > 1 else None) or []
+
+    def _blank(cells) -> bool:
+        return not any(str(c).strip() for c in cells)
+
+    to_delete = []
+    for i in range(last_row - 1):  # 0-based offset from row 2
+        row_cells = data[i] if i < len(data) else []
+        key_cells = keys[i] if i < len(keys) else []
+        if _blank(row_cells) and _blank(key_cells):
+            to_delete.append(i + 2)
+    # Trailing not-yet-used rows also read as blank — only delete blanks that
+    # sit ABOVE real content (true gaps), never the empty tail of the sheet.
+    last_content = 0
+    for i in range(last_row - 1):
+        row_cells = data[i] if i < len(data) else []
+        key_cells = keys[i] if i < len(keys) else []
+        if not (_blank(row_cells) and _blank(key_cells)):
+            last_content = i + 2
+    to_delete = [r for r in to_delete if r < last_content]
+    if not to_delete:
+        return 0
+    try:
+        svc.spreadsheets().batchUpdate(
+            spreadsheetId=sheet_id,
+            body={
+                "requests": [
+                    {
+                        "deleteDimension": {
+                            "range": {
+                                "sheetId": gid,
+                                "dimension": "ROWS",
+                                "startIndex": r - 1,
+                                "endIndex": r,
+                            }
+                        }
+                    }
+                    # bottom-up so earlier deletes don't shift later indexes
+                    for r in sorted(to_delete, reverse=True)
+                ]
+            },
+        ).execute()
+    except HttpError as e:
+        logger.warning("sheets_mirror[ld]: blank-row delete failed: %s", e)
+        return 0
+    logger.info(
+        "sheets_mirror[ld]: removed %s blank row(s) at %s", len(to_delete), to_delete
+    )
+    return len(to_delete)
+
+
 def _ld_insert_dated_row(svc, sheet_id, tab, gid, at_row, row9, uuid) -> None:
     """LD-layout counterpart to _insert_dated_row: insert a blank row at
     at_row (1-based, pushing everything from there down) and write the A:I
     data + Spark key column into it. _insert_dated_row only knows the
-    generic contiguous layout, hence the separate function."""
+    generic contiguous layout, hence the separate function.
+
+    If the content write fails after the row was inserted (e.g. a grid-limit
+    error), the inserted row is deleted again so the sheet is never left with
+    an orphaned blank row, then the error propagates."""
     svc.spreadsheets().batchUpdate(
         spreadsheetId=sheet_id,
         body={
@@ -613,13 +759,43 @@ def _ld_insert_dated_row(svc, sheet_id, tab, gid, at_row, row9, uuid) -> None:
             ]
         },
     ).execute()
-    _ld_write(svc, sheet_id, tab, at_row, row9, uuid)
+    try:
+        _ld_write(svc, sheet_id, tab, at_row, row9, uuid)
+    except HttpError:
+        try:
+            svc.spreadsheets().batchUpdate(
+                spreadsheetId=sheet_id,
+                body={
+                    "requests": [
+                        {
+                            "deleteDimension": {
+                                "range": {
+                                    "sheetId": gid,
+                                    "dimension": "ROWS",
+                                    "startIndex": at_row - 1,
+                                    "endIndex": at_row,
+                                }
+                            }
+                        }
+                    ]
+                },
+            ).execute()
+        except HttpError as cleanup_err:  # pragma: no cover - best-effort
+            logger.warning(
+                "sheets_mirror[ld]: failed-insert cleanup also failed: %s",
+                cleanup_err,
+            )
+        raise
 
 
 def _ld_upsert_request_row(svc, sheet_id, tab, request) -> bool:
     data9 = _ld_retail_row(request)
     if data9 is None:
         return False
+    # Widen the grid to the key column FIRST: on a too-narrow client sheet
+    # even the key-column READ below 400s, so every request looked new and
+    # every write failed. Also hands back the gid for the insert path.
+    gid = _ld_ensure_grid(svc, sheet_id, tab)
     uuid = str(request.uuid)
     existing = _ld_existing_rows(svc, sheet_id, tab)
     row_idx = existing.get(uuid)
@@ -633,7 +809,6 @@ def _ld_upsert_request_row(svc, sheet_id, tab, request) -> bool:
     # already honors for its own appends (see _append_or_insert_new).
     tenant = getattr(request, "tenant", None)
     if getattr(tenant, "master_tracker_insert_by_date", False) and tab:
-        gid = _tab_gid(svc, sheet_id, tab)
         at = (
             _date_descending_insert_index(svc, sheet_id, tab, _parse_sheet_date(data9[2]))
             if gid is not None
@@ -667,6 +842,13 @@ def _ld_bulk_sync(svc, sheet_id, tab, requests) -> tuple[int, str | None]:
     if not requests:
         return 0, None
     tenant = getattr(requests[0], "tenant", None)
+    # Heal the grid before ANY read/write: widen to the key column (narrow
+    # client sheets 400 even on key-column reads) and clear blank-row debris
+    # left by past half-failed inserts — BEFORE reading row indexes, since
+    # deletes shift everything below them.
+    gid = _ld_ensure_grid(svc, sheet_id, tab)
+    if gid is not None:
+        _ld_remove_blank_rows(svc, sheet_id, tab, gid)
     existing = _ld_existing_rows(svc, sheet_id, tab)
     col = _ld_key_col()
 
@@ -700,7 +882,8 @@ def _ld_bulk_sync(svc, sheet_id, tab, requests) -> tuple[int, str | None]:
     written //= 2
 
     insert_by_date = bool(getattr(tenant, "master_tracker_insert_by_date", False)) and tab
-    gid = _tab_gid(svc, sheet_id, tab) if (insert_by_date and new_rows) else None
+    if not (insert_by_date and new_rows):
+        gid = None
     for uuid, row9 in new_rows:
         at = (
             _date_descending_insert_index(svc, sheet_id, tab, _parse_sheet_date(row9[2]))

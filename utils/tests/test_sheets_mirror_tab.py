@@ -205,3 +205,74 @@ def test_append_or_insert_inserts_at_date_slot_when_enabled():
     assert update.call_args.kwargs["range"] == "'MASTER_Tracker'!A5:O5"
     # And it did NOT fall back to append.
     spreadsheets.values.return_value.append.assert_not_called()
+
+
+# ── LD grid self-healing (ensure columns / blank-row debris / compensation) ──
+
+def _meta_svc(cols, gid=77, title="MASTER_Tracker"):
+    svc = MagicMock()
+    svc.spreadsheets.return_value.get.return_value.execute.return_value = {
+        "sheets": [
+            {"properties": {"title": title, "sheetId": gid, "index": 0,
+                            "gridProperties": {"columnCount": cols}}}
+        ]
+    }
+    return svc
+
+
+def test_ld_ensure_grid_appends_missing_columns():
+    from utils.sheets_mirror import _LD_KEY_COL_INDEX, _ld_ensure_grid
+
+    svc = _meta_svc(cols=61)
+    gid = _ld_ensure_grid(svc, "sid", "MASTER_Tracker")
+    assert gid == 77
+    body = svc.spreadsheets.return_value.batchUpdate.call_args.kwargs["body"]
+    req = body["requests"][0]["appendDimension"]
+    assert req["dimension"] == "COLUMNS"
+    # 61 existing + appended == key column + one spare
+    assert 61 + req["length"] == _LD_KEY_COL_INDEX + 2
+
+
+def test_ld_ensure_grid_noops_when_wide_enough():
+    from utils.sheets_mirror import _ld_ensure_grid
+
+    svc = _meta_svc(cols=80)
+    assert _ld_ensure_grid(svc, "sid", "MASTER_Tracker") == 77
+    svc.spreadsheets.return_value.batchUpdate.assert_not_called()
+
+
+def test_ld_remove_blank_rows_deletes_gap_but_not_tail():
+    from utils.sheets_mirror import _ld_remove_blank_rows
+
+    svc = MagicMock()
+    # Rows 2-5 content, row 6 blank (the debris), rows 7-8 content, rest tail.
+    data = [["NH", "Friday"]] * 4 + [[]] + [["NY"], ["TX"]]
+    svc.spreadsheets.return_value.values.return_value.batchGet.return_value.execute.return_value = {
+        "valueRanges": [{"values": data}, {"values": []}]
+    }
+    removed = _ld_remove_blank_rows(svc, "sid", "MASTER_Tracker", gid=77, last_row=40)
+    assert removed == 1
+    body = svc.spreadsheets.return_value.batchUpdate.call_args.kwargs["body"]
+    rng = body["requests"][0]["deleteDimension"]["range"]
+    # Row 6 → 0-based [5, 6); the blank tail rows 9-40 are NOT deleted.
+    assert (rng["startIndex"], rng["endIndex"]) == (5, 6)
+    assert len(body["requests"]) == 1
+
+
+def test_ld_insert_dated_row_deletes_inserted_row_when_write_fails():
+    from googleapiclient.errors import HttpError
+    from utils.sheets_mirror import _ld_insert_dated_row
+
+    svc = MagicMock()
+    err = HttpError(resp=SimpleNamespace(status=400, reason="bad"), content=b"grid")
+    svc.spreadsheets.return_value.values.return_value.batchUpdate.return_value.execute.side_effect = err
+    try:
+        _ld_insert_dated_row(svc, "sid", "MASTER_Tracker", gid=77, at_row=6,
+                             row9=["NV"] * 9, uuid="u-1")
+        assert False, "expected HttpError to propagate"
+    except HttpError:
+        pass
+    # Two structural batchUpdates: the insert, then the compensating delete.
+    calls = svc.spreadsheets.return_value.batchUpdate.call_args_list
+    assert "insertDimension" in str(calls[0])
+    assert "deleteDimension" in str(calls[1])
