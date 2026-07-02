@@ -1,0 +1,48 @@
+name: Resend BA welcome email (reset temp password)
+
+# Fires `/internal/cron/resend-ba-welcome` — resets an EXISTING user onto
+# admin-created-BA rails (temp password + forced change, verified, active BA
+# profile) and re-sends the "Welcome to Spark by Ignite" email with app
+# buttons. DRY-RUN default prints last_login/password state first.
+# Secret-gated via X-Cron-Secret header. Manual dispatch only.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (report account state only). Set false to reset + send."
+        required: true
+        default: true
+        type: boolean
+      email:
+        description: "The BA's email."
+        required: true
+        type: string
+
+jobs:
+  fire-resend-ba-welcome:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire resend-ba-welcome cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/resend-ba-welcome
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+          EMAIL: ${{ github.event.inputs.email }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          if [ "$DRY_RUN" = "false" ]; then EXECUTE="true"; else EXECUTE="false"; fi
+          echo "dry_run=$DRY_RUN -> execute=$EXECUTE"
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL" \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            --data-urlencode "execute=$EXECUTE" \
+            --data-urlencode "email=$EMAIL")
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          echo ""
+          [ "$STATUS" != "200" ] && exit 1 || exit 0

@@ -1,0 +1,67 @@
+name: Retext tenant events (scoped find/replace)
+
+# Fires `/internal/cron/retext-tenant-events` — literal find/replace across
+# Event.notes + Request.notes + Job.description for one tenant/event-type.
+# First use: Feel Free "5.5h billable" -> "5h billable". DRY-RUN default
+# reports per-model match counts. Secret-gated header. Manual dispatch only.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (count matches only). Set false to write."
+        required: true
+        default: true
+        type: boolean
+      tenant_name:
+        description: "Tenant name (case-insensitive)."
+        required: true
+        default: "Feel Free"
+        type: string
+      event_type:
+        description: "EventType name scope."
+        required: true
+        default: "Field Sampling"
+        type: string
+      find:
+        description: "Literal substring to find."
+        required: true
+        type: string
+      replace:
+        description: "Replacement text."
+        required: true
+        type: string
+
+jobs:
+  fire-retext-tenant-events:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire retext-tenant-events cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/retext-tenant-events
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+          TENANT_NAME: ${{ github.event.inputs.tenant_name }}
+          EVENT_TYPE: ${{ github.event.inputs.event_type }}
+          FIND: ${{ github.event.inputs.find }}
+          REPLACE: ${{ github.event.inputs.replace }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          if [ "$DRY_RUN" = "false" ]; then EXECUTE="true"; else EXECUTE="false"; fi
+          echo "dry_run=$DRY_RUN -> execute=$EXECUTE"
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL" \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            --data-urlencode "execute=$EXECUTE" \
+            --data-urlencode "tenant_name=$TENANT_NAME" \
+            --data-urlencode "event_type=$EVENT_TYPE" \
+            --data-urlencode "find=$FIND" \
+            --data-urlencode "replace=$REPLACE")
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          echo ""
+          [ "$STATUS" != "200" ] && exit 1 || exit 0
