@@ -643,6 +643,118 @@ class AmbassadorEventQueries:
         return await sync_to_async(_fetch, thread_sensitive=True)()
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def my_past_shifts_owing_recap(
+        self,
+        info: strawberry.Info,
+        within_days: int = 30,
+    ) -> List[types.ShiftOfferDetails]:
+        """The current BA's accepted shifts that have already ENDED but
+        still have no recap — powers a "Needs a recap" section on the
+        mobile Shifts tab so a BA who forgot to clock in (or whose shift
+        closed) can still file late.
+
+        A shift "owes a recap" when neither a Recap nor a CustomRecap
+        exists for that event by this ambassador. Scoped to shifts that
+        ended within the last `within_days`. BA-scoped via Ambassador→user;
+        empty for non-ambassador users.
+        """
+        from datetime import timedelta
+        from django.utils import timezone
+
+        user = info.context.request.user
+        if not getattr(user, "is_authenticated", False):
+            return []
+
+        from ambassadors import models as a_models
+        from ambassadors import types as a_types
+        from recaps.models import Recap, CustomRecap
+
+        def _fetch() -> List:
+            try:
+                ambassador = a_models.Ambassador.objects.get(user=user)
+            except a_models.Ambassador.DoesNotExist:
+                return []
+            now = timezone.now()
+            window_start = now - timedelta(days=within_days)
+            qs = (
+                a_models.AmbassadorEvent.objects.select_related(
+                    "event",
+                    "event__retailer",
+                    "event__state",
+                    "event__timezone",
+                )
+                .filter(
+                    ambassador=ambassador,
+                    is_approved=True,
+                    event__end_time__lt=now,
+                    event__end_time__gte=window_start,
+                )
+                .order_by("-event__end_time")
+            )
+            out: List = []
+            for ae in qs:
+                ev = ae.event
+                # Skip shifts that already have a recap (either family)
+                # filed for this BA — they don't "owe" one.
+                already_recapped = (
+                    Recap.objects.filter(event=ev, ambassador=ambassador).exists()
+                    or CustomRecap.objects.filter(
+                        event=ev, ambassador=ambassador
+                    ).exists()
+                )
+                if already_recapped:
+                    continue
+                venue = (
+                    getattr(ev, "name", None)
+                    or getattr(getattr(ev, "retailer", None), "name", None)
+                )
+                state_code = getattr(getattr(ev, "state", None), "code", None)
+                coords = getattr(ev, "coordinates", None) or []
+                lat = float(coords[0]) if len(coords) >= 1 else None
+                lng = float(coords[1]) if len(coords) >= 2 else None
+                date_label, start_label, end_label = _shift_time_labels(ev)
+                out.append(
+                    a_types.ShiftOfferDetails(
+                        ambassador_event_uuid=strawberry.ID(str(ae.uuid)),
+                        event_uuid=strawberry.ID(str(ev.uuid)),
+                        event_name=venue or "(shift)",
+                        venue=venue,
+                        address=getattr(ev, "address", None),
+                        date=ev.date.isoformat() if getattr(ev, "date", None) else None,
+                        start_time=(
+                            ev.start_time.isoformat()
+                            if getattr(ev, "start_time", None)
+                            else None
+                        ),
+                        end_time=(
+                            ev.end_time.isoformat()
+                            if getattr(ev, "end_time", None)
+                            else None
+                        ),
+                        state_code=state_code,
+                        is_approved=True,
+                        latitude=lat,
+                        longitude=lng,
+                        date_label=date_label,
+                        start_label=start_label,
+                        end_label=end_label,
+                        confirmation_requested_at=(
+                            ae.confirmation_requested_at.isoformat()
+                            if ae.confirmation_requested_at
+                            else None
+                        ),
+                        confirmed_at=(
+                            ae.confirmed_at.isoformat()
+                            if ae.confirmed_at
+                            else None
+                        ),
+                    )
+                )
+            return out
+
+        return await sync_to_async(_fetch, thread_sensitive=True)()
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def shift_context(
         self,
         info: strawberry.Info,
