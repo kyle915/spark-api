@@ -1,0 +1,53 @@
+name: Tests
+
+# PR gate + develop check: the full pytest suite against a disposable
+# Postgres. Until now spark-api had NO CI — tests only ran when someone ran
+# them locally, which twice let runtime-broken changes reach prod that the
+# existing suite would have caught (a management command with a swallowed
+# `def handle`, stale IDOR-message assertions). Redis is deliberately absent:
+# the queue layer logs-and-falls-back inline, same as prod.
+
+on:
+  pull_request:
+  push:
+    branches: [develop]
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: spark_tests
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/spark_tests
+      # Throwaway values — settings requires these with no default; nothing
+      # in the test run talks to real services.
+      SECRET_KEY: ci-only-not-a-secret
+      DEBUG: "true"
+      ALLOWED_HOSTS: "*"
+      CORS_ALLOWED_ORIGINS: "http://localhost"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Install dependencies
+        run: uv sync --locked
+      - name: Run test suite
+        run: uv run pytest -q -p no:cacheprovider
