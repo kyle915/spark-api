@@ -1124,6 +1124,11 @@ class OAuthSignInResponse:
     message: str
     token: OAuthTokenType | None = None
     user: OAuthUserType | None = None
+    # True when no account matched the SSO email and the client asked us
+    # not to auto-create (create_if_missing=false) — the app shows a
+    # "were you invited? sign in with that email" prompt instead of
+    # silently forking an empty duplicate account.
+    new_account_required: bool = False
     is_new_account: bool = False
     client_mutation_id: strawberry.ID | None = None
 
@@ -1171,3 +1176,24 @@ class OpenShiftItem:
     start_time: str | None
     end_time: str | None
     state_code: str | None
+
+
+@strawberry.type
+class BaActivationRow:
+    """One booked BA's activation state for the admin dashboard — has the
+    person actually signed into the account we booked their shifts on?"""
+
+    ambassador_uuid: strawberry.ID
+    name: str
+    email: str
+    phone: str | None
+    last_login: str | None
+    signed_in: bool
+    bookings: int
+    next_shift: str | None
+
+
+@strawberry.type
+class ResendBaWelcomeResponse:
+    success: bool
+    message: str

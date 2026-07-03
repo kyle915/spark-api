@@ -3683,13 +3683,20 @@ class OAuthSignInService(BaseAmbassadorService):
         first_name: str | None,
         last_name: str | None,
         provider: str,
+        allow_create: bool = True,
     ) -> tuple[Any, bool]:
-        """Return (user, is_new). Creates User + Ambassador on first sign-in."""
+        """Return (user, is_new). Creates User + Ambassador on first sign-in.
+
+        With allow_create=False an unmatched email returns (None, False)
+        instead — the duplicate-account guard (Rocio's Apple Hide-My-Email
+        sign-in silently created an empty second account)."""
         existing = await sync_to_async(
             User.objects.filter(email__iexact=email).first
         )()
         if existing:
             return existing, False
+        if not allow_create:
+            return None, False
 
         @sync_to_async
         @transaction.atomic
@@ -3788,12 +3795,14 @@ class OAuthSignInService(BaseAmbassadorService):
 
     @classmethod
     async def _finish(cls, input, identity) -> OAuthSignInResponse:
+        allow_create = getattr(input, "create_if_missing", None) is not False
         try:
             user, is_new = await cls._find_or_create_user(
                 email=identity.email,
                 first_name=identity.first_name,
                 last_name=identity.last_name,
                 provider=identity.provider,
+                allow_create=allow_create,
             )
         except Exception as exc:
             return build_mutation_response(
@@ -3801,6 +3810,29 @@ class OAuthSignInService(BaseAmbassadorService):
                 success=False,
                 message=f"Could not provision account: {exc}",
                 input_obj=input,
+            )
+
+        if user is None:
+            # Guarded miss: no account matches this SSO email and the
+            # client asked us not to auto-create. Apple Hide-My-Email
+            # relays deserve an explicit call-out — the user usually
+            # believes they signed in "with their real email".
+            relay = identity.email.lower().endswith("@privaterelay.appleid.com")
+            detail = (
+                "Your Apple ID is sharing a hidden relay address, which "
+                "doesn't match any Spark account. "
+                if relay
+                else f"No Spark account exists for {identity.email}. "
+            )
+            return build_mutation_response(
+                OAuthSignInResponse,
+                success=False,
+                message=detail
+                + "If you were invited to Spark by email, sign in with that "
+                "email and password instead — or continue to create a "
+                "brand-new account.",
+                input_obj=input,
+                new_account_required=True,
             )
 
         if not user.is_active:
@@ -4407,3 +4439,40 @@ class MileageService:
             )
 
         return await sync_to_async(_op)()
+
+
+def reset_ba_welcome_and_email(email: str) -> str:
+    """Put an EXISTING user onto admin-created-BA rails and re-send the
+    welcome email: new temp password (change forced on first sign-in),
+    verified + active user, active Ambassador profile, and the
+    "Welcome to Spark by Ignite" email with the app-store buttons.
+
+    Shared by the resend_ba_welcome command (ops/cron path) and the
+    resendBaWelcome mutation (admin dashboard button). Raises ValueError
+    when no user matches — callers surface the message."""
+    from ambassadors.envelopes import AmbassadorGeneratedPasswordMailer
+    from ambassadors.models import Ambassador
+
+    user = User.objects.filter(email__iexact=email.strip()).order_by("id").first()
+    if user is None:
+        raise ValueError(f"User not found: {email}")
+
+    password = generate_random_password()
+    user.set_password(password)
+    user.is_active = True
+    user.requires_password_change = True
+    user.save(update_fields=["password", "is_active", "requires_password_change"])
+    UserStatus.objects.update_or_create(
+        user=user, defaults={"verified": True, "archived": False}
+    )
+    amb = Ambassador.objects.filter(user=user).first()
+    if amb is None:
+        Ambassador.objects.create(
+            user=user, is_active=True, created_by=user, updated_by=user,
+        )
+    elif not amb.is_active:
+        amb.is_active = True
+        amb.save(update_fields=["is_active"])
+
+    AmbassadorGeneratedPasswordMailer(user, password).send()
+    return f"Welcome email sent to {user.email} (temp password, change forced)."

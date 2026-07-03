@@ -594,6 +594,11 @@ class AppleSignInInput(SparkGraphQLInput):
     # in the user's name on initial account creation.
     first_name: str | None = None
     last_name: str | None = None
+    # Duplicate-account guard: None (legacy clients) keeps the historical
+    # auto-create; explicit False makes an unmatched email return
+    # new_account_required instead of silently forking a fresh, empty
+    # account (Apple Hide-My-Email relays never match the invited email).
+    create_if_missing: bool | None = None
 
 
 @strawberry.input
@@ -601,6 +606,8 @@ class GoogleSignInInput(SparkGraphQLInput):
     """Google ID token sign-in."""
 
     id_token: str
+    # Same duplicate-account guard as AppleSignInInput.
+    create_if_missing: bool | None = None
 
 
 @strawberry.input
