@@ -3442,6 +3442,8 @@ class AuditBaAccountsView(View):
             cmd_args += ["--tenant-slug", _get("tenant_slug")]
         if _flag("deactivate_empty_relay_dups"):
             cmd_args.append("--deactivate-empty-relay-dups")
+        if _flag("backfill_memberships"):
+            cmd_args.append("--backfill-memberships")
         if _flag("apply"):
             cmd_args.append("--apply")
 

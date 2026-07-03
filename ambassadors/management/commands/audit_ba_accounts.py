@@ -36,6 +36,12 @@ class Command(BaseCommand):
             action="store_true",
             help="Deactivate relay accounts with no bookings/recaps/mileage.",
         )
+        parser.add_argument(
+            "--backfill-memberships",
+            action="store_true",
+            help="Create the missing TenantedUser for every booked BA (the "
+            "historical version of the #893 assignment signal).",
+        )
         parser.add_argument("--apply", action="store_true", help="Actually write (default dry-run).")
 
     def handle(self, *args, **opts):
@@ -58,6 +64,8 @@ class Command(BaseCommand):
         section("BACKEND ERRORS (last 24h)", self._errors)
         if opts["deactivate_empty_relay_dups"]:
             section("DEACTIVATE EMPTY RELAY DUPS", lambda: self._deactivate(opts["apply"]))
+        if opts["backfill_memberships"]:
+            section("BACKFILL TENANT MEMBERSHIPS", lambda: self._backfill(opts["apply"]))
 
     # -- helpers -----------------------------------------------------------
 
@@ -244,3 +252,44 @@ class Command(BaseCommand):
             u.is_active = False
             u.save(update_fields=["is_active"])
         w(self.style.SUCCESS(f"  deactivated {len(targets)} empty relay duplicate(s)."))
+
+    def _backfill(self, apply: bool):
+        """Give every booked BA the tenant membership their bookings imply.
+
+        PR #893 ensures this on NEW assignments; this closes the historical
+        gap (422 booked-but-rosterless BAs found 2026-07-03). Never touches
+        existing rows — including deliberately-deactivated memberships,
+        which get_or_create leaves inactive.
+        """
+        from collections import Counter
+
+        from ambassadors.models import AmbassadorEvent
+        from tenants.models import TenantedUser
+
+        w = self.stdout.write
+        pairs = set(
+            AmbassadorEvent.objects.filter(
+                ambassador__user__isnull=False, event__tenant__isnull=False
+            ).values_list("ambassador__user_id", "event__tenant_id")
+        )
+        existing = set(TenantedUser.objects.values_list("user_id", "tenant_id"))
+        missing = sorted(pairs - existing)
+        w(f"  booked (user, tenant) pairs: {len(pairs)} | already members: "
+          f"{len(pairs & existing)} | MISSING: {len(missing)}")
+        per_tenant = Counter(t for _, t in missing)
+        for tenant_id, n in per_tenant.most_common():
+            w(f"    tenant {tenant_id}: +{n}")
+        if not missing:
+            return
+        if not apply:
+            w(f"  DRY-RUN — would create {len(missing)} membership(s). "
+              "Re-run with apply=true.")
+            return
+        created = 0
+        for user_id, tenant_id in missing:
+            _, was_created = TenantedUser.objects.get_or_create(
+                user_id=user_id, tenant_id=tenant_id,
+                defaults={"is_active": True},
+            )
+            created += int(was_created)
+        w(self.style.SUCCESS(f"  created {created} membership(s)."))

@@ -19,6 +19,10 @@ on:
         description: "Deactivate empty relay duplicates (true/false)"
         required: false
         default: "false"
+      backfill_memberships:
+        description: "Backfill TenantedUser for booked BAs (true/false)"
+        required: false
+        default: "false"
       apply:
         description: "Actually write (true) or dry-run (false)"
         required: false
@@ -41,6 +45,7 @@ jobs:
             --data-urlencode "names=${{ inputs.names }}" \
             --data-urlencode "tenant_slug=${{ inputs.tenant_slug }}" \
             --data-urlencode "deactivate_empty_relay_dups=${{ inputs.deactivate_empty_relay_dups }}" \
+            --data-urlencode "backfill_memberships=${{ inputs.backfill_memberships }}" \
             --data-urlencode "apply=${{ inputs.apply }}" \
             --max-time 540)
           echo "$BODY"
