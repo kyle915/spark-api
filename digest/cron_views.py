@@ -3371,6 +3371,50 @@ class RetextTenantEventsView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class WeeklyMileageReportView(View):
+    """POST `/internal/cron/weekly-mileage-report`.
+
+    Emails the prior Mon-Sun week's mileage reimbursement summary + CSV
+    (weekly_mileage_report command). Scheduled Mondays 13:00 UTC; params:
+    week_ending (Sunday YYYY-MM-DD, for reruns), dry_run.
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _get(name: str) -> str:
+            return (request.GET.get(name) or request.POST.get(name) or "").strip()
+
+        dry_run = _get("dry_run").lower() in ("1", "true", "yes", "on")
+        cmd_args: list[str] = []
+        week_ending = _get("week_ending")
+        if week_ending:
+            cmd_args += ["--week-ending", week_ending]
+        if dry_run:
+            cmd_args.append("--dry-run")
+
+        out = io.StringIO()
+        try:
+            call_command("weekly_mileage_report", *cmd_args, stdout=out)
+        except Exception as exc:
+            logger.exception("weekly-mileage-report cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed",
+                 "exception": _concise_exc(exc), "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "dry_run": dry_run, "log": out.getvalue()})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class StaffTenantEventsView(View):
     """POST `/internal/cron/staff-tenant-events`.
 
@@ -4521,6 +4565,7 @@ def _registered_views() -> dict[str, Any]:
         "fix-ld-kpi-totals": FixLdKpiTotalsView,
         "set-tenant-mileage-tracking": SetTenantMileageTrackingView,
         "staff-tenant-events": StaffTenantEventsView,
+        "weekly-mileage-report": WeeklyMileageReportView,
         "resend-ba-welcome": ResendBaWelcomeView,
         "retext-tenant-events": RetextTenantEventsView,
         "backfill-ld-master-tracker": BackfillLdMasterTrackerView,

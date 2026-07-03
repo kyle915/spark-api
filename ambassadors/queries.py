@@ -379,6 +379,94 @@ class FileTypeQueries:
 @strawberry.type
 class AmbassadorEventQueries:
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def tenant_ba_activation(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID,
+    ) -> List[types.BaActivationRow]:
+        """Admin dashboard: every BA booked on this tenant's events with
+        their sign-in state — the "who hasn't activated their account yet"
+        view (Feel Free week one: 5 of 8 BAs hadn't signed in and we only
+        knew by running ad-hoc scripts). Admin access only; others get []."""
+        from django.db.models import Count, Min, Q
+        from django.utils import timezone as _tz
+
+        from utils.graphql.mixins import resolve_id_to_int
+        from utils.graphql.permissions import (
+            _is_admin_access,
+            resolve_request_user_access,
+        )
+
+        user = info.context.request.user
+        if not getattr(user, "is_authenticated", False):
+            return []
+        _rs, _st, _su, _em = await resolve_request_user_access(user)
+        if not _is_admin_access(_rs, _st, _su, _em):
+            return []
+
+        tid = resolve_id_to_int(tenant_id)
+
+        def _fetch() -> List[types.BaActivationRow]:
+            from ambassadors import models as a_models
+
+            now = _tz.now()
+            scoped = Q(
+                ambassadors_events__tenant_id=tid,
+                ambassadors_events__is_approved=True,
+            )
+            qs = (
+                a_models.Ambassador.objects.filter(scoped)
+                .select_related("user")
+                .annotate(
+                    booked=Count(
+                        "ambassadors_events",
+                        filter=Q(
+                            ambassadors_events__tenant_id=tid,
+                            ambassadors_events__is_approved=True,
+                        ),
+                        distinct=True,
+                    ),
+                    upcoming=Min(
+                        "ambassadors_events__event__start_time",
+                        filter=Q(
+                            ambassadors_events__tenant_id=tid,
+                            ambassadors_events__is_approved=True,
+                            ambassadors_events__event__start_time__gte=now,
+                        ),
+                    ),
+                )
+                .distinct()
+            )
+            rows = []
+            for amb in qs:
+                u = amb.user
+                name = (
+                    f"{getattr(u, 'first_name', '')} "
+                    f"{getattr(u, 'last_name', '') or ''}"
+                ).strip() or getattr(u, "email", "?")
+                rows.append(
+                    types.BaActivationRow(
+                        ambassador_uuid=strawberry.ID(str(amb.uuid)),
+                        name=name,
+                        email=getattr(u, "email", ""),
+                        phone=amb.phone,
+                        last_login=(
+                            u.last_login.isoformat() if u.last_login else None
+                        ),
+                        signed_in=bool(u.last_login),
+                        bookings=amb.booked,
+                        next_shift=(
+                            amb.upcoming.isoformat() if amb.upcoming else None
+                        ),
+                    )
+                )
+            # Not-signed-in first — they're the ones needing a nudge.
+            rows.sort(key=lambda r: (r.signed_in, r.name.lower()))
+            return rows
+
+        return await sync_to_async(_fetch)()
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def my_upcoming_shifts(
         self,
         info: strawberry.Info,

@@ -93,29 +93,7 @@ class Command(BaseCommand):
             ))
             return
 
-        from gqlauth.models import UserStatus
+        from ambassadors.services import reset_ba_welcome_and_email
 
-        from ambassadors.envelopes import AmbassadorGeneratedPasswordMailer
-        from ambassadors.services import generate_random_password
-
-        password = generate_random_password()
-        user.set_password(password)
-        user.is_active = True
-        user.requires_password_change = True
-        user.save(update_fields=["password", "is_active", "requires_password_change"])
-        UserStatus.objects.update_or_create(
-            user=user, defaults={"verified": True, "archived": False}
-        )
-        if amb is None:
-            amb = Ambassador.objects.create(
-                user=user, is_active=True, created_by=user, updated_by=user,
-            )
-        elif not amb.is_active:
-            amb.is_active = True
-            amb.save(update_fields=["is_active"])
-
-        AmbassadorGeneratedPasswordMailer(user, password).send()
-        w(self.style.SUCCESS(
-            f"Reset + welcome email sent to {user.email} "
-            "(temp password, change forced on first sign-in)."
-        ))
+        msg = reset_ba_welcome_and_email(user.email)
+        w(self.style.SUCCESS(msg))

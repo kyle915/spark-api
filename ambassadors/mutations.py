@@ -75,6 +75,7 @@ from .types import (
     BaSelfProfileType,
     PushPreferences,
 )
+from .types import ResendBaWelcomeResponse
 from . import inputs
 from .services import (
     PublicAmbassadorCreationService,
@@ -185,6 +186,36 @@ async def _get_default_application_status(tenant_id: int) -> JobStatus | None:
 
 @strawberry.type
 class AmbassadorMutations:
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def resend_ba_welcome(
+        self,
+        info: strawberry.Info,
+        email: str,
+    ) -> ResendBaWelcomeResponse:
+        """Admin dashboard button: reset a BA onto admin-created rails (new
+        temp password, verified, active profile) and re-send the welcome
+        email with the app-store buttons. Admin access only."""
+        from utils.graphql.permissions import (
+            _is_admin_access,
+            resolve_request_user_access,
+        )
+
+        user = info.context.request.user
+        _rs, _st, _su, _em = await resolve_request_user_access(user)
+        if not _is_admin_access(_rs, _st, _su, _em):
+            return ResendBaWelcomeResponse(
+                success=False, message="Not authorized."
+            )
+
+        from .services import reset_ba_welcome_and_email
+
+        try:
+            msg = await sync_to_async(reset_ba_welcome_and_email)(email)
+        except Exception as exc:
+            return ResendBaWelcomeResponse(success=False, message=str(exc))
+        return ResendBaWelcomeResponse(success=True, message=msg)
+
+
     @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
     async def apply_ambassador_event(
         self,
