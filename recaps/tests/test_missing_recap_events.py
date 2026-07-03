@@ -246,9 +246,12 @@ class TestNudgeAmbassadorForRecap(AmbassadorsGraphQLTestCase):
     async def test_fires_push_on_valid_assignment(self):
         # send_push_to_user is awaitable — patch with an AsyncMock
         # that returns 2 (devices-notified) so the success path
-        # reports a real number.
+        # reports a real number. The mutation imports it function-locally
+        # (`from ambassadors.push import send_push_to_user`), so the patch
+        # must target ambassadors.push — the module the name is read from
+        # at call time.
         with patch(
-            "recaps.mutations.send_push_to_user",
+            "ambassadors.push.send_push_to_user",
             new=AsyncMock(return_value=2),
         ) as mock_push:
             result = await self._execute_mutation(
@@ -280,7 +283,7 @@ class TestNudgeAmbassadorForRecap(AmbassadorsGraphQLTestCase):
         )
 
         with patch(
-            "recaps.mutations.send_push_to_user",
+            "ambassadors.push.send_push_to_user",
             new=AsyncMock(return_value=99),
         ) as mock_push:
             result = await self._execute_mutation(

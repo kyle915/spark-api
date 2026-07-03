@@ -17,15 +17,26 @@ User = get_user_model()
 def user(db):
     # User.role is a non-nullable FK (Role, on_delete=RESTRICT), so a bare
     # create_user() violates the NOT NULL constraint. Attach an ambassador
-    # Role (these are BA push tests).
+    # Role (these are BA push tests). ensure_role/update_or_create because
+    # the role (and possibly the user) can already exist — migration seeds
+    # or rows committed outside an earlier test's transaction.
     from tenants.models import Role
+    from tenants.tests.base import ensure_role
+    from utils.utils import ROLE_ID
 
-    role, _ = Role.objects.get_or_create(
-        slug=Role.AMBASSADOR_SLUG, defaults={"name": "Ambassador"}
+    role = ensure_role(
+        "Ambassador", slug=Role.AMBASSADOR_SLUG, pk=ROLE_ID.Ambassadors)
+    ba, _ = User.objects.update_or_create(
+        username="ba-push",
+        defaults={"email": "ba-push@example.com", "role": role,
+                  "is_active": True},
     )
-    return User.objects.create_user(
-        username="ba-push", email="ba-push@example.com", role=role
-    )
+    # Deterministic device/notification state for the fan-out assertions.
+    from ambassadors.models import PushNotification
+
+    PushDevice.objects.filter(user=ba).delete()
+    PushNotification.objects.filter(user=ba).delete()
+    return ba
 
 
 @pytest.fixture
@@ -123,11 +134,16 @@ def test_mark_notifications_read_scopes_to_user_and_unread():
     from ambassadors.models import PushNotification
     from tenants.models import Role
 
-    role, _ = Role.objects.get_or_create(
-        slug=Role.AMBASSADOR_SLUG, defaults={"name": "Ambassador"}
-    )
-    me = User.objects.create_user(username="me", email="me@x.com", role=role)
-    other = User.objects.create_user(username="other", email="other@x.com", role=role)
+    from tenants.tests.base import ensure_role
+    from utils.utils import ROLE_ID
+
+    role = ensure_role(
+        "Ambassador", slug=Role.AMBASSADOR_SLUG, pk=ROLE_ID.Ambassadors)
+    me, _ = User.objects.update_or_create(
+        username="me", defaults={"email": "me@x.com", "role": role})
+    other, _ = User.objects.update_or_create(
+        username="other", defaults={"email": "other@x.com", "role": role})
+    PushNotification.objects.filter(user__in=[me, other]).delete()
 
     mine_unread = PushNotification.objects.create(user=me, title="a")
     mine_read = PushNotification.objects.create(

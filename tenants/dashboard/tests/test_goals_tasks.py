@@ -81,6 +81,10 @@ class TestCreateGoalsForTenant(DashboardGraphQLTestCase):
         from tenants.models import Goal
 
         large_tenant = self.create_tenant(name="Large Tenant")
+        # Tenant post_save auto-links existing spark admins (prod behavior);
+        # the exact-count assertions below must reflect only the users this
+        # test creates, so drop any pre-linked memberships.
+        large_tenant.tenanted_users.all().delete()
         role = self.roles["client"]
         num_users = SCALE_TEST_MIN_USERS
         for i in range(num_users):

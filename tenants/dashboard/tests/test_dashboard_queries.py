@@ -305,34 +305,58 @@ class TestEventDashboardQueries(DashboardGraphQLTestCase):
     async def test_event_dashboard_with_multiple_distributors_filter(self):
         """Test event_dashboard query with multiple distributors filter."""
         today = timezone.now().date()
-        other_distributor = self.create_distributor(
-            name="Other Distributor",
-            email="other-distributor@example.com",
-            location=self.location,
-            tenant=self.tenant,
-        )
-        other_request = self.create_request(
-            name="Request Other Distributor",
-            date=today,
-            address="Address Other Distributor",
-            client=self.client,
-            distributor=other_distributor,
-            retailer=self.retailer,
-            request_type=self.request_type,
-            tenant=self.tenant,
-            start_time=time(11, 0),
-            end_time=time(19, 0),
-            status=self.approved_status,
-        )
-        self.create_event(
-            name="Event Other Distributor",
-            tenant=self.tenant,
-            address="Address Other Distributor",
-            request=other_request,
-            event_type=self.event_type,
-            status=self.event_status,
-            rmm_asigned=self.rmm_user,
-        )
+
+        def _build_other_distributor_event():
+            # Sync ORM must not run directly in the async test body
+            # (SynchronousOnlyOperation) — build the fixture in a worker
+            # thread like the rest of this file's ORM calls.
+            from recaps import models as recap_models
+
+            other_distributor = self.create_distributor(
+                name="Other Distributor",
+                email="other-distributor@example.com",
+                location=self.location,
+                tenant=self.tenant,
+            )
+            other_request = self.create_request(
+                name="Request Other Distributor",
+                date=today,
+                address="Address Other Distributor",
+                client=self.client,
+                distributor=other_distributor,
+                retailer=self.retailer,
+                request_type=self.request_type,
+                tenant=self.tenant,
+                start_time=time(11, 0),
+                end_time=time(19, 0),
+                status=self.approved_status,
+            )
+            other_event = self.create_event(
+                name="Event Other Distributor",
+                tenant=self.tenant,
+                address="Address Other Distributor",
+                request=other_request,
+                event_type=self.event_type,
+                status=self.event_status,
+                rmm_asigned=self.rmm_user,
+            )
+            # totalEvents counts events WITH a recap ("Events Run" matches
+            # the Program-KPIs basis) — a recapless event would never move
+            # the metric this test asserts on.
+            recap_models.Recap.objects.create(
+                name="Recap Other Distributor",
+                event=other_event,
+                ambassador=self.ambassador,
+                job=self.job1,
+                retailer=self.retailer,
+                total_engagements=10,
+                approved=True,
+                created_by=self.get_system_user(),
+            )
+            return other_distributor
+
+        other_distributor = await sync_to_async(
+            _build_other_distributor_event)()
 
         query = """
         query EventDashboard($distributorId: ID, $distributorIds: [ID!]) {

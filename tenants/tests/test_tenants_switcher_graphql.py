@@ -54,13 +54,16 @@ class TestClientsTenantsSwitcher(BaseGraphQLTestCase):
         # @igniteproductions.co, NOT is_staff, NO membership row — must still
         # see every client (the Madison case). The role is intentionally
         # "client" to prove the EMAIL DOMAIN is what grants the full list.
-        madison = await sync_to_async(self.create_user)(
-            username="madison@igniteproductions.co",
-            email="madison@igniteproductions.co",
+        # NOTE: don't use madison@ itself — that address now sits on
+        # IGNITE_ADMIN_EXCLUDE (demoted 2026-06-26), which strips exactly the
+        # domain-admin grant this test asserts.
+        teammate = await sync_to_async(self.create_user)(
+            username="fieldops@igniteproductions.co",
+            email="fieldops@igniteproductions.co",
             role=self.roles["client"],
             is_staff=False,
         )
-        assert await self._tenant_names(madison) == {"Alpha Co", "Bravo Co"}
+        assert await self._tenant_names(teammate) == {"Alpha Co", "Bravo Co"}
 
     @pytest.mark.asyncio
     async def test_spark_admin_role_sees_all_tenants(self):

@@ -26,6 +26,7 @@ from events.models import (
 from ambassadors.models import Ambassador, AmbassadorEvent
 from events.jobs.google_calendar_jobs import EventGoogleCalendarJob
 from events.tasks import sync_event_to_google_calendar
+from tenants.tests.base import ensure_role
 from utils.utils import ROLE_ID
 
 User = get_user_model()
@@ -35,59 +36,61 @@ User = get_user_model()
 class TestEventGoogleCalendarJob:
     """Tests for EventGoogleCalendarJob class."""
 
+    def _user(self, username, role):
+        """User keyed on the unique username — adopts a leaked committed row
+        (from an earlier module's async writes) instead of colliding on it."""
+        user, _ = User.objects.update_or_create(
+            username=username,
+            defaults={
+                "email": f"{username}@test.com",
+                "role": role,
+                "is_active": True,
+            },
+        )
+        return user
+
+    def _connection(self, user):
+        connection, _ = GoogleCalendarConnection.objects.update_or_create(
+            user=user,
+            defaults={
+                "created_by": user,
+                "updated_by": user,
+                "is_active": True,
+                "calendar_id": "primary",
+            },
+        )
+        connection.set_access_token("test_token")
+        connection.set_refresh_token("test_refresh_token")
+        connection.token_expiry = timezone.now() + timedelta(hours=1)
+        connection.save()
+        return connection
+
     def setup_method(self):
         """Set up test data."""
-        # Create roles
-        self.admin_role, _ = Role.objects.update_or_create(
-            slug=Role.SPARK_ADMIN_SLUG,
-            defaults={"name": "Spark Admin", "slug": Role.SPARK_ADMIN_SLUG}
-        )
-        self.client_role, _ = Role.objects.update_or_create(
-            slug=Role.CLIENT_SLUG,
-            defaults={"name": "Client", "slug": Role.CLIENT_SLUG}
-        )
-        self.ambassador_role, _ = Role.objects.update_or_create(
-            pk=ROLE_ID.Ambassadors,
-            defaults={"name": "Ambassador", "slug": Role.AMBASSADOR_SLUG}
-        )
+        # Create roles (collision-proof against migration seeds / leaked rows)
+        self.admin_role = ensure_role(
+            "Spark Admin", slug=Role.SPARK_ADMIN_SLUG, pk=ROLE_ID.SparkAdmin)
+        self.client_role = ensure_role(
+            "Client", slug=Role.CLIENT_SLUG, pk=ROLE_ID.Client)
+        self.ambassador_role = ensure_role(
+            "Ambassador", slug=Role.AMBASSADOR_SLUG, pk=ROLE_ID.Ambassadors)
+
+        # send_to_admins() fans out to ALL active users carrying the admin
+        # role — deactivate any leaked ones so the call-count assertions see
+        # exactly the users this fixture creates (rolled back with the test).
+        User.objects.filter(
+            role__in=[self.admin_role, self.client_role,
+                      self.ambassador_role],
+        ).update(is_active=False)
 
         # Create users
-        self.admin_user = User.objects.create_user(
-            username="admin",
-            email="admin@test.com",
-            password="testpass123",
-            role=self.admin_role
-        )
-        self.admin_user2 = User.objects.create_user(
-            username="admin2",
-            email="admin2@test.com",
-            password="testpass123",
-            role=self.admin_role
-        )
-        self.client_user = User.objects.create_user(
-            username="client",
-            email="client@test.com",
-            password="testpass123",
-            role=self.client_role
-        )
-        self.client_user2 = User.objects.create_user(
-            username="client2",
-            email="client2@test.com",
-            password="testpass123",
-            role=self.client_role
-        )
-        self.ambassador_user = User.objects.create_user(
-            username="ambassador",
-            email="ambassador@test.com",
-            password="testpass123",
-            role=self.ambassador_role
-        )
-        self.ambassador_user2 = User.objects.create_user(
-            username="ambassador2",
-            email="ambassador2@test.com",
-            password="testpass123",
-            role=self.ambassador_role
-        )
+        self.admin_user = self._user("admin", self.admin_role)
+        self.admin_user2 = self._user("admin2", self.admin_role)
+        self.client_user = self._user("client", self.client_role)
+        self.client_user2 = self._user("client2", self.client_role)
+        self.ambassador_user = self._user("ambassador", self.ambassador_role)
+        self.ambassador_user2 = self._user(
+            "ambassador2", self.ambassador_role)
 
         # Create tenant
         self.tenant = Tenant.objects.create(
@@ -133,42 +136,11 @@ class TestEventGoogleCalendarJob:
             created_by=self.admin_user
         )
 
-        # Create Google Calendar connections
-        self.admin_connection = GoogleCalendarConnection.objects.create(
-            user=self.admin_user,
-            created_by=self.admin_user,
-            updated_by=self.admin_user,
-            is_active=True,
-            calendar_id="primary"
-        )
-        self.admin_connection.set_access_token("test_token")
-        self.admin_connection.set_refresh_token("test_refresh_token")
-        self.admin_connection.token_expiry = timezone.now() + timedelta(hours=1)
-        self.admin_connection.save()
-
-        self.admin_connection2 = GoogleCalendarConnection.objects.create(
-            user=self.admin_user2,
-            created_by=self.admin_user2,
-            updated_by=self.admin_user2,
-            is_active=True,
-            calendar_id="primary"
-        )
-        self.admin_connection2.set_access_token("test_token")
-        self.admin_connection2.set_refresh_token("test_refresh_token")
-        self.admin_connection2.token_expiry = timezone.now() + timedelta(hours=1)
-        self.admin_connection2.save()
-
-        self.client_connection = GoogleCalendarConnection.objects.create(
-            user=self.client_user,
-            created_by=self.client_user,
-            updated_by=self.client_user,
-            is_active=True,
-            calendar_id="primary"
-        )
-        self.client_connection.set_access_token("test_token")
-        self.client_connection.set_refresh_token("test_refresh_token")
-        self.client_connection.token_expiry = timezone.now() + timedelta(hours=1)
-        self.client_connection.save()
+        # Create Google Calendar connections (OneToOne per user — adopt a
+        # leaked row rather than collide on it, same as the users above)
+        self.admin_connection = self._connection(self.admin_user)
+        self.admin_connection2 = self._connection(self.admin_user2)
+        self.client_connection = self._connection(self.client_user)
 
         # Create state and location
         self.state = State.objects.create(
@@ -283,14 +255,14 @@ class TestEventGoogleCalendarJob:
             created_by=self.admin_user
         )
 
-        # Create ambassadors
-        self.ambassador = Ambassador.objects.create(
+        # Create ambassadors (OneToOne per user — adopt like the connections)
+        self.ambassador, _ = Ambassador.objects.update_or_create(
             user=self.ambassador_user,
-            created_by=self.admin_user
+            defaults={"created_by": self.admin_user},
         )
-        self.ambassador2 = Ambassador.objects.create(
+        self.ambassador2, _ = Ambassador.objects.update_or_create(
             user=self.ambassador_user2,
-            created_by=self.admin_user
+            defaults={"created_by": self.admin_user},
         )
 
         # Create ambassador events
@@ -518,29 +490,8 @@ class TestEventGoogleCalendarJob:
         mock_queues_class.return_value = mock_queues
 
         # Create Google Calendar connections for ambassadors
-        ambassador_connection = GoogleCalendarConnection.objects.create(
-            user=self.ambassador_user,
-            created_by=self.ambassador_user,
-            updated_by=self.ambassador_user,
-            is_active=True,
-            calendar_id="primary"
-        )
-        ambassador_connection.set_access_token("test_token")
-        ambassador_connection.set_refresh_token("test_refresh_token")
-        ambassador_connection.token_expiry = timezone.now() + timedelta(hours=1)
-        ambassador_connection.save()
-
-        ambassador_connection2 = GoogleCalendarConnection.objects.create(
-            user=self.ambassador_user2,
-            created_by=self.ambassador_user2,
-            updated_by=self.ambassador_user2,
-            is_active=True,
-            calendar_id="primary"
-        )
-        ambassador_connection2.set_access_token("test_token")
-        ambassador_connection2.set_refresh_token("test_refresh_token")
-        ambassador_connection2.token_expiry = timezone.now() + timedelta(hours=1)
-        ambassador_connection2.save()
+        ambassador_connection = self._connection(self.ambassador_user)
+        ambassador_connection2 = self._connection(self.ambassador_user2)
 
         job = EventGoogleCalendarJob(self.event.id)
         job.send_to_ambassadors()
@@ -597,12 +548,9 @@ class TestEventGoogleCalendarJob:
         mock_queues_class.return_value = mock_queues
 
         # Create user without connection
-        user_no_connection = User.objects.create_user(
-            username="noconnection",
-            email="noconnection@test.com",
-            password="testpass123",
-            role=self.admin_role
-        )
+        user_no_connection = self._user("noconnection", self.admin_role)
+        GoogleCalendarConnection.objects.filter(
+            user=user_no_connection).delete()
 
         job = EventGoogleCalendarJob(self.event.id)
         job.send_to_user(user_no_connection)

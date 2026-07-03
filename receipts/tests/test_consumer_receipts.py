@@ -26,6 +26,14 @@ from receipts import models as receipt_models
 from receipts.tokens import make_event_receipt_token, verify_event_receipt_token
 
 
+@pytest.fixture(autouse=True)
+def _gcs_bucket(settings):
+    # Receipt photo URLs come from utils.gcs.public_url(), which returns
+    # None when settings.GS_BUCKET_NAME is empty (no bucket configured in
+    # CI) — pin a dummy bucket so the URL assertions run everywhere.
+    settings.GS_BUCKET_NAME = "spark-test-bucket"
+
+
 REVIEW_RECEIPT_MUTATION = """
 mutation ReviewReceipt($input: ReviewReceiptInput!) {
   reviewReceipt(input: $input) {

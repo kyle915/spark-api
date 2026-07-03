@@ -6,11 +6,72 @@ tenanted user relationships needed for testing GraphQL mutations.
 """
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
+from django.db import connection
+from django.utils.text import slugify
 from gqlauth.models import UserStatus
 from tenants.models import Role, Tenant, TenantedUser
 from utils.utils import ROLE_ID
 
 User = get_user_model()
+
+
+def _sync_role_id_sequence():
+    """Point tenants_role's id sequence past the highest existing id.
+
+    0001_initial seeds Ambassador/Spark Admin with EXPLICIT pks, which does
+    not advance the sequence — so the first sequence-assigned INSERT gets
+    nextval=1 and dies on tenants_role_pkey while those rows exist. Call
+    before any Role INSERT that doesn't pass an explicit pk.
+    """
+    with connection.cursor() as cur:
+        cur.execute(
+            "SELECT setval(pg_get_serial_sequence('tenants_role', 'id'),"
+            " GREATEST(COALESCE((SELECT MAX(id) FROM tenants_role), 0), 1))"
+        )
+
+
+def ensure_role(name: str, *, slug: str | None = None, pk: int | None = None,
+                created_by=None) -> Role:
+    """Return THE role for ``name``, creating or converging as needed.
+
+    Role fixtures cannot assume a clean table: 0001_initial seeds
+    Ambassador/Spark Admin through historical models (explicit pks, custom
+    save() skipped, so slug is NULL and the id sequence never advances), any
+    transaction=True test's teardown flush deletes those seeds mid-suite,
+    and async tests can commit extra rows outside the test transaction.
+    ``name`` is the unique constraint fixtures keep colliding on, so this
+    looks up by name first, adopts a row squatting on a required ``pk``, and
+    keeps the sequence ahead of explicit-pk rows before inserting.
+    """
+    slug = slug or slugify(name)
+    # A different-named row holding our slug (unique) would break both our
+    # save and slug-keyed lookups in code under test — release it.
+    Role.objects.exclude(name=name).filter(slug=slug).update(slug=None)
+
+    role = Role.objects.filter(name=name).first()
+    if role is None and pk is not None:
+        # No row with our name, but our required pk may be occupied by a
+        # leaked row under another name: converge it so both unique keys
+        # (pk and name) end up canonical.
+        role = Role.objects.filter(pk=pk).first()
+    if role is not None:
+        dirty = False
+        for field, value in (("name", name), ("slug", slug)):
+            if getattr(role, field) != value:
+                setattr(role, field, value)
+                dirty = True
+        if created_by is not None and role.created_by_id is None:
+            role.created_by = created_by
+            dirty = True
+        if dirty:
+            role.save()
+        return role
+
+    if pk is not None:
+        return Role.objects.create(
+            pk=pk, name=name, slug=slug, created_by=created_by)
+    _sync_role_id_sequence()
+    return Role.objects.create(name=name, slug=slug, created_by=created_by)
 
 
 class BaseGraphQLTestCase:
@@ -39,10 +100,7 @@ class BaseGraphQLTestCase:
                 self._system_user = User.objects.get(username='system')
             except User.DoesNotExist:
                 # Create a temporary role for the system user
-                temp_role, _ = Role.objects.get_or_create(
-                    name='System',
-                    defaults={'slug': 'system'}
-                )
+                temp_role = ensure_role('System')
 
                 # Create the system user
                 self._system_user = User.objects.create_user(
@@ -76,20 +134,12 @@ class BaseGraphQLTestCase:
         """
         system_user = self.get_system_user()
 
-        defaults = {
-            'created_by': system_user,
-            **kwargs
-        }
-
-        if role_id:
-            role, _ = Role.objects.update_or_create(
-                pk=role_id,
-                defaults={'name': name, **defaults}
-            )
-        else:
-            role = Role.objects.create(name=name, **defaults)
-
-        return role
+        return ensure_role(
+            name,
+            slug=kwargs.pop('slug', None),
+            pk=role_id,
+            created_by=kwargs.pop('created_by', system_user),
+        )
 
     def create_tenant(self, name: str = "Test Tenant", **kwargs):
         """
@@ -184,36 +234,14 @@ class BaseGraphQLTestCase:
         """
         system_user = self.get_system_user()
 
-        roles = {}
-
-        # Role 1: Ambassador
-        roles['ambassador'], _ = Role.objects.update_or_create(
-            pk=ROLE_ID.Ambassadors,
-            defaults={
-                'name': 'Ambassador',
-                'created_by': system_user,
-            }
-        )
-
-        # Role 2: Spark Admin
-        roles['spark_admin'], _ = Role.objects.update_or_create(
-            pk=ROLE_ID.SparkAdmin,
-            defaults={
-                'name': 'Spark Admin',
-                'created_by': system_user,
-            }
-        )
-
-        # Role 3: Client
-        roles['client'], _ = Role.objects.update_or_create(
-            pk=3,
-            defaults={
-                'name': 'Client',
-                'created_by': system_user,
-            }
-        )
-
-        return roles
+        return {
+            'ambassador': ensure_role(
+                'Ambassador', pk=ROLE_ID.Ambassadors, created_by=system_user),
+            'spark_admin': ensure_role(
+                'Spark Admin', pk=ROLE_ID.SparkAdmin, created_by=system_user),
+            'client': ensure_role(
+                'Client', pk=ROLE_ID.Client, created_by=system_user),
+        }
 
     async def _execute_mutation(self, mutation, variables, endpoint_path=None, user=None):
         """

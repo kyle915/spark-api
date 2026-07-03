@@ -13,9 +13,11 @@ from datetime import date, time, datetime
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 from tenants.models import Role, Tenant, TenantedUser, GoogleCalendarConnection
+from tenants.tests.base import ensure_role
 from events.models import Event, EventType, EventStatus, Request, RequestType, RequestStatus
 from events.models import Client, Distributor, Retailer, Location
 from ambassadors.models import Ambassador, AmbassadorEvent
+from utils.utils import ROLE_ID
 
 User = get_user_model()
 
@@ -35,23 +37,22 @@ class TestGoogleCalendarSignals:
 
     def setup_method(self):
         """Set up test data."""
-        # Create roles
-        self.ambassador_role = Role.objects.create(
-            name="Ambassador", slug="ambassador")
-        self.client_role = Role.objects.create(name="Client", slug="client")
+        # Create roles (collision-proof against migration seeds / leaked rows)
+        self.ambassador_role = ensure_role(
+            "Ambassador", slug=Role.AMBASSADOR_SLUG, pk=ROLE_ID.Ambassadors)
+        self.client_role = ensure_role(
+            "Client", slug=Role.CLIENT_SLUG, pk=ROLE_ID.Client)
 
-        # Create users
-        self.ambassador_user = User.objects.create_user(
+        # Create users (keyed on the unique username — adopt leaked rows)
+        self.ambassador_user, _ = User.objects.update_or_create(
             username="ambassador",
-            email="ambassador@test.com",
-            password="testpass123",
-            role=self.ambassador_role
+            defaults={"email": "ambassador@test.com",
+                      "role": self.ambassador_role, "is_active": True},
         )
-        self.client_user = User.objects.create_user(
+        self.client_user, _ = User.objects.update_or_create(
             username="client",
-            email="client@test.com",
-            password="testpass123",
-            role=self.client_role
+            defaults={"email": "client@test.com",
+                      "role": self.client_role, "is_active": True},
         )
 
         # Create tenant
@@ -74,27 +75,31 @@ class TestGoogleCalendarSignals:
             created_by=self.client_user
         )
 
-        # Create Google Calendar connections
-        self.ambassador_connection = GoogleCalendarConnection.objects.create(
-            user=self.ambassador_user,
-            created_by=self.ambassador_user,
-            updated_by=self.ambassador_user,
-            is_active=True
+        # Create Google Calendar connections (OneToOne per user — adopt)
+        self.ambassador_connection, _ = (
+            GoogleCalendarConnection.objects.update_or_create(
+                user=self.ambassador_user,
+                defaults={"created_by": self.ambassador_user,
+                          "updated_by": self.ambassador_user,
+                          "is_active": True},
+            )
         )
         self.ambassador_connection.set_access_token("test_token")
 
-        self.client_connection = GoogleCalendarConnection.objects.create(
-            user=self.client_user,
-            created_by=self.client_user,
-            updated_by=self.client_user,
-            is_active=True
+        self.client_connection, _ = (
+            GoogleCalendarConnection.objects.update_or_create(
+                user=self.client_user,
+                defaults={"created_by": self.client_user,
+                          "updated_by": self.client_user,
+                          "is_active": True},
+            )
         )
         self.client_connection.set_access_token("test_token")
 
-        # Create ambassador
-        self.ambassador = Ambassador.objects.create(
+        # Create ambassador (OneToOne per user — adopt)
+        self.ambassador, _ = Ambassador.objects.update_or_create(
             user=self.ambassador_user,
-            created_by=self.client_user
+            defaults={"created_by": self.client_user},
         )
 
         # Create event type and status

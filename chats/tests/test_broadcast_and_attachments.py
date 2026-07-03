@@ -22,6 +22,14 @@ from asgiref.sync import sync_to_async
 from ambassadors.tests.base import AmbassadorsGraphQLTestCase
 
 
+@pytest.fixture(autouse=True)
+def _gcs_bucket(settings):
+    # Attachment URLs come from utils.gcs.public_url(), which returns None
+    # when settings.GS_BUCKET_NAME is empty (no bucket configured in CI) —
+    # pin a dummy bucket so the URL assertions run everywhere.
+    settings.GS_BUCKET_NAME = "spark-test-bucket"
+
+
 BROADCAST_MUTATION = """
 mutation Broadcast($input: BroadcastChatMessageInput!) {
   broadcastChatMessage(input: $input) {

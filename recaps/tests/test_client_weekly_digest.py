@@ -13,7 +13,7 @@ Guarantees locked in:
   and the pending-approval list are each counted from the right rows — and a
   ``reviewed=True`` request is EXCLUDED from "needs your approval".
 * **Opt-in OFF safe default.** A tenant is only touched with BOTH
-  ``scheduled_report_enabled=True`` AND non-empty recipients. Nothing enabled →
+  ``client_weekly_digest_enabled=True`` AND non-empty recipients. Nothing enabled →
   nothing sent; enabled-but-no-recipients → skipped.
 * **Quiet weeks are skipped** unless ``--force``.
 * **--dry-run sends nothing.**
@@ -62,25 +62,25 @@ class TestClientWeeklyDigest(AmbassadorsGraphQLTestCase):
         # Enabled + recipients + a busy week -> the one tenant that gets emailed.
         self.enabled_tenant = self.create_tenant(
             name="Girl Beer",
-            scheduled_report_enabled=True,
+            client_weekly_digest_enabled=True,
             recap_recipient_emails="client@girlbeer.com, ops@girlbeer.com",
         )
         # Enabled but NO recipients -> opted in, must be skipped.
         self.enabled_no_recipients = self.create_tenant(
             name="Quiet Brand",
-            scheduled_report_enabled=True,
+            client_weekly_digest_enabled=True,
             recap_recipient_emails="",
         )
         # Has recipients but NOT enabled -> opt-in OFF, never emailed.
         self.disabled_tenant = self.create_tenant(
             name="Liquid Death",
-            scheduled_report_enabled=False,
+            client_weekly_digest_enabled=False,
             recap_recipient_emails="brand@liquiddeath.com",
         )
         # Enabled + recipients but a totally QUIET week -> skipped unless --force.
         self.quiet_enabled = self.create_tenant(
             name="Sleepy Brand",
-            scheduled_report_enabled=True,
+            client_weekly_digest_enabled=True,
             recap_recipient_emails="zzz@sleepy.com",
         )
 
@@ -244,7 +244,7 @@ class TestClientWeeklyDigest(AmbassadorsGraphQLTestCase):
         """A quiet enabled tenant is skipped by default, sent under --force."""
         # Narrow scope to ONLY the quiet enabled tenant.
         for t in (self.enabled_tenant, self.enabled_no_recipients):
-            type(t).objects.filter(id=t.id).update(scheduled_report_enabled=False)
+            type(t).objects.filter(id=t.id).update(client_weekly_digest_enabled=False)
 
         with mock.patch.object(
             cmd_mod.timezone, "now", return_value=_FAKE_NOW
@@ -268,7 +268,7 @@ class TestClientWeeklyDigest(AmbassadorsGraphQLTestCase):
             self.enabled_no_recipients,
             self.quiet_enabled,
         ):
-            type(t).objects.filter(id=t.id).update(scheduled_report_enabled=False)
+            type(t).objects.filter(id=t.id).update(client_weekly_digest_enabled=False)
 
         with mock.patch.object(
             cmd_mod.timezone, "now", return_value=_FAKE_NOW
@@ -282,7 +282,7 @@ class TestClientWeeklyDigest(AmbassadorsGraphQLTestCase):
         """An opted-in tenant with no recipients is skipped, never emailed."""
         # Only the no-recipients enabled tenant remains in scope.
         for t in (self.enabled_tenant, self.quiet_enabled):
-            type(t).objects.filter(id=t.id).update(scheduled_report_enabled=False)
+            type(t).objects.filter(id=t.id).update(client_weekly_digest_enabled=False)
 
         with mock.patch.object(
             cmd_mod.timezone, "now", return_value=_FAKE_NOW

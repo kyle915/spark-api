@@ -25,6 +25,14 @@ from recaps.report_tokens import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _gcs_bucket(settings):
+    # Photo URLs come from utils.gcs.public_url(), which returns None when
+    # settings.GS_BUCKET_NAME is empty (no bucket configured in CI) — pin a
+    # dummy bucket so the URL-shape assertions run everywhere.
+    settings.GS_BUCKET_NAME = "spark-test-bucket"
+
+
 # ---------------------------------------------------------------------------
 # Lightweight stand-ins. Mimic just the attributes the helpers read so the
 # aggregation logic can be pinned without a database / migrations.

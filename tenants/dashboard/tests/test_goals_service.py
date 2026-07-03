@@ -352,6 +352,11 @@ class TestEnsureGoalsForTenantUsers(DashboardGraphQLTestCase):
     def test_ensure_goals_returns_zero_when_no_active_users(self):
         """Tenant with only inactive tenanted users gets no goals created."""
         empty_tenant = self.create_tenant(name="Empty Tenant")
+        # Tenant post_save auto-links existing spark admins (prod behavior);
+        # this test asserts an exact membership set, so start from a clean
+        # slate — a leaked admin user from an earlier module would otherwise
+        # arrive pre-linked and active.
+        empty_tenant.tenanted_users.all().delete()
         self.create_tenanted_user(user=self.client_user, tenant=empty_tenant, is_active=False)
         count = ensure_goals_for_tenant_users(empty_tenant.id, 2025)
         assert count == 0
@@ -384,6 +389,10 @@ class TestEnsureGoalsForTenantUsers(DashboardGraphQLTestCase):
     def test_ensure_goals_bulk_batching_respected(self):
         """When missing users exceed batch size, all are still created (batched bulk_create)."""
         big_tenant = self.create_tenant(name="Big Tenant")
+        # Drop auto-linked admin memberships (see
+        # test_ensure_goals_returns_zero_when_no_active_users) — the count
+        # below must reflect exactly the users this test creates.
+        big_tenant.tenanted_users.all().delete()
         role = self.roles["client"]
         num_users = 5  # More than patched batch size of 2
         for i in range(num_users):
