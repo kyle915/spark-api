@@ -214,14 +214,28 @@ class ResendMailDriver(MailDriver):
         if envelope.attachments:
             params["attachments"] = envelope.attachments
         result = resend.Emails.send(params)
-        # Log the response so we can verify deliveries in Cloud Run logs.
         # When the API key is invalid or the FROM domain isn't verified,
         # the SDK still returns a payload (no exception) but `id` is
-        # missing — surfacing it here is the difference between silent
-        # success and silent failure.
+        # missing — without this check that's a SILENT failure: the caller
+        # believes the email went out (welcome emails, approvals) and
+        # nobody ever learns otherwise. ERROR-level so the backend error
+        # monitor alerts on it; deliberately not raised — most sends are
+        # best-effort side effects of a mutation that already committed,
+        # and failing the whole request over a lost email is worse than
+        # the lost email.
+        send_id = (
+            result.get("id") if isinstance(result, dict)
+            else getattr(result, "id", None)
+        )
+        if not send_id:
+            logger.error(
+                "Resend send FAILED (no id in response) to=%s subject=%r result=%s",
+                envelope.to_emails, envelope.subject, result,
+            )
+            return
         logger.info(
-            "Resend send to=%s subject=%r result=%s",
-            envelope.to_emails, envelope.subject, result,
+            "Resend send to=%s subject=%r id=%s",
+            envelope.to_emails, envelope.subject, send_id,
         )
 
 

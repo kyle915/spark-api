@@ -30,7 +30,11 @@ class Queue:
         try:
             return self.get_queue().enqueue(func, *args, **kwargs)
         except Exception as e:
-            logger.error(
+            # WARNING, not error: prod Cloud Run has no Redis, so this fires
+            # on every enqueue and callers fall back to inline execution —
+            # the designed path, not an incident (and error-level here would
+            # spam the backend error monitor).
+            logger.warning(
                 f"Error enqueuing job {func} to queue {self.name}: {e}")
             raise e
 

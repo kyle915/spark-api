@@ -479,6 +479,21 @@ else:
             "JOB_EXTENSION_RATE_DEFAULT must be a valid decimal value."
         ) from exc
 
+# ── Backend error monitoring (utils.error_monitor) ─────────────────────
+# Alert emails fire only when enabled (defaults to on outside DEBUG so
+# tests/CI never pollute outboxes); events are recorded regardless.
+BACKEND_ERROR_ALERTS_ENABLED = env.bool(
+    "BACKEND_ERROR_ALERTS_ENABLED", default=not DEBUG
+)
+BACKEND_ERROR_ALERT_EMAILS = env.list(
+    "BACKEND_ERROR_ALERT_EMAILS", default=["kyle@igniteproductions.co"]
+)
+
+# Weekly mileage reimbursement report recipients (Monday cron).
+MILEAGE_REPORT_EMAILS = env.list(
+    "MILEAGE_REPORT_EMAILS", default=["kyle@igniteproductions.co"]
+)
+
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
@@ -525,3 +540,15 @@ LOGGING = {
         },
     },
 }
+
+
+# Feed every configured logger (they set propagate=False) plus the root into
+# the backend error monitor at ERROR level. Done by mutation so new loggers
+# added to the dict above are picked up automatically.
+LOGGING["handlers"]["error_monitor"] = {
+    "class": "utils.error_monitor.ErrorEventLogHandler",
+    "level": "ERROR",
+}
+LOGGING["root"]["handlers"].append("error_monitor")
+for _logger_cfg in LOGGING["loggers"].values():
+    _logger_cfg.setdefault("handlers", []).append("error_monitor")
