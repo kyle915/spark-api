@@ -482,6 +482,11 @@ else:
 # ── Backend error monitoring (utils.error_monitor) ─────────────────────
 # Alert emails fire only when enabled (defaults to on outside DEBUG so
 # tests/CI never pollute outboxes); events are recorded regardless.
+# Push delivery master switch. Default: on only when DEBUG is off — the
+# queue/inline push path round-trips through asgiref's main-thread executor,
+# which DEADLOCKS under pytest's run_until_complete (and is pointless noise
+# in dev). Set PUSH_ENABLED=true locally to exercise real pushes.
+PUSH_ENABLED = env.bool("PUSH_ENABLED", default=not DEBUG)
 BACKEND_ERROR_ALERTS_ENABLED = env.bool(
     "BACKEND_ERROR_ALERTS_ENABLED", default=not DEBUG
 )

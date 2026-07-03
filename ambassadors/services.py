@@ -3691,7 +3691,10 @@ class OAuthSignInService(BaseAmbassadorService):
         instead — the duplicate-account guard (Rocio's Apple Hide-My-Email
         sign-in silently created an empty second account)."""
         existing = await sync_to_async(
-            User.objects.filter(email__iexact=email).first
+            # Only active accounts — deactivated relay duplicates must not
+            # capture the sign-in (the BA should land on newAccountRequired
+            # and use their invited email instead).
+            User.objects.filter(email__iexact=email, is_active=True).first
         )()
         if existing:
             return existing, False

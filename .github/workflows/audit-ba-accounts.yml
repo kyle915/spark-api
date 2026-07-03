@@ -1,0 +1,48 @@
+name: audit-ba-accounts
+
+# BA account health dump — relay duplicates, per-name account sets, tenant
+# recap/clock-in vitals, tenant-less census, recent backend errors.
+# Read-only unless apply=true. Manual dispatch only.
+
+on:
+  workflow_dispatch:
+    inputs:
+      names:
+        description: "Comma-separated name/email fragments"
+        required: false
+        default: ""
+      tenant_slug:
+        description: "Tenant slug for recap/clock-in vitals"
+        required: false
+        default: ""
+      deactivate_empty_relay_dups:
+        description: "Deactivate empty relay duplicates (true/false)"
+        required: false
+        default: "false"
+      apply:
+        description: "Actually write (true) or dry-run (false)"
+        required: false
+        default: "false"
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Fire audit-ba-accounts cron endpoint
+        run: |
+          if [ -z "${{ secrets.INTERNAL_CRON_SECRET }}" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          BODY=$(curl -sS -w "\nHTTP %{http_code}" \
+            -X POST "https://spark-api-new-490085168610.us-central1.run.app/internal/cron/audit-ba-accounts" \
+            -H "X-Cron-Secret: ${{ secrets.INTERNAL_CRON_SECRET }}" \
+            --data-urlencode "names=${{ inputs.names }}" \
+            --data-urlencode "tenant_slug=${{ inputs.tenant_slug }}" \
+            --data-urlencode "deactivate_empty_relay_dups=${{ inputs.deactivate_empty_relay_dups }}" \
+            --data-urlencode "apply=${{ inputs.apply }}" \
+            --max-time 540)
+          echo "$BODY"
+          STATUS=$(echo "$BODY" | tail -1 | awk '{print $2}')
+          [ "$STATUS" = "200" ] || exit 1

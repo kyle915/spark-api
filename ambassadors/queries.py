@@ -670,8 +670,21 @@ class AmbassadorEventQueries:
                 )
                 .order_by("event__start_time")
             )
+            rows = list(qs)
+            # Latest clock-in per event for these bookings, so the app can
+            # show clocked-in state instead of re-offering "Clock in".
+            clock_map: dict = {}
+            if rows:
+                from ambassadors.models import Attendance
+
+                for att in Attendance.objects.filter(
+                    ambassador=ambassador,
+                    event_id__in=[ae.event_id for ae in rows],
+                    source__name="clock_in",
+                ).order_by("clock_time"):
+                    clock_map[att.event_id] = att.clock_time.isoformat()
             out: List = []
-            for ae in qs:
+            for ae in rows:
                 ev = ae.event
                 # Active = the shift's LOCAL date equals local today, both in
                 # the event's own zone. Skip events with no placeable date
@@ -714,6 +727,7 @@ class AmbassadorEventQueries:
                         date_label=date_label,
                         start_label=start_label,
                         end_label=end_label,
+                        clocked_in_at=clock_map.get(ae.event_id),
                         confirmation_requested_at=(
                             ae.confirmation_requested_at.isoformat()
                             if ae.confirmation_requested_at

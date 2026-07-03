@@ -84,3 +84,24 @@ class TestSsoDuplicateGuard(EventsGraphQLTestCase):
         )
         assert resp.success is True
         assert resp.new_account_required is False
+
+    def test_inactive_account_does_not_capture_sign_in(self):
+        """A deactivated relay duplicate must not win the SSO email match —
+        the guarded sign-in should come back as newAccountRequired so the BA
+        uses their invited email instead (audit_ba_accounts deactivates the
+        empty dups; this is what makes that cleanup effective)."""
+        from tenants.models import Role
+
+        role = Role.objects.get(slug=Role.AMBASSADOR_SLUG)
+        User.objects.create_user(
+            username="dup",
+            email="x9relay@privaterelay.appleid.com",
+            first_name="Alicia",
+            role=role,
+            is_active=False,
+        )
+        resp = self._finish(
+            "x9relay@privaterelay.appleid.com", create_if_missing=False
+        )
+        assert resp.success is False
+        assert resp.new_account_required is True

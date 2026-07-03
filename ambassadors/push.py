@@ -327,6 +327,14 @@ def enqueue_push(
     Falls back to running the send inline if the queue (Redis) is
     unreachable — same posture as utils/mailer.send().
     """
+    from django.conf import settings
+
+    if not getattr(settings, "PUSH_ENABLED", True):
+        # Tests/dev: the inline fallback's dedicated-thread asyncio.run
+        # deadlocks against pytest's blocked main event loop (asgiref
+        # main-thread executor). Prod (DEBUG=false) is unaffected.
+        logger.debug("PUSH_ENABLED=false — dropping push to user_id=%s", user_id)
+        return
     try:
         from utils.queues import Queues
 
@@ -361,6 +369,12 @@ def schedule_push_at(
     enqueue it immediately. If the scheduler is unreachable, we log
     and drop — there's no inline fallback for a future-dated send.
     """
+    from django.conf import settings
+
+    if not getattr(settings, "PUSH_ENABLED", True):
+        logger.debug("PUSH_ENABLED=false — dropping scheduled push to user_id=%s", user_id)
+        return
+
     now = timezone.now()
     if eta <= now + datetime.timedelta(seconds=5):
         enqueue_push(user_id, title=title, body=body, data=data)

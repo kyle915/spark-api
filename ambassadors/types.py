@@ -1016,6 +1016,10 @@ class ShiftOfferDetails:
     date_label: str | None = None
     start_label: str | None = None
     end_label: str | None = None
+    # ISO timestamp of the BA's latest clock-in for this event (active
+    # shifts only) — lets the app show clocked-in state + "File recap"
+    # instead of re-offering Clock in after every reload.
+    clocked_in_at: str | None = None
     # Day-before confirmation state (AmbassadorEvent stamps, ISO 8601).
     # Mobile shows the "Confirm you're in" button when requested-but-not-
     # confirmed and the green confirmed chip once stamped. Defaulted so

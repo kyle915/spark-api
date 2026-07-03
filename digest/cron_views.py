@@ -3415,6 +3415,56 @@ class WeeklyMileageReportView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class AuditBaAccountsView(View):
+    """POST `/internal/cron/audit-ba-accounts`.
+
+    BA account health dump (audit_ba_accounts command): relay duplicates,
+    per-name account sets, tenant recap/clock-in vitals, tenant-less
+    census, recent backend errors. Params: names, tenant_slug,
+    deactivate_empty_relay_dups, apply. Read-only unless apply=true.
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _get(name: str) -> str:
+            return (request.GET.get(name) or request.POST.get(name) or "").strip()
+
+        def _flag(name: str) -> bool:
+            return _get(name).lower() in ("1", "true", "yes", "on")
+
+        cmd_args: list[str] = []
+        if _get("names"):
+            cmd_args += ["--names", _get("names")]
+        if _get("tenant_slug"):
+            cmd_args += ["--tenant-slug", _get("tenant_slug")]
+        if _flag("deactivate_empty_relay_dups"):
+            cmd_args.append("--deactivate-empty-relay-dups")
+        if _flag("apply"):
+            cmd_args.append("--apply")
+
+        out = io.StringIO()
+        try:
+            call_command("audit_ba_accounts", *cmd_args, stdout=out)
+        except Exception as exc:
+            logger.exception("audit-ba-accounts cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed",
+                 "exception": _concise_exc(exc), "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "log": out.getvalue()})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class StaffTenantEventsView(View):
     """POST `/internal/cron/staff-tenant-events`.
 
@@ -4566,6 +4616,7 @@ def _registered_views() -> dict[str, Any]:
         "set-tenant-mileage-tracking": SetTenantMileageTrackingView,
         "staff-tenant-events": StaffTenantEventsView,
         "weekly-mileage-report": WeeklyMileageReportView,
+        "audit-ba-accounts": AuditBaAccountsView,
         "resend-ba-welcome": ResendBaWelcomeView,
         "retext-tenant-events": RetextTenantEventsView,
         "backfill-ld-master-tracker": BackfillLdMasterTrackerView,
