@@ -817,9 +817,46 @@ class Event(Node):
     timezone: TimeZone | None = None
     rmm_asigned: SparkUserType | None = None
     custom_recap_template_id: strawberry.ID
-    custom_recap_template: (
-        Annotated["CustomRecapTemplate", strawberry.lazy("recaps.types")] | None
-    ) = None
+
+    @strawberry.field
+    async def custom_recap_template(
+        self,
+    ) -> Annotated["CustomRecapTemplate", strawberry.lazy("recaps.types")] | None:
+        """The recap template for this event.
+
+        Returns the event's directly-linked template when set; otherwise
+        falls back to the tenant's template for this event's event type —
+        the same tenant + event_type match the desktop recap form uses.
+
+        Nearly all events have no direct `custom_recap_template_id` FK, so
+        without this fallback `customRecapTemplate` was null for them. The
+        mobile app gates custom-vs-legacy recap on this field, so it was
+        filing the legacy form even when a matching template existed
+        (desktop matched by event type and used the custom form — the
+        mismatch we saw on Feel Free). The fallback aligns the two.
+        """
+        from recaps.models import CustomRecapTemplate as CustomRecapTemplateModel
+
+        def _resolve():
+            if self.custom_recap_template_id:
+                return CustomRecapTemplateModel.objects.filter(
+                    id=self.custom_recap_template_id
+                ).first()
+            if not self.tenant_id or not self.event_type_id:
+                return None
+            # First template for this tenant + event type. One-per-event-type
+            # is the norm (the create form warns on duplicates); ordering by
+            # id just makes the pick deterministic if several exist.
+            return (
+                CustomRecapTemplateModel.objects.filter(
+                    tenant_id=self.tenant_id,
+                    event_type_id=self.event_type_id,
+                )
+                .order_by("id")
+                .first()
+            )
+
+        return await sync_to_async(_resolve, thread_sensitive=True)()
 
     @strawberry.field
     async def tenant_image(self) -> str | None:
