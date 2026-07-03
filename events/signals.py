@@ -77,6 +77,15 @@ def sync_event_for_ambassador(sender, instance: AmbassadorEvent, created: bool, 
     # so the thread can't touch a stale/detached object. The background ORM
     # reads run under fresh_db_connection (a pooled thread keeps a
     # thread-local connection Django's request cleanup never closes).
+    # Master switch (default: on only outside DEBUG). Off in dev/CI so the
+    # daemon thread below — which opens its own db connection and runs ORM
+    # reads — can't race a transaction=True test's teardown TRUNCATE into a
+    # deadlock. Prod (DEBUG off) is unaffected. Mirrors PUSH_ENABLED.
+    from django.conf import settings
+
+    if not getattr(settings, "CALENDAR_SYNC_ENABLED", True):
+        return
+
     event_id = instance.event_id
 
     def _run() -> None:

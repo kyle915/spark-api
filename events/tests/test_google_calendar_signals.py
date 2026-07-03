@@ -35,6 +35,14 @@ def _join_calendar_sync_threads(timeout: float = 5.0) -> None:
 class TestGoogleCalendarSignals:
     """Tests for Google Calendar synchronization signals."""
 
+    @pytest.fixture(autouse=True)
+    def _enable_calendar_sync(self, settings):
+        # This suite exercises the calendar-sync daemon thread itself, so opt
+        # back into it — it's off by default under DEBUG/CI (see
+        # settings.CALENDAR_SYNC_ENABLED) precisely so incidental
+        # AmbassadorEvent-creating tests don't spawn it and deadlock teardown.
+        settings.CALENDAR_SYNC_ENABLED = True
+
     def setup_method(self):
         """Set up test data."""
         # Create roles (collision-proof against migration seeds / leaked rows)

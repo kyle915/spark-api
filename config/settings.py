@@ -487,6 +487,16 @@ else:
 # which DEADLOCKS under pytest's run_until_complete (and is pointless noise
 # in dev). Set PUSH_ENABLED=true locally to exercise real pushes.
 PUSH_ENABLED = env.bool("PUSH_ENABLED", default=not DEBUG)
+# Google Calendar sync master switch. The AmbassadorEvent post_save fans the
+# sync out onto a daemon thread that opens its OWN db connection (via
+# fresh_db_connection) and runs live ORM reads. Under a transaction=True test
+# that thread's reads race the teardown TRUNCATE, and Postgres resolves the
+# deadlock by killing EITHER the (disposable) thread OR the teardown flush —
+# a coin flip that makes any AmbassadorEvent-creating test flaky. Default on
+# only when DEBUG is off, same as PUSH_ENABLED, so prod is unchanged while
+# dev/CI skip the background sync entirely. Set CALENDAR_SYNC_ENABLED=true to
+# exercise the real sync (the calendar-sync signal tests do).
+CALENDAR_SYNC_ENABLED = env.bool("CALENDAR_SYNC_ENABLED", default=not DEBUG)
 BACKEND_ERROR_ALERTS_ENABLED = env.bool(
     "BACKEND_ERROR_ALERTS_ENABLED", default=not DEBUG
 )
