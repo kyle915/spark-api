@@ -594,12 +594,49 @@ class AmbassadorInvitationService(BaseAmbassadorService):
         """Create an ambassador invitation."""
         user = info.context.request.user
 
-        # Validate user doesn't exist
-        if await cls.check_email_exists(input.email):
+        # If the email already has an account, the invite-by-email flow
+        # (which creates a brand-new user) doesn't apply. When that account
+        # is an existing BA, add them straight to this tenant's roster (a
+        # TenantedUser membership) instead of erroring — this is how a BA
+        # who already works for one brand gets added to another. A
+        # non-ambassador account (client/admin) still can't be turned into
+        # a BA this way, so it keeps the original error.
+        existing_user = await sync_to_async(
+            lambda: User.objects.filter(email=input.email).first()
+        )()
+        if existing_user is not None:
+            is_ambassador = await sync_to_async(
+                lambda: Ambassador.objects.filter(user=existing_user).exists()
+            )()
+            if not is_ambassador:
+                return build_mutation_response(
+                    AmbassadorInvitationResponse,
+                    success=False,
+                    message="User with this email already exists.",
+                    input_obj=input,
+                )
+            try:
+                tenant = await Tenant.objects._get(id=input.tenant_id)
+            except (Tenant.DoesNotExist, ValueError, TypeError):
+                return build_mutation_response(
+                    AmbassadorInvitationResponse,
+                    success=False,
+                    message="Invalid tenant ID.",
+                    input_obj=input,
+                )
+            membership = await cls.assign_user_to_tenant(
+                user=existing_user,
+                tenant=tenant,
+                created_by=user,
+            )
             return build_mutation_response(
                 AmbassadorInvitationResponse,
-                success=False,
-                message="User with this email already exists.",
+                success=True,
+                message=(
+                    "Existing BA added to your roster."
+                    if membership is not None
+                    else "This BA is already on your roster."
+                ),
                 input_obj=input,
             )
 
