@@ -1325,3 +1325,270 @@ class TestApproveRecapNotifications(JobsGraphQLTestCase):
                 "name": "Single Template Sampling",
             },
         }
+
+
+@pytest.mark.django_db(transaction=True)
+class TestBaRecapEditGuards(JobsGraphQLTestCase):
+    """Authorization guards for BA-driven custom-recap edits.
+
+    A Brand Ambassador may edit their OWN custom recap, ONLY until it's
+    approved, and may NEVER set the `approved` flag — regardless of which
+    mutation/input variant they use (both updateCustomRecapMobile and the
+    web updateCustomRecap are exposed to the BA app via
+    RecapMutationsMobile). Admins/clients are unaffected.
+    """
+
+    UPDATE_MOBILE = """
+    mutation UpdateCustomRecapMobile($input: UpdateCustomRecapMobileInput!) {
+        updateCustomRecapMobile(input: $input) {
+            success
+            message
+            customRecap { id approved }
+        }
+    }
+    """
+
+    UPDATE_WEB = """
+    mutation UpdateCustomRecap($input: UpdateCustomRecapInput!) {
+        updateCustomRecap(input: $input) {
+            success
+            message
+            customRecap { id approved }
+        }
+    }
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self, db):
+        from config.schema_mobile import schema_mobile
+        from config.schema_spark import schema_spark
+
+        self.roles = self.setup_default_roles()
+        self.tenant = self.create_tenant(name="Edit Guard Tenant")
+
+        self.spark_user = self.create_user(
+            username="edit_spark@test.com",
+            email="edit_spark@test.com",
+            role=self.roles["spark_admin"],
+            password="testpass123",
+        )
+        self.create_tenanted_user(user=self.spark_user, tenant=self.tenant)
+
+        self.owner_user = self.create_user(
+            username="edit_owner_amb@test.com",
+            email="edit_owner_amb@test.com",
+            role=self.roles["ambassador"],
+            password="testpass123",
+        )
+        self.owner_ambassador = self.create_ambassador(user=self.owner_user)
+        self.create_tenanted_user(user=self.owner_user, tenant=self.tenant)
+
+        self.other_user = self.create_user(
+            username="edit_other_amb@test.com",
+            email="edit_other_amb@test.com",
+            role=self.roles["ambassador"],
+            password="testpass123",
+        )
+        self.other_ambassador = self.create_ambassador(user=self.other_user)
+        self.create_tenanted_user(user=self.other_user, tenant=self.tenant)
+
+        self.event = self.create_event(
+            name="Edit Guard Event",
+            tenant=self.tenant,
+            address="1 Edit St",
+        )
+
+        system_user = self.get_system_user()
+        event_type = EventType.objects.create(
+            name="Edit Guard Sampling",
+            slug="edit-guard-sampling",
+            tenant=self.tenant,
+            created_by=system_user,
+        )
+        template = recap_models.CustomRecapTemplate.objects.create(
+            name="Edit guard recap",
+            event_type=event_type,
+            tenant=self.tenant,
+            created_by=system_user,
+        )
+        section = recap_models.RecapSection.objects.create(
+            name="Main",
+            tenant=self.tenant,
+            created_by=system_user,
+        )
+        field_type = recap_models.CustomRecapFieldType.objects.create(
+            name="Text",
+            created_by=system_user,
+        )
+        self.custom_field = recap_models.CustomField.objects.create(
+            name="Notes",
+            custom_recap_template=template,
+            custom_field_type=field_type,
+            recap_section=section,
+            created_by=system_user,
+        )
+        self.template = template
+        self.recap = recap_models.CustomRecap.objects.create(
+            name="Owner's recap",
+            approved=False,
+            event=self.event,
+            tenant=self.tenant,
+            ambassador=self.owner_ambassador,
+            custom_recap_template=template,
+            created_by=self.owner_user,
+        )
+        recap_models.CustomFieldValue.objects.create(
+            custom_recap=self.recap,
+            custom_field=self.custom_field,
+            value="original",
+            created_by=self.owner_user,
+        )
+
+        self.schema = schema_mobile
+        self.spark_schema = schema_spark
+        self.mobile_path = "/api/v1/graphql/mobile"
+        self.spark_path = "/api/v1/graphql/spark"
+
+    @sync_to_async
+    def _refresh(self):
+        self.recap.refresh_from_db()
+        return self.recap
+
+    @sync_to_async
+    def _notes_value(self):
+        return (
+            recap_models.CustomFieldValue.objects.filter(
+                custom_recap=self.recap, custom_field=self.custom_field
+            )
+            .values_list("value", flat=True)
+            .first()
+        )
+
+    @pytest.mark.asyncio
+    async def test_ba_can_edit_own_unapproved_recap(self):
+        variables = {
+            "input": {
+                "id": str(self.recap.id),
+                "name": "Owner's recap",
+                "customFieldValues": [
+                    {"customFieldId": str(self.custom_field.id), "value": "edited"},
+                ],
+            }
+        }
+        result = await self._execute_mutation_authenticated(
+            self.UPDATE_MOBILE, variables, self.owner_user, self.mobile_path
+        )
+        assert result.errors is None
+        assert result.data["updateCustomRecapMobile"]["success"] is True
+        assert await self._notes_value() == "edited"
+
+    @pytest.mark.asyncio
+    async def test_ba_cannot_edit_another_bas_recap_mobile(self):
+        variables = {
+            "input": {
+                "id": str(self.recap.id),
+                "name": "Hijacked",
+                "customFieldValues": [
+                    {"customFieldId": str(self.custom_field.id), "value": "hijack"},
+                ],
+            }
+        }
+        result = await self._execute_mutation_authenticated(
+            self.UPDATE_MOBILE, variables, self.other_user, self.mobile_path
+        )
+        assert result.data["updateCustomRecapMobile"]["success"] is False
+        assert "not found" in result.data["updateCustomRecapMobile"]["message"].lower()
+        assert await self._notes_value() == "original"
+
+    @pytest.mark.asyncio
+    async def test_ba_cannot_edit_approved_recap(self):
+        @sync_to_async
+        def approve():
+            self.recap.approved = True
+            self.recap.save(update_fields=["approved"])
+
+        await approve()
+        variables = {
+            "input": {
+                "id": str(self.recap.id),
+                "name": "Owner's recap",
+                "customFieldValues": [
+                    {"customFieldId": str(self.custom_field.id), "value": "late edit"},
+                ],
+            }
+        }
+        result = await self._execute_mutation_authenticated(
+            self.UPDATE_MOBILE, variables, self.owner_user, self.mobile_path
+        )
+        assert result.data["updateCustomRecapMobile"]["success"] is False
+        assert "approved" in result.data["updateCustomRecapMobile"]["message"].lower()
+        assert await self._notes_value() == "original"
+
+    @pytest.mark.asyncio
+    async def test_ba_cannot_self_approve_via_web_input(self):
+        # A BA hitting the web-input updateCustomRecap (also exposed to the
+        # app) with approved:true — the edit is allowed but approval is
+        # silently ignored (caller-role gate).
+        variables = {
+            "input": {
+                "id": str(self.recap.id),
+                "name": "Owner's recap",
+                "eventId": str(self.event.id),
+                "customRecapTemplateId": str(self.template.id),
+                "approved": True,
+                "customFieldValues": [
+                    {"customFieldId": str(self.custom_field.id), "value": "edited"},
+                ],
+            }
+        }
+        result = await self._execute_mutation_authenticated(
+            self.UPDATE_WEB, variables, self.owner_user, self.mobile_path
+        )
+        assert result.errors is None
+        assert result.data["updateCustomRecap"]["success"] is True
+        recap = await self._refresh()
+        assert recap.approved is False
+
+    @pytest.mark.asyncio
+    async def test_ba_cannot_edit_another_bas_recap_via_web_input(self):
+        variables = {
+            "input": {
+                "id": str(self.recap.id),
+                "name": "Hijacked",
+                "eventId": str(self.event.id),
+                "customRecapTemplateId": str(self.template.id),
+                "customFieldValues": [
+                    {"customFieldId": str(self.custom_field.id), "value": "hijack"},
+                ],
+            }
+        }
+        result = await self._execute_mutation_authenticated(
+            self.UPDATE_WEB, variables, self.other_user, self.mobile_path
+        )
+        assert result.data["updateCustomRecap"]["success"] is False
+        assert "not found" in result.data["updateCustomRecap"]["message"].lower()
+        assert await self._notes_value() == "original"
+
+    @pytest.mark.asyncio
+    async def test_admin_can_approve_via_update(self):
+        # Admins are unaffected by the BA gate — approval via update works.
+        variables = {
+            "input": {
+                "id": str(self.recap.id),
+                "name": "Owner's recap",
+                "eventId": str(self.event.id),
+                "customRecapTemplateId": str(self.template.id),
+                "approved": True,
+                "customFieldValues": [
+                    {"customFieldId": str(self.custom_field.id), "value": "original"},
+                ],
+            }
+        }
+        self.schema = self.spark_schema
+        result = await self._execute_mutation_authenticated(
+            self.UPDATE_WEB, variables, self.spark_user, self.spark_path
+        )
+        assert result.errors is None
+        assert result.data["updateCustomRecap"]["success"] is True
+        recap = await self._refresh()
+        assert recap.approved is True

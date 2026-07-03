@@ -1798,6 +1798,10 @@ class RecapMutationService(SparkGraphQLMixin):
             except (State.DoesNotExist, TypeError, ValueError, GraphQLError):
                 raise GraphQLError("State not found.")
 
+        # Resolve once (async) before the sync transaction: may the caller
+        # set the `approved` flag? False for BAs — blocks self-approval.
+        can_set_approval = await self._caller_can_set_recap_approval()
+
         @sync_to_async
         def create_custom_recap_transaction():
             with transaction.atomic():
@@ -1824,7 +1828,12 @@ class RecapMutationService(SparkGraphQLMixin):
                     custom_recap.late = self.input.late
                 if self.input.incomplete is not None:
                     custom_recap.incomplete = self.input.incomplete
-                if self.input.approved is not None:
+                # A BA can never set approval — that's an admin/client
+                # action. Gate on the CALLER's role (not the input variant):
+                # both the mobile and web create/update inputs are reachable
+                # from the BA app, so an input-type check alone left a BA able
+                # to self-approve via a raw web-input mutation.
+                if self.input.approved is not None and can_set_approval:
                     custom_recap.approved = self.input.approved
                 if self.input.used_corpo_card is not None:
                     custom_recap.used_corpo_card = self.input.used_corpo_card
@@ -1999,6 +2008,23 @@ class RecapMutationService(SparkGraphQLMixin):
             record_label="Custom recap",
         )
 
+        # BA edit guard rails — caller-based, so they hold on BOTH the
+        # mobile updateCustomRecapMobile AND the web updateCustomRecap
+        # (both reachable from the BA app). A Brand Ambassador may edit
+        # ONLY their own recap, and ONLY until it's approved. Admins /
+        # clients / RMM are unaffected (editing_ambassador is None). The
+        # tenant gate above does NOT distinguish BAs within a tenant, so
+        # without this a same-tenant BA could edit another BA's recap by
+        # id (IDOR). "Not found" posture avoids leaking another BA's recap.
+        editing_ambassador = await self._caller_editing_ambassador()
+        if editing_ambassador is not None:
+            if custom_recap.ambassador_id != editing_ambassador.id:
+                raise GraphQLError("Custom recap not found.")
+            if custom_recap.approved:
+                raise GraphQLError(
+                    "This recap has been approved and can no longer be edited."
+                )
+
         job = None
         if is_mobile_input:
             job = custom_recap.job
@@ -2071,6 +2097,9 @@ class RecapMutationService(SparkGraphQLMixin):
 
         ambassador = None
         if is_mobile_input:
+            # Ownership + approved-lock for BA callers is enforced above
+            # (caller-based) — here we just resolve the BA so the write can
+            # attribute the recap to them.
             ambassador = await sync_to_async(
                 Ambassador.objects.filter(user=self.user).first
             )()
@@ -2109,6 +2138,11 @@ class RecapMutationService(SparkGraphQLMixin):
             except (State.DoesNotExist, TypeError, ValueError, GraphQLError):
                 raise GraphQLError("State not found.")
 
+        # Resolve once (async) before the sync transaction: may the caller
+        # set the `approved` flag? False for BAs — blocks self-approval on
+        # both the mobile edit path and a raw web-input update.
+        can_set_approval = await self._caller_can_set_recap_approval()
+
         @sync_to_async
         def update_custom_recap_transaction():
             with transaction.atomic():
@@ -2146,7 +2180,12 @@ class RecapMutationService(SparkGraphQLMixin):
                     custom_recap.late = self.input.late
                 if self.input.incomplete is not None:
                     custom_recap.incomplete = self.input.incomplete
-                if self.input.approved is not None:
+                # A BA can never set approval — that's an admin/client
+                # action. Gate on the CALLER's role (not the input variant):
+                # both the mobile and web create/update inputs are reachable
+                # from the BA app, so an input-type check alone left a BA able
+                # to self-approve via a raw web-input mutation.
+                if self.input.approved is not None and can_set_approval:
                     custom_recap.approved = self.input.approved
                 if self.input.used_corpo_card is not None:
                     custom_recap.used_corpo_card = self.input.used_corpo_card
@@ -3119,6 +3158,62 @@ class RecapMutationService(SparkGraphQLMixin):
             await sync_to_async(user.get_tenant)(tenant_id=tenant_id)
         except Exception:
             raise GraphQLError(f"{record_label} not found.")
+
+    async def _caller_can_set_recap_approval(self) -> bool:
+        """Whether the current caller may set/clear a recap's `approved` flag.
+
+        Approval is an admin/client action — a Brand Ambassador filing or
+        editing their own recap must NEVER self-approve. This gates the
+        `approved` write on BOTH the mobile and the web create/update
+        inputs (all exposed to the BA app via RecapMutationsMobile), so a
+        BA can't bypass the "editable until approved" rule by crafting a
+        raw createCustomRecap/updateCustomRecap with `approved: true`.
+
+        Resolved DB-authoritatively (the JWT user often doesn't hydrate its
+        role FK in async resolvers). Returns False only for ambassadors;
+        True for admins / clients / RMM. Non-input approval paths
+        (approveCustomRecap) are unaffected — they gate separately.
+        """
+        user = self.user
+        if user is None:
+            return False
+        role_slug, is_staff, is_super, email = await resolve_request_user_access(
+            user
+        )
+        # Admins may always set approval, even if they also hold a BA record.
+        if _is_admin_access(role_slug, is_staff, is_super, email):
+            return True
+        is_ambassador = (
+            role_slug == Role.AMBASSADOR_SLUG
+            or getattr(user, "role_id", None) == ROLE_ID.Ambassadors
+        )
+        return not is_ambassador
+
+    async def _caller_editing_ambassador(self):
+        """The caller's Ambassador record IFF they're editing as a BA.
+
+        Returns the `Ambassador` when the caller is a (non-admin) Brand
+        Ambassador — used to enforce owner-only + approved-lock on recap
+        edits regardless of which mutation/input variant they use. Returns
+        None for admins / clients / RMM (unrestricted beyond the tenant
+        gate) and for a BA with no Ambassador row. Resolved role is
+        DB-authoritative (JWT user often unhydrated in async resolvers).
+        """
+        user = self.user
+        if user is None:
+            return None
+        role_slug, is_staff, is_super, email = await resolve_request_user_access(
+            user
+        )
+        if _is_admin_access(role_slug, is_staff, is_super, email):
+            return None
+        is_ambassador = (
+            role_slug == Role.AMBASSADOR_SLUG
+            or getattr(user, "role_id", None) == ROLE_ID.Ambassadors
+        )
+        if not is_ambassador:
+            return None
+        return await sync_to_async(Ambassador.objects.filter(user=user).first)()
 
     async def _assert_can_delete_recap(
         self, tenant_id: int, *, record_label: str = "Recap"
