@@ -42,6 +42,38 @@ class Command(BaseCommand):
         from ambassadors.models import Ambassador
 
         email = (opts["email"] or "").strip()
+
+        # Diagnostic search mode: a fragment with no "@" lists every account
+        # whose email OR name contains it (read-only, ignores --apply) — for
+        # hunting duplicate accounts ("I *am* signed in with that email").
+        if "@" not in email:
+            from django.db.models import Q
+
+            from ambassadors.models import AmbassadorEvent
+
+            matches = list(
+                User.objects.filter(
+                    Q(email__icontains=email)
+                    | Q(first_name__icontains=email)
+                    | Q(last_name__icontains=email)
+                ).order_by("id")[:20]
+            )
+            self.stdout.write(f"search {email!r}: {len(matches)} account(s)")
+            for u in matches:
+                amb = Ambassador.objects.filter(user=u).first()
+                bookings = (
+                    AmbassadorEvent.objects.filter(
+                        ambassador=amb, is_approved=True
+                    ).count()
+                    if amb else 0
+                )
+                self.stdout.write(
+                    f"  [{u.id}] {u.email!r} ({u.first_name} {u.last_name or ''}) "
+                    f"last_login={u.last_login or 'NEVER'} "
+                    f"ba={'yes' if amb else 'no'} bookings={bookings}"
+                )
+            return
+
         user = User.objects.filter(email__iexact=email).order_by("id").first()
         if user is None:
             raise CommandError(f"User not found: {email}")
