@@ -1,4 +1,5 @@
 import strawberry
+from django.db import transaction
 from django.db.models import Model
 from django.db.models.deletion import ProtectedError
 from strawberry import relay
@@ -2408,91 +2409,102 @@ class JobLifecycleMutations:
             ):
                 return None, f"Job is {job.lifecycle_status}; can't reassign.", []
 
-            now = _django_tz.now()
-            app, created = models.JobApplication.objects.get_or_create(
-                job=job, ambassador=amb,
-                defaults={
-                    "tenant_id": job.tenant_id,
-                    "status": models.JobApplication.STATUS_ACCEPTED,
-                    "decided_at": now,
-                    "decided_by": actor if getattr(actor, "id", None) else None,
-                    "note": "Manually assigned by admin.",
-                },
-            )
-            if not created:
-                app.status = models.JobApplication.STATUS_ACCEPTED
-                app.decided_at = now
-                app.decided_by = actor if getattr(actor, "id", None) else None
-                app.save(update_fields=["status", "decided_at", "decided_by", "updated_at"])
+            # Atomic: the JobApplication accept, the auto-decline of the other
+            # applicants, the FILLED/closed flip, and the AmbassadorEvent
+            # booking must commit or roll back as ONE unit. _ensure_approved_booking
+            # is sync and can raise (e.g. a transient DB error); without this
+            # wrapper a failure after job.save(FILLED) already committed would
+            # leave the job FILLED with NO booking — and the lifecycle gate above
+            # ("can't reassign") then blocks any retry from the UI, stranding the
+            # gig with no path to fix it but the book-ambassador-on-event cron.
+            # Rolling back the FILLED flip keeps the job PENDING/POSTED and
+            # re-assignable. _ensure_approved_booking stays INSIDE the block.
+            with transaction.atomic():
+                now = _django_tz.now()
+                app, created = models.JobApplication.objects.get_or_create(
+                    job=job, ambassador=amb,
+                    defaults={
+                        "tenant_id": job.tenant_id,
+                        "status": models.JobApplication.STATUS_ACCEPTED,
+                        "decided_at": now,
+                        "decided_by": actor if getattr(actor, "id", None) else None,
+                        "note": "Manually assigned by admin.",
+                    },
+                )
+                if not created:
+                    app.status = models.JobApplication.STATUS_ACCEPTED
+                    app.decided_at = now
+                    app.decided_by = actor if getattr(actor, "id", None) else None
+                    app.save(update_fields=["status", "decided_at", "decided_by", "updated_at"])
 
-            # Snapshot user_ids of every applicant we're about to
-            # auto-decline so the resolver can fan out "your application
-            # was declined" pushes after the sync helper returns. Done
-            # before the bulk-update because once the rows are flipped
-            # we lose the ability to scope the query cleanly. Excludes
-            # the accepted BA (their user gets the "you got it" push
-            # below, not a decline push).
-            declined_user_ids = list(
+                # Snapshot user_ids of every applicant we're about to
+                # auto-decline so the resolver can fan out "your application
+                # was declined" pushes after the sync helper returns. Done
+                # before the bulk-update because once the rows are flipped
+                # we lose the ability to scope the query cleanly. Excludes
+                # the accepted BA (their user gets the "you got it" push
+                # below, not a decline push).
+                declined_user_ids = list(
+                    models.JobApplication.objects.filter(
+                        job=job, status=models.JobApplication.STATUS_APPLIED,
+                    )
+                    .exclude(pk=app.pk)
+                    .select_related("ambassador")
+                    .values_list("ambassador__user_id", flat=True)
+                    .distinct()
+                )
+
+                # Decline all other Applied rows for this job.
                 models.JobApplication.objects.filter(
                     job=job, status=models.JobApplication.STATUS_APPLIED,
-                )
-                .exclude(pk=app.pk)
-                .select_related("ambassador")
-                .values_list("ambassador__user_id", flat=True)
-                .distinct()
-            )
-
-            # Decline all other Applied rows for this job.
-            models.JobApplication.objects.filter(
-                job=job, status=models.JobApplication.STATUS_APPLIED,
-            ).exclude(pk=app.pk).update(
-                status=models.JobApplication.STATUS_DECLINED,
-                decided_at=now, decided_by=actor if getattr(actor, "id", None) else None,
-            )
-
-            job.lifecycle_status = models.Job.STATUS_FILLED
-            job.closed = True
-            job.save(update_fields=["lifecycle_status", "closed", "updated_at"])
-
-            # Create (or flip) the booking so the accepted BA's shift shows
-            # up on the mobile "What's on the books" screen, which reads
-            # ONLY AmbassadorEvent(is_approved=True). Without this the BA
-            # gets the "you got the gig" push but the shift never appears.
-            # Mirrors ambassadors/mutations.py's invite pattern; created_by/
-            # updated_by are non-null RESTRICT so we always stamp a real
-            # user — the acting admin, falling back to job.created_by.
-            actor_for_event = actor if getattr(actor, "id", None) else None
-            booking_creator_id = (
-                actor_for_event.id if actor_for_event else job.created_by_id
-            )
-            event = job.event
-            # Single source of truth: get-or-create the approved booking and
-            # flip any existing is_approved=False invite/accept row to True.
-            _ensure_approved_booking(
-                ambassador_id=amb.id,
-                event_id=job.event_id,
-                tenant_id=job.tenant_id,
-                creator_id=booking_creator_id,
-            )
-
-            # The mobile shift screens key off event.start_time / event.date.
-            # If both are null the booking won't surface there yet — still
-            # create it (above), but log so the gap is visible.
-            if not getattr(event, "start_time", None) and not getattr(
-                event, "date", None
-            ):
-                logger.warning(
-                    "Booking created for job=%s ambassador=%s event=%s with no "
-                    "start_time/date — shift won't appear on mobile shift "
-                    "screens until the event is scheduled.",
-                    job.id, amb.id, event.id,
+                ).exclude(pk=app.pk).update(
+                    status=models.JobApplication.STATUS_DECLINED,
+                    decided_at=now, decided_by=actor if getattr(actor, "id", None) else None,
                 )
 
-            return (
-                job,
-                f"{amb.user.get_full_name() if amb.user else 'BA'} assigned to the job.",
-                declined_user_ids,
-            )
+                job.lifecycle_status = models.Job.STATUS_FILLED
+                job.closed = True
+                job.save(update_fields=["lifecycle_status", "closed", "updated_at"])
+
+                # Create (or flip) the booking so the accepted BA's shift shows
+                # up on the mobile "What's on the books" screen, which reads
+                # ONLY AmbassadorEvent(is_approved=True). Without this the BA
+                # gets the "you got the gig" push but the shift never appears.
+                # Mirrors ambassadors/mutations.py's invite pattern; created_by/
+                # updated_by are non-null RESTRICT so we always stamp a real
+                # user — the acting admin, falling back to job.created_by.
+                actor_for_event = actor if getattr(actor, "id", None) else None
+                booking_creator_id = (
+                    actor_for_event.id if actor_for_event else job.created_by_id
+                )
+                event = job.event
+                # Single source of truth: get-or-create the approved booking and
+                # flip any existing is_approved=False invite/accept row to True.
+                _ensure_approved_booking(
+                    ambassador_id=amb.id,
+                    event_id=job.event_id,
+                    tenant_id=job.tenant_id,
+                    creator_id=booking_creator_id,
+                )
+
+                # The mobile shift screens key off event.start_time / event.date.
+                # If both are null the booking won't surface there yet — still
+                # create it (above), but log so the gap is visible.
+                if not getattr(event, "start_time", None) and not getattr(
+                    event, "date", None
+                ):
+                    logger.warning(
+                        "Booking created for job=%s ambassador=%s event=%s with no "
+                        "start_time/date — shift won't appear on mobile shift "
+                        "screens until the event is scheduled.",
+                        job.id, amb.id, event.id,
+                    )
+
+                return (
+                    job,
+                    f"{amb.user.get_full_name() if amb.user else 'BA'} assigned to the job.",
+                    declined_user_ids,
+                )
 
         job, msg, declined_user_ids = await sync_to_async(_assign)()
         # Push the assignment to the BA — admin moved their applied row

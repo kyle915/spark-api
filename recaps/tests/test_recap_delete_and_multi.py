@@ -328,7 +328,8 @@ class TestRecapDeleteAndMultiPerEvent(AmbassadorsGraphQLTestCase):
         assert result.errors is None, f"errored: {result.errors}"
         payload = result.data["deleteCustomRecap"]
         assert payload["success"] is False
-        assert "authorized" in payload["message"].lower()
+        # Non-existence-leaking denial (aligned to "not found." on purpose).
+        assert "not found" in payload["message"].lower()
         still = await sync_to_async(
             recap_models.CustomRecap.objects.filter(id=foreign.id).exists
         )()

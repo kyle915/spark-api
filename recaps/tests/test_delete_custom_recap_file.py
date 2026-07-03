@@ -185,7 +185,8 @@ class TestDeleteCustomRecapFile(AmbassadorsGraphQLTestCase):
         assert result.errors is None, f"errored: {result.errors}"
         payload = result.data["deleteCustomRecapFile"]
         assert payload["success"] is False
-        assert "authorized" in payload["message"].lower()
+        # Non-existence-leaking denial (aligned to "not found." on purpose).
+        assert "not found" in payload["message"].lower()
         still = await sync_to_async(
             recap_models.CustomRecapFile.objects.filter(id=rec_file.id).exists
         )()
