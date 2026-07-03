@@ -157,6 +157,7 @@ class Command(BaseCommand):
                 )
             for u in User.objects.filter(q)[:10]:
                 w(self._user_line(u))
+                self._session_detail(u)
 
     def _tenant(self, slug):
         import datetime
@@ -293,3 +294,47 @@ class Command(BaseCommand):
             )
             created += int(was_created)
         w(self.style.SUCCESS(f"  created {created} membership(s)."))
+
+    def _session_detail(self, user):
+        """Refresh-token history + booking windows — the "app suddenly
+        empty" diagnosis (access JWT lives 1 day; refresh 10; the shift
+        lists window on local event date)."""
+        import datetime
+
+        from django.db.models import Q
+        from django.utils import timezone
+
+        w = self.stdout.write
+        try:
+            from gqlauth.models import RefreshToken
+
+            now = timezone.now()
+            for rt in RefreshToken.objects.filter(user=user).order_by("-created")[:5]:
+                if rt.revoked:
+                    status = f"revoked {rt.revoked:%m-%d %H:%M}"
+                elif rt.created < now - datetime.timedelta(days=10):
+                    status = "EXPIRED (>10d)"
+                else:
+                    status = "valid"
+                w(f"      refresh-token created {rt.created:%m-%d %H:%M} — {status}")
+        except Exception as exc:  # noqa: BLE001
+            w(f"      refresh-token check failed: {exc!r}")
+        try:
+            from ambassadors.models import Ambassador, AmbassadorEvent
+
+            amb = Ambassador.objects.filter(user=user).first()
+            if amb is None:
+                return
+            today = timezone.localdate()
+            horizon = today + datetime.timedelta(days=14)
+            qs = AmbassadorEvent.objects.filter(ambassador=amb, is_approved=True)
+            today_q = Q(event__date=today) | Q(event__start_time__date=today)
+            upc_q = Q(event__date__gt=today, event__date__lte=horizon) | Q(
+                event__start_time__date__gt=today, event__start_time__date__lte=horizon
+            )
+            w(
+                f"      bookings: approved={qs.count()} today={qs.filter(today_q).count()} "
+                f"next14d={qs.filter(upc_q).count()}"
+            )
+        except Exception as exc:  # noqa: BLE001
+            w(f"      booking-window check failed: {exc!r}")
