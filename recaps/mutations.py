@@ -202,6 +202,29 @@ User = get_user_model()
 logger = logging.getLogger(__name__)
 
 
+def _get_event_by_flexible_id(raw_id, qs=None):
+    """Resolve an Event by relay global id / plain int / UUID string.
+
+    The mobile RecapSubmitScreen sends the event's *uuid* as eventId
+    (the web sends relay ids). resolve_id_to_int alone rejects uuids,
+    which surfaced as "Event not found." on every mobile submit for a
+    tenant without a custom template (legacy form). Raises GraphQLError
+    ("Event not found.") when nothing matches.
+    """
+    from django.core.exceptions import ValidationError as _DjangoValidationError
+
+    qs = qs if qs is not None else Event.objects.all()
+    try:
+        return qs.get(id=resolve_id_to_int(raw_id))
+    except (Event.DoesNotExist, TypeError, ValueError, GraphQLError):
+        pass
+    try:
+        return qs.get(uuid=str(raw_id))
+    except (Event.DoesNotExist, TypeError, ValueError, _DjangoValidationError):
+        raise GraphQLError("Event not found.")
+
+
+
 async def _resolve_recap_pdf_attachment(
     recap: models.Recap | models.CustomRecap,
 ) -> list[dict] | None:
@@ -946,12 +969,8 @@ class RecapMutationService(SparkGraphQLMixin):
         # This mutation currently only accepts CreateRecapInput.
         is_mobile_input = False
 
-        # Validate event exists
-        try:
-            event_id = resolve_id_to_int(self.input.event_id)
-            event = await sync_to_async(Event.objects.get)(id=event_id)
-        except (Event.DoesNotExist, TypeError, ValueError, GraphQLError):
-            raise GraphQLError("Event not found.")
+        # Validate event exists (mobile sends the event uuid; web relay id)
+        event = await sync_to_async(_get_event_by_flexible_id)(self.input.event_id)
 
         job = None
         if self.input.job_id:
@@ -1244,11 +1263,7 @@ class RecapMutationService(SparkGraphQLMixin):
         )
 
         # Validate event exists
-        try:
-            event_id = resolve_id_to_int(self.input.event_id)
-            event = await sync_to_async(Event.objects.get)(id=event_id)
-        except (Event.DoesNotExist, TypeError, ValueError, GraphQLError):
-            raise GraphQLError("Event not found.")
+        event = await sync_to_async(_get_event_by_flexible_id)(self.input.event_id)
 
         job = None
         if self.input.job_id:
@@ -1678,20 +1693,17 @@ class RecapMutationService(SparkGraphQLMixin):
             if event is None:
                 raise GraphQLError("Event not found.")
         else:
-            try:
-                event_id = resolve_id_to_int(self.input.event_id)
-                event = await sync_to_async(
-                    Event.objects.select_related(
-                        "timezone",
-                        "location",
-                        "state",
-                        "retailer",
-                        "retailer__location",
-                        "retailer__location__state",
-                    ).get
-                )(id=event_id)
-            except (Event.DoesNotExist, TypeError, ValueError, GraphQLError):
-                raise GraphQLError("Event not found.")
+            event = await sync_to_async(_get_event_by_flexible_id)(
+                self.input.event_id,
+                Event.objects.select_related(
+                    "timezone",
+                    "location",
+                    "state",
+                    "retailer",
+                    "retailer__location",
+                    "retailer__location__state",
+                ),
+            )
 
         try:
             template_id = resolve_id_to_int(self.input.custom_recap_template_id)
@@ -1996,11 +2008,9 @@ class RecapMutationService(SparkGraphQLMixin):
             if event is None:
                 raise GraphQLError("Event not found.")
         else:
-            try:
-                event_id = resolve_id_to_int(self.input.event_id)
-                event = await sync_to_async(Event.objects.get)(id=event_id)
-            except (Event.DoesNotExist, TypeError, ValueError, GraphQLError):
-                raise GraphQLError("Event not found.")
+            event = await sync_to_async(_get_event_by_flexible_id)(
+                self.input.event_id
+            )
 
         if is_mobile_input:
             custom_recap_template = custom_recap.custom_recap_template
