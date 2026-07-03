@@ -256,9 +256,6 @@ class Command(BaseCommand):
         from ambassadors.queries import _shift_time_labels
 
         try:
-            from django.conf import settings
-            from django.core.mail import EmailMessage
-
             from tenants.support import _resolve_ignite_recipients
 
             recipients = _resolve_ignite_recipients()
@@ -315,12 +312,28 @@ class Command(BaseCommand):
                 )
                 return False
 
-            EmailMessage(
-                subject=subject,
-                body=body,
-                from_email=settings.DEFAULT_FROM_EMAIL,
-                to=recipients,
-            ).send()
+            # House Resend mailer — NOT django.core.mail: there is no SMTP
+            # server on Cloud Run, so EmailMessage.send() dies with
+            # ConnectionRefusedError and this alert never delivered (first
+            # thing the error monitor ever caught, 2026-07-03).
+            import html as _html
+
+            from utils.mailer import Envelope, Mailer
+
+            body_html = (
+                '<pre style="font-family:inherit;white-space:pre-wrap;'
+                f'margin:0">{_html.escape(body)}</pre>'
+            )
+
+            class _UnconfirmedAlertMailer(Mailer):
+                def envelope(self) -> Envelope:
+                    return Envelope(
+                        subject=subject,
+                        html=body_html,
+                        to_emails=recipients,
+                    )
+
+            _UnconfirmedAlertMailer().send_now()
             return True
         except Exception:
             logger.exception("unconfirmed-shift alert email failed")
