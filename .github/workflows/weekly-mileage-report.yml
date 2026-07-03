@@ -1,0 +1,48 @@
+name: Weekly mileage report
+
+# Emails the prior Mon-Sun week's mileage reimbursement summary + CSV every
+# Monday morning (13:00 UTC ≈ 8am CT) via /internal/cron/weekly-mileage-report.
+# Manual dispatch supports week_ending (a Sunday) for reruns and dry_run.
+# Secret-gated via X-Cron-Secret header.
+
+on:
+  schedule:
+    - cron: "0 13 * * 1"
+  workflow_dispatch:
+    inputs:
+      week_ending:
+        description: "Sunday (YYYY-MM-DD) closing the report week. Blank = most recent."
+        required: false
+        default: ""
+        type: string
+      dry_run:
+        description: "Print summary only; don't email."
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  fire-weekly-mileage-report:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire weekly-mileage-report cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/weekly-mileage-report
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          WEEK_ENDING: ${{ github.event.inputs.week_ending || '' }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL" \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            --data-urlencode "week_ending=$WEEK_ENDING" \
+            --data-urlencode "dry_run=$DRY_RUN")
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          echo ""
+          [ "$STATUS" != "200" ] && exit 1 || exit 0
