@@ -224,6 +224,20 @@ def _filter_event_window(queryset, prefix: str, window: tuple | None):
     return qs
 
 
+def _filter_event_year(queryset, prefix: str, year: int | None):
+    """Narrow ``queryset`` to rows whose effective EVENT date is in ``year``.
+
+    The event-date sibling of :func:`_filter_year`: a calendar year is just
+    the :func:`_year_bounds` ``[start, end)`` window applied on the coalesced
+    event date (:func:`_event_date_expr`) instead of ``created_at``.
+    ``year=None`` returns the queryset UNTOUCHED (all-time), so all-time
+    rollups keep their exact previous SQL — only windowed reads move onto the
+    event-date basis, matching the hero + program KPIs (#839).
+    """
+    window = None if year is None else _year_bounds(year)
+    return _filter_event_window(queryset, prefix, window)
+
+
 def _legacy_kpis_window(tenant_id: int, window: tuple | None) -> dict[str, int]:
     """Sum the legacy :class:`recaps.models.Recap` KPIs over a ``[start, end)``.
 
@@ -1044,21 +1058,23 @@ def _legacy_market_kpis(tenant_id: int, year: int | None = None) -> dict[str, di
     off ``ProductSamples``) summed in the DB but GROUPED BY the recap's
     ``event``'s state code instead of rolled into one tenant total. Every
     queryset is scoped through the event (``…__event__tenant_id``) and
-    year-filtered with the same half-open window; ``year=None`` leaves the
-    SQL unfiltered. Returns ``{state_code: {kpi: value, …}}`` (recap/event
-    counts are added by the caller).
+    year-filtered on the EVENT date (:func:`_filter_event_year`, same basis
+    as the hero + :func:`_legacy_kpis`), so a state's row counts the period
+    its events happened in — not when the recap rows were created/imported;
+    ``year=None`` leaves the SQL unfiltered. Returns
+    ``{state_code: {kpi: value, …}}`` (recap/event counts added by the caller).
     """
-    recaps = _filter_year(
-        Recap.objects.filter(event__tenant_id=tenant_id), "created_at", year
+    recaps = _filter_event_year(
+        Recap.objects.filter(event__tenant_id=tenant_id), "event__", year
     )
-    engagements = _filter_year(
+    engagements = _filter_event_year(
         ConsumerEngagements.objects.filter(recap__event__tenant_id=tenant_id),
-        "created_at",
+        "recap__event__",
         year,
     )
-    samples = _filter_year(
+    samples = _filter_event_year(
         ProductSamples.objects.filter(recap__event__tenant_id=tenant_id),
-        "created_at",
+        "recap__event__",
         year,
     )
 
@@ -1104,16 +1120,18 @@ def _custom_market_kpis(tenant_id: int, year: int | None = None) -> dict[str, di
       CustomRecap object — only the matched value rows + the small id->state
       map.
 
-    ``year`` narrows every queryset to its own ``created_at`` within the
-    calendar year, exactly like :func:`_custom_kpis`; ``year=None`` leaves the
-    SQL unfiltered. Returns ``{state_code: {kpi: value, …}}``.
+    ``year`` narrows every queryset to its EVENT date within the calendar
+    year (:func:`_filter_event_year`, the hero + :func:`_custom_kpis` basis),
+    so a state's numbers count the period its events happened in — not when
+    the recap rows were created/imported; ``year=None`` leaves the SQL
+    unfiltered. Returns ``{state_code: {kpi: value, …}}``.
     """
-    custom_recaps = _filter_year(
-        CustomRecap.objects.filter(tenant_id=tenant_id), "created_at", year
+    custom_recaps = _filter_event_year(
+        CustomRecap.objects.filter(tenant_id=tenant_id), "event__", year
     )
-    structured_samples_qs = _filter_year(
+    structured_samples_qs = _filter_event_year(
         CustomRecapProductSample.objects.filter(custom_recap__tenant_id=tenant_id),
-        "created_at",
+        "custom_recap__event__",
         year,
     )
 
@@ -1143,12 +1161,12 @@ def _custom_market_kpis(tenant_id: int, year: int | None = None) -> dict[str, di
     # attribute the result to the right state. Bounded slice, never the full
     # recap tree.
     rows = (
-        _filter_year(
+        _filter_event_year(
             CustomFieldValue.objects.filter(
                 custom_recap__tenant_id=tenant_id,
                 custom_field__name__iregex=_CUSTOM_KPI_NAME_RE.pattern,
             ),
-            "created_at",
+            "custom_recap__event__",
             year,
         )
         .values_list(
@@ -1242,27 +1260,30 @@ def tenant_market_performance(
     recap tree is materialized, and the result is at most ~50 rows.
 
     ``year=None`` rolls up the tenant's whole history; ``year=Y`` restricts
-    every figure to recaps/events whose ``created_at`` falls in calendar year
-    ``Y`` — the identical half-open window the other tenant aggregates use.
+    every figure (counts AND KPIs) to recaps/events whose EVENT date falls in
+    calendar year ``Y`` — the same event-date basis the hero + KPI totals use,
+    so a state's year numbers reflect when its events happened, not when the
+    rows were created/imported.
 
     Rows are returned sorted by state code for a stable, deterministic order.
     """
-    # Per-state event + recap counts (each a DB GROUP BY + COUNT).
+    # Per-state event + recap counts (each a DB GROUP BY + COUNT), windowed
+    # on the EVENT date so the counts agree with the KPIs below (same basis).
     event_counts = _grouped_count(
-        _filter_year(
-            Event.objects.filter(tenant_id=tenant_id), "created_at", year
+        _filter_event_year(
+            Event.objects.filter(tenant_id=tenant_id), "", year
         ),
         "state__code",
     )
     legacy_recap_counts = _grouped_count(
-        _filter_year(
-            Recap.objects.filter(event__tenant_id=tenant_id), "created_at", year
+        _filter_event_year(
+            Recap.objects.filter(event__tenant_id=tenant_id), "event__", year
         ),
         _LEGACY_STATE_PATH,
     )
     custom_recap_counts = _grouped_count(
-        _filter_year(
-            CustomRecap.objects.filter(tenant_id=tenant_id), "created_at", year
+        _filter_event_year(
+            CustomRecap.objects.filter(tenant_id=tenant_id), "event__", year
         ),
         _CUSTOM_STATE_PATH,
     )

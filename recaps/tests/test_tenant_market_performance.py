@@ -249,6 +249,34 @@ class TestTenantMarketPerformance(AmbassadorsGraphQLTestCase):
         # All fixtures are created "now"; a far-past year yields no rows.
         assert tenant_market_performance(self.tenant.id, year=2000) == []
 
+    def test_year_filter_uses_event_date(self):
+        # Windowing is on the EVENT date, not created_at: a recap whose event
+        # is dated 2022 lands in the 2022 view even though its row was created
+        # "now"; the now-dated setup events do not. Counts + KPIs share this
+        # basis, so a state's year numbers agree.
+        import datetime
+
+        from django.utils import timezone
+
+        when = timezone.make_aware(datetime.datetime(2022, 5, 1, 12, 0))
+        ev = self.create_event(name="WF 2022", tenant=self.tenant, state=self.ca)
+        event_models.Event.objects.filter(id=ev.id).update(
+            date=when, start_time=when
+        )
+        recap_models.Recap.objects.create(
+            name="2022 legacy", event=ev, total_engagements=42,
+            created_by=self.system_user, updated_by=self.system_user,
+        )
+        by = {r["state"]: r for r in tenant_market_performance(self.tenant.id, year=2022)}
+        # Only the 2022-dated event's state appears; the now-dated setup
+        # CA/TX events are excluded from the 2022 window.
+        assert set(by) == {"CA"}
+        assert by["CA"]["total_engagements"] == 42
+        assert by["CA"]["recap_count"] == 1
+        assert by["CA"]["event_count"] == 1
+        # A neighbouring year with no event-dated activity is empty.
+        assert tenant_market_performance(self.tenant.id, year=2023) == []
+
     def test_unknown_tenant_is_empty(self):
         assert tenant_market_performance(987654321) == []
 

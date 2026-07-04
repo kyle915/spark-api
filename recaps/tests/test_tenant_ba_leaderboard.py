@@ -288,15 +288,21 @@ class TestTenantBaLeaderboard(AmbassadorsGraphQLTestCase):
         assert order.index(finn.id) < order.index(self.carol.id)
 
     def test_year_filter(self):
-        # Back-date ALL of bob's current-year activity into 2021, then assert
-        # a 2021 query sees bob and a 2020 query sees nobody for bob.
+        # Shifts + recaps window on the EVENT date (the hero/KPI basis), so
+        # give bob a dedicated 2021-dated event and put a shift + recap on it;
+        # a 2021 query then sees bob and a 2019 query sees nobody. (bob's other
+        # activity is on the shared "now"-dated ev1, which alice/carol also use
+        # — back-dating that event would wrongly pull them into 2021 too, hence
+        # a separate event.) Ratings still window on created_at, so back-date
+        # bob's rating row directly.
         when = timezone.make_aware(datetime.datetime(2021, 6, 15, 12, 0))
-        amb_models.AmbassadorEvent.objects.filter(
-            ambassador=self.bob, tenant=self.tenant
-        ).update(created_at=when)
-        recap_models.Recap.objects.filter(
-            ambassador=self.bob, event__tenant=self.tenant
-        ).update(created_at=when)
+        ev_2021 = self.create_event(name="WF 2021", tenant=self.tenant)
+        # Event's own date is what _filter_event_year coalesces on first.
+        type(ev_2021).objects.filter(id=ev_2021.id).update(
+            date=when, start_time=when
+        )
+        self._shift(self.bob, ev_2021)
+        self._legacy_recap(self.bob, ev_2021, name="bob 2021 legacy")
         amb_models.AmbassadorRating.objects.filter(
             ambassador=self.bob, tenant=self.tenant
         ).update(created_at=when)
@@ -306,7 +312,7 @@ class TestTenantBaLeaderboard(AmbassadorsGraphQLTestCase):
         assert by_2021[self.bob.id]["shifts_worked"] == 1
         assert by_2021[self.bob.id]["recaps_filed"] == 1
         assert by_2021[self.bob.id]["avg_rating"] == 3.0
-        # alice/carol activity is still "now", so they're absent from 2021.
+        # alice/carol have no 2021 event-dated activity, so they're absent.
         assert self.alice.id not in by_2021
         assert self.carol.id not in by_2021
 

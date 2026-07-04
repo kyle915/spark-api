@@ -40,10 +40,13 @@ Design rules (mirroring :mod:`recaps.tenant_overview`):
   rather than blowing up the whole leaderboard, matching the never-raise
   posture of the report surface.
 
-``year`` reuses :func:`recaps.tenant_overview._filter_year`: ``None`` is the
-all-time path (no extra ``WHERE``), ``Y`` restricts every source to its own
-``created_at`` within calendar year ``Y`` (the identical half-open window the
-KPI roll-up, monthly trend, and market heatmap use).
+``year`` windows each source over calendar year ``Y`` (``None`` = all-time,
+no extra ``WHERE``). Work metrics — shifts worked + recaps filed — window on
+the EVENT date (:func:`recaps.tenant_overview._filter_event_year`, the same
+basis as the KPI roll-up / monthly trend / market heatmap / hero), so a BA is
+credited in the period the work happened, not when the row was imported.
+Ratings alone stay on ``created_at`` (their event FK is nullable — see
+:func:`_ratings`).
 
 On the deliberately-omitted reliability / on-time metric, see
 :data:`RELIABILITY_SUPPORTED`.
@@ -61,7 +64,7 @@ from django.db.models import Avg, Count
 
 from ambassadors.models import Ambassador, AmbassadorEvent, AmbassadorRating
 from recaps.models import CustomRecap, Recap
-from recaps.tenant_overview import _filter_year
+from recaps.tenant_overview import _filter_event_year, _filter_year
 
 log = logging.getLogger(__name__)
 
@@ -175,13 +178,16 @@ def _shifts_worked(tenant_id: int, year: int | None) -> dict[int, int]:
 
     One roster row == one BA assigned to one of the tenant's events == one
     shift worked. Scoped by the roster row's own ``tenant_id`` (non-null,
-    indexed, equal to the event's tenant) and year-filtered on the row's
-    ``created_at`` — so a BA's roster rows for OTHER brands are never counted.
+    indexed, equal to the event's tenant) and year-filtered on the EVENT date
+    (:func:`_filter_event_year`, the hero + KPI basis) so a shift counts in
+    the period it was WORKED, not when the roster row was created — a BA's
+    roster rows for OTHER brands are never counted. All-time (``year=None``)
+    is untouched.
     """
     return _count_by_ambassador(
-        _filter_year(
+        _filter_event_year(
             AmbassadorEvent.objects.filter(tenant_id=tenant_id),
-            "created_at",
+            "event__",
             year,
         )
     )
@@ -194,26 +200,28 @@ def _recaps_filed(tenant_id: int, year: int | None) -> dict[int, int]:
     (``event__tenant_id`` — it has no direct tenant FK) and custom
     :class:`recaps.models.CustomRecap` via its direct ``tenant_id``; both are
     restricted to rows with a real ``ambassador`` FK (external typed-name
-    credits have no rankable id) and year-filtered on their own
-    ``created_at``. The two per-BA maps are summed so a BA who filed both
-    shapes gets credit for each, exactly like the recap-count headline in
+    credits have no rankable id) and year-filtered on the EVENT date
+    (:func:`_filter_event_year`, the hero + KPI basis) so a recap counts in
+    the period its event happened, not when the row was created/imported. The
+    two per-BA maps are summed so a BA who filed both shapes gets credit for
+    each, matching the recap-count headline in
     :func:`recaps.tenant_overview.tenant_event_recap_counts`.
     """
     legacy = _count_by_ambassador(
-        _filter_year(
+        _filter_event_year(
             Recap.objects.filter(
                 event__tenant_id=tenant_id, ambassador__isnull=False
             ),
-            "created_at",
+            "event__",
             year,
         )
     )
     custom = _count_by_ambassador(
-        _filter_year(
+        _filter_event_year(
             CustomRecap.objects.filter(
                 tenant_id=tenant_id, ambassador__isnull=False
             ),
-            "created_at",
+            "event__",
             year,
         )
     )
@@ -229,9 +237,12 @@ def _ratings(tenant_id: int, year: int | None) -> dict[int, tuple[float, int]]:
     :class:`ambassadors.models.AmbassadorRating` carries its own ``tenant_id``
     (captured from the gig at create time), so scoping by it keeps a BA's
     ratings from OTHER brands out — even for the same BA. Year-filtered on the
-    rating's own ``created_at``. Both admin- and client-authored ratings count
-    toward the BA's average (the ``by_client`` flag only governs UI
-    visibility, not the performance mean).
+    rating's own ``created_at`` — deliberately NOT the event date (unlike
+    shifts/recaps): ``AmbassadorRating.event`` is nullable (general, non-gig
+    ratings exist), so an event-date window would silently drop those; a
+    rating's timing is genuinely when it was given. Both admin- and
+    client-authored ratings count toward the BA's average (the ``by_client``
+    flag only governs UI visibility, not the performance mean).
     """
     return _ratings_by_ambassador(
         _filter_year(
