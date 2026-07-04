@@ -1,0 +1,39 @@
+name: activation-autopilot
+
+# Email never-signed-in BAs with a shift in the next 72h (once each) + a
+# digest of the stragglers to the Ignite team. Every 6 hours + manual.
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      window_hours:
+        description: "Look-ahead window in hours"
+        required: false
+        default: "72"
+      dry_run:
+        description: "Dry run (true) — print only, send nothing"
+        required: false
+        default: "false"
+
+jobs:
+  fire:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Fire activation-autopilot cron endpoint
+        run: |
+          if [ -z "${{ secrets.INTERNAL_CRON_SECRET }}" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          BODY=$(curl -sS -w "\nHTTP %{http_code}" \
+            -X POST "https://spark-api-new-490085168610.us-central1.run.app/internal/cron/activation-autopilot" \
+            -H "X-Cron-Secret: ${{ secrets.INTERNAL_CRON_SECRET }}" \
+            --data-urlencode "window_hours=${{ inputs.window_hours || '72' }}" \
+            --data-urlencode "dry_run=${{ inputs.dry_run || 'false' }}" \
+            --max-time 540)
+          echo "$BODY"
+          STATUS=$(echo "$BODY" | tail -1 | awk '{print $2}')
+          [ "$STATUS" = "200" ] || exit 1
