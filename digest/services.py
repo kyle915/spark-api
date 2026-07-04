@@ -265,10 +265,23 @@ def build_tenant_digest(
     )
 
 
+# Synthetic bootstrap/service accounts that must never receive digest email.
+# Both the create_tenant_and_roles bootstrap command and the test helper
+# (get_system_user) create a superuser named "system" with a reserved,
+# non-routable ".local" address (admin@spark.local / system@spark.local). It's
+# an infrastructure account, not a person, yet it can end up carrying an admin
+# role — via role-pk reuse or the new-tenant auto-link (see
+# tenants/dashboard/signals.link_admins_to_new_tenant) — and would then be
+# mailed. Exclude it by identity. We match on username/email, NOT on is_staff/
+# is_superuser, because real Ignite admins are staff/superusers too.
+SYSTEM_ACCOUNT_USERNAMES = frozenset({"system"})
+SYSTEM_ACCOUNT_EMAILS = frozenset({"system@spark.local", "admin@spark.local"})
+
+
 def admin_recipients_for_tenant(tenant: Tenant) -> list[str]:
     """Email addresses for the admin + spark-admin users in this
-    tenant. Filters out blanks. Falls back to settings.NEW_AMBASSADOR_ALERT_EMAILS
-    when no admins are found so the digest still goes somewhere.
+    tenant. Filters out blanks and the synthetic system/service account
+    (see SYSTEM_ACCOUNT_*). Returns [] when no real admins are found.
     """
     qs = (
         TenantedUser.objects.filter(tenant=tenant, is_active=True)
@@ -277,6 +290,8 @@ def admin_recipients_for_tenant(tenant: Tenant) -> list[str]:
             Q(user__role__slug=Role.SPARK_ADMIN_SLUG)
             | Q(user__role__name__iexact="admin")
         )
+        .exclude(user__username__in=SYSTEM_ACCOUNT_USERNAMES)
+        .exclude(user__email__in=SYSTEM_ACCOUNT_EMAILS)
     )
     emails = []
     for tu in qs:
