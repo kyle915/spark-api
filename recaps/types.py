@@ -817,6 +817,9 @@ class CustomRecap(Node):
     incomplete: bool
     approved: bool
     used_corpo_card: bool
+    # Non-empty when the submit-time guard flagged implausible parsed KPIs
+    # (conversion >100%, absurd counts). Surfaced so admins see a warning.
+    data_quality_flags: str
     timezone_id: strawberry.ID | None
 
     event_id: strawberry.ID

@@ -48,7 +48,11 @@ class Command(BaseCommand):
 
     def handle(self, *args, **opts):
         from recaps.models import CustomRecap
-        from recaps.report_service import CampaignReportKpis, _accumulate_custom
+        from recaps.report_service import (
+            CampaignReportKpis,
+            _accumulate_custom,
+            implausibility_reasons,
+        )
         from tenants.models import Tenant
 
         w = self.stdout.write
@@ -91,18 +95,9 @@ class Command(BaseCommand):
                 flags.append(self._flag(cr, "parse-error", repr(exc)[:120]))
                 continue
 
-            reasons = []
-            if kpis.consumers_reached and kpis.willing_to_purchase > kpis.consumers_reached:
-                reasons.append(
-                    f"conversion >100% (willing {kpis.willing_to_purchase} > "
-                    f"consumers {kpis.consumers_reached})"
-                )
-            if kpis.consumers_reached > max_consumers:
-                reasons.append(f"consumers {kpis.consumers_reached} > {max_consumers}")
-            if kpis.cans_sold > max_units:
-                reasons.append(f"cans {kpis.cans_sold} > {max_units}")
-            if kpis.packs_sold > max_units:
-                reasons.append(f"packs {kpis.packs_sold} > {max_units}")
+            reasons = implausibility_reasons(
+                kpis, max_consumers=max_consumers, max_units=max_units
+            )
             if reasons:
                 flags.append(self._flag(cr, "; ".join(reasons), None))
 

@@ -505,6 +505,106 @@ async def _notify_recap_ready_for_review_to_admins(
         )
 
 
+def _compute_recap_data_quality_flags(custom_recap: models.CustomRecap) -> list[str]:
+    """Run the sacred KPI matcher over a just-saved custom recap and return
+    the implausibility reasons (empty = looks fine). Stamps
+    ``data_quality_flags`` on the row so the flag is durable + visible.
+    Sync — call via sync_to_async. Best-effort: never raises."""
+    from recaps.report_service import (
+        CampaignReportKpis,
+        _accumulate_custom,
+        implausibility_reasons,
+    )
+
+    try:
+        kpis = CampaignReportKpis()
+        _accumulate_custom(custom_recap, kpis)
+        reasons = implausibility_reasons(kpis)
+    except Exception as exc:  # noqa: BLE001 — a matcher hiccup must not block filing
+        logger.warning(
+            "recap data-quality guard failed for recap %s: %s",
+            getattr(custom_recap, "id", None),
+            exc,
+        )
+        return []
+
+    flags_text = "; ".join(reasons)
+    # Only write when it changed (avoid a needless UPDATE on the happy path).
+    if (custom_recap.data_quality_flags or "") != flags_text:
+        custom_recap.data_quality_flags = flags_text
+        try:
+            custom_recap.save(update_fields=["data_quality_flags"])
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "recap data-quality flag save failed for recap %s: %s",
+                getattr(custom_recap, "id", None),
+                exc,
+            )
+    return reasons
+
+
+def _send_recap_data_quality_alert(
+    custom_recap: models.CustomRecap, reasons: list[str]
+) -> None:
+    """Email the Ignite team that a recap was just filed with suspect
+    numbers. Sync + best-effort (never raises) — call via sync_to_async."""
+    import html as _html
+
+    try:
+        from tenants.support import _resolve_ignite_recipients
+        from utils.mailer import Envelope, Mailer
+
+        recipients = _resolve_ignite_recipients()
+        if not recipients:
+            return
+        ev = getattr(custom_recap, "event", None)
+        tenant_name = getattr(getattr(ev, "tenant", None), "name", "") or ""
+        event_name = getattr(ev, "name", "") or "(no event)"
+        amb = getattr(custom_recap, "ambassador", None)
+        user = getattr(amb, "user", None) if amb else None
+        who = (
+            (user.get_full_name() or "").strip() if user else ""
+        ) or (getattr(custom_recap, "external_ba_name", "") or "").strip() or "?"
+        reason_items = "".join(f"<li>{_html.escape(r)}</li>" for r in reasons)
+        body = f"""
+        <h2 style="margin:0 0 8px">A recap was just filed with suspect numbers</h2>
+        <p style="margin:0 0 12px;color:#555">
+          Recap <b>#{custom_recap.id}</b> ({_html.escape(event_name)} ·
+          {_html.escape(tenant_name)} · {_html.escape(who)}) parsed into values
+          that can't be right for a single event. Review and correct the field
+          value before these numbers reach a client report.
+        </p>
+        <ul style="margin:0 0 12px">{reason_items}</ul>
+        <p style="color:#888;margin-top:12px">Recap submit-time guard · fix the
+          recap's field value to clear the flag.</p>
+        """
+        subject = f"[Spark] Recap #{custom_recap.id} filed with suspect numbers"
+
+        class _GuardMailer(Mailer):
+            def envelope(self) -> Envelope:
+                return Envelope(subject=subject, html=body, to_emails=recipients)
+
+        _GuardMailer().send_now()
+    except Exception as exc:  # noqa: BLE001 — alert failure must not break filing
+        logger.warning(
+            "recap data-quality alert email failed for recap %s: %s",
+            getattr(custom_recap, "id", None),
+            exc,
+        )
+
+
+async def _guard_recap_data_quality(custom_recap: models.CustomRecap) -> None:
+    """Submit-time data guard: the moment a custom recap is filed, flag it if
+    its parsed KPIs are implausible (conversion >100%, absurd counts) and
+    alert the Ignite team immediately — so a fat-fingered number is caught at
+    the source instead of a week later in the audit. Best-effort throughout;
+    a guard failure never breaks recap creation."""
+    reasons = await sync_to_async(_compute_recap_data_quality_flags)(custom_recap)
+    if not reasons:
+        return
+    await sync_to_async(_send_recap_data_quality_alert)(custom_recap, reasons)
+
+
 class RecapMutationService(SparkGraphQLMixin):
     """Service for recap mutations."""
 
@@ -1960,6 +2060,9 @@ class RecapMutationService(SparkGraphQLMixin):
                 return custom_recap
 
         custom_recap = await create_custom_recap_transaction()
+        # Submit-time data guard: flag + alert immediately if the parsed KPIs
+        # are implausible (runs after commit — reads the saved field values).
+        await _guard_recap_data_quality(custom_recap)
         await _notify_recap_ready_for_review_to_admins(custom_recap, self.user)
         return custom_recap
 

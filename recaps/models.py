@@ -417,6 +417,14 @@ class CustomRecap(models.Model):
     approved = models.BooleanField(default=False)
     used_corpo_card = models.BooleanField(default=False)
 
+    # Submit-time data-quality guard: non-empty when this recap's parsed
+    # KPIs are implausible (conversion >100%, absurd consumer/unit counts).
+    # Stamped on create by the guard in recaps.mutations (which reuses the
+    # sacred report_service matcher + implausibility_reasons), so a
+    # fat-fingered number surfaces the moment it's filed instead of a week
+    # later in the audit — and stays visible for a human to correct.
+    data_quality_flags = models.TextField(blank=True, default="")
+
     timezone = models.ForeignKey(
         TimeZone,
         on_delete=models.RESTRICT,

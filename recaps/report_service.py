@@ -79,6 +79,39 @@ class CampaignReportKpis:
     willing_to_purchase: int = 0
 
 
+# Plausibility thresholds for a SINGLE event's parsed KPIs. Shared by the
+# submit-time guard (recaps.mutations, fires the moment a recap is filed)
+# and the weekly audit (audit_recap_data_health) so both judge "suspect
+# numbers" identically. Single source of truth — do NOT duplicate the rules.
+DEFAULT_MAX_CONSUMERS = 1000
+DEFAULT_MAX_UNITS = 5000
+
+
+def implausibility_reasons(
+    kpis: CampaignReportKpis,
+    *,
+    max_consumers: int = DEFAULT_MAX_CONSUMERS,
+    max_units: int = DEFAULT_MAX_UNITS,
+) -> list[str]:
+    """Human-readable reasons the parsed KPIs can't be right for one event
+    (empty list = looks fine). Catches the failure modes from the SHB
+    digit-mash incident: impossible conversion, or counts far above what a
+    single sampling event could produce."""
+    reasons: list[str] = []
+    if kpis.consumers_reached and kpis.willing_to_purchase > kpis.consumers_reached:
+        reasons.append(
+            f"conversion >100% (willing {kpis.willing_to_purchase} > "
+            f"consumers {kpis.consumers_reached})"
+        )
+    if kpis.consumers_reached > max_consumers:
+        reasons.append(f"consumers {kpis.consumers_reached} > {max_consumers}")
+    if kpis.cans_sold > max_units:
+        reasons.append(f"cans {kpis.cans_sold} > {max_units}")
+    if kpis.packs_sold > max_units:
+        reasons.append(f"packs {kpis.packs_sold} > {max_units}")
+    return reasons
+
+
 @dataclass
 class CampaignReportPhoto:
     url: str
