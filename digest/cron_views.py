@@ -3467,6 +3467,50 @@ class AuditBaAccountsView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class ActivationAutopilotView(View):
+    """POST `/internal/cron/activation-autopilot`.
+
+    Emails never-signed-in BAs with a shift in the next window (once each,
+    fresh welcome + temp password) and digests the stragglers to the
+    Ignite team (send_activation_autopilot command). Scheduled every 6h.
+    Params: window_hours, dry_run.
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _get(name: str) -> str:
+            return (request.GET.get(name) or request.POST.get(name) or "").strip()
+
+        dry_run = _get("dry_run").lower() in ("1", "true", "yes", "on")
+        cmd_args: list[str] = []
+        if _get("window_hours"):
+            cmd_args += ["--window-hours", _get("window_hours")]
+        if dry_run:
+            cmd_args.append("--dry-run")
+
+        out = io.StringIO()
+        try:
+            call_command("send_activation_autopilot", *cmd_args, stdout=out)
+        except Exception as exc:
+            logger.exception("activation-autopilot cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed",
+                 "exception": _concise_exc(exc), "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "dry_run": dry_run, "log": out.getvalue()})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class StaffTenantEventsView(View):
     """POST `/internal/cron/staff-tenant-events`.
 
@@ -4618,6 +4662,7 @@ def _registered_views() -> dict[str, Any]:
         "set-tenant-mileage-tracking": SetTenantMileageTrackingView,
         "staff-tenant-events": StaffTenantEventsView,
         "weekly-mileage-report": WeeklyMileageReportView,
+        "activation-autopilot": ActivationAutopilotView,
         "audit-ba-accounts": AuditBaAccountsView,
         "resend-ba-welcome": ResendBaWelcomeView,
         "retext-tenant-events": RetextTenantEventsView,

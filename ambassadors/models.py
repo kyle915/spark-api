@@ -296,6 +296,10 @@ class AmbassadorEvent(models.Model):
     # nudged exactly once, no matter how often the cron runs.
     activation_reminder_sent_at = models.DateTimeField(null=True, blank=True)
     recap_nudge_sent_at = models.DateTimeField(null=True, blank=True)
+    # Activation autopilot escalation stage for booked-but-never-signed-in
+    # BAs: 0=none, 1=welcome/reset email sent as the shift approached. Kept
+    # per-booking so a BA is emailed once per shift, not every cron run.
+    activation_nudge_stage = models.PositiveSmallIntegerField(default=0)
 
     # Day-before confirmation flow ("confirm you're in") — same cron→stamp
     # pattern as the reminders above (send_shift_confirmations command):
