@@ -1,0 +1,46 @@
+name: check-cron-health
+
+# Cron staleness watchdog: reads the digest.CronRun heartbeats and emails
+# the Ignite team when a recurring job has gone overdue or is erroring.
+# Every 6 hours + manual dispatch. The proactive alarm on top of the
+# passive System Health page.
+
+on:
+  schedule:
+    - cron: "20 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (true) — print the plan, send/stamp nothing"
+        required: false
+        default: "false"
+      throttle_hours:
+        description: "Don't re-alert the same cron within this many hours"
+        required: false
+        default: "12"
+      alert_never_seen:
+        description: "Also alert on watched crons with no heartbeat yet"
+        required: false
+        default: "false"
+
+jobs:
+  fire:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Fire check-cron-health cron endpoint
+        run: |
+          if [ -z "${{ secrets.INTERNAL_CRON_SECRET }}" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          BODY=$(curl -sS -w "\nHTTP %{http_code}" \
+            -X POST "https://spark-api-new-490085168610.us-central1.run.app/internal/cron/check-cron-health" \
+            -H "X-Cron-Secret: ${{ secrets.INTERNAL_CRON_SECRET }}" \
+            --data-urlencode "dry_run=${{ inputs.dry_run || 'false' }}" \
+            --data-urlencode "throttle_hours=${{ inputs.throttle_hours || '12' }}" \
+            --data-urlencode "alert_never_seen=${{ inputs.alert_never_seen || 'false' }}" \
+            --max-time 540)
+          echo "$BODY"
+          STATUS=$(echo "$BODY" | tail -1 | awk '{print $2}')
+          [ "$STATUS" = "200" ] || exit 1
