@@ -3511,6 +3511,62 @@ class ActivationAutopilotView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class RecapDataHealthView(View):
+    """GET/POST `/internal/cron/recap-data-health`.
+
+    Flags custom recaps whose parsed KPIs are implausible (conversion
+    >100%, absurd consumer/unit counts) — catches bad numbers before they
+    reach a client deck. Fires the `audit_recap_data_health` command;
+    read-only. Params: tenant_slug, year, all_time, max_consumers,
+    max_units, email.
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _get(name: str) -> str:
+            return (request.GET.get(name) or request.POST.get(name) or "").strip()
+
+        def _flag(name: str) -> bool:
+            return _get(name).lower() in ("1", "true", "yes", "on")
+
+        cmd_args: list[str] = []
+        if _get("tenant_slug"):
+            cmd_args += ["--tenant-slug", _get("tenant_slug")]
+        if _get("year"):
+            cmd_args += ["--year", _get("year")]
+        if _flag("all_time"):
+            cmd_args.append("--all-time")
+        if _get("max_consumers"):
+            cmd_args += ["--max-consumers", _get("max_consumers")]
+        if _get("max_units"):
+            cmd_args += ["--max-units", _get("max_units")]
+        # Default to emailing the digest unless explicitly disabled.
+        if _get("email") == "" or _flag("email"):
+            cmd_args.append("--email")
+
+        out = io.StringIO()
+        try:
+            call_command("audit_recap_data_health", *cmd_args, stdout=out)
+        except Exception as exc:
+            logger.exception("recap-data-health cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed",
+                 "exception": _concise_exc(exc), "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "log": out.getvalue()})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class StaffTenantEventsView(View):
     """POST `/internal/cron/staff-tenant-events`.
 
@@ -4663,6 +4719,7 @@ def _registered_views() -> dict[str, Any]:
         "staff-tenant-events": StaffTenantEventsView,
         "weekly-mileage-report": WeeklyMileageReportView,
         "activation-autopilot": ActivationAutopilotView,
+        "recap-data-health": RecapDataHealthView,
         "audit-ba-accounts": AuditBaAccountsView,
         "resend-ba-welcome": ResendBaWelcomeView,
         "retext-tenant-events": RetextTenantEventsView,

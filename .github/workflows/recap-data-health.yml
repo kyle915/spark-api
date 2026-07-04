@@ -1,0 +1,45 @@
+name: recap-data-health
+
+# Flag custom recaps with implausible parsed numbers (conversion >100%,
+# absurd consumer/unit counts) before they reach a client deck.
+# Weekly (Mon 14:00 UTC) + manual dispatch.
+
+on:
+  schedule:
+    - cron: "0 14 * * 1"
+  workflow_dispatch:
+    inputs:
+      tenant_slug:
+        description: "Scope to one tenant slug (blank = all)"
+        required: false
+        default: ""
+      all_time:
+        description: "Scan all years (true) or current year (false)"
+        required: false
+        default: "false"
+      email:
+        description: "Email the digest to the Ignite team (true/false)"
+        required: false
+        default: "true"
+
+jobs:
+  fire:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Fire recap-data-health cron endpoint
+        run: |
+          if [ -z "${{ secrets.INTERNAL_CRON_SECRET }}" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          BODY=$(curl -sS -w "\nHTTP %{http_code}" \
+            -X POST "https://spark-api-new-490085168610.us-central1.run.app/internal/cron/recap-data-health" \
+            -H "X-Cron-Secret: ${{ secrets.INTERNAL_CRON_SECRET }}" \
+            --data-urlencode "tenant_slug=${{ inputs.tenant_slug }}" \
+            --data-urlencode "all_time=${{ inputs.all_time || 'false' }}" \
+            --data-urlencode "email=${{ inputs.email || 'true' }}" \
+            --max-time 540)
+          echo "$BODY"
+          STATUS=$(echo "$BODY" | tail -1 | awk '{print $2}')
+          [ "$STATUS" = "200" ] || exit 1
