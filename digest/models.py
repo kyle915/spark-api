@@ -31,3 +31,57 @@ class BackendErrorEvent(models.Model):
 
     def __str__(self) -> str:  # pragma: no cover
         return f"{self.signature} ×{self.count}"
+
+
+class CronRun(models.Model):
+    """Heartbeat for each internal cron endpoint — one row per cron name.
+
+    Every hit of `/internal/cron/<name>` stamps this (via the wrapper in
+    digest.urls), so the System Health page can show whether each
+    automation actually fired and when — the thing that was invisible when
+    the RQ scheduler silently died for weeks. `last_ok` is the HTTP result
+    (2xx), `stale` (a property) is computed by readers against expected
+    cadence.
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    name = models.CharField(max_length=100, unique=True, db_index=True)
+    last_run_at = models.DateTimeField(null=True, blank=True)
+    last_status = models.PositiveSmallIntegerField(default=0)
+    last_ok = models.BooleanField(default=False)
+    last_detail = models.TextField(blank=True, default="")
+    run_count = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ["name"]
+
+    def __str__(self) -> str:  # pragma: no cover
+        return f"{self.name} @ {self.last_run_at} ok={self.last_ok}"
+
+
+def record_cron_run(name: str, *, status: int, detail: str = "") -> None:
+    """Best-effort heartbeat stamp for one cron hit. Never raises."""
+    try:
+        from django.db.models import F
+        from django.utils import timezone
+
+        row, created = CronRun.objects.get_or_create(
+            name=name[:100],
+            defaults={
+                "last_run_at": timezone.now(),
+                "last_status": status,
+                "last_ok": 200 <= status < 400,
+                "last_detail": (detail or "")[:2000],
+                "run_count": 1,
+            },
+        )
+        if not created:
+            CronRun.objects.filter(pk=row.pk).update(
+                last_run_at=timezone.now(),
+                last_status=status,
+                last_ok=200 <= status < 400,
+                last_detail=(detail or "")[:2000],
+                run_count=F("run_count") + 1,
+            )
+    except Exception:  # noqa: BLE001 — heartbeat must never break a cron
+        pass

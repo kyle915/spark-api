@@ -275,6 +275,18 @@ class BackendErrorRow:
 
 
 @strawberry.type
+class CronRunRow:
+    """Heartbeat for one internal cron: did it fire, when, and was it OK."""
+
+    name: str
+    last_run_at: str | None
+    last_ok: bool
+    last_status: int
+    run_count: int
+    hours_since: float | None
+
+
+@strawberry.type
 class SystemHealthType:
     """Ignite-admin observability snapshot: what's running + what's broken.
 
@@ -291,6 +303,7 @@ class SystemHealthType:
     errors_7d: int
     distinct_signatures: int
     recent_errors: list[BackendErrorRow]
+    cron_runs: list[CronRunRow]
 
 
 def _build_system_health_sync() -> dict:
@@ -298,14 +311,30 @@ def _build_system_health_sync() -> dict:
 
     from django.utils import timezone as _tz
 
-    from digest.models import BackendErrorEvent
+    from digest.models import BackendErrorEvent, CronRun
 
     now = _tz.now()
     day_ago = now - _dt.timedelta(hours=24)
     week_ago = now - _dt.timedelta(days=7)
     qs = BackendErrorEvent.objects.all()
     recent = list(qs.order_by("-last_seen")[:25])
+    crons = [
+        CronRunRow(
+            name=c.name,
+            last_run_at=c.last_run_at.isoformat() if c.last_run_at else None,
+            last_ok=c.last_ok,
+            last_status=c.last_status,
+            run_count=c.run_count,
+            hours_since=(
+                round((now - c.last_run_at).total_seconds() / 3600, 1)
+                if c.last_run_at
+                else None
+            ),
+        )
+        for c in CronRun.objects.all()
+    ]
     return {
+        "cron_runs": crons,
         "errors_24h": qs.filter(last_seen__gte=day_ago).count(),
         "errors_7d": qs.filter(last_seen__gte=week_ago).count(),
         "distinct_signatures": qs.count(),
@@ -354,6 +383,7 @@ class QuerySpark(GoogleCalendarQueries, TenantThemingQuery):
             errors_7d=data["errors_7d"],
             distinct_signatures=data["distinct_signatures"],
             recent_errors=data["recent"],
+            cron_runs=data["cron_runs"],
         )
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])

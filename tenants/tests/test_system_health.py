@@ -14,18 +14,15 @@ class TestSystemHealth(EventsGraphQLTestCase):
     @pytest.fixture(autouse=True)
     def setup(self):
         from django.contrib.auth import get_user_model
-        from tenants.models import Role
+
+        from tenants.tests.base import ensure_role
 
         self.system_user = self.get_system_user()
         User = get_user_model()
-        admin_role, _ = Role.objects.get_or_create(
-            slug=Role.SPARK_ADMIN_SLUG,
-            defaults={"name": "Spark Admin", "created_by": self.system_user},
-        )
-        client_role, _ = Role.objects.get_or_create(
-            slug=Role.CLIENT_SLUG,
-            defaults={"name": "Client", "created_by": self.system_user},
-        )
+        # ensure_role converges on the name-unique constraint that fixtures
+        # keep colliding on (0001_initial seeds these with NULL slugs).
+        admin_role = ensure_role("Spark Admin", created_by=self.system_user)
+        client_role = ensure_role("Client", created_by=self.system_user)
         self.admin = User.objects.create_user(
             username="sh-admin", email="admin@igniteproductions.co",
             role=admin_role, is_active=True,
@@ -35,11 +32,21 @@ class TestSystemHealth(EventsGraphQLTestCase):
             role=client_role, is_active=True,
         )
         # Seed one recorded error so the snapshot has content.
-        from digest.models import BackendErrorEvent
+        from django.utils import timezone
+
+        from digest.models import BackendErrorEvent, CronRun
 
         BackendErrorEvent.objects.create(
             signature="ValueError:recaps.mutations:create",
             message="boom", location="recaps/mutations.py:12", count=3,
+        )
+        # Seed a cron heartbeat so the automations section has content.
+        CronRun.objects.create(
+            name="activation-autopilot",
+            last_run_at=timezone.now(),
+            last_status=200,
+            last_ok=True,
+            run_count=7,
         )
 
     def _health(self, as_user):
