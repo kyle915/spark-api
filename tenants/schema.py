@@ -262,6 +262,67 @@ async def _build_server_info() -> ServerInfoType:
     )
 
 
+@strawberry.type
+class BackendErrorRow:
+    """One distinct backend-error signature for the System Health page."""
+
+    signature: str
+    message: str
+    location: str
+    count: int
+    first_seen: str
+    last_seen: str
+
+
+@strawberry.type
+class SystemHealthType:
+    """Ignite-admin observability snapshot: what's running + what's broken.
+
+    Surfaces the backend error monitor (digest.BackendErrorEvent — which
+    also captures silent email/push delivery failures) in the admin UI so
+    problems are visible in-app, not just in the throttled alert email.
+    """
+
+    server_time: str
+    git_sha: str
+    revision: str
+    database_ok: bool
+    errors_24h: int
+    errors_7d: int
+    distinct_signatures: int
+    recent_errors: list[BackendErrorRow]
+
+
+def _build_system_health_sync() -> dict:
+    import datetime as _dt
+
+    from django.utils import timezone as _tz
+
+    from digest.models import BackendErrorEvent
+
+    now = _tz.now()
+    day_ago = now - _dt.timedelta(hours=24)
+    week_ago = now - _dt.timedelta(days=7)
+    qs = BackendErrorEvent.objects.all()
+    recent = list(qs.order_by("-last_seen")[:25])
+    return {
+        "errors_24h": qs.filter(last_seen__gte=day_ago).count(),
+        "errors_7d": qs.filter(last_seen__gte=week_ago).count(),
+        "distinct_signatures": qs.count(),
+        "recent": [
+            BackendErrorRow(
+                signature=r.signature,
+                message=(r.message or "")[:300],
+                location=r.location or "",
+                count=r.count,
+                first_seen=r.first_seen.isoformat() if r.first_seen else "",
+                last_seen=r.last_seen.isoformat() if r.last_seen else "",
+            )
+            for r in recent
+        ],
+    }
+
+
 # Spark Schema
 @strawberry.type()
 class QuerySpark(GoogleCalendarQueries, TenantThemingQuery):
@@ -272,6 +333,28 @@ class QuerySpark(GoogleCalendarQueries, TenantThemingQuery):
     @strawberry.field
     async def server_info(self) -> ServerInfoType:
         return await _build_server_info()
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def system_health(self, info) -> SystemHealthType | None:
+        """Ignite-admin only; others get null (the FE hides the page)."""
+        user = info.context.request.user
+        role_slug, is_staff, is_super, email = await resolve_request_user_access(
+            user
+        )
+        if not _is_admin_access(role_slug, is_staff, is_super, email):
+            return None
+        info_snap = await _build_server_info()
+        data = await sync_to_async(_build_system_health_sync, thread_sensitive=True)()
+        return SystemHealthType(
+            server_time=info_snap.server_time,
+            git_sha=info_snap.git_sha,
+            revision=info_snap.revision,
+            database_ok=info_snap.database_ok,
+            errors_24h=data["errors_24h"],
+            errors_7d=data["errors_7d"],
+            distinct_signatures=data["distinct_signatures"],
+            recent_errors=data["recent"],
+        )
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     def me(self, info) -> CustomUserType:
