@@ -4667,6 +4667,90 @@ class BuildPoliTabView(View):
         return self._run(request)
 
 
+@method_decorator(csrf_exempt, name="dispatch")
+class CheckCronHealthView(View):
+    """POST `/internal/cron/check-cron-health`.
+
+    Fires `check_cron_health` — the staleness watchdog that reads the
+    digest.CronRun heartbeats and emails the Ignite team when a recurring
+    cron has gone overdue (older than its cadence) or is erroring. This is
+    the proactive alarm on top of the passive System Health page: a job
+    that silently stops firing surfaces within a cadence window instead of
+    weeks later. Read-only apart from the per-cron alert throttle stamp.
+
+    Designed for a frequent-ish GHA cron (every ~6h). Note: the wrapper in
+    digest.urls also records THIS endpoint's own heartbeat, so the watchdog
+    is itself watched (add it to EXPECTED_MAX_HOURS to alert if it stops).
+
+    Body / query params (all optional):
+      - dry_run: "1" / "true" / "yes" — report the plan, send/stamp nothing.
+      - throttle_hours: int (default 12) — don't re-alert the same cron
+        within this many hours.
+      - alert_never_seen: "1"/"true"/"yes" — also alert on watched crons
+        with no heartbeat at all (off by default; cold-start noise).
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _bool(name: str, default: bool = False) -> bool:
+            raw = (request.GET.get(name) or request.POST.get(name) or "").lower()
+            if not raw:
+                return default
+            return raw in ("1", "true", "yes", "on")
+
+        def _int(name: str, default: int) -> int | None:
+            raw = request.GET.get(name) or request.POST.get(name)
+            if raw is None or raw == "":
+                return default
+            try:
+                return int(raw)
+            except ValueError:
+                return None
+
+        throttle_hours = _int("throttle_hours", 12)
+        if throttle_hours is None:
+            return JsonResponse(
+                {"ok": False, "error": "throttle_hours must be an integer"},
+                status=400,
+            )
+        dry_run = _bool("dry_run", default=False)
+        alert_never_seen = _bool("alert_never_seen", default=False)
+
+        cmd_args: list[str] = ["--throttle-hours", str(throttle_hours)]
+        if dry_run:
+            cmd_args.append("--dry-run")
+        if alert_never_seen:
+            cmd_args.append("--alert-never-seen")
+
+        out = io.StringIO()
+        try:
+            call_command("check_cron_health", *cmd_args, stdout=out)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("Cron health check failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "log": out.getvalue(),
+                },
+                status=500,
+            )
+
+        return JsonResponse(
+            {"ok": True, "dry_run": dry_run, "log": out.getvalue()}
+        )
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        return JsonResponse({"ok": True, "endpoint": "check-cron-health"})
+
+
 def _registered_views() -> dict[str, Any]:
     """Map URL path → view class. Lets `digest/urls.py` mount these
     without each one being re-exported explicitly.
@@ -4726,4 +4810,5 @@ def _registered_views() -> dict[str, Any]:
         "backfill-ld-master-tracker": BackfillLdMasterTrackerView,
         "ld-data-census": LdDataCensusView,
         "export-ld-recaps": ExportLdRecapsView,
+        "check-cron-health": CheckCronHealthView,
     }

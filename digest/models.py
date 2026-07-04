@@ -51,6 +51,10 @@ class CronRun(models.Model):
     last_ok = models.BooleanField(default=False)
     last_detail = models.TextField(blank=True, default="")
     run_count = models.PositiveIntegerField(default=0)
+    # Staleness-alert throttle: last time check_cron_health emailed about
+    # this cron being overdue/errored, so a persistently-stuck job doesn't
+    # re-alert on every checker run.
+    last_alerted_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ["name"]
