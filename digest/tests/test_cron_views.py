@@ -1051,3 +1051,33 @@ class TestBackfillAmbassadorCoordinatesCronView:
         )
         assert ok.status_code == 200
         assert ok.json()["endpoint"] == "backfill-ambassador-coordinates"
+
+
+@pytest.mark.django_db
+class TestCronEndpointsAreCsrfExempt:
+    """Regression: the CronRun heartbeat wrapper in digest/urls.py must not
+    strip the csrf_exempt attribute off the wrapped view. If it does, EVERY
+    cron POST 403s on CSRF (prod incident: all scheduled jobs went dark).
+    The default test Client doesn't enforce CSRF, so this uses
+    enforce_csrf_checks=True to actually catch it."""
+
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    def test_post_is_csrf_exempt(self):
+        csrf_client = Client(enforce_csrf_checks=True)
+        # No CSRF token + no secret: a csrf-exempt view reaches the secret
+        # gate and returns 401 (unauthorized). A NON-exempt view would 403
+        # on CSRF before ever running. So 401 (not 403) proves exemption.
+        resp = csrf_client.post(ADMIN_DIGEST_URL)
+        assert resp.status_code == 401, (
+            f"expected 401 (csrf-exempt, secret gate), got {resp.status_code} "
+            "— the heartbeat wrapper likely dropped csrf_exempt"
+        )
+
+    def test_resolved_view_carries_csrf_exempt_attr(self):
+        from django.urls import resolve
+
+        for url in (ADMIN_DIGEST_URL, EXEC_SUMMARY_URL, SCHEDULED_REPORTS_URL):
+            match = resolve(url)
+            assert getattr(match.func, "csrf_exempt", False) is True, (
+                f"{url} view is not csrf_exempt"
+            )

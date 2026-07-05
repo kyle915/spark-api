@@ -7,13 +7,17 @@ secret check. Every hit is wrapped to record a CronRun heartbeat
 (skipping auth denials) so System Health can show what actually fired.
 """
 
+import functools
+
 from django.urls import path
+from django.views.decorators.csrf import csrf_exempt
 
 from .cron_views import _registered_views
 from .models import record_cron_run
 
 
 def _heartbeat(name, view_callable):
+    @functools.wraps(view_callable)
     def wrapped(request, *args, **kwargs):
         response = view_callable(request, *args, **kwargs)
         # Skip auth denials (401/403) — those are "someone hit it without the
@@ -29,7 +33,11 @@ def _heartbeat(name, view_callable):
 urlpatterns = [
     path(
         f"{name}",
-        _heartbeat(name, view.as_view()),
+        # csrf_exempt MUST wrap the outer callable: View.as_view() sets
+        # csrf_exempt=True as a function attribute, but our _heartbeat closure
+        # is what the URL resolver actually calls, so CsrfViewMiddleware reads
+        # the attribute off IT. Without this, every cron POST 403s on CSRF.
+        csrf_exempt(_heartbeat(name, view.as_view())),
         name=f"digest-cron-{name}",
     )
     for name, view in _registered_views().items()
