@@ -4950,6 +4950,71 @@ class FixNeutonicGeoView(View):
         return JsonResponse({"ok": True, "endpoint": "fix-neutonic-geo"})
 
 
+@method_decorator(csrf_exempt, name="dispatch")
+class SetRecapChoiceOptionsView(View):
+    """POST `/internal/cron/set-recap-choice-options` — set a custom-recap
+    choice field's allowed options (the builder only sets them at create time).
+
+    Params (query or POST): tenant_slug (req), field_contains (req), options
+    (comma-separated; omit to use the tenant's Product names), apply, overwrite.
+    Dry-run unless apply=1. Secret-gated. Guarded: writes only when exactly one
+    choice field matches field_contains.
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _p(name: str) -> str:
+            return (request.GET.get(name) or request.POST.get(name) or "").strip()
+
+        def _bool(name: str) -> bool:
+            return _p(name).lower() in ("1", "true", "yes", "on")
+
+        tenant_slug = _p("tenant_slug")
+        field_contains = _p("field_contains")
+        if not tenant_slug or not field_contains:
+            return JsonResponse(
+                {"ok": False, "error": "tenant_slug and field_contains are required"},
+                status=400,
+            )
+
+        cmd_args = [
+            "--tenant-slug", tenant_slug,
+            "--field-contains", field_contains,
+        ]
+        options = _p("options")
+        if options:
+            cmd_args += ["--options", options]
+        if _bool("apply"):
+            cmd_args.append("--apply")
+        if _bool("overwrite"):
+            cmd_args.append("--overwrite")
+
+        out = io.StringIO()
+        try:
+            call_command("set_recap_choice_options", *cmd_args, stdout=out)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("set_recap_choice_options cron failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "log": out.getvalue(),
+                },
+                status=500,
+            )
+        return JsonResponse({"ok": True, "log": out.getvalue()})
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        return JsonResponse({"ok": True, "endpoint": "set-recap-choice-options"})
+
+
 def _registered_views() -> dict[str, Any]:
     """Map URL path → view class. Lets `digest/urls.py` mount these
     without each one being re-exported explicitly.
@@ -4974,6 +5039,7 @@ def _registered_views() -> dict[str, Any]:
         ),
         "repair-event-dates": RepairEventDatesView,
         "fix-neutonic-geo": FixNeutonicGeoView,
+        "set-recap-choice-options": SetRecapChoiceOptionsView,
         "backfill-event-coordinates": BackfillEventCoordinatesView,
         "backfill-ambassador-coordinates": BackfillAmbassadorCoordinatesView,
         "backfill-request-rmm-routing": BackfillRequestRmmRoutingView,
