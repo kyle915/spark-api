@@ -1354,6 +1354,90 @@ class SendActivationRemindersView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class SendPreShiftChecklistsView(View):
+    """POST `/internal/cron/pre-shift-checklists`.
+
+    Fires the `send_pre_shift_checklists` command — pushes the per-shift
+    "pre-shift checklist" reminder (~2h before start) to every BA with an
+    approved shift starting in the next N minutes (once per shift, deduped
+    via AmbassadorEvent.pre_shift_checklist_sent_at).
+
+    Replaces the dead django-rq scheduled checklist (no rqscheduler in prod).
+    Designed for a frequent GHA cron (every ~10 min). The push is sent
+    INLINE in the web process — no worker needed.
+
+    Body / query params (all optional):
+      - lead_minutes: int (default 120) — send the checklist for shifts
+        starting within this many minutes (the ~2h pre-shift lead). The
+        dedup stamp keeps it to one send per shift.
+      - dry_run: "1" / "true" / "yes" — log who would get a checklist, send
+        nothing, stamp nothing.
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _bool(name: str, default: bool = False) -> bool:
+            raw = (request.GET.get(name) or request.POST.get(name) or "").lower()
+            if not raw:
+                return default
+            return raw in ("1", "true", "yes", "on")
+
+        def _int(name: str, default: int) -> int | None:
+            raw = request.GET.get(name) or request.POST.get(name)
+            if raw is None or raw == "":
+                return default
+            try:
+                return int(raw)
+            except ValueError:
+                return None
+
+        lead_minutes = _int("lead_minutes", 120)
+        if lead_minutes is None:
+            return JsonResponse(
+                {"ok": False, "error": "lead_minutes must be an integer"},
+                status=400,
+            )
+        dry_run = _bool("dry_run", default=False)
+
+        cmd_args: list[str] = ["--lead-minutes", str(lead_minutes)]
+        if dry_run:
+            cmd_args.append("--dry-run")
+
+        out = io.StringIO()
+        try:
+            call_command("send_pre_shift_checklists", *cmd_args, stdout=out)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("Pre-shift checklists cron failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "log": out.getvalue(),
+                },
+                status=500,
+            )
+
+        return JsonResponse(
+            {
+                "ok": True,
+                "lead_minutes": lead_minutes,
+                "dry_run": dry_run,
+                "log": out.getvalue(),
+            }
+        )
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        return JsonResponse({"ok": True, "endpoint": "pre-shift-checklists"})
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class SendAmbassadorJobRemindersView(View):
     """POST `/internal/cron/ambassador-job-reminders`.
 
@@ -4836,6 +4920,7 @@ def _registered_views() -> dict[str, Any]:
         "send-recap-reminders": SendRecapRemindersView,
         "send-open-shift-alerts": SendOpenShiftAlertsView,
         "activation-reminders": SendActivationRemindersView,
+        "pre-shift-checklists": SendPreShiftChecklistsView,
         "ambassador-job-reminders": SendAmbassadorJobRemindersView,
         "recap-nudges": SendRecapNudgesView,
         "send-payment-notifications": SendPaymentNotificationsView,

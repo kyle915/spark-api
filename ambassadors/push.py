@@ -355,58 +355,20 @@ def enqueue_push(
             logger.exception("inline push fallback failed for user_id=%s", user_id)
 
 
-def schedule_push_at(
-    eta: datetime.datetime,
-    user_id: int,
-    *,
-    title: str,
-    body: str,
-    data: dict[str, Any] | None = None,
-) -> None:
-    """Schedule a push to fire at ``eta`` (UTC). Best-effort.
-
-    If ``eta`` is in the past or within the next 5 seconds, we just
-    enqueue it immediately. If the scheduler is unreachable, we log
-    and drop — there's no inline fallback for a future-dated send.
-    """
-    from django.conf import settings
-
-    if not getattr(settings, "PUSH_ENABLED", True):
-        logger.debug("PUSH_ENABLED=false — dropping scheduled push to user_id=%s", user_id)
-        return
-
-    now = timezone.now()
-    if eta <= now + datetime.timedelta(seconds=5):
-        enqueue_push(user_id, title=title, body=body, data=data)
-        return
-
-    try:
-        import django_rq
-
-        scheduler = django_rq.get_scheduler("default")
-        scheduler.enqueue_at(
-            eta,
-            _send_push_to_user_sync,
-            user_id,
-            title=title,
-            body=body,
-            data=data,
-        )
-    except Exception as exc:
-        logger.warning(
-            "push scheduler unreachable (%s); dropping eta=%s user_id=%s title=%r",
-            exc, eta.isoformat(), user_id, title,
-        )
-
-
-# NOTE: the recap-nudge scheduler (schedule_recap_nudge_at /
-# _send_recap_nudge_if_unfiled) used to live here, scheduling a per-shift
-# "don't forget your recap" push via django-rq at event end + N hours. It
-# never fired — there is no rqscheduler in prod — so it was removed. The
-# recap nudge is now a wall-clock cron that sends inline (no worker):
-# recaps/management/commands/send_recap_nudges.py, hit via
-# /internal/cron/recap-nudges. Likewise the activation reminder is now
-# send_activation_reminders.py → /internal/cron/activation-reminders.
-# `schedule_push_at` above is still used (the pre-shift checklist), and
-# `enqueue_push` (immediate sends, with inline fallback) is the live path
-# for shift offers and the other event-driven pushes.
+# NOTE: the django-rq future-dated schedulers that used to live here
+# (schedule_push_at for the pre-shift checklist + activation reminder, and
+# schedule_recap_nudge_at for the recap nudge) have all been REMOVED. They
+# scheduled per-shift pushes via `scheduler.enqueue_at(...)`, but there is
+# no rqscheduler running in prod, so every future-dated job was silently
+# dropped and never fired. All three timed pushes are now wall-clock crons
+# that send inline (no worker), each deduped via an AmbassadorEvent.*_sent_at
+# stamp:
+#   - activation reminder → events/management/commands/send_activation_reminders.py
+#       (/internal/cron/activation-reminders)
+#   - pre-shift checklist → events/management/commands/send_pre_shift_checklists.py
+#       (/internal/cron/pre-shift-checklists)
+#   - recap nudge → recaps/management/commands/send_recap_nudges.py
+#       (/internal/cron/recap-nudges)
+# `enqueue_push` (immediate sends, with an inline fallback when Redis is
+# down) remains the live path for shift offers and other event-driven
+# pushes. Do NOT re-introduce a future-dated scheduler here — it won't fire.

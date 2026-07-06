@@ -287,15 +287,18 @@ class AmbassadorEvent(models.Model):
         related_name="ambassadors_events_updated_by",
     )
 
-    # Cron dedup stamps. The "your shift starts soon" activation reminder
-    # and the "don't forget your recap" nudge are fired by wall-clock crons
-    # (events/management/commands/send_activation_reminders.py +
-    # send_recap_nudges.py, hit via /internal/cron/…), NOT by an RQ
-    # scheduler — there's no rqscheduler running in prod. Each cron stamps
-    # the matching field the first time it sends so a shift is reminded /
-    # nudged exactly once, no matter how often the cron runs.
+    # Cron dedup stamps. The "your shift starts soon" activation reminder,
+    # the "don't forget your recap" nudge, and the "pre-shift checklist" push
+    # are all fired by wall-clock crons (events/management/commands/
+    # send_activation_reminders.py + send_pre_shift_checklists.py +
+    # recaps/management/commands/send_recap_nudges.py, hit via
+    # /internal/cron/…), NOT by an RQ scheduler — there's no rqscheduler
+    # running in prod. Each cron stamps the matching field the first time it
+    # sends so a shift is reminded / nudged exactly once, no matter how often
+    # the cron runs.
     activation_reminder_sent_at = models.DateTimeField(null=True, blank=True)
     recap_nudge_sent_at = models.DateTimeField(null=True, blank=True)
+    pre_shift_checklist_sent_at = models.DateTimeField(null=True, blank=True)
     # Activation autopilot escalation stage for booked-but-never-signed-in
     # BAs: 0=none, 1=welcome/reset email sent as the shift approached. Kept
     # per-booking so a BA is emailed once per shift, not every cron run.

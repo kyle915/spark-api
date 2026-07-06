@@ -3,25 +3,24 @@ Django signals for Google Calendar synchronization and mobile push.
 
 Calendar sync (existing) keeps Google Calendar in step with Event /
 AmbassadorEvent rows. Push notifications fire at moments BAs care about.
-The two fired from THIS signal:
+Only ONE push fires from THIS signal:
 
   - shift-offer: BA was invited to an Event (AmbassadorEvent created) —
     sent immediately via enqueue_push (inline fallback when Redis is down).
-  - pre-shift checklist: ~2h before Event.start_time, once approved —
-    scheduled via schedule_push_at.
 
-The "your shift starts soon" activation reminder and the "don't forget
-your recap" nudge are NO LONGER fired here. They used to be scheduled at
-AmbassadorEvent-creation time via django-rq, but there is no rqscheduler
-in prod so they never fired. They are now driven by wall-clock crons that
-send inline (no worker):
+The three TIMED per-shift pushes — the "your shift starts soon" activation
+reminder, the "~2h before" pre-shift checklist, and the "don't forget your
+recap" nudge — are NO LONGER fired here. They used to be scheduled at
+AmbassadorEvent-creation/approval time via django-rq, but there is no
+rqscheduler in prod so they never fired. They are now driven by wall-clock
+crons that send inline (no worker):
   - send_activation_reminders → /internal/cron/activation-reminders
-  - send_recap_nudges → /internal/cron/recap-nudges
+  - send_pre_shift_checklists → /internal/cron/pre-shift-checklists
+  - send_recap_nudges       → /internal/cron/recap-nudges
 
 All push paths are best-effort — the queue layer can fail (no Redis on
 Cloud Run by default) without aborting Event/AmbassadorEvent saves.
 """
-import datetime
 import logging
 
 from django.db.models.signals import post_save
@@ -35,12 +34,6 @@ from utils.queues import Queues
 
 logger = logging.getLogger(__name__)
 queues: Queues = Queues()
-
-# How far before start_time we send the pre-shift checklist push.
-# Two hours gives BAs enough time to grab uniform + materials and head
-# out, but not so far ahead that they forget by the time they arrive.
-PRE_SHIFT_CHECKLIST_LEAD = datetime.timedelta(hours=2)
-
 
 @receiver(post_save, sender=Event)
 def sync_event_on_create_or_update(sender, instance: Event, created: bool, **kwargs):
@@ -125,10 +118,7 @@ def push_on_ambassador_event_change(
     user, missing event start_time) is logged and dropped.
     """
     try:
-        from ambassadors.push import (
-            enqueue_push,
-            schedule_push_at,
-        )
+        from ambassadors.push import enqueue_push
 
         ambassador = getattr(instance, "ambassador", None)
         user = getattr(ambassador, "user", None) if ambassador else None
@@ -150,14 +140,6 @@ def push_on_ambassador_event_change(
             "eventUuid": str(event.uuid),
             "ambassadorEventUuid": str(instance.uuid),
         }
-        # Reminder-only payload: no ambassadorEventUuid, so the mobile
-        # tap handler falls through to data.screen and routes to the
-        # Shifts tab via navigationRef.
-        reminder_data = {
-            "screen": "shifts",
-            "eventUuid": str(event.uuid),
-        }
-
         if created:
             # Shift offer — invited but not yet approved.
             enqueue_push(
@@ -167,37 +149,23 @@ def push_on_ambassador_event_change(
                 data=offer_data,
             )
 
-        # If the invite has been approved AND the event has a start_time,
-        # schedule the pre-shift checklist. update_or_create paths hit
-        # post_save with created=False, so we wire from both.
-        #
-        # NOTE: the activation reminder ("your shift starts soon") and the
-        # recap nudge ("don't forget your recap") used to be scheduled here
-        # too, via schedule_push_at / schedule_recap_nudge_at. Those never
-        # fired — there is no rqscheduler running in prod, so the django-rq
-        # scheduled jobs were silently dropped. They are now driven by
-        # wall-clock crons that send inline (no worker), which is the single
-        # source of truth for both:
-        #   - activation reminder → events/management/commands/
-        #       send_activation_reminders.py  (/internal/cron/activation-reminders)
-        #   - recap nudge → recaps/management/commands/send_recap_nudges.py
+        # NOTE: the three TIMED per-shift pushes are NO LONGER scheduled
+        # here. They used to be wired at approval time via schedule_push_at /
+        # schedule_recap_nudge_at, but there is no rqscheduler running in
+        # prod, so the django-rq scheduled jobs were silently dropped and
+        # never fired. All three are now driven by wall-clock crons that send
+        # inline (no worker) — the single source of truth for each, deduped
+        # via the matching AmbassadorEvent.*_sent_at stamp:
+        #   - activation reminder ("your shift starts soon") →
+        #       events/management/commands/send_activation_reminders.py
+        #       (/internal/cron/activation-reminders)
+        #   - pre-shift checklist (~2h before start) →
+        #       events/management/commands/send_pre_shift_checklists.py
+        #       (/internal/cron/pre-shift-checklists)
+        #   - recap nudge ("don't forget your recap") →
+        #       recaps/management/commands/send_recap_nudges.py
         #       (/internal/cron/recap-nudges)
-        # Do NOT re-add scheduled sends here.
-        if instance.is_approved and event.start_time:
-            # Pre-shift checklist: 2h before start. Nudges BAs to grab
-            # uniform + materials + check the briefing before they head
-            # out. Generic copy reusable across brands; per-tenant body
-            # text can come from event.notes once we wire that path.
-            schedule_push_at(
-                event.start_time - PRE_SHIFT_CHECKLIST_LEAD,
-                user.id,
-                title="Pre-shift checklist",
-                body=(
-                    f"Shift in 2h: {event_name}. "
-                    "Open the briefing and grab your uniform + materials."
-                ),
-                data={**reminder_data, "kind": "pre_shift_checklist"},
-            )
+        # Do NOT re-add scheduled sends here — they will not fire.
     except Exception as exc:
         logger.warning(
             "push wiring failed for ambassador_event=%s: %s", instance.id, exc
