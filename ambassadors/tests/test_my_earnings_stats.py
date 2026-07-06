@@ -204,6 +204,62 @@ class TestMyEarningsStats(AmbassadorsGraphQLTestCase):
         assert result.data["myEarningsStats"]["withinDays"] == 1
 
     @pytest.mark.asyncio
+    async def test_approved_hours_counts_only_recap_approved_shifts(self):
+        """approvedHours / approvedShiftsCount reflect ONLY shifts whose recap
+        is approved — the "hours show once the recap is signed off" model.
+        The completed shiftsCount / hoursEstimate still count all past
+        approved-booking shifts."""
+        from recaps.models import Recap
+
+        ba_user = await self.create_user_async(
+            username="ba-appr", email="ba-appr@test.com",
+            role=self.roles["ambassador"],
+        )
+        ambassador = await sync_to_async(self.create_ambassador)(ba_user)
+
+        # Shift A: 4h, WITH an approved recap → counts toward approved hours.
+        d, s, e = self._shift_at(3, 10, 14)
+        ev_a = await sync_to_async(self.create_event)(
+            name="Recapped", tenant=self.tenant, date=d, start_time=s, end_time=e,
+        )
+        await sync_to_async(AmbassadorEvent.objects.create)(
+            ambassador=ambassador, event=ev_a, tenant=self.tenant,
+            is_approved=True, created_by=ba_user,
+        )
+        await sync_to_async(Recap.objects.create)(
+            name="rec", event=ev_a, ambassador=ambassador, approved=True,
+            created_by=ba_user, updated_by=ba_user,
+        )
+
+        # Shift B: 4h, completed but NO approved recap → not approved hours.
+        d2, s2, e2 = self._shift_at(4, 10, 14)
+        ev_b = await sync_to_async(self.create_event)(
+            name="No recap", tenant=self.tenant, date=d2, start_time=s2,
+            end_time=e2,
+        )
+        await sync_to_async(AmbassadorEvent.objects.create)(
+            ambassador=ambassador, event=ev_b, tenant=self.tenant,
+            is_approved=True, created_by=ba_user,
+        )
+
+        query = """
+        query Stats($withinDays: Int) {
+          myEarningsStats(withinDays: $withinDays) {
+            shiftsCount hoursEstimate approvedShiftsCount approvedHours
+          }
+        }
+        """
+        result = await self._execute_mutation(
+            query, {"withinDays": 30}, self.endpoint_path, user=ba_user,
+        )
+        assert result.errors is None, f"query errored: {result.errors}"
+        stats = result.data["myEarningsStats"]
+        assert stats["shiftsCount"] == 2            # both completed
+        assert stats["hoursEstimate"] == 8.0        # both counted for estimate
+        assert stats["approvedShiftsCount"] == 1    # only the recapped one
+        assert stats["approvedHours"] == 4.0        # only its scheduled length
+
+    @pytest.mark.asyncio
     async def test_handles_midnight_rollover(self):
         ba_user = await self.create_user_async(
             username="ba-midnight",

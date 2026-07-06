@@ -1289,29 +1289,68 @@ class AmbassadorEventQueries:
                 shifts_count=0,
                 hours_estimate=None,
                 within_days=days,
+                approved_shifts_count=0,
+                approved_hours=None,
             )
 
-        total_seconds = 0.0
-        for ae in rows:
+        # Which of these shifts have an APPROVED recap (legacy or custom)
+        # filed by this BA? Approving the recap is what "approves" the hours
+        # (Kyle's model), so those shifts' scheduled length becomes the
+        # locked-in approved-hours figure the BA sees.
+        event_ids = [ae.event_id for ae in rows if ae.event_id]
+        approved_event_ids: set = set()
+        if event_ids:
+            from recaps.models import CustomRecap, Recap
+
+            def _approved_event_ids() -> set:
+                legacy = set(
+                    Recap.objects.filter(
+                        ambassador__user=user,
+                        approved=True,
+                        event_id__in=event_ids,
+                    ).values_list("event_id", flat=True)
+                )
+                custom = set(
+                    CustomRecap.objects.filter(
+                        ambassador__user=user,
+                        approved=True,
+                        event_id__in=event_ids,
+                    ).values_list("event_id", flat=True)
+                )
+                return legacy | custom
+
+            approved_event_ids = await sync_to_async(_approved_event_ids)()
+
+        def _shift_hours(ae) -> float:
             ev = ae.event
             start = getattr(ev, "start_time", None)
             end = getattr(ev, "end_time", None)
             if not start or not end:
-                continue
-            # start/end are TimeField — combine with a sentinel date
-            # to compute the delta. Roll over midnight by adding 24h.
+                return 0.0
+            # start/end are TimeField; roll over midnight by adding 24h.
             s_secs = (start.hour * 3600) + (start.minute * 60) + start.second
             e_secs = (end.hour * 3600) + (end.minute * 60) + end.second
             delta = e_secs - s_secs
             if delta < 0:
                 delta += 24 * 3600
-            total_seconds += float(delta)
+            return float(delta) / 3600.0
 
-        hours = total_seconds / 3600.0
+        total_hours = 0.0
+        approved_hours = 0.0
+        approved_shifts = 0
+        for ae in rows:
+            h = _shift_hours(ae)
+            total_hours += h
+            if ae.event_id in approved_event_ids:
+                approved_hours += h
+                approved_shifts += 1
+
         return types.MyEarningsStats(
             shifts_count=shifts_count,
-            hours_estimate=round(hours, 2),
+            hours_estimate=round(total_hours, 2),
             within_days=days,
+            approved_shifts_count=approved_shifts,
+            approved_hours=round(approved_hours, 2) if approved_shifts else None,
         )
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])

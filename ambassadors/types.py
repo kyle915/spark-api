@@ -158,6 +158,14 @@ class MyEarningsStats:
     hours_estimate: float | None
     # The lookback window the numbers were computed over.
     within_days: int
+    # APPROVED hours: the subset of the above whose recap has been APPROVED
+    # (legacy Recap or CustomRecap with approved=True for the BA on that
+    # event). This is the "your hours are locked in" number the BA sees once
+    # an admin approves their recap — scheduled length, per Kyle's model.
+    # `approved_shifts_count` is how many of the completed shifts are
+    # recap-approved; `approved_hours` is their summed scheduled length.
+    approved_shifts_count: int = 0
+    approved_hours: float | None = None
 
 
 @strawberry.type
