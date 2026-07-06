@@ -824,37 +824,69 @@ class Event(Node):
     ) -> Annotated["CustomRecapTemplate", strawberry.lazy("recaps.types")] | None:
         """The recap template for this event.
 
-        Returns the event's directly-linked template when set; otherwise
-        falls back to the tenant's template for this event's event type —
-        the same tenant + event_type match the desktop recap form uses.
+        Resolution order (first hit wins):
+          1. the event's directly-linked template FK, if set;
+          2. the template of a recap ALREADY filed for this event — the
+             desktop already bound a template to this exact event, so it's
+             authoritative (this is the Feel Free case: the approved recap
+             in the dashboard points straight at the template);
+          3. the tenant's template for this event's event type — the same
+             tenant + event_type match the desktop recap form uses;
+          4. the tenant's sole template, if it has exactly one.
 
         Nearly all events have no direct `custom_recap_template_id` FK, so
         without this fallback `customRecapTemplate` was null for them. The
         mobile app gates custom-vs-legacy recap on this field, so it was
-        filing the legacy form even when a matching template existed
-        (desktop matched by event type and used the custom form — the
-        mismatch we saw on Feel Free). The fallback aligns the two.
+        filing the legacy photo-only form even when a matching template
+        existed — the "nothing to collect the info" bug on Feel Free, whose
+        events carry no matching event_type. The fallbacks align app + desktop.
         """
-        from recaps.models import CustomRecapTemplate as CustomRecapTemplateModel
+        from recaps.models import (
+            CustomRecap as CustomRecapModel,
+            CustomRecapTemplate as CustomRecapTemplateModel,
+        )
 
         def _resolve():
             if self.custom_recap_template_id:
                 return CustomRecapTemplateModel.objects.filter(
                     id=self.custom_recap_template_id
                 ).first()
-            if not self.tenant_id or not self.event_type_id:
+            if not self.tenant_id:
                 return None
-            # First template for this tenant + event type. One-per-event-type
-            # is the norm (the create form warns on duplicates); ordering by
-            # id just makes the pick deterministic if several exist.
-            return (
-                CustomRecapTemplateModel.objects.filter(
-                    tenant_id=self.tenant_id,
-                    event_type_id=self.event_type_id,
-                )
-                .order_by("id")
+            # A recap already filed for THIS event is the strongest signal:
+            # desktop bound a specific template to it (Feel Free's approved
+            # recap). Unambiguous even when the tenant has multiple templates.
+            existing_tpl_id = (
+                CustomRecapModel.objects.filter(event_id=self.id)
+                .order_by("-id")
+                .values_list("custom_recap_template_id", flat=True)
                 .first()
             )
+            if existing_tpl_id:
+                tpl = CustomRecapTemplateModel.objects.filter(
+                    id=existing_tpl_id
+                ).first()
+                if tpl:
+                    return tpl
+            tenant_qs = CustomRecapTemplateModel.objects.filter(
+                tenant_id=self.tenant_id
+            )
+            # Prefer the tenant + event-type match (the desktop form's match).
+            # One-per-event-type is the norm; order by id for determinism.
+            if self.event_type_id:
+                match = (
+                    tenant_qs.filter(event_type_id=self.event_type_id)
+                    .order_by("id")
+                    .first()
+                )
+                if match:
+                    return match
+            # Last resort: the event carries no (or a non-matching) event
+            # type, but the tenant has exactly ONE template — unambiguous, so
+            # use it. 2+ templates → we can't guess which, so stay null.
+            if tenant_qs.count() == 1:
+                return tenant_qs.first()
+            return None
 
         return await sync_to_async(_resolve, thread_sensitive=True)()
 
