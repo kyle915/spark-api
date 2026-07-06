@@ -203,10 +203,28 @@ class Command(BaseCommand):
         customs = CustomRecap.objects.filter(event__tenant=tenant)
         legacy = Recap.objects.filter(event__tenant=tenant)
         w(f"  custom recaps: {customs.count()} | legacy recaps: {legacy.count()}")
-        for r in customs.order_by("-id")[:5]:
+        import re as _re
+
+        from recaps.models import CustomFieldValue
+
+        for r in customs.order_by("-id")[:8]:
             amb = r.ambassador
             who = f"{amb.user.first_name} {amb.user.last_name}" if amb and amb.user else "?"
-            w(f"    custom #{r.id} event={getattr(r.event, 'name', '?')} by {who}")
+            ev = getattr(r, "event", None)
+            st = getattr(getattr(ev, "state", None), "code", None)
+            addr = getattr(ev, "address", None)
+            w(
+                f"    custom #{r.id} event={getattr(ev, 'name', '?')!r} "
+                f"STATE={st!r} addr={addr!r} by {who}"
+            )
+            # Consumer/sample/engagement KPI field values — diagnoses the
+            # 'consumers reached' geo number (dashboard buckets by event.state).
+            for fv in CustomFieldValue.objects.filter(custom_recap=r).select_related(
+                "custom_field"
+            ):
+                nm = getattr(fv.custom_field, "name", "?") or ""
+                if _re.search(r"consumer|sampl|engage", nm, _re.I):
+                    w(f"        [{nm[:60]}] = {(fv.value or '')[:50]!r}")
         since = timezone.now() - datetime.timedelta(days=7)
         atts = (
             Attendance.objects.filter(
