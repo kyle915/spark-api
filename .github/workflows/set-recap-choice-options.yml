@@ -1,0 +1,75 @@
+name: Set recap choice-field options
+
+# Manual: set the allowed options on a custom-recap select/multiselect field.
+# The template builder only sets options at create time, so a choice field made
+# without options renders "No options configured for this field yet" on the app
+# (Feel Free's "Which products were sampled?"). Defaults target that field;
+# leave `options` blank to use the tenant's Product names. Guarded (writes only
+# when exactly one field matches) + dry-run unless apply=true. See
+# recaps/management/commands/set_recap_choice_options.py.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tenant_slug:
+        description: "Tenant slug"
+        required: true
+        default: "feel-free"
+      field_contains:
+        description: "Substring of the choice field NAME to target"
+        required: true
+        default: "product"
+      options:
+        description: "Comma-separated options (blank = use the tenant's Product names)"
+        required: false
+        default: ""
+      apply:
+        description: "Actually write (true) or dry-run (false)"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      overwrite:
+        description: "Replace options even if already set (true/false)"
+        required: false
+        default: "false"
+
+jobs:
+  set-recap-choice-options:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire set-recap-choice-options cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/set-recap-choice-options
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          TENANT_SLUG: ${{ github.event.inputs.tenant_slug }}
+          FIELD_CONTAINS: ${{ github.event.inputs.field_contains }}
+          OPTIONS: ${{ github.event.inputs.options }}
+          APPLY: ${{ github.event.inputs.apply || 'false' }}
+          OVERWRITE: ${{ github.event.inputs.overwrite || 'false' }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -G "$CRON_URL" \
+            --data-urlencode "tenant_slug=$TENANT_SLUG" \
+            --data-urlencode "field_contains=$FIELD_CONTAINS" \
+            --data-urlencode "options=$OPTIONS" \
+            --data-urlencode "apply=$APPLY" \
+            --data-urlencode "overwrite=$OVERWRITE" \
+            -X POST \
+            -H "X-Cron-Secret: $CRON_SECRET")
+
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS — see body above."
+            exit 1
+          fi
