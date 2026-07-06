@@ -182,6 +182,49 @@ class TestEventCustomRecapTemplateResolve(EventsGraphQLTestCase):
         assert resolved["uuid"] == str(tpl_y.uuid)
 
     @pytest.mark.asyncio
+    async def test_choice_field_options_survive_the_schema(self):
+        """A select/multiselect field's admin-configured options MUST reach the
+        app through `customField { options }`. Regression for Feel Free's
+        'Which products were sampled?' showing 'No options configured' on the
+        app even though the field HAS options: the strawberry-django optimizer
+        deferred the `options` column, so the __dict__-based resolver saw None."""
+        def _seed():
+            tenant = self.create_tenant(name="Options Co")
+            et = self.create_event_type(name="Sampling", tenant=tenant)
+            tpl = self._template(tenant, "Opts Template", event_type=et)
+            ms_type = rm.CustomRecapFieldType.objects.create(
+                name="multiselect", created_by=self.sys
+            )
+            section = rm.RecapSection.objects.create(
+                name="Products Section", tenant=tenant, created_by=self.sys
+            )
+            rm.CustomField.objects.create(
+                name="Which products were sampled?",
+                custom_recap_template=tpl,
+                custom_field_type=ms_type,
+                recap_section=section,
+                options=["Kava Mate", "Classic"],
+                created_by=self.sys,
+            )
+            event = self.create_event(name="Opts event", tenant=tenant)
+            rm.CustomRecap.objects.create(
+                name="filed", event=event, tenant=tenant,
+                custom_recap_template=tpl, created_by=self.sys, updated_by=self.sys,
+            )
+            return event
+
+        event = await sync_to_async(_seed)()
+        tpl = await self._resolve_template(event)
+        assert tpl is not None
+        fld = next(
+            f for f in tpl["customField"]
+            if f["name"] == "Which products were sampled?"
+        )
+        assert fld["options"] == ["Kava Mate", "Classic"], (
+            f"choice-field options lost through the schema: {fld['options']!r}"
+        )
+
+    @pytest.mark.asyncio
     async def test_tenant_without_templates_stays_null(self):
         """A legacy photo-only tenant (no templates at all) is unaffected —
         customRecapTemplate stays null so the app keeps the legacy form."""

@@ -1480,11 +1480,20 @@ class CustomField(Node):
     created_at: str
     updated_at: str
 
-    @strawberry.field
+    @strawberry_django.field(only=["options"])
     def options(self) -> list[str]:
         """Admin-defined choices for 'select' / 'multiselect' fields; [] for
-        every other field type. Read from the model's JSON column via
-        __dict__ to avoid shadowing this resolver name."""
+        every other field type.
+
+        `only=["options"]` tells the strawberry-django query optimizer to keep
+        the `options` column in its `.only(...)` selection. Without it the
+        optimizer (which can't see that this custom resolver needs the column)
+        DEFERRED `options`, so the __dict__ read below returned None and every
+        choice field came back [] — Feel Free's 'Which products were sampled?'
+        rendered 'No options configured' on the app despite having options.
+        (Reloading the column in-resolver isn't an option: this runs in the
+        async schema, where a sync ORM read raises SynchronousOnlyOperation.)
+        Read via __dict__ to avoid recursing into this resolver's own name."""
         raw = self.__dict__.get("options")
         return [str(o) for o in raw] if isinstance(raw, list) else []
 
