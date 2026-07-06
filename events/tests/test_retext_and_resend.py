@@ -66,10 +66,11 @@ class TestResendBaWelcome(EventsGraphQLTestCase):
     def setup(self):
         self.system_user = self.get_system_user()
         from tenants.models import Role
-        role, _ = Role.objects.get_or_create(
-            slug=Role.AMBASSADOR_SLUG,
-            defaults={"name": "Ambassador", "created_by": self.system_user},
-        )
+        from tenants.tests.base import ensure_role
+        from utils.utils import ROLE_ID
+        role = ensure_role(
+            "Ambassador", slug=Role.AMBASSADOR_SLUG,
+            pk=ROLE_ID.Ambassadors, created_by=self.system_user)
         from django.contrib.auth import get_user_model
         User = get_user_model()
         self.user = User.objects.create_user(

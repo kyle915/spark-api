@@ -55,11 +55,11 @@ class TestWeeklyMileageReport(EventsGraphQLTestCase):
 
     def _role(self):
         from tenants.models import Role
-        role, _ = Role.objects.get_or_create(
-            slug=Role.AMBASSADOR_SLUG,
-            defaults={"name": "Ambassador", "created_by": self.system_user},
-        )
-        return role
+        from tenants.tests.base import ensure_role
+        from utils.utils import ROLE_ID
+        return ensure_role(
+            "Ambassador", slug=Role.AMBASSADOR_SLUG,
+            pk=ROLE_ID.Ambassadors, created_by=self.system_user)
 
     def _run(self, *args):
         out = io.StringIO()

@@ -17,10 +17,11 @@ User = get_user_model()
 @pytest.fixture
 def user(db):
     from tenants.models import Role
+    from tenants.tests.base import ensure_role
+    from utils.utils import ROLE_ID
 
-    role, _ = Role.objects.get_or_create(
-        slug=Role.AMBASSADOR_SLUG, defaults={"name": "Ambassador"}
-    )
+    role = ensure_role(
+        "Ambassador", slug=Role.AMBASSADOR_SLUG, pk=ROLE_ID.Ambassadors)
     return User.objects.create_user(
         username="ba-pref", email="ba-pref@example.com", role=role
     )

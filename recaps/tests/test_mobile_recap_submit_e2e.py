@@ -21,10 +21,11 @@ class TestMobileLegacyRecapSubmit(EventsGraphQLTestCase):
     def setup(self):
         self.system_user = self.get_system_user()
         from tenants.models import Role
-        role, _ = Role.objects.get_or_create(
-            slug=Role.AMBASSADOR_SLUG,
-            defaults={"name": "Ambassador", "created_by": self.system_user},
-        )
+        from tenants.tests.base import ensure_role
+        from utils.utils import ROLE_ID
+        role = ensure_role(
+            "Ambassador", slug=Role.AMBASSADOR_SLUG,
+            pk=ROLE_ID.Ambassadors, created_by=self.system_user)
         self.tenant = self.create_tenant(name="Feel Free")
         etype = self.create_event_type(name="Field Sampling", tenant=self.tenant)
         status = self.create_event_status(name="Approved", tenant=self.tenant)

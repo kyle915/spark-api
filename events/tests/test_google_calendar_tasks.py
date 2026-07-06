@@ -29,14 +29,10 @@ class TestGoogleCalendarTasks:
 
     def setup_method(self):
         """Set up test data."""
-        # Create role with canonical client ID so role helpers and ID checks work
-        self.role, _ = Role.objects.update_or_create(
-            pk=ROLE_ID.Client,
-            defaults={
-                "name": "Client",
-                "slug": "client",
-            },
-        )
+        # Create role with canonical client ID (collision-proof against
+        # migration seeds / leaked rows) so role helpers and ID checks work
+        from tenants.tests.base import ensure_role
+        self.role = ensure_role("Client", slug="client", pk=ROLE_ID.Client)
 
         # Create user
         self.user = User.objects.create_user(

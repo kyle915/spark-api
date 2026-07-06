@@ -1354,6 +1354,80 @@ class SendActivationRemindersView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class SendAmbassadorJobRemindersView(View):
+    """POST `/internal/cron/ambassador-job-reminders`.
+
+    Fires `send_ambassador_job_reminders` — the four per-shift BA reminders
+    (24h / 3h / 15-min-before / 15-min-after-end), deduped via the
+    AmbassadorJob.reminder_*_sent_at columns. Replaces the dead django-rq
+    scheduled reminders (no rqscheduler in prod); sends INLINE, no worker
+    needed. Meant for a frequent GHA cron (~every 10 min).
+
+    Params (optional):
+      - dry_run: "1"/"true"/"yes" — report per-reminder counts, send nothing.
+      - end_lookback_minutes: int (default 120) — the after-end reminder only
+        fires for shifts that ended within this window (first-run/gap safety).
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _bool(name: str, default: bool = False) -> bool:
+            raw = (request.GET.get(name) or request.POST.get(name) or "").lower()
+            return raw in ("1", "true", "yes", "on") if raw else default
+
+        def _int(name: str, default: int) -> int | None:
+            raw = request.GET.get(name) or request.POST.get(name)
+            if raw is None or raw == "":
+                return default
+            try:
+                return int(raw)
+            except ValueError:
+                return None
+
+        dry_run = _bool("dry_run", default=False)
+        end_lookback = _int("end_lookback_minutes", 120)
+        if end_lookback is None:
+            return JsonResponse(
+                {"ok": False, "error": "end_lookback_minutes must be an integer"},
+                status=400,
+            )
+
+        cmd_args: list[str] = ["--end-lookback-minutes", str(end_lookback)]
+        if dry_run:
+            cmd_args.append("--dry-run")
+
+        out = io.StringIO()
+        try:
+            call_command("send_ambassador_job_reminders", *cmd_args, stdout=out)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("Ambassador job reminders cron failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "log": out.getvalue(),
+                },
+                status=500,
+            )
+
+        return JsonResponse(
+            {"ok": True, "dry_run": dry_run, "log": out.getvalue()}
+        )
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        return JsonResponse(
+            {"ok": True, "endpoint": "ambassador-job-reminders"}
+        )
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class SendRecapNudgesView(View):
     """POST `/internal/cron/recap-nudges`.
 
@@ -4762,6 +4836,7 @@ def _registered_views() -> dict[str, Any]:
         "send-recap-reminders": SendRecapRemindersView,
         "send-open-shift-alerts": SendOpenShiftAlertsView,
         "activation-reminders": SendActivationRemindersView,
+        "ambassador-job-reminders": SendAmbassadorJobRemindersView,
         "recap-nudges": SendRecapNudgesView,
         "send-payment-notifications": SendPaymentNotificationsView,
         "send-document-expiry-reminders": SendDocumentExpiryRemindersView,

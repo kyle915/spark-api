@@ -27,7 +27,9 @@ dedupe_migration = importlib.import_module("events.migrations.0048_dedupe_timezo
 
 @pytest.fixture
 def user(django_user_model):
-    role = Role.objects.create(name="Client", slug="client")
+    from tenants.tests.base import ensure_role
+    from utils.utils import ROLE_ID
+    role = ensure_role("Client", slug="client", pk=ROLE_ID.Client)
     return django_user_model.objects.create_user(
         username="dedupe_user",
         email="dedupe@test.com",

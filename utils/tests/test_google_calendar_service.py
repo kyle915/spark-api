@@ -26,8 +26,9 @@ class TestGoogleCalendarService:
 
     def setup_method(self):
         """Set up test data."""
-        # Create role
-        self.role = Role.objects.create(name="Client", slug="client")
+        # Create role (collision-proof against migration seeds / leaked rows)
+        from tenants.tests.base import ensure_role
+        self.role = ensure_role("Client", slug="client", pk=ROLE_ID.Client)
 
         # Create user
         self.user = User.objects.create_user(

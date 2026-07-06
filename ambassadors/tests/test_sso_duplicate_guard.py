@@ -27,15 +27,12 @@ class TestSsoDuplicateGuard(EventsGraphQLTestCase):
     def setup(self):
         self.system_user = self.get_system_user()
         from tenants.models import Role
+        from tenants.tests.base import ensure_role
         # The service resolves the Ambassador role by fixed pk.
         from ambassadors.services import ROLE_ID
-        Role.objects.get_or_create(
-            pk=ROLE_ID.Ambassadors,
-            defaults={
-                "name": "Ambassador", "slug": Role.AMBASSADOR_SLUG,
-                "created_by": self.system_user,
-            },
-        )
+        ensure_role(
+            "Ambassador", slug=Role.AMBASSADOR_SLUG,
+            pk=ROLE_ID.Ambassadors, created_by=self.system_user)
 
     def _finish(self, email, create_if_missing):
         inp = amb_inputs.AppleSignInInput(
