@@ -1116,6 +1116,7 @@ class AmbassadorEventQueries:
                     "event",
                     "event__retailer",
                     "event__state",
+                    "event__timezone",
                 )
                 .filter(
                     ambassador=ambassador,
@@ -1132,6 +1133,12 @@ class AmbassadorEventQueries:
                     or getattr(getattr(ev, "retailer", None), "name", None)
                 )
                 state_code = getattr(getattr(ev, "state", None), "code", None)
+                # Pre-format date/time in the VENUE's tz so the mobile client
+                # renders them verbatim — a NY shift shows NY time on a CA
+                # phone. Without these the pending-invite row device-parsed the
+                # raw datetimes (wrong time out-of-state; and event.date at
+                # 00:00Z showed the prior day). Mirrors my_upcoming_shifts.
+                date_label, start_label, end_label = _shift_time_labels(ev)
                 out.append(
                     types.ShiftOfferDetails(
                         ambassador_event_uuid=strawberry.ID(str(ae.uuid)),
@@ -1152,6 +1159,9 @@ class AmbassadorEventQueries:
                         ),
                         state_code=state_code,
                         is_approved=False,
+                        date_label=date_label,
+                        start_label=start_label,
+                        end_label=end_label,
                     )
                 )
             return out

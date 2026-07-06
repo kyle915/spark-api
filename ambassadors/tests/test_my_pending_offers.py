@@ -148,3 +148,45 @@ class TestMyPendingOffers(AmbassadorsGraphQLTestCase):
         )
         assert result.errors is None
         assert result.data["myPendingOffers"] == []
+
+    @pytest.mark.asyncio
+    async def test_offers_carry_venue_tz_labels(self):
+        """Pending offers must expose pre-formatted date/start/end labels so
+        the mobile client renders venue-local time verbatim (not device-parsed).
+        Regression guard: the resolver previously omitted these, so the
+        pending-invite row device-parsed the raw datetimes — wrong time for
+        out-of-state shifts and a prior-day date for 00:00Z event.date."""
+        ev = await sync_to_async(self._future_event)(name="Labeled shift")
+        await sync_to_async(AmbassadorEvent.objects.create)(
+            ambassador=self.ambassador,
+            event=ev,
+            tenant=self.tenant,
+            is_approved=False,
+            created_by=self.admin,
+        )
+
+        query = """
+        query Pending {
+          myPendingOffers {
+            eventName
+            dateLabel
+            startLabel
+            endLabel
+          }
+        }
+        """
+        result = await self._execute_mutation(
+            query, {}, self.endpoint_path, user=self.ba_user
+        )
+        assert result.errors is None, f"errored: {result.errors}"
+        offers = result.data["myPendingOffers"]
+        assert len(offers) == 1
+        o = offers[0]
+        # Non-null, human-formatted labels (event has start/end times set).
+        assert o["dateLabel"], "dateLabel should be populated"
+        assert o["startLabel"] and (
+            "AM" in o["startLabel"] or "PM" in o["startLabel"]
+        ), o["startLabel"]
+        assert o["endLabel"] and (
+            "AM" in o["endLabel"] or "PM" in o["endLabel"]
+        ), o["endLabel"]
