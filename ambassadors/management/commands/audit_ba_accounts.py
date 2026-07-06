@@ -174,7 +174,32 @@ class Command(BaseCommand):
             w(f"  no tenant with slug {slug!r}")
             return
         for t in CustomRecapTemplate.objects.filter(tenant=tenant):
-            w(f"  template id={t.id} '{t.name}' event_type={t.event_type_id}")
+            w(
+                f"  template id={t.id} '{t.name}' event_type={t.event_type_id} "
+                f"product_samples={t.product_samples} sales_performance={t.sales_performance}"
+            )
+        # Per-SKU picker readiness: the mobile per-product picker renders only
+        # when the template has product_samples=True AND the shift's parent
+        # Request has RequestProduct rows (shiftContext.products source). Dump
+        # both so we can tell "flip the flag" from "no products attached."
+        from events.models import Product, RequestProduct
+
+        prods = Product.objects.filter(tenant=tenant).order_by("id")
+        prod_names = ", ".join(f"#{p.id} {p.name}" for p in prods[:40])
+        w(f"  products ({prods.count()}): {prod_names or 'NONE'}")
+        rp_qs = (
+            RequestProduct.objects.filter(product__tenant=tenant)
+            .select_related("request", "product")
+            .order_by("request_id", "id")
+        )
+        by_req: dict = {}
+        for rp in rp_qs:
+            by_req.setdefault(rp.request_id, []).append(
+                getattr(rp.product, "name", "?")
+            )
+        w(f"  requests with products attached: {len(by_req)}")
+        for req_id, names in list(by_req.items())[:15]:
+            w(f"    request #{req_id}: {', '.join(names)}")
         customs = CustomRecap.objects.filter(event__tenant=tenant)
         legacy = Recap.objects.filter(event__tenant=tenant)
         w(f"  custom recaps: {customs.count()} | legacy recaps: {legacy.count()}")
