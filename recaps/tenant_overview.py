@@ -1126,6 +1126,10 @@ def _custom_market_kpis(tenant_id: int, year: int | None = None) -> dict[str, di
     the recap rows were created/imported; ``year=None`` leaves the SQL
     unfiltered. Returns ``{state_code: {kpi: value, …}}``.
     """
+    # Address-based state fallback for events created without a State FK
+    # (a complete address like "…, Austin, TX 78759" still resolves to TX).
+    from events.routing import extract_state_code
+
     custom_recaps = _filter_event_year(
         CustomRecap.objects.filter(tenant_id=tenant_id), "event__", year
     )
@@ -1172,6 +1176,7 @@ def _custom_market_kpis(tenant_id: int, year: int | None = None) -> dict[str, di
         .values_list(
             "custom_recap_id",
             f"custom_recap__{_CUSTOM_STATE_PATH}",
+            "custom_recap__event__address",
             "custom_field__name",
             "value",
         )
@@ -1179,9 +1184,9 @@ def _custom_market_kpis(tenant_id: int, year: int | None = None) -> dict[str, di
     )
 
     per_recap: dict[int, dict] = {}
-    for recap_id, state_code, name, value in rows.iterator():
+    for recap_id, state_code, address, name, value in rows.iterator():
         entry = per_recap.setdefault(
-            recap_id, {"state": state_code, "pairs": []}
+            recap_id, {"state": state_code, "address": address, "pairs": []}
         )
         entry["pairs"].append((name, value))
 
@@ -1191,11 +1196,17 @@ def _custom_market_kpis(tenant_id: int, year: int | None = None) -> dict[str, di
     sampled_by_state: dict[str, int] = {}
 
     for entry in per_recap.values():
-        code = entry["state"]
+        # Prefer the event's State FK; when it's blank, fall back to parsing
+        # the state out of the event address ("…, Austin, TX 78759, USA" ->
+        # "TX"). Events created without a State FK but WITH a full address
+        # were otherwise silently dropped from the map (the Neutonic Austin
+        # recap case).
+        code = entry["state"] or extract_state_code(entry.get("address"))
         if not code:
-            # No event state -> can't place this recap on the map; its KPIs
-            # are dropped from the per-state view (it still counts in the
-            # whole-tenant tenant_kpi_totals, which doesn't group by state).
+            # No event state AND none parseable from the address -> can't
+            # place this recap on the map; its KPIs are dropped from the
+            # per-state view (it still counts in the whole-tenant
+            # tenant_kpi_totals, which doesn't group by state).
             continue
         pairs = entry["pairs"]
         bucket = _bucket(code)

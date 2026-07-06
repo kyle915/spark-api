@@ -4909,6 +4909,47 @@ class CheckCronHealthView(View):
         return JsonResponse({"ok": True, "endpoint": "check-cron-health"})
 
 
+@method_decorator(csrf_exempt, name="dispatch")
+class FixNeutonicGeoView(View):
+    """POST `/internal/cron/fix-neutonic-geo` — one-off Neutonic geo data fix.
+
+    Runs `fix_neutonic_geo`: sets the Austin Costco event's state to TX and
+    deletes the leftover FL "TEST event Costco" recap. Dry-run unless
+    ``apply=1``. Secret-gated; safe to re-run (idempotent + guarded).
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        raw = (request.GET.get("apply") or request.POST.get("apply") or "").lower()
+        apply = raw in ("1", "true", "yes", "on")
+
+        cmd_args: list[str] = ["--apply"] if apply else []
+        out = io.StringIO()
+        try:
+            call_command("fix_neutonic_geo", *cmd_args, stdout=out)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("fix_neutonic_geo cron failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "log": out.getvalue(),
+                },
+                status=500,
+            )
+        return JsonResponse({"ok": True, "apply": apply, "log": out.getvalue()})
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        return JsonResponse({"ok": True, "endpoint": "fix-neutonic-geo"})
+
+
 def _registered_views() -> dict[str, Any]:
     """Map URL path → view class. Lets `digest/urls.py` mount these
     without each one being re-exported explicitly.
@@ -4932,6 +4973,7 @@ def _registered_views() -> dict[str, Any]:
             RepairMissingEventsForApprovedRequestsView
         ),
         "repair-event-dates": RepairEventDatesView,
+        "fix-neutonic-geo": FixNeutonicGeoView,
         "backfill-event-coordinates": BackfillEventCoordinatesView,
         "backfill-ambassador-coordinates": BackfillAmbassadorCoordinatesView,
         "backfill-request-rmm-routing": BackfillRequestRmmRoutingView,

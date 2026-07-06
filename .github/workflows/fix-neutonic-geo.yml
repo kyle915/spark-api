@@ -1,0 +1,48 @@
+name: Fix Neutonic geo data
+
+# One-off, manual: fixes Neutonic's geographic-performance map data.
+#  - sets the Austin Costco event's state to TX (it had no State FK, so the
+#    map dropped it), and
+#  - deletes the leftover FL "TEST event Costco" recap (polluting FL with 650).
+# Guarded + idempotent; dry-run unless apply=true. See
+# recaps/management/commands/fix_neutonic_geo.py.
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Actually write (true) or dry-run (false)"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+jobs:
+  fix-neutonic-geo:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire fix-neutonic-geo cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/fix-neutonic-geo
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          APPLY: ${{ github.event.inputs.apply || 'false' }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL?apply=$APPLY" \
+            -H "X-Cron-Secret: $CRON_SECRET")
+
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS — see body above."
+            exit 1
+          fi
