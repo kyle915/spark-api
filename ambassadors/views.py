@@ -190,8 +190,18 @@ class ExtensionApprovalView(View):
         # sync (thread-sensitive) Django view, so calling the sync push wrapper
         # inline would deadlock the way the GraphQL mutation did. Fire-and-forget
         # so the page returns immediately regardless of push latency.
+        #
+        # Gate on PUSH_ENABLED (on in prod, off in dev/CI). The thread's
+        # send_push_to_user records the in-app PushNotification row FIRST —
+        # a DB write — so under a transaction=True test it would race the
+        # teardown TRUNCATE into a deadlock (same failure mode as the
+        # calendar-sync and new-gig-nearby threads). Its only job is push
+        # delivery, already disabled in tests, so skip the spawn there. Prod
+        # (PUSH_ENABLED on) is unchanged.
+        from django.conf import settings
+
         push = (result or {}).get("push")
-        if push:
+        if push and getattr(settings, "PUSH_ENABLED", True):
             import threading
             from ambassadors.push import _send_push_to_user_sync
 

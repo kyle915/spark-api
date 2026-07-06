@@ -87,6 +87,20 @@ def notify_nearby_bas_of_new_gig(job) -> None:
         # The post returns immediately; the per-BA pushes still go out (each
         # push's own inline-send handles the missing worker). Daily digest stays
         # the backstop if the thread can't finish.
+        #
+        # Gate the daemon-thread fallback on PUSH_ENABLED (on in prod, off in
+        # dev/CI). The thread opens its own db connection and runs the full
+        # eligibility/distance ORM fan-out, so under a transaction=True test it
+        # races the teardown TRUNCATE into a deadlock (the exact failure mode
+        # the calendar-sync thread had). Its only purpose is delivering pushes,
+        # which PUSH_ENABLED already disables in tests, so there is nothing to
+        # spawn it for there. Prod (PUSH_ENABLED on, no Redis) is unchanged —
+        # this fallback stays the real at-post delivery path.
+        from django.conf import settings
+
+        if not getattr(settings, "PUSH_ENABLED", True):
+            return
+
         import threading
 
         try:
