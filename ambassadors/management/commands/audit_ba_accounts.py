@@ -253,6 +253,25 @@ class Command(BaseCommand):
         from ambassadors.models import AmbassadorEvent
         from events.types import Event as EventGqlType
 
+        def _resolve_template_safe(ev):
+            # This command runs from a cron endpoint on Cloud Run (ASGI), so
+            # the calling thread may already be asgiref's thread-sensitive
+            # executor thread. asyncio.run() directly on that thread would
+            # deadlock the same way #820/eb4e288 did for push: the resolver's
+            # nested `sync_to_async(thread_sensitive=True)` DB read tries to
+            # hand off to "the main thread" — the very thread blocked in
+            # asyncio.run(). Mirror push.py's `_send_push_to_user_sync` fix:
+            # always drive the coroutine on a FRESH thread (no asgiref
+            # thread-local), so the nested thread_sensitive call routes to
+            # asgiref's own shared executor instead of back onto us.
+            import concurrent.futures
+
+            def _run():
+                return asyncio.run(EventGqlType.custom_recap_template(ev))
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                return executor.submit(_run).result(timeout=15)
+
         since30 = timezone.now() - datetime.timedelta(days=30)
         owing_qs = (
             AmbassadorEvent.objects.select_related(
@@ -281,7 +300,7 @@ class Command(BaseCommand):
                 else "?"
             )
             try:
-                resolved = asyncio.run(EventGqlType.custom_recap_template(ev))
+                resolved = _resolve_template_safe(ev)
             except Exception as exc:  # noqa: BLE001 — surface, keep auditing
                 resolved = f"ERROR: {exc}"
             resolved_name = getattr(resolved, "name", resolved)
