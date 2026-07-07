@@ -5015,6 +5015,46 @@ class SetRecapChoiceOptionsView(View):
         return JsonResponse({"ok": True, "endpoint": "set-recap-choice-options"})
 
 
+@method_decorator(csrf_exempt, name="dispatch")
+class SendUpdateCheckPushView(View):
+    """POST `/internal/cron/send-update-check-push` — broadcast a silent
+    push telling every spark-mobile device to run its background OTA-update
+    check right now, instead of waiting for a natural app-open.
+
+    Dispatch-only (no schedule) — run manually right after publishing a new
+    OTA via `eas update`, so a fix lands on field devices immediately.
+    Dry-run unless ``apply=1``. Secret-gated. Requires spark-mobile build
+    >= 37 (background-notification entitlement); older installed binaries
+    silently ignore the wake, same as any unsupported push.
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        raw = (request.GET.get("apply") or request.POST.get("apply") or "").lower()
+        apply = raw in ("1", "true", "yes", "on")
+
+        cmd_args: list[str] = ["--apply"] if apply else []
+        out = io.StringIO()
+        try:
+            call_command("send_update_check_push", *cmd_args, stdout=out)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("send_update_check_push cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc), "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "apply": apply, "log": out.getvalue()})
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        return JsonResponse({"ok": True, "endpoint": "send-update-check-push"})
+
+
 def _registered_views() -> dict[str, Any]:
     """Map URL path → view class. Lets `digest/urls.py` mount these
     without each one being re-exported explicitly.
@@ -5040,6 +5080,7 @@ def _registered_views() -> dict[str, Any]:
         "repair-event-dates": RepairEventDatesView,
         "fix-neutonic-geo": FixNeutonicGeoView,
         "set-recap-choice-options": SetRecapChoiceOptionsView,
+        "send-update-check-push": SendUpdateCheckPushView,
         "backfill-event-coordinates": BackfillEventCoordinatesView,
         "backfill-ambassador-coordinates": BackfillAmbassadorCoordinatesView,
         "backfill-request-rmm-routing": BackfillRequestRmmRoutingView,

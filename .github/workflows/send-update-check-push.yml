@@ -1,0 +1,47 @@
+name: Send OTA update-check push
+
+# One-off, manual: broadcasts a silent push telling every spark-mobile
+# device (build >= 37) to run its background OTA-update check right now,
+# instead of waiting for a natural app-open. Run this right after
+# publishing a new OTA via `eas update --branch production`.
+# See ambassadors/management/commands/send_update_check_push.py.
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Actually send (true) or dry-run count only (false)"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+jobs:
+  send-update-check-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire send-update-check-push cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/send-update-check-push
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          APPLY: ${{ github.event.inputs.apply || 'false' }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL?apply=$APPLY" \
+            -H "X-Cron-Secret: $CRON_SECRET")
+
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS — see body above."
+            exit 1
+          fi

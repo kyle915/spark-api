@@ -258,6 +258,88 @@ async def send_push_to_user(
 # anything themselves.
 
 
+async def send_silent_update_check_push(
+    *,
+    client: ExpoPushClient | None = None,
+) -> tuple[int, int]:
+    """Broadcast a silent (no alert/sound/banner) push to EVERY active
+    device, telling spark-mobile to run its background OTA-update check
+    (see spark-mobile ``src/lib/backgroundUpdateTask.ts``).
+
+    Unlike ``send_push_to_user`` this is not tied to any one user or event —
+    it's an operational nudge, not user-facing content, so it deliberately
+    skips the Notifications-inbox record and the per-category mute check.
+
+    Returns ``(ok_count, total_count)``. Best-effort per device: a bad
+    ticket for one device never blocks the rest.
+    """
+    client = client or expo_push_client
+
+    devices = await sync_to_async(
+        lambda: list(PushDevice.objects.filter(is_active=True).only("id", "token", "platform"))
+    )()
+    if not devices:
+        return (0, 0)
+
+    messages = [
+        ExpoPushMessage(
+            to=d.token,
+            title=None,
+            body=None,
+            sound=None,
+            data={"type": "ota_check"},
+            priority="high",
+            # iOS: wakes the app in the background to run the registered
+            # TaskManager task even with no visible alert. Expo's relay
+            # only applies this when bridging to APNs — harmless on Android.
+            extra={"_contentAvailable": True},
+        )
+        for d in devices
+    ]
+
+    try:
+        tickets = await client.send(messages)
+    except ExpoPushError as exc:
+        logger.warning("expo push relay failed for silent update-check broadcast: %s", exc)
+        return (0, len(devices))
+    except Exception:
+        logger.exception("unexpected expo push failure for silent update-check broadcast")
+        return (0, len(devices))
+
+    now = timezone.now()
+    invalid_ids: list[int] = []
+    used_ids: list[int] = []
+    ok_count = 0
+
+    for device, ticket in zip(devices, tickets):
+        if ticket.ok:
+            ok_count += 1
+            used_ids.append(device.id)
+        elif ticket.is_invalid_token:
+            invalid_ids.append(device.id)
+        else:
+            logger.warning(
+                "expo push ticket error (update-check broadcast) token=%s code=%s message=%s",
+                device.token[:12],
+                ticket.error_code,
+                ticket.message,
+            )
+
+    @sync_to_async
+    def mark_devices():
+        if invalid_ids:
+            PushDevice.objects.filter(id__in=invalid_ids).update(is_active=False)
+        if used_ids:
+            PushDevice.objects.filter(id__in=used_ids).update(last_used_at=now)
+
+    try:
+        await mark_devices()
+    except Exception:
+        logger.exception("failed to update PushDevice rows after update-check broadcast")
+
+    return (ok_count, len(devices))
+
+
 def _send_push_to_user_sync(
     user_id: int,
     *,
