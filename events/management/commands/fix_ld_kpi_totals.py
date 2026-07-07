@@ -63,10 +63,12 @@ FIXES = [
 ]
 
 # Monthly Total Sales cells (cols E..R on the "Total Sales" row) sum
-# $AL$19:$BK<end> — one column short of BL ("Others" sales). Only this
-# exact range is rewritten; anything else in the formula is preserved.
+# $AL$19:$BK — one column short of BL ("Others" sales). The live sheet
+# uses OPEN-ENDED ranges (no end row: "$AL$19:$BK"), but a bounded end
+# row is tolerated too. Only this exact range is rewritten; anything
+# else in the formula is preserved.
 MONTHLY_SALES_COLS = "EFGHIJKLMNOPQR"
-MONTHLY_SALES_BROKEN = re.compile(r"(\$AL\$\d+:\$?)BK(\d+)")
+MONTHLY_SALES_BROKEN = re.compile(r"(\$AL\$\d+:\$?)BK(?![A-Z])(\d*)")
 
 # Row-total spill anchors on each scorecard tab's first data row. The
 # formulas are copied verbatim from the intact tabs (Pat/Northeast/...).
@@ -229,8 +231,8 @@ class Command(BaseCommand):
                     )
                 else:
                     self.stdout.write(
-                        "  - Total Sales monthly: all cells already end at "
-                        "$BL (skip)"
+                        "  - Total Sales monthly: no $AL:$BK ranges found "
+                        "(already $BL or unknown shape — skip)"
                     )
 
             # ---- Repair 3: restore SAMPLES/SALES BYROW anchors ----------
