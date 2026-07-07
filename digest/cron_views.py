@@ -3393,11 +3393,12 @@ class DescribeSheetTabsView(View):
 class FixLdKpiTotalsView(View):
     """POST `/internal/cron/fix-ld-kpi-totals`.
 
-    One-off: widen the LD RMM KPI workbook's per-tab annual Total Cans
-    Sampled / Total Sales formulas to include the "Others" column (they
-    were written before that column existed and stop one column short).
-    Dry-run by default; pass apply=1 to write. Params: sheet_url, tabs
-    (comma-separated), apply. See fix_ld_kpi_totals for details.
+    Formula repairs for the LD RMM KPI workbook: annual + monthly totals
+    missing the "Others" column, missing SAMPLES/SALES BYROW row-total
+    anchors (wiped from Poli's tab by the build-poli-tab data clear), and
+    MASTER YTD cells missing their December term. Dry-run by default;
+    pass apply=1 to write. Params: sheet_url, tabs (comma-separated),
+    master_tab, apply. See fix_ld_kpi_totals for details.
     """
 
     def _run(self, request: HttpRequest) -> HttpResponse:
@@ -3410,7 +3411,7 @@ class FixLdKpiTotalsView(View):
 
         apply = _get("apply").lower() in ("1", "true", "yes", "on")
         cmd_args: list[str] = []
-        for flag in ("sheet_url", "tabs"):
+        for flag in ("sheet_url", "tabs", "master_tab"):
             val = _get(flag)
             if val:
                 cmd_args += [f"--{flag.replace('_', '-')}", val]

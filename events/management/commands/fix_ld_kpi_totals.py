@@ -1,23 +1,30 @@
 """
-One-off: widen the two ANUAL/TOTAL formulas on the LD RMM KPI workbook's
-scorecard tabs so they include the "Others" column.
+Formula repairs for the LD RMM KPI workbook's scorecard tabs + MASTER.
 
 Each scorecard tab (Northeast / Florida / South / Central / West / Poli /
 Pat) logs events with per-SKU can counts in columns J..AJ (samples, AJ =
-"Others") and AL..BL (sales, BL = "Others"). The per-row totals (I / AK,
-BYROW over J:AJ / AL:BL) and the monthly SUMPRODUCTs ($J$19:$AJ) already
-include Others — but the two annual TOTAL cells were written before the
-Others columns existed and stop one column short:
+"Others") and AL..BL (sales, BL = "Others"). Repairs, each idempotent
+(already-fixed cells are skipped, unknown formulas reported + left alone):
 
-    Total Cans Sampled   =SUM(J19:AI1008)   → should end at AJ
-    Total Sales          =SUM(AL19:BK1008)  → should end at BL
+1. Annual totals one column short of Others (original 2026-07-01 fix):
+       Total Cans Sampled   =SUM(J19:AI1008)   → should end at AJ
+       Total Sales          =SUM(AL19:BK1008)  → should end at BL
 
-So each tab's annual total disagrees with its own monthly breakdown by
-exactly the cans/sales logged under Others. This command rewrites the two
-cells per tab (preserving each tab's own start/end rows), reporting the
-delta each fix adds. Rows are located by their column-A label (not
-hardcoded), and a cell whose formula doesn't match the expected broken
-pattern is reported and left untouched — so re-running is a no-op.
+2. MONTHLY Total Sales SUMPRODUCTs end at $BK — they miss BL ("Others"
+   sales), so the monthly breakdown disagrees with the (fixed) annual
+   total whenever Others sales are logged. Cols E..R on the Total Sales
+   row, every scorecard tab.
+
+3. Missing SAMPLES/SALES row-total anchors: each tab's I19 / AK19 holds a
+   BYROW spill formula that auto-sums the SKU columns per row. The
+   build-poli-tab data clear (A19:BM1011) wiped them off Poli's tab, so
+   her SAMPLES/SALES columns compute nothing (and hand-typed totals drift
+   from the SKU columns). Restores the anchors, clearing any literal
+   values below them that would block the spill (reported first).
+
+4. MASTER YTD cells E16:I16 (Hearse / CRM / Total Sales / Events
+   Supported / Seedings) sum only 11 monthly-total cells — the December
+   term (J171..J175) is missing. C16/D16 already have all 12.
 
 Usage:
     python manage.py fix_ld_kpi_totals            # dry-run, per-tab report
@@ -55,11 +62,36 @@ FIXES = [
     ),
 ]
 
+# Monthly Total Sales cells (cols E..R on the "Total Sales" row) sum
+# $AL$19:$BK<end> — one column short of BL ("Others" sales). Only this
+# exact range is rewritten; anything else in the formula is preserved.
+MONTHLY_SALES_COLS = "EFGHIJKLMNOPQR"
+MONTHLY_SALES_BROKEN = re.compile(r"(\$AL\$\d+:\$?)BK(\d+)")
+
+# Row-total spill anchors on each scorecard tab's first data row. The
+# formulas are copied verbatim from the intact tabs (Pat/Northeast/...).
+FORMULA_ROW = 19
+ANCHORS = [
+    ("I", "SAMPLES", "=BYROW(J19:AJ, LAMBDA(row, IF(COUNTA(row)=0, 0, SUM(row))))"),
+    ("AK", "SALES", "=BYROW(AL19:BL, LAMBDA(row, IF(COUNTA(row)=0, 0, SUM(row))))"),
+]
+
+# MASTER YTD cells whose =SUM(J..+J..) chain stops at November: the
+# December monthly-total term to append. C16/D16 already include all 12.
+MASTER_YTD_MISSING = {
+    "E16": "J171",  # Hearse Appearances
+    "F16": "J172",  # CRM Contacts Collected
+    "G16": "J173",  # Total Sales
+    "H16": "J174",  # Events Supported
+    "I16": "J175",  # Seedings
+}
+
 
 class Command(BaseCommand):
     help = (
-        "Widen the LD KPI scorecard tabs' annual Total Cans Sampled / Total "
-        "Sales formulas to include the Others column. Dry-run by default."
+        "Repair LD KPI workbook formulas: annual + monthly totals missing "
+        "the Others column, missing SAMPLES/SALES BYROW anchors, and MASTER "
+        "YTD cells missing December. Dry-run by default."
     )
 
     def add_arguments(self, parser):
@@ -69,6 +101,12 @@ class Command(BaseCommand):
             type=str,
             default=DEFAULT_TABS,
             help="Comma-separated scorecard tab names to fix.",
+        )
+        parser.add_argument(
+            "--master-tab",
+            type=str,
+            default="MASTER",
+            help="MASTER rollup tab for the YTD-December repair ('' skips it).",
         )
         parser.add_argument(
             "--apply",
@@ -93,13 +131,15 @@ class Command(BaseCommand):
             ))
 
         writes: list[dict] = []
+        clears: list[str] = []
         for tab in tabs:
             self.stdout.write(self.style.MIGRATE_HEADING(f"[{tab}]"))
-            # One read: labels + current annual-total formulas for rows 1-20.
+            # One read: labels + annual (C) and monthly (E..R) formulas for
+            # rows 1-20.
             try:
                 resp = (
                     svc.spreadsheets().values()
-                    .get(spreadsheetId=sheet_id, range=f"'{tab}'!A1:C20",
+                    .get(spreadsheetId=sheet_id, range=f"'{tab}'!A1:R20",
                          valueRenderOption="FORMULA")
                     .execute()
                 )
@@ -161,14 +201,142 @@ class Command(BaseCommand):
                     "values": [[fixed]],
                 })
 
-        if not writes:
+            # ---- Repair 2: monthly Total Sales $AL:$BK → $AL:$BL --------
+            sales_idx = next(
+                (i for i, r in enumerate(rows, start=1)
+                 if r and str(r[0]).strip() == "Total Sales"),
+                None,
+            )
+            if sales_idx is not None:
+                row = rows[sales_idx - 1]
+                n_fixed = 0
+                for col in MONTHLY_SALES_COLS:
+                    ci = ord(col) - ord("A")  # E..R are single letters
+                    current = str(row[ci]).strip() if len(row) > ci else ""
+                    if not current.startswith("="):
+                        continue
+                    fixed, n = MONTHLY_SALES_BROKEN.subn(r"\g<1>BL\g<2>", current)
+                    if n:
+                        writes.append({
+                            "range": f"'{tab}'!{col}{sales_idx}",
+                            "values": [[fixed]],
+                        })
+                        n_fixed += 1
+                if n_fixed:
+                    self.stdout.write(
+                        f"  + Total Sales monthly ({sales_idx}): widened "
+                        f"{n_fixed} cell(s) $BK → $BL (Others sales)"
+                    )
+                else:
+                    self.stdout.write(
+                        "  - Total Sales monthly: all cells already end at "
+                        "$BL (skip)"
+                    )
+
+            # ---- Repair 3: restore SAMPLES/SALES BYROW anchors ----------
+            try:
+                aresp = (
+                    svc.spreadsheets().values()
+                    .batchGet(
+                        spreadsheetId=sheet_id,
+                        ranges=[
+                            f"'{tab}'!{col}{FORMULA_ROW}:{col}"
+                            for col, _, _ in ANCHORS
+                        ],
+                        valueRenderOption="FORMULA",
+                    )
+                    .execute()
+                )
+                aranges = aresp.get("valueRanges") or []
+            except Exception as e:
+                self.stdout.write(self.style.ERROR(f"  anchor read failed: {e}"))
+                aranges = []
+            for (col, label, anchor), vr in zip(ANCHORS, aranges):
+                col_rows = vr.get("values") or []
+                head = str(col_rows[0][0]).strip() if col_rows and col_rows[0] else ""
+                if head.upper().startswith("=BYROW"):
+                    self.stdout.write(f"  - {label} anchor ({col}{FORMULA_ROW}): present (skip)")
+                    continue
+                # Literal values below the anchor block the spill — clear
+                # them (values only; the SKU columns are the source of truth).
+                blockers = [
+                    (FORMULA_ROW + i, r[0])
+                    for i, r in enumerate(col_rows[1:], start=1)
+                    if r and str(r[0]).strip() != ""
+                ]
+                for rownum, val in blockers[:20]:
+                    self.stdout.write(
+                        f"      clearing literal {col}{rownum} = {val!r} "
+                        "(will be recomputed from SKU columns)"
+                    )
+                if blockers:
+                    clears.append(f"'{tab}'!{col}{FORMULA_ROW + 1}:{col}")
+                self.stdout.write(
+                    f"  + {label} anchor ({col}{FORMULA_ROW}): missing "
+                    f"(was {head!r}) → restore BYROW"
+                )
+                writes.append({
+                    "range": f"'{tab}'!{col}{FORMULA_ROW}",
+                    "values": [[anchor]],
+                })
+
+        # ---- Repair 4: MASTER YTD cells missing the December term -------
+        master_tab = (opts.get("master_tab") or "").strip()
+        if master_tab:
+            self.stdout.write(self.style.MIGRATE_HEADING(f"[{master_tab}]"))
+            try:
+                mresp = (
+                    svc.spreadsheets().values()
+                    .get(spreadsheetId=sheet_id,
+                         range=f"'{master_tab}'!E16:I16",
+                         valueRenderOption="FORMULA")
+                    .execute()
+                )
+                mrow = (mresp.get("values") or [[]])[0]
+            except Exception as e:
+                self.stdout.write(self.style.ERROR(f"  read failed: {e}"))
+                mrow = []
+            for i, (cell, term) in enumerate(sorted(MASTER_YTD_MISSING.items())):
+                current = str(mrow[i]).strip() if len(mrow) > i else ""
+                if not (current.upper().startswith("=SUM(") and current.endswith(")")):
+                    self.stdout.write(
+                        f"  - {cell}: formula is {current!r} — not the known "
+                        "pattern (skip)"
+                    )
+                    continue
+                if re.search(rf"\b{term}\b", current):
+                    self.stdout.write(f"  - {cell}: already includes {term} (skip)")
+                    continue
+                fixed = current[:-1] + f"+{term})"
+                self.stdout.write(f"  + {cell}: {current}  →  {fixed}")
+                writes.append({
+                    "range": f"'{master_tab}'!{cell}",
+                    "values": [[fixed]],
+                })
+
+        if not writes and not clears:
             self.stdout.write("\nNothing to fix.")
             return
         if not apply:
-            self.stdout.write(f"\nWould update {len(writes)} cell(s).")
+            self.stdout.write(
+                f"\nWould update {len(writes)} cell(s)"
+                + (f" and clear {len(clears)} range(s)" if clears else "")
+                + "."
+            )
             return
-        svc.spreadsheets().values().batchUpdate(
-            spreadsheetId=sheet_id,
-            body={"valueInputOption": "USER_ENTERED", "data": writes},
-        ).execute()
-        self.stdout.write(self.style.SUCCESS(f"\nUpdated {len(writes)} cell(s)."))
+        # Clear spill-blocking literals BEFORE writing the anchors, or the
+        # freshly written BYROW lands as a #REF! spill error.
+        if clears:
+            svc.spreadsheets().values().batchClear(
+                spreadsheetId=sheet_id, body={"ranges": clears}
+            ).execute()
+        if writes:
+            svc.spreadsheets().values().batchUpdate(
+                spreadsheetId=sheet_id,
+                body={"valueInputOption": "USER_ENTERED", "data": writes},
+            ).execute()
+        self.stdout.write(self.style.SUCCESS(
+            f"\nUpdated {len(writes)} cell(s)"
+            + (f", cleared {len(clears)} range(s)" if clears else "")
+            + "."
+        ))
