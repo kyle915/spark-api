@@ -22,6 +22,8 @@ relation can't blank the whole report.
 
 from __future__ import annotations
 
+import asyncio
+
 from django.core.management.base import BaseCommand
 
 
@@ -241,6 +243,54 @@ class Command(BaseCommand):
                 else "?"
             )
             w(f"    {a.clock_time:%m-%d %H:%M} {who} @ {getattr(a.event, 'name', '?')}")
+
+        # "Needs a recap" template-resolution check — reproduces EXACTLY what
+        # the mobile app's Event.customRecapTemplate resolver would return for
+        # each unfiled past shift (the my_past_shifts_owing_recap set). This
+        # diagnoses "the recap screen shows the generic legacy form / photo
+        # shot list instead of the tenant's custom fields" — that only
+        # happens when this resolver comes back null for the shift's event.
+        from ambassadors.models import AmbassadorEvent
+        from events.types import Event as EventGqlType
+
+        since30 = timezone.now() - datetime.timedelta(days=30)
+        owing_qs = (
+            AmbassadorEvent.objects.select_related(
+                "event", "event__event_type", "ambassador__user"
+            )
+            .filter(
+                event__tenant=tenant,
+                is_approved=True,
+                event__end_time__lt=timezone.now(),
+                event__end_time__gte=since30,
+            )
+            .order_by("-event__end_time")
+        )
+        w(f"  needs-a-recap template check (last 30d, {owing_qs.count()} approved past shifts):")
+        for ae in owing_qs[:15]:
+            ev = ae.event
+            already = (
+                Recap.objects.filter(event=ev, ambassador=ae.ambassador).exists()
+                or CustomRecap.objects.filter(event=ev, ambassador=ae.ambassador).exists()
+            )
+            if already:
+                continue
+            who = (
+                f"{ae.ambassador.user.first_name} {ae.ambassador.user.last_name}"
+                if ae.ambassador and ae.ambassador.user
+                else "?"
+            )
+            try:
+                resolved = asyncio.run(EventGqlType.custom_recap_template(ev))
+            except Exception as exc:  # noqa: BLE001 — surface, keep auditing
+                resolved = f"ERROR: {exc}"
+            resolved_name = getattr(resolved, "name", resolved)
+            w(
+                f"    event #{ev.id} {ev.name!r} end={ev.end_time} by {who} "
+                f"direct_fk={ev.custom_recap_template_id!r} "
+                f"event_type={getattr(ev.event_type, 'name', None)!r} "
+                f"-> resolves to: {resolved_name!r}"
+            )
 
     def _tenantless(self):
         from ambassadors.models import Ambassador, AmbassadorEvent
