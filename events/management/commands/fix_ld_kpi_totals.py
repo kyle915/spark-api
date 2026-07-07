@@ -16,11 +16,14 @@ Pat) logs events with per-SKU can counts in columns J..AJ (samples, AJ =
    row, every scorecard tab.
 
 3. Missing SAMPLES/SALES row-total anchors: each tab's I19 / AK19 holds a
-   BYROW spill formula that auto-sums the SKU columns per row. The
-   build-poli-tab data clear (A19:BM1011) wiped them off Poli's tab, so
-   her SAMPLES/SALES columns compute nothing (and hand-typed totals drift
-   from the SKU columns). Restores the anchors, clearing any literal
-   values below them that would block the spill (reported first).
+   BYROW spill formula that auto-sums the SKU columns per row, parked in
+   a dedicated dummy row labeled "FORMULA ROW" so data-row cleanups can't
+   delete it. Poli's tab lost the anchors twice — first to the
+   build-poli-tab data clear (A19:BM1011), then to a row deletion that
+   removed the whole formula row. Restores the anchors, re-inserting a
+   labeled FORMULA ROW at 19 when the current row 19 is real data, and
+   clearing any literal values below that would block the spill
+   (reported first).
 
 4. MASTER YTD cells E16:I16 (Hearse / CRM / Total Sales / Events
    Supported / Seedings) sum only 11 monthly-total cells — the December
@@ -134,6 +137,7 @@ class Command(BaseCommand):
 
         writes: list[dict] = []
         clears: list[str] = []
+        row_inserts: list[str] = []  # tabs needing a fresh FORMULA ROW at 19
         for tab in tabs:
             self.stdout.write(self.style.MIGRATE_HEADING(f"[{tab}]"))
             # One read: labels + annual (C) and monthly (E..R) formulas for
@@ -236,12 +240,19 @@ class Command(BaseCommand):
                     )
 
             # ---- Repair 3: restore SAMPLES/SALES BYROW anchors ----------
+            # On intact tabs the anchors live in a dedicated dummy row 19
+            # labeled "FORMULA ROW" (column C) so that deleting data rows
+            # can't take the formulas with it. If the anchors are gone AND
+            # row 19 is a real data row (the FORMULA ROW itself was
+            # deleted), a fresh row is inserted at 19 first — otherwise the
+            # next data-row cleanup wipes the formulas again.
             try:
                 aresp = (
                     svc.spreadsheets().values()
                     .batchGet(
                         spreadsheetId=sheet_id,
-                        ranges=[
+                        ranges=[f"'{tab}'!A{FORMULA_ROW}:C{FORMULA_ROW}"]
+                        + [
                             f"'{tab}'!{col}{FORMULA_ROW}:{col}"
                             for col, _, _ in ANCHORS
                         ],
@@ -253,12 +264,20 @@ class Command(BaseCommand):
             except Exception as e:
                 self.stdout.write(self.style.ERROR(f"  anchor read failed: {e}"))
                 aranges = []
-            for (col, label, anchor), vr in zip(ANCHORS, aranges):
+            marker_row = (aranges[0].get("values") or [[]])[0] if aranges else []
+            has_marker = (
+                len(marker_row) > 2
+                and str(marker_row[2]).strip().upper() == "FORMULA ROW"
+            )
+            needs_insert = False
+            for (col, label, anchor), vr in zip(ANCHORS, aranges[1:]):
                 col_rows = vr.get("values") or []
                 head = str(col_rows[0][0]).strip() if col_rows and col_rows[0] else ""
                 if head.upper().startswith("=BYROW"):
                     self.stdout.write(f"  - {label} anchor ({col}{FORMULA_ROW}): present (skip)")
                     continue
+                if not has_marker:
+                    needs_insert = True
                 # Literal values below the anchor block the spill — clear
                 # them (values only; the SKU columns are the source of truth).
                 blockers = [
@@ -280,6 +299,16 @@ class Command(BaseCommand):
                 writes.append({
                     "range": f"'{tab}'!{col}{FORMULA_ROW}",
                     "values": [[anchor]],
+                })
+            if needs_insert:
+                self.stdout.write(
+                    f"  + row {FORMULA_ROW} is a DATA row (the FORMULA ROW "
+                    "was deleted) → insert a fresh labeled row above it"
+                )
+                row_inserts.append(tab)
+                writes.append({
+                    "range": f"'{tab}'!B{FORMULA_ROW}:C{FORMULA_ROW}",
+                    "values": [[False, "FORMULA ROW"]],
                 })
 
         # ---- Repair 4: MASTER YTD cells missing the December term -------
@@ -316,18 +345,49 @@ class Command(BaseCommand):
                     "values": [[fixed]],
                 })
 
-        if not writes and not clears:
+        if not writes and not clears and not row_inserts:
             self.stdout.write("\nNothing to fix.")
             return
         if not apply:
             self.stdout.write(
                 f"\nWould update {len(writes)} cell(s)"
-                + (f" and clear {len(clears)} range(s)" if clears else "")
+                + (f", clear {len(clears)} range(s)" if clears else "")
+                + (f", insert {len(row_inserts)} FORMULA ROW(s)" if row_inserts else "")
                 + "."
             )
             return
-        # Clear spill-blocking literals BEFORE writing the anchors, or the
-        # freshly written BYROW lands as a #REF! spill error.
+        # Order matters: insert the fresh FORMULA ROW first (shifting data
+        # down), THEN clear spill-blocking literals, THEN write formulas —
+        # a BYROW written before its column is clear lands as a #REF!.
+        if row_inserts:
+            meta = (
+                svc.spreadsheets()
+                .get(spreadsheetId=sheet_id,
+                     fields="sheets.properties(title,sheetId)")
+                .execute()
+            )
+            gids = {
+                s["properties"]["title"]: s["properties"]["sheetId"]
+                for s in meta.get("sheets", [])
+            }
+            requests = []
+            for tab in row_inserts:
+                if tab not in gids:
+                    raise CommandError(f"Tab {tab!r} vanished mid-run — aborting.")
+                requests.append({
+                    "insertDimension": {
+                        "range": {
+                            "sheetId": gids[tab],
+                            "dimension": "ROWS",
+                            "startIndex": FORMULA_ROW - 1,
+                            "endIndex": FORMULA_ROW,
+                        },
+                        "inheritFromBefore": False,
+                    }
+                })
+            svc.spreadsheets().batchUpdate(
+                spreadsheetId=sheet_id, body={"requests": requests}
+            ).execute()
         if clears:
             svc.spreadsheets().values().batchClear(
                 spreadsheetId=sheet_id, body={"ranges": clears}
@@ -340,5 +400,6 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS(
             f"\nUpdated {len(writes)} cell(s)"
             + (f", cleared {len(clears)} range(s)" if clears else "")
+            + (f", inserted {len(row_inserts)} FORMULA ROW(s)" if row_inserts else "")
             + "."
         ))
