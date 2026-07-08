@@ -92,6 +92,47 @@ class TestBaSelfEdit(AmbassadorsGraphQLTestCase):
         assert fresh.in_college is True
 
     @pytest.mark.asyncio
+    async def test_profile_complete_without_bio(self):
+        # Regression: the mobile onboarding form marks bio OPTIONAL, but
+        # profileComplete used to require it — so a BA who filled
+        # name/phone/address and skipped bio stayed profileComplete=false
+        # and got re-routed to onboarding on every login. Name + phone +
+        # address (all REQUIRED in the app) must be sufficient.
+        u, ba = await sync_to_async(self._make_ba)("nobio")
+
+        result = await self._execute_mutation(
+            MUTATION,
+            {
+                "input": {
+                    "firstName": "Nena",
+                    "phone": "555-0100",
+                    "address": "1 Main St",
+                }
+            },
+            self.endpoint_path,
+            user=u,
+        )
+        assert result.errors is None, f"errored: {result.errors}"
+        amb = result.data["updateBaProfile"]["ambassador"]
+        assert amb["bio"] in (None, "")  # no bio provided
+        assert amb["profileComplete"] is True
+
+    @pytest.mark.asyncio
+    async def test_profile_incomplete_without_essentials(self):
+        # The gate still holds for the essentials: missing address (a
+        # required onboarding field) keeps profileComplete=false.
+        u, ba = await sync_to_async(self._make_ba)("partial")
+
+        result = await self._execute_mutation(
+            MUTATION,
+            {"input": {"firstName": "Nena", "phone": "555-0100"}},
+            self.endpoint_path,
+            user=u,
+        )
+        assert result.errors is None, f"errored: {result.errors}"
+        assert result.data["updateBaProfile"]["ambassador"]["profileComplete"] is False
+
+    @pytest.mark.asyncio
     async def test_attaches_headshot_and_event_photos(self):
         u, ba = await sync_to_async(self._make_ba)("uploader")
 
