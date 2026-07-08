@@ -21,7 +21,7 @@ because the aggregation is synchronous Django ORM.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import strawberry
 from asgiref.sync import sync_to_async
@@ -40,6 +40,7 @@ from recaps.tenant_overview import (
     tenant_kpi_comparison,
     tenant_kpi_totals,
     tenant_market_performance,
+    tenant_metro_breakdown,
     tenant_monthly_trend,
 )
 from utils.ai_text import (
@@ -593,6 +594,80 @@ def _build_market_performance(
         )
         for row in tenant_market_performance(tenant_id, year)
     ]
+
+
+@strawberry.type
+class MetroWeekCell:
+    """One metro market's KPI roll-up for one ISO week, within a
+    :class:`MetroWeek` row of a :class:`TenantMetroBreakdown`.
+    """
+
+    metro: str
+    event_count: int
+    recap_count: int
+    consumers_reached: int
+    samples_distributed: int
+    products_sold: int
+    total_engagements: int
+
+
+@strawberry.type
+class MetroWeek:
+    """One ISO week's per-metro roll-up rows, within a
+    :class:`TenantMetroBreakdown`.
+    """
+
+    iso_year: int
+    iso_week: int
+    week_start: str  # ISO date (YYYY-MM-DD) — the Monday of this ISO week.
+    cells: list[MetroWeekCell]
+
+
+@strawberry.type
+class TenantMetroBreakdown:
+    """Week-by-metro-market KPI breakdown for tenants whose events follow
+    the "<Market> — <Corridor> · <date>" naming convention — Feel Free's
+    Guerrilla Field Sampling program, which runs identical weekly shifts
+    across several metro markets with no structured city/market field to
+    group by (see :func:`recaps.tenant_overview.tenant_metro_breakdown`).
+
+    Deliberately distinct from :class:`MarketPerformance` (US state) and
+    the dashboard's retailer-keyed ``marketAnalysis`` — "market" already
+    means two other things in this schema, so this type/query is named
+    "metro" throughout to avoid colliding with either.
+
+    ``metros`` is every distinct metro label found in the requested window,
+    sorted; EMPTY when the tenant's events in-window don't follow the
+    naming convention — the frontend hides the whole section on an empty
+    list, so this doubles as "does this feature apply to this tenant."
+    ``weeks`` is sorted oldest-to-newest.
+    """
+
+    metros: list[str]
+    weeks: list[MetroWeek]
+
+
+def _build_metro_breakdown(
+    tenant_id: int,
+    start: datetime,
+    end: datetime,
+    event_type_id: int | None = None,
+) -> TenantMetroBreakdown:
+    """Map :func:`tenant_metro_breakdown`'s dict shape to GraphQL rows."""
+    data = tenant_metro_breakdown(tenant_id, start, end, event_type_id)
+    weeks = [
+        MetroWeek(
+            iso_year=w["iso_year"],
+            iso_week=w["iso_week"],
+            week_start=w["week_start"].isoformat(),
+            cells=[
+                MetroWeekCell(metro=metro, **kpis)
+                for metro, kpis in w["cells"].items()
+            ],
+        )
+        for w in data["weeks"]
+    ]
+    return TenantMetroBreakdown(metros=data["metros"], weeks=weeks)
 
 
 @strawberry.type
@@ -1636,6 +1711,81 @@ class CampaignReportQueries:
         if data is None:
             return []
         return data
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def tenant_metro_breakdown(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID,
+        start_date: str,
+        end_date: str,
+        event_type_id: strawberry.ID | None = None,
+    ) -> TenantMetroBreakdown:
+        """Week-by-metro-market KPI breakdown for tenants whose events are
+        named "<Market> — <Corridor> · <date>" (see
+        :func:`recaps.tenant_overview.tenant_metro_breakdown`) — built for
+        Feel Free's Guerrilla Field Sampling program, which runs identical
+        weekly shifts across several metro markets with no structured
+        city/market field to group by.
+
+        ``start_date`` / ``end_date`` are ISO date strings (YYYY-MM-DD);
+        the window is INCLUSIVE of both days. ``event_type_id`` optionally
+        restricts to one EventType (e.g. Feel Free's "Field Sampling").
+
+        Tenant scoping is identical to :meth:`tenant_kpis`
+        (:meth:`_CampaignReportService.resolve_target_tenant_id`).
+
+        Never raises: a missing/out-of-scope tenant, an unparseable date,
+        or any aggregation error resolves to an EMPTY breakdown (``metros:
+        []``) rather than a GraphQL error — the frontend hides the section
+        on an empty ``metros`` list either way.
+        """
+        empty = TenantMetroBreakdown(metros=[], weeks=[])
+        service = _CampaignReportService()
+        target_tenant_id = await service.resolve_target_tenant_id(info, tenant_id)
+        if target_tenant_id is None:
+            return empty
+
+        try:
+            start_d = datetime.fromisoformat(start_date).date()
+            end_d = datetime.fromisoformat(end_date).date()
+        except (ValueError, TypeError):
+            return empty
+
+        et_id: int | None = None
+        if event_type_id is not None:
+            raw = str(event_type_id).strip()
+            if raw:
+                try:
+                    et_id = resolve_id_to_int(raw)
+                except Exception:
+                    et_id = None
+
+        def _build():
+            from tenants.models import Tenant
+
+            if not Tenant.objects.filter(id=target_tenant_id).exists():
+                return None
+            # Half-open [start, end) window with end_date INCLUSIVE — mirrors
+            # tenant_overview._year_bounds' half-open convention, anchored on
+            # timezone.now() so both bounds carry the active tzinfo.
+            anchor = timezone.now().replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+            start_dt = anchor.replace(
+                year=start_d.year, month=start_d.month, day=start_d.day
+            )
+            end_dt = anchor.replace(
+                year=end_d.year, month=end_d.month, day=end_d.day
+            ) + timedelta(days=1)
+            return _build_metro_breakdown(target_tenant_id, start_dt, end_dt, et_id)
+
+        try:
+            data = await sync_to_async(_build, thread_sensitive=True)()
+        except Exception:
+            return empty
+
+        return data if data is not None else empty
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def tenant_ba_leaderboard(

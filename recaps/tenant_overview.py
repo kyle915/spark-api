@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, fields as dataclass_fields
+from datetime import date, timedelta
 
 from django.db.models import Count, Max, Min, Sum
 from django.db.models.functions import Coalesce, TruncMonth
@@ -1326,6 +1327,197 @@ def tenant_market_performance(
             ).get(field, 0)
         rows.append(row)
     return rows
+
+
+def _metro_from_event_name(name: str | None) -> str | None:
+    """The metro-market label from an event named "<Market> — <Corridor> ·
+    <date>", e.g. ``"Miami — Wynwood · 9/24"`` -> ``"Miami"``.
+
+    Some tenants (Feel Free's Guerrilla Field Sampling program) name every
+    event this way rather than carrying a structured city/market field —
+    their imported events have no ``Location``/``State`` FK, and even their
+    address text doesn't reliably resolve to the right label (Ft.
+    Lauderdale's warehouse address is in Plantation, FL; Tampa/St. Pete's is
+    in Pinellas Park, FL — see ``events/management/commands/
+    import_event_schedule.py``). This convention-based prefix is the ONLY
+    reliable metro signal for these tenants.
+
+    Splits on the FIRST `` — `` (em dash WITH surrounding spaces, so a plain
+    hyphen inside a venue name like "7-Eleven — Main St" still splits
+    correctly — only the em-dash separator matters). Returns ``None`` for
+    names that don't contain it, so tenants without this convention simply
+    produce no metro rows (see :func:`tenant_metro_breakdown`).
+    """
+    if not name:
+        return None
+    parts = name.split(" — ", 1)
+    if len(parts) != 2:
+        return None
+    metro = parts[0].strip()
+    return metro or None
+
+
+def tenant_metro_breakdown(
+    tenant_id: int,
+    start,
+    end,
+    event_type_id: int | None = None,
+) -> dict:
+    """Week-by-metro-market KPI roll-up for tenants whose events follow the
+    "<Market> — <Corridor> · <date>" naming convention (see
+    :func:`_metro_from_event_name`) — built for Feel Free's Guerrilla Field
+    Sampling program, which runs identical weekly Thu–Sun shifts across
+    several metro markets with no structured city/market field to GROUP BY.
+
+    Buckets every tenant :class:`recaps.models.CustomRecap` (+ its event)
+    whose effective EVENT date (:func:`_event_date_expr` — the SAME
+    date/start_time/request-date priority the hero + per-state rollup use)
+    falls in the half-open ``[start, end)`` window into (ISO year, ISO week,
+    metro) cells, using the SAME free-text KPI parsing
+    (:func:`recaps.types._consumers_sampled_from_fields` /
+    ``_sold_units_from_fields``) :func:`_custom_market_kpis` uses — so a
+    metro's numbers agree with the tenant's all-time / per-state totals.
+    ``event_type_id`` optionally restricts to one :class:`events.models.
+    EventType` (e.g. Feel Free's "Field Sampling").
+
+    Unlike the per-state rollup, grouping happens in PYTHON, not SQL — the
+    metro label comes from free-text ``Event.name``, not a DB column. Volume
+    is bounded (one tenant, one caller-chosen date window — at most a few
+    hundred rows for a summer-long weekly program), so this never approaches
+    the whole-tenant-history scale the per-state functions are built to
+    avoid loading into Python.
+
+    Returns ``{"metros": [str, ...], "weeks": [{"iso_year", "iso_week",
+    "week_start" (date, the Monday of that ISO week), "cells": {metro:
+    {event_count, recap_count, consumers_reached, samples_distributed,
+    products_sold, total_engagements}}}, ...]}``. ``metros`` is every
+    distinct label seen, sorted; ``weeks`` is sorted by (iso_year,
+    iso_week) ascending. A tenant whose events in-window don't follow the
+    naming convention returns ``{"metros": [], "weeks": []}`` — the
+    frontend uses an empty ``metros`` list to hide the whole section.
+    """
+    base = CustomRecap.objects.filter(tenant_id=tenant_id)
+    if event_type_id is not None:
+        base = base.filter(event__event_type_id=event_type_id)
+    windowed = _filter_event_window(base, "event__", (start, end))
+
+    # One bounded pass: id + the two fields needed to place the row, plus
+    # the typed engagement column (cheap — no need for a second query just
+    # to sum it, since grouping can't happen in SQL anyway).
+    recap_rows = list(
+        windowed.values_list("id", "event_id", "event__name", "_evtdate", "total_engagements")
+    )
+    if not recap_rows:
+        return {"metros": [], "weeks": []}
+
+    # recap_id -> (metro, iso_year, iso_week); rows whose event name doesn't
+    # match the convention (or has no placeable date, which _filter_event_window
+    # already excludes) are dropped — same "can't place this row" posture
+    # _custom_market_kpis takes for a stateless event.
+    placement: dict[int, tuple[str, int, int]] = {}
+    event_ids: dict[int, int] = {}
+    week_starts: dict[tuple[int, int], date] = {}
+    engagement_totals: dict[tuple[str, int, int], int] = {}
+    for recap_id, event_id, name, evtdate, total_engagements in recap_rows:
+        metro = _metro_from_event_name(name)
+        if not metro:
+            continue
+        d = evtdate.date()
+        iso_year, iso_week, _ = d.isocalendar()
+        key = (metro, iso_year, iso_week)
+        placement[recap_id] = key
+        event_ids[recap_id] = event_id
+        week_starts.setdefault((iso_year, iso_week), d - timedelta(days=d.isoweekday() - 1))
+        engagement_totals[key] = engagement_totals.get(key, 0) + int(total_engagements or 0)
+
+    if not placement:
+        return {"metros": [], "weeks": []}
+
+    recap_ids = list(placement.keys())
+
+    # Event + recap counts per bucket. event_count is DISTINCT events (a
+    # market/week usually has one event per corridor stop, but don't assume
+    # 1:1 with recaps).
+    counts: dict[tuple[str, int, int], dict] = {}
+    events_seen: dict[tuple[str, int, int], set] = {}
+    for recap_id, key in placement.items():
+        counts.setdefault(key, {"event_count": 0, "recap_count": 0})
+        counts[key]["recap_count"] += 1
+        events_seen.setdefault(key, set()).add(event_ids[recap_id])
+    for key, ev_ids in events_seen.items():
+        counts[key]["event_count"] = len(ev_ids)
+
+    # Structured product-sample quantities, bounded to the placed recaps —
+    # mirrors _custom_market_kpis' structured-samples-per-state pass.
+    structured_totals: dict[tuple[str, int, int], int] = {}
+    for recap_id, quantity in CustomRecapProductSample.objects.filter(
+        custom_recap_id__in=recap_ids
+    ).values_list("custom_recap_id", "quantity"):
+        key = placement.get(recap_id)
+        if key is None:
+            continue
+        structured_totals[key] = structured_totals.get(key, 0) + int(quantity or 0)
+
+    # Free-text KPI value rows, bounded to the placed recaps + the same
+    # KPI-relevant name regex _custom_market_kpis filters on — grouped per
+    # recap (for the per-recap parse rules), then attributed to that
+    # recap's (metro, week) bucket.
+    per_recap_pairs: dict[int, list[tuple[str, str]]] = {}
+    for recap_id, cf_name, value in (
+        CustomFieldValue.objects.filter(
+            custom_recap_id__in=recap_ids,
+            custom_field__name__iregex=_CUSTOM_KPI_NAME_RE.pattern,
+        )
+        .values_list("custom_recap_id", "custom_field__name", "value")
+        .order_by("custom_recap_id")
+    ):
+        per_recap_pairs.setdefault(recap_id, []).append((cf_name, value))
+
+    sampled_totals: dict[tuple[str, int, int], int] = {}
+    products_totals: dict[tuple[str, int, int], int] = {}
+    for recap_id, pairs in per_recap_pairs.items():
+        key = placement.get(recap_id)
+        if key is None:
+            continue
+        consumers_sampled = _consumers_sampled_from_fields(pairs)
+        if consumers_sampled is not None:
+            sampled_totals[key] = sampled_totals.get(key, 0) + int(consumers_sampled)
+        sold = _sold_units_from_fields(pairs)
+        if sold is not None:
+            products_totals[key] = products_totals.get(key, 0) + int(sold)
+
+    metros = sorted({metro for metro, _, _ in placement.values()})
+    week_keys = sorted({(iso_year, iso_week) for _, iso_year, iso_week in placement.values()})
+
+    weeks = []
+    for iso_year, iso_week in week_keys:
+        cells = {}
+        for metro in metros:
+            key = (metro, iso_year, iso_week)
+            if key not in counts:
+                continue
+            consumers_reached = sampled_totals.get(key, 0)
+            cells[metro] = {
+                "event_count": counts[key]["event_count"],
+                "recap_count": counts[key]["recap_count"],
+                "consumers_reached": consumers_reached,
+                # Prefers structured sample quantities; falls back to the
+                # free-text sampled-consumer count when this bucket logged
+                # no structured samples — mirrors _custom_market_kpis.
+                "samples_distributed": structured_totals.get(key, 0) or consumers_reached,
+                "products_sold": products_totals.get(key, 0),
+                "total_engagements": engagement_totals.get(key, 0),
+            }
+        weeks.append(
+            {
+                "iso_year": iso_year,
+                "iso_week": iso_week,
+                "week_start": week_starts[(iso_year, iso_week)],
+                "cells": cells,
+            }
+        )
+
+    return {"metros": metros, "weeks": weeks}
 
 
 def _recent_event_lines(tenant_id: int) -> list[str]:
