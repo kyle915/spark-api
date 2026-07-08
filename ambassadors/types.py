@@ -660,8 +660,14 @@ class BaSelfProfileType:
     headshot_url: str | None = None
     resume_url: str | None = None
     photos: list[AmbassadorPhotoType] = strawberry.field(default_factory=list)
-    # True once the BA has the essentials filled (name + phone + address
-    # + a bio). Drives the "finish setup" nudge on the mobile profile.
+    # True once the BA has the essentials filled (name + phone + address).
+    # Drives the "finish setup" nudge on the mobile profile AND the
+    # onboarding gate that routes to CreateProfileScreen on login. Must
+    # match what mobile onboarding actually REQUIRES: bio is an optional
+    # field there ("A short bio (optional)"), so requiring it here left
+    # every BA who skipped it stuck re-onboarding on each login — the
+    # flag never flipped true. Keep this in lockstep with the mobile
+    # CreateProfileScreen required-field set.
     profile_complete: bool = False
 
     @classmethod
@@ -674,7 +680,7 @@ class BaSelfProfileType:
         last = (getattr(user, "last_name", None) if user else None) or None
         phone = ambassador.phone or None
         address = ambassador.address or None
-        complete = bool(first and phone and address and bio)
+        complete = bool(first and phone and address)
         return cls(
             id=strawberry.ID(str(ambassador.id)),
             first_name=first,
