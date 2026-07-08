@@ -34,6 +34,10 @@ from recaps.report_tokens import make_report_token
 from recaps.tenant_ba_leaderboard import tenant_ba_leaderboard
 from recaps.tenant_insights import build_insight_buckets
 from recaps.tenant_sentiment import get_or_refresh_tenant_sentiment
+from recaps.field_sampling_report import (
+    build_field_sampling_report,
+    generate_ai_callout_summary,
+)
 from recaps.tenant_overview import (
     build_tenant_overview,
     tenant_event_recap_counts,
@@ -1271,6 +1275,165 @@ class _CampaignReportService(SparkGraphQLMixin):
 
 
 @strawberry.type
+class SkuTotal:
+    """One SKU's total within a :class:`SkuBreakdown` — see that type's
+    ``mode`` for whether ``total`` is a real unit count or a session count.
+    """
+
+    product: str
+    total: int
+
+
+@strawberry.type
+class SkuBreakdown:
+    """Per-SKU sample totals for one tenant/window (see
+    :func:`recaps.field_sampling_report.sku_breakdown`).
+
+    ``mode`` tells you what ``items[].total`` actually counts:
+
+    * ``"quantity"`` — real summed unit counts (the tenant's template logs
+      per-SKU quantities).
+    * ``"sessions"`` — a FALLBACK: how many distinct recap sessions
+      selected that SKU via a "which products were sampled" choice field
+      — NOT a unit count. Shown differently in the UI so it's never
+      mistaken for real volume.
+    * ``"none"`` — neither mechanism has any data in the window.
+    """
+
+    mode: str
+    items: list[SkuTotal]
+
+
+@strawberry.type
+class SamplesPerHour:
+    """Total samples ÷ total labor hours for one tenant/window (see
+    :func:`recaps.field_sampling_report.samples_per_hour`). ``estimated``
+    is True when any contributing shift had no real clock-in/out pair and
+    fell back to its scheduled duration (mirrors ``events.pnl``'s
+    per-event flag).
+    """
+
+    samples: int
+    hours: float
+    per_hour: float | None
+    estimated: bool
+
+
+@strawberry.type
+class LocationVisit:
+    """One stop actually run in-window, within
+    :class:`FieldSamplingReport.locations_hit`.
+    """
+
+    market: str | None
+    corridor: str | None
+    date: str | None
+    address: str | None
+
+
+@strawberry.type
+class UpcomingShift:
+    """One scheduled-but-not-yet-run shift, within :class:`UpcomingShifts`."""
+
+    market: str | None
+    corridor: str | None
+    name: str | None
+    start_time: str | None
+    address: str | None
+
+
+@strawberry.type
+class UpcomingShifts:
+    """The tenant's next 7 days of scheduled shifts (see
+    :func:`recaps.field_sampling_report.upcoming_shifts`). ``total`` is the
+    real count; ``items`` may be a capped prefix of it.
+    """
+
+    total: int
+    items: list[UpcomingShift]
+
+
+@strawberry.type
+class FieldCallout:
+    """One free-text BA note/feedback snippet, within
+    :class:`FieldSamplingReport.callouts` — the deterministic, no-AI
+    "things to note" feed (see
+    :func:`recaps.field_sampling_report.field_callouts`).
+    """
+
+    market: str | None
+    corridor: str | None
+    date: str | None
+    text: str
+
+
+@strawberry.type
+class FieldSamplingReport:
+    """Consolidated Field Sampling Report for one tenant/window — samples
+    per hour, YTD + selected-window SKU breakdowns, locations hit, the
+    next 7 days' upcoming shifts, and the deterministic call-outs feed.
+    See :func:`recaps.field_sampling_report.build_field_sampling_report`.
+
+    Built for programs like Feel Free's Guerrilla Field Sampling, which
+    run across metro markets with no structured city field to group by —
+    same "metro" derivation as :class:`TenantMetroBreakdown`.
+    """
+
+    samples_per_hour: SamplesPerHour
+    ytd_sku_breakdown: SkuBreakdown
+    week_sku_breakdown: SkuBreakdown
+    locations_hit: list[LocationVisit]
+    upcoming: UpcomingShifts
+    callouts: list[FieldCallout]
+
+
+def _empty_field_sampling_report() -> FieldSamplingReport:
+    """The degrade-to shape for a missing/out-of-scope tenant, an
+    unparseable date, or any aggregation error — never a GraphQL error.
+    """
+    return FieldSamplingReport(
+        samples_per_hour=SamplesPerHour(
+            samples=0, hours=0.0, per_hour=None, estimated=False
+        ),
+        ytd_sku_breakdown=SkuBreakdown(mode="none", items=[]),
+        week_sku_breakdown=SkuBreakdown(mode="none", items=[]),
+        locations_hit=[],
+        upcoming=UpcomingShifts(total=0, items=[]),
+        callouts=[],
+    )
+
+
+def _build_field_sampling_report_type(
+    tenant_id: int,
+    start: datetime,
+    end: datetime,
+    event_type_id: int | None = None,
+    market: str | None = None,
+) -> FieldSamplingReport:
+    """Map :func:`recaps.field_sampling_report.build_field_sampling_report`'s
+    dict shape to GraphQL rows.
+    """
+    data = build_field_sampling_report(tenant_id, start, end, event_type_id, market)
+    return FieldSamplingReport(
+        samples_per_hour=SamplesPerHour(**data["samples_per_hour"]),
+        ytd_sku_breakdown=SkuBreakdown(
+            mode=data["ytd_sku_breakdown"]["mode"],
+            items=[SkuTotal(**i) for i in data["ytd_sku_breakdown"]["items"]],
+        ),
+        week_sku_breakdown=SkuBreakdown(
+            mode=data["week_sku_breakdown"]["mode"],
+            items=[SkuTotal(**i) for i in data["week_sku_breakdown"]["items"]],
+        ),
+        locations_hit=[LocationVisit(**loc) for loc in data["locations_hit"]],
+        upcoming=UpcomingShifts(
+            total=data["upcoming"]["total"],
+            items=[UpcomingShift(**item) for item in data["upcoming"]["items"]],
+        ),
+        callouts=[FieldCallout(**c) for c in data["callouts"]],
+    )
+
+
+@strawberry.type
 class CampaignReportQueries:
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def campaign_report(
@@ -1786,6 +1949,83 @@ class CampaignReportQueries:
             return empty
 
         return data if data is not None else empty
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def tenant_field_sampling_report(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID,
+        start_date: str,
+        end_date: str,
+        event_type_id: strawberry.ID | None = None,
+        market: str | None = None,
+    ) -> FieldSamplingReport:
+        """Consolidated Field Sampling Report: samples/hour, YTD +
+        selected-window SKU breakdowns, locations hit, next-7-days
+        upcoming shifts, and the deterministic call-outs feed. See
+        :func:`recaps.field_sampling_report.build_field_sampling_report`.
+
+        ``start_date``/``end_date`` are ISO date strings (YYYY-MM-DD)
+        scoping the "this window" figures (SKU breakdown, samples/hour,
+        locations, call-outs) — INCLUSIVE of both days. ``event_type_id``
+        optionally restricts to one EventType; ``market`` optionally
+        restricts to one metro label (see
+        :func:`recaps.tenant_overview.tenant_metro_breakdown` for how
+        metro labels are derived). YTD is always Jan 1 of the current
+        year through now; ``upcoming`` is always the real next 7 days from
+        now — both independent of ``start_date``/``end_date``/``market``.
+
+        Tenant scoping is identical to :meth:`tenant_kpis`
+        (:meth:`_CampaignReportService.resolve_target_tenant_id`).
+
+        Never raises: a missing/out-of-scope tenant, an unparseable date,
+        or any aggregation error resolves to an EMPTY report (see
+        :func:`_empty_field_sampling_report`) rather than a GraphQL error.
+        """
+        service = _CampaignReportService()
+        target_tenant_id = await service.resolve_target_tenant_id(info, tenant_id)
+        if target_tenant_id is None:
+            return _empty_field_sampling_report()
+
+        try:
+            start_d = datetime.fromisoformat(start_date).date()
+            end_d = datetime.fromisoformat(end_date).date()
+        except (ValueError, TypeError):
+            return _empty_field_sampling_report()
+
+        et_id: int | None = None
+        if event_type_id is not None:
+            raw = str(event_type_id).strip()
+            if raw:
+                try:
+                    et_id = resolve_id_to_int(raw)
+                except Exception:
+                    et_id = None
+
+        def _build():
+            from tenants.models import Tenant
+
+            if not Tenant.objects.filter(id=target_tenant_id).exists():
+                return None
+            anchor = timezone.now().replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+            start_dt = anchor.replace(
+                year=start_d.year, month=start_d.month, day=start_d.day
+            )
+            end_dt = anchor.replace(
+                year=end_d.year, month=end_d.month, day=end_d.day
+            ) + timedelta(days=1)
+            return _build_field_sampling_report_type(
+                target_tenant_id, start_dt, end_dt, et_id, market
+            )
+
+        try:
+            data = await sync_to_async(_build, thread_sensitive=True)()
+        except Exception:
+            return _empty_field_sampling_report()
+
+        return data if data is not None else _empty_field_sampling_report()
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def tenant_ba_leaderboard(
@@ -2313,6 +2553,106 @@ class ExportExpenseReceiptsResponse:
     recap_count: int = 0
     receipt_count: int = 0
     total_spend: float = 0.0
+
+
+@strawberry.type
+class FieldSamplingCalloutSummary:
+    """The on-demand Gemini narrative over one Field Sampling Report
+    window's deterministic call-outs feed — see
+    :func:`recaps.field_sampling_report.generate_ai_callout_summary`.
+
+    ``summary`` is None when Gemini is unavailable/fails (never an error —
+    the caller already has the deterministic :class:`FieldCallout` feed to
+    fall back to) OR when there were no call-outs to summarize.
+    """
+
+    summary: str | None
+
+
+@strawberry.type
+class FieldSamplingReportMutations:
+    """Mutation surface for the Field Sampling Report's OPTIONAL AI layer.
+
+    Deliberately separate from the (free, deterministic, always-on) read
+    side: generating a narrative costs a real Gemini call, so it only
+    happens when a user explicitly clicks "Summarize with AI" — never
+    automatically on page load. Matches this codebase's own precedent
+    (recaps/tenant_insights.py replaced free-form AI summaries with fixed
+    deterministic buckets for reliability on numbers a client sees).
+    """
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def generate_field_sampling_callout_summary(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID,
+        start_date: str,
+        end_date: str,
+        event_type_id: strawberry.ID | None = None,
+        market: str | None = None,
+    ) -> FieldSamplingCalloutSummary:
+        """Ask Gemini to summarize this EXACT window's deterministic
+        call-outs feed (same args as ``tenantFieldSamplingReport`` — the
+        frontend calls this with whatever window it's currently showing).
+
+        Never raises: an out-of-scope tenant, unparseable dates, no
+        call-outs in window, or any Gemini failure all resolve to
+        ``FieldSamplingCalloutSummary(summary=None)`` — the caller keeps
+        showing the deterministic feed either way.
+        """
+        empty = FieldSamplingCalloutSummary(summary=None)
+        service = _CampaignReportService()
+        target_tenant_id = await service.resolve_target_tenant_id(info, tenant_id)
+        if target_tenant_id is None:
+            return empty
+
+        try:
+            start_d = datetime.fromisoformat(start_date).date()
+            end_d = datetime.fromisoformat(end_date).date()
+        except (ValueError, TypeError):
+            return empty
+
+        et_id: int | None = None
+        if event_type_id is not None:
+            raw = str(event_type_id).strip()
+            if raw:
+                try:
+                    et_id = resolve_id_to_int(raw)
+                except Exception:
+                    et_id = None
+
+        def _build() -> str | None:
+            from tenants.models import Tenant
+            from recaps.field_sampling_report import field_callouts, samples_per_hour
+
+            tenant = Tenant.objects.filter(id=target_tenant_id).first()
+            if tenant is None:
+                return None
+            anchor = timezone.now().replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+            start_dt = anchor.replace(
+                year=start_d.year, month=start_d.month, day=start_d.day
+            )
+            end_dt = anchor.replace(
+                year=end_d.year, month=end_d.month, day=end_d.day
+            ) + timedelta(days=1)
+            callouts = field_callouts(
+                target_tenant_id, start_dt, end_dt, et_id, market
+            )
+            if not callouts:
+                return None
+            context = samples_per_hour(
+                target_tenant_id, start_dt, end_dt, et_id, market
+            )
+            return generate_ai_callout_summary(tenant.name, callouts, context)
+
+        try:
+            summary = await sync_to_async(_build, thread_sensitive=True)()
+        except Exception:
+            return empty
+
+        return FieldSamplingCalloutSummary(summary=summary)
 
 
 @strawberry.type

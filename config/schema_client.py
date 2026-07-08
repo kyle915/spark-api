@@ -8,6 +8,7 @@ from events.schema import EventQueryClient, EventMutationsClient
 from recaps.schema import RecapQueryClient, RecapMutationsClient
 from recaps.report_types import (
     CampaignReportQueries,
+    FieldSamplingReportMutations,
     ScheduledReportMutations,
     TenantGoalsMutations,
 )
@@ -52,6 +53,7 @@ MutationClients = merge_types(
         RecapMutationsClient,
         TenantGoalsMutations,
         ScheduledReportMutations,
+        FieldSamplingReportMutations,
         MutationClients,
         ClientJobMutations,
         AmbassadorMutationsClient,
