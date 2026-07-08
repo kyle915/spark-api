@@ -82,15 +82,41 @@ _LEGACY_FEEDBACK_FIELDS = (
 )
 
 # Custom-template fields store feedback as free-text values keyed by the field
-# NAME. We pull only value rows whose field name reads like consumer feedback,
-# matched in SQL. Superset of ``report_service``'s highlight regex
-# (quote/story/highlight/feedback/testimonial) plus the comment/note/reaction/
-# sentiment vocabulary the spec calls out and "what … said"-style prompts.
+# NAME. We pull only value rows whose field name reads like consumer feedback.
+# Superset of ``report_service``'s highlight regex (quote/story/highlight/
+# feedback/testimonial) plus the comment/note/reaction/sentiment vocabulary the
+# spec calls out and "what … said"-style prompts.
+#
+# This is the Python-side (``\b`` word-boundary) copy, used with ``re.search()``
+# — by :mod:`recaps.recap_quality`, which duplicates this pattern locally, and
+# available here for any future in-process matching. It is NOT used for the
+# ``__iregex`` DB filter below; see :data:`_CUSTOM_FEEDBACK_NAME_IREGEX`.
 _CUSTOM_FEEDBACK_NAME_RE = re.compile(
     r"quote|story|stories|highlight|feedback|testimonial|comment|"
     r"reaction|sentiment|verbatim|\bnotes?\b|consumer.*sa(?:id|y)|"
     r"what.*sa(?:id|y)|said",
     re.IGNORECASE,
+)
+
+# Postgres-side sibling of :data:`_CUSTOM_FEEDBACK_NAME_RE`, used ONLY for the
+# ``__iregex`` filter in :func:`_custom_feedback_rows` below. A deliberately
+# PLAIN STRING (not ``re.compile()``'d), with ``\y`` instead of ``\b`` for the
+# word boundary around "notes?": Postgres's regex engine does NOT treat ``\b``
+# as a word boundary the way Python's ``re`` does (confirmed live —
+# ``'Field Notes' ~* '\bnotes?\b'`` is FALSE, which was silently excluding any
+# field literally named "Notes"/"Field Notes" from every ``__iregex`` query
+# built on ``_CUSTOM_FEEDBACK_NAME_RE.pattern``; ``\ynotes?\y`` is Postgres's
+# correct spelling — confirmed live to match "Field Notes" but not
+# "Annotestation"). Can't be ``re.compile()``'d — Python's ``re`` rejects ``\y``
+# outright (``bad escape \y``). ``_CUSTOM_FEEDBACK_NAME_RE`` itself stays on
+# ``\b`` because :mod:`recaps.recap_quality` reuses that pattern text with
+# Python's ``re.search()``, where ``\y`` means nothing. Keep both in sync by
+# hand if the vocabulary changes. Mirrored in
+# :data:`recaps.field_sampling_report._FEEDBACK_NAME_RE_IREGEX`.
+_CUSTOM_FEEDBACK_NAME_IREGEX = (
+    r"quote|story|stories|highlight|feedback|testimonial|comment|"
+    r"reaction|sentiment|verbatim|\ynotes?\y|consumer.*sa(?:id|y)|"
+    r"what.*sa(?:id|y)|said"
 )
 
 # Valid enums the frontend renders. Anything else is normalised/dropped.
@@ -205,7 +231,7 @@ def _custom_feedback_rows(tenant_id: int, year: int | None):
     """Most-recent-first custom feedback ``CustomFieldValue`` values.
 
     Pulls ONLY the feedback-like value rows (``custom_field__name`` matched by
-    :data:`_CUSTOM_FEEDBACK_NAME_RE` in SQL) on the custom recap's direct
+    :data:`_CUSTOM_FEEDBACK_NAME_IREGEX` in SQL) on the custom recap's direct
     tenant FK, year-filtered on the value row's own ``created_at`` — the same
     bounded-slice approach :func:`recaps.tenant_overview._custom_kpis` uses for
     KPI values. Newest-first so the snippet cap keeps the freshest feedback.
@@ -214,7 +240,7 @@ def _custom_feedback_rows(tenant_id: int, year: int | None):
         _filter_year(
             CustomFieldValue.objects.filter(
                 custom_recap__tenant_id=tenant_id,
-                custom_field__name__iregex=_CUSTOM_FEEDBACK_NAME_RE.pattern,
+                custom_field__name__iregex=_CUSTOM_FEEDBACK_NAME_IREGEX,
             ),
             "created_at",
             year,

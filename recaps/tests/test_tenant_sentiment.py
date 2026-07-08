@@ -190,6 +190,19 @@ class TestGatherConsumerFeedback(AmbassadorsGraphQLTestCase):
         assert "Loved the cans" in snippets
         assert "120" not in snippets
 
+    def test_collects_field_named_notes(self):
+        # Regression test: "Notes"/"Field Notes" match ONLY via the `notes?`
+        # alternative (no "quote"/"feedback"/"comment"/etc. substring), which
+        # exercises the DB-side __iregex word-boundary. Postgres's `~*` does
+        # NOT treat `\b` as a word boundary the way Python's `re` does, so a
+        # pattern built with `\b` silently excluded these field names; the
+        # query must use the `\y`-based _CUSTOM_FEEDBACK_NAME_IREGEX instead.
+        self._custom_field_value("Notes", "Ran out of samples by 2pm")
+        self._custom_field_value("Field Notes", "Great turnout, sunny day")
+        snippets = gather_consumer_feedback(self.tenant.id)
+        assert "Ran out of samples by 2pm" in snippets
+        assert "Great turnout, sunny day" in snippets
+
     def test_tenant_isolation(self):
         self._legacy_feedback(quotes="ours")
         other_event = self.create_event(name="theirs", tenant=self.other_tenant)
