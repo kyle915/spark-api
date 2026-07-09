@@ -1592,3 +1592,74 @@ class TestBaRecapEditGuards(JobsGraphQLTestCase):
         assert result.data["updateCustomRecap"]["success"] is True
         recap = await self._refresh()
         assert recap.approved is True
+
+    CREATE_WEB = """
+    mutation CreateCustomRecap($input: CreateCustomRecapInput!) {
+      createCustomRecap(input: $input) {
+        success
+        message
+        customRecap { id uuid }
+      }
+    }
+    """
+
+    @pytest.mark.asyncio
+    async def test_ba_web_create_links_ambassador(self):
+        # The mobile app files custom recaps via the WEB createCustomRecap
+        # (it carries event_id) with NO ambassadorId. It must still attribute
+        # the recap to the authenticated BA — otherwise the recap lands with
+        # no ambassador and the BA's name is missing from the report.
+        variables = {
+            "input": {
+                "name": "BA app recap",
+                "eventId": str(self.event.id),
+                "customRecapTemplateId": str(self.template.id),
+                "customFieldValues": [
+                    {"customFieldId": str(self.custom_field.id), "value": "42"},
+                ],
+            }
+        }
+        result = await self._execute_mutation_authenticated(
+            self.CREATE_WEB, variables, self.owner_user, self.mobile_path
+        )
+        assert result.errors is None, f"errored: {result.errors}"
+        payload = result.data["createCustomRecap"]
+        assert payload["success"] is True, payload["message"]
+        new_uuid = payload["customRecap"]["uuid"]
+
+        @sync_to_async
+        def _ambassador_id():
+            return recap_models.CustomRecap.objects.get(
+                uuid=new_uuid
+            ).ambassador_id
+
+        assert await _ambassador_id() == self.owner_ambassador.id
+
+    @pytest.mark.asyncio
+    async def test_admin_web_create_is_not_self_attributed(self):
+        # An admin filing via the web createCustomRecap WITHOUT an
+        # ambassadorId must NOT be auto-attributed to the admin — that path
+        # is for on-behalf / external-BA recaps. Only BA callers self-link.
+        variables = {
+            "input": {
+                "name": "Admin-filed recap",
+                "eventId": str(self.event.id),
+                "customRecapTemplateId": str(self.template.id),
+            }
+        }
+        self.schema = self.spark_schema
+        result = await self._execute_mutation_authenticated(
+            self.CREATE_WEB, variables, self.spark_user, self.spark_path
+        )
+        assert result.errors is None, f"errored: {result.errors}"
+        payload = result.data["createCustomRecap"]
+        assert payload["success"] is True, payload["message"]
+        new_uuid = payload["customRecap"]["uuid"]
+
+        @sync_to_async
+        def _ambassador_id():
+            return recap_models.CustomRecap.objects.get(
+                uuid=new_uuid
+            ).ambassador_id
+
+        assert await _ambassador_id() is None
