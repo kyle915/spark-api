@@ -1898,6 +1898,31 @@ class RecapMutationService(SparkGraphQLMixin):
             except (State.DoesNotExist, TypeError, ValueError, GraphQLError):
                 raise GraphQLError("State not found.")
 
+        # Attribute BA-filed recaps to the BA. The mobile app files custom
+        # recaps via the WEB createCustomRecap (it carries event_id, which
+        # createCustomRecapMobile lacks), so is_mobile_input is False and no
+        # ambassador_id is sent — the recap would land with NO ambassador
+        # (and no retailer/location/state), dropping the BA's name from the
+        # report. When the CALLER is the BA and none was resolved from input,
+        # link them and backfill retailer/location/state from the event,
+        # mirroring the createCustomRecapMobile derivation. Admins/clients are
+        # excluded by _caller_editing_ambassador, so on-behalf / external-BA
+        # filing on the web is unchanged.
+        if ambassador is None:
+            caller_ambassador = await self._caller_editing_ambassador()
+            if caller_ambassador is not None:
+                ambassador = caller_ambassador
+                if retailer is None:
+                    retailer = getattr(event, "retailer", None)
+                if location is None:
+                    location = getattr(event, "location", None) or (
+                        getattr(retailer, "location", None) if retailer else None
+                    )
+                if state is None:
+                    state = getattr(event, "state", None) or (
+                        getattr(location, "state", None) if location else None
+                    )
+
         # Resolve once (async) before the sync transaction: may the caller
         # set the `approved` flag? False for BAs — blocks self-approval.
         can_set_approval = await self._caller_can_set_recap_approval()
