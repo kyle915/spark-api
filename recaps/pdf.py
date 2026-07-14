@@ -925,6 +925,47 @@ def _aggregate_engagements(recaps: Iterable) -> dict[str, int]:
     return totals
 
 
+def _aggregate_units_sold(recaps: Iterable) -> int:
+    """Sum "total units sold" across recaps for the cover page.
+
+    This is the generic "units moved" headline, matching the definition
+    ``recaps/report_service.py`` uses for its ``products_sold`` KPI so the
+    campaign report and the dashboard agree:
+
+      * Custom recap (Neutonic/Borjomi/Girl Beer) → the canonical
+        ``recaps.types._sold_units_from_fields`` matcher over its
+        CustomFieldValue (name, value) pairs. That reads the cans/packs
+        SKU fields, falling back to a "sold/bought/purchased" field
+        (e.g. Neutonic's "How many packs did consumers purchase?"), and
+        returns None when the template has no sales field at all — those
+        contribute 0 rather than a misleading number.
+      * Legacy recap → the typed ``products_sold`` column (auto-filled
+        from cans + packs on the legacy recap form).
+
+    Reuses the shared matcher rather than re-implementing label matching
+    (which the codebase deliberately keeps in one place).
+    """
+    from recaps.types import _sold_units_from_fields
+
+    total = 0
+    for recap in recaps:
+        custom_values = _related_items(recap, "custom_field_value")
+        if custom_values:
+            pairs = [
+                (
+                    getattr(getattr(cfv, "custom_field", None), "name", None),
+                    getattr(cfv, "value", None),
+                )
+                for cfv in custom_values
+            ]
+            sold = _sold_units_from_fields(pairs)
+            if sold is not None:
+                total += int(sold)
+        else:
+            total += int(getattr(recap, "products_sold", 0) or 0)
+    return total
+
+
 def _format_date_range(recaps: list) -> str:
     """Earliest → latest event date label for the cover page. Falls back
     to '—' when no events have a usable date.
@@ -964,6 +1005,7 @@ def build_campaign_report_pdf(
 
     recap_objs = [r for (r, _imgs) in recaps_with_images]
     totals = _aggregate_engagements(recap_objs)
+    units_sold = _aggregate_units_sold(recap_objs)
     date_range = _format_date_range(recap_objs)
     count = len(recap_objs)
 
@@ -986,12 +1028,12 @@ def build_campaign_report_pdf(
           <strong>{totals['first_time_consumers']:,}</strong>
         </div>
         <div>
-          <span>Brand Aware</span>
-          <strong>{totals['brand_aware_consumers']:,}</strong>
-        </div>
-        <div>
           <span>Willing To Buy</span>
           <strong>{totals['willing_to_purchase_consumers']:,}</strong>
+        </div>
+        <div>
+          <span>Total Units Sold</span>
+          <strong>{units_sold:,}</strong>
         </div>
       </div>
     </section>
