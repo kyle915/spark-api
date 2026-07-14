@@ -3032,6 +3032,75 @@ class AuditTenantConsumersView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class AuditTenantAccountSpendView(View):
+    """GET/POST `/internal/cron/audit-tenant-account-spend`.
+
+    READ-ONLY per-recap account / product-spend breakdown for ONE tenant —
+    sums the dollar amount logged on each recap as account/corporate-card spend
+    (custom "Account/Amount/Product Spend" fields + legacy
+    ``Recap.account_spend_amount``) and prints a money-ish field census so the
+    true "product spend" field is visible before anyone trusts the total. Fires
+    the `audit_tenant_account_spend` command; the response `log` is the table.
+
+    Query params:
+      - tenant: id / request-url-name / name (required)
+      - year: int (optional; default = all-time / every recap ever)
+      - all_time: "1"/"true"/"yes" — explicit all-time (also the default)
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        tenant = request.GET.get("tenant") or request.POST.get("tenant")
+        if not tenant:
+            return JsonResponse(
+                {"ok": False, "error": "tenant-required (id / name / url-name)"},
+                status=400,
+            )
+        raw = (
+            request.GET.get("all_time") or request.POST.get("all_time") or ""
+        ).lower()
+        kwargs: dict = {
+            "tenant": str(tenant),
+            "all_time": raw in ("1", "true", "yes", "on"),
+        }
+        year = request.GET.get("year") or request.POST.get("year")
+        if year:
+            try:
+                kwargs["year"] = int(year)
+            except ValueError:
+                return JsonResponse(
+                    {"ok": False, "error": "year-must-be-int"}, status=400
+                )
+
+        out = io.StringIO()
+        try:
+            call_command("audit_tenant_account_spend", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("Tenant account-spend audit cron failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "log": out.getvalue(),
+                },
+                status=500,
+            )
+        return JsonResponse(
+            {"ok": True, "tenant": str(tenant), "log": out.getvalue()}
+        )
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class CampaignToDateView(View):
     """GET/POST `/internal/cron/campaign-to-date`.
 
@@ -5179,6 +5248,7 @@ def _registered_views() -> dict[str, Any]:
         "backfill-girlbeer-receipts": BackfillGirlBeerReceiptsView,
         "audit-tenant-onboarding": AuditTenantOnboardingView,
         "audit-tenant-consumers": AuditTenantConsumersView,
+        "audit-tenant-account-spend": AuditTenantAccountSpendView,
         "campaign-to-date": CampaignToDateView,
         "dedupe-skills": DedupeSkillsView,
         "apply-girl-beer-branding": ApplyGirlBeerBrandingView,
