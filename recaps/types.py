@@ -1403,6 +1403,10 @@ class ImportConnecteamRecapPdfResponse:
     custom_recap: CustomRecap | None = None
     matched_count: int = 0
     unmatched_count: int = 0
+    # How many embedded photos we pulled out of the PDF and attached to the
+    # recap. 0 means the PDF carried no usable images — the frontend uses
+    # this to route the admin into the manual photo-upload workflow.
+    images_attached: int = 0
     stats: list[ImportConnecteamRecapPdfStat] = strawberry.field(
         default_factory=list,
     )
