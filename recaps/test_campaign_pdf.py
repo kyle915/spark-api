@@ -17,6 +17,7 @@ import pytest
 
 from recaps.pdf import (
     _aggregate_engagements,
+    _aggregate_units_sold,
     _extract_body,
     _format_date_range,
     build_campaign_report_pdf,
@@ -128,6 +129,64 @@ def test_aggregate_engagements_ignores_non_numeric():
     assert totals["first_time_consumers"] == 0
     assert totals["brand_aware_consumers"] == 0
     assert totals["willing_to_purchase_consumers"] == 8
+
+
+# ─── _aggregate_units_sold ───────────────────────────────────────
+
+
+def _make_custom_recap(field_pairs):
+    """Synthetic custom recap whose `custom_field_value.all()` yields rows
+    with `.custom_field.name` + `.value` — the shape the units matcher
+    reads (Neutonic/Borjomi/Girl Beer store sold units as free-text
+    custom fields)."""
+    cfvs = [
+        SimpleNamespace(custom_field=SimpleNamespace(name=name), value=value)
+        for name, value in field_pairs
+    ]
+    return SimpleNamespace(custom_field_value=_RelatedList(cfvs))
+
+
+def _make_legacy_recap(products_sold):
+    """Legacy recap: no custom fields, a typed products_sold column."""
+    return SimpleNamespace(products_sold=products_sold)
+
+
+def test_aggregate_units_sold_legacy_sums_products_sold():
+    recaps = [_make_legacy_recap(120), _make_legacy_recap(30)]
+    assert _aggregate_units_sold(recaps) == 150
+
+
+def test_aggregate_units_sold_legacy_handles_none():
+    # products_sold can be NULL on a legacy recap → treated as 0.
+    recaps = [_make_legacy_recap(None), _make_legacy_recap(45)]
+    assert _aggregate_units_sold(recaps) == 45
+
+
+def test_aggregate_units_sold_custom_reads_packs_field():
+    # Matches the Neutonic recap: "How many packs did consumers purchase?"
+    recap = _make_custom_recap(
+        [
+            ("How many consumers were sampled?", "370"),
+            ("How many packs did consumers purchase?", "86"),
+        ]
+    )
+    assert _aggregate_units_sold([recap]) == 86
+
+
+def test_aggregate_units_sold_custom_without_sales_field_contributes_zero():
+    # A template with no cans/packs/sold field → None → 0, not a crash.
+    recap = _make_custom_recap([("General demographics", "families")])
+    assert _aggregate_units_sold([recap]) == 0
+
+
+def test_aggregate_units_sold_mixes_legacy_and_custom():
+    recaps = [
+        _make_legacy_recap(100),
+        _make_custom_recap(
+            [("How many packs did consumers purchase?", "86")]
+        ),
+    ]
+    assert _aggregate_units_sold(recaps) == 186
 
 
 # ─── _format_date_range ──────────────────────────────────────────
@@ -248,6 +307,44 @@ def test_build_campaign_report_pdf_renders_cover_with_title_and_count():
     assert html.find("Recap A") < html.find("Recap B")
     assert html.count('class="recap-detail"') == 2
     assert "page-break-before: always" in html
+
+
+def test_cover_shows_total_units_sold_and_drops_brand_aware():
+    # Per Kyle's request: the cover's 4th stat card is now "Total Units
+    # Sold" (summed from each recap), and the old "Brand Aware" card is
+    # gone from the campaign cover.
+    recap = _empty_engagement_recap("Recap A")
+    recap.products_sold = 42  # legacy units-moved column
+
+    captured = {}
+
+    class FakeHTML:
+        def __init__(self, string):
+            captured["html"] = string
+
+        def write_pdf(self, stylesheets=None):  # noqa: ARG002
+            return b"%PDF-1.4 fake"
+
+    class FakeCSS:
+        def __init__(self, string):  # noqa: ARG002
+            pass
+
+    with patch("weasyprint.HTML", FakeHTML), patch("weasyprint.CSS", FakeCSS):
+        build_campaign_report_pdf(
+            title="Neutonic · Campaign Report",
+            subtitle="Campaign Report",
+            recaps_with_images=[(recap, [])],
+        )
+
+    html = captured["html"]
+    # Scope assertions to the COVER (everything before the first per-recap
+    # detail block). A legacy recap's own detail body still renders a
+    # "Brand Aware" engagement row — Kyle only asked to drop it from the
+    # cover ("1st sheet"), not from the per-recap pages.
+    cover = html.split('class="recap-detail"', 1)[0]
+    assert "Total Units Sold" in cover
+    assert ">42<" in cover  # the summed units render on the cover
+    assert "Brand Aware" not in cover
 
 
 def test_build_campaign_report_pdf_singular_label_for_one_recap():
