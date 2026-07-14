@@ -3032,6 +3032,94 @@ class AuditTenantConsumersView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class CampaignToDateView(View):
+    """GET/POST `/internal/cron/campaign-to-date`.
+
+    READ-ONLY: builds the existing per-Request Client Campaign Report
+    (`recaps.report_service.build_campaign_report`) for EVERY live request
+    of ONE tenant and returns the reports as a JSON array — the raw
+    material for a whole-campaign "to date" deliverable when a tenant's
+    campaign spans many tracker Requests (one per event) rather than one
+    multi-event Request. Each entry also carries its `shareToken` so any
+    single request's public report link
+    (`/api/public/report/<token>[/pdf]`) can be handed out as-is.
+
+    Query params:
+      - tenant: id / request-url-name / name (required)
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        ident = request.GET.get("tenant") or request.POST.get("tenant")
+        if not ident:
+            return JsonResponse(
+                {"ok": False, "error": "tenant-required (id / name / url-name)"},
+                status=400,
+            )
+
+        from django.utils import timezone as _tz
+
+        from recaps import report_service
+        from recaps.management.commands.audit_tenant_consumers import (
+            _resolve_tenant,
+        )
+        from recaps.report_tokens import make_report_token
+
+        try:
+            tenant = _resolve_tenant(str(ident))
+        except Exception as exc:  # noqa: BLE001 — CommandError et al.
+            return JsonResponse(
+                {"ok": False, "error": "tenant-not-found", "detail": str(exc)},
+                status=404,
+            )
+
+        generated_at = _tz.now().isoformat()
+        qs = (
+            report_service.report_request_queryset()
+            .filter(tenant_id=tenant.id)
+            .order_by("start_time", "id")
+        )
+
+        reports = []
+        errors = []
+        for req in qs:
+            try:
+                data = report_service.build_campaign_report(
+                    req, generated_at=generated_at
+                )
+            except Exception as exc:  # noqa: BLE001 — skip, keep going
+                logger.exception(
+                    "campaign-to-date: report build failed for request %s",
+                    req.id,
+                )
+                errors.append({"requestId": str(req.id), "error": str(exc)})
+                continue
+            payload = report_service.report_to_dict(data)
+            payload["shareToken"] = make_report_token(req.id)
+            reports.append(payload)
+
+        return JsonResponse(
+            {
+                "ok": True,
+                "tenant": {"id": tenant.id, "name": tenant.name},
+                "generatedAt": generated_at,
+                "count": len(reports),
+                "reports": reports,
+                "errors": errors,
+            }
+        )
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class SetCustomRecapFieldView(View):
     """GET/POST `/internal/cron/set-custom-recap-field`.
 
@@ -5091,6 +5179,7 @@ def _registered_views() -> dict[str, Any]:
         "backfill-girlbeer-receipts": BackfillGirlBeerReceiptsView,
         "audit-tenant-onboarding": AuditTenantOnboardingView,
         "audit-tenant-consumers": AuditTenantConsumersView,
+        "campaign-to-date": CampaignToDateView,
         "dedupe-skills": DedupeSkillsView,
         "apply-girl-beer-branding": ApplyGirlBeerBrandingView,
         "shift-confirmations": SendShiftConfirmationsView,
