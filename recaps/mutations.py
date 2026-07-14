@@ -5409,8 +5409,13 @@ class RecapMutations:
                 else f"Imported from Connecteam · {stamp}"
             )
 
-        def _create() -> models.CustomRecap:
+        def _create() -> tuple[models.CustomRecap, int]:
             from django.core.files.base import ContentFile
+
+            # Count of embedded PDF photos actually attached — returned so
+            # the frontend can send the admin to upload photos when the PDF
+            # carried none.
+            images_attached = 0
 
             with transaction.atomic():
                 recap = models.CustomRecap.objects.create(
@@ -5532,6 +5537,7 @@ class RecapMutations:
                             save=False,
                         )
                         file_row.save()
+                        images_attached += 1
                         # Receipts live in Evidences under "Receipts" — NOT
                         # also routed onto the receipt field (Kyle picked
                         # Evidences over the dedicated field). Only non-receipt
@@ -5567,10 +5573,10 @@ class RecapMutations:
                         "recap_id=%s", recap.id,
                     )
 
-                return recap
+                return recap, images_attached
 
         try:
-            recap = await sync_to_async(_create)()
+            recap, images_attached = await sync_to_async(_create)()
         except Exception as e:
             logging.getLogger(__name__).exception(
                 "connecteam-import: DB write failed event_id=%s", event.id,
@@ -5595,17 +5601,23 @@ class RecapMutations:
             )
             for mr in match_results
         ]
+        photo_note = (
+            f"{images_attached} photo(s) attached"
+            if images_attached
+            else "no photos found in the PDF"
+        )
         return build_mutation_response(
             types.ImportConnecteamRecapPdfResponse,
             success=True,
             message=(
                 f"Drafted recap from PDF: {matched} field(s) imported, "
-                f"{unmatched} unmatched."
+                f"{unmatched} unmatched, {photo_note}."
             ),
             input_obj=input,
             custom_recap=recap,
             matched_count=matched,
             unmatched_count=unmatched,
+            images_attached=images_attached,
             stats=stats,
         )
 
