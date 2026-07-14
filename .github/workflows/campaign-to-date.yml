@@ -1,0 +1,64 @@
+name: Campaign to date report data
+
+# Manually fires `/internal/cron/campaign-to-date` on Cloud Run — READ-ONLY.
+# Builds the existing per-Request Client Campaign Report for EVERY live
+# request of ONE tenant and returns them as JSON (KPIs, event roster, photo
+# URLs, BA roster, consumer quotes, per-request share tokens). The raw
+# material for a whole-campaign "to date" client deliverable.
+#
+# The full response JSON is uploaded as the `campaign-to-date` artifact
+# (it's usually too big to read comfortably in the step log); a compact
+# per-request KPI summary prints in the log. Secret-gated via X-Cron-Secret
+# (shared INTERNAL_CRON_SECRET) — the secret is a HEADER, never in the URL.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tenant:
+        description: "Tenant: id, request-url-name, or name (e.g. 'stone house bread')."
+        required: true
+        type: string
+
+jobs:
+  fire-campaign-to-date:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire campaign-to-date cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/campaign-to-date
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          TENANT: ${{ github.event.inputs.tenant }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+
+          # URL-encode the tenant (it may contain spaces).
+          TENANT_ENC=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$TENANT")
+
+          STATUS=$(curl -sS -o campaign-to-date.json -w '%{http_code}' \
+            -X POST "$CRON_URL?tenant=$TENANT_ENC" \
+            -H "X-Cron-Secret: $CRON_SECRET")
+          echo "HTTP $STATUS"
+
+          # Compact per-request KPI summary in the log; full JSON goes to
+          # the artifact.
+          if command -v jq >/dev/null 2>&1; then
+            jq -r '"tenant: \(.tenant.name // "?")  requests: \(.count // 0)",
+                   (.reports[]? | "  #\(.requestId)  \(.title)  \(.dateRange // "-")  events=\(.kpis.events) recaps=\(.kpis.recaps) consumers=\(.kpis.consumersReached) samples=\(.kpis.samplesDistributed) sold=\(.kpis.productsSold) photos=\(.photos | length)")' \
+              campaign-to-date.json || cat campaign-to-date.json
+          else
+            cat campaign-to-date.json
+          fi
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS — see body above."
+            exit 1
+          fi
+
+      - name: Upload full response JSON
+        uses: actions/upload-artifact@v4
+        with:
+          name: campaign-to-date
+          path: campaign-to-date.json
