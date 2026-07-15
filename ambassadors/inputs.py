@@ -612,15 +612,24 @@ class GoogleSignInInput(SparkGraphQLInput):
 
 @strawberry.input
 class InviteAmbassadorToShiftInput(SparkGraphQLInput):
-    """Admin invites a specific BA to a specific event.
+    """Admin invites — or directly ASSIGNS — a specific BA to a specific event.
 
-    Creates an AmbassadorEvent (is_approved=False), which fires the
-    existing post_save signal → "New shift offered" push to the
-    BA's mobile device.
+    Default (``approved=False``, "Invite"): creates an AmbassadorEvent
+    (is_approved=False) → "New shift offered" push; the BA must accept before
+    the shift books and becomes visible.
+
+    ``approved=True`` ("Assign"): books the BA directly (is_approved=True) via
+    the shared ``_ensure_approved_booking`` helper — idempotently flipping an
+    existing invite to approved instead of erroring — and sends a "You're
+    booked" push. The shift appears immediately on the BA's Today / My Shifts
+    screens with a clock-in entry point; no BA action required. This is the
+    reliable one-tap assign path (an invited BA who never taps accept was the
+    main "assigned but the BA can't find it" failure).
     """
 
     ambassador_id: strawberry.ID
     event_id: strawberry.ID
+    approved: bool = False
 
 
 @strawberry.input
@@ -676,6 +685,9 @@ class BulkInviteToShiftInput(SparkGraphQLInput):
 
     event_id: strawberry.ID
     ambassador_ids: List[strawberry.ID]
+    # When True, every BA is ASSIGNED (booked approved) rather than invited —
+    # threaded straight through to the per-BA invite_ambassador_to_shift path.
+    approved: bool = False
 
 
 @strawberry.input

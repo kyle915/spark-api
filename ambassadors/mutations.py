@@ -321,6 +321,109 @@ class AmbassadorMutations:
                 client_mutation_id=input.client_mutation_id,
             )
 
+        # "Assign" — book the BA directly (approved) instead of sending an
+        # offer. Routes through the shared _ensure_approved_booking helper so
+        # it matches every other hire/approve path AND idempotently flips an
+        # existing invite to approved (re-assigning is safe, never errors).
+        # The shift then shows up instantly on the BA's Today / My Shifts
+        # screens with a clock-in entry point — no BA acceptance needed.
+        if getattr(input, "approved", False):
+            from asgiref.sync import sync_to_async
+
+            from jobs.mutations import _ensure_approved_booking
+
+            try:
+                action = await sync_to_async(_ensure_approved_booking)(
+                    ambassador_id=ambassador.id,
+                    event_id=event.id,
+                    tenant_id=event.tenant_id,
+                    creator_id=getattr(user, "id", None),
+                )
+            except Exception as exc:  # noqa: BLE001
+                return InviteAmbassadorToShiftResponse(
+                    success=False,
+                    message=f"Could not assign: {exc}",
+                    client_mutation_id=input.client_mutation_id,
+                )
+
+            ae = await AmbassadorEvent.objects.aget(
+                ambassador=ambassador, event=event
+            )
+
+            # Best-effort "you're booked" push (distinct from the offer push).
+            # type=shift_confirmation routes the mobile app to the Shifts tab.
+            try:
+                from ambassadors.push import send_push_to_user
+
+                event_label = getattr(event, "name", None) or "your shift"
+                await send_push_to_user(
+                    ambassador.user_id,
+                    title="You're booked",
+                    body=(
+                        f"You've been assigned to {event_label}. "
+                        "Tap for details."
+                    ),
+                    data={
+                        "type": "shift_confirmation",
+                        "ambassadorEventUuid": str(ae.uuid),
+                        "eventUuid": str(event.uuid),
+                    },
+                )
+            except Exception:
+                import logging
+
+                logging.getLogger(__name__).exception(
+                    "assign push failed for ambassador_event=%s", ae.uuid
+                )
+
+            # Activity-log entry on the parent request (best-effort).
+            try:
+                from asgiref.sync import sync_to_async as _s2a
+                from events.models import Request, RequestActivityLog
+
+                if getattr(event, "request_id", None):
+                    req = await _s2a(
+                        lambda: Request.objects.filter(
+                            id=event.request_id
+                        ).first()
+                    )()
+                    if req is not None:
+                        ba_name = (
+                            " ".join(
+                                filter(
+                                    None,
+                                    [
+                                        getattr(ambassador, "first_name", None),
+                                        getattr(ambassador, "last_name", None),
+                                    ],
+                                )
+                            )
+                            or getattr(ambassador, "email", "")
+                            or "BA"
+                        )
+                        await _s2a(RequestActivityLog.objects.create)(
+                            tenant=event.tenant,
+                            request=req,
+                            kind=RequestActivityLog.KIND_BA_INVITED,
+                            actor_user=(
+                                user if getattr(user, "id", None) else None
+                            ),
+                            summary=f"Assigned {ba_name}",
+                        )
+            except Exception:
+                pass
+
+            return InviteAmbassadorToShiftResponse(
+                success=True,
+                message=(
+                    "This BA is already assigned to this shift."
+                    if action == "already-approved"
+                    else "Assigned — the BA is booked and notified."
+                ),
+                client_mutation_id=input.client_mutation_id,
+                ambassador_event_uuid=strawberry.ID(str(ae.uuid)),
+            )
+
         if await AmbassadorEvent.objects.filter(
             ambassador=ambassador, event=event
         ).aexists():
@@ -608,6 +711,7 @@ class AmbassadorMutations:
             single_input = inputs.InviteAmbassadorToShiftInput(
                 ambassador_id=ambassador_id,
                 event_id=input.event_id,
+                approved=getattr(input, "approved", False),
             )
             try:
                 # Reuse the EXACT single-invite path (create + dedupe +
@@ -631,14 +735,15 @@ class AmbassadorMutations:
             else:
                 skipped += 1
 
+        verb = "Assigned" if getattr(input, "approved", False) else "Invited"
         if invited and skipped:
-            message = f"Invited {invited} BA(s); skipped {skipped}."
+            message = f"{verb} {invited} BA(s); skipped {skipped}."
         elif invited:
-            message = f"Invited {invited} BA(s)."
+            message = f"{verb} {invited} BA(s)."
         elif skipped:
             message = (
-                f"No new invites sent; {skipped} BA(s) were already "
-                "invited or could not be invited."
+                f"No changes; {skipped} BA(s) were already booked "
+                "or could not be processed."
             )
         else:
             message = "No ambassadors provided."

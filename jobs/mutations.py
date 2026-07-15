@@ -1357,6 +1357,25 @@ class ManageAmbassadorJobMutationService(SparkGraphQLMixin):
         ambassador_job.updated_by = user
         await sync_to_async(ambassador_job.save)()
 
+        # ACCEPT must also create the approved AmbassadorEvent booking —
+        # otherwise the BA shows "accepted" here but the shift never appears on
+        # their Today / My Shifts screens (no clock-in). Route through the same
+        # helper every hire/approve path uses; re-fetch with the job loaded so
+        # the (sync) FK access inside the helper is safe in this async path.
+        # Best-effort: a booking hiccup must not undo the accept that saved.
+        if input.action == inputs.ManageAmbassadorJobAssignmentAction.ACCEPT:
+            try:
+                aj_with_job = await sync_to_async(
+                    models.AmbassadorJob.objects.select_related("job").get
+                )(id=ambassador_job.id)
+                await _confirm_booking_for_ambassador_job(aj_with_job, user)
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    "manage_assignment ACCEPT: booking confirm failed for "
+                    "ambassador_job=%s",
+                    ambassador_job.id,
+                )
+
         action_messages = {
             inputs.ManageAmbassadorJobAssignmentAction.ACCEPT: "Ambassador accepted for job.",
             inputs.ManageAmbassadorJobAssignmentAction.REJECT: "Ambassador rejected for job.",
@@ -1424,6 +1443,28 @@ class ManageAmbassadorJobMutationService(SparkGraphQLMixin):
                 ).get
             )(id=ambassador_job.id)
             await _notify_unassigned_ambassador_by_email(ambassador_job)
+            # Also remove the AmbassadorEvent booking so the shift actually
+            # drops off the BA's schedule. Deleting only the AmbassadorJob used
+            # to orphan the booking — leaving a "ghost" shift on their My Shifts
+            # screen with a live clock-in button. Best-effort (swallow, e.g. a
+            # RESTRICT from existing attendance) so unassign never crashes.
+            try:
+                _event_id = getattr(
+                    getattr(ambassador_job, "job", None), "event_id", None
+                )
+                _amb_id = getattr(ambassador_job, "ambassador_id", None)
+                if _event_id and _amb_id:
+                    await sync_to_async(
+                        lambda: AmbassadorEvent.objects.filter(
+                            ambassador_id=_amb_id, event_id=_event_id
+                        ).delete()
+                    )()
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    "unassign: failed to remove AmbassadorEvent booking for "
+                    "ambassador_job=%s",
+                    getattr(ambassador_job, "id", None),
+                )
             await sync_to_async(ambassador_job.delete)()
         except ProtectedError:
             return build_mutation_response(
