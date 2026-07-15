@@ -753,6 +753,15 @@ class Event(models.Model):
     mileage_rate = models.DecimalField(
         max_digits=6, decimal_places=3, null=True, blank=True,
     )
+    # When True, this event is EXCLUDED from the tenant dashboard KPIs, the
+    # metro/week breakdown, the geographic map, and the reporting rollups
+    # (recaps.tenant_overview + field_sampling_report) — for a one-off event
+    # in a different campaign phase/market that would otherwise skew a
+    # program's numbers (e.g. Feel Free's spring CO/CA activations vs the
+    # summer FL/TX sampling program). default False = counts normally, so
+    # this is a no-op for every existing event. The recap rows themselves are
+    # left fully intact — this only scopes them out of aggregate reporting.
+    exclude_from_dashboard = models.BooleanField(default=False, db_index=True)
     # Leaving these fields nullable, we'll validate them in the schema
     # to avoid conflicts with the migrations
     event_type = models.ForeignKey(

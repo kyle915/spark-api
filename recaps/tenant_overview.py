@@ -213,7 +213,14 @@ def _filter_event_window(queryset, prefix: str, window: tuple | None):
     (year / quarter / month / week) queries move off ``created_at``. Rows
     whose event has none of date/start_time/request.date are excluded (no
     date to place them in a period — same as the hero).
+
+    Events flagged ``exclude_from_dashboard`` are dropped from EVERY path
+    (windowed AND all-time), since every dashboard/report queryset funnels
+    through here — a one-off event in a different campaign phase/market
+    shouldn't skew a program's KPIs, metro breakdown, or geo map. ``default
+    False`` makes this a no-op for every normal event.
     """
+    queryset = queryset.filter(**{f"{prefix}exclude_from_dashboard": False})
     if window is None:
         return queryset
     start, end = window
@@ -1050,6 +1057,37 @@ def _grouped_count(queryset, group_path: str) -> dict[str, int]:
     return out
 
 
+def _grouped_sum_state_or_address(
+    queryset, state_path: str, address_path: str, sum_field: str
+) -> dict[str, int]:
+    """``{state_code: SUM(sum_field)}`` like :func:`_grouped_sum`, but when a
+    row's ``state_path`` (the event State FK) is blank it falls back to the
+    state parsed out of ``address_path`` (the event address) — the exact same
+    precedence the per-recap consumers/products loop in
+    :func:`_custom_market_kpis` already uses.
+
+    Without this, structured samples / engagements on events that carry a full
+    address but NO State FK (Feel Free's summer FL/TX sampling program) group
+    under a null code and get dropped from the map, undercounting the state
+    view. Grouping is still a DB-side ``GROUP BY (state, address)`` — only the
+    small set of (state, address) buckets comes back, never a full row.
+    """
+    from events.routing import extract_state_code
+
+    rows = (
+        queryset.values(state_path, address_path)
+        .annotate(_v=Sum(sum_field))
+        .values_list(state_path, address_path, "_v")
+    )
+    out: dict[str, int] = {}
+    for code, address, value in rows:
+        code = code or extract_state_code(address)
+        if not code:
+            continue
+        out[code] = out.get(code, 0) + int(value or 0)
+    return out
+
+
 def _legacy_market_kpis(tenant_id: int, year: int | None = None) -> dict[str, dict]:
     """Per-state legacy :class:`recaps.models.Recap` KPIs for one tenant.
 
@@ -1145,18 +1183,22 @@ def _custom_market_kpis(tenant_id: int, year: int | None = None) -> dict[str, di
     def _bucket(code: str) -> dict:
         return per_state.setdefault(code, {})
 
-    # Typed engagement column groups cleanly in SQL.
-    for code, value in _grouped_sum(
-        custom_recaps, _CUSTOM_STATE_PATH, "total_engagements"
+    # Typed engagement column groups cleanly in SQL — same address fallback as
+    # the samples/consumers below so a no-State-FK event isn't dropped.
+    for code, value in _grouped_sum_state_or_address(
+        custom_recaps, _CUSTOM_STATE_PATH, "event__address", "total_engagements"
     ).items():
         _bucket(code)["total_engagements"] = (
             _bucket(code).get("total_engagements", 0) + value
         )
 
-    # Structured custom samples group cleanly in SQL.
-    structured_by_state = _grouped_sum(
+    # Structured custom samples group cleanly in SQL — with the address
+    # fallback so no-State-FK events (Feel Free's FL/TX program) still land on
+    # the map instead of being dropped under a null code.
+    structured_by_state = _grouped_sum_state_or_address(
         structured_samples_qs,
         f"custom_recap__{_CUSTOM_STATE_PATH}",
+        "custom_recap__event__address",
         "quantity",
     )
 

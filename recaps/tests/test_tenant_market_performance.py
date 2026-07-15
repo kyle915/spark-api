@@ -280,6 +280,72 @@ class TestTenantMarketPerformance(AmbassadorsGraphQLTestCase):
     def test_unknown_tenant_is_empty(self):
         assert tenant_market_performance(987654321) == []
 
+    def test_exclude_from_dashboard_scopes_event_out(self):
+        # An event flagged ``exclude_from_dashboard`` is dropped from EVERY
+        # per-state figure (event + recap counts AND KPIs) even though its
+        # recap rows stay intact — the mechanism that keeps Feel Free's spring
+        # CO/CA activations off the summer FL/TX program's map.
+        base = {r["state"]: r for r in tenant_market_performance(self.tenant.id)}
+        tx_engagements = base["TX"]["total_engagements"]
+        tx_events = base["TX"]["event_count"]
+        tx_recaps = base["TX"]["recap_count"]
+
+        flagged = self.create_event(
+            name="HEB Dallas (spring)",
+            tenant=self.tenant,
+            state=self.tx,
+            exclude_from_dashboard=True,
+        )
+        recap_models.Recap.objects.create(
+            name="tx flagged legacy",
+            event=flagged,
+            total_engagements=500,
+            created_by=self.system_user,
+            updated_by=self.system_user,
+        )
+
+        after = {r["state"]: r for r in tenant_market_performance(self.tenant.id)}
+        # The flagged event + its 500-engagement recap are invisible on the map.
+        assert after["TX"]["total_engagements"] == tx_engagements
+        assert after["TX"]["event_count"] == tx_events
+        assert after["TX"]["recap_count"] == tx_recaps
+        # ...but the recap row itself was NOT deleted (data preserved).
+        assert recap_models.Recap.objects.filter(event=flagged).exists()
+
+    def test_structured_samples_placed_by_address_when_no_state_fk(self):
+        # A custom recap whose event has NO State FK but a full address must
+        # still land its STRUCTURED samples on the map, under the state parsed
+        # from the address (Feel Free's summer FL/TX program) — instead of
+        # grouping under a null code and being dropped (the geo undercount).
+        fl_event = self.create_event(
+            name="Publix Miami",
+            tenant=self.tenant,
+            address="1100 Biscayne Blvd, Miami, FL 33132, USA",
+            state=None,
+        )
+        fl_custom = recap_models.CustomRecap.objects.create(
+            name="fl custom",
+            event=fl_event,
+            tenant=self.tenant,
+            custom_recap_template=self.template,
+            total_engagements=12,
+            created_by=self.system_user,
+            updated_by=self.system_user,
+        )
+        recap_models.CustomRecapProductSample.objects.create(
+            custom_recap=fl_custom,
+            product=self._product("Kava Mate"),
+            quantity=250,
+            created_by=self.system_user,
+            updated_by=self.system_user,
+        )
+
+        by = {r["state"]: r for r in tenant_market_performance(self.tenant.id)}
+        # Placed on the map via the address fallback, not dropped under null.
+        assert "FL" in by
+        assert by["FL"]["samples_distributed"] == 250
+        assert by["FL"]["total_engagements"] == 12
+
     # -- GraphQL resolver tests -----------------------------------------
 
     @pytest.mark.asyncio
