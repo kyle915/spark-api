@@ -762,6 +762,20 @@ class Event(models.Model):
     # this is a no-op for every existing event. The recap rows themselves are
     # left fully intact — this only scopes them out of aggregate reporting.
     exclude_from_dashboard = models.BooleanField(default=False, db_index=True)
+    # --- Walk-up self-serve clock-in --------------------------------------
+    # A short code an admin generates for this event so a BA can clock in +
+    # file a recap WITHOUT being pre-assigned: they enter the code (or scan
+    # its QR) in the app, which resolves to this event + brand and creates a
+    # walk-up AmbassadorEvent (source="walkup", pending admin review). NULL =
+    # walk-ups disabled for this event; generating a code enables them,
+    # revoking clears it. Codes are minted uppercase from an unambiguous
+    # alphabet and matched case-insensitively in the resolver.
+    walkup_code = models.CharField(
+        max_length=12, null=True, blank=True, unique=True, db_index=True,
+    )
+    # When the code stops working. Set to the event day + a buffer at
+    # generation time; a resolve after this instant returns "expired".
+    walkup_code_expires_at = models.DateTimeField(null=True, blank=True)
     # Leaving these fields nullable, we'll validate them in the schema
     # to avoid conflicts with the migrations
     event_type = models.ForeignKey(

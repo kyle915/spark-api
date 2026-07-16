@@ -255,6 +255,31 @@ class AmbassadorEvent(models.Model):
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     is_approved = models.BooleanField(default=False)
 
+    # How this booking came to exist. "walkup" rows are self-serve clock-ins
+    # created from an event code (see Event.walkup_code) with NO prior
+    # assignment; a walk-up by a brand-new account stays is_approved=False
+    # (pending admin review) and is excluded from KPI/payroll rollups until an
+    # admin confirms it. Everything created before this field existed is
+    # "admin". Purely descriptive for the non-walkup values today.
+    SOURCE_ADMIN = "admin"
+    SOURCE_APPLY = "apply"
+    SOURCE_CLAIM = "claim"
+    SOURCE_ASSIGN = "assign"
+    SOURCE_WALKUP = "walkup"
+    SOURCE_CHOICES = [
+        (SOURCE_ADMIN, "Admin"),
+        (SOURCE_APPLY, "Applied"),
+        (SOURCE_CLAIM, "Claimed open shift"),
+        (SOURCE_ASSIGN, "Assigned"),
+        (SOURCE_WALKUP, "Walk-up"),
+    ]
+    source = models.CharField(
+        max_length=16,
+        choices=SOURCE_CHOICES,
+        default=SOURCE_ADMIN,
+        db_index=True,
+    )
+
     ambassador = models.ForeignKey(
         Ambassador,
         on_delete=models.RESTRICT,

@@ -1,6 +1,6 @@
 import strawberry
 
-from ambassadors import queries, mutations
+from ambassadors import queries, mutations, walkup
 from ambassadors.staffing import StaffingQueries, StaffingSuggestionQueries
 
 
@@ -19,6 +19,8 @@ class AmbassadorQuerySpark(
     queries.AttendanceQueries,
     queries.GroupTypeQueries,
     queries.AmbassadorGroupQueries,
+    # Walk-up self-serve clock-ins queue (admin review).
+    walkup.WalkupAdminQueries,
     # Admin notification center (web): the per-user push log + pending
     # shift-extension requests with inline approve/decline.
     queries.NotificationQueries,
@@ -44,6 +46,9 @@ class AmbassadorQueryClient(
     queries.AmbassadorGroupQueries,
     StaffingQueries,
     StaffingSuggestionQueries,
+    # Walk-up self-serve clock-ins queue (admin review) — the web app uses
+    # the CLIENTS schema.
+    walkup.WalkupAdminQueries,
     # Admin notification center (the web app uses the CLIENTS schema): the
     # per-user push log + pending shift-extension requests.
     queries.NotificationQueries,
@@ -65,6 +70,8 @@ class AmbassadorQueryMobile(
     queries.GroupTypeQueries,
     queries.NotificationQueries,
     queries.ReferralQueries,
+    # Walk-up self-serve clock-in: resolve an event code to its event+brand.
+    walkup.WalkupMobileQueries,
 ):
     pass
 
@@ -84,6 +91,8 @@ class AmbassadorMutationsMobile(
     mutations.AttendanceMutations,
     mutations.ShiftAttendanceMutations,
     mutations.NotificationMutations,
+    # Walk-up self-serve clock-in: start a walk-up shift from an event code.
+    walkup.WalkupMobileMutations,
 ):
     pass
 
@@ -93,6 +102,9 @@ class AmbassadorMutationsClient(
     AmbassadorMutations,
     mutations.GroupTypeMutations,
     mutations.AmbassadorGroupMutations,
+    # Walk-up self-serve clock-ins: generate/revoke event code + confirm/
+    # reject a walk-up (the web app uses the CLIENTS schema).
+    walkup.WalkupAdminMutations,
     # Admin notification center (the web app uses the CLIENTS schema): mark
     # notifications read + resolve (approve/decline) a shift-extension request.
     mutations.NotificationMutations,
