@@ -52,6 +52,7 @@ from recaps.pdf import (
     build_campaign_report_pdf,
     should_embed_recap_file,
     is_image_bytes,
+    downscale_image_bytes,
     IMAGE_EXTENSIONS,
 )
 from recaps.excel import build_recaps_xlsx
@@ -4344,6 +4345,12 @@ class RecapMutationService(SparkGraphQLMixin):
                     return None
                 if not data or not is_image_bytes(data):
                     return None
+                # Shrink full-res phone photos before they're base64-embedded
+                # into the WeasyPrint doc — a campaign report bundles many
+                # recaps × photos, and full-res bytes OOM/timeout the render
+                # (the "Failed to fetch" client saw). Best-effort: keeps the
+                # original on failure.
+                data = downscale_image_bytes(data)
                 cat = getattr(rf, "file_recap_category", None)
                 return (
                     idx,

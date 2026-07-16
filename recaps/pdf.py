@@ -249,6 +249,46 @@ def _convert_heic_to_jpeg_bytes(image_bytes: bytes) -> bytes | None:
         return None
 
 
+def downscale_image_bytes(
+    data: bytes, *, max_dim: int = 1400, quality: int = 80
+) -> bytes:
+    """Shrink a photo for PDF embedding: cap the longest side to ``max_dim``
+    and re-encode JPEG.
+
+    Full-res phone photos are multi-MB / ~3000-4000px; embedded at that size a
+    multi-recap campaign report (up to 50 recaps × several photos each) balloons
+    the WeasyPrint document past the container's memory + request timeout — the
+    request dies mid-render and the client sees a bare "Failed to fetch". A
+    report page shows each photo at a few hundred px, so 1400px @ q80 is
+    visually identical while ~10-20× smaller.
+
+    Best-effort: returns the ORIGINAL bytes on ANY failure (or if re-encoding
+    wouldn't shrink it), so a quirky image never drops out of the report.
+    """
+    try:
+        register_heif_opener()
+        with Image.open(BytesIO(data)) as im:
+            im = ImageOps.exif_transpose(im)  # honor rotation before resize
+            longest = max(im.size)
+            if longest > max_dim:
+                scale = max_dim / float(longest)
+                im = im.resize(
+                    (
+                        max(1, int(im.size[0] * scale)),
+                        max(1, int(im.size[1] * scale)),
+                    ),
+                    Image.LANCZOS,
+                )
+            out = BytesIO()
+            im.convert("RGB").save(
+                out, format="JPEG", quality=quality, optimize=True
+            )
+            result = out.getvalue()
+            return result if result and len(result) < len(data) else data
+    except Exception:
+        return data
+
+
 def bytes_to_data_uri(image_bytes: bytes) -> str | None:
     image_type = detect_image_type(image_bytes)
     if not image_type:
