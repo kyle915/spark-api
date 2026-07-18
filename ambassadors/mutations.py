@@ -172,6 +172,22 @@ class ApplyAmbassadorJobResponse:
     application: AmbassadorJobType | None = None
 
 
+@strawberry.input
+class BulkAssignAmbassadorInput:
+    ambassador_id: strawberry.ID
+    event_ids: list[strawberry.ID]
+    client_mutation_id: strawberry.ID | None = None
+
+
+@strawberry.type
+class BulkAssignAmbassadorResponse:
+    success: bool
+    message: str
+    assigned_count: int = 0
+    failed_count: int = 0
+    client_mutation_id: strawberry.ID | None = None
+
+
 async def _get_default_application_status(tenant_id: int) -> JobStatus | None:
     """Pick a sensible default status for a new application using the status slug."""
     for slug in ("pending", "apply"):
@@ -523,6 +539,115 @@ class AmbassadorMutations:
             message="Invite sent. The BA has been notified.",
             client_mutation_id=input.client_mutation_id,
             ambassador_event_uuid=strawberry.ID(str(ae.uuid)),
+        )
+
+    @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
+    async def bulk_assign_ambassador_to_events(
+        self,
+        info: strawberry.Info,
+        input: BulkAssignAmbassadorInput,
+    ) -> BulkAssignAmbassadorResponse:
+        """Book ONE ambassador onto MANY events in a single call (the Staffing
+        Board "assign this BA to every empty slot I clicked" action).
+
+        Each event is booked through the shared `_ensure_approved_booking`
+        helper — the exact same idempotent get-or-create/flip path used by the
+        single-shift Assign — so re-assigning is always safe and the shifts show
+        up instantly on the BA's Today / My Shifts screens. One summary push is
+        sent at the end rather than one per shift.
+        """
+        from asgiref.sync import sync_to_async
+
+        from jobs.mutations import _ensure_approved_booking
+
+        user = info.context.request.user
+
+        try:
+            resolved_ambassador_id = resolve_id_to_int(input.ambassador_id)
+            ambassador = await Ambassador.objects.select_related("user").aget(
+                id=resolved_ambassador_id
+            )
+        except (Ambassador.DoesNotExist, ValueError, TypeError, GraphQLError):
+            return BulkAssignAmbassadorResponse(
+                success=False,
+                message="Ambassador not found.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        # De-dupe while preserving order; ignore anything that won't decode.
+        seen: set[int] = set()
+        event_ids: list[int] = []
+        for raw in input.event_ids or []:
+            try:
+                eid = resolve_id_to_int(raw)
+            except (ValueError, TypeError, GraphQLError):
+                continue
+            if eid not in seen:
+                seen.add(eid)
+                event_ids.append(eid)
+
+        if not event_ids:
+            return BulkAssignAmbassadorResponse(
+                success=False,
+                message="No valid shifts were selected.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        assigned = 0
+        failed = 0
+        for eid in event_ids:
+            try:
+                event = await Event.objects.select_related("tenant").aget(id=eid)
+            except (Event.DoesNotExist, ValueError, TypeError):
+                failed += 1
+                continue
+            try:
+                await sync_to_async(_ensure_approved_booking)(
+                    ambassador_id=ambassador.id,
+                    event_id=event.id,
+                    tenant_id=event.tenant_id,
+                    creator_id=getattr(user, "id", None),
+                )
+                assigned += 1
+            except Exception:  # noqa: BLE001 — one bad shift shouldn't sink the batch
+                failed += 1
+
+        # One "you're booked" summary push (best-effort). type=shift_confirmation
+        # routes the mobile app to the Shifts tab, same as the single Assign.
+        if assigned:
+            try:
+                from ambassadors.push import send_push_to_user
+
+                shift_word = "shift" if assigned == 1 else "shifts"
+                await send_push_to_user(
+                    ambassador.user_id,
+                    title="You're booked",
+                    body=f"You've been assigned to {assigned} new {shift_word}. "
+                    "Open Spark to see your schedule.",
+                    data={"type": "shift_confirmation"},
+                )
+            except Exception:  # noqa: BLE001 — never fail the assign on a push error
+                pass
+
+        if not assigned:
+            return BulkAssignAmbassadorResponse(
+                success=False,
+                message="Could not assign the BA to any of the selected shifts.",
+                assigned_count=0,
+                failed_count=failed,
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        msg = f"Assigned {ambassador.user.first_name or 'the BA'} to {assigned} "
+        msg += "shift." if assigned == 1 else "shifts."
+        if failed:
+            msg += f" {failed} could not be assigned."
+        return BulkAssignAmbassadorResponse(
+            success=True,
+            message=msg,
+            assigned_count=assigned,
+            failed_count=failed,
+            client_mutation_id=input.client_mutation_id,
         )
 
     @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
