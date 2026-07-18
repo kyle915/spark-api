@@ -20,6 +20,8 @@ from .mutations import (
 )
 from events import queries
 from events.staffing_board import StaffingBoardQueries
+from events.live_board import LiveBoardQueries
+from events.payroll import PayrollQueries
 
 
 @strawberry.type
@@ -37,6 +39,8 @@ class EventQueryAmbassadors(
 class EventQueryClient(
     queries.EventQueries,
     StaffingBoardQueries,
+    LiveBoardQueries,
+    PayrollQueries,
     queries.EventTypeQueries,
     queries.EventStatusQueries,
     queries.ClientQueries,
