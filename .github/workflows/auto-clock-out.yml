@@ -1,0 +1,70 @@
+name: Auto clock-out stale shifts
+
+# Fires `/internal/cron/auto-clock-out` on Cloud Run every hour.
+# Inserts a scheduled-end clock-out for approved shifts whose BA clocked in
+# but never clocked out, once the event ended more than grace_minutes ago —
+# so "still on the clock" shifts and inflated hours don't linger. Idempotent
+# (the clock-out row itself is the dedupe). See
+# events/management/commands/auto_clock_out_stale_shifts.py.
+#
+# Secret-gated via `X-Cron-Secret` (shared INTERNAL_CRON_SECRET, set on both
+# the Cloud Run service env and the GitHub repo secret) — see the
+# daily-admin-digest workflow for full setup notes.
+#
+# Schedule: hourly. The 120-min grace + 24h lookback windows are wider than
+# the cadence so nothing slips; the new clock-out row keeps it single-shot.
+
+on:
+  schedule:
+    - cron: "0 * * * *"
+  workflow_dispatch:
+    inputs:
+      grace_minutes:
+        description: "Only close shifts whose end_time is at least this many minutes past"
+        required: false
+        default: "120"
+      lookback_hours:
+        description: "Ignore shifts that ended more than this many hours ago"
+        required: false
+        default: "24"
+      dry_run:
+        description: "Log what would be closed, but write nothing"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+jobs:
+  fire-auto-clock-out:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire auto clock-out cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/auto-clock-out
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          GRACE_MINUTES: ${{ github.event.inputs.grace_minutes || '120' }}
+          LOOKBACK_HOURS: ${{ github.event.inputs.lookback_hours || '24' }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            echo "Generate one with: openssl rand -hex 32"
+            echo "Then set it as INTERNAL_CRON_SECRET in both the repo secrets"
+            echo "and the Cloud Run service env (must match)."
+            exit 1
+          fi
+
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL?grace_minutes=$GRACE_MINUTES&lookback_hours=$LOOKBACK_HOURS&dry_run=$DRY_RUN" \
+            -H "X-Cron-Secret: $CRON_SECRET")
+
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS — see body above."
+            exit 1
+          fi
