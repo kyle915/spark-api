@@ -89,6 +89,50 @@ def _event_trigger_at_hours_before_utc(
     return event_start_utc - datetime.timedelta(hours=hours_before)
 
 
+def _is_redis_conn_error(exc: Exception) -> bool:
+    """True when `exc` is (or reads as) a Redis connectivity failure.
+
+    Prod (Cloud Run) has NO Redis — ambassador-job reminders are delivered by
+    the cron endpoints (send_activation_reminders et al.), not RQ — so a
+    missing Redis here is EXPECTED, not a bug. We log those at DEBUG so the
+    backend error monitor never pages on them (they were flooding it: the
+    schedule/cancel calls fire on every job save/status change).
+    """
+    try:
+        import redis.exceptions as _rexc
+
+        if isinstance(exc, (_rexc.ConnectionError, _rexc.TimeoutError)):
+            return True
+    except Exception:  # noqa: BLE001 — redis import should never break this
+        pass
+    name = type(exc).__name__.lower()
+    return "connection" in name or "timeout" in name
+
+
+def _reminder_scheduler_or_none():
+    """The RQ scheduler if Redis is reachable, else None (DEBUG-logged).
+
+    Pings Redis up front so callers bail HERE quietly rather than deep inside a
+    .schedule()/.cancel() where the failure would hit an ERROR-level log path
+    and the backend error monitor.
+    """
+    try:
+        scheduler = django_rq.get_scheduler("default")
+        scheduler.connection.ping()
+        return scheduler
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("RQ scheduler unavailable — skipping reminder op: %s", exc)
+        return None
+
+
+def _log_scheduler_issue(exc: Exception, msg: str, *args) -> None:
+    """DEBUG for expected Redis-down; exception (ERROR, paged) otherwise."""
+    if _is_redis_conn_error(exc):
+        logger.debug("Redis unavailable — " + msg, *args)
+    else:
+        logger.exception(msg, *args)
+
+
 def _cancel_ambassador_job_reminder_schedule(
     ambassador_job_id: int,
     *,
@@ -96,25 +140,19 @@ def _cancel_ambassador_job_reminder_schedule(
     func_name_suffix: str,
     reminder_label: str,
 ) -> int:
-    try:
-        scheduler = django_rq.get_scheduler("default")
-        get_jobs = getattr(scheduler, "get_jobs", None)
-    except Exception:
-        logger.exception(
-            "Failed to access scheduler while canceling %s reminder for ambassador_job=%s",
-            reminder_label,
-            ambassador_job_id,
-        )
+    scheduler = _reminder_scheduler_or_none()
+    if scheduler is None:
         return 0
-
+    get_jobs = getattr(scheduler, "get_jobs", None)
     if not callable(get_jobs):
         return 0
 
     canceled = 0
     try:
         scheduled_jobs = list(get_jobs())
-    except Exception:
-        logger.exception(
+    except Exception as exc:
+        _log_scheduler_issue(
+            exc,
             "Failed to list scheduled jobs while canceling %s reminder for ambassador_job=%s",
             reminder_label,
             ambassador_job_id,
@@ -132,8 +170,9 @@ def _cancel_ambassador_job_reminder_schedule(
         try:
             scheduler.cancel(scheduled_job)
             canceled += 1
-        except Exception:
-            logger.exception(
+        except Exception as exc:
+            _log_scheduler_issue(
+                exc,
                 "Failed to cancel %s reminder for ambassador_job=%s",
                 reminder_label,
                 ambassador_job_id,
@@ -142,21 +181,20 @@ def _cancel_ambassador_job_reminder_schedule(
 
 
 def cancel_legacy_ambassador_event_reminder_schedules() -> int:
-    try:
-        scheduler = django_rq.get_scheduler("default")
-        get_jobs = getattr(scheduler, "get_jobs", None)
-    except Exception:
-        logger.exception("Failed to access scheduler while canceling legacy reminder schedules")
+    scheduler = _reminder_scheduler_or_none()
+    if scheduler is None:
         return 0
-
+    get_jobs = getattr(scheduler, "get_jobs", None)
     if not callable(get_jobs):
         return 0
 
     canceled = 0
     try:
         scheduled_jobs = list(get_jobs())
-    except Exception:
-        logger.exception("Failed to list scheduled jobs while canceling legacy reminder schedules")
+    except Exception as exc:
+        _log_scheduler_issue(
+            exc, "Failed to list scheduled jobs while canceling legacy reminder schedules"
+        )
         return 0
 
     for scheduled_job in scheduled_jobs:
@@ -175,8 +213,9 @@ def cancel_legacy_ambassador_event_reminder_schedules() -> int:
         try:
             scheduler.cancel(scheduled_job)
             canceled += 1
-        except Exception:
-            logger.exception(
+        except Exception as exc:
+            _log_scheduler_issue(
+                exc,
                 "Failed to cancel legacy reminder schedule job=%s",
                 getattr(scheduled_job, "id", None),
             )
@@ -249,8 +288,10 @@ def _schedule_ambassador_job_exact_reminder(
     if trigger_at_utc is None or trigger_at_utc <= now_utc:
         return None
 
+    scheduler = _reminder_scheduler_or_none()
+    if scheduler is None:
+        return None
     try:
-        scheduler = django_rq.get_scheduler("default")
         scheduled_job = scheduler.schedule(
             scheduled_time=trigger_at_utc.astimezone(datetime.timezone.utc).replace(
                 tzinfo=None
@@ -264,8 +305,9 @@ def _schedule_ambassador_job_exact_reminder(
                 ambassador_job_id,
             ),
         )
-    except Exception:
-        logger.exception(
+    except Exception as exc:
+        _log_scheduler_issue(
+            exc,
             "Failed to schedule exact %s reminder for ambassador_job=%s",
             reminder_label,
             ambassador_job_id,
@@ -319,8 +361,10 @@ def schedule_ambassador_job_15m_reminder(ambassador_job_id: int) -> str | None:
     if trigger_at_utc <= now_utc:
         return None
 
+    scheduler = _reminder_scheduler_or_none()
+    if scheduler is None:
+        return None
     try:
-        scheduler = django_rq.get_scheduler("default")
         scheduled_job = scheduler.schedule(
             scheduled_time=trigger_at_utc.astimezone(datetime.timezone.utc).replace(
                 tzinfo=None
@@ -334,8 +378,9 @@ def schedule_ambassador_job_15m_reminder(ambassador_job_id: int) -> str | None:
                 ambassador_job_id,
             ),
         )
-    except Exception:
-        logger.exception(
+    except Exception as exc:
+        _log_scheduler_issue(
+            exc,
             "Failed to schedule exact 15m reminder for ambassador_job=%s",
             ambassador_job_id,
         )
@@ -364,8 +409,10 @@ def schedule_ambassador_job_end_15m_reminder(ambassador_job_id: int) -> str | No
     if trigger_at_utc <= now_utc:
         return None
 
+    scheduler = _reminder_scheduler_or_none()
+    if scheduler is None:
+        return None
     try:
-        scheduler = django_rq.get_scheduler("default")
         scheduled_job = scheduler.schedule(
             scheduled_time=trigger_at_utc.astimezone(datetime.timezone.utc).replace(
                 tzinfo=None
@@ -379,8 +426,9 @@ def schedule_ambassador_job_end_15m_reminder(ambassador_job_id: int) -> str | No
                 ambassador_job_id,
             ),
         )
-    except Exception:
-        logger.exception(
+    except Exception as exc:
+        _log_scheduler_issue(
+            exc,
             "Failed to schedule exact end+15m reminder for ambassador_job=%s",
             ambassador_job_id,
         )
