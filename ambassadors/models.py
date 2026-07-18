@@ -336,9 +336,12 @@ class AmbassadorEvent(models.Model):
     #                               (showing up IS confirming)
     #   unconfirmed_alerted_at    — the morning-of "still unconfirmed" alert
     #                               email to the Ignite team included this row
+    #   no_show_alerted_at        — the after-start "never clocked in" no-show
+    #                               alert (BA nudge + Ignite email) fired for it
     confirmation_requested_at = models.DateTimeField(null=True, blank=True)
     confirmed_at = models.DateTimeField(null=True, blank=True)
     unconfirmed_alerted_at = models.DateTimeField(null=True, blank=True)
+    no_show_alerted_at = models.DateTimeField(null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
     updated_at = models.DateTimeField(auto_now=True)

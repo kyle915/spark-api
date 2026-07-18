@@ -5213,6 +5213,151 @@ class SendUpdateCheckPushView(View):
         return JsonResponse({"ok": True, "endpoint": "send-update-check-push"})
 
 
+@method_decorator(csrf_exempt, name="dispatch")
+class AutoClockOutStaleShiftsView(View):
+    """POST `/internal/cron/auto-clock-out`.
+
+    Fires `auto_clock_out_stale_shifts` — inserts a scheduled-end clock-out
+    for approved shifts whose BA clocked in but never clocked out, once the
+    event ended more than `grace_minutes` ago. Idempotent (the clock-out row
+    itself is the dedupe). Designed for an hourly GHA cron.
+
+    Body / query params (all optional):
+      - grace_minutes: int (default 120)
+      - lookback_hours: int (default 24)
+      - dry_run: "1" / "true" / "yes" — log, write nothing.
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _bool(name: str, default: bool = False) -> bool:
+            raw = (request.GET.get(name) or request.POST.get(name) or "").lower()
+            return raw in ("1", "true", "yes", "on") if raw else default
+
+        def _int(name: str, default: int) -> int | None:
+            raw = request.GET.get(name) or request.POST.get(name)
+            if raw is None or raw == "":
+                return default
+            try:
+                return int(raw)
+            except ValueError:
+                return None
+
+        grace_minutes = _int("grace_minutes", 120)
+        lookback_hours = _int("lookback_hours", 24)
+        if grace_minutes is None or lookback_hours is None:
+            return JsonResponse(
+                {"ok": False, "error": "grace_minutes/lookback_hours must be integers"},
+                status=400,
+            )
+        dry_run = _bool("dry_run", default=False)
+
+        cmd_args = [
+            "--grace-minutes", str(grace_minutes),
+            "--lookback-hours", str(lookback_hours),
+        ]
+        if dry_run:
+            cmd_args.append("--dry-run")
+
+        out = io.StringIO()
+        try:
+            call_command("auto_clock_out_stale_shifts", *cmd_args, stdout=out)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Auto clock-out cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc),
+                 "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse(
+            {"ok": True, "grace_minutes": grace_minutes,
+             "lookback_hours": lookback_hours, "dry_run": dry_run,
+             "log": out.getvalue()}
+        )
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        return JsonResponse({"ok": True, "endpoint": "auto-clock-out"})
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class SendNoShowAlertsView(View):
+    """POST `/internal/cron/no-show-alerts`.
+
+    Fires `send_no_show_alerts` — nudges the BA + emails the Ignite team about
+    approved shifts that started more than `threshold_minutes` ago with no
+    clock-in / arrival of any kind. Deduped via
+    AmbassadorEvent.no_show_alerted_at. Designed for a ~15-min GHA cron.
+
+    Body / query params (all optional):
+      - threshold_minutes: int (default 45)
+      - lookback_hours: int (default 8)
+      - dry_run: "1" / "true" / "yes" — log, send nothing, stamp nothing.
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _bool(name: str, default: bool = False) -> bool:
+            raw = (request.GET.get(name) or request.POST.get(name) or "").lower()
+            return raw in ("1", "true", "yes", "on") if raw else default
+
+        def _int(name: str, default: int) -> int | None:
+            raw = request.GET.get(name) or request.POST.get(name)
+            if raw is None or raw == "":
+                return default
+            try:
+                return int(raw)
+            except ValueError:
+                return None
+
+        threshold_minutes = _int("threshold_minutes", 45)
+        lookback_hours = _int("lookback_hours", 8)
+        if threshold_minutes is None or lookback_hours is None:
+            return JsonResponse(
+                {"ok": False,
+                 "error": "threshold_minutes/lookback_hours must be integers"},
+                status=400,
+            )
+        dry_run = _bool("dry_run", default=False)
+
+        cmd_args = [
+            "--threshold-minutes", str(threshold_minutes),
+            "--lookback-hours", str(lookback_hours),
+        ]
+        if dry_run:
+            cmd_args.append("--dry-run")
+
+        out = io.StringIO()
+        try:
+            call_command("send_no_show_alerts", *cmd_args, stdout=out)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("No-show alerts cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc),
+                 "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse(
+            {"ok": True, "threshold_minutes": threshold_minutes,
+             "lookback_hours": lookback_hours, "dry_run": dry_run,
+             "log": out.getvalue()}
+        )
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        return JsonResponse({"ok": True, "endpoint": "no-show-alerts"})
+
+
 def _registered_views() -> dict[str, Any]:
     """Map URL path → view class. Lets `digest/urls.py` mount these
     without each one being re-exported explicitly.
@@ -5224,6 +5369,8 @@ def _registered_views() -> dict[str, Any]:
         "send-recap-reminders": SendRecapRemindersView,
         "send-open-shift-alerts": SendOpenShiftAlertsView,
         "activation-reminders": SendActivationRemindersView,
+        "auto-clock-out": AutoClockOutStaleShiftsView,
+        "no-show-alerts": SendNoShowAlertsView,
         "pre-shift-checklists": SendPreShiftChecklistsView,
         "ambassador-job-reminders": SendAmbassadorJobRemindersView,
         "recap-nudges": SendRecapNudgesView,

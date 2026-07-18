@@ -1,0 +1,70 @@
+name: No-show alerts
+
+# Fires `/internal/cron/no-show-alerts` on Cloud Run every 15 min.
+# Nudges the BA + emails the Ignite team about approved shifts that started
+# more than threshold_minutes ago with no clock-in / arrival of any kind —
+# the after-start escalation the T-15m activation reminder can't give.
+# Deduped via AmbassadorEvent.no_show_alerted_at. See
+# events/management/commands/send_no_show_alerts.py.
+#
+# Secret-gated via `X-Cron-Secret` (shared INTERNAL_CRON_SECRET, set on both
+# the Cloud Run service env and the GitHub repo secret) — see the
+# daily-admin-digest workflow for full setup notes.
+#
+# Schedule: every 15 minutes. The 45-min threshold + 8h lookback windows are
+# wider than the cadence so nothing slips; the alert stamp keeps it single-shot.
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+    inputs:
+      threshold_minutes:
+        description: "Flag as a no-show once the shift started this many minutes ago"
+        required: false
+        default: "45"
+      lookback_hours:
+        description: "Ignore shifts that started more than this many hours ago"
+        required: false
+        default: "8"
+      dry_run:
+        description: "Log what would be alerted, but send nothing and stamp nothing"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+jobs:
+  fire-no-show-alerts:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire no-show alerts cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/no-show-alerts
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          THRESHOLD_MINUTES: ${{ github.event.inputs.threshold_minutes || '45' }}
+          LOOKBACK_HOURS: ${{ github.event.inputs.lookback_hours || '8' }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            echo "Generate one with: openssl rand -hex 32"
+            echo "Then set it as INTERNAL_CRON_SECRET in both the repo secrets"
+            echo "and the Cloud Run service env (must match)."
+            exit 1
+          fi
+
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL?threshold_minutes=$THRESHOLD_MINUTES&lookback_hours=$LOOKBACK_HOURS&dry_run=$DRY_RUN" \
+            -H "X-Cron-Secret: $CRON_SECRET")
+
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS — see body above."
+            exit 1
+          fi
