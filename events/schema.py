@@ -22,6 +22,7 @@ from events import queries
 from events.staffing_board import StaffingBoardQueries
 from events.live_board import LiveBoardQueries
 from events.payroll import PayrollQueries
+from events.campaign_pnl import CampaignPnlQueries
 
 
 @strawberry.type
@@ -41,6 +42,7 @@ class EventQueryClient(
     StaffingBoardQueries,
     LiveBoardQueries,
     PayrollQueries,
+    CampaignPnlQueries,
     queries.EventTypeQueries,
     queries.EventStatusQueries,
     queries.ClientQueries,

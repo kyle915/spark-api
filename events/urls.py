@@ -12,6 +12,7 @@ glance.
 from django.urls import path
 
 from events import views
+from events import client_live_views
 
 urlpatterns = [
     # GET + POST. See events/views.py for the contract.
@@ -19,5 +20,11 @@ urlpatterns = [
         "approval/<str:token>",
         views.public_approval_view,
         name="events.public_approval",
+    ),
+    # GET — public branded client-live page JSON (signed token = auth).
+    path(
+        "client-live/<str:token>",
+        client_live_views.public_client_live_view,
+        name="events.public_client_live",
     ),
 ]

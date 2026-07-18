@@ -38,6 +38,13 @@ class PayrollTimesheetRow:
     estimated_pay: float | None = None
     # Shifts with no booked rate (contribute hours but no pay).
     shifts_missing_rate: int = 0
+    # Payroll-prep flags a human should check before paying this row:
+    #   no_rate          — ≥1 shift has no booked rate (pay is incomplete)
+    #   unverified_hours — ≥1 shift used scheduled length (no clock pair) —
+    #                      confirm the BA actually worked it
+    flags: list[str] = strawberry.field(default_factory=list)
+    # True when `flags` is non-empty — the FE surfaces a "Review" chip.
+    needs_review: bool = False
 
 
 @strawberry.type
@@ -47,6 +54,8 @@ class PayrollTimesheet:
     rows: list[PayrollTimesheetRow] = strawberry.field(default_factory=list)
     total_hours: float = 0.0
     total_estimated_pay: float | None = None
+    # How many rows carry at least one flag.
+    flagged_rows: int = 0
 
 
 @strawberry.type
@@ -149,11 +158,19 @@ class PayrollQueries:
             total_hours = 0.0
             total_pay = 0.0
             any_pay_total = False
+            flagged = 0
             for a in agg.values():
                 total_hours += a["hours"]
                 if a["any_pay"]:
                     total_pay += a["pay"]
                     any_pay_total = True
+                flags: list[str] = []
+                if a["missing_rate"] > 0:
+                    flags.append("no_rate")
+                if a["estimated_shifts"] > 0:
+                    flags.append("unverified_hours")
+                if flags:
+                    flagged += 1
                 rows.append(
                     PayrollTimesheetRow(
                         ambassador_uuid=a["uuid"] or "",
@@ -164,15 +181,19 @@ class PayrollQueries:
                         estimated_shifts=a["estimated_shifts"],
                         estimated_pay=round(a["pay"], 2) if a["any_pay"] else None,
                         shifts_missing_rate=a["missing_rate"],
+                        flags=flags,
+                        needs_review=bool(flags),
                     )
                 )
-            rows.sort(key=lambda r: r.name.lower())
+            # Flagged rows first (they need attention), then alphabetical.
+            rows.sort(key=lambda r: (not r.needs_review, r.name.lower()))
             return PayrollTimesheet(
                 start_date=start.isoformat(),
                 end_date=end.isoformat(),
                 rows=rows,
                 total_hours=round(total_hours, 2),
                 total_estimated_pay=round(total_pay, 2) if any_pay_total else None,
+                flagged_rows=flagged,
             )
 
         return await sync_to_async(_go)()

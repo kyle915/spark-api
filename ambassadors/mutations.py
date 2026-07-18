@@ -188,6 +188,12 @@ class BulkAssignAmbassadorResponse:
     client_mutation_id: strawberry.ID | None = None
 
 
+@strawberry.input
+class RebookLastCrewInput:
+    event_id: strawberry.ID
+    client_mutation_id: strawberry.ID | None = None
+
+
 async def _get_default_application_status(tenant_id: int) -> JobStatus | None:
     """Pick a sensible default status for a new application using the status slug."""
     for slug in ("pending", "apply"):
@@ -646,6 +652,119 @@ class AmbassadorMutations:
             success=True,
             message=msg,
             assigned_count=assigned,
+            failed_count=failed,
+            client_mutation_id=input.client_mutation_id,
+        )
+
+    @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
+    async def rebook_last_crew(
+        self,
+        info: strawberry.Info,
+        input: RebookLastCrewInput,
+    ) -> BulkAssignAmbassadorResponse:
+        """Book the same BAs who worked this venue last time onto this shift —
+        the Staffing Board's "re-book last crew" one-click.
+
+        "Last crew" = the approved ambassadors on the most recent PAST event
+        for the same tenant at the same venue (retailer, else the request's
+        retailer name), before this event's date. Each is booked through the
+        shared `_ensure_approved_booking` helper (idempotent — already-booked
+        BAs are a no-op), so it's always safe to click.
+        """
+        from asgiref.sync import sync_to_async
+
+        from jobs.mutations import _ensure_approved_booking
+
+        user = info.context.request.user
+
+        def _find_crew():
+            from ambassadors.models import AmbassadorEvent
+            from events.models import Event
+
+            try:
+                eid = resolve_id_to_int(input.event_id)
+                event = Event.objects.select_related("request").get(id=eid)
+            except (Event.DoesNotExist, ValueError, TypeError, GraphQLError):
+                return None, None, "Event not found."
+
+            # Venue key: retailer FK first, else the request's retailer name.
+            retailer_id = event.retailer_id
+            req_retailer = (
+                getattr(event.request, "retailer_name", None)
+                if event.request_id
+                else None
+            )
+            if not retailer_id and not req_retailer:
+                return event, [], "no_venue"
+
+            prior = Event.objects.filter(tenant_id=event.tenant_id).exclude(
+                id=event.id
+            )
+            if event.date:
+                prior = prior.filter(date__lt=event.date)
+            if retailer_id:
+                prior = prior.filter(retailer_id=retailer_id)
+            else:
+                prior = prior.filter(request__retailer_name=req_retailer)
+
+            # Walk most-recent-first until we find one with an approved crew.
+            for prev in prior.order_by("-date", "-id")[:25]:
+                amb_ids = list(
+                    AmbassadorEvent.objects.filter(
+                        event_id=prev.id, is_approved=True, ambassador__isnull=False
+                    ).values_list("ambassador_id", flat=True)
+                )
+                if amb_ids:
+                    return event, amb_ids, None
+            return event, [], "no_prior"
+
+        event, amb_ids, err = await sync_to_async(_find_crew)()
+        if err == "Event not found.":
+            return BulkAssignAmbassadorResponse(
+                success=False, message=err,
+                client_mutation_id=input.client_mutation_id,
+            )
+        if err == "no_venue":
+            return BulkAssignAmbassadorResponse(
+                success=False,
+                message="This shift has no venue set, so there's no prior crew "
+                "to re-book.",
+                client_mutation_id=input.client_mutation_id,
+            )
+        if not amb_ids:
+            return BulkAssignAmbassadorResponse(
+                success=False,
+                message="No prior crew found for this venue.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        booked = 0
+        failed = 0
+        for amb_id in amb_ids:
+            try:
+                await sync_to_async(_ensure_approved_booking)(
+                    ambassador_id=amb_id,
+                    event_id=event.id,
+                    tenant_id=event.tenant_id,
+                    creator_id=getattr(user, "id", None),
+                )
+                booked += 1
+            except Exception:  # noqa: BLE001
+                failed += 1
+
+        if not booked:
+            return BulkAssignAmbassadorResponse(
+                success=False,
+                message="Could not re-book the last crew.",
+                failed_count=failed,
+                client_mutation_id=input.client_mutation_id,
+            )
+        msg = f"Re-booked {booked} BA{'s' if booked != 1 else ''} from the last "
+        msg += "crew at this venue."
+        return BulkAssignAmbassadorResponse(
+            success=True,
+            message=msg,
+            assigned_count=booked,
             failed_count=failed,
             client_mutation_id=input.client_mutation_id,
         )

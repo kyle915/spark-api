@@ -60,6 +60,27 @@ class LiveBoardShift:
 @strawberry.type
 class LiveBoardQueries:
     @strawberry.field(permission_classes=[IsClientOrSparkAdmin])
+    async def client_live_token(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID,
+    ) -> str:
+        """Mint a signed share token for a tenant's public client-live page.
+        The web builds the shareable URL as `<origin>/live/<token>`. Admin
+        can only mint for a tenant they can access."""
+        user = info.context.request.user
+        is_admin, allowed = await _accessible_tenants(user)
+        try:
+            tid = resolve_id_to_int(tenant_id)
+        except Exception:  # noqa: BLE001
+            raise ValueError("Invalid tenant id.")
+        if not is_admin and tid not in (allowed or set()):
+            raise ValueError("Not allowed for this tenant.")
+        from events.client_live_tokens import make_client_live_token
+
+        return await sync_to_async(make_client_live_token)(tid)
+
+    @strawberry.field(permission_classes=[IsClientOrSparkAdmin])
     async def live_shift_board(
         self,
         info: strawberry.Info,
