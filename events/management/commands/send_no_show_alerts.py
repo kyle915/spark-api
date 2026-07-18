@@ -95,6 +95,22 @@ class Command(BaseCommand):
             self.stdout.write("no-show radar: no started shifts in the window.")
             return
 
+        # Only flag shifts that are still IN PROGRESS — a "clock in now" nudge
+        # and an admin "scramble a backup" alert only make sense while the
+        # window is open. A shift whose end_time has already passed is a
+        # post-hoc payroll/data question, not a live no-show, so skip it
+        # (end_time NULL = unknown end, keep it: we can't prove it's over).
+        candidates = [
+            r for r in candidates
+            if getattr(r.event, "end_time", None) is None
+            or r.event.end_time > now
+        ]
+        if not candidates:
+            self.stdout.write(
+                "no-show radar: started shifts in window have all ended."
+            )
+            return
+
         # Drop anyone with ANY attendance for that shift — a clock-in,
         # an "I'm here," even a GPS ping means they're not a no-show.
         on_site = set(
