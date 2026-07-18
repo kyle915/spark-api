@@ -19,6 +19,7 @@ from .mutations import (
     TimeZoneMutations,
 )
 from events import queries
+from events.staffing_board import StaffingBoardQueries
 
 
 @strawberry.type
@@ -35,6 +36,7 @@ class EventQueryAmbassadors(
 @strawberry.type
 class EventQueryClient(
     queries.EventQueries,
+    StaffingBoardQueries,
     queries.EventTypeQueries,
     queries.EventStatusQueries,
     queries.ClientQueries,
