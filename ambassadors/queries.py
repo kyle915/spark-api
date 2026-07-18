@@ -1440,10 +1440,25 @@ class AmbassadorEventQueries:
                 .order_by("-event__date")
             )
 
+            # Real worked hours (clock punches) + booked rate → estimated pay,
+            # via the shared attendance-hours primitives. Scheduled hours stay
+            # in `hours`/`hours_total`; worked hours + est pay are additive.
+            from ambassadors import attendance_hours as ah
+
+            ae_list = list(qs)
+            event_ids = [ae.event_id for ae in ae_list]
+            facts = ah.clock_facts(event_ids)
+            rates = ah.rate_map(event_ids)
+            amb_id = ambassador.id
+
             rows: list[types.EarningsShiftRow] = []
             total_hours = 0.0
             any_hours = False
-            for ae in qs:
+            worked_total = 0.0
+            any_worked = False
+            pay_total = 0.0
+            any_pay = False
+            for ae in ae_list:
                 ev = ae.event
                 venue = (
                     getattr(ev, "name", None)
@@ -1460,6 +1475,17 @@ class AmbassadorEventQueries:
                     any_hours = True
                     total_hours += hrs
                     blocks = max(1, ceil(hrs / 4.0)) if hrs > 0 else 0
+
+                wh, est = ah.worked_hours(facts.get((ev.id, amb_id)), hrs)
+                rate = rates.get((ev.id, amb_id))
+                pay = ah.pay_for(wh, rate)
+                if wh is not None:
+                    any_worked = True
+                    worked_total += wh
+                if pay is not None:
+                    any_pay = True
+                    pay_total += pay
+
                 rows.append(
                     types.EarningsShiftRow(
                         ambassador_event_uuid=strawberry.ID(str(ae.uuid)),
@@ -1483,8 +1509,12 @@ class AmbassadorEventQueries:
                         state_code=state_code,
                         hours=hrs,
                         blocks=blocks,
-                        gross=None,  # honest: no per-shift $ source exists
+                        gross=None,  # honest: no confirmed per-shift $ source
                         payment_status="not_available",
+                        worked_hours=wh,
+                        estimated_hours=est,
+                        rate=rate,
+                        estimated_pay=pay,
                     )
                 )
 
@@ -1494,6 +1524,9 @@ class AmbassadorEventQueries:
                 hours_total=round(total_hours, 2) if any_hours else None,
                 payments_available=False,
                 rows=rows,
+                worked_hours_total=round(worked_total, 2) if any_worked else None,
+                estimated_pay_total=round(pay_total, 2) if any_pay else None,
+                estimated_pay_available=any_pay,
             )
 
         return await sync_to_async(_fetch, thread_sensitive=True)()

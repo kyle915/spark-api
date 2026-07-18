@@ -203,6 +203,19 @@ class EarningsShiftRow:
     # ALWAYS "not_available" today. Enum-ish string the UI maps to a pill:
     # not_available | pending | paid. Kept forward-compatible.
     payment_status: str
+    # WORKED hours from the BA's actual clock-in→clock-out on this shift
+    # (Attendance). None when they never clocked a full pair. `estimated_hours`
+    # True means `worked_hours` fell back to the scheduled length (no clock
+    # pair) — the UI shows an "~" so the BA knows it's not their real punch.
+    worked_hours: float | None = None
+    estimated_hours: bool = False
+    # The BA's booked hourly rate for this shift (AmbassadorJob.rate). None
+    # when no rate was booked → no estimated pay is shown for the row.
+    rate: float | None = None
+    # ESTIMATED pay = worked_hours × rate. Honest label, distinct from `gross`
+    # (a confirmed Wingspan payout, which Spark still can't see): this is "on
+    # track to earn," not "paid." None when hours or rate is missing.
+    estimated_pay: float | None = None
 
 
 @strawberry.type
@@ -221,6 +234,14 @@ class MyEarningsBreakdown:
     # payment status. False today so the UI shows the honest Wingspan
     # explainer instead of empty money columns.
     payments_available: bool
+    # Sum of WORKED hours (real clock punches, scheduled fallback) across the
+    # rows. Distinct from hours_total (scheduled). None when no rows.
+    worked_hours_total: float | None = None
+    # Sum of ESTIMATED pay (worked_hours × booked rate) across rows that HAVE a
+    # rate. None when no row has a booked rate. `estimated_pay_available` is the
+    # UI gate: show the pay column only when at least one shift has a rate.
+    estimated_pay_total: float | None = None
+    estimated_pay_available: bool = False
     rows: list[EarningsShiftRow]
 
 
