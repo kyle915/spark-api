@@ -13,6 +13,7 @@ from django.urls import path
 
 from events import views
 from events import client_live_views
+from events import checkin_views
 
 urlpatterns = [
     # GET + POST. See events/views.py for the contract.
@@ -26,5 +27,33 @@ urlpatterns = [
         "client-live/<str:token>",
         client_live_views.public_client_live_view,
         name="events.public_client_live",
+    ),
+    # Public web check-in (no login) — the event's walk-up code IS the link.
+    # See events/checkin_views.py; the session token minted by /identify
+    # authorizes the follow-up clock / upload-url / recap calls.
+    path(
+        "checkin/<str:code>",
+        checkin_views.public_checkin_context,
+        name="events.public_checkin_context",
+    ),
+    path(
+        "checkin/<str:code>/identify",
+        checkin_views.public_checkin_identify,
+        name="events.public_checkin_identify",
+    ),
+    path(
+        "checkin/<str:code>/clock",
+        checkin_views.public_checkin_clock,
+        name="events.public_checkin_clock",
+    ),
+    path(
+        "checkin/<str:code>/upload-url",
+        checkin_views.public_checkin_upload_url,
+        name="events.public_checkin_upload_url",
+    ),
+    path(
+        "checkin/<str:code>/recap",
+        checkin_views.public_checkin_recap,
+        name="events.public_checkin_recap",
     ),
 ]
