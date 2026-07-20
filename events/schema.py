@@ -21,7 +21,7 @@ from .mutations import (
 from events import queries
 from events.staffing_board import StaffingBoardQueries
 from events.live_board import LiveBoardQueries
-from events.payroll import PayrollQueries
+from events.payroll import PayrollQueries, PayrollMutations
 from events.campaign_pnl import CampaignPnlQueries
 
 
@@ -113,6 +113,7 @@ class EventMutationsAmbassadors(
 @strawberry.type
 class EventMutationsClient(
     EventMutations,
+    PayrollMutations,
     PublicRequestMutations,
     EventTypeMutations,
     EventStatusMutations,

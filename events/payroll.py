@@ -17,6 +17,7 @@ from collections import defaultdict
 from datetime import date as _date
 
 import strawberry
+from strawberry import relay
 from asgiref.sync import sync_to_async
 
 from events.models import Event
@@ -45,6 +46,12 @@ class PayrollTimesheetRow:
     flags: list[str] = strawberry.field(default_factory=list)
     # True when `flags` is non-empty — the FE surfaces a "Review" chip.
     needs_review: bool = False
+    # Close-out state (PayrollApproval for this BA + period). approved = an admin
+    # signed the hours off; paid_at = the disbursement was recorded (in Wingspan —
+    # Spark never moves money).
+    approved: bool = False
+    approved_at: str | None = None
+    paid_at: str | None = None
 
 
 @strawberry.type
@@ -154,12 +161,29 @@ class PayrollQueries:
                     else:
                         a["missing_rate"] += 1
 
+            # Close-out state: approvals for this exact period within the same
+            # tenant scope, keyed by ambassador.
+            from events.models import PayrollApproval
+
+            appr_qs = PayrollApproval.objects.filter(
+                period_start=start, period_end=end
+            )
+            if not is_admin:
+                appr_qs = appr_qs.filter(tenant_id__in=(allowed or set()))
+            elif resolved_tid is not None:
+                appr_qs = appr_qs.filter(tenant_id=resolved_tid)
+            approvals_by_amb = {}
+            for ap in appr_qs:
+                # Latest wins if somehow >1 across tenants in an all-tenant view.
+                approvals_by_amb[ap.ambassador_id] = ap
+
             rows: list[PayrollTimesheetRow] = []
             total_hours = 0.0
             total_pay = 0.0
             any_pay_total = False
             flagged = 0
-            for a in agg.values():
+            for amb_id, a in agg.items():
+                ap = approvals_by_amb.get(amb_id)
                 total_hours += a["hours"]
                 if a["any_pay"]:
                     total_pay += a["pay"]
@@ -183,6 +207,11 @@ class PayrollQueries:
                         shifts_missing_rate=a["missing_rate"],
                         flags=flags,
                         needs_review=bool(flags),
+                        approved=ap is not None,
+                        approved_at=ap.approved_at.isoformat() if ap else None,
+                        paid_at=(
+                            ap.paid_at.isoformat() if ap and ap.paid_at else None
+                        ),
                     )
                 )
             # Flagged rows first (they need attention), then alphabetical.
@@ -197,3 +226,159 @@ class PayrollQueries:
             )
 
         return await sync_to_async(_go)()
+
+
+# --------------------------------------------------------------------------
+# Close-out: approve hours → (record) pay
+# --------------------------------------------------------------------------
+def _compute_period_hours(tenant_id: int, start, end, amb_ids: set[int]) -> dict:
+    """{ambassador_id: {"hours": float, "pay": float, "any": bool}} for a tenant
+    over [start, end], restricted to `amb_ids`. Same clock+rate join as the
+    timesheet — the authoritative snapshot stored at approval time."""
+    from ambassadors.attendance_hours import (
+        clock_facts,
+        rate_map,
+        scheduled_hours,
+        worked_hours,
+    )
+
+    events = list(
+        Event.objects.filter(
+            tenant_id=tenant_id, date__date__gte=start, date__date__lte=end
+        ).prefetch_related("ambassadors_events")[:5000]
+    )
+    event_ids = [e.id for e in events]
+    facts = clock_facts(event_ids)
+    rates = rate_map(event_ids)
+    out = {aid: {"hours": 0.0, "pay": 0.0, "any": False} for aid in amb_ids}
+    for ev in events:
+        sched = scheduled_hours(
+            getattr(ev, "start_time", None), getattr(ev, "end_time", None)
+        )
+        for ae in ev.ambassadors_events.all():
+            if not ae.is_approved or ae.ambassador_id not in amb_ids:
+                continue
+            wh, _est = worked_hours(facts.get((ev.id, ae.ambassador_id)), sched)
+            if wh is None:
+                continue
+            o = out[ae.ambassador_id]
+            o["hours"] += wh
+            rate = rates.get((ev.id, ae.ambassador_id))
+            if rate is not None:
+                o["pay"] += wh * rate
+                o["any"] = True
+    return out
+
+
+@strawberry.input
+class ApprovePayrollInput:
+    start_date: str
+    end_date: str
+    tenant_id: strawberry.ID
+    ambassador_uuids: list[strawberry.ID]
+    client_mutation_id: strawberry.ID | None = None
+
+
+@strawberry.type
+class PayrollActionResponse:
+    success: bool
+    message: str
+    count: int = 0
+    client_mutation_id: strawberry.ID | None = None
+
+
+@strawberry.type
+class PayrollMutations:
+    @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
+    async def approve_payroll_hours(
+        self, info: strawberry.Info, input: ApprovePayrollInput
+    ) -> PayrollActionResponse:
+        """Sign off a set of BAs' worked hours for a pay period (snapshots the
+        hours + estimated pay). Idempotent per (tenant, BA, period)."""
+        return await _payroll_action(info, input, kind="approve")
+
+    @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
+    async def mark_payroll_paid(
+        self, info: strawberry.Info, input: ApprovePayrollInput
+    ) -> PayrollActionResponse:
+        """Record that an already-approved payroll set was PAID (in Wingspan —
+        Spark never moves money). Stamps ``paid_at``; only affects approved rows."""
+        return await _payroll_action(info, input, kind="paid")
+
+    @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
+    async def unapprove_payroll_hours(
+        self, info: strawberry.Info, input: ApprovePayrollInput
+    ) -> PayrollActionResponse:
+        """Undo a sign-off (removes the approval rows for the period)."""
+        return await _payroll_action(info, input, kind="unapprove")
+
+
+async def _payroll_action(
+    info: strawberry.Info, input: "ApprovePayrollInput", *, kind: str
+) -> PayrollActionResponse:
+    from datetime import datetime, timezone as _tz
+    from decimal import Decimal
+
+    user = info.context.request.user
+    is_admin, allowed = await _accessible_tenants(user)
+
+    def _go():
+        from ambassadors.models import Ambassador
+        from events.models import PayrollApproval
+
+        try:
+            start = _date.fromisoformat(str(input.start_date))
+            end = _date.fromisoformat(str(input.end_date))
+            tid = resolve_id_to_int(input.tenant_id)
+        except (TypeError, ValueError, Exception):  # noqa: BLE001
+            return False, "Bad period or tenant.", 0
+        if not is_admin and tid not in (allowed or set()):
+            return False, "Not authorized for this client.", 0
+
+        amb_pairs = list(
+            Ambassador.objects.filter(
+                uuid__in=[str(u) for u in (input.ambassador_uuids or [])]
+            ).values_list("id", "uuid")
+        )
+        amb_ids = {aid for aid, _ in amb_pairs}
+        if not amb_ids:
+            return False, "No ambassadors selected.", 0
+
+        if kind == "unapprove":
+            n, _ = PayrollApproval.objects.filter(
+                tenant_id=tid, period_start=start, period_end=end,
+                ambassador_id__in=amb_ids,
+            ).delete()
+            return True, f"Removed sign-off for {len(amb_ids)} BA(s).", len(amb_ids)
+
+        if kind == "paid":
+            n = PayrollApproval.objects.filter(
+                tenant_id=tid, period_start=start, period_end=end,
+                ambassador_id__in=amb_ids, paid_at__isnull=True,
+            ).update(paid_at=datetime.now(_tz.utc))
+            return True, f"Marked {n} BA(s) paid.", n
+
+        # approve — snapshot hours + pay, upsert.
+        snap = _compute_period_hours(tid, start, end, amb_ids)
+        count = 0
+        for aid in amb_ids:
+            s = snap.get(aid, {"hours": 0.0, "pay": 0.0, "any": False})
+            PayrollApproval.objects.update_or_create(
+                tenant_id=tid, ambassador_id=aid,
+                period_start=start, period_end=end,
+                defaults=dict(
+                    hours=Decimal(str(round(s["hours"], 2))),
+                    estimated_pay=(
+                        Decimal(str(round(s["pay"], 2))) if s["any"] else None
+                    ),
+                    approved_by=user if getattr(user, "id", None) else None,
+                ),
+            )
+            count += 1
+        return True, f"Approved {count} BA(s).", count
+
+    ok, msg, count = await sync_to_async(_go)()
+    return PayrollActionResponse(
+        success=ok, message=msg, count=count,
+        client_mutation_id=input.client_mutation_id,
+    )

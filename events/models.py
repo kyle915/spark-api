@@ -1213,3 +1213,64 @@ class RequestActivityLog(models.Model):
     def __str__(self) -> str:
         actor = self.actor_user.email if self.actor_user_id else "system"
         return f"[{self.kind}] {actor} · request={self.request_id}"
+
+
+class PayrollApproval(models.Model):
+    """Admin sign-off on a BA's worked hours for a pay period — the "close-out"
+    step on top of the read-only timesheet (events/payroll.py).
+
+    One row per (tenant, ambassador, period_start, period_end). Approving
+    snapshots the hours + estimated pay at approval time (so a later clock edit
+    doesn't silently change what was signed off), records who/when, and optionally
+    stamps ``paid_at`` when the disbursement is made in Wingspan. Spark never moves
+    money — this is record-keeping + the gate for the "approved only" export."""
+
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+
+    period_start = models.DateField()
+    period_end = models.DateField()
+    hours = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    estimated_pay = models.DecimalField(
+        max_digits=12, decimal_places=2, null=True, blank=True
+    )
+
+    tenant = models.ForeignKey(
+        "tenants.Tenant",
+        on_delete=models.CASCADE,
+        related_name="payroll_approvals",
+    )
+    ambassador = models.ForeignKey(
+        "ambassadors.Ambassador",
+        on_delete=models.CASCADE,
+        related_name="payroll_approvals",
+    )
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="payroll_approvals_made",
+    )
+    approved_at = models.DateTimeField(auto_now_add=True)
+    paid_at = models.DateTimeField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["tenant", "ambassador", "period_start", "period_end"],
+                name="uq_payroll_approval_period",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["tenant", "period_start", "period_end"],
+                name="ev_payappr_t_period_idx",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return (
+            f"PayrollApproval amb={self.ambassador_id} "
+            f"{self.period_start}->{self.period_end}"
+        )
