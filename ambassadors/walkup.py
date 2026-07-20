@@ -488,14 +488,19 @@ class WalkupAdminQueries:
 
         return await sync_to_async(_go)()
 
-    @strawberry.field(permission_classes=[IsClientOrSparkAdmin])
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def pending_walkup_count(
         self,
         info: strawberry.Info,
         tenant_id: strawberry.ID | None = None,
     ) -> int:
-        """Count of walk-ups awaiting review for the admin's tenant(s) — a light
-        scalar for the sidebar badge (no row payload)."""
+        """Count of walk-ups awaiting review for the caller's tenant(s) — a light
+        scalar for the always-mounted sidebar badge (no row payload). Gated only
+        on authentication (not admin) so it can safely ride the shared
+        SidebarCountsQuery, which is StrictIsAuthenticated: a non-admin caller has
+        no accessible tenants via _admin_scope, so this returns 0 for them rather
+        than erroring and breaking the sidebar. Never leaks — it only ever counts
+        the caller's own accessible pending walk-ups."""
         user = info.context.request.user
         is_admin, allowed = await _admin_scope(user)
         resolved_tid = None
