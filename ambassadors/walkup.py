@@ -347,6 +347,20 @@ class WalkupActionResponse:
     client_mutation_id: strawberry.ID | None = None
 
 
+@strawberry.input
+class BulkWalkupShiftsInput:
+    ambassador_event_uuids: list[strawberry.ID]
+    client_mutation_id: strawberry.ID | None = None
+
+
+@strawberry.type
+class BulkWalkupActionResponse:
+    success: bool
+    message: str
+    count: int = 0
+    client_mutation_id: strawberry.ID | None = None
+
+
 async def _admin_scope(user):
     """(is_admin_access, allowed_tenant_ids_or_None). None = all tenants."""
     from utils.graphql.permissions import (
@@ -471,6 +485,35 @@ class WalkupAdminQueries:
             elif status == "confirmed":
                 qs = qs.filter(is_approved=True)
             return [_build_walkup_row(ae) for ae in qs[:200]]
+
+        return await sync_to_async(_go)()
+
+    @strawberry.field(permission_classes=[IsClientOrSparkAdmin])
+    async def pending_walkup_count(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID | None = None,
+    ) -> int:
+        """Count of walk-ups awaiting review for the admin's tenant(s) — a light
+        scalar for the sidebar badge (no row payload)."""
+        user = info.context.request.user
+        is_admin, allowed = await _admin_scope(user)
+        resolved_tid = None
+        if tenant_id is not None:
+            try:
+                resolved_tid = resolve_id_to_int(tenant_id)
+            except Exception:  # noqa: BLE001
+                resolved_tid = None
+
+        def _go():
+            qs = AmbassadorEvent.objects.filter(
+                source=AmbassadorEvent.SOURCE_WALKUP, is_approved=False
+            )
+            if not is_admin:
+                qs = qs.filter(tenant_id__in=(allowed or set()))
+            elif resolved_tid is not None:
+                qs = qs.filter(tenant_id=resolved_tid)
+            return qs.count()
 
         return await sync_to_async(_go)()
 
@@ -668,5 +711,91 @@ class WalkupAdminMutations:
         return WalkupActionResponse(
             success=True,
             message="Walk-up rejected.",
+            client_mutation_id=input.client_mutation_id,
+        )
+
+    @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
+    async def bulk_confirm_walkup_shifts(
+        self, info: strawberry.Info, input: BulkWalkupShiftsInput
+    ) -> BulkWalkupActionResponse:
+        """Confirm many walk-ups at once (approve booking + activate new BAs +
+        roster them). Skips any the admin can't access; reports how many landed.
+        Same per-item semantics as confirm_walkup_shift."""
+        user = info.context.request.user
+        is_admin, allowed = await _admin_scope(user)
+        uuids = [str(u) for u in (input.ambassador_event_uuids or [])]
+
+        def _go():
+            from tenants.models import TenantedUser
+
+            confirmed = 0
+            rows = (
+                AmbassadorEvent.objects.select_related("ambassador__user", "tenant")
+                .filter(uuid__in=uuids, source=AmbassadorEvent.SOURCE_WALKUP)
+            )
+            for amb_event in rows:
+                if not is_admin and amb_event.tenant_id not in (allowed or set()):
+                    continue
+                if amb_event.is_approved:
+                    continue
+                amb_event.is_approved = True
+                amb_event.updated_by = user
+                amb_event.save(
+                    update_fields=["is_approved", "updated_by", "updated_at"]
+                )
+                amb = amb_event.ambassador
+                if amb and not getattr(amb, "is_active", False):
+                    amb.is_active = True
+                    amb.save(update_fields=["is_active"])
+                try:
+                    if amb and amb.user_id:
+                        TenantedUser.objects.get_or_create(
+                            user=amb.user, tenant=amb_event.tenant
+                        )
+                except Exception:  # noqa: BLE001
+                    pass
+                confirmed += 1
+            return confirmed
+
+        count = await sync_to_async(_go)()
+        return BulkWalkupActionResponse(
+            success=True,
+            message=f"Confirmed {count} walk-up{'s' if count != 1 else ''} — hours now count.",
+            count=count,
+            client_mutation_id=input.client_mutation_id,
+        )
+
+    @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
+    async def bulk_reject_walkup_shifts(
+        self, info: strawberry.Info, input: BulkWalkupShiftsInput
+    ) -> BulkWalkupActionResponse:
+        """Reject many walk-ups at once (remove booking + attendance punches).
+        Any recap a BA filed stays for the normal recap review flow. Same
+        per-item semantics as reject_walkup_shift."""
+        user = info.context.request.user
+        is_admin, allowed = await _admin_scope(user)
+        uuids = [str(u) for u in (input.ambassador_event_uuids or [])]
+
+        def _go():
+            rejected = 0
+            rows = (
+                AmbassadorEvent.objects.select_related("ambassador", "event")
+                .filter(uuid__in=uuids, source=AmbassadorEvent.SOURCE_WALKUP)
+            )
+            for amb_event in rows:
+                if not is_admin and amb_event.tenant_id not in (allowed or set()):
+                    continue
+                Attendance.objects.filter(
+                    ambassador=amb_event.ambassador, event=amb_event.event
+                ).delete()
+                amb_event.delete()
+                rejected += 1
+            return rejected
+
+        count = await sync_to_async(_go)()
+        return BulkWalkupActionResponse(
+            success=True,
+            message=f"Rejected {count} walk-up{'s' if count != 1 else ''}.",
+            count=count,
             client_mutation_id=input.client_mutation_id,
         )

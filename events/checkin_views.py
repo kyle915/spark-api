@@ -23,6 +23,7 @@ import logging
 import re
 import secrets
 
+from django.core.cache import cache
 from django.http import HttpRequest, HttpResponse, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
@@ -59,6 +60,43 @@ def _body(request: HttpRequest) -> dict:
         return data if isinstance(data, dict) else {}
     except (ValueError, UnicodeDecodeError):
         return {}
+
+
+def _client_ip(request: HttpRequest) -> str:
+    """Best-effort client IP. Cloud Run sits behind a proxy, so the real client
+    is the first hop in X-Forwarded-For; fall back to REMOTE_ADDR."""
+    xff = request.META.get("HTTP_X_FORWARDED_FOR", "")
+    if xff:
+        return xff.split(",")[0].strip() or "?"
+    return request.META.get("REMOTE_ADDR", "") or "?"
+
+
+def _over_limit(scope: str, ident: str, *, limit: int, window: int) -> bool:
+    """True if (scope, ident) has exceeded `limit` hits in the last `window`s.
+
+    Uses the default cache (LocMemCache in prod — per-instance), so this is a
+    speed bump against a single-source flood layered on top of the
+    pending-review gate + code expiry, not a hard global quota. Cache trouble
+    never blocks a legitimate check-in (fails open)."""
+    key = f"checkin:rl:{scope}:{ident}"
+    try:
+        cache.add(key, 0, timeout=window)
+        count = cache.incr(key)
+    except ValueError:
+        # Key expired between add and incr — start a fresh window.
+        cache.set(key, 1, timeout=window)
+        count = 1
+    except Exception:  # noqa: BLE001 — never block on cache failure
+        return False
+    return count > limit
+
+
+def _rate_limited() -> JsonResponse:
+    return _err(
+        "Too many attempts. Wait a minute and try again.",
+        status=429,
+        code="rate_limited",
+    )
 
 
 def _load_event(code: str):
@@ -137,6 +175,14 @@ def public_checkin_context(request: HttpRequest, code: str) -> HttpResponse:
 @csrf_exempt
 @require_http_methods(["POST"])
 def public_checkin_identify(request: HttpRequest, code: str) -> HttpResponse:
+    ip = _client_ip(request)
+    # Per-IP burst guard + per-code cap on how many stub accounts one event's
+    # link can spawn (the account-creating endpoint is the worst flood vector).
+    if _over_limit("identify-ip", ip, limit=10, window=300) or _over_limit(
+        "identify-code", code, limit=50, window=3600
+    ):
+        return _rate_limited()
+
     event = checkin_web.resolve_event_by_code(code)
     if event is None:
         return _err("This check-in link isn't active.", status=404, code="not_found")
@@ -162,7 +208,7 @@ def public_checkin_identify(request: HttpRequest, code: str) -> HttpResponse:
         ambassador, _ = checkin_web.get_or_create_checkin_ambassador(
             first_name=first_name, last_name=last_name, phone=phone, email=email
         )
-        amb_event = checkin_web.ensure_walkup_booking(
+        amb_event, _created = checkin_web.ensure_walkup_booking(
             event, ambassador, actor=ambassador.user
         )
     except Exception:  # noqa: BLE001
@@ -182,6 +228,8 @@ def public_checkin_identify(request: HttpRequest, code: str) -> HttpResponse:
 @csrf_exempt
 @require_http_methods(["POST"])
 def public_checkin_clock(request: HttpRequest, code: str) -> HttpResponse:
+    if _over_limit("clock-ip", _client_ip(request), limit=40, window=300):
+        return _rate_limited()
     data = _body(request)
     loaded, err = _load_session(code, data.get("session") or "")
     if err is not None:
@@ -205,7 +253,7 @@ def public_checkin_clock(request: HttpRequest, code: str) -> HttpResponse:
             coordinates = None
 
     try:
-        amb_event = checkin_web.ensure_walkup_booking(
+        amb_event, _created = checkin_web.ensure_walkup_booking(
             event, ambassador, actor=ambassador.user
         )
         checkin_web.record_attendance(
@@ -214,6 +262,9 @@ def public_checkin_clock(request: HttpRequest, code: str) -> HttpResponse:
             coordinates=coordinates,
             actor=ambassador.user,
         )
+        # First clock-IN → email admins so the pending walk-up gets seen.
+        if source_name == "clock_in":
+            checkin_web.notify_checkin_landed_if_first(event, ambassador)
         state = checkin_web.clock_state(
             ambassador_id=ambassador.id, event_id=event.id
         )
@@ -232,6 +283,8 @@ _SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
 @csrf_exempt
 @require_http_methods(["POST"])
 def public_checkin_upload_url(request: HttpRequest, code: str) -> HttpResponse:
+    if _over_limit("upload-ip", _client_ip(request), limit=80, window=300):
+        return _rate_limited()
     data = _body(request)
     loaded, err = _load_session(code, data.get("session") or "")
     if err is not None:
@@ -264,6 +317,8 @@ def public_checkin_upload_url(request: HttpRequest, code: str) -> HttpResponse:
 @csrf_exempt
 @require_http_methods(["POST"])
 def public_checkin_recap(request: HttpRequest, code: str) -> HttpResponse:
+    if _over_limit("recap-ip", _client_ip(request), limit=20, window=300):
+        return _rate_limited()
     data = _body(request)
     loaded, err = _load_session(code, data.get("session") or "")
     if err is not None:

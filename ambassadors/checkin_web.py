@@ -301,7 +301,7 @@ def ensure_walkup_booking(event, ambassador, actor):
     active account."""
     from ambassadors.models import AmbassadorEvent
 
-    amb_event, _ = AmbassadorEvent.objects.get_or_create(
+    amb_event, created = AmbassadorEvent.objects.get_or_create(
         ambassador=ambassador,
         event=event,
         defaults=dict(
@@ -312,7 +312,7 @@ def ensure_walkup_booking(event, ambassador, actor):
             updated_by=actor,
         ),
     )
-    return amb_event
+    return amb_event, created
 
 
 def _ensure_source(name: str):
@@ -381,6 +381,84 @@ def has_recap(*, ambassador_id: int, event_id: int) -> bool:
             event_id=event_id, ambassador_id=ambassador_id
         ).exists()
     )
+
+
+# --------------------------------------------------------------------------
+# Admin alert — "a web check-in just landed"
+# --------------------------------------------------------------------------
+def notify_checkin_landed_if_first(event, ambassador) -> None:
+    """Email the Ignite admins the FIRST time a web check-in BA clocks in for an
+    event, so a pending walk-up never sits unseen in the queue. Fires once per
+    (BA, event) — gated on it being the first ``clock_in``. Best-effort: email
+    is reliable inline (see project_push_email_delivery) and a failure here
+    never blocks the clock."""
+    from ambassadors.models import Attendance
+
+    try:
+        n = Attendance.objects.filter(
+            ambassador=ambassador, event=event, source__name="clock_in"
+        ).count()
+        if n != 1:
+            return
+        _email_admins_checkin_landed(event, ambassador)
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "checkin: landed-alert failed event=%s", getattr(event, "id", None)
+        )
+
+
+def _email_admins_checkin_landed(event, ambassador) -> None:
+    from django.conf import settings
+    from django.utils.html import escape
+
+    from events.mutations import _get_spark_admin_emails
+    from utils.mailer import Envelope, Mailer
+
+    admins = _get_spark_admin_emails()
+    if not admins:
+        return
+    user = getattr(ambassador, "user", None)
+    name = ""
+    if user:
+        name = f"{user.first_name or ''} {user.last_name or ''}".strip()
+    name = name or "A field rep"
+    phone = getattr(ambassador, "phone", None) or ""
+    brand = event.tenant.name if getattr(event, "tenant_id", None) else ""
+    venue = event.name or "an event"
+    base = (getattr(settings, "ADMIN_FRONTEND_URL", "") or "").rstrip("/")
+    link_html = (
+        f"<div style='margin:16px 0 4px'><a href='{base}/walkups' "
+        "style='display:inline-block;background:#c5f546;color:#0a0d09;"
+        "padding:10px 18px;border-radius:10px;text-decoration:none;"
+        "font-weight:700'>Review in Walk-ups</a></div>"
+        if base and base != "http://localhost:3000"
+        else ""
+    )
+    phone_html = (
+        f"<p style='color:#555;margin:4px 0 0'>Phone: {escape(phone)}</p>"
+        if phone
+        else ""
+    )
+    html = (
+        "<div style='font-family:system-ui,sans-serif;color:#14181a'>"
+        f"<p style='font-size:15px;margin:0'><strong>{escape(name)}</strong> just "
+        f"checked in via the web link for <strong>{escape(venue)}</strong>"
+        f"{(' — ' + escape(brand)) if brand else ''}.</p>"
+        f"{phone_html}"
+        "<p style='color:#555'>They're clocked in and can file a recap. Confirm "
+        "the walk-up so their hours count.</p>"
+        f"{link_html}</div>"
+    )
+
+    class _CheckinMailer(Mailer):
+        def envelope(self) -> "Envelope":
+            return Envelope(
+                subject=f"New web check-in — {name} @ {venue}",
+                html=html,
+                to_emails=admins,
+            )
+
+    _CheckinMailer().send_now()
 
 
 # --------------------------------------------------------------------------
