@@ -61,12 +61,20 @@ def _haversine_miles(a_lat, a_lng, b_lat, b_lng) -> float | None:
 def _code_expiry_for_event(event: Event) -> datetime:
     """Codes stay valid through the end of the event's day plus a one-day
     grace buffer (so a shift that runs late, or a next-morning recap, still
-    works). No event date → 2 days from now. Admins can revoke sooner."""
+    works). No event date → 2 days from now. Admins can revoke sooner.
+
+    FLOOR: never expire sooner than 48h from generation. Without this, an
+    admin clicking Generate on a PAST event (late/backfill recap — or just
+    testing) got a code that was expired at birth: event May 1 → "valid
+    through" May 2, generated Jul 21 → /checkin link dead on arrival with no
+    hint why (Kyle, 2026-07-21). Explicitly generating a code means "I want a
+    working code NOW"; future events keep the event-based expiry since it
+    already exceeds the floor."""
     base = getattr(event, "start_time", None) or getattr(event, "date", None)
     base = base or dj_tz.now()
     # end of that calendar day + 1 day grace
     end_of_day = base.replace(hour=23, minute=59, second=59, microsecond=0)
-    return end_of_day + timedelta(days=1)
+    return max(end_of_day + timedelta(days=1), dj_tz.now() + timedelta(days=2))
 
 
 def _user_in_tenant(user, tenant_id: int) -> bool:
