@@ -1,0 +1,58 @@
+name: Dump field sampling
+
+# Manual, READ-ONLY: dump a tenant's field-sampling results (per-market YTD SKU
+# breakdowns + call-outs + weekly buckets) as JSON in the run log. The data
+# feed for refreshing the Feel Free routes site (kyle915.github.io/
+# feel-free-routes) without a local DB proxy. No writes of any kind.
+# See recaps/management/commands/dump_field_sampling.py.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tenant:
+        description: "Tenant slug or numeric id"
+        required: true
+        default: "feel-free"
+      markets:
+        description: "Comma-separated market labels (blank = the five FF metros)"
+        required: false
+        default: ""
+      anchor:
+        description: "Weekly-bucket anchor date YYYY-MM-DD"
+        required: false
+        default: "2026-06-25"
+
+jobs:
+  dump-field-sampling:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire dump-field-sampling cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/dump-field-sampling
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          TENANT: ${{ github.event.inputs.tenant }}
+          MARKETS: ${{ github.event.inputs.markets }}
+          ANCHOR: ${{ github.event.inputs.anchor }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -G "$CRON_URL" \
+            --data-urlencode "tenant=$TENANT" \
+            --data-urlencode "markets=$MARKETS" \
+            --data-urlencode "anchor=$ANCHOR" \
+            -X POST \
+            -H "X-Cron-Secret: $CRON_SECRET")
+
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          echo ""
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS — see body above."
+            exit 1
+          fi
