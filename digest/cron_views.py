@@ -3262,6 +3262,65 @@ class SetCustomRecapFieldView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class SeedBrewDrRecapTemplateView(View):
+    """GET/POST `/internal/cron/seed-brew-dr-recap-template`.
+
+    Builds the Brew Dr. Kombucha custom recap template (sections + fields,
+    incl. the sampled-cans multi-select). Fires `seed_brew_dr_recap_template`.
+    DRY-RUN unless apply=true; the response `report` is the command's full
+    stdout (self-diagnosing — lists tenants if Brew Dr. can't be matched).
+
+    Params (query or POST, all optional):
+      - tenant: tenant name/slug substring (default "brew")
+      - template_name: override the template name
+      - event_type: event-type name substring to attach to
+      - apply: "1"/"true"/"yes" — actually write (omit for dry-run)
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _param(name: str) -> str | None:
+            return request.GET.get(name) or request.POST.get(name)
+
+        apply_raw = (_param("apply") or "").lower()
+        kwargs: dict = {
+            "tenant": _param("tenant") or "brew",
+            "apply": apply_raw in ("1", "true", "yes", "on"),
+        }
+        if _param("template_name"):
+            kwargs["template_name"] = str(_param("template_name"))
+        if _param("event_type"):
+            kwargs["event_type"] = str(_param("event_type"))
+
+        out = io.StringIO()
+        try:
+            call_command("seed_brew_dr_recap_template", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("seed_brew_dr_recap_template cron failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "report": out.getvalue(),
+                },
+                status=500,
+            )
+        return JsonResponse(
+            {"ok": True, "applied": kwargs["apply"], "report": out.getvalue()}
+        )
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class ExportRecapsToSheetView(View):
     """POST `/internal/cron/export-recaps-to-sheet`.
 
@@ -5409,6 +5468,7 @@ def _registered_views() -> dict[str, Any]:
         "book-ambassador-on-event": BookAmbassadorOnEventView,
         "set-tenant-event-types": SetTenantEventTypesView,
         "set-custom-recap-field": SetCustomRecapFieldView,
+        "seed-brew-dr-recap-template": SeedBrewDrRecapTemplateView,
         "export-recaps-to-sheet": ExportRecapsToSheetView,
         "export-ld-summary": ExportLdSummaryView,
         "export-girlbeer-summary": ExportGirlbeerSummaryView,
