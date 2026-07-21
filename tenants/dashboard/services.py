@@ -517,6 +517,20 @@ class DashboardQueriesService(SparkGraphQLMixin):
         Returns:
             Filtered queryset
         """
+        # Drop recaps whose parent Request was soft-deleted. deleteRequest only
+        # sets Request.deleted_at and deliberately keeps the linked Event +
+        # Recap/CustomRecap rows, so a "deleted" event's recap otherwise keeps
+        # feeding every dashboard section (period comparison, monthly trend,
+        # market analysis). Applies to both legacy Recap and CustomRecap (both
+        # reach here scoped through event__). Standalone events (no request) are
+        # kept, mirroring recaps.tenant_overview._filter_event_window (the
+        # headline-KPI path). BEFORE the `not filters` early-return so it always
+        # runs, even for the unfiltered admin view.
+        queryset = queryset.filter(
+            Q(event__request__isnull=True)
+            | Q(event__request__deleted_at__isnull=True)
+        )
+
         if not filters:
             return queryset
 

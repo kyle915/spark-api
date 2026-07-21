@@ -42,7 +42,7 @@ import re
 from dataclasses import dataclass, fields as dataclass_fields
 from datetime import date, timedelta
 
-from django.db.models import Count, Max, Min, Sum
+from django.db.models import Count, Max, Min, Q, Sum
 from django.db.models.functions import Coalesce, TruncMonth
 from django.utils import timezone
 
@@ -221,6 +221,20 @@ def _filter_event_window(queryset, prefix: str, window: tuple | None):
     False`` makes this a no-op for every normal event.
     """
     queryset = queryset.filter(**{f"{prefix}exclude_from_dashboard": False})
+    # Drop recaps whose parent Request was soft-deleted. deleteRequest
+    # (events.mutations) only sets Request.deleted_at — it deliberately leaves
+    # the linked Event + Recap/CustomRecap rows intact — so a "deleted" test
+    # event's recap otherwise keeps counting in every KPI, count, monthly
+    # trend, and geo figure (Kyle: built a Brew Dr. test event+recap, deleted
+    # it, dashboard still showed 100/100/100 · 1 event/1 recap). Standalone
+    # events (no request) are KEPT, mirroring events.queries.EventQueriesService
+    # (`request__isnull=True OR request__deleted_at__isnull=True`). Unconditional
+    # (applies to the all-time path too), like the exclude_from_dashboard filter
+    # above — a deleted request should never resurface, windowed or not.
+    queryset = queryset.filter(
+        Q(**{f"{prefix}request__isnull": True})
+        | Q(**{f"{prefix}request__deleted_at__isnull": True})
+    )
     if window is None:
         return queryset
     start, end = window
