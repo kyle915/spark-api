@@ -1,0 +1,63 @@
+name: Seed Brew Dr recap template
+
+# Manual: build the Brew Dr. Kombucha custom recap template (sections + fields,
+# incl. the sampled-cans multi-select). Dry-run by default — the run log prints
+# the resolved tenant / event type and the full planned template, and lists all
+# tenants if Brew Dr. can't be matched (so you learn the exact slug / whether it
+# needs onboarding first). Flip apply=true to write. Idempotent.
+# See recaps/management/commands/seed_brew_dr_recap_template.py.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tenant:
+        description: "Tenant name/slug substring"
+        required: true
+        default: "brew"
+      event_type:
+        description: "Event-type name substring (blank = prefer 'retail', else first)"
+        required: false
+        default: ""
+      apply:
+        description: "Actually write (true) or dry-run (false)"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+jobs:
+  seed-brew-dr-recap-template:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire seed-brew-dr-recap-template cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/seed-brew-dr-recap-template
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          TENANT: ${{ github.event.inputs.tenant }}
+          EVENT_TYPE: ${{ github.event.inputs.event_type }}
+          APPLY: ${{ github.event.inputs.apply || 'false' }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -G "$CRON_URL" \
+            --data-urlencode "tenant=$TENANT" \
+            --data-urlencode "event_type=$EVENT_TYPE" \
+            --data-urlencode "apply=$APPLY" \
+            -X POST \
+            -H "X-Cron-Secret: $CRON_SECRET")
+
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          echo ""
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS — see body above."
+            exit 1
+          fi
