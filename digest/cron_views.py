@@ -25,6 +25,7 @@ on any cron runner with a curl-shaped trigger.
 from __future__ import annotations
 
 import io
+import json
 import logging
 import traceback
 from typing import Any
