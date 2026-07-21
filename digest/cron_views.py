@@ -3321,6 +3321,65 @@ class SeedBrewDrRecapTemplateView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class DumpFieldSamplingView(View):
+    """GET/POST `/internal/cron/dump-field-sampling`.
+
+    READ-ONLY: dumps a tenant's field-sampling results (per-market YTD SKU
+    breakdowns + call-outs + weekly buckets) as JSON — the data feed for the
+    Feel Free routes site refresh. Fires `dump_field_sampling`; the parsed
+    JSON is returned under `data` so a GH Actions run log carries it cleanly.
+
+    Params (query or POST, all optional):
+      - tenant: slug or numeric id (default "feel-free")
+      - markets: comma-separated market labels (default the five FF metros)
+      - anchor: YYYY-MM-DD weekly-bucket anchor (default 2026-06-25)
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _param(name: str) -> str | None:
+            return request.GET.get(name) or request.POST.get(name)
+
+        kwargs: dict = {}
+        if _param("tenant"):
+            kwargs["tenant"] = str(_param("tenant"))
+        if _param("markets"):
+            kwargs["markets"] = str(_param("markets"))
+        if _param("anchor"):
+            kwargs["anchor"] = str(_param("anchor"))
+
+        out = io.StringIO()
+        try:
+            call_command("dump_field_sampling", stdout=out, **kwargs)
+            raw = out.getvalue()
+            blob = raw.split("FFDUMP_JSON_START", 1)[1].split(
+                "FFDUMP_JSON_END", 1
+            )[0]
+            data = json.loads(blob)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("dump_field_sampling cron failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "report": out.getvalue(),
+                },
+                status=500,
+            )
+        return JsonResponse({"ok": True, "data": data})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class ExportRecapsToSheetView(View):
     """POST `/internal/cron/export-recaps-to-sheet`.
 
@@ -5469,6 +5528,7 @@ def _registered_views() -> dict[str, Any]:
         "set-tenant-event-types": SetTenantEventTypesView,
         "set-custom-recap-field": SetCustomRecapFieldView,
         "seed-brew-dr-recap-template": SeedBrewDrRecapTemplateView,
+        "dump-field-sampling": DumpFieldSamplingView,
         "export-recaps-to-sheet": ExportRecapsToSheetView,
         "export-ld-summary": ExportLdSummaryView,
         "export-girlbeer-summary": ExportGirlbeerSummaryView,
