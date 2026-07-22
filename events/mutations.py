@@ -273,6 +273,9 @@ class BaseMutationService(SparkGraphQLMixin):
         # set the tenant id
         if hasattr(model, "tenant_id"):
             setattr(model, "tenant_id", self.tenant_id)
+        # Localize naive wall-clock times to the model's OWN timezone (no-op for
+        # models without a timezone FK). See _localize_model_times_to_own_tz.
+        _localize_model_times_to_own_tz(model)
         await sync_to_async(model.save)()
         return model
 
@@ -388,6 +391,7 @@ class EventMutationService(BaseMutationService):
         if hasattr(model, "tenant_id"):
             setattr(model, "tenant_id", self.tenant_id)
 
+        _localize_model_times_to_own_tz(model)
         model.save()
         return model
 
@@ -2324,6 +2328,7 @@ class RequestMutationService(BaseMutationService):
         if hasattr(model, "tenant_id"):
             setattr(model, "tenant_id", self.tenant_id)
 
+        _localize_model_times_to_own_tz(model)
         model.save()
         self._replace_request_products_sync(model)
         self._sync_request_store_manager(model)
@@ -2578,6 +2583,82 @@ class PublicRequestMutations:
             )
 
 
+def _localize_naive_to_offset(value, offset_minutes):
+    """Interpret a NAIVE datetime in a fixed UTC offset (minutes); pass
+    aware datetimes and ``None`` through unchanged.
+
+    The FE is supposed to bake the venue's DST-aware UTC offset into each
+    request timestamp before posting. When a form path can't resolve the
+    offset it posts a naive ``...T09:00:00`` — Strawberry keeps it naive and
+    Django then stores it as UTC, so it reads back shifted by the offset (a
+    9 AM Central demo surfaced as 4 AM — REQ-1514). Localizing a naive value
+    in the request's own (already-DST-resolved) TimeZone offset reproduces
+    what the client should have sent; an aware value from a correct client is
+    left untouched, so this only ever repairs the broken path.
+    """
+    if value in (None, "") or offset_minutes is None:
+        return value
+
+    fixed = datetime.timezone(datetime.timedelta(minutes=offset_minutes))
+
+    # Datetime path (a Strawberry-parsed / future-proof caller).
+    if isinstance(value, datetime.datetime):
+        return value if value.utcoffset() is not None else value.replace(tzinfo=fixed)
+
+    # String path: the request inputs are declared `str`, so ISO strings reach
+    # us un-parsed (Django coerces on save). Parse it; if it carries no UTC
+    # offset, stamp the request tz's offset so Django stores the intended
+    # wall-clock instant. Anything that isn't an ISO datetime (a bare date, a
+    # malformed value) is left for Django to handle unchanged.
+    if isinstance(value, str):
+        try:
+            parsed = datetime.datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        except ValueError:
+            return value
+        if parsed.utcoffset() is not None:
+            return value
+        return parsed.replace(tzinfo=fixed).isoformat()
+
+    return value
+
+
+# Wall-clock time fields that the FE bakes the venue's UTC offset into before
+# posting. Event carries an extra ``new_end_time``; the others are shared by
+# Request and Event.
+_LOCALIZABLE_TIME_ATTRS = ("date", "start_time", "end_time", "new_end_time")
+
+
+def _localize_model_times_to_own_tz(model) -> None:
+    """Localize a model's NAIVE wall-clock time fields to its OWN timezone.
+
+    Backend safety net for every request/event write path. The FE is supposed
+    to bake the venue's DST-aware UTC offset into each time before posting; a
+    form path that can't resolve the offset posts a naive ``...T09:00:00`` that
+    Django then stores as UTC, so it reads back shifted (a 9 AM Central demo
+    surfaced as 4 AM — REQ-1514). We resolve the model's own ``TimeZone`` offset
+    and re-stamp only the naive fields; aware values from a correct client pass
+    through untouched, so this only ever repairs the broken path. Models without
+    a ``timezone_id`` (Client, Distributor, ...) are left alone.
+
+    Assumes the FE convention that a naive time is LOCAL wall-clock, never
+    naive-UTC — which holds across every request/event form (all go through
+    ``buildRequestDateTimes``). Mutates ``model`` in place; call it immediately
+    before ``.save()``.
+    """
+    tz_id = getattr(model, "timezone_id", None)
+    if not tz_id:
+        return
+    tz_row = models.TimeZone.objects.filter(id=tz_id).first()
+    offset = getattr(tz_row, "offset", None)
+    if offset is None:
+        return
+    for attr in _LOCALIZABLE_TIME_ATTRS:
+        if hasattr(model, attr):
+            setattr(
+                model, attr, _localize_naive_to_offset(getattr(model, attr), offset)
+            )
+
+
 class RequestWithDependenciesMutationService(BaseMutationService):
     """Service for request with dependencies mutations."""
 
@@ -2630,6 +2711,11 @@ class RequestWithDependenciesMutationService(BaseMutationService):
                         "Pending status not found. Please ensure you have a status with slug 'pending'."
                     )
                 request.status = pending_status
+
+            # Localize naive wall-clock times to the request's OWN timezone
+            # before persisting (repairs a form path that couldn't resolve the
+            # venue's UTC offset; aware values pass through untouched).
+            _localize_model_times_to_own_tz(request)
 
             request.save()
 
