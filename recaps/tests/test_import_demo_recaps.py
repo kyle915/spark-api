@@ -59,6 +59,11 @@ class TestImportDemoRecaps(EventsGraphQLTestCase):
             name="Approved", slug="approved", tenant=self.tenant,
             created_by=self.system_user,
         )
+        # create_request needs an approved RequestStatus for the tenant.
+        event_models.RequestStatus.objects.create(
+            name="Approved", slug="approved", tenant=self.tenant,
+            created_by=self.system_user,
+        )
         event_models.TimeZone.objects.create(
             name="Central Daylight Time", code="CDT", offset=-300,
             created_by=self.system_user,
@@ -123,10 +128,12 @@ class TestImportDemoRecaps(EventsGraphQLTestCase):
         res = self._run(apply=False)
         assert res["mode"] == "DRY_RUN"
         assert res["rows_in"] == 7
-        assert res["would_create"] == 7
-        assert res["created"] == 0
+        assert res["would_create_events"] == 7
+        assert res["would_create_requests"] == 7
+        assert res["events_created"] == 0
         assert event_models.Event.objects.count() == 0
         assert recap_models.CustomRecap.objects.count() == 0
+        assert event_models.Request.objects.count() == 0
 
         # Our subset is mapped; a known column we didn't model is unmapped.
         mapped = res["columns_mapped"]
@@ -136,15 +143,26 @@ class TestImportDemoRecaps(EventsGraphQLTestCase):
         assert res["tenant"]["slug"] == "girl-beer"
         assert res["state"] == "TX"
         assert res["external_ba_name"] == "Internal"
+        assert res["create_request"] is True
 
-    def test_apply_creates_events_recaps_and_values(self):
+    def test_apply_creates_events_recaps_requests_and_values(self):
         res = self._run(apply=True)
-        assert res["created"] == 7
+        assert res["events_created"] == 7
+        assert res["recaps_created"] == 7
+        assert res["requests_created"] == 7
         assert event_models.Event.objects.count() == 7
         assert recap_models.CustomRecap.objects.count() == 7
+        assert event_models.Request.objects.count() == 7
 
-        # Standalone events — no client Request (stay off the Master Tracker).
-        assert event_models.Event.objects.filter(request__isnull=False).count() == 0
+        # Every event now has a linked (approved, already-scheduled) Request →
+        # it lands on the Master Tracker + mirror.
+        assert event_models.Event.objects.filter(request__isnull=True).count() == 0
+        for req in event_models.Request.objects.all():
+            assert req.status.slug == "approved"
+            assert req.scheduling_status == "already_scheduled"
+            assert req.tenant_id == self.tenant.id
+            assert req.state.code == "TX"
+
         # All approved, template attached, TX, Central.
         for ev in event_models.Event.objects.all():
             assert ev.status.slug == "approved"
@@ -183,9 +201,29 @@ class TestImportDemoRecaps(EventsGraphQLTestCase):
 
     def test_apply_is_idempotent(self):
         first = self._run(apply=True)
-        assert first["created"] == 7
+        assert first["events_created"] == 7
+        assert first["requests_created"] == 7
         again = self._run(apply=True)
-        assert again["created"] == 0
-        assert again["skipped"] == 7
+        assert again["events_created"] == 0
+        assert again["recaps_created"] == 0
+        assert again["requests_created"] == 0
+        # Nothing duplicated on the second pass.
         assert event_models.Event.objects.count() == 7
         assert recap_models.CustomRecap.objects.count() == 7
+        assert event_models.Request.objects.count() == 7
+
+    def test_second_pass_adds_only_requests_to_recap_only_events(self):
+        """The real prod scenario: events + recaps already exist (from the
+        first, request-less load); a re-run adds ONLY the Requests."""
+        # Simulate the prior state: run once WITHOUT create_request by stripping
+        # the linked requests after a full apply.
+        self._run(apply=True)
+        event_models.Event.objects.update(request=None)
+        event_models.Request.objects.all().delete()
+        assert event_models.Event.objects.filter(request__isnull=True).count() == 7
+
+        again = self._run(apply=True)
+        assert again["events_created"] == 0
+        assert again["recaps_created"] == 0
+        assert again["requests_created"] == 7
+        assert event_models.Event.objects.filter(request__isnull=True).count() == 0

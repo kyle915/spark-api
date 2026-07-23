@@ -61,7 +61,16 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 from django.utils import timezone as dj_tz
 
-from events.models import Event, EventStatus, EventType, State, TimeZone
+from events.models import (
+    Event,
+    EventStatus,
+    EventType,
+    Request,
+    RequestStatus,
+    RequestType,
+    State,
+    TimeZone,
+)
 from recaps.models import (
     CustomField,
     CustomFieldValue,
@@ -280,6 +289,29 @@ class Command(BaseCommand):
         if state_code and not state:
             raise CommandError(f"State code/name={state_code!r} not found.")
 
+        # ---- Resolve Request artifacts (opt-in via create_request) ----------
+        # When on, each row ALSO gets an approved Request linked to its event,
+        # so the demos land on the (request-driven) Master Tracker + its Google
+        # Sheet mirror. scheduling_status="already_scheduled" keeps the auto-job
+        # signal from ever posting these internal demos to the BA board.
+        create_request = bool(spec.get("create_request"))
+        request_type = None
+        request_status = None
+        if create_request:
+            rt_name = (spec.get("request_type_name") or event_type.name).strip()
+            request_type, _ = RequestType.objects.get_or_create(
+                tenant=tenant, name=rt_name, defaults={"created_by": owner}
+            )
+            rs_slug = (spec.get("request_status_slug") or "approved").strip()
+            request_status = RequestStatus.objects.filter(
+                tenant=tenant, slug=rs_slug
+            ).first()
+            if not request_status:
+                raise CommandError(
+                    f"RequestStatus slug={rs_slug!r} not found for tenant "
+                    f"{tenant.name!r} (needed for create_request)."
+                )
+
         # ---- Build the column → field map ----------------------------------
         fields = list(
             CustomField.objects.filter(custom_recap_template=template).select_related(
@@ -319,6 +351,9 @@ class Command(BaseCommand):
                 "timezone": {"code": tz_code, "offset_min": tz_offset},
                 "state": (state.code if state else None),
                 "external_ba_name": spec.get("external_ba_name"),
+                "create_request": create_request,
+                "request_type": (request_type.name if request_type else None),
+                "request_status": (request_status.slug if request_status else None),
                 "fields_total": len(fields),
                 "columns_mapped": {c: mapped[c].name for c in mapped},
                 "columns_unmapped": unmapped_cols,
@@ -336,6 +371,12 @@ class Command(BaseCommand):
         w(f"  timezone     : {tz_code} (offset {tz_offset} min)")
         w(f"  state        : {state.code if state else '(none)'}")
         w(f"  BA credit    : {spec.get('external_ba_name')!r}")
+        if create_request:
+            w(
+                f"  + request    : YES → Master Tracker "
+                f"(type={request_type.name!r}, status={request_status.slug!r}, "
+                f"scheduling=already_scheduled)"
+            )
         w(f"  rows         : {len(rows)}")
         w("")
         w(f"  MAPPED columns → fields ({len(mapped)}):")
@@ -352,13 +393,92 @@ class Command(BaseCommand):
             w(f"  Template fields left blank ({len(unfilled_fields)}): {', '.join(unfilled_fields)}")
         w("")
 
-        # ---- Per-row processing --------------------------------------------
+        # ---- Per-row processing (idempotent upsert of event/recap/request) --
         results = []
         engagements_field_norm = _norm(spec.get("engagements_field") or "")
         prefix = (spec.get("event_name_prefix") or "Demo").strip()
         local_hour = int(spec.get("local_hour") or 12)
         approved = bool(spec.get("approved", True))
         ba_name = (spec.get("external_ba_name") or "").strip() or None
+
+        def _engagements(row):
+            if not engagements_field_norm:
+                return None
+            for col, f in mapped.items():
+                if _norm(f.name) == engagements_field_norm and col in row:
+                    try:
+                        return int(float(row[col]))
+                    except (TypeError, ValueError):
+                        return None
+            return None
+
+        def _create_recap(event, row):
+            recap = CustomRecap.objects.create(
+                name=event.name,
+                submitted_at=event.date,
+                total_engagements=_engagements(row),
+                approved=approved,
+                event=event,
+                timezone=timezone_row,
+                ambassador=None,
+                external_ba_name=ba_name,
+                retailer=None,
+                location=None,
+                state=state,
+                tenant=tenant,
+                custom_recap_template=template,
+                created_by=owner,
+            )
+            written = 0
+            for col, f in mapped.items():
+                if col not in row:
+                    continue
+                val, _note = _format_value(f, row.get(col))
+                if val is None or val == "":
+                    continue
+                CustomFieldValue.objects.create(
+                    custom_recap=recap, custom_field=f, value=val, created_by=owner
+                )
+                written += 1
+            return recap, written
+
+        def _create_request_for(event):
+            # Create the Request BEFORE linking the event: the Request post_save
+            # job signal reads request.event_set (empty here) → no BA-board job.
+            req = Request.objects.create(
+                name=event.name,
+                tenant=tenant,
+                status=request_status,
+                request_type=request_type,
+                date=event.date,
+                start_time=event.start_time,
+                end_time=event.end_time,
+                address=event.address or "",
+                state=state,
+                timezone=timezone_row,
+                scheduling_status="already_scheduled",
+                created_by=owner,
+                approved_by=owner,
+            )
+            event.request = req
+            event.save(update_fields=["request", "updated_at"])
+            # Mirror to the tenant's linked Master Tracker sheet INLINE. The
+            # Request post_save signal also mirrors, but on Cloud Run it may
+            # enqueue to an RQ queue with no worker; an explicit inline upsert
+            # (idempotent by UUID) guarantees the row lands within this run.
+            try:
+                from utils.sheets_mirror import upsert_request_row
+
+                req.refresh_from_db()
+                upsert_request_row(req)
+            except Exception:  # noqa: BLE001 — best-effort; never fail the row
+                pass
+            return req
+
+        def _has_recap(event):
+            return CustomRecap.objects.filter(
+                event=event, custom_recap_template=template
+            ).exists()
 
         for i, row in enumerate(rows, start=1):
             date_raw = row.get(date_key)
@@ -367,16 +487,15 @@ class Command(BaseCommand):
             try:
                 event_dt = self._build_event_dt(date_raw, local_hour, tz_offset)
             except Exception as e:  # noqa: BLE001
-                row_res["status"] = "error"
-                row_res["error"] = f"bad date {date_raw!r}: {e}"
+                row_res.update(status="error", error=f"bad date {date_raw!r}: {e}")
                 results.append(row_res)
                 w(self.style.ERROR(f"  row {i}: {row_res['error']}"))
                 continue
 
             city = self._city_from_address(address)
             event_name = f"{prefix} — {city}" if city else prefix
+            row_res["event_name"] = event_name
 
-            # Count the field values we'd write (for the preview).
             n_vals, notes = 0, []
             for col, f in mapped.items():
                 if col not in row:
@@ -387,118 +506,107 @@ class Command(BaseCommand):
                 n_vals += 1
                 if note:
                     notes.append(f"{f.name}: {note}")
+            row_res.update(field_values=n_vals, notes=notes)
 
-            row_res.update(
-                {"event_name": event_name, "field_values": n_vals, "notes": notes}
-            )
-
-            existing = Event.objects.filter(
+            event = Event.objects.filter(
                 tenant=tenant, name=event_name, date=event_dt
             ).first()
-            if existing:
-                row_res["status"] = "skipped_exists"
-                row_res["event_id"] = existing.id
-                results.append(row_res)
-                w(f"  row {i}: SKIP (event exists id={existing.id}) — {event_name}")
-                continue
 
             if not apply:
-                row_res["status"] = "would_create"
+                recap_here = bool(event and _has_recap(event))
+                needs_req = create_request and (
+                    event is None or event.request_id is None
+                )
+                row_res.update(
+                    event=("exists" if event else "would_create"),
+                    recap=("exists" if recap_here else "would_create"),
+                    request=(
+                        "would_create"
+                        if needs_req
+                        else ("exists" if create_request else "n/a")
+                    ),
+                )
+                if event:
+                    row_res["event_id"] = event.id
                 results.append(row_res)
-                w(f"  row {i}: would create — {event_name}  ({n_vals} field values)")
+                w(
+                    f"  row {i}: event={row_res['event']} recap={row_res['recap']} "
+                    f"request={row_res['request']} — {event_name}"
+                )
                 for n in notes:
                     w(self.style.WARNING(f"       note: {n}"))
                 continue
 
-            # ---- APPLY: create event + recap + values in one transaction ----
+            # ---- APPLY --------------------------------------------------------
             with transaction.atomic():
-                event = Event.objects.create(
-                    name=event_name,
-                    date=event_dt,
-                    tenant=tenant,
-                    event_type=event_type,
-                    status=event_status,
-                    address=address,
-                    state=state,
-                    timezone=timezone_row,
-                    custom_recap_template=template,
-                    created_by=owner,
-                )
-
-                engagements = None
-                if engagements_field_norm:
-                    for col, f in mapped.items():
-                        if _norm(f.name) == engagements_field_norm and col in row:
-                            try:
-                                engagements = int(float(row[col]))
-                            except (TypeError, ValueError):
-                                engagements = None
-                            break
-
-                recap = CustomRecap.objects.create(
-                    name=event_name,
-                    submitted_at=event_dt,
-                    total_engagements=engagements,
-                    approved=approved,
-                    event=event,
-                    timezone=timezone_row,
-                    ambassador=None,
-                    external_ba_name=ba_name,
-                    retailer=None,
-                    location=None,
-                    state=state,
-                    tenant=tenant,
-                    custom_recap_template=template,
-                    created_by=owner,
-                )
-
-                written = 0
-                for col, f in mapped.items():
-                    if col not in row:
-                        continue
-                    val, _note = _format_value(f, row.get(col))
-                    if val is None or val == "":
-                        continue
-                    CustomFieldValue.objects.create(
-                        custom_recap=recap,
-                        custom_field=f,
-                        value=val,
+                if event is None:
+                    event = Event.objects.create(
+                        name=event_name,
+                        date=event_dt,
+                        tenant=tenant,
+                        event_type=event_type,
+                        status=event_status,
+                        address=address,
+                        state=state,
+                        timezone=timezone_row,
+                        custom_recap_template=template,
                         created_by=owner,
                     )
-                    written += 1
+                    row_res["event"] = "created"
+                else:
+                    row_res["event"] = "exists"
+                row_res["event_id"] = event.id
 
-            row_res.update(
-                {
-                    "status": "created",
-                    "event_id": event.id,
-                    "recap_id": recap.id,
-                    "field_values_written": written,
-                    "total_engagements": engagements,
-                }
-            )
+                if _has_recap(event):
+                    row_res["recap"] = "exists"
+                else:
+                    recap, written = _create_recap(event, row)
+                    row_res.update(
+                        recap="created",
+                        recap_id=recap.id,
+                        field_values_written=written,
+                    )
+
+                if not create_request:
+                    row_res["request"] = "n/a"
+                elif event.request_id:
+                    row_res["request"] = "exists"
+                    row_res["request_id"] = event.request_id
+                else:
+                    req = _create_request_for(event)
+                    row_res.update(
+                        request="created",
+                        request_id=req.id,
+                        request_uuid=str(req.uuid),
+                    )
+
             results.append(row_res)
             w(
                 self.style.SUCCESS(
-                    f"  row {i}: CREATED event={event.id} recap={recap.id} "
-                    f"({written} values) — {event_name}"
+                    f"  row {i}: event={row_res['event']}(#{row_res['event_id']}) "
+                    f"recap={row_res['recap']} request={row_res['request']} "
+                    f"— {event_name}"
                 )
             )
 
         report["results"] = results
-        report["created"] = sum(1 for r in results if r.get("status") == "created")
-        report["skipped"] = sum(
-            1 for r in results if r.get("status") == "skipped_exists"
-        )
-        report["would_create"] = sum(
-            1 for r in results if r.get("status") == "would_create"
-        )
-        report["errors"] = sum(1 for r in results if r.get("status") == "error")
+
+        def _count(key, val):
+            return sum(1 for r in results if r.get(key) == val)
+
+        report["events_created"] = _count("event", "created")
+        report["recaps_created"] = _count("recap", "created")
+        report["requests_created"] = _count("request", "created")
+        report["would_create_events"] = _count("event", "would_create")
+        report["would_create_requests"] = _count("request", "would_create")
+        report["errors"] = _count("status", "error")
 
         w("")
         w(
-            f"  SUMMARY: created={report['created']} "
-            f"would_create={report['would_create']} "
-            f"skipped={report['skipped']} errors={report['errors']}"
+            f"  SUMMARY: events_created={report['events_created']} "
+            f"recaps_created={report['recaps_created']} "
+            f"requests_created={report['requests_created']} "
+            f"errors={report['errors']}"
         )
         if not apply:
             w("  (dry-run — nothing written. Re-run with --apply to commit.)")
