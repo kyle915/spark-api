@@ -3322,6 +3322,73 @@ class SeedBrewDrRecapTemplateView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class ImportDemoRecapsView(View):
+    """GET/POST `/internal/cron/import-demo-recaps`.
+
+    Bulk-creates custom recaps (+ standalone approved events) for a tenant from
+    a committed JSON data file (e.g. Girl Beer's internal H-E-B make-good demos).
+    Fires `import_demo_recaps`. DRY-RUN unless apply=true; the parsed per-run
+    `summary` (resolved tenant/template, column→field mapping, per-row outcome)
+    is returned alongside the full `report` stdout so a GH Actions run log shows
+    exactly what would / did get written.
+
+    Params (query or POST):
+      - dataset: dataset key → recaps/management/commands/data/<key>.json
+                 (default the Girl Beer H-E-B make-good set)
+      - apply: "1"/"true"/"yes" — actually write (omit for dry-run)
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _param(name: str) -> str | None:
+            return request.GET.get(name) or request.POST.get(name)
+
+        apply_raw = (_param("apply") or "").lower()
+        kwargs: dict = {
+            "dataset": _param("dataset") or "girlbeer_heb_makegood_2026_07_04",
+            "apply": apply_raw in ("1", "true", "yes", "on"),
+        }
+
+        out = io.StringIO()
+        try:
+            call_command("import_demo_recaps", stdout=out, **kwargs)
+            raw = out.getvalue()
+            summary = None
+            for line in raw.splitlines():
+                if line.startswith("JSON_RESULT: "):
+                    summary = json.loads(line[len("JSON_RESULT: ") :])
+                    break
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("import_demo_recaps cron failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "report": out.getvalue(),
+                },
+                status=500,
+            )
+        return JsonResponse(
+            {
+                "ok": True,
+                "applied": kwargs["apply"],
+                "summary": summary,
+                "report": out.getvalue(),
+            }
+        )
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class DumpFieldSamplingView(View):
     """GET/POST `/internal/cron/dump-field-sampling`.
 
@@ -5529,6 +5596,7 @@ def _registered_views() -> dict[str, Any]:
         "set-tenant-event-types": SetTenantEventTypesView,
         "set-custom-recap-field": SetCustomRecapFieldView,
         "seed-brew-dr-recap-template": SeedBrewDrRecapTemplateView,
+        "import-demo-recaps": ImportDemoRecapsView,
         "dump-field-sampling": DumpFieldSamplingView,
         "export-recaps-to-sheet": ExportRecapsToSheetView,
         "export-ld-summary": ExportLdSummaryView,
