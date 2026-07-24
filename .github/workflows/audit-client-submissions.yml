@@ -1,0 +1,49 @@
+name: Audit client submissions (read-only)
+
+# Manually fires `/internal/cron/audit-client-submissions` on Cloud Run to list
+# a tenant's recent Requests by submitter (client-login vs Ignite/admin) — see
+# events/management/commands/audit_client_submissions.py. READ-ONLY; never
+# writes. Answers "has the client been submitting from their portal login, and
+# did it reach the Ignite team by email?" The parsed summary + per-row detail
+# land in the run log.
+#
+# Secret-gated via X-Cron-Secret (shared INTERNAL_CRON_SECRET), header only.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tenant:
+        description: "Tenant slug or name"
+        required: true
+        default: "girl-beer"
+        type: string
+      days:
+        description: "Lookback window (days)"
+        required: true
+        default: "45"
+        type: string
+
+jobs:
+  fire-audit-client-submissions:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire audit-client-submissions cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/audit-client-submissions
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          TENANT: ${{ github.event.inputs.tenant }}
+          DAYS: ${{ github.event.inputs.days }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL?tenant=$TENANT&days=$DAYS" \
+            -H "X-Cron-Secret: $CRON_SECRET")
+          echo "HTTP $STATUS"
+          echo "----- response body -----"
+          cat /tmp/cron-response.json
+          echo
+          [ "$STATUS" != "200" ] && exit 1 || exit 0
