@@ -3389,6 +3389,61 @@ class ImportDemoRecapsView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class AuditClientSubmissionsView(View):
+    """GET/POST `/internal/cron/audit-client-submissions`.
+
+    READ-ONLY: lists a tenant's recent Requests by submitter (client-login vs
+    Ignite/admin) so we can confirm whether the client is actually submitting
+    through their portal login — and, since a client submission auto-approves +
+    CCs the whole Ignite team on the approval email, which submissions routed to
+    the team. Fires `audit_client_submissions`; the parsed `summary` is returned.
+
+    Params (query or POST, all optional):
+      - tenant: slug or name (default "girl-beer")
+      - days: lookback window (default 45)
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _param(name: str) -> str | None:
+            return request.GET.get(name) or request.POST.get(name)
+
+        kwargs: dict = {"tenant_slug": _param("tenant") or "girl-beer"}
+        if _param("days"):
+            try:
+                kwargs["days"] = int(str(_param("days")))
+            except ValueError:
+                pass
+
+        out = io.StringIO()
+        try:
+            call_command("audit_client_submissions", stdout=out, **kwargs)
+            raw = out.getvalue()
+            summary = None
+            for line in raw.splitlines():
+                if line.startswith("JSON_RESULT: "):
+                    summary = json.loads(line[len("JSON_RESULT: ") :])
+                    break
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("audit_client_submissions cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc),
+                 "report": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "summary": summary, "report": out.getvalue()})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class DumpFieldSamplingView(View):
     """GET/POST `/internal/cron/dump-field-sampling`.
 
@@ -5597,6 +5652,7 @@ def _registered_views() -> dict[str, Any]:
         "set-custom-recap-field": SetCustomRecapFieldView,
         "seed-brew-dr-recap-template": SeedBrewDrRecapTemplateView,
         "import-demo-recaps": ImportDemoRecapsView,
+        "audit-client-submissions": AuditClientSubmissionsView,
         "dump-field-sampling": DumpFieldSamplingView,
         "export-recaps-to-sheet": ExportRecapsToSheetView,
         "export-ld-summary": ExportLdSummaryView,
