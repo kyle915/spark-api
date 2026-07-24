@@ -26,6 +26,7 @@ from utils.graphql.types import SparkGraphQLErrorResponse
 from utils.graphql.mixins import SparkGraphQLMixin, resolve_id_to_int
 from utils.utils import ROLE_ID, build_mutation_response
 from .envelopes import (
+    ClientRequestCreatedNotificationMailer,
     EventApprovedNotificationMailer,
     RequestorRequestApprovedMailer,
     RequestorRequestDeclinedMailer,
@@ -2492,9 +2493,13 @@ class PublicRequestMutations:
             await _notify_notification_group_users_for_request_created(
                 request_with_relations, location, delay_seconds=0
             )
-            await _notify_spark_admins_for_client_request(
-                request_with_relations, location, delay_seconds=1
-            )
+            # NB: the dedicated client-submission alert
+            # (`_notify_spark_admins_for_client_request`) is intentionally NOT
+            # fired on this public request-by-URL path — the Ignite team is
+            # already looped in via the RMM routing email below (or the
+            # Ignite-only unroutable fallback). The alert is reserved for the
+            # authenticated client-portal path, where it's the belt-and-
+            # suspenders companion to the auto-approval email.
             # Per-tenant state-based RMM routing (LD only today). The
             # helper sets request.rmm_asigned_id + returns the TO email
             # list (the RMMs whose territory matches the request state).
@@ -2890,7 +2895,34 @@ async def _notify_spark_admins_for_client_request(
     location: models.Location | None,
     delay_seconds: int | float | None = None,
 ) -> None:
-    return
+    """Independent heads-up to the Ignite team the moment a client files a
+    request from their own portal login.
+
+    Deliberately separate from the auto-approval email
+    (`_notify_requestor_for_request_auto_approved`, which also CCs the Ignite
+    team): the two paths are belt-and-suspenders for each other, so if one
+    ever fails to build or send, the team still gets notified a client
+    submitted. Best-effort — a mail failure here must NEVER break the create.
+    """
+    try:
+        ignite_team = await _get_request_cc_emails_async()
+        if not ignite_team:
+            return
+        status_slug = await sync_to_async(
+            lambda: (getattr(getattr(request, "status", None), "slug", "") or "")
+        )()
+        mailer = ClientRequestCreatedNotificationMailer(
+            request=request,
+            location=location,
+            to_emails=ignite_team,
+            auto_approved=(status_slug == "approved"),
+        )
+        await sync_to_async(mailer.send)(delay_seconds=delay_seconds)
+    except Exception:
+        logger.exception(
+            "Client-submission alert failed for request %s",
+            getattr(request, "id", None),
+        )
 
 
 async def _notify_rmm_for_request_created(

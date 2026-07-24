@@ -565,26 +565,43 @@ class RequestCreatedNotificationMailer(Mailer):
 
 
 class ClientRequestCreatedNotificationMailer(Mailer):
+    """Ignite-team heads-up that a client filed a request from their own
+    portal login. `auto_approved` toggles the banner between the amber
+    "awaiting your approval" and the green "auto-approved · FYI" state so
+    the email tells the truth for the self-serve (auto-approving) path."""
+
     def __init__(
         self,
         request: models.Request,
         location: models.Location | None,
         to_emails: list[str],
+        auto_approved: bool = False,
     ) -> None:
         self.request = request
         self.location = location
         self.to_emails = to_emails
+        self.auto_approved = auto_approved
 
     def envelope(self) -> Envelope:
         offset = _get_timezone_offset_minutes(self.request)
+        tenant_name = (
+            getattr(getattr(self.request, "tenant", None), "name", None) or "Client"
+        )
+        req_label = (
+            f"REQ-{self.request.id}" if getattr(self.request, "id", None) else ""
+        )
+        subject = f"New client submission · {tenant_name}"
+        if req_label:
+            subject = f"{subject} · {req_label}"
         return Envelope(
-            subject="New request created",
+            subject=subject,
             template="events.templates.emails.request_created_admin_notification",
             to_emails=self.to_emails,
             context={
                 "request": self.request,
                 "products": _request_product_names(self.request),
                 "location": self.location,
+                "auto_approved": self.auto_approved,
                 "request_date": _format_dt_no_tz(
                     self.request.date, "%B %d, %Y", offset
                 ),
