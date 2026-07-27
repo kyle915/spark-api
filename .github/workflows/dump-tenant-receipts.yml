@@ -1,0 +1,61 @@
+name: Dump tenant receipts (read-only)
+
+# Manually fires `/internal/cron/dump-tenant-receipts` on Cloud Run to dump one
+# tenant's per-recap product spend PLUS a SIGNED download URL for every attached
+# receipt file — see recaps/management/commands/dump_tenant_receipts.py. The
+# companion to "Audit tenant account spend": that one gives the totals, this one
+# gives the images backing them. READ-ONLY; never writes.
+#
+# NOTE: the run log contains time-boxed signed GCS URLs (default 12h) that grant
+# read access to the receipt images. Keep the repo private and treat the log as
+# sensitive until the URLs expire.
+#
+# Secret-gated via X-Cron-Secret (shared INTERNAL_CRON_SECRET), header only.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tenant:
+        description: "Tenant: id, request-url-name, or name (e.g. 'stone house bread')."
+        required: true
+        default: "stone house bread"
+        type: string
+      expire_minutes:
+        description: "Signed-URL lifetime in minutes (default 720 = 12h)."
+        required: false
+        default: "720"
+        type: string
+      spend_only:
+        description: "Only include recaps that carry a product-spend amount."
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  fire-dump-tenant-receipts:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire dump-tenant-receipts cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/dump-tenant-receipts
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          TENANT: ${{ github.event.inputs.tenant }}
+          EXPIRE: ${{ github.event.inputs.expire_minutes }}
+          SPEND_ONLY: ${{ github.event.inputs.spend_only }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL" \
+            --data-urlencode "tenant=$TENANT" \
+            --data-urlencode "expire_minutes=$EXPIRE" \
+            --data-urlencode "spend_only=$SPEND_ONLY" \
+            -H "X-Cron-Secret: $CRON_SECRET")
+          echo "HTTP $STATUS"
+          echo "----- response body -----"
+          cat /tmp/cron-response.json
+          echo
+          [ "$STATUS" != "200" ] && exit 1 || exit 0
