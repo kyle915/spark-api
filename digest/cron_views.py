@@ -3538,6 +3538,9 @@ class DumpFieldSamplingView(View):
       - tenant: slug or numeric id (default "feel-free")
       - markets: comma-separated market labels (default the five FF metros)
       - anchor: YYYY-MM-DD weekly-bucket anchor (default 2026-06-25)
+      - start: YYYY-MM-DD inclusive window start (adds a `window` SKU
+        breakdown for [start, end], unfiltered by market)
+      - end: YYYY-MM-DD inclusive window end (defaults to today)
     """
 
     def _run(self, request: HttpRequest) -> HttpResponse:
@@ -3555,6 +3558,10 @@ class DumpFieldSamplingView(View):
             kwargs["markets"] = str(_param("markets"))
         if _param("anchor"):
             kwargs["anchor"] = str(_param("anchor"))
+        if _param("start"):
+            kwargs["start"] = str(_param("start"))
+        if _param("end"):
+            kwargs["end"] = str(_param("end"))
 
         out = io.StringIO()
         try:

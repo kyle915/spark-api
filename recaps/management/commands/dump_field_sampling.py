@@ -45,6 +45,21 @@ class Command(BaseCommand):
             default="2026-06-25",
             help="YYYY-MM-DD Thursday anchoring the 7-day weekly buckets (default 2026-06-25)",
         )
+        parser.add_argument(
+            "--start",
+            default="",
+            help=(
+                "YYYY-MM-DD inclusive window start. With this set, output "
+                "carries a 'window' SKU breakdown (unfiltered by market) for "
+                "[start, end] — the arbitrary-range companion to the fixed YTD "
+                "'overall'."
+            ),
+        )
+        parser.add_argument(
+            "--end",
+            default="",
+            help="YYYY-MM-DD inclusive window end (defaults to today when --start is given)",
+        )
 
     def handle(self, *args, **opts):
         from tenants.models import Tenant
@@ -74,6 +89,45 @@ class Command(BaseCommand):
 
         ytd_start, ytd_end = _ytd_window()
         now = timezone.now()
+
+        # Optional arbitrary [start, end] window (inclusive calendar dates),
+        # unfiltered by market — for pulling a specific range like "July 2 →
+        # today" that the fixed YTD 'overall' can't isolate. Read-only.
+        window_block = None
+        start_s = str(opts.get("start") or "").strip()
+        end_s = str(opts.get("end") or "").strip()
+        if start_s:
+            try:
+                w_start = datetime.date.fromisoformat(start_s)
+            except ValueError as exc:
+                raise CommandError(f"Bad --start {start_s!r}: {exc}")
+            if end_s:
+                try:
+                    w_end = datetime.date.fromisoformat(end_s)
+                except ValueError as exc:
+                    raise CommandError(f"Bad --end {end_s!r}: {exc}")
+            else:
+                w_end = timezone.localdate()
+            if w_end < w_start:
+                raise CommandError(f"--end {w_end} precedes --start {w_start}")
+
+            def _aware_midnight(d: datetime.date) -> datetime.datetime:
+                return timezone.make_aware(
+                    datetime.datetime.combine(d, datetime.time.min)
+                )
+
+            # sku_breakdown's window is half-open [start, end); push the upper
+            # bound to next midnight so the --end calendar day is INCLUSIVE.
+            window_block = {
+                "start": w_start.isoformat(),
+                "end": w_end.isoformat(),
+                "sku": sku_breakdown(
+                    tenant.id,
+                    _aware_midnight(w_start),
+                    _aware_midnight(w_end + datetime.timedelta(days=1)),
+                ),
+            }
+
         out: dict = {
             "tenant": {"id": tenant.id, "slug": tenant.slug, "name": tenant.name},
             "ytd_window": [ytd_start.isoformat(), ytd_end.isoformat()],
@@ -81,6 +135,7 @@ class Command(BaseCommand):
             # Unfiltered program total — if it exceeds the sum of the listed
             # markets, a new market label (or unparseable event names) exists.
             "overall": sku_breakdown(tenant.id, ytd_start, ytd_end),
+            "window": window_block,
             "markets": {},
             "weekly": [],
         }
