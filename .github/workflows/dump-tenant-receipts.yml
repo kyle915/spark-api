@@ -55,7 +55,20 @@ jobs:
             --data-urlencode "spend_only=$SPEND_ONLY" \
             -H "X-Cron-Secret: $CRON_SECRET")
           echo "HTTP $STATUS"
-          echo "----- response body -----"
-          cat /tmp/cron-response.json
+          echo "bytes: $(wc -c < /tmp/cron-response.json)"
+          # NB: do NOT cat the body — it's one huge single-line JSON (a signed
+          # URL per file) and GitHub truncates oversized log lines, which
+          # silently loses the payload. It's uploaded as an artifact instead.
+          echo "----- head (first 600 chars) -----"
+          head -c 600 /tmp/cron-response.json
           echo
           [ "$STATUS" != "200" ] && exit 1 || exit 0
+
+      - name: Upload response as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: receipts-dump
+          path: /tmp/cron-response.json
+          # Short retention: the payload holds live signed GCS URLs.
+          retention-days: 1
