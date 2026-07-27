@@ -3102,6 +3102,88 @@ class AuditTenantAccountSpendView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class DumpTenantReceiptsView(View):
+    """GET/POST `/internal/cron/dump-tenant-receipts`.
+
+    READ-ONLY companion to `audit-tenant-account-spend`: for ONE tenant, dumps
+    each recap's product-spend amount PLUS every attached file with a SIGNED GCS
+    download URL, so the receipt images backing the spend can actually be pulled
+    down and handed to a client. HEIC receipts resolve to their converted JPG.
+    Fires the `dump_tenant_receipts` command; the parsed `JSON_RESULT` line is
+    returned as `report` (the human table stays in `log`).
+
+    The signed URLs are time-boxed (`expire_minutes`, default 720 = 12h) and the
+    body carries one URL per file — treat the response as sensitive and
+    short-lived.
+
+    Query params:
+      - tenant: id / request-url-name / name (required)
+      - expire_minutes: int (optional, default 720)
+      - spend_only: "1"/"true"/"yes" — only recaps carrying a spend amount
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        tenant = request.GET.get("tenant") or request.POST.get("tenant")
+        if not tenant:
+            return JsonResponse(
+                {"ok": False, "error": "tenant-required (id / name / url-name)"},
+                status=400,
+            )
+        kwargs: dict = {"tenant": str(tenant)}
+        raw = (
+            request.GET.get("spend_only") or request.POST.get("spend_only") or ""
+        ).lower()
+        if raw in ("1", "true", "yes", "on"):
+            kwargs["spend_only"] = True
+        exp = request.GET.get("expire_minutes") or request.POST.get("expire_minutes")
+        if exp:
+            try:
+                kwargs["expire_minutes"] = int(exp)
+            except ValueError:
+                return JsonResponse(
+                    {"ok": False, "error": "expire_minutes-must-be-int"}, status=400
+                )
+
+        out = io.StringIO()
+        try:
+            call_command("dump_tenant_receipts", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("Tenant receipts dump cron failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "log": out.getvalue(),
+                },
+                status=500,
+            )
+
+        log = out.getvalue()
+        report = None
+        for line in log.splitlines():
+            if line.startswith("JSON_RESULT: "):
+                try:
+                    report = json.loads(line[len("JSON_RESULT: "):])
+                except Exception:  # noqa: BLE001 — keep the log even if parse fails
+                    report = None
+                break
+        return JsonResponse(
+            {"ok": True, "tenant": str(tenant), "report": report, "log": log}
+        )
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class CampaignToDateView(View):
     """GET/POST `/internal/cron/campaign-to-date`.
 
@@ -5637,6 +5719,7 @@ def _registered_views() -> dict[str, Any]:
         "audit-tenant-onboarding": AuditTenantOnboardingView,
         "audit-tenant-consumers": AuditTenantConsumersView,
         "audit-tenant-account-spend": AuditTenantAccountSpendView,
+        "dump-tenant-receipts": DumpTenantReceiptsView,
         "campaign-to-date": CampaignToDateView,
         "dedupe-skills": DedupeSkillsView,
         "apply-girl-beer-branding": ApplyGirlBeerBrandingView,
