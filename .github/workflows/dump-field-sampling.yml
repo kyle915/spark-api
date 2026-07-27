@@ -21,6 +21,14 @@ on:
         description: "Weekly-bucket anchor date YYYY-MM-DD"
         required: false
         default: "2026-06-25"
+      start:
+        description: "Inclusive window start YYYY-MM-DD (adds a 'window' SKU breakdown)"
+        required: false
+        default: ""
+      end:
+        description: "Inclusive window end YYYY-MM-DD (blank = today)"
+        required: false
+        default: ""
 
 jobs:
   dump-field-sampling:
@@ -33,6 +41,8 @@ jobs:
           TENANT: ${{ github.event.inputs.tenant }}
           MARKETS: ${{ github.event.inputs.markets }}
           ANCHOR: ${{ github.event.inputs.anchor }}
+          START: ${{ github.event.inputs.start }}
+          END: ${{ github.event.inputs.end }}
         run: |
           set -euo pipefail
 
@@ -46,6 +56,8 @@ jobs:
             --data-urlencode "tenant=$TENANT" \
             --data-urlencode "markets=$MARKETS" \
             --data-urlencode "anchor=$ANCHOR" \
+            --data-urlencode "start=$START" \
+            --data-urlencode "end=$END" \
             -X POST \
             -H "X-Cron-Secret: $CRON_SECRET")
 
