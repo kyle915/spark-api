@@ -158,20 +158,39 @@ def _reanchor(formula: str, wrong_row: int, right_row: int) -> tuple[str, int]:
 
 # Repair 6 — a KPI cell whose formula was pasted over with a value.
 # The month grid is E (arrow-paged "current month", keyed off D$1) then
-# F..R = Jan..Dec plus a duplicate December. Every cell in a metric row shares
-# one shape and differs ONLY by its month-key column, so a lost formula is
-# rebuildable exactly from any surviving sibling in the same row.
+# F..Q = Jan..Dec. Every cell in a metric row shares one shape and differs ONLY
+# by its month-key column, so a lost formula is rebuildable exactly from any
+# surviving sibling in the same row.
 #
 # Found in the wild: Florida!K7 (June / Mountain) held a literal SPACE, so the
 # monthly breakdown under-reported 974 cans while the annual was correct. NOTE
 # a whitespace-only literal survives a naive `if value` check — detect these by
 # asserting the cell HAS a formula, never by hunting for non-empty literals.
+#
+# R is deliberately IN this list but gated by _month_cols_for() below: row 1 has
+# no R header, so R's month key matches nothing and every R formula evaluates to
+# 0. Only row 3 has one (a stray copy-drag); "restoring" R4..R11 would paste a
+# column of zeros onto all 7 tabs. Gating on a real header keeps that from
+# happening again if someone adds or removes a month column.
 MONTH_COLS = list("EFGHIJKLMNOPQR")
 
 
 def _month_key(col: str) -> str:
     """The month-name header cell a monthly formula compares against."""
     return "D" if col == "E" else col
+
+
+def _month_cols_for(header_row: list) -> list:
+    """Month columns this tab actually has, i.e. whose month key is populated.
+
+    A monthly formula keys off its header cell (=TEXT(...)=K$1), so a column
+    with a blank header can only ever total 0 — it is spare grid, not a month.
+    """
+    def head(letter: str) -> str:
+        i = ord(letter) - ord("A")
+        return str(header_row[i]).strip() if len(header_row) > i else ""
+
+    return [c for c in MONTH_COLS if head(_month_key(c))]
 
 
 def _rebuild_month_formula(sib_formula: str, sib_col: str, tgt_col: str):
@@ -515,12 +534,20 @@ class Command(BaseCommand):
                 m = _END_ROW_RE.search(cur)
                 if m:
                     end_row = int(m.group(1)); break
+            month_cols = _month_cols_for(rows[0] if rows else [])
+            skipped_cols = [c for c in MONTH_COLS if c not in month_cols]
+            if skipped_cols:
+                self.stdout.write(
+                    f"  · month columns: {''.join(month_cols)} "
+                    f"(no row-1 header on {','.join(skipped_cols)} — spare grid, "
+                    "not a month)"
+                )
             n_month = 0
             for r in KPI_ROWS:
                 row = rows[r - 1] if len(rows) >= r else []
                 label = str(row[0]).strip() if row else ""
                 have, missing = {}, []
-                for col in MONTH_COLS:
+                for col in month_cols:
                     ci = ord(col) - ord("A")
                     cur = str(row[ci]).strip() if len(row) > ci else ""
                     if cur.startswith("="):
