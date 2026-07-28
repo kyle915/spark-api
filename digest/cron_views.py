@@ -3938,6 +3938,72 @@ class AddLdOthersRowView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class AddLdTypeRowsView(View):
+    """GET/POST `/internal/cron/add-ld-type-rows`.
+
+    Inserts the two missing activity-type rows ("Event" and "Sales (Venues /
+    Events / Accounts)") under Seeding on the LD KPI scorecard tabs, cloning
+    Seeding's formula shapes with only the activity-type literal swapped. The
+    Direct/Indirect/Seeding breakdown matched three exact strings while Total
+    Cans Sampled sums unconditionally, so 51,592 cans (West 42,828, Central
+    5,688, South 2,688, Northeast 388) counted toward the total but appeared in
+    no type row. Fires the `add_ld_type_rows` command. Nothing in the event log
+    is rewritten.
+
+    STRUCTURAL: the insert shifts the rest of the KPI block and the event log —
+    header, the labeled FORMULA ROW protecting the spill anchors, and all data —
+    down TWO rows on every tab. Sheets re-points the KPI ranges and MASTER's
+    cross-tab refs automatically, and MASTER stays consistent because all tabs
+    are inserted in one batch. Follow with `fix-ld-kpi-totals` (dry-run) to
+    confirm alignment.
+
+    Query params:
+      - sheet_url: workbook URL (optional; defaults to the LD KPI workbook)
+      - tabs: comma-separated scorecard tabs (optional)
+      - apply: "1"/"true"/"yes" — actually write (default DRY RUN)
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        kwargs: dict = {}
+        for key in ("sheet_url", "tabs"):
+            val = request.GET.get(key) or request.POST.get(key)
+            if val:
+                kwargs[key] = str(val)
+        raw = (request.GET.get("apply") or request.POST.get("apply") or "").lower()
+        apply_it = raw in ("1", "true", "yes", "on")
+        if apply_it:
+            kwargs["apply"] = True
+
+        out = io.StringIO()
+        try:
+            call_command("add_ld_type_rows", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("add-ld-type-rows cron failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "log": out.getvalue(),
+                },
+                status=500,
+            )
+        return JsonResponse(
+            {"ok": True, "apply": apply_it, "log": out.getvalue()}
+        )
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class FixLdKpiTotalsView(View):
     """POST `/internal/cron/fix-ld-kpi-totals`.
 
@@ -5812,6 +5878,7 @@ def _registered_views() -> dict[str, Any]:
         "describe-sheet-tabs": DescribeSheetTabsView,
         "fix-ld-kpi-totals": FixLdKpiTotalsView,
         "add-ld-others-row": AddLdOthersRowView,
+        "add-ld-type-rows": AddLdTypeRowsView,
         "set-tenant-mileage-tracking": SetTenantMileageTrackingView,
         "staff-tenant-events": StaffTenantEventsView,
         "weekly-mileage-report": WeeklyMileageReportView,

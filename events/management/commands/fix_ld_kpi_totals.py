@@ -124,9 +124,10 @@ def _find_formula_row(svc, sheet_id: str, tab: str) -> int:
 # Rows 3-16 are the KPI metrics; C = annual total, E = arrow-paged current
 # month, F..R = Jan..Dec (R duplicates December). D is a static target, so
 # it is never rewritten.
-# 3-17 rather than 3-16: adding the "Others" flavor row extends the
-# block by one. Non-formula cells are skipped, so over-scanning is safe.
-KPI_ROWS = range(3, 18)
+# 3-19 rather than the original 3-16: the "Others" flavor row added one, and
+# the "Event" / "Sales (Venues / Events / Accounts)" activity-type rows added
+# two more. Non-formula cells are skipped, so over-scanning is safe.
+KPI_ROWS = range(3, 20)
 KPI_FORMULA_COLS = ["C"] + list("EFGHIJKLMNOPQR")
 # A range START is a (optionally $-anchored) column + row immediately
 # followed by ":". The lookahead is what keeps end rows untouched — an end
