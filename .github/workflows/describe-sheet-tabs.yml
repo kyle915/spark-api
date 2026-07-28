@@ -61,6 +61,19 @@ jobs:
             --data-urlencode "peek_render=$PEEK_RENDER" \
             --data-urlencode "peek_start=$PEEK_START")
           echo "HTTP $STATUS"
-          cat /tmp/cron-response.json
+          echo "bytes: $(wc -c < /tmp/cron-response.json)"
+          # A wide peek is one enormous single-line JSON, and GitHub silently
+          # truncates oversized log lines — the step then looks like it returned
+          # nothing. Print only a head here and ship the full body as an
+          # artifact; download it with `gh run download <run-id>`.
+          head -c 4000 /tmp/cron-response.json
           echo ""
           [ "$STATUS" != "200" ] && exit 1 || exit 0
+
+      - name: Upload full response
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sheet-peek
+          path: /tmp/cron-response.json
+          retention-days: 1
