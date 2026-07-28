@@ -1,0 +1,62 @@
+name: Add LD "Others" flavor row
+
+# Fires `/internal/cron/add-ld-others-row` to insert the "Others" flavor row
+# under Energy on the LD RMM KPI scorecard tabs and clone Energy's formula
+# shapes onto column AJ — see events/management/commands/add_ld_others_row.py.
+#
+# STRUCTURAL CHANGE. The insert shifts the event log (header, the labeled
+# FORMULA ROW that protects the SAMPLES/SALES spill anchors, and all data) down
+# one row on every tab. Sheets re-points the KPI ranges and MASTER's cross-tab
+# references automatically, and MASTER stays consistent because every tab is
+# inserted in the SAME batch. Run with apply=false first, then follow up with
+# the "Fix LD KPI totals" workflow (dry-run) to confirm alignment.
+#
+# Secret-gated via X-Cron-Secret (shared INTERNAL_CRON_SECRET), header only.
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Actually insert + write (false = dry run, report only)"
+        required: false
+        default: "false"
+        type: string
+      tabs:
+        description: "Comma-separated scorecard tabs"
+        required: false
+        default: "Northeast,Florida,South,Central,West,Poli,Pat"
+        type: string
+      sheet_url:
+        description: "KPI workbook URL"
+        required: false
+        default: "https://docs.google.com/spreadsheets/d/1W4F7X_vdW7d0SmthUvdxujBH2CahG0DaB53xBVr5q04/edit"
+        type: string
+
+jobs:
+  fire-add-ld-others-row:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire add-ld-others-row cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/add-ld-others-row
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          APPLY: ${{ github.event.inputs.apply }}
+          TABS: ${{ github.event.inputs.tabs }}
+          SHEET_URL: ${{ github.event.inputs.sheet_url }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL" \
+            --data-urlencode "apply=$APPLY" \
+            --data-urlencode "tabs=$TABS" \
+            --data-urlencode "sheet_url=$SHEET_URL" \
+            -H "X-Cron-Secret: $CRON_SECRET")
+          echo "HTTP $STATUS"
+          echo "----- response body -----"
+          cat /tmp/cron-response.json
+          echo
+          [ "$STATUS" != "200" ] && exit 1 || exit 0
