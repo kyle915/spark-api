@@ -3877,6 +3877,67 @@ class DescribeSheetTabsView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class AddLdOthersRowView(View):
+    """GET/POST `/internal/cron/add-ld-others-row`.
+
+    Inserts the "Others" flavor row under Energy on the LD KPI scorecard tabs
+    and clones Energy's formula shapes onto column AJ, so the flavor breakdown
+    finally accounts for the catch-all SKU column (11,386 cans workbook-wide
+    were invisible to it). Fires the `add_ld_others_row` command.
+
+    STRUCTURAL: the insert shifts the event log — header, the labeled FORMULA
+    ROW protecting the spill anchors, and all data — down one row on every tab.
+    Sheets re-points the KPI ranges and MASTER's cross-tab refs automatically,
+    and MASTER stays consistent because all tabs are inserted in one batch.
+    Follow with `fix-ld-kpi-totals` (dry-run) to confirm alignment.
+
+    Query params:
+      - sheet_url: workbook URL (optional; defaults to the LD KPI workbook)
+      - tabs: comma-separated scorecard tabs (optional)
+      - apply: "1"/"true"/"yes" — actually write (default DRY RUN)
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        kwargs: dict = {}
+        for key in ("sheet_url", "tabs"):
+            val = request.GET.get(key) or request.POST.get(key)
+            if val:
+                kwargs[key] = str(val)
+        raw = (request.GET.get("apply") or request.POST.get("apply") or "").lower()
+        apply_it = raw in ("1", "true", "yes", "on")
+        if apply_it:
+            kwargs["apply"] = True
+
+        out = io.StringIO()
+        try:
+            call_command("add_ld_others_row", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("add-ld-others-row cron failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "log": out.getvalue(),
+                },
+                status=500,
+            )
+        return JsonResponse(
+            {"ok": True, "apply": apply_it, "log": out.getvalue()}
+        )
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class FixLdKpiTotalsView(View):
     """POST `/internal/cron/fix-ld-kpi-totals`.
 
@@ -5750,6 +5811,7 @@ def _registered_views() -> dict[str, Any]:
         "backfill-recap-retailers": BackfillRecapRetailersView,
         "describe-sheet-tabs": DescribeSheetTabsView,
         "fix-ld-kpi-totals": FixLdKpiTotalsView,
+        "add-ld-others-row": AddLdOthersRowView,
         "set-tenant-mileage-tracking": SetTenantMileageTrackingView,
         "staff-tenant-events": StaffTenantEventsView,
         "weekly-mileage-report": WeeklyMileageReportView,

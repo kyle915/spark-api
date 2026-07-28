@@ -86,19 +86,47 @@ FIXES = [
 MONTHLY_SALES_COLS = "EFGHIJKLMNOPQR"
 MONTHLY_SALES_BROKEN = re.compile(r"(\$AL\$\d+:\$?)BK(?![A-Z])(\d*)")
 
-# Row-total spill anchors on each scorecard tab's first data row. The
-# formulas are copied verbatim from the intact tabs (Pat/Northeast/...).
-FORMULA_ROW = 19
+# Row-total spill anchors live in a dedicated dummy row labeled "FORMULA ROW"
+# in column C. Its row number is NOT hardcoded: adding a KPI metric row (e.g.
+# the "Others" flavor row) shifts the whole event log down, and a fixed 19
+# would then silently target the wrong row — that is exactly how Poli's ranges
+# ended up skewed. `_find_formula_row` locates it by label per tab and only
+# falls back to this default when the label is missing.
+FORMULA_ROW_DEFAULT = 19
+FORMULA_ROW_LABEL = "FORMULA ROW"
+# Anchor templates: {r} is substituted with the located formula row.
 ANCHORS = [
-    ("I", "SAMPLES", "=BYROW(J19:AJ, LAMBDA(row, IF(COUNTA(row)=0, 0, SUM(row))))"),
-    ("AK", "SALES", "=BYROW(AL19:BL, LAMBDA(row, IF(COUNTA(row)=0, 0, SUM(row))))"),
+    ("I", "SAMPLES", "=BYROW(J{r}:AJ, LAMBDA(row, IF(COUNTA(row)=0, 0, SUM(row))))"),
+    ("AK", "SALES", "=BYROW(AL{r}:BL, LAMBDA(row, IF(COUNTA(row)=0, 0, SUM(row))))"),
 ]
+
+
+def _find_formula_row(svc, sheet_id: str, tab: str) -> int:
+    """Row number of the labeled FORMULA ROW on `tab` (falls back to 19).
+
+    Scans a window around the usual position so a shifted layout still
+    resolves. Column C carries the label on every scorecard tab.
+    """
+    try:
+        resp = (
+            svc.spreadsheets().values()
+            .get(spreadsheetId=sheet_id, range=f"'{tab}'!C15:C30")
+            .execute()
+        )
+    except Exception:
+        return FORMULA_ROW_DEFAULT
+    for i, r in enumerate(resp.get("values") or [], start=15):
+        if r and str(r[0]).strip().upper() == FORMULA_ROW_LABEL:
+            return i
+    return FORMULA_ROW_DEFAULT
 
 # Repair 5 — KPI block whose range starts must sit on the FORMULA ROW.
 # Rows 3-16 are the KPI metrics; C = annual total, E = arrow-paged current
 # month, F..R = Jan..Dec (R duplicates December). D is a static target, so
 # it is never rewritten.
-KPI_ROWS = range(3, 17)
+# 3-17 rather than 3-16: adding the "Others" flavor row extends the
+# block by one. Non-formula cells are skipped, so over-scanning is safe.
+KPI_ROWS = range(3, 18)
 KPI_FORMULA_COLS = ["C"] + list("EFGHIJKLMNOPQR")
 # A range START is a (optionally $-anchored) column + row immediately
 # followed by ":". The lookahead is what keeps end rows untouched — an end
@@ -286,6 +314,16 @@ class Command(BaseCommand):
                         "(already $BL or unknown shape — skip)"
                     )
 
+            # The formula row is LOCATED per tab (see _find_formula_row):
+            # inserting a KPI metric row shifts the whole event log down, so a
+            # hardcoded 19 would target the wrong row.
+            FORMULA_ROW = _find_formula_row(svc, sheet_id, tab)
+            if FORMULA_ROW != FORMULA_ROW_DEFAULT:
+                self.stdout.write(
+                    f"  · FORMULA ROW located at {FORMULA_ROW} "
+                    f"(not the default {FORMULA_ROW_DEFAULT})"
+                )
+
             # ---- Repair 3: restore SAMPLES/SALES BYROW anchors ----------
             # On intact tabs the anchors live in a dedicated dummy row 19
             # labeled "FORMULA ROW" (column C) so that deleting data rows
@@ -345,14 +383,14 @@ class Command(BaseCommand):
                 )
                 writes.append({
                     "range": f"'{tab}'!{col}{FORMULA_ROW}",
-                    "values": [[anchor]],
+                    "values": [[anchor.format(r=FORMULA_ROW)]],
                 })
             if needs_insert:
                 self.stdout.write(
                     f"  + row {FORMULA_ROW} is a DATA row (the FORMULA ROW "
                     "was deleted) → insert a fresh labeled row above it"
                 )
-                row_inserts.append(tab)
+                row_inserts.append((tab, FORMULA_ROW))
                 writes.append({
                     "range": f"'{tab}'!B{FORMULA_ROW}:C{FORMULA_ROW}",
                     "values": [[False, "FORMULA ROW"]],
@@ -472,7 +510,7 @@ class Command(BaseCommand):
                 for s in meta.get("sheets", [])
             }
             requests = []
-            for tab in row_inserts:
+            for tab, ins_row in row_inserts:
                 if tab not in gids:
                     raise CommandError(f"Tab {tab!r} vanished mid-run — aborting.")
                 requests.append({
@@ -480,8 +518,8 @@ class Command(BaseCommand):
                         "range": {
                             "sheetId": gids[tab],
                             "dimension": "ROWS",
-                            "startIndex": FORMULA_ROW - 1,
-                            "endIndex": FORMULA_ROW,
+                            "startIndex": ins_row - 1,
+                            "endIndex": ins_row,
                         },
                         "inheritFromBefore": False,
                     }
