@@ -156,6 +156,46 @@ def _reanchor(formula: str, wrong_row: int, right_row: int) -> tuple[str, int]:
     return out, (0 if out == formula else 1)
 
 
+# Repair 6 — a KPI cell whose formula was pasted over with a value.
+# The month grid is E (arrow-paged "current month", keyed off D$1) then
+# F..R = Jan..Dec plus a duplicate December. Every cell in a metric row shares
+# one shape and differs ONLY by its month-key column, so a lost formula is
+# rebuildable exactly from any surviving sibling in the same row.
+#
+# Found in the wild: Florida!K7 (June / Mountain) held a literal SPACE, so the
+# monthly breakdown under-reported 974 cans while the annual was correct. NOTE
+# a whitespace-only literal survives a naive `if value` check — detect these by
+# asserting the cell HAS a formula, never by hunting for non-empty literals.
+MONTH_COLS = list("EFGHIJKLMNOPQR")
+
+
+def _month_key(col: str) -> str:
+    """The month-name header cell a monthly formula compares against."""
+    return "D" if col == "E" else col
+
+
+def _rebuild_month_formula(sib_formula: str, sib_col: str, tgt_col: str):
+    """Clone a sibling monthly formula, swapping only its month key."""
+    sk, tk = _month_key(sib_col), _month_key(tgt_col)
+    if sk == tk:
+        return sib_formula, 0
+    out, n = re.subn(
+        rf"(?<![A-Z0-9$]){re.escape(sk)}\$1", f"{tk}$1", sib_formula
+    )
+    return out, n
+
+
+# A tab's own grid end row, learned from any bounded formula on that tab, so a
+# donated ANNUAL formula can be retargeted to the correct tab length.
+# The end row may be followed by ")" (SUM) or "," (COUNTIF's criteria
+# argument), so match on a lookahead rather than consuming the delimiter.
+_END_ROW_RE = re.compile(r":\$?[A-Z]{1,2}(\d{3,5})(?=[),])")
+
+
+def _retarget_end_row(formula: str, end_row: int) -> str:
+    return _END_ROW_RE.sub(lambda m: m.group(0).replace(m.group(1), str(end_row)), formula)
+
+
 # MASTER YTD cells whose =SUM(J..+J..) chain stops at November: the
 # December monthly-total term to append. C16/D16 already include all 12.
 MASTER_YTD_MISSING = {
@@ -189,6 +229,17 @@ class Command(BaseCommand):
             help="MASTER rollup tab for the YTD-December repair ('' skips it).",
         )
         parser.add_argument(
+            "--restore-annual",
+            action="store_true",
+            help=(
+                "Also rebuild ANNUAL (col C) cells whose formula was pasted "
+                "over, donating the same metric's formula from another tab. "
+                "OFF by default: deliberate business hardcodes live in col C "
+                "(e.g. Northeast Retail Samplings), and overwriting one "
+                "destroys a number that exists nowhere else."
+            ),
+        )
+        parser.add_argument(
             "--apply",
             action="store_true",
             help="Actually write. Without this, print what WOULD change.",
@@ -212,7 +263,9 @@ class Command(BaseCommand):
 
         writes: list[dict] = []
         clears: list[str] = []
-        row_inserts: list[str] = []  # tabs needing a fresh FORMULA ROW at 19
+        row_inserts: list = []  # (tab, row) needing a fresh FORMULA ROW
+        annual_gaps: list = []   # (tab, row, label, value, end_row)
+        annual_donors: dict = {} # tab -> {label: annual formula}
         for tab in tabs:
             self.stdout.write(self.style.MIGRATE_HEADING(f"[{tab}]"))
             # One read: labels + annual (C) and monthly (E..R) formulas for
@@ -449,6 +502,91 @@ class Command(BaseCommand):
                                 f"      note: other start rows present {other} "
                                 "(left alone)"
                             )
+
+            # ---- Repair 6: KPI cells whose formula was pasted over ------
+            # Monthly cells are rebuilt from a sibling in the same row (exact,
+            # differing only by month key). Annual (C) cells are only REPORTED
+            # unless --restore-annual, since col C is where intentional
+            # business hardcodes live.
+            end_row = None
+            for r in KPI_ROWS:
+                row = rows[r - 1] if len(rows) >= r else []
+                cur = str(row[2]).strip() if len(row) > 2 else ""
+                m = _END_ROW_RE.search(cur)
+                if m:
+                    end_row = int(m.group(1)); break
+            n_month = 0
+            for r in KPI_ROWS:
+                row = rows[r - 1] if len(rows) >= r else []
+                label = str(row[0]).strip() if row else ""
+                have, missing = {}, []
+                for col in MONTH_COLS:
+                    ci = ord(col) - ord("A")
+                    cur = str(row[ci]).strip() if len(row) > ci else ""
+                    if cur.startswith("="):
+                        have[col] = cur
+                    else:
+                        missing.append((col, cur))
+                if len(have) < 3:
+                    continue  # not a monthly formula family — leave alone
+                for col, was in missing:
+                    sib_col, sib = next(iter(have.items()))
+                    fixed, n = _rebuild_month_formula(sib, sib_col, col)
+                    if not n:
+                        self.stdout.write(self.style.ERROR(
+                            f"  ! {col}{r} ({label}): could not rebuild from "
+                            f"{sib_col}{r} — skipped"
+                        ))
+                        continue
+                    self.stdout.write(self.style.WARNING(
+                        f"  + {col}{r} ({label}): formula was MISSING "
+                        f"(held {was!r}) → rebuilt from {sib_col}{r}"
+                    ))
+                    writes.append({
+                        "range": f"'{tab}'!{col}{r}",
+                        "values": [[fixed]],
+                    })
+                    n_month += 1
+                # annual
+                cur_c = str(row[2]).strip() if len(row) > 2 else ""
+                if label and cur_c and not cur_c.startswith("="):
+                    annual_gaps.append((tab, r, label, cur_c, end_row))
+            if not n_month:
+                self.stdout.write("  - pasted-over monthly cells: none (skip)")
+            annual_donors.setdefault(tab, {})
+            for r in KPI_ROWS:
+                row = rows[r - 1] if len(rows) >= r else []
+                label = str(row[0]).strip() if row else ""
+                cur_c = str(row[2]).strip() if len(row) > 2 else ""
+                if label and cur_c.startswith("="):
+                    annual_donors[tab][label] = cur_c
+
+        # ---- Repair 6b: ANNUAL cells pasted over (report; opt-in restore) --
+        for tab, r, label, was, end_row in annual_gaps:
+            donor = None
+            for dtab, dmap in annual_donors.items():
+                if dtab != tab and label in dmap:
+                    donor = (dtab, dmap[label]); break
+            if donor is None:
+                self.stdout.write(self.style.ERROR(
+                    f"[{tab}] C{r} ({label}) is a hardcode {was!r} — no donor "
+                    "tab has this metric's annual formula (skip)"
+                ))
+                continue
+            dtab, dformula = donor
+            fixed = _retarget_end_row(dformula, end_row) if end_row else dformula
+            if opts.get("restore_annual"):
+                self.stdout.write(self.style.WARNING(
+                    f"[{tab}] C{r} ({label}): hardcode {was!r} → {fixed} "
+                    f"(donor {dtab})"
+                ))
+                writes.append({"range": f"'{tab}'!C{r}", "values": [[fixed]]})
+            else:
+                self.stdout.write(self.style.NOTICE(
+                    f"[{tab}] C{r} ({label}) is a HARDCODE {was!r}. "
+                    f"--restore-annual would set it to {fixed} (donor {dtab}). "
+                    "Left alone: col C carries intentional business numbers."
+                ))
 
         # ---- Repair 4: MASTER YTD cells missing the December term -------
         master_tab = (opts.get("master_tab") or "").strip()
