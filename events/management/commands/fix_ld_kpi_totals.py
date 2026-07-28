@@ -29,6 +29,19 @@ Pat) logs events with per-SKU can counts in columns J..AJ (samples, AJ =
    Supported / Seedings) sum only 11 monthly-total cells — the December
    term (J171..J175) is missing. C16/D16 already have all 12.
 
+5. KPI range START row skewed off the FORMULA ROW. Every KPI formula in
+   rows 3-16 must begin at row 19 (the labeled FORMULA ROW, which is
+   inert: blank date, Is-Event FALSE, no can counts) so that the first
+   real data row — 20 — is inside the range. Repair 3 above inserts a
+   fresh row 19 when the formula row was deleted, and Sheets then
+   auto-shifts every range start DOWN by one (19→20) while the data
+   shifts down too — leaving the ranges starting one row BELOW the first
+   data row, silently excluding it from every metric. Poli's tab took
+   this twice (ranges ended up at 21 vs data at 20), so her first logged
+   event counted toward nothing. Detects the tab's dominant start row and
+   rewrites only START positions (a row number immediately followed by
+   ":"), never end rows, and no-ops when the start already equals 19.
+
 Usage:
     python manage.py fix_ld_kpi_totals            # dry-run, per-tab report
     python manage.py fix_ld_kpi_totals --apply    # write the fixed formulas
@@ -80,6 +93,40 @@ ANCHORS = [
     ("I", "SAMPLES", "=BYROW(J19:AJ, LAMBDA(row, IF(COUNTA(row)=0, 0, SUM(row))))"),
     ("AK", "SALES", "=BYROW(AL19:BL, LAMBDA(row, IF(COUNTA(row)=0, 0, SUM(row))))"),
 ]
+
+# Repair 5 — KPI block whose range starts must sit on the FORMULA ROW.
+# Rows 3-16 are the KPI metrics; C = annual total, E = arrow-paged current
+# month, F..R = Jan..Dec (R duplicates December). D is a static target, so
+# it is never rewritten.
+KPI_ROWS = range(3, 17)
+KPI_FORMULA_COLS = ["C"] + list("EFGHIJKLMNOPQR")
+# A range START is a (optionally $-anchored) column + row immediately
+# followed by ":". The lookahead is what keeps end rows untouched — an end
+# row is followed by ")" / "," / whitespace, never ":".
+_RANGE_START = re.compile(r"(?<![A-Z0-9$])(\$?[A-Z]{1,2}\$?)(\d+)(?=:)")
+
+
+def _kpi_start_rows(rows: list[list], col_letters: list[str]) -> list[int]:
+    """Every range-start row number found in the KPI block's formulas."""
+    found: list[int] = []
+    for r in KPI_ROWS:
+        row = rows[r - 1] if len(rows) >= r else []
+        for col in col_letters:
+            ci = ord(col) - ord("A")
+            cur = str(row[ci]).strip() if len(row) > ci else ""
+            if not cur.startswith("="):
+                continue
+            found.extend(int(m.group(2)) for m in _RANGE_START.finditer(cur))
+    return found
+
+
+def _reanchor(formula: str, wrong_row: int, right_row: int) -> tuple[str, int]:
+    """Rewrite range STARTS from wrong_row to right_row. Returns (new, n)."""
+    def sub(m: re.Match) -> str:
+        return f"{m.group(1)}{right_row}" if int(m.group(2)) == wrong_row else m.group(0)
+    out = _RANGE_START.sub(sub, formula)
+    return out, (0 if out == formula else 1)
+
 
 # MASTER YTD cells whose =SUM(J..+J..) chain stops at November: the
 # December monthly-total term to append. C16/D16 already include all 12.
@@ -310,6 +357,60 @@ class Command(BaseCommand):
                     "range": f"'{tab}'!B{FORMULA_ROW}:C{FORMULA_ROW}",
                     "values": [[False, "FORMULA ROW"]],
                 })
+
+            # ---- Repair 5: KPI range starts skewed off the FORMULA ROW ---
+            # Skipped when this run is going to insert a row here: the
+            # insert itself shifts every range start, so re-anchoring in the
+            # same pass would fight it. Re-run afterwards to settle.
+            if needs_insert:
+                self.stdout.write(
+                    "  - KPI range starts: deferred (a FORMULA ROW insert is "
+                    "queued this run — re-run to re-anchor)"
+                )
+            else:
+                starts = _kpi_start_rows(rows, KPI_FORMULA_COLS)
+                if not starts:
+                    self.stdout.write(
+                        "  - KPI range starts: no ranges found (skip)"
+                    )
+                else:
+                    from collections import Counter
+                    tally = Counter(starts)
+                    dominant, n_dom = tally.most_common(1)[0]
+                    if dominant == FORMULA_ROW:
+                        self.stdout.write(
+                            f"  - KPI range starts: already row {FORMULA_ROW} "
+                            f"({n_dom} refs) (skip)"
+                        )
+                    else:
+                        n_cells = 0
+                        for r in KPI_ROWS:
+                            row = rows[r - 1] if len(rows) >= r else []
+                            for col in KPI_FORMULA_COLS:
+                                ci = ord(col) - ord("A")
+                                cur = str(row[ci]).strip() if len(row) > ci else ""
+                                if not cur.startswith("="):
+                                    continue
+                                fixed, changed = _reanchor(
+                                    cur, dominant, FORMULA_ROW
+                                )
+                                if changed:
+                                    writes.append({
+                                        "range": f"'{tab}'!{col}{r}",
+                                        "values": [[fixed]],
+                                    })
+                                    n_cells += 1
+                        other = {k: v for k, v in tally.items() if k != dominant}
+                        self.stdout.write(self.style.WARNING(
+                            f"  + KPI range starts: row {dominant} → "
+                            f"{FORMULA_ROW} in {n_cells} cell(s) — the first "
+                            f"data row was OUTSIDE every KPI range"
+                        ))
+                        if other:
+                            self.stdout.write(
+                                f"      note: other start rows present {other} "
+                                "(left alone)"
+                            )
 
         # ---- Repair 4: MASTER YTD cells missing the December term -------
         master_tab = (opts.get("master_tab") or "").strip()
