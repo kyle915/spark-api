@@ -1,0 +1,62 @@
+name: Add LD activity-type rows (one-off)
+
+# Inserts the two missing activity-type rows -- "Event" and "Sales (Venues /
+# Events / Accounts)" -- under Seeding on the LD RMM KPI scorecard tabs, cloning
+# Seeding's formula shapes with only the activity-type literal swapped. The
+# Direct/Indirect/Seeding breakdown matched three exact strings while Total Cans
+# Sampled sums unconditionally, so 51,592 cans (West 42,828, Central 5,688,
+# South 2,688, Northeast 388) counted toward the total but appeared in no type
+# row. Nothing in the event log is rewritten.
+#
+# ⚠ STRUCTURAL CHANGE: the insert shifts the rest of the KPI block and the whole
+# event log -- header, the labeled FORMULA ROW protecting the SAMPLES/SALES
+# spill anchors, and all data -- down TWO rows on every tab. Sheets re-points
+# the KPI ranges and MASTER's cross-tab refs automatically, and MASTER stays
+# consistent because all tabs are inserted in ONE batch. Run with apply=false
+# first, and follow a real apply with "Fix LD KPI totals" (dry-run) to confirm
+# alignment. Manual only.
+
+on:
+  workflow_dispatch:
+    inputs:
+      sheet_url:
+        description: "KPI workbook URL"
+        required: false
+        default: "https://docs.google.com/spreadsheets/d/1W4F7X_vdW7d0SmthUvdxujBH2CahG0DaB53xBVr5q04/edit"
+      tabs:
+        description: "Comma-separated scorecard tabs"
+        required: false
+        default: "Northeast,Florida,South,Central,West,Poli,Pat"
+      apply:
+        description: "Actually insert + write (false = dry run, report only)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+jobs:
+  add-ld-type-rows:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire add-ld-type-rows endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/add-ld-type-rows
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          SHEET_URL: ${{ github.event.inputs.sheet_url }}
+          TABS: ${{ github.event.inputs.tabs }}
+          APPLY: ${{ github.event.inputs.apply }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL" \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            --data-urlencode "sheet_url=$SHEET_URL" \
+            --data-urlencode "tabs=$TABS" \
+            --data-urlencode "apply=$APPLY")
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          echo ""
+          [ "$STATUS" != "200" ] && exit 1 || exit 0
