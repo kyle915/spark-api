@@ -3938,6 +3938,57 @@ class AddLdOthersRowView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class AuditLdTrackerSyncView(View):
+    """GET/POST `/internal/cron/audit-ld-tracker-sync`.
+
+    READ-ONLY. Answers two questions about a tenant's LD MASTER_Tracker mirror:
+    which upcoming requests never reached the sheet, and whether the Start/End
+    times that did land match what was submitted. Dumps raw stored datetimes
+    with tzinfo so a naive-vs-aware mixup is visible. Writes nothing.
+
+    Query params:
+      - tenant_slug (default "liquid-death")
+      - since: ISO date (default today)
+      - limit: max requests (default 400)
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        kwargs: dict = {}
+        for key in ("tenant_slug", "since"):
+            val = request.GET.get(key) or request.POST.get(key)
+            if val:
+                kwargs[key] = str(val)
+        limit = request.GET.get("limit") or request.POST.get("limit")
+        if limit:
+            try:
+                kwargs["limit"] = int(limit)
+            except (TypeError, ValueError):
+                pass
+
+        out = io.StringIO()
+        try:
+            call_command("audit_ld_tracker_sync", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("audit-ld-tracker-sync cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc),
+                 "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "log": out.getvalue()})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class AddLdTypeRowsView(View):
     """GET/POST `/internal/cron/add-ld-type-rows`.
 
@@ -5879,6 +5930,7 @@ def _registered_views() -> dict[str, Any]:
         "fix-ld-kpi-totals": FixLdKpiTotalsView,
         "add-ld-others-row": AddLdOthersRowView,
         "add-ld-type-rows": AddLdTypeRowsView,
+        "audit-ld-tracker-sync": AuditLdTrackerSyncView,
         "set-tenant-mileage-tracking": SetTenantMileageTrackingView,
         "staff-tenant-events": StaffTenantEventsView,
         "weekly-mileage-report": WeeklyMileageReportView,
