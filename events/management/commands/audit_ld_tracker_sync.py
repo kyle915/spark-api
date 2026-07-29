@@ -25,6 +25,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 from django.core.management.base import BaseCommand, CommandError
+from django.db.models import Count
 from django.utils import timezone as djtz
 
 from events.models import Request
@@ -112,6 +113,29 @@ class Command(BaseCommand):
         if not requests:
             return
 
+        # The Timezone table is a FIXED offset per row, which cannot express DST.
+        # Dump it: duplicate rows for one zone, or a single row whose offset is
+        # only right half the year, both render wrong clock times downstream.
+        try:
+            from events.models import Request as _R
+            tz_model = _R._meta.get_field("timezone").related_model
+            self.stdout.write("Timezone rows (id · name · offset min · usage):")
+            counts = {
+                row["timezone"]: row["n"]
+                for row in Request.objects.filter(tenant=tenant)
+                .values("timezone").annotate(n=Count("id"))
+            }
+            for tz in tz_model.objects.all().order_by("name", "id"):
+                off = getattr(tz, "offset", None)
+                hrs = f"{off/60:+.1f}h" if isinstance(off, (int, float)) else "?"
+                self.stdout.write(
+                    f"  [{tz.id}] {getattr(tz,'name','?'):<22} {str(off):>6} "
+                    f"({hrs})   used by {counts.get(tz.id, 0)} {slug} request(s)"
+                )
+            self.stdout.write("")
+        except Exception as exc:  # noqa: BLE001 — diagnostic only
+            self.stdout.write(self.style.ERROR(f"timezone dump failed: {exc}\n"))
+
         svc = _sm._service()
         if svc is None:
             raise CommandError("No Sheets credentials (ADC).")
@@ -160,20 +184,28 @@ class Command(BaseCommand):
             srow = sheet_rows.get(row_idx, [])
             sheet_start = str(srow[4]).strip() if len(srow) > 4 else ""
             sheet_end = str(srow[5]).strip() if len(srow) > 5 else ""
-            rendered_start = _sm._fmt_time_ld(r.start_time, off)
-            want_start = _sm._fmt_time_ld(r.start_time, 0)  # no shift = as stored
-            flag = "" if sheet_start == want_start else "  <-- MISMATCH"
-            if flag:
-                time_mismatch.append((r, sheet_start, want_start))
+            # The mirror's contract is stored-UTC + the venue offset. Compare the
+            # sheet against THAT: a disagreement means the row was written under a
+            # different offset than the request carries now (a stale row), which
+            # is a different defect from the offset itself being wrong.
+            expect_start = _sm._fmt_time_ld(r.start_time, off)
+            expect_end = _sm._fmt_time_ld(r.end_time, off)
+            stale = sheet_start != expect_start or sheet_end != expect_end
+            if stale:
+                time_mismatch.append((r, f"{sheet_start}-{sheet_end}",
+                                      f"{expect_start}-{expect_end}"))
+            # A venue offset that disagrees with the address's state is the other
+            # failure mode — the sheet then faithfully renders a wrong number.
+            addr = (getattr(r, "address", "") or "").strip()
             self.stdout.write(
                 f"{head}  row {row_idx}\n"
-                f"     stored start : {_raw(r.start_time)}   end: {_raw(r.end_time)}\n"
+                f"     stored (UTC) : {_raw(r.start_time)} -> {_raw(r.end_time)}\n"
                 f"     venue tz     : {tzname} offset {off} min\n"
+                f"     address      : {addr[:70]}\n"
                 f"     sheet E/F    : {sheet_start!r} / {sheet_end!r}\n"
-                f"     as stored    : {want_start!r}  (what the submitter typed)"
-                f"{flag}\n"
-                f"     with shift   : {rendered_start!r}  (what _fmt_time_ld("
-                f"offset={off}) yields today)"
+                f"     expected     : {expect_start!r} / {expect_end!r}  "
+                f"(stored UTC + {off} min)"
+                + ("  <-- SHEET IS STALE" if stale else "  ok")
             )
 
         self.stdout.write("=" * 100)
