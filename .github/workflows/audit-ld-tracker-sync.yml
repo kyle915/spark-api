@@ -1,0 +1,60 @@
+name: Audit LD tracker sync (read-only)
+
+# READ-ONLY. Two questions about the LD MASTER_Tracker mirror: which upcoming
+# requests never reached the sheet, and whether the Start/End times that did
+# land match what was submitted. Prints raw stored datetimes with tzinfo so a
+# naive-vs-aware mixup is visible. Writes nothing. Manual only.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tenant_slug:
+        description: "Tenant slug"
+        required: false
+        default: "liquid-death"
+      since:
+        description: "ISO date to audit from (blank = today)"
+        required: false
+        default: ""
+      limit:
+        description: "Max requests"
+        required: false
+        default: "400"
+
+jobs:
+  audit-ld-tracker-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire audit endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/audit-ld-tracker-sync
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          TENANT_SLUG: ${{ github.event.inputs.tenant_slug }}
+          SINCE: ${{ github.event.inputs.since }}
+          LIMIT: ${{ github.event.inputs.limit }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL" \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            --data-urlencode "tenant_slug=$TENANT_SLUG" \
+            --data-urlencode "since=$SINCE" \
+            --data-urlencode "limit=$LIMIT")
+          echo "HTTP $STATUS"
+          echo "bytes: $(wc -c < /tmp/cron-response.json)"
+          # The report is one large single-line JSON and GitHub truncates
+          # oversized log lines, so ship the full body as an artifact.
+          head -c 4000 /tmp/cron-response.json
+          echo ""
+          [ "$STATUS" != "200" ] && exit 1 || exit 0
+
+      - name: Upload full report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ld-tracker-audit
+          path: /tmp/cron-response.json
+          retention-days: 1
