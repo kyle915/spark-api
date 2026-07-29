@@ -3989,6 +3989,55 @@ class AuditLdTrackerSyncView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class ExplainRequestMirrorView(View):
+    """GET/POST `/internal/cron/explain-request-mirror`.
+
+    Explains, step by step, why one Request did or didn't reach its tracker
+    sheet. The mirror is best-effort and swallows every error (HttpError AND
+    bare Exception, inside a signal that also swallows), so a request that fails
+    to mirror leaves no trace the app surfaces. Reads only unless apply=true;
+    with apply it writes exactly that request's row and lets the real API error
+    raise so the cause is visible.
+
+    Params: request_id (pk or comma list, required), apply (default off).
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        rid = request.GET.get("request_id") or request.POST.get("request_id")
+        if not rid:
+            return JsonResponse(
+                {"ok": False, "error": "request_id is required"}, status=400
+            )
+        kwargs: dict = {"request_id": str(rid)}
+        raw = (request.GET.get("apply") or request.POST.get("apply") or "").lower()
+        apply_it = raw in ("1", "true", "yes", "on")
+        if apply_it:
+            kwargs["apply"] = True
+
+        out = io.StringIO()
+        try:
+            call_command("explain_request_mirror", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("explain-request-mirror cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc),
+                 "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "apply": apply_it, "log": out.getvalue()})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class AddLdTypeRowsView(View):
     """GET/POST `/internal/cron/add-ld-type-rows`.
 
@@ -5931,6 +5980,7 @@ def _registered_views() -> dict[str, Any]:
         "add-ld-others-row": AddLdOthersRowView,
         "add-ld-type-rows": AddLdTypeRowsView,
         "audit-ld-tracker-sync": AuditLdTrackerSyncView,
+        "explain-request-mirror": ExplainRequestMirrorView,
         "set-tenant-mileage-tracking": SetTenantMileageTrackingView,
         "staff-tenant-events": StaffTenantEventsView,
         "weekly-mileage-report": WeeklyMileageReportView,
