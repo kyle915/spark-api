@@ -4038,6 +4038,74 @@ class ExplainRequestMirrorView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class ReconcileTrackerRowsView(View):
+    """GET/POST `/internal/cron/reconcile-tracker-rows`.
+
+    Self-healing sweep for tracker rows that never landed. Mirroring is
+    best-effort and fails silently (upsert_request_row swallows, the post_save
+    signal swallows, and the explicit re-syncs in events/mutations.py are gated
+    on `if _routed:` so unrouted requests get no second attempt). This finds
+    requests the sheet has no key for and mirrors them, so the tracker converges
+    regardless of which path dropped the row.
+
+    ADDITIVE ONLY — never rewrites an existing keyed row (some are correct while
+    the request's current timezone would render them wrong), and skips any
+    request the client already hand-typed so live activations aren't duplicated.
+
+    Params: tenant_slug, days_back, days_ahead, limit, apply (default DRY RUN).
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        kwargs: dict = {}
+        val = request.GET.get("tenant_slug") or request.POST.get("tenant_slug")
+        if val:
+            kwargs["tenant_slug"] = str(val)
+        for key in ("days_back", "days_ahead", "limit"):
+            raw_n = request.GET.get(key) or request.POST.get(key)
+            if raw_n:
+                try:
+                    kwargs[key] = int(raw_n)
+                except (TypeError, ValueError):
+                    pass
+        raw = (request.GET.get("apply") or request.POST.get("apply") or "").lower()
+        apply_it = raw in ("1", "true", "yes", "on")
+        if apply_it:
+            kwargs["apply"] = True
+
+        out = io.StringIO()
+        try:
+            call_command("reconcile_tracker_rows", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("reconcile-tracker-rows cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc),
+                 "log": out.getvalue()},
+                status=500,
+            )
+        log = out.getvalue()
+        report = None
+        for line in log.splitlines():
+            if line.startswith("JSON_RESULT:"):
+                try:
+                    report = json.loads(line[len("JSON_RESULT:"):])
+                except Exception:  # noqa: BLE001
+                    report = None
+        return JsonResponse(
+            {"ok": True, "apply": apply_it, "report": report, "log": log}
+        )
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class AddLdTypeRowsView(View):
     """GET/POST `/internal/cron/add-ld-type-rows`.
 
@@ -5981,6 +6049,7 @@ def _registered_views() -> dict[str, Any]:
         "add-ld-type-rows": AddLdTypeRowsView,
         "audit-ld-tracker-sync": AuditLdTrackerSyncView,
         "explain-request-mirror": ExplainRequestMirrorView,
+        "reconcile-tracker-rows": ReconcileTrackerRowsView,
         "set-tenant-mileage-tracking": SetTenantMileageTrackingView,
         "staff-tenant-events": StaffTenantEventsView,
         "weekly-mileage-report": WeeklyMileageReportView,
