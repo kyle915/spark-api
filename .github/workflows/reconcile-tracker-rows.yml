@@ -50,8 +50,11 @@ jobs:
           TENANT_SLUG: ${{ github.event.inputs.tenant_slug }}
           DAYS_BACK: ${{ github.event.inputs.days_back }}
           DAYS_AHEAD: ${{ github.event.inputs.days_ahead }}
-          # schedule has no inputs, so default the cron run to apply=true
-          APPLY: ${{ github.event.inputs.apply || 'true' }}
+          # Gate on the EVENT, not on an empty input. `inputs.apply || 'true'`
+          # made a manual dispatch with a blank input silently WRITE, which is
+          # the opposite of safe-by-default and did fire once by accident.
+          # schedule -> always apply; dispatch -> exactly what was passed.
+          APPLY: ${{ github.event_name == 'schedule' && 'true' || github.event.inputs.apply }}
         run: |
           if [ -z "$CRON_SECRET" ]; then
             echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
