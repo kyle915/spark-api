@@ -1,0 +1,54 @@
+name: Explain request mirror (why a row is missing)
+
+# Explains step by step why one Request did or didn't reach its tracker sheet.
+# The mirror swallows every error inside a signal that also swallows, so a
+# failed mirror leaves no trace. Reads only with apply=false. With apply=true it
+# writes EXACTLY that request's row and lets the real API error surface — the
+# additive repair, as opposed to a full sync_tenant_to_sheet which rewrites
+# every row. Manual only.
+
+on:
+  workflow_dispatch:
+    inputs:
+      request_id:
+        description: "Request id, or comma-separated list (e.g. 1515,1581,1582,1583)"
+        required: true
+      apply:
+        description: "Actually write the row(s)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+jobs:
+  explain-request-mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire explain endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/explain-request-mirror
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          REQUEST_ID: ${{ github.event.inputs.request_id }}
+          APPLY: ${{ github.event.inputs.apply }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL" \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            --data-urlencode "request_id=$REQUEST_ID" \
+            --data-urlencode "apply=$APPLY")
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          echo ""
+          [ "$STATUS" != "200" ] && exit 1 || exit 0
+
+      - name: Upload full report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: request-mirror-explain
+          path: /tmp/cron-response.json
+          retention-days: 1
