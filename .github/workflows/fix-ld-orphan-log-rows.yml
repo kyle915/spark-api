@@ -24,6 +24,10 @@ on:
         description: "Comma-separated scorecard tabs"
         required: false
         default: "Northeast,Florida,South,Central,West,Poli,Pat"
+      delete_rows:
+        description: "Surgical removal instead of a scan: TAB:ROW:NAME-SUBSTRING, comma-separated (refuses if the row's name no longer matches)"
+        required: false
+        default: ""
       apply:
         description: "Actually move the stranded rows into the log"
         required: false
@@ -42,6 +46,7 @@ jobs:
           SHEET_URL: ${{ github.event.inputs.sheet_url }}
           TABS: ${{ github.event.inputs.tabs }}
           APPLY: ${{ github.event.inputs.apply }}
+          DELETE_ROWS: ${{ github.event.inputs.delete_rows }}
         run: |
           if [ -z "$CRON_SECRET" ]; then
             echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
@@ -52,7 +57,8 @@ jobs:
             -H "X-Cron-Secret: $CRON_SECRET" \
             --data-urlencode "sheet_url=$SHEET_URL" \
             --data-urlencode "tabs=$TABS" \
-            --data-urlencode "apply=$APPLY")
+            --data-urlencode "apply=$APPLY" \
+            --data-urlencode "delete_rows=$DELETE_ROWS")
           echo "HTTP $STATUS"
           cat /tmp/cron-response.json
           echo ""
