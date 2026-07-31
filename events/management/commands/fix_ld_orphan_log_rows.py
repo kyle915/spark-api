@@ -64,6 +64,16 @@ class Command(BaseCommand):
         parser.add_argument("--sheet-url", type=str, default=WORKBOOK_URL)
         parser.add_argument("--tabs", type=str, default=DEFAULT_TABS)
         parser.add_argument("--apply", action="store_true")
+        parser.add_argument(
+            "--delete-rows", type=str, default="",
+            help=(
+                "Surgical removal, e.g. 'Central:23:Driver,West:23:Snag' as "
+                "TAB:ROW:EXPECTED-NAME-SUBSTRING. Each row is read first and "
+                "REFUSED unless its event name contains the substring, so a "
+                "shifted row can never be deleted by accident. Used to back "
+                "out a bad move; runs instead of the scan."
+            ),
+        )
 
     def handle(self, *args, **opts):
         sheet_id = extract_sheet_id(opts["sheet_url"])
@@ -88,6 +98,10 @@ class Command(BaseCommand):
             s["properties"]["title"]: s["properties"]["sheetId"]
             for s in meta.get("sheets", [])
         }
+
+        if opts["delete_rows"]:
+            self._delete_rows(svc, sheet_id, gids, opts["delete_rows"], apply)
+            return
 
         total_rows = 0
         total_cans = 0.0
@@ -201,3 +215,74 @@ class Command(BaseCommand):
             "Otherwise every future row/column added to the KPI block silently "
             "strands new entries again."
         )
+
+    def _delete_rows(self, svc, sheet_id, gids, spec: str, apply: bool) -> None:
+        """Remove explicitly named rows, refusing any whose content moved.
+
+        Deleting from a client's live sheet by row number is only safe if the
+        row is confirmed to still hold what the caller thinks it holds — rows
+        shift constantly here. So every target is read and matched against an
+        expected name substring before anything is removed, and deletions run
+        bottom-up per tab so earlier indices stay valid.
+        """
+        targets: dict[str, list[tuple[int, str]]] = {}
+        for tok in spec.split(","):
+            tok = tok.strip()
+            if not tok:
+                continue
+            parts = tok.split(":")
+            if len(parts) != 3:
+                raise CommandError(
+                    f"--delete-rows entry {tok!r} must be TAB:ROW:NAME-SUBSTRING"
+                )
+            tab, row_s, expect = parts[0].strip(), parts[1].strip(), parts[2].strip()
+            if tab not in gids:
+                raise CommandError(f"Tab {tab!r} not found.")
+            try:
+                row_i = int(row_s)
+            except ValueError:
+                raise CommandError(f"Bad row {row_s!r} in {tok!r}")
+            targets.setdefault(tab, []).append((row_i, expect))
+
+        for tab, entries in targets.items():
+            for row_i, expect in sorted(entries, reverse=True):
+                resp = (
+                    svc.spreadsheets().values()
+                    .get(spreadsheetId=sheet_id, range=f"'{tab}'!A{row_i}:AJ{row_i}",
+                         valueRenderOption="FORMATTED_VALUE")
+                    .execute()
+                )
+                row = (resp.get("values") or [[]])[0]
+                name = str(row[2]).strip() if len(row) > 2 else ""
+                date = str(row[0]).strip() if row else ""
+                cans = sum(
+                    _num(row[j]) for j in range(SKU_FIRST, SKU_LAST + 1)
+                    if len(row) > j
+                )
+                if expect.lower() not in name.lower():
+                    self.stdout.write(self.style.ERROR(
+                        f"  REFUSED {tab}!{row_i}: holds {name[:40]!r}, expected "
+                        f"something containing {expect!r} — row moved, not deleting"
+                    ))
+                    continue
+                if not apply:
+                    self.stdout.write(
+                        f"  would delete {tab}!{row_i}: {date} | {name[:38]} | "
+                        f"{cans:,.0f} cans"
+                    )
+                    continue
+                svc.spreadsheets().batchUpdate(
+                    spreadsheetId=sheet_id,
+                    body={"requests": [{
+                        "deleteDimension": {
+                            "range": {
+                                "sheetId": gids[tab], "dimension": "ROWS",
+                                "startIndex": row_i - 1, "endIndex": row_i,
+                            }
+                        }
+                    }]},
+                ).execute()
+                self.stdout.write(self.style.SUCCESS(
+                    f"  deleted {tab}!{row_i}: {date} | {name[:38]} | "
+                    f"{cans:,.0f} cans"
+                ))
