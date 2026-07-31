@@ -4125,7 +4125,7 @@ class FixLdOrphanLogRowsView(View):
             return deny
 
         kwargs: dict = {}
-        for key in ("sheet_url", "tabs"):
+        for key in ("sheet_url", "tabs", "delete_rows"):
             val = request.GET.get(key) or request.POST.get(key)
             if val:
                 kwargs[key] = str(val)
