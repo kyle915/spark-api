@@ -52,6 +52,23 @@ class Tenant(Asyncable, models.Model):
     image = models.ImageField(upload_to="tenants/images", null=True)
     request_url_name = models.CharField(max_length=100, unique=True, null=True)
     slug = models.SlugField(max_length=50, null=True)
+    # STANDING web check-in code for this tenant. The existing check-in link
+    # (``/checkin/<code>``) carries an EVENT's walkup_code, so it only works
+    # for one pre-created activation. This is the tenant-wide twin: one durable
+    # link an admin pins on the client's page and shares with every BA. The BA
+    # supplies the store + date themselves and Spark finds-or-creates the
+    # event, so activations don't have to exist up front.
+    #
+    # Find-or-create is keyed on (tenant, normalized address, date), which is
+    # what lets SEVERAL BAs working the same store on the same day land on ONE
+    # event — each with their own booking, hours and recap — instead of
+    # spawning a duplicate event per person.
+    #
+    # NULL = tenant-wide check-in is off (the default for every tenant).
+    # See ambassadors/checkin_web.py + events/checkin_views.py.
+    checkin_code = models.CharField(
+        max_length=32, null=True, blank=True, unique=True, db_index=True
+    )
     # Per-tenant Google Sheet that mirrors the Master Tracker. Set by
     # admins via the front-end "Link Sheet" chip; the "Copy for Sheets"
     # TSV path expects this URL to live somewhere persistent. Storing

@@ -734,3 +734,193 @@ def build_public_context(event, ambassador=None) -> dict:
             "pendingReview": not bool(getattr(ambassador, "is_active", False)),
         }
     return payload
+
+
+# ---------------------------------------------------------------------------
+# Tenant-wide standing check-in
+# ---------------------------------------------------------------------------
+#
+# The per-event link above needs an activation to exist first. A tenant's
+# `checkin_code` is the standing twin: ONE durable link, pinned on the client's
+# page, that any BA can open. They supply the store + date and Spark
+# finds-or-creates the event, so nobody has to pre-build the activation.
+#
+# The find-or-create key is (tenant, normalized address, calendar date). That is
+# deliberately the "same place, same day" identity rather than one-event-per-BA,
+# because several BAs commonly work a single location together: the first to
+# check in creates the event, everyone after joins it, and each gets their own
+# booking, their own hours and their own recap on that shared event.
+
+
+def resolve_checkin_target(code: str):
+    """Resolve a check-in code to what it points at.
+
+    Returns ``("event", event)``, ``("tenant", tenant)`` or ``(None, None)``.
+    Event codes are tried FIRST so every link already in circulation keeps its
+    exact current behaviour; the tenant code is a fallback, never an override.
+    """
+    event = resolve_event_by_code(code)
+    if event is not None:
+        return "event", event
+
+    from tenants.models import Tenant
+
+    clean = (code or "").strip()
+    if not clean:
+        return None, None
+    tenant = Tenant.objects.filter(checkin_code__iexact=clean).first()
+    if tenant is not None:
+        return "tenant", tenant
+    return None, None
+
+
+def normalize_place(value: str) -> str:
+    """The 'is this the same store?' key: case-, punctuation- and
+    spacing-insensitive, so `1155 E. State St.` and `1155 e state st` are one
+    place and two BAs there don't fork into two events."""
+    v = (value or "").strip().lower()
+    v = re.sub(r"[^\w\s]", " ", v)
+    return re.sub(r"\s+", " ", v).strip()
+
+
+def recent_checkin_locations(tenant, limit: int = 30) -> list:
+    """Distinct recent store names + addresses for this tenant, newest first.
+
+    Feeds the autocomplete on the store step. Its real job is data hygiene: a BA
+    picking a known store re-uses its exact spelling, so the normalized key
+    matches and they join the existing event instead of creating a near-dupe.
+    """
+    from events.models import Event
+
+    seen: set = set()
+    out: list = []
+    rows = (
+        Event.objects.filter(tenant=tenant)
+        .exclude(address="")
+        .order_by("-id")
+        .values("name", "address")[: limit * 4]
+    )
+    for row in rows:
+        key = normalize_place(row.get("address"))
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append({"name": row.get("name") or "", "address": row.get("address") or ""})
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _event_date_utc(on_date):
+    """A calendar date stored as NOON UTC.
+
+    Midnight would be the obvious choice and is wrong here: read back in any US
+    zone (UTC-4 … UTC-10) midnight UTC lands on the PREVIOUS evening, so the
+    event would report a day early everywhere the work actually happened. Noon
+    UTC reads as 2am–8am on the intended date across every US zone.
+    """
+    from datetime import datetime, time, timezone as _tz
+
+    return datetime.combine(on_date, time(12, 0), tzinfo=_tz.utc)
+
+
+def _default_event_type(tenant):
+    """The tenant's standard sampling event type, if it has one."""
+    from events.models import EventType
+
+    try:
+        return (
+            EventType.objects.filter(tenant=tenant)
+            .order_by("id")
+            .first()
+        )
+    except Exception:  # noqa: BLE001 — event type is optional on Event
+        return None
+
+
+def find_or_create_walkin_event(
+    *, tenant, store_name: str, address: str, on_date, actor
+):
+    """The event for (tenant, address, date) — found if it exists, else created.
+
+    Returns ``(event, created)``. Wrapped in a transaction with a re-check so two
+    BAs tapping "start" at the same second still land on one event.
+
+    ``actor`` is REQUIRED and must be a real user: ``Event.created_by`` is NOT
+    NULL, and there is no system-user fallback in app code, so a default of
+    ``None`` here would raise IntegrityError on the very first check-in. The
+    caller identifies the BA first and passes their user, which also gives the
+    Walk-ups queue honest attribution for who opened the event.
+    """
+    if actor is None:
+        raise ValueError("find_or_create_walkin_event requires an actor.")
+    from django.db import transaction
+
+    from events.models import Event
+
+    key = normalize_place(address)
+    if not key:
+        raise ValueError("A store address is required to start a check-in.")
+
+    day_start = _event_date_utc(on_date)
+    lo = day_start.replace(hour=0, minute=0)
+    hi = day_start.replace(hour=23, minute=59)
+
+    def _match():
+        # Small set (one tenant, one day), so normalize in Python rather than
+        # trying to express the same collapsing in SQL.
+        for ev in Event.objects.filter(tenant=tenant, date__gte=lo, date__lte=hi):
+            if normalize_place(getattr(ev, "address", "")) == key:
+                return ev
+        return None
+
+    with transaction.atomic():
+        existing = _match()
+        if existing is not None:
+            return existing, False
+
+        name = (store_name or "").strip() or (address or "").strip()[:120]
+        event = Event.objects.create(
+            tenant=tenant,
+            name=name[:255],
+            address=(address or "").strip(),
+            date=day_start,
+            event_type=_default_event_type(tenant),
+            created_by=actor,
+            updated_by=actor,
+        )
+
+    # Stamp the state from the address so the row shows a Market in the tracker
+    # and counts in the geo breakdown. Best-effort: a geo miss must never block
+    # a BA from checking in.
+    try:
+        from events.routing import extract_state_code
+        from tenants.models import State
+
+        code = extract_state_code(event.address or "")
+        if code:
+            st = State.objects.filter(code__iexact=code).first()
+            if st is not None:
+                event.state = st
+                event.save(update_fields=["state"])
+    except Exception:  # noqa: BLE001
+        logger.warning("checkin: state stamp failed for event=%s", event.id)
+
+    return event, True
+
+
+def build_tenant_context(tenant) -> dict:
+    """Payload for a standing tenant link before any event exists.
+
+    ``needsEventDetails`` tells the page to ask for store + date first; the rest
+    of the flow is identical to the per-event link once identify resolves one.
+    """
+    return {
+        "mode": "tenant",
+        "needsEventDetails": True,
+        "brand": {
+            "name": getattr(tenant, "name", "") or "",
+            "primaryColor": _brand_primary_color(tenant),
+        },
+        "recentLocations": recent_checkin_locations(tenant),
+    }

@@ -24,6 +24,7 @@ import re
 import secrets
 
 from django.core.cache import cache
+from django.utils import timezone as dj_tz
 from django.http import HttpRequest, HttpResponse, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
@@ -99,6 +100,17 @@ def _rate_limited() -> JsonResponse:
     )
 
 
+def _parse_iso_date(value: str):
+    """Parse a YYYY-MM-DD string from the store step, or None."""
+    from datetime import date as _date
+
+    try:
+        y, m, d = (value or "").split("-")
+        return _date(int(y), int(m), int(d))
+    except Exception:  # noqa: BLE001 — any malformed input is just "no date"
+        return None
+
+
 def _load_event(code: str):
     """Resolve the code to a live event, or ``None``."""
     from asgiref.sync import async_to_sync  # noqa: F401 — not needed; kept sync
@@ -107,12 +119,20 @@ def _load_event(code: str):
 
 
 def _load_session(code: str, token: str):
-    """Return ``(event, ambassador)`` for a valid session token whose event
-    matches ``code``; otherwise ``(None, error_response)``."""
-    from ambassadors.models import Ambassador
+    """Return ``(event, ambassador)`` for a valid session token; otherwise
+    ``(None, error_response)``.
 
-    event = checkin_web.resolve_event_by_code(code)
-    if event is None:
+    Two link shapes land here. An EVENT code names one event, so the token's
+    event must equal it. A TENANT code names no event — the session token minted
+    at identify carries whichever event identify found-or-created — so the check
+    becomes "does that event belong to this tenant?". Both are equally strict:
+    a token can never reach an event outside the link's own scope.
+    """
+    from ambassadors.models import Ambassador
+    from events.models import Event
+
+    kind, target = checkin_web.resolve_checkin_target(code)
+    if kind is None:
         return None, _err("This link is no longer active.", status=404, code="not_found")
     if not token:
         return None, _err("Your check-in session is missing. Reload the link.", status=401, code="no_session")
@@ -122,8 +142,22 @@ def _load_session(code: str, token: str):
         return None, _err("Your check-in session expired. Reload the link.", status=401, code="expired")
     except (BadSignature, ValueError):
         return None, _err("Invalid check-in session.", status=401, code="bad_session")
-    if event_id != event.id:
-        return None, _err("This session doesn't match the event.", status=401, code="mismatch")
+
+    if kind == "event":
+        event = target
+        if event_id != event.id:
+            return None, _err("This session doesn't match the event.", status=401, code="mismatch")
+    else:
+        event = (
+            Event.objects.select_related("tenant", "request", "retailer", "location", "state", "timezone")
+            .filter(id=event_id)
+            .first()
+        )
+        if event is None:
+            return None, _err("Couldn't find your check-in.", status=404, code="not_found")
+        if getattr(event, "tenant_id", None) != target.id:
+            return None, _err("This session doesn't match the link.", status=401, code="mismatch")
+
     ambassador = (
         Ambassador.objects.select_related("user").filter(id=amb_id).first()
     )
@@ -138,13 +172,33 @@ def _load_session(code: str, token: str):
 @csrf_exempt
 @require_http_methods(["GET"])
 def public_checkin_context(request: HttpRequest, code: str) -> HttpResponse:
-    event = checkin_web.resolve_event_by_code(code)
-    if event is None:
+    kind, target = checkin_web.resolve_checkin_target(code)
+    if kind is None:
         return _err(
             "This check-in link isn't active. Ask your lead for a current one.",
             status=404,
             code="not_found",
         )
+
+    # Standing tenant link: there is no event yet. Hand back the brand + the
+    # store autocomplete and let the page ask for store + date first; identify
+    # is what resolves an actual event.
+    if kind == "tenant":
+        token = request.headers.get("X-Checkin-Session") or ""
+        if token:
+            loaded, err = _load_session(code, token)
+            if err is None:
+                event, ambassador = loaded
+                payload = checkin_web.build_public_context(event, ambassador)
+                payload["mode"] = "tenant"
+                return JsonResponse(payload)
+        try:
+            return JsonResponse(checkin_web.build_tenant_context(target))
+        except Exception:  # noqa: BLE001
+            logger.exception("checkin tenant context failed code=%s", code)
+            return _err("Couldn't load this check-in.", status=500, code="server")
+
+    event = target
     ambassador = None
     # Read the session token from a header, NOT the query string — a bearer
     # token in a URL leaks into access logs, browser history, and Referer
@@ -183,8 +237,8 @@ def public_checkin_identify(request: HttpRequest, code: str) -> HttpResponse:
     ):
         return _rate_limited()
 
-    event = checkin_web.resolve_event_by_code(code)
-    if event is None:
+    kind, target = checkin_web.resolve_checkin_target(code)
+    if kind is None:
         return _err("This check-in link isn't active.", status=404, code="not_found")
 
     data = _body(request)
@@ -204,19 +258,56 @@ def public_checkin_identify(request: HttpRequest, code: str) -> HttpResponse:
     if not phone:
         return _err("Enter a phone number so your lead can confirm you.")
 
+    # Identify the BA FIRST. On a standing tenant link the event may not exist
+    # yet and Event.created_by is NOT NULL, so we need a real user in hand
+    # before creating one — and attributing it to the BA who opened it is what
+    # the Walk-ups queue wants to show anyway.
     try:
         ambassador, _ = checkin_web.get_or_create_checkin_ambassador(
             first_name=first_name, last_name=last_name, phone=phone, email=email
-        )
-        amb_event, _created = checkin_web.ensure_walkup_booking(
-            event, ambassador, actor=ambassador.user
         )
     except Exception:  # noqa: BLE001
         logger.exception("checkin identify failed code=%s", code)
         return _err("Couldn't start your check-in. Try again.", status=500, code="server")
 
+    # A standing tenant link carries no event, so the BA supplies the store and
+    # the date and we find-or-create it. Several BAs at the same store on the
+    # same day resolve to the SAME event (see find_or_create_walkin_event).
+    event = target if kind == "event" else None
+    if kind == "tenant":
+        address = (data.get("address") or data.get("storeAddress") or "").strip()
+        store_name = (data.get("storeName") or data.get("eventName") or "").strip()
+        date_raw = (data.get("eventDate") or data.get("date") or "").strip()
+        if not address:
+            return _err("Enter the store address so your work is logged to the right place.")
+        on_date = _parse_iso_date(date_raw)
+        if on_date is None:
+            return _err("Pick the date you worked (YYYY-MM-DD).")
+        if abs((on_date - dj_tz.localdate()).days) > 14:
+            return _err("That date is too far from today. Ask your lead to log it.")
+        try:
+            event, _new = checkin_web.find_or_create_walkin_event(
+                tenant=target, store_name=store_name, address=address,
+                on_date=on_date, actor=ambassador.user,
+            )
+        except ValueError as exc:
+            return _err(str(exc))
+        except Exception:  # noqa: BLE001
+            logger.exception("checkin tenant event resolve failed code=%s", code)
+            return _err("Couldn't set up your event. Try again.", status=500, code="server")
+
+    try:
+        amb_event, _created = checkin_web.ensure_walkup_booking(
+            event, ambassador, actor=ambassador.user
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("checkin booking failed code=%s", code)
+        return _err("Couldn't start your check-in. Try again.", status=500, code="server")
+
     token = make_checkin_session_token(event.id, ambassador.id)
     payload = checkin_web.build_public_context(event, ambassador)
+    if kind == "tenant":
+        payload["mode"] = "tenant"
     payload["sessionToken"] = token
     payload["ambassadorEventUuid"] = str(amb_event.uuid)
     return JsonResponse(payload)
