@@ -1,0 +1,59 @@
+name: Fix LD orphaned log rows
+
+# Finds activity rows stranded ABOVE the LD event-log header, where no KPI
+# formula can see them. The sheet's own "Liquid Death Tools" Apps Script appends
+# at a HARDCODED row, and that row is now above the header because the KPI block
+# grew (the Others flavor row +1, the Event / Sales activity-type rows +2). Cans
+# entered through the tool therefore count toward nothing, while the same numbers
+# typed by hand into the log work fine.
+#
+# apply=true MOVES those rows under the FORMULA ROW so they count. Header and
+# FORMULA ROW are located by LABEL, never by row number. Manual only.
+#
+# This does NOT fix the Apps Script - only its owner can. The report prints the
+# change the script needs.
+
+on:
+  workflow_dispatch:
+    inputs:
+      sheet_url:
+        description: "KPI workbook URL"
+        required: false
+        default: "https://docs.google.com/spreadsheets/d/1W4F7X_vdW7d0SmthUvdxujBH2CahG0DaB53xBVr5q04/edit"
+      tabs:
+        description: "Comma-separated scorecard tabs"
+        required: false
+        default: "Northeast,Florida,South,Central,West,Poli,Pat"
+      apply:
+        description: "Actually move the stranded rows into the log"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+jobs:
+  fix-ld-orphan-log-rows:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/fix-ld-orphan-log-rows
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          SHEET_URL: ${{ github.event.inputs.sheet_url }}
+          TABS: ${{ github.event.inputs.tabs }}
+          APPLY: ${{ github.event.inputs.apply }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL" \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            --data-urlencode "sheet_url=$SHEET_URL" \
+            --data-urlencode "tabs=$TABS" \
+            --data-urlencode "apply=$APPLY")
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          echo ""
+          [ "$STATUS" != "200" ] && exit 1 || exit 0
