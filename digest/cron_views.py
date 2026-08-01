@@ -6144,6 +6144,51 @@ class PurgeWalkinEventView(View):
         )
 
 
+class DailyCheckinHoursView(View):
+    """POST `/internal/cron/daily-checkin-hours`.
+
+    Fires `email_daily_checkin_hours` — the end-of-day clock-in/out summary to
+    the field-ops crew (settings.CHECKIN_NOTIFY_EMAILS). Scheduled for 10pm PT.
+
+    Sends nothing on a day with no clock activity, so a quiet day is silence
+    rather than an empty email.
+
+    Body / query params (all optional):
+      - date: YYYY-MM-DD (default: today in --timezone)
+      - timezone: IANA name (default America/Los_Angeles)
+      - dry_run: "1"/"true" — compute and report, send nothing
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _param(name: str) -> str:
+            return (request.GET.get(name) or request.POST.get(name) or "").strip()
+
+        kwargs = {}
+        if _param("date"):
+            kwargs["date"] = _param("date")
+        if _param("timezone"):
+            kwargs["timezone"] = _param("timezone")
+        if _param("dry_run").lower() in ("1", "true", "yes", "on"):
+            kwargs["dry_run"] = True
+
+        out = io.StringIO()
+        try:
+            call_command("email_daily_checkin_hours", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("daily-checkin-hours cron failed")
+            return JsonResponse(
+                {"ok": False, "error": str(exc), "output": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse(
+            {"ok": True, "endpoint": "daily-checkin-hours", "output": out.getvalue()}
+        )
+
+
 def _registered_views() -> dict[str, Any]:
     """Map URL path → view class. Lets `digest/urls.py` mount these
     without each one being re-exported explicitly.
@@ -6186,6 +6231,7 @@ def _registered_views() -> dict[str, Any]:
         "campaign-to-date": CampaignToDateView,
         "dedupe-skills": DedupeSkillsView,
         "purge-walkin-event": PurgeWalkinEventView,
+        "daily-checkin-hours": DailyCheckinHoursView,
         "apply-girl-beer-branding": ApplyGirlBeerBrandingView,
         "shift-confirmations": SendShiftConfirmationsView,
         "provision-review-ambassador": ProvisionReviewAmbassadorView,

@@ -754,6 +754,12 @@ def _finalize_recap_offthread(recap_id: int) -> None:
             await _notify_recap_ready_for_review_to_admins(recap, created_by)
         except Exception:  # noqa: BLE001
             logger.exception("checkin recap: notify-admins failed id=%s", recap_id)
+        # Field-ops crew for the check-in link specifically — nobody is
+        # watching a queue for these, so the submission has to reach a person.
+        try:
+            await sync_to_async(notify_checkin_recap_submitted)(recap)
+        except Exception:  # noqa: BLE001
+            logger.exception("checkin recap: crew notify failed id=%s", recap_id)
 
     def _worker():
         asyncio.run(_run())
@@ -1013,3 +1019,74 @@ def build_tenant_context(tenant) -> dict:
         },
         "recentLocations": recent_checkin_locations(tenant),
     }
+
+
+def notify_checkin_recap_submitted(recap) -> None:
+    """Email the field-ops crew the moment a recap lands from the check-in link.
+
+    Separate from the existing "ready for review" alert, which goes to
+    RECAP_REVIEW_COPY_EMAILS — a different list for a different job. This one
+    is scoped to the standing/web check-in flow, where nobody is watching a
+    queue and the whole point is that the submission reaches a person.
+
+    Best-effort: runs on the finalize thread and never fails the recap.
+    """
+    from django.conf import settings
+    from django.utils.html import escape
+
+    from utils.mailer import Envelope, Mailer
+
+    to = [e.strip() for e in getattr(settings, "CHECKIN_NOTIFY_EMAILS", []) if (e or "").strip()]
+    if not to:
+        return
+
+    event = getattr(recap, "event", None)
+    tenant = getattr(recap, "tenant", None) or getattr(event, "tenant", None)
+    brand = getattr(tenant, "name", "") or ""
+    where = getattr(event, "name", "") or "an event"
+    address = getattr(event, "address", "") or ""
+
+    amb = getattr(recap, "ambassador", None)
+    user = getattr(amb, "user", None) or getattr(recap, "created_by", None)
+    who = ""
+    if user:
+        who = f"{getattr(user, 'first_name', '') or ''} {getattr(user, 'last_name', '') or ''}".strip()
+    who = who or "A field rep"
+    phone = getattr(amb, "phone", None) or ""
+
+    base = (getattr(settings, "ADMIN_FRONTEND_URL", "") or "").rstrip("/")
+    link = (
+        f"<div style='margin:16px 0 4px'><a href='{base}/recaps' "
+        "style='display:inline-block;background:#c5f546;color:#0a0d09;"
+        "padding:10px 18px;border-radius:10px;text-decoration:none;"
+        "font-weight:700'>Open recaps</a></div>"
+        if base and base != "http://localhost:3000"
+        else ""
+    )
+    rows = "".join(
+        f"<p style='color:#555;margin:2px 0'>{escape(label)}: {escape(str(value))}</p>"
+        for label, value in (
+            ("Brand", brand),
+            ("Where", address or where),
+            ("Phone", phone),
+        )
+        if value
+    )
+    html = (
+        "<div style='font-family:system-ui,sans-serif;color:#14181a'>"
+        f"<p style='font-size:15px;margin:0'><strong>{escape(who)}</strong> just "
+        f"submitted a recap for <strong>{escape(where)}</strong>.</p>"
+        f"{rows}"
+        "<p style='color:#555;margin-top:12px'>Approving it logs their hours.</p>"
+        f"{link}</div>"
+    )
+
+    class _RecapSubmittedMailer(Mailer):
+        def envelope(self) -> "Envelope":
+            return Envelope(
+                subject=f"Recap submitted — {who} @ {where}",
+                html=html,
+                to_emails=to,
+            )
+
+    _RecapSubmittedMailer().send_now()

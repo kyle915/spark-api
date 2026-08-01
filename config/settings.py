@@ -332,6 +332,22 @@ RESEND_API_KEY = env("RESEND_API_KEY", default="")
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="Spark <onboarding@resend.dev>")
 REQUEST_REVIEW_COPY_EMAILS = env.list("REQUEST_REVIEW_COPY_EMAILS", default=[])
 RECAP_REVIEW_COPY_EMAILS = env.list("RECAP_REVIEW_COPY_EMAILS", default=[])
+# Field-ops crew for the web CHECK-IN link: alerted when a BA submits a recap
+# through it, and sent the nightly clock-in/out summary. ONE list behind both
+# so the two can never drift apart.
+#
+# Unlike the lists above this ships with a real default rather than [], so it
+# works without anyone editing Cloud Run env; set CHECKIN_NOTIFY_EMAILS there
+# to change the crew without a deploy.
+CHECKIN_NOTIFY_EMAILS = env.list(
+    "CHECKIN_NOTIFY_EMAILS",
+    default=[
+        "nevena@igniteproductions.co",
+        "keis@igniteproductions.co",
+        "myriant@igniteproductions.co",
+        "kyle@igniteproductions.co",
+    ],
+)
 # Comma-separated admin emails alerted when a new BA signs up via
 # any public path (createPublicAmbassador / Apple / Google).
 # Empty default → no alert. Set this in prod env to plug the silent-
