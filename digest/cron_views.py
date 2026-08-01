@@ -4154,6 +4154,62 @@ class FixLdOrphanLogRowsView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class SetupTotalWirelessCheckinView(View):
+    """GET/POST `/internal/cron/setup-total-wireless-checkin`.
+
+    Sets Total Wireless up for field capture in one shot: seeds the
+    "Total Wireless - BA Event Recap" template and mints the tenant's STANDING
+    check-in code. They ship together because neither is useful alone — the
+    link has nothing to file without the template, and the template has no
+    BA-facing entry point without the link.
+
+    The standing code is the point of the whole feature: one durable URL pinned
+    on the client page, so BAs never type an event code. They open it, give name
+    + cell, pick store + date, clock in/out and file the recap. Several BAs at
+    one store on one day land on the SAME event.
+
+    Idempotent: get_or_create for the template, and an existing checkin_code is
+    left alone (rotating it would break every copy already shared).
+
+    Params: tenant (default "total-wireless"), template_name, event_type,
+    apply (default DRY RUN).
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        kwargs: dict = {}
+        for key in ("tenant", "template_name", "event_type"):
+            val = request.GET.get(key) or request.POST.get(key)
+            if val:
+                kwargs[key] = str(val)
+        raw = (request.GET.get("apply") or request.POST.get("apply") or "").lower()
+        apply_it = raw in ("1", "true", "yes", "on")
+        if apply_it:
+            kwargs["apply"] = True
+
+        out = io.StringIO()
+        try:
+            call_command("setup_total_wireless_checkin", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("setup-total-wireless-checkin cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc),
+                 "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "apply": apply_it, "log": out.getvalue()})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class AddLdTypeRowsView(View):
     """GET/POST `/internal/cron/add-ld-type-rows`.
 
@@ -6099,6 +6155,7 @@ def _registered_views() -> dict[str, Any]:
         "explain-request-mirror": ExplainRequestMirrorView,
         "reconcile-tracker-rows": ReconcileTrackerRowsView,
         "fix-ld-orphan-log-rows": FixLdOrphanLogRowsView,
+        "setup-total-wireless-checkin": SetupTotalWirelessCheckinView,
         "set-tenant-mileage-tracking": SetTenantMileageTrackingView,
         "staff-tenant-events": StaffTenantEventsView,
         "weekly-mileage-report": WeeklyMileageReportView,
