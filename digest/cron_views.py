@@ -6087,6 +6087,63 @@ class SendNoShowAlertsView(View):
         return JsonResponse({"ok": True, "endpoint": "no-show-alerts"})
 
 
+class PurgeWalkinEventView(View):
+    """POST `/internal/cron/purge-walkin-event`.
+
+    Fires `purge_walkin_event` — removes a junk Event conjured through a
+    standing check-in link (a typo'd address, a test tap, an abandoned
+    check-in). These are not cosmetic: `recent_checkin_locations()` feeds
+    every event's address back to the next BA as a store suggestion, so one
+    bad address becomes a permanent wrong answer in the field autocomplete.
+
+    SAFE — DRY-RUN by default; only an explicit `execute=true` deletes. The
+    command itself REFUSES on any event carrying a recap, a clock punch, or an
+    approved booking, and requires `expect_name` to match the event's name.
+
+    Body / query params:
+      - event_uuid  (required)
+      - expect_name (required) — substring that must appear in the name
+      - execute: "1"/"true"/"yes" — apply (default OFF → dry-run)
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _param(name: str) -> str:
+            return (request.GET.get(name) or request.POST.get(name) or "").strip()
+
+        event_uuid = _param("event_uuid")
+        expect_name = _param("expect_name")
+        if not event_uuid or not expect_name:
+            return JsonResponse(
+                {"ok": False, "error": "event_uuid and expect_name are required"},
+                status=400,
+            )
+        execute = _param("execute").lower() in ("1", "true", "yes", "on")
+
+        out = io.StringIO()
+        try:
+            call_command(
+                "purge_walkin_event",
+                stdout=out,
+                event_uuid=event_uuid,
+                expect_name=expect_name,
+                apply=execute,
+            )
+        except Exception as exc:  # noqa: BLE001 — surface refusals to caller
+            logger.exception("purge-walkin-event cron failed")
+            return JsonResponse(
+                {"ok": False, "error": str(exc), "output": out.getvalue()},
+                status=400,
+            )
+        return JsonResponse(
+            {"ok": True, "endpoint": "purge-walkin-event",
+             "executed": execute, "output": out.getvalue()}
+        )
+
+
 def _registered_views() -> dict[str, Any]:
     """Map URL path → view class. Lets `digest/urls.py` mount these
     without each one being re-exported explicitly.
@@ -6128,6 +6185,7 @@ def _registered_views() -> dict[str, Any]:
         "dump-tenant-receipts": DumpTenantReceiptsView,
         "campaign-to-date": CampaignToDateView,
         "dedupe-skills": DedupeSkillsView,
+        "purge-walkin-event": PurgeWalkinEventView,
         "apply-girl-beer-branding": ApplyGirlBeerBrandingView,
         "shift-confirmations": SendShiftConfirmationsView,
         "provision-review-ambassador": ProvisionReviewAmbassadorView,
