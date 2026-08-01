@@ -230,16 +230,24 @@ def public_checkin_context(request: HttpRequest, code: str) -> HttpResponse:
 @require_http_methods(["POST"])
 def public_checkin_identify(request: HttpRequest, code: str) -> HttpResponse:
     ip = _client_ip(request)
-    # Per-IP burst guard + per-code cap on how many stub accounts one event's
-    # link can spawn (the account-creating endpoint is the worst flood vector).
-    if _over_limit("identify-ip", ip, limit=10, window=300) or _over_limit(
-        "identify-code", code, limit=50, window=3600
-    ):
+    # Per-IP burst guard first — it's the real flood defence and costs nothing.
+    if _over_limit("identify-ip", ip, limit=10, window=300):
         return _rate_limited()
 
     kind, target = checkin_web.resolve_checkin_target(code)
     if kind is None:
         return _err("This check-in link isn't active.", status=404, code="not_found")
+
+    # Then a per-code cap on how many stub accounts one link can spawn (the
+    # account-creating endpoint is the worst vector). The ceiling has to depend
+    # on what the code IS: an EVENT code serves one activation, so 50/hour is
+    # generous. A TENANT code is a standing link the whole field shares across
+    # hundreds of events — 50/hour would throttle real BAs on a busy morning,
+    # which is a self-inflicted outage, not security. 500/hour still bounds
+    # abuse (~8 sign-ups a minute, sustained) without ever touching real use.
+    code_cap = 500 if kind == "tenant" else 50
+    if _over_limit("identify-code", code, limit=code_cap, window=3600):
+        return _rate_limited()
 
     data = _body(request)
     first_name = (data.get("firstName") or data.get("first_name") or "").strip()
