@@ -42,7 +42,7 @@ class Command(BaseCommand):
         term = (opts["search"] or "").strip()
         if term:
             qs = qs.filter(Q(name__icontains=term) | Q(slug__icontains=term))
-        qs = qs.annotate(members=Count("tenantedusers", distinct=True)).order_by("id")
+        qs = qs.annotate(members=Count("tenanted_users", distinct=True)).order_by("id")
 
         rows = list(qs)
         total = Tenant.objects.count()
