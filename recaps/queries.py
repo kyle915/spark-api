@@ -4,7 +4,8 @@ import strawberry
 from asgiref.sync import sync_to_async
 from graphql import GraphQLError
 
-from django.db.models import QuerySet, Model, Prefetch, Q
+from django.db.models import QuerySet, Model, Prefetch, Q, Max
+from django.db.models.functions import Coalesce
 
 from recaps import types
 from recaps import models
@@ -1204,6 +1205,12 @@ async def _assert_caller_authorized_to_read_recap_tenant(
         raise GraphQLError("Recap not found.")
 
 
+# How long after a walk-in BA's LAST clock punch we consider the shift
+# wrapped and the recap genuinely overdue. Long enough that a BA taking a
+# break, or one whose clock-out failed, isn't chased while still on site.
+WALKIN_WRAP_GRACE_HOURS = 4
+
+
 @strawberry.type
 class RecapQueries:
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
@@ -2033,9 +2040,28 @@ class RecapQueries:
                     "tenant",
                     "request",
                 )
+                # "Wrapped" has TWO shapes and only one was handled.
+                #
+                # A scheduled event wraps at end_time. A WALK-IN event — one a
+                # BA conjured through the check-in link or a walk-up code — has
+                # NO end_time at all, and a NULL satisfies neither comparison,
+                # so every one of them was invisible here. /recaps/missing said
+                # "All clear" for Total Wireless no matter how many check-in
+                # shifts owed a recap: not a stale count, a whole class of
+                # shift the query could never return.
+                #
+                # A walk-in counts as wrapped once its LAST clock punch is far
+                # enough back that the BA is plainly done. Anything more recent
+                # is someone still working, and nagging them mid-shift is how
+                # this page loses its credibility.
+                .annotate(last_punch=Max("attendance__clock_time"))
                 .filter(
-                    end_time__lt=now,
-                    end_time__gte=cutoff,
+                    Q(end_time__lt=now, end_time__gte=cutoff)
+                    | Q(
+                        end_time__isnull=True,
+                        last_punch__lt=now - timedelta(hours=WALKIN_WRAP_GRACE_HOURS),
+                        last_punch__gte=cutoff,
+                    )
                 )
                 # An event is missing a recap if neither the standard
                 # `recaps` nor the tenant-custom `custom_recap` tables
@@ -2043,7 +2069,10 @@ class RecapQueries:
                 # and without this check every Borjomi event with a
                 # filed customRecap was still flagged as missing.
                 .filter(recaps__isnull=True, custom_recap__isnull=True)
-                .order_by("-end_time")
+                # Newest first regardless of which shape it is — a walk-in has
+                # no end_time to sort by, so fall back to its last punch.
+                .annotate(wrapped_at=Coalesce("end_time", "last_punch"))
+                .order_by("-wrapped_at")
             )
             if resolved_tenant_id is not None:
                 qs = qs.filter(tenant_id=resolved_tenant_id)
