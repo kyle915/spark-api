@@ -28,6 +28,14 @@ class TenantType(Node):
     # setClientWeeklyDigestEnabled) — its own flag so the weekly digest and
     # the monthly report roll out independently. Default False (opt-in only).
     client_weekly_digest_enabled: strawberry.auto
+    # The tenant's STANDING check-in code, e.g. "TW-KZ4ATS". One durable
+    # link (/checkin/<code>) the whole field team can use all season, as
+    # opposed to Event.walkup_code which is minted per event. Null until
+    # a code is issued. Read-only here — codes are minted by the tenant
+    # setup command, never by the UI. Safe to expose: the `tenants` query
+    # is already membership-scoped, and the code is meant to be shared
+    # with BAs anyway.
+    checkin_code: strawberry.auto
 
     @strawberry.field
     def recap_recipient_emails(self) -> str:
