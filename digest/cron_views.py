@@ -6189,6 +6189,45 @@ class DailyCheckinHoursView(View):
         )
 
 
+class ListTenantsView(View):
+    """POST `/internal/cron/list-tenants`.
+
+    READ-ONLY. Lists tenants with name, slug, created date and member count —
+    the facts that separate "the client was never created" from "it exists but
+    you can't see it", which the UI alone can't tell you apart.
+
+    Params: search (optional substring), verbose ("1" adds creator / request
+    URL / check-in code).
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _param(name: str) -> str:
+            return (request.GET.get(name) or request.POST.get(name) or "").strip()
+
+        kwargs = {}
+        if _param("search"):
+            kwargs["search"] = _param("search")
+        if _param("verbose").lower() in ("1", "true", "yes", "on"):
+            kwargs["verbose"] = True
+
+        out = io.StringIO()
+        try:
+            call_command("list_tenants", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("list-tenants cron failed")
+            return JsonResponse(
+                {"ok": False, "error": str(exc), "output": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse(
+            {"ok": True, "endpoint": "list-tenants", "output": out.getvalue()}
+        )
+
+
 def _registered_views() -> dict[str, Any]:
     """Map URL path → view class. Lets `digest/urls.py` mount these
     without each one being re-exported explicitly.
@@ -6232,6 +6271,7 @@ def _registered_views() -> dict[str, Any]:
         "dedupe-skills": DedupeSkillsView,
         "purge-walkin-event": PurgeWalkinEventView,
         "daily-checkin-hours": DailyCheckinHoursView,
+        "list-tenants": ListTenantsView,
         "apply-girl-beer-branding": ApplyGirlBeerBrandingView,
         "shift-confirmations": SendShiftConfirmationsView,
         "provision-review-ambassador": ProvisionReviewAmbassadorView,
