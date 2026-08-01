@@ -15,6 +15,7 @@ via ambassadors/schema.py.
 """
 from __future__ import annotations
 
+import logging
 import math
 import secrets
 from datetime import datetime, timedelta
@@ -23,6 +24,8 @@ import strawberry
 from strawberry import relay
 from asgiref.sync import sync_to_async
 from django.utils import timezone as dj_tz
+
+logger = logging.getLogger(__name__)
 
 from events.models import Event
 from utils.graphql.permissions import (
@@ -812,3 +815,73 @@ class WalkupAdminMutations:
             count=count,
             client_mutation_id=input.client_mutation_id,
         )
+
+
+# ---------------------------------------------------------------------------
+# Recap approval as the hours gate
+# ---------------------------------------------------------------------------
+def approve_booking_for_recap(*, ambassador_id: int, event_id: int, actor=None) -> dict:
+    """Approve the booking behind a recap so its hours count.
+
+    Walk-ups (mobile code, web check-in, standing link) land at
+    ``is_approved=False`` and are excluded from payroll and KPIs until an admin
+    confirms them in the Walk-ups queue. In practice nobody has capacity to
+    work that queue in real time — Ignite reviews RECAPS after the fact, so the
+    confirm step just silently didn't happen and hours went missing.
+
+    So approving the recap now carries the same weight the Confirm button does:
+    the booking is approved, the BA is activated, and they're added to the
+    brand's roster. Same end state, one queue instead of two. The Walk-ups
+    queue still exists for check-ins that never produce a recap and for
+    rejecting bad ones.
+
+    Idempotent and NEVER raises — approving a recap must not fail because a
+    booking couldn't be updated. Returns a dict of what changed, for logging.
+    """
+    from tenants.models import TenantedUser
+
+    out = {"bookings_approved": 0, "ambassador_activated": False, "roster_added": False}
+    if not ambassador_id or not event_id:
+        return out
+
+    try:
+        bookings = list(
+            AmbassadorEvent.objects.select_related("ambassador__user", "tenant")
+            .filter(ambassador_id=ambassador_id, event_id=event_id, is_approved=False)
+        )
+        for booking in bookings:
+            booking.is_approved = True
+            if actor is not None:
+                booking.updated_by = actor
+            booking.save(
+                update_fields=(
+                    ["is_approved", "updated_by", "updated_at"]
+                    if actor is not None
+                    else ["is_approved", "updated_at"]
+                )
+            )
+            out["bookings_approved"] += 1
+
+            amb = booking.ambassador
+            if amb and not getattr(amb, "is_active", False):
+                amb.is_active = True
+                amb.save(update_fields=["is_active"])
+                out["ambassador_activated"] = True
+            # Roster membership is best-effort — the approval stands without it.
+            try:
+                if amb and amb.user_id and booking.tenant_id:
+                    _, made = TenantedUser.objects.get_or_create(
+                        user=amb.user, tenant=booking.tenant
+                    )
+                    out["roster_added"] = out["roster_added"] or made
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    "roster add failed ambassador=%s tenant=%s",
+                    ambassador_id, booking.tenant_id,
+                )
+    except Exception:  # noqa: BLE001 — never break a recap approval
+        logger.exception(
+            "approve_booking_for_recap failed ambassador=%s event=%s",
+            ambassador_id, event_id,
+        )
+    return out

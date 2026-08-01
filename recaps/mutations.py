@@ -3863,6 +3863,23 @@ class RecapMutationService(SparkGraphQLMixin):
                 return recap
 
         recap = await approve_recap_transaction()
+
+        # Same rule as the custom-recap path: approving the recap is what logs
+        # the hours, so ops works one queue instead of two. See
+        # approve_booking_for_recap.
+        if self.input.approved:
+            from ambassadors.walkup import approve_booking_for_recap
+
+            changed = await sync_to_async(approve_booking_for_recap)(
+                ambassador_id=recap.ambassador_id,
+                event_id=recap.event_id,
+                actor=self.user,
+            )
+            if changed.get("bookings_approved"):
+                logger.info(
+                    "recap approval logged hours: recap=%s %s", recap.id, changed
+                )
+
         if self.input.approved:
             recap = await sync_to_async(
                 models.Recap.objects.select_related(
@@ -3926,6 +3943,28 @@ class RecapMutationService(SparkGraphQLMixin):
                 return custom_recap
 
         custom_recap = await approve_custom_recap_transaction()
+
+        # Approving the recap is what LOGS THE HOURS. Walk-ups (mobile code,
+        # web check-in, standing link) sit at is_approved=False and stay out of
+        # payroll until someone works the Walk-ups queue — which nobody has
+        # capacity to do in real time, so hours were quietly going missing.
+        # Ignite reviews recaps after the fact, so that review is now the one
+        # gate. Best-effort by design: it can never fail an approval.
+        if self.input.approved:
+            from ambassadors.walkup import approve_booking_for_recap
+
+            changed = await sync_to_async(approve_booking_for_recap)(
+                ambassador_id=custom_recap.ambassador_id,
+                event_id=custom_recap.event_id,
+                actor=self.user,
+            )
+            if changed.get("bookings_approved"):
+                logger.info(
+                    "recap approval logged hours: custom_recap=%s %s",
+                    custom_recap.id,
+                    changed,
+                )
+
         if self.input.approved:
             custom_recap = await sync_to_async(
                 models.CustomRecap.objects.select_related(
