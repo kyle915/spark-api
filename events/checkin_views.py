@@ -361,6 +361,14 @@ def public_checkin_clock(request: HttpRequest, code: str) -> HttpResponse:
             coordinates=coordinates,
             actor=ambassador.user,
         )
+        # Same coordinates, but PLOTTED: Attendance records the punch,
+        # LocationPing is what the admin map and GPS trail actually read.
+        checkin_web.record_location_ping(
+            ambassador=ambassador,
+            event=event,
+            coordinates=coordinates,
+            source=source_name,
+        )
         # First clock-IN → email admins so the pending walk-up gets seen.
         if source_name == "clock_in":
             checkin_web.notify_checkin_landed_if_first(event, ambassador)
@@ -465,3 +473,90 @@ def public_checkin_recap(request: HttpRequest, code: str) -> HttpResponse:
             "pendingReview": not bool(getattr(ambassador, "is_active", False)),
         }
     )
+
+
+# --------------------------------------------------------------------------
+# POST where  (reverse-geocode the BA's phone GPS -> a street address)
+# --------------------------------------------------------------------------
+#
+# Used by the standing tenant link's "Use my current location" button, which
+# fires BEFORE identify — there is no session yet, so this cannot require one.
+# That is safe because it reveals nothing: the caller supplies the coordinates
+# and gets back the address of the coordinates they already had. It is still
+# rate-limited per IP so it can't be used as a free bulk geocoder.
+@csrf_exempt
+@require_http_methods(["POST"])
+def public_checkin_where(request: HttpRequest, code: str) -> HttpResponse:
+    if _over_limit("where-ip", _client_ip(request), limit=30, window=300):
+        return _rate_limited()
+    # Still require the code to name a real link, so this isn't an open
+    # endpoint hanging off the API for anyone who finds the path.
+    kind, _target = checkin_web.resolve_checkin_target(code)
+    if kind is None:
+        return _err(
+            "This check-in link isn't active. Ask your lead for a current one.",
+            status=404,
+            code="not_found",
+        )
+
+    data = _body(request)
+    lat, lng = data.get("latitude"), data.get("longitude")
+    if lat is None or lng is None:
+        return _err("We didn't get a location from your phone.")
+
+    from utils.geocoding import photon_reverse
+
+    try:
+        hit = photon_reverse(lat, lng)
+    except Exception:  # noqa: BLE001 — belt and braces; photon_reverse
+        logger.exception("reverse geocode blew up lat=%s lng=%s", lat, lng)
+        hit = None
+    if not hit:
+        # Not an error the BA should be blocked by — they can type it.
+        return JsonResponse({"address": None, "message": "Couldn't name that spot."})
+    return JsonResponse(hit)
+
+
+# --------------------------------------------------------------------------
+# POST ping  (periodic location while the BA is on the clock)
+# --------------------------------------------------------------------------
+#
+# The page posts here on a timer while it is OPEN and the BA is clocked in.
+# IMPORTANT and deliberately limited: a mobile browser suspends timers when
+# the tab is backgrounded or the screen locks, so this yields an on-site trail
+# while the BA is actually looking at the page, NOT continuous background
+# tracking. Only the native app can do the latter (see spark-mobile's
+# locationTracker). Do not describe this to clients as full-shift tracking.
+@csrf_exempt
+@require_http_methods(["POST"])
+def public_checkin_ping(request: HttpRequest, code: str) -> HttpResponse:
+    if _over_limit("ping-ip", _client_ip(request), limit=240, window=3600):
+        return _rate_limited()
+    data = _body(request)
+    loaded, err = _load_session(code, data.get("session") or "")
+    if err is not None:
+        return err
+    event, ambassador = loaded
+
+    lat, lng = data.get("latitude"), data.get("longitude")
+    if lat is None or lng is None:
+        return _err("No location supplied.")
+    try:
+        coordinates = [float(lat), float(lng)]
+    except (TypeError, ValueError):
+        return _err("No location supplied.")
+
+    # Only record while genuinely on the clock. Otherwise a page left open in
+    # a pocket after clock-out would keep reporting the BA's whereabouts,
+    # which is both useless to ops and not something we should collect.
+    state = checkin_web.clock_state(ambassador_id=ambassador.id, event_id=event.id)
+    if state.get("state") != "clocked_in":
+        return JsonResponse({"recorded": False, "reason": "not_clocked_in"})
+
+    ping = checkin_web.record_location_ping(
+        ambassador=ambassador,
+        event=event,
+        coordinates=coordinates,
+        source="foreground",
+    )
+    return JsonResponse({"recorded": bool(ping)})

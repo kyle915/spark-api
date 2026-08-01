@@ -337,6 +337,53 @@ def record_attendance(*, amb_event, kind: str, coordinates, actor):
     )
 
 
+def record_location_ping(*, ambassador, event, coordinates, source: str):
+    """Write one ``LocationPing`` for a web check-in, best-effort.
+
+    Clock coordinates were already stored on ``Attendance.coordinates``, but
+    the admin surfaces that actually PLOT a BA — the "Today, on the ground"
+    map and the per-event GPS trail — read ``LocationPing``. Web check-ins
+    were therefore invisible on both while the mobile app showed up fine.
+    This closes that gap: browser BAs land on the same map with no new admin
+    UI.
+
+    Returns the ping or ``None``. NEVER raises — a BA has to be able to clock
+    in from a stockroom with one bar even if we can't record where they are.
+    """
+    from ambassadors.models import LocationPing
+
+    if not coordinates or len(coordinates) < 2:
+        return None
+    try:
+        lat = float(coordinates[0])
+        lng = float(coordinates[1])
+    except (TypeError, ValueError):
+        return None
+    # Null island means "no fix", not "off the coast of Ghana".
+    if lat == 0.0 and lng == 0.0:
+        return None
+    if not (-90.0 <= lat <= 90.0) or not (-180.0 <= lng <= 180.0):
+        return None
+
+    valid = {c[0] for c in LocationPing.SOURCE_CHOICES}
+    try:
+        return LocationPing.objects.create(
+            ambassador=ambassador,
+            event=event,
+            lat=lat,
+            lng=lng,
+            recorded_at=dj_tz.now(),
+            source=source if source in valid else "foreground",
+        )
+    except Exception:  # noqa: BLE001 — presence data is never worth a 500
+        logger.exception(
+            "location ping failed ambassador=%s event=%s",
+            getattr(ambassador, "id", None),
+            getattr(event, "id", None),
+        )
+        return None
+
+
 def clock_state(*, ambassador_id: int, event_id: int) -> dict:
     """Current clock state for (BA, event): ``state`` is one of ``not_started``
     / ``clocked_in`` / ``clocked_out`` (the latest punch wins), plus first-in /

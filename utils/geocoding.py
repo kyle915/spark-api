@@ -137,3 +137,93 @@ def photon_state_for_address(
     props = (features[0] or {}).get("properties") or {}
     state = (props.get("state") or "").strip()
     return state or None
+
+
+PHOTON_REVERSE_URL = "https://photon.komoot.io/reverse"
+
+
+def _format_photon_address(props: dict) -> str:
+    """Build a US-style one-line address from Photon feature properties.
+
+    Photon returns the pieces separately (housenumber / street / city / state /
+    postcode). We assemble "123 Main St, Springfield, IL 62704", dropping any
+    piece Photon didn't supply rather than leaving holes or stray punctuation.
+
+    When there is no street at all (a park, a lake, open country) we fall back
+    to the feature's own ``name`` so the BA still sees something recognisable
+    instead of a blank field.
+    """
+    housenumber = (props.get("housenumber") or "").strip()
+    street = (props.get("street") or props.get("name") or "").strip()
+    city = (
+        props.get("city")
+        or props.get("town")
+        or props.get("village")
+        or props.get("locality")
+        or props.get("district")
+        or ""
+    ).strip()
+    state = (props.get("state") or "").strip()
+    postcode = (props.get("postcode") or "").strip()
+
+    line1 = " ".join(p for p in (housenumber, street) if p).strip()
+    # "IL 62704" — state and zip belong together on the last line.
+    tail = " ".join(p for p in (state, postcode) if p).strip()
+    return ", ".join(p for p in (line1, city, tail) if p)
+
+
+def photon_reverse(
+    lat: float,
+    lng: float,
+    *,
+    timeout: float = DEFAULT_TIMEOUT_SECONDS,
+) -> dict | None:
+    """Reverse-geocode ``lat``/``lng`` to a street address, best-effort.
+
+    Returns ``{"address": str, "city": str, "state": str, "postcode": str}``
+    or ``None`` when the coordinates are unusable, the request fails/times
+    out, or Photon has no feature there. NEVER raises — the web check-in
+    treats ``None`` as "couldn't name this spot, let the BA type it", which
+    must never be a hard failure: a BA standing in a store with a weak signal
+    still has to be able to clock in.
+
+    Note the query parameter is ``lon``, not ``lng`` — Photon's reverse
+    endpoint rejects ``lng``.
+    """
+    try:
+        lat_f = float(lat)
+        lng_f = float(lng)
+    except (TypeError, ValueError):
+        return None
+    # Reject out-of-range and the null-island sentinel, same as forward.
+    if not (-90.0 <= lat_f <= 90.0) or not (-180.0 <= lng_f <= 180.0):
+        return None
+    if lat_f == 0.0 and lng_f == 0.0:
+        return None
+
+    try:
+        resp = httpx.get(
+            PHOTON_REVERSE_URL,
+            params={"lat": lat_f, "lon": lng_f, "limit": 1},
+            timeout=timeout,
+            headers={"User-Agent": "spark-api/checkin-reverse-geocode"},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        logger.warning("Photon reverse failed for %s,%s: %s", lat, lng, exc)
+        return None
+
+    features = (data or {}).get("features") or []
+    if not features:
+        return None
+    props = (features[0] or {}).get("properties") or {}
+    address = _format_photon_address(props)
+    if not address:
+        return None
+    return {
+        "address": address,
+        "city": (props.get("city") or props.get("town") or "").strip(),
+        "state": (props.get("state") or "").strip(),
+        "postcode": (props.get("postcode") or "").strip(),
+    }

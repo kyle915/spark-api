@@ -52,6 +52,16 @@ urlpatterns = [
         name="events.public_checkin_upload_url",
     ),
     path(
+        "checkin/<str:code>/where",
+        checkin_views.public_checkin_where,
+        name="events.public_checkin_where",
+    ),
+    path(
+        "checkin/<str:code>/ping",
+        checkin_views.public_checkin_ping,
+        name="events.public_checkin_ping",
+    ),
+    path(
         "checkin/<str:code>/recap",
         checkin_views.public_checkin_recap,
         name="events.public_checkin_recap",
