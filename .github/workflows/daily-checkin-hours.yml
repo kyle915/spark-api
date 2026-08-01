@@ -1,0 +1,65 @@
+name: Daily check-in hours (10pm PT)
+
+# Fires `/internal/cron/daily-checkin-hours` — the end-of-day clock-in/out
+# summary to the field-ops crew (settings.CHECKIN_NOTIFY_EMAILS: Nevena, Keis,
+# Myriant, Kyle).
+#
+# 05:00 UTC = 10pm PDT / 9pm PST. GitHub cron has no DST, so like the other
+# daily crons here (see daily-admin-digest) this drifts an hour in winter.
+#
+# Sends NOTHING on a day with no clock activity — a daily email that's usually
+# empty is one people stop opening.
+
+on:
+  schedule:
+    - cron: "0 5 * * *"
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "YYYY-MM-DD to report on. Blank = today (Pacific)."
+        required: false
+        default: ""
+        type: string
+      dry_run:
+        description: "Compute and report only — send no email."
+        required: true
+        default: false
+        type: boolean
+
+jobs:
+  fire-daily-checkin-hours:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire daily-checkin-hours cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/daily-checkin-hours
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          REPORT_DATE: ${{ github.event.inputs.date || '' }}
+          # A scheduled run always sends; dry-run is a manual-only affordance.
+          DRY_RUN: ${{ github.event_name == 'schedule' && 'false' || github.event.inputs.dry_run }}
+        run: |
+          set -uo pipefail
+          if [ -z "$CRON_SECRET" ]; then echo "::error::secret missing"; exit 1; fi
+
+          QS="dry_run=$DRY_RUN"
+          if [ -n "$REPORT_DATE" ]; then QS="$QS&date=$REPORT_DATE"; fi
+          echo "query: $QS"
+
+          # Retry cold starts. Re-sending the same day's summary is harmless
+          # (it's a read + one email), so a retry can't corrupt anything.
+          STATUS=000
+          for attempt in 1 2 3; do
+            STATUS=$(curl -sS -o /tmp/resp.json -w '%{http_code}' \
+              -X POST "$CRON_URL?$QS" \
+              -H "X-Cron-Secret: $CRON_SECRET" || echo 000)
+            echo "attempt $attempt -> HTTP $STATUS"
+            case "$STATUS" in
+              502|503|504|000) echo "transient — retrying in $((attempt*10))s"; sleep $((attempt*10));;
+              *) break;;
+            esac
+          done
+          echo "----- response body -----"; cat /tmp/resp.json 2>/dev/null; echo; echo "-------------------------"
+          case "$STATUS" in
+            2*) echo "OK ($STATUS)"; exit 0;;
+            *) echo "::error::Endpoint returned $STATUS after retries — see body above."; exit 1;;
+          esac
