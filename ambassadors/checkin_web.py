@@ -337,6 +337,37 @@ def record_attendance(*, amb_event, kind: str, coordinates, actor):
     )
 
 
+def walkin_event_name(*, store_name: str, address: str, on_date) -> str:
+    """Name a walk-in event "M/D/YYYY - <address>".
+
+    This string is the title on the recap, in pickers and in exports, so it has
+    to say WHICH activation at a glance. The old behaviour used whatever the BA
+    typed in the optional store-name box, which in practice was the brand —
+    every Total Wireless recap came through titled "Total wireless", telling
+    you nothing about which one. Date + address is the pair that actually
+    identifies a stop, and both are already required at check-in.
+
+    A store name, when given and not just the brand echoed back, is appended in
+    parentheses rather than dropped — "8/1/2026 - 123 Main St (Kiosk 4)".
+
+    Note this is display only. Find-or-create keys on
+    (tenant, normalized address, date), NOT on the name, so changing the format
+    can never fork or merge events.
+    """
+    addr = (address or "").strip()
+    store = (store_name or "").strip()
+    try:
+        stamp = f"{on_date.month}/{on_date.day}/{on_date.year}"
+    except AttributeError:
+        stamp = ""
+
+    base = " - ".join(p for p in (stamp, addr) if p) or store or "Walk-in event"
+    # Skip a store name that adds nothing: blank, or already inside the address.
+    if store and normalize_place(store) not in normalize_place(base):
+        base = f"{base} ({store})"
+    return base[:255]
+
+
 def record_location_ping(*, ambassador, event, coordinates, source: str):
     """Write one ``LocationPing`` for a web check-in, best-effort.
 
@@ -753,8 +784,16 @@ def build_public_context(event, ambassador=None) -> dict:
     session already exists (ambassador given) — that BA's current clock/recap
     state so a returning link resumes where they left off."""
     tenant = getattr(event, "tenant", None)
-    start = getattr(event, "start_time", None) or getattr(event, "date", None)
+    # Keep the SCHEDULED START and the CALENDAR DATE apart. They used to be
+    # coalesced into one `startTime`, which was fine for a pre-booked event but
+    # wrong for a walk-in: those have no start_time, so the page fell back to
+    # `date` — stored at noon UTC — and rendered it as a clock time. A BA in
+    # Nevada checking in for Aug 1 saw "Sat, Aug 1 · 5 AM" for a shift that has
+    # no start time at all. Sending them separately lets the page show a time
+    # only when there genuinely is one.
+    start = getattr(event, "start_time", None)
     end = getattr(event, "end_time", None)
+    day = getattr(event, "date", None)
     payload = {
         "event": {
             "uuid": str(event.uuid),
@@ -762,6 +801,7 @@ def build_public_context(event, ambassador=None) -> dict:
             "address": getattr(event, "address", None),
             "startTime": start.isoformat() if start else None,
             "endTime": end.isoformat() if end else None,
+            "date": day.isoformat() if day else None,
         },
         "brand": {
             "name": tenant.name if tenant else "",
@@ -926,7 +966,9 @@ def find_or_create_walkin_event(
         if existing is not None:
             return existing, False
 
-        name = (store_name or "").strip() or (address or "").strip()[:120]
+        name = walkin_event_name(
+            store_name=store_name, address=address, on_date=on_date
+        )
         event = Event.objects.create(
             tenant=tenant,
             name=name[:255],

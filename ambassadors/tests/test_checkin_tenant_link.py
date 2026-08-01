@@ -74,7 +74,12 @@ class TestTenantCheckinLink(AmbassadorsGraphQLTestCase):
         )
         assert created is True
         assert event.tenant_id == self.tenant.id
-        assert event.name == "Total Wireless Trenton"
+        # Titled date-then-address so ops can tell WHICH stop this was;
+        # the store name rides along in parentheses.
+        assert event.name == (
+            "7/31/2026 - 1155 E State St, Trenton, NJ 08609, USA "
+            "(Total Wireless Trenton)"
+        )
         # Stored at noon UTC so the calendar date reads correctly in every US
         # zone — midnight would report the previous evening.
         assert event.date.hour == 12
@@ -188,3 +193,52 @@ class TestTenantCheckinLink(AmbassadorsGraphQLTestCase):
         keys = {checkin_web.normalize_place(x["address"]) for x in out}
         assert len(keys) == len(out), "no duplicate stores in the autocomplete"
         assert len(out) == 2
+
+    # -- event naming -------------------------------------------------------
+
+    def test_event_is_titled_date_then_address(self):
+        """The title is what ops reads on the recap, in pickers and exports.
+        Every Total Wireless walk-in used to come through titled "Total
+        wireless" — the brand, telling you nothing about WHICH stop."""
+        import datetime
+
+        assert checkin_web.walkin_event_name(
+            store_name="", address="7902 Taconite Drive, Sparks, NV 89436",
+            on_date=datetime.date(2026, 8, 1),
+        ) == "8/1/2026 - 7902 Taconite Drive, Sparks, NV 89436"
+
+    def test_a_useful_store_name_is_kept(self):
+        import datetime
+
+        out = checkin_web.walkin_event_name(
+            store_name="Kiosk 4", address="123 Main St",
+            on_date=datetime.date(2026, 8, 1),
+        )
+        assert out == "8/1/2026 - 123 Main St (Kiosk 4)"
+
+    def test_a_store_name_already_in_the_address_is_not_repeated(self):
+        import datetime
+
+        out = checkin_web.walkin_event_name(
+            store_name="Main St", address="123 Main St",
+            on_date=datetime.date(2026, 8, 1),
+        )
+        assert out == "8/1/2026 - 123 Main St"
+
+    def test_naming_does_not_change_the_find_or_create_key(self):
+        """Renaming must never fork or merge events — the key is
+        (tenant, normalized address, date), not the name."""
+        import datetime
+
+        on = datetime.date(2026, 7, 31)
+        a, created_a = checkin_web.find_or_create_walkin_event(
+            tenant=self.tenant, store_name="Kiosk 4",
+            address="55 Elm St", on_date=on, actor=self.system_user,
+        )
+        b, created_b = checkin_web.find_or_create_walkin_event(
+            tenant=self.tenant, store_name="totally different name",
+            address="55 elm st", on_date=on, actor=self.system_user,
+        )
+        assert created_a is True and created_b is False
+        assert a.id == b.id
+        assert a.name.startswith("7/31/2026 - 55 Elm St")
