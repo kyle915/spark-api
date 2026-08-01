@@ -14,6 +14,7 @@ import environ
 from pathlib import Path
 from datetime import timedelta
 from decimal import Decimal, InvalidOperation
+from corsheaders.defaults import default_headers
 from django.core.exceptions import ImproperlyConfigured
 from gqlauth.settings_type import GqlAuthSettings
 
@@ -38,6 +39,19 @@ CORS_ALLOWED_ORIGINS = env.list(
 )
 if DEBUG:
     CORS_ALLOW_ALL_ORIGINS = True
+
+# The public web check-in sends its session token in the `X-Checkin-Session`
+# REQUEST HEADER (deliberately, so the bearer stays out of URLs, access logs,
+# browser history and Referer). A custom header makes the request non-simple,
+# so the browser preflights it and refuses to send it unless the header is
+# named here. django-cors-headers' default_headers does NOT include it, so
+# without this the BA's browser blocks the very first context fetch after
+# identify -- the page shows "Couldn't load this check-in" while the server
+# is perfectly healthy and curl (which ignores CORS) succeeds.
+CORS_ALLOW_HEADERS = (
+    *default_headers,
+    "x-checkin-session",
+)
 
 
 # Application definition
