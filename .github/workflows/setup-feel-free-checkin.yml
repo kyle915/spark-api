@@ -1,0 +1,65 @@
+name: Setup Feel Free check-in
+
+# Seeds the "Feel Free - Sampling Recap" template (field-for-field off the
+# client's own PDF) AND mints the tenant's STANDING check-in code, in one
+# idempotent run. The Feel Free twin of "Setup Total Wireless check-in".
+#
+# RUN apply=false FIRST AND READ THE LOG. Unlike Total Wireless, Feel Free is
+# an established tenant: the dry run dumps every template already on it. If one
+# of those is already their live sampling form, EDIT that instead of applying
+# this — two templates split the brand's recaps across two forms and halve
+# every dashboard number.
+#
+# Idempotent otherwise: get_or_create for the template, and an existing
+# check-in code is left alone (rotating it breaks every copy already shared).
+
+on:
+  workflow_dispatch:
+    inputs:
+      tenant:
+        description: "Tenant name/slug substring"
+        required: false
+        default: "feel free"
+      template_name:
+        description: "Template name (blank = the default)"
+        required: false
+        default: ""
+      event_type:
+        description: "Event type substring to attach the template to (blank = prefer 'sampling')"
+        required: false
+        default: ""
+      apply:
+        description: "Actually write the template + code (read the dry run first)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+jobs:
+  setup-feel-free-checkin:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire setup endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/setup-feel-free-checkin
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          TENANT: ${{ github.event.inputs.tenant }}
+          TEMPLATE_NAME: ${{ github.event.inputs.template_name }}
+          EVENT_TYPE: ${{ github.event.inputs.event_type }}
+          APPLY: ${{ github.event.inputs.apply }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL" \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            --data-urlencode "tenant=$TENANT" \
+            --data-urlencode "template_name=$TEMPLATE_NAME" \
+            --data-urlencode "event_type=$EVENT_TYPE" \
+            --data-urlencode "apply=$APPLY")
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          echo ""
+          [ "$STATUS" != "200" ] && exit 1 || exit 0
