@@ -122,3 +122,79 @@ def osrm_match(
         return None
 
     return {"miles": round(total_meters / _METERS_PER_MILE, 2), "route": route}
+
+
+def osrm_route(
+    start: tuple,
+    end: tuple,
+    *,
+    timeout: float = DEFAULT_TIMEOUT_SECONDS,
+) -> dict | None:
+    """Driving distance + road geometry between TWO points, best-effort.
+
+    The odometer counterpart to :func:`osrm_match`. Map-matching needs a dense
+    trace to snap; a browser can't produce one (mobile Safari suspends JS and
+    geolocation the moment the screen locks, which is most of a drive), so the
+    web mileage flow records only a start fix and an end fix and asks OSRM to
+    ROUTE between them. That yields real distance over real streets instead of
+    a straight line through buildings — for a store-to-store or home-to-event
+    leg it's within a few percent of the driven distance.
+
+    It is NOT the same claim as the app's breadcrumb trail: this is "the road
+    distance between where they started and where they stopped", which assumes
+    a sensible route and no detours. Callers stamp ``route_source="osrm_route"``
+    so a reader can tell the two apart later.
+
+    ``start`` / ``end`` are ``(lat, lng)``. Returns
+    ``{"miles": float, "route": [[lat, lng], ...]}`` or ``None`` on any
+    failure. NEVER raises.
+    """
+    try:
+        pts = [
+            (float(start[0]), float(start[1])),
+            (float(end[0]), float(end[1])),
+        ]
+    except (TypeError, ValueError, IndexError):
+        return None
+    if any(lat == 0.0 and lng == 0.0 for lat, lng in pts):
+        return None  # null island = no fix
+
+    coord_str = ";".join(f"{lng:.6f},{lat:.6f}" for (lat, lng) in pts)
+    url = f"{OSRM_BASE_URL}/route/v1/driving/{coord_str}"
+
+    try:
+        resp = httpx.get(
+            url,
+            params={"overview": "full", "geometries": "geojson"},
+            timeout=timeout,
+            headers={"User-Agent": "spark-api/mileage-route"},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        logger.warning("OSRM route failed: %s", exc)
+        return None
+
+    if (data or {}).get("code") != "Ok":
+        return None
+    routes = data.get("routes") or []
+    if not routes:
+        return None
+
+    best = routes[0]
+    try:
+        meters = float(best.get("distance") or 0.0)
+    except (TypeError, ValueError):
+        return None
+    if meters <= 0:
+        return None
+
+    route: list[list[float]] = []
+    for c in ((best.get("geometry") or {}).get("coordinates")) or []:
+        if isinstance(c, (list, tuple)) and len(c) >= 2:
+            try:
+                route.append([float(c[1]), float(c[0])])  # [lng,lat] -> [lat,lng]
+            except (TypeError, ValueError):
+                continue
+
+    return {"miles": round(meters / _METERS_PER_MILE, 2), "route": route}

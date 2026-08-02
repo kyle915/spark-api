@@ -578,3 +578,64 @@ def public_checkin_ping(request: HttpRequest, code: str) -> HttpResponse:
         source="foreground",
     )
     return JsonResponse({"recorded": bool(ping)})
+
+
+def _mileage_coords(data) -> list | None:
+    lat, lng = data.get("latitude"), data.get("longitude")
+    if lat is None or lng is None:
+        return None
+    try:
+        return [float(lat), float(lng)]
+    except (TypeError, ValueError):
+        return None
+
+
+# ── Web mileage: start / stop an odometer leg ───────────────────────────────
+#
+# ONE fix at start, ONE at stop, routed over real roads by OSRM. Deliberately
+# NOT a breadcrumb loop: mobile Safari suspends JS and geolocation while the
+# screen is off, which is most of a drive, so a browser trail would be full of
+# holes and would UNDER-report mileage while looking precise. See
+# ambassadors/checkin_web's mileage section. The app remains the only thing
+# that records a true GPS trail.
+@csrf_exempt
+@require_http_methods(["POST"])
+def public_checkin_mileage_start(request: HttpRequest, code: str) -> HttpResponse:
+    if _over_limit("mileage-ip", _client_ip(request), limit=60, window=3600):
+        return _rate_limited()
+    data = _body(request)
+    loaded, err = _load_session(code, data.get("session") or "")
+    if err is not None:
+        return err
+    event, ambassador = loaded
+
+    state, message = checkin_web.start_mileage_leg(
+        ambassador=ambassador, event=event, coordinates=_mileage_coords(data)
+    )
+    if state is None:
+        return _err(message or "Couldn't start the drive.")
+    return JsonResponse({"mileage": state})
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def public_checkin_mileage_stop(request: HttpRequest, code: str) -> HttpResponse:
+    if _over_limit("mileage-ip", _client_ip(request), limit=60, window=3600):
+        return _rate_limited()
+    data = _body(request)
+    loaded, err = _load_session(code, data.get("session") or "")
+    if err is not None:
+        return err
+    event, ambassador = loaded
+
+    state, message = checkin_web.stop_mileage_leg(
+        ambassador=ambassador, event=event, coordinates=_mileage_coords(data)
+    )
+    if state is None:
+        return _err(message or "Couldn't stop the drive.")
+    # `message` here is a WARNING on an otherwise-successful stop (the leg
+    # closed but OSRM couldn't produce a distance) — 200, with the note.
+    payload: dict = {"mileage": state}
+    if message:
+        payload["warning"] = message
+    return JsonResponse(payload)

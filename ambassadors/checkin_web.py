@@ -835,6 +835,9 @@ def build_public_context(event, ambassador=None) -> dict:
             "clock": clock_state(ambassador_id=ambassador.id, event_id=event.id),
             "hasRecap": has_recap(ambassador_id=ambassador.id, event_id=event.id),
             "pendingReview": not bool(getattr(ambassador, "is_active", False)),
+            # Only present when the gig has track_mileage on, so the control
+            # never appears for brands that don't reimburse driving.
+            "mileage": mileage_state(ambassador=ambassador, event=event),
         }
     return payload
 
@@ -1170,3 +1173,194 @@ def open_shift_event_for(*, ambassador, tenant):
             getattr(ambassador, "id", None), getattr(tenant, "id", None),
         )
     return None
+
+
+# ── Web mileage: an ODOMETER, not a breadcrumb trail ────────────────────────
+#
+# The mobile app records a dense GPS trail and map-matches it. A browser
+# CANNOT: mobile Safari suspends JavaScript and geolocation the moment the
+# screen locks or the tab backgrounds, which is most of any drive. A
+# breadcrumb loop in a browser produces a trail full of holes and a mileage
+# number that is badly under-reported while looking authoritative — worse than
+# no number at all.
+#
+# So the web flow takes ONE fix at Start and ONE at Stop and asks OSRM to route
+# between them over real streets. That is honest about what it knows: the road
+# distance between where they started and where they stopped. Sessions are
+# stamped ``route_source="osrm_route"`` so a reader can always tell an odometer
+# leg from the app's matched trail.
+
+# Anything longer than this is a forgotten Stop, not a drive. Auto-closed with
+# no distance rather than left active forever blocking a new leg.
+MILEAGE_MAX_OPEN_HOURS = 12
+WEB_MILEAGE_SOURCE = "osrm_route"
+
+
+def _mileage_enabled(event) -> bool:
+    """Per-gig toggle — same `Event.track_mileage` flag the app respects."""
+    return bool(getattr(event, "track_mileage", False))
+
+
+def active_mileage_session(*, ambassador, event):
+    """This BA's open leg on this event, or None. Auto-closes a stale one."""
+    from ambassadors.models import MileageSession
+
+    if ambassador is None or event is None:
+        return None
+    session = (
+        MileageSession.objects.filter(
+            ambassador=ambassador, event=event, status=MileageSession.STATUS_ACTIVE
+        )
+        .order_by("-started_at")
+        .first()
+    )
+    if session is None:
+        return None
+    if session.started_at and session.started_at < dj_tz.now() - timedelta(
+        hours=MILEAGE_MAX_OPEN_HOURS
+    ):
+        session.status = MileageSession.STATUS_CANCELED
+        session.ended_at = dj_tz.now()
+        session.save(update_fields=["status", "ended_at", "updated_at"])
+        return None
+    return session
+
+
+def _leg_payload(session) -> dict:
+    return {
+        "uuid": str(session.uuid),
+        "status": session.status,
+        "startedAt": session.started_at.isoformat() if session.started_at else None,
+        "endedAt": session.ended_at.isoformat() if session.ended_at else None,
+        "miles": float(session.total_miles) if session.total_miles is not None else None,
+        "amount": (
+            float(session.reimbursement_amount)
+            if session.reimbursement_amount is not None
+            else None
+        ),
+    }
+
+
+def mileage_state(*, ambassador, event) -> dict:
+    """What the check-in page needs to render the mileage control."""
+    from ambassadors.models import MileageSession
+
+    if not _mileage_enabled(event) or ambassador is None:
+        return {"enabled": False, "active": None, "legs": [], "totalMiles": 0.0,
+                "totalAmount": 0.0}
+
+    active = active_mileage_session(ambassador=ambassador, event=event)
+    done = list(
+        MileageSession.objects.filter(
+            ambassador=ambassador, event=event,
+            status=MileageSession.STATUS_COMPLETED,
+        ).order_by("started_at")
+    )
+    total_miles = sum(float(s.total_miles or 0) for s in done)
+    total_amount = sum(float(s.reimbursement_amount or 0) for s in done)
+    return {
+        "enabled": True,
+        "active": _leg_payload(active) if active else None,
+        "legs": [_leg_payload(s) for s in done],
+        "totalMiles": round(total_miles, 2),
+        "totalAmount": round(total_amount, 2),
+    }
+
+
+def start_mileage_leg(*, ambassador, event, coordinates) -> tuple[dict | None, str | None]:
+    """Open a leg from a single GPS fix. Returns (state, error_message)."""
+    from ambassadors.models import MileageBreadcrumb, MileageSession
+
+    if not _mileage_enabled(event):
+        return None, "Mileage isn't being tracked for this event."
+    if not coordinates or len(coordinates) < 2:
+        return None, "We couldn't get your location. Turn on location and try again."
+    try:
+        lat, lng = float(coordinates[0]), float(coordinates[1])
+    except (TypeError, ValueError):
+        return None, "We couldn't read your location."
+    if lat == 0.0 and lng == 0.0:
+        return None, "We couldn't get a location fix. Try again outside."
+
+    if active_mileage_session(ambassador=ambassador, event=event) is not None:
+        # Not an error worth blocking on — just hand back the current state so
+        # a double-tap doesn't open two legs.
+        return mileage_state(ambassador=ambassador, event=event), None
+
+    session = MileageSession.objects.create(
+        tenant=getattr(event, "tenant", None),
+        ambassador=ambassador,
+        event=event,
+        status=MileageSession.STATUS_ACTIVE,
+    )
+    # The start fix is stored as a breadcrumb so the pair (first, last) is
+    # readable by the same admin surfaces that render the app's trail.
+    MileageBreadcrumb.objects.create(
+        session=session, lat=lat, lng=lng, recorded_at=dj_tz.now()
+    )
+    return mileage_state(ambassador=ambassador, event=event), None
+
+
+def stop_mileage_leg(*, ambassador, event, coordinates) -> tuple[dict | None, str | None]:
+    """Close the open leg, routing start->end over real roads for distance."""
+    from decimal import Decimal
+
+    from ambassadors.models import MileageBreadcrumb, MileageSession
+    from utils.map_matching import osrm_route
+
+    if not _mileage_enabled(event):
+        return None, "Mileage isn't being tracked for this event."
+    session = active_mileage_session(ambassador=ambassador, event=event)
+    if session is None:
+        return None, "No drive is running. Tap Start drive first."
+
+    end = None
+    if coordinates and len(coordinates) >= 2:
+        try:
+            lat, lng = float(coordinates[0]), float(coordinates[1])
+            if not (lat == 0.0 and lng == 0.0):
+                end = (lat, lng)
+        except (TypeError, ValueError):
+            end = None
+
+    start_crumb = session.breadcrumbs.order_by("recorded_at", "id").first()
+    if end is not None:
+        MileageBreadcrumb.objects.create(
+            session=session, lat=end[0], lng=end[1], recorded_at=dj_tz.now()
+        )
+
+    miles = None
+    route = None
+    if start_crumb is not None and end is not None:
+        routed = osrm_route((start_crumb.lat, start_crumb.lng), end)
+        if routed:
+            miles = routed.get("miles")
+            route = routed.get("route")
+
+    session.status = MileageSession.STATUS_COMPLETED
+    session.ended_at = dj_tz.now()
+    session.route_source = WEB_MILEAGE_SOURCE if miles is not None else ""
+    if route:
+        session.route = route
+    if miles is not None:
+        session.total_miles = Decimal(str(miles))
+        rate = getattr(event, "mileage_rate", None)
+        if rate:
+            session.rate_per_mile = rate
+            session.reimbursement_amount = (
+                Decimal(str(miles)) * Decimal(str(rate))
+            ).quantize(Decimal("0.01"))
+    session.save(
+        update_fields=[
+            "status", "ended_at", "total_miles", "rate_per_mile",
+            "reimbursement_amount", "route", "route_source", "updated_at",
+        ]
+    )
+
+    state = mileage_state(ambassador=ambassador, event=event)
+    if miles is None:
+        # Leg is closed either way — never leave a BA with a stuck timer — but
+        # say plainly that no distance was recorded rather than showing 0 mi as
+        # if they drove nowhere.
+        return state, "Drive stopped, but we couldn't work out the distance."
+    return state, None
