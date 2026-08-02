@@ -28,6 +28,10 @@ on:
         description: "Event type substring to attach the template to (blank = prefer 'sampling')"
         required: false
         default: ""
+      add_photo_field:
+        description: "Add an IMAGE field with this name to the brand's template (e.g. Consumer Sampling Pictures). Blank = skip"
+        required: false
+        default: ""
       location_mode:
         description: "How the link asks for location: market (roaming crew) or address (static store). Blank = leave as-is"
         required: false
@@ -58,6 +62,7 @@ jobs:
           TENANT: ${{ github.event.inputs.tenant }}
           TEMPLATE_NAME: ${{ github.event.inputs.template_name }}
           EVENT_TYPE: ${{ github.event.inputs.event_type }}
+          ADD_PHOTO_FIELD: ${{ github.event.inputs.add_photo_field }}
           LOCATION_MODE: ${{ github.event.inputs.location_mode }}
           CODE_ONLY: ${{ github.event.inputs.code_only }}
           APPLY: ${{ github.event.inputs.apply }}
@@ -72,6 +77,7 @@ jobs:
             --data-urlencode "tenant=$TENANT" \
             --data-urlencode "template_name=$TEMPLATE_NAME" \
             --data-urlencode "event_type=$EVENT_TYPE" \
+            --data-urlencode "add_photo_field=$ADD_PHOTO_FIELD" \
             --data-urlencode "location_mode=$LOCATION_MODE" \
             --data-urlencode "code_only=$CODE_ONLY" \
             --data-urlencode "apply=$APPLY")
