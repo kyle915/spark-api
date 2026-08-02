@@ -28,6 +28,12 @@ on:
         description: "Event type substring to attach the template to (blank = prefer 'sampling')"
         required: false
         default: ""
+      location_mode:
+        description: "How the link asks for location: market (roaming crew) or address (static store). Blank = leave as-is"
+        required: false
+        default: ""
+        type: choice
+        options: ["", "market", "address"]
       code_only:
         description: "Mint ONLY the standing link; touch no templates (use when the brand already has its form)"
         required: false
@@ -52,6 +58,7 @@ jobs:
           TENANT: ${{ github.event.inputs.tenant }}
           TEMPLATE_NAME: ${{ github.event.inputs.template_name }}
           EVENT_TYPE: ${{ github.event.inputs.event_type }}
+          LOCATION_MODE: ${{ github.event.inputs.location_mode }}
           CODE_ONLY: ${{ github.event.inputs.code_only }}
           APPLY: ${{ github.event.inputs.apply }}
         run: |
@@ -65,6 +72,7 @@ jobs:
             --data-urlencode "tenant=$TENANT" \
             --data-urlencode "template_name=$TEMPLATE_NAME" \
             --data-urlencode "event_type=$EVENT_TYPE" \
+            --data-urlencode "location_mode=$LOCATION_MODE" \
             --data-urlencode "code_only=$CODE_ONLY" \
             --data-urlencode "apply=$APPLY")
           echo "HTTP $STATUS"
