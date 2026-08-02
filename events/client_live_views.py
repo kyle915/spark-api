@@ -88,7 +88,12 @@ def _build(tenant_id: int) -> dict:
         primary = None
 
     now = timezone.now()
-    day = timezone.localdate()
+    # NOT timezone.localdate() — settings.TIME_ZONE is UTC, so that rolls over
+    # to tomorrow at 5pm Pacific and this page would show the client tomorrow's
+    # shifts every evening. Same fix, same helper, as the admin board.
+    from events.live_board import _ops_today
+
+    day = _ops_today()
     month_start = day.replace(day=1)
 
     events = list(
