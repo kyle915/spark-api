@@ -838,6 +838,7 @@ def build_public_context(event, ambassador=None) -> dict:
             # Only present when the gig has track_mileage on, so the control
             # never appears for brands that don't reimburse driving.
             "mileage": mileage_state(ambassador=ambassador, event=event),
+            "stops": sampling_stops(ambassador=ambassador, event=event),
         }
     return payload
 
@@ -1036,6 +1037,9 @@ def build_tenant_context(tenant) -> dict:
             "primaryColor": _brand_primary_color(tenant),
         },
         "recentLocations": recent_checkin_locations(tenant),
+        # Roaming brands pick a market instead of typing a store address.
+        "locationMode": tenant_location_mode(tenant),
+        "markets": tenant_markets(tenant),
     }
 
 
@@ -1369,3 +1373,130 @@ def stop_mileage_leg(*, ambassador, event, coordinates) -> tuple[dict | None, st
         # if they drove nowhere.
         return state, "Drive stopped, but we couldn't work out the distance."
     return state, None
+
+
+# ── Roaming crews: markets instead of store addresses ───────────────────────
+#
+# See Tenant.checkin_location_mode. A static activation keys its event on the
+# store address the BA types; a roaming crew keys it on the MARKET they picked,
+# and the individual spots become SamplingStops.
+
+def tenant_location_mode(tenant) -> str:
+    from tenants.models import Tenant
+
+    mode = (getattr(tenant, "checkin_location_mode", "") or "").strip()
+    return mode if mode == Tenant.CHECKIN_LOCATION_MARKET else Tenant.CHECKIN_LOCATION_ADDRESS
+
+
+# A choice field named like this on the brand's recap template IS their market
+# list. Reading it means the check-in page and the recap can't drift apart.
+_MARKET_FIELD_RE = re.compile(r"market|event\s*location|city", re.IGNORECASE)
+
+
+def tenant_markets(tenant) -> list:
+    """The brand's market list, in order.
+
+    Explicit ``Tenant.checkin_markets`` wins; otherwise read the options off
+    the brand's own recap template choice field (Feel Free's "Event Location:"
+    already holds Miami / Ft. Lauderdale / Tampa / Austin / San Antonio). ONE
+    list, so a market added to the recap form shows up on the link too.
+    """
+    explicit = getattr(tenant, "checkin_markets", None)
+    if isinstance(explicit, list) and explicit:
+        return [str(m).strip() for m in explicit if str(m).strip()]
+
+    from recaps.models import CustomField
+
+    try:
+        rows = (
+            CustomField.objects.filter(
+                custom_recap_template__tenant_id=getattr(tenant, "id", None)
+            )
+            .select_related("custom_field_type")
+            .order_by("id")
+        )
+        for cf in rows:
+            kind = (getattr(cf.custom_field_type, "name", "") or "").lower()
+            if "select" not in kind and "dropdown" not in kind:
+                continue
+            if not _MARKET_FIELD_RE.search(cf.name or ""):
+                continue
+            opts = [str(o).strip() for o in (cf.options or []) if str(o).strip()]
+            if opts:
+                return opts
+    except Exception:  # noqa: BLE001 — never break a check-in over this
+        logger.exception("market lookup failed tenant=%s", getattr(tenant, "id", None))
+    return []
+
+
+def log_sampling_stop(
+    *, ambassador, event, coordinates, name: str = ""
+) -> tuple[dict | None, str | None]:
+    """Record one place the BA sampled. Returns (stop_payload, error)."""
+    from ambassadors.models import SamplingStop
+
+    lat = lng = None
+    if coordinates and len(coordinates) >= 2:
+        try:
+            lat, lng = float(coordinates[0]), float(coordinates[1])
+        except (TypeError, ValueError):
+            lat = lng = None
+        if lat == 0.0 and lng == 0.0:
+            lat = lng = None
+
+    label = (name or "").strip()[:255]
+    if lat is None and not label:
+        return None, "Turn on location, or type where you are, so we can log the stop."
+
+    # Reverse-geocode best-effort — a stop is still worth recording without a
+    # street address, and the coordinates are the part we actually trust.
+    address = ""
+    if lat is not None:
+        try:
+            from utils.geocoding import photon_reverse
+
+            address = (photon_reverse(lat, lng) or "")[:512]
+        except Exception:  # noqa: BLE001
+            address = ""
+
+    stop = SamplingStop.objects.create(
+        ambassador=ambassador,
+        event=event,
+        lat=lat,
+        lng=lng,
+        address=address,
+        name=label,
+        recorded_at=dj_tz.now(),
+    )
+    # Mirror onto the ping trail so the stop plots on the admin map and the
+    # per-event GPS trail without any new admin UI.
+    if lat is not None:
+        record_location_ping(
+            ambassador=ambassador, event=event, coordinates=[lat, lng], source="foreground"
+        )
+    return _stop_payload(stop), None
+
+
+def _stop_payload(stop) -> dict:
+    return {
+        "uuid": str(stop.uuid),
+        "name": stop.name or "",
+        "address": stop.address or "",
+        "lat": stop.lat,
+        "lng": stop.lng,
+        "recordedAt": stop.recorded_at.isoformat() if stop.recorded_at else None,
+    }
+
+
+def sampling_stops(*, ambassador, event) -> list:
+    """This BA's stops on this event, oldest first."""
+    from ambassadors.models import SamplingStop
+
+    if ambassador is None or event is None:
+        return []
+    return [
+        _stop_payload(s)
+        for s in SamplingStop.objects.filter(
+            ambassador=ambassador, event=event
+        ).order_by("recorded_at", "id")
+    ]

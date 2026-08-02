@@ -1646,3 +1646,57 @@ class AmbassadorReferral(models.Model):
             f"AmbassadorReferral({self.referrer_id} → {self.referred_id}, "
             f"{stage})"
         )
+
+
+class SamplingStop(models.Model):
+    """One place a roaming BA actually sampled, logged in the moment.
+
+    Feel Free's crew works a MARKET (Austin) and moves between spots all
+    shift. The event is keyed on the market, so the individual spots need
+    their own record — and it has to be captured as it happens, not typed
+    from memory into the recap at the end (which is what made the old
+    free-text answer so vague).
+
+    Deliberately NOT a LocationPing: a ping is passive telemetry that only
+    lands while the page is foregrounded, whereas a stop is an explicit "I
+    worked here" the BA tapped. Each stop is ALSO mirrored to LocationPing
+    (source="stop") so it plots on the admin map and the per-event trail with
+    no new admin surface.
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+
+    ambassador = models.ForeignKey(
+        "ambassadors.Ambassador",
+        on_delete=models.CASCADE,
+        null=False,
+        related_name="sampling_stops",
+    )
+    event = models.ForeignKey(
+        Event,
+        on_delete=models.CASCADE,
+        null=False,
+        related_name="sampling_stops",
+    )
+
+    # Where. lat/lng come from the device; `address` is the reverse-geocoded
+    # street address (Photon, best-effort) and `name` is whatever the BA typed
+    # ("Whole Foods patio"). Either may be blank — the coordinates are the
+    # thing we can always trust.
+    lat = models.FloatField(null=True, blank=True)
+    lng = models.FloatField(null=True, blank=True)
+    address = models.CharField(max_length=512, blank=True, default="")
+    name = models.CharField(max_length=255, blank=True, default="")
+
+    recorded_at = models.DateTimeField(db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["event", "recorded_at"]),
+            models.Index(fields=["ambassador", "-recorded_at"]),
+        ]
+
+    def __str__(self):
+        return f"stop {self.ambassador_id}@{self.event_id} {self.recorded_at}"

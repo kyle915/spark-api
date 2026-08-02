@@ -85,6 +85,32 @@ class Tenant(Asyncable, models.Model):
     default_mileage_rate = models.DecimalField(
         max_digits=6, decimal_places=3, null=True, blank=True
     )
+    # How the standing check-in link asks "where are you working?".
+    #
+    #   address — a STATIC activation. The BA types the store address and the
+    #     event is keyed on it (Total Wireless: one BA, one store, all day).
+    #   market  — a ROAMING crew. The BA picks a market and the event is keyed
+    #     on that, so everyone in Austin today shares one event. Feel Free BAs
+    #     move between spots all shift; keying on a typed address forked a new
+    #     event per BA per spelling, which for a roaming crew multiplies into
+    #     junk events daily. Individual spots are captured as SamplingStops
+    #     instead, which is finer-grained AND real GPS rather than typed text.
+    CHECKIN_LOCATION_ADDRESS = "address"
+    CHECKIN_LOCATION_MARKET = "market"
+    CHECKIN_LOCATION_CHOICES = (
+        (CHECKIN_LOCATION_ADDRESS, "Store address"),
+        (CHECKIN_LOCATION_MARKET, "Market picker"),
+    )
+    checkin_location_mode = models.CharField(
+        max_length=12,
+        choices=CHECKIN_LOCATION_CHOICES,
+        default=CHECKIN_LOCATION_ADDRESS,
+    )
+    # Optional explicit market list. Left empty, the markets are read from the
+    # brand's own recap template (its "Event Location"-style choice field), so
+    # there is ONE list rather than two that drift apart. This is the override
+    # for brands whose template doesn't carry one.
+    checkin_markets = models.JSONField(null=True, blank=True)
     # Per-tenant Google Sheet that mirrors the Master Tracker. Set by
     # admins via the front-end "Link Sheet" chip; the "Copy for Sheets"
     # TSV path expects this URL to live somewhere persistent. Storing

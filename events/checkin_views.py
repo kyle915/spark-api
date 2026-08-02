@@ -304,7 +304,29 @@ def public_checkin_identify(request: HttpRequest, code: str) -> HttpResponse:
         address = (data.get("address") or data.get("storeAddress") or "").strip()
         store_name = (data.get("storeName") or data.get("eventName") or "").strip()
         date_raw = (data.get("eventDate") or data.get("date") or "").strip()
-        if not address:
+
+        # ROAMING brands pick a market; the market becomes the event's location
+        # key, so everyone working Austin today shares one event instead of
+        # forking one per typed address. Where they actually sampled is
+        # captured as SamplingStops during the shift.
+        from tenants.models import Tenant
+
+        if checkin_web.tenant_location_mode(target) == Tenant.CHECKIN_LOCATION_MARKET:
+            market = (data.get("market") or "").strip()
+            allowed = checkin_web.tenant_markets(target)
+            if not market:
+                return _err("Pick your market so your work is logged to the right place.")
+            # Match case-insensitively but STORE the canonical spelling — the
+            # event key is the normalized market, and two spellings would fork
+            # the very event this mode exists to keep single.
+            canon = next(
+                (m for m in allowed if m.strip().lower() == market.lower()), None
+            )
+            if allowed and canon is None:
+                return _err("Pick your market from the list.")
+            address = canon or market
+            store_name = ""
+        elif not address:
             return _err("Enter the store address so your work is logged to the right place.")
         on_date = _parse_iso_date(date_raw)
         if on_date is None:
@@ -639,3 +661,41 @@ def public_checkin_mileage_stop(request: HttpRequest, code: str) -> HttpResponse
     if message:
         payload["warning"] = message
     return JsonResponse(payload)
+
+
+# ── Sampling stops — where a roaming BA actually worked ─────────────────────
+#
+# A market-mode event says "Austin today". This is the finer grain: an
+# explicit, timestamped "I sampled here", tapped in the moment rather than
+# recalled into the recap at the end. Each stop also mirrors to LocationPing,
+# so it lands on the admin map and the per-event trail with no new admin UI.
+@csrf_exempt
+@require_http_methods(["POST"])
+def public_checkin_sampling_stop(request: HttpRequest, code: str) -> HttpResponse:
+    if _over_limit("stop-ip", _client_ip(request), limit=120, window=3600):
+        return _rate_limited()
+    data = _body(request)
+    loaded, err = _load_session(code, data.get("session") or "")
+    if err is not None:
+        return err
+    event, ambassador = loaded
+
+    coordinates = None
+    lat, lng = data.get("latitude"), data.get("longitude")
+    if lat is not None and lng is not None:
+        try:
+            coordinates = [float(lat), float(lng)]
+        except (TypeError, ValueError):
+            coordinates = None
+
+    stop, message = checkin_web.log_sampling_stop(
+        ambassador=ambassador,
+        event=event,
+        coordinates=coordinates,
+        name=str(data.get("name") or ""),
+    )
+    if stop is None:
+        return _err(message or "Couldn't log that stop.")
+    return JsonResponse(
+        {"stop": stop, "stops": checkin_web.sampling_stops(ambassador=ambassador, event=event)}
+    )
