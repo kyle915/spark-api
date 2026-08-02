@@ -134,6 +134,23 @@ class Command(BaseCommand):
             help="event type name substring. Default: prefer 'sampling', else the tenant's first.",
         )
         parser.add_argument(
+            "--add-photo-field",
+            dest="add_photo_field",
+            default=None,
+            help=(
+                "add an IMAGE field with this name to the brand's existing "
+                "template if absent. For a brand whose only image field is "
+                "something like 'corporate card receipts', a BA has nowhere "
+                "labelled to put their sampling photos."
+            ),
+        )
+        parser.add_argument(
+            "--photo-section",
+            dest="photo_section",
+            default="Photos",
+            help="section for --add-photo-field (default: 'Photos').",
+        )
+        parser.add_argument(
             "--location-mode",
             dest="location_mode",
             choices=["address", "market"],
@@ -321,6 +338,11 @@ class Command(BaseCommand):
         self._report_existing_templates(tenant, template_name)
         self._location_mode(tenant, opts.get("location_mode"), apply)
 
+        if opts.get("add_photo_field"):
+            self._add_photo_field(
+                tenant, creator, opts["add_photo_field"], opts["photo_section"], apply
+            )
+
         if opts.get("code_only"):
             self.stdout.write(
                 self.style.WARNING(
@@ -438,6 +460,84 @@ class Command(BaseCommand):
             _run()
 
         self._checkin_code(tenant, apply)
+
+    def _add_photo_field(
+        self, tenant, creator, field_name: str, section_name: str, apply: bool
+    ) -> None:
+        """Append one image field to the tenant's EXISTING template.
+
+        Photos on the check-in page are a single shared pool — the template's
+        image fields are prompts, not separate buckets — so adding one is a
+        labelling change, not a data-model one. It is what gives a BA a place
+        that actually says "sampling pictures".
+
+        Refuses to guess: exactly one template, or nothing happens.
+        """
+        from recaps.models import (
+            CustomField,
+            CustomRecapFieldType,
+            CustomRecapTemplate,
+            RecapSection,
+        )
+
+        templates = list(CustomRecapTemplate.objects.filter(tenant_id=tenant.id))
+        if len(templates) != 1:
+            raise CommandError(
+                f"--add-photo-field needs exactly one template on the tenant; "
+                f"found {len(templates)}. Use the admin template editor instead."
+            )
+        tpl = templates[0]
+
+        existing = CustomField.objects.filter(
+            custom_recap_template=tpl, name__iexact=field_name.strip()
+        ).first()
+        self.stdout.write(f"\nPhoto field {field_name!r} on {tpl.name!r}:")
+        if existing:
+            self.stdout.write("  already present — nothing to do")
+            return
+        if not apply:
+            self.stdout.write(
+                self.style.WARNING(
+                    f"  DRY-RUN — would add an image field in section "
+                    f"{section_name!r}"
+                )
+            )
+            return
+
+        ftype = None
+        for ft in CustomRecapFieldType.objects.all():
+            if _match_field_type("image", (ft.name or "").lower()):
+                ftype = ft
+                break
+        if ftype is None:
+            ftype = CustomRecapFieldType.objects.create(
+                name="image", created_by=creator
+            )
+
+        section, _ = RecapSection.objects.get_or_create(
+            tenant_id=tenant.id,
+            name=section_name,
+            defaults={"order": 90, "created_by": creator},
+        )
+        last = (
+            CustomField.objects.filter(custom_recap_template=tpl)
+            .order_by("-order")
+            .values_list("order", flat=True)
+            .first()
+        )
+        CustomField.objects.create(
+            custom_recap_template=tpl,
+            recap_section=section,
+            name=field_name.strip(),
+            custom_field_type=ftype,
+            required=False,
+            options=[],
+            order=(last or 0) + 1,
+            created_by=creator,
+        )
+        self.stdout.write(
+            self.style.SUCCESS(f"  ADDED image field in section {section_name!r}")
+        )
 
     def _location_mode(self, tenant, mode: str | None, apply: bool) -> None:
         """Set (or just report) how the link asks for location."""

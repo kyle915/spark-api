@@ -4235,7 +4235,10 @@ class SetupFeelFreeCheckinView(View):
             return deny
 
         kwargs: dict = {}
-        for key in ("tenant", "template_name", "event_type", "location_mode"):
+        for key in (
+            "tenant", "template_name", "event_type", "location_mode",
+            "add_photo_field", "photo_section",
+        ):
             val = request.GET.get(key) or request.POST.get(key)
             if val:
                 kwargs[key] = str(val)
