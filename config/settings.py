@@ -341,12 +341,11 @@ RECAP_REVIEW_COPY_EMAILS = env.list("RECAP_REVIEW_COPY_EMAILS", default=[])
 # to change the crew without a deploy.
 CHECKIN_NOTIFY_EMAILS = env.list(
     "CHECKIN_NOTIFY_EMAILS",
-    default=[
-        "nevena@igniteproductions.co",
-        "keis@igniteproductions.co",
-        "myriant@igniteproductions.co",
-        "kyle@igniteproductions.co",
-    ],
+    # ONE shared inbox, not a list of people. Kyle, after seeing a single
+    # check-in alert land on seven individual Ignite addresses: "please only
+    # send these emails to events@". A distribution address also means the
+    # crew changes without a code change.
+    default=["events@igniteproductions.co"],
 )
 # Comma-separated admin emails alerted when a new BA signs up via
 # any public path (createPublicAmbassador / Apple / Google).

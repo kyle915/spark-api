@@ -491,10 +491,18 @@ def _email_admins_checkin_landed(event, ambassador) -> None:
     from django.conf import settings
     from django.utils.html import escape
 
-    from events.mutations import _get_spark_admin_emails
     from utils.mailer import Envelope, Mailer
 
-    admins = _get_spark_admin_emails()
+    # The check-in crew inbox, NOT every Spark admin. This used to fan out via
+    # _get_spark_admin_emails(), so one BA clocking in pinged seven people
+    # individually — the fastest way to train a team to ignore an alert. Same
+    # list as the recap-submitted and nightly-hours emails, so all three
+    # check-in notifications move together.
+    admins = [
+        e.strip()
+        for e in getattr(settings, "CHECKIN_NOTIFY_EMAILS", [])
+        if (e or "").strip()
+    ]
     if not admins:
         return
     user = getattr(ambassador, "user", None)
