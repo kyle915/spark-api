@@ -4243,6 +4243,9 @@ class SetupFeelFreeCheckinView(View):
         apply_it = raw in ("1", "true", "yes", "on")
         if apply_it:
             kwargs["apply"] = True
+        co = (request.GET.get("code_only") or request.POST.get("code_only") or "").lower()
+        if co in ("1", "true", "yes", "on"):
+            kwargs["code_only"] = True
 
         out = io.StringIO()
         try:

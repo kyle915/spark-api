@@ -134,6 +134,16 @@ class Command(BaseCommand):
             help="event type name substring. Default: prefer 'sampling', else the tenant's first.",
         )
         parser.add_argument(
+            "--code-only",
+            dest="code_only",
+            action="store_true",
+            help=(
+                "mint the standing check-in code and DO NOTHING to templates. "
+                "Use when the brand already has its recap form in Spark — the "
+                "link resolves it on its own."
+            ),
+        )
+        parser.add_argument(
             "--apply",
             action="store_true",
             help="actually write (omit for a dry-run that changes nothing).",
@@ -245,6 +255,17 @@ class Command(BaseCommand):
                 f"  [{t.id}] {t.name!r} — {n_fields} field(s), "
                 f"event_type={getattr(t.event_type, 'name', None)!r}{same}"
             )
+            for cf in (
+                CustomField.objects.filter(custom_recap_template=t)
+                .select_related("custom_field_type", "recap_section")
+                .order_by("recap_section__order", "order", "id")
+            ):
+                kind = (getattr(cf.custom_field_type, "name", "") or "?").lower()
+                sec = getattr(cf.recap_section, "name", None)
+                self.stdout.write(
+                    f"        · {cf.name!r} [{kind}]"
+                    f"{' REQUIRED' if cf.required else ''}  (section {sec!r})"
+                )
         if not any(t.name == template_name for t in rows):
             self.stdout.write(
                 self.style.WARNING(
@@ -286,6 +307,16 @@ class Command(BaseCommand):
             )
 
         self._report_existing_templates(tenant, template_name)
+
+        if opts.get("code_only"):
+            self.stdout.write(
+                self.style.WARNING(
+                    "\n--code-only: leaving templates untouched. The standing "
+                    "link resolves the brand's existing form by itself."
+                )
+            )
+            self._checkin_code(tenant, apply)
+            return
 
         ft_cache: dict = {}
         for _, fields in SPEC:
