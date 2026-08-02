@@ -28,8 +28,14 @@ on:
         description: "Event type substring to attach the template to (blank = prefer 'sampling')"
         required: false
         default: ""
+      code_only:
+        description: "Mint ONLY the standing link; touch no templates (use when the brand already has its form)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
       apply:
-        description: "Actually write the template + code (read the dry run first)"
+        description: "Actually write (read the dry run first)"
         required: false
         default: "false"
         type: choice
@@ -46,6 +52,7 @@ jobs:
           TENANT: ${{ github.event.inputs.tenant }}
           TEMPLATE_NAME: ${{ github.event.inputs.template_name }}
           EVENT_TYPE: ${{ github.event.inputs.event_type }}
+          CODE_ONLY: ${{ github.event.inputs.code_only }}
           APPLY: ${{ github.event.inputs.apply }}
         run: |
           if [ -z "$CRON_SECRET" ]; then
@@ -58,6 +65,7 @@ jobs:
             --data-urlencode "tenant=$TENANT" \
             --data-urlencode "template_name=$TEMPLATE_NAME" \
             --data-urlencode "event_type=$EVENT_TYPE" \
+            --data-urlencode "code_only=$CODE_ONLY" \
             --data-urlencode "apply=$APPLY")
           echo "HTTP $STATUS"
           cat /tmp/cron-response.json
