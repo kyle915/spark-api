@@ -134,6 +134,18 @@ class Command(BaseCommand):
             help="event type name substring. Default: prefer 'sampling', else the tenant's first.",
         )
         parser.add_argument(
+            "--location-mode",
+            dest="location_mode",
+            choices=["address", "market"],
+            default=None,
+            help=(
+                "how the link asks 'where are you working?'. 'market' for a "
+                "ROAMING crew (event keyed on the market, spots logged as "
+                "stops); 'address' for a static store activation. Omit to "
+                "leave the tenant's current setting alone."
+            ),
+        )
+        parser.add_argument(
             "--code-only",
             dest="code_only",
             action="store_true",
@@ -307,6 +319,7 @@ class Command(BaseCommand):
             )
 
         self._report_existing_templates(tenant, template_name)
+        self._location_mode(tenant, opts.get("location_mode"), apply)
 
         if opts.get("code_only"):
             self.stdout.write(
@@ -425,6 +438,33 @@ class Command(BaseCommand):
             _run()
 
         self._checkin_code(tenant, apply)
+
+    def _location_mode(self, tenant, mode: str | None, apply: bool) -> None:
+        """Set (or just report) how the link asks for location."""
+        from ambassadors import checkin_web
+
+        current = checkin_web.tenant_location_mode(tenant)
+        markets = checkin_web.tenant_markets(tenant)
+        self.stdout.write(
+            f"\nLocation mode: {current!r}"
+            + (f"  markets={markets}" if markets else "  (no market list found)")
+        )
+        if mode is None or mode == current:
+            return
+        if mode == "market" and not markets:
+            raise CommandError(
+                "Can't switch to market mode: no market list. Add options to "
+                "the brand's 'Event Location'-style recap field, or set "
+                "Tenant.checkin_markets."
+            )
+        if not apply:
+            self.stdout.write(
+                self.style.WARNING(f"DRY-RUN — would set location mode to {mode!r}")
+            )
+            return
+        tenant.checkin_location_mode = mode
+        tenant.save(update_fields=["checkin_location_mode"])
+        self.stdout.write(self.style.SUCCESS(f"Location mode set to {mode!r}"))
 
     # ---- standing check-in link -----------------------------------------
 
