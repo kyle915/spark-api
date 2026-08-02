@@ -73,9 +73,17 @@ _SOLD_EXCLUDE_RE = re.compile(
     r"willing|intent|would|interested|likely|plan\s+to", re.IGNORECASE
 )
 
-# First field whose NAME contains "consumer(s) sampled". Mirrors
-# /consumers?\s+sampled/i.
-_CONSUMERS_SAMPLED_RE = re.compile(r"consumers?\s+sampled", re.IGNORECASE)
+# First field whose NAME contains "consumer(s) sampled".
+#
+# The second alternative covers the QUESTION form. Feel Free's template asks
+# "How many TOTAL consumers did you sample?" — the same metric worded
+# naturally, matching nothing, so their consumers-sampled KPI would have read
+# "—" forever with the number sitting right there in the recap. Kept narrow
+# (the words stay adjacent apart from "did you") so it can't swallow prose;
+# _SAMPLED_DESC_EXCLUDE_RE below remains the backstop for descriptive fields.
+_CONSUMERS_SAMPLED_RE = re.compile(
+    r"consumers?\s+sampled|consumers?\s+did\s+you\s+sample", re.IGNORECASE
+)
 
 # A field can MENTION "consumers sampled" in its label yet be a free-text
 # DESCRIPTION, not a count — e.g. Stone House Bread's "General demographics of

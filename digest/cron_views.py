@@ -4210,6 +4210,60 @@ class SetupTotalWirelessCheckinView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class SetupFeelFreeCheckinView(View):
+    """GET/POST `/internal/cron/setup-feel-free-checkin`.
+
+    The Feel Free twin of setup-total-wireless-checkin: seeds the
+    "Feel Free - Sampling Recap" template off the client's own PDF and mints
+    the tenant's STANDING check-in code.
+
+    Unlike Total Wireless, Feel Free is an ESTABLISHED tenant, so the dry run
+    also dumps every template already on it. Run it dry and READ that list
+    before applying — a second near-identical template splits the brand's
+    recaps across two forms and halves every dashboard number.
+
+    Idempotent: get_or_create for the template, and an existing checkin_code is
+    left alone (rotating it breaks every copy already shared).
+
+    Params: tenant (default "feel free"), template_name, event_type,
+    apply (default DRY RUN).
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        kwargs: dict = {}
+        for key in ("tenant", "template_name", "event_type"):
+            val = request.GET.get(key) or request.POST.get(key)
+            if val:
+                kwargs[key] = str(val)
+        raw = (request.GET.get("apply") or request.POST.get("apply") or "").lower()
+        apply_it = raw in ("1", "true", "yes", "on")
+        if apply_it:
+            kwargs["apply"] = True
+
+        out = io.StringIO()
+        try:
+            call_command("setup_feel_free_checkin", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("setup-feel-free-checkin cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc),
+                 "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "apply": apply_it, "log": out.getvalue()})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class AddLdTypeRowsView(View):
     """GET/POST `/internal/cron/add-ld-type-rows`.
 
@@ -6300,6 +6354,7 @@ def _registered_views() -> dict[str, Any]:
         "reconcile-tracker-rows": ReconcileTrackerRowsView,
         "fix-ld-orphan-log-rows": FixLdOrphanLogRowsView,
         "setup-total-wireless-checkin": SetupTotalWirelessCheckinView,
+        "setup-feel-free-checkin": SetupFeelFreeCheckinView,
         "set-tenant-mileage-tracking": SetTenantMileageTrackingView,
         "staff-tenant-events": StaffTenantEventsView,
         "weekly-mileage-report": WeeklyMileageReportView,
