@@ -493,14 +493,14 @@ def _email_admins_checkin_landed(event, ambassador) -> None:
 
     from utils.mailer import Envelope, Mailer
 
-    # The check-in crew inbox, NOT every Spark admin. This used to fan out via
+    # The shared events@ inbox, NOT every Spark admin. This used to fan out via
     # _get_spark_admin_emails(), so one BA clocking in pinged seven people
-    # individually — the fastest way to train a team to ignore an alert. Same
-    # list as the recap-submitted and nightly-hours emails, so all three
-    # check-in notifications move together.
+    # individually — the fastest way to train a team to ignore an alert. Clock
+    # traffic rides the HOURS list with the nightly digest; the recap alert is
+    # a separate, people-facing list.
     admins = [
         e.strip()
-        for e in getattr(settings, "CHECKIN_NOTIFY_EMAILS", [])
+        for e in getattr(settings, "CHECKIN_HOURS_NOTIFY_EMAILS", [])
         if (e or "").strip()
     ]
     if not admins:
@@ -1046,7 +1046,13 @@ def notify_checkin_recap_submitted(recap) -> None:
 
     from utils.mailer import Envelope, Mailer
 
-    to = [e.strip() for e in getattr(settings, "CHECKIN_NOTIFY_EMAILS", []) if (e or "").strip()]
+    # People, by name — a recap is something a human reviews, unlike the clock
+    # punches that go to the shared events@ inbox.
+    to = [
+        e.strip()
+        for e in getattr(settings, "CHECKIN_RECAP_NOTIFY_EMAILS", [])
+        if (e or "").strip()
+    ]
     if not to:
         return
 

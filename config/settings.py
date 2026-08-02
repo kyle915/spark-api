@@ -332,19 +332,32 @@ RESEND_API_KEY = env("RESEND_API_KEY", default="")
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="Spark <onboarding@resend.dev>")
 REQUEST_REVIEW_COPY_EMAILS = env.list("REQUEST_REVIEW_COPY_EMAILS", default=[])
 RECAP_REVIEW_COPY_EMAILS = env.list("RECAP_REVIEW_COPY_EMAILS", default=[])
-# Field-ops crew for the web CHECK-IN link: alerted when a BA submits a recap
-# through it, and sent the nightly clock-in/out summary. ONE list behind both
-# so the two can never drift apart.
+# Recipients for the web CHECK-IN link's two notifications. These were ONE
+# list until Kyle split them by hand (2026-08-01): the recap alert is content
+# the field team reads individually, the clock traffic is bookkeeping that
+# belongs in a shared inbox. Deliberately separate — do not re-merge.
 #
-# Unlike the lists above this ships with a real default rather than [], so it
-# works without anyone editing Cloud Run env; set CHECKIN_NOTIFY_EMAILS there
-# to change the crew without a deploy.
-CHECKIN_NOTIFY_EMAILS = env.list(
-    "CHECKIN_NOTIFY_EMAILS",
-    # ONE shared inbox, not a list of people. Kyle, after seeing a single
-    # check-in alert land on seven individual Ignite addresses: "please only
-    # send these emails to events@". A distribution address also means the
-    # crew changes without a code change.
+# Unlike the lists above these ship with real defaults rather than [], so they
+# work without anyone editing Cloud Run env; set the env vars there to change
+# recipients without a deploy.
+
+# "<BA> submitted a recap" — goes to people, by name.
+CHECKIN_RECAP_NOTIFY_EMAILS = env.list(
+    "CHECKIN_RECAP_NOTIFY_EMAILS",
+    default=[
+        "nevena@igniteproductions.co",
+        "keis@igniteproductions.co",
+        "myriant@igniteproductions.co",
+        "kyle@igniteproductions.co",
+        "harris@igniteproductions.co",
+    ],
+)
+
+# Clock traffic — the "BA just clocked in" alert and the nightly hours
+# digest. Kyle: "The clock-in emails are the ones I want to just go to
+# events@." One shared inbox, so routine punch noise doesn't hit five people.
+CHECKIN_HOURS_NOTIFY_EMAILS = env.list(
+    "CHECKIN_HOURS_NOTIFY_EMAILS",
     default=["events@igniteproductions.co"],
 )
 # Comma-separated admin emails alerted when a new BA signs up via

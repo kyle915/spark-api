@@ -190,7 +190,7 @@ class Command(BaseCommand):
 
         to = [
             e.strip()
-            for e in getattr(settings, "CHECKIN_NOTIFY_EMAILS", [])
+            for e in getattr(settings, "CHECKIN_HOURS_NOTIFY_EMAILS", [])
             if (e or "").strip()
         ]
         self.stdout.write(f"{len(shifts)} shift(s), {_fmt_hours(total)} total, {open_count} open")

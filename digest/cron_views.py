@@ -6148,7 +6148,7 @@ class DailyCheckinHoursView(View):
     """POST `/internal/cron/daily-checkin-hours`.
 
     Fires `email_daily_checkin_hours` — the end-of-day clock-in/out summary to
-    the field-ops crew (settings.CHECKIN_NOTIFY_EMAILS). Scheduled for 10pm PT.
+    the events@ inbox (settings.CHECKIN_HOURS_NOTIFY_EMAILS). Scheduled 10pm PT.
 
     Sends nothing on a day with no clock activity, so a quiet day is silence
     rather than an empty email.
