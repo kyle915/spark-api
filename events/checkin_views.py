@@ -283,6 +283,24 @@ def public_checkin_identify(request: HttpRequest, code: str) -> HttpResponse:
     # same day resolve to the SAME event (see find_or_create_walkin_event).
     event = target if kind == "event" else None
     if kind == "tenant":
+        # ALREADY ON THE CLOCK? Resume that shift and ignore what they typed.
+        #
+        # Reported from the field: a BA clocked in at 3:55, lost her session,
+        # re-identified, and landed on a NEW event because she spelled the
+        # store slightly differently the second time — "it's not letting me go
+        # to where I clocked in before". She was stuck on the clock with no way
+        # to clock out. Someone with an open punch is at the place they clocked
+        # in, whatever they type now, so the open shift wins.
+        resumed = checkin_web.open_shift_event_for(
+            ambassador=ambassador, tenant=target
+        )
+        if resumed is not None:
+            event = resumed
+            logger.info(
+                "checkin identify resumed open shift ambassador=%s event=%s",
+                ambassador.id, resumed.id,
+            )
+    if kind == "tenant" and event is None:
         address = (data.get("address") or data.get("storeAddress") or "").strip()
         store_name = (data.get("storeName") or data.get("eventName") or "").strip()
         date_raw = (data.get("eventDate") or data.get("date") or "").strip()

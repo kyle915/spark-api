@@ -31,6 +31,8 @@ import logging
 import re
 import secrets
 
+from datetime import timedelta
+
 from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.utils import timezone as dj_tz
@@ -1090,3 +1092,67 @@ def notify_checkin_recap_submitted(recap) -> None:
             )
 
     _RecapSubmittedMailer().send_now()
+
+
+# Longest a shift can stay open and still be resumable. Beyond this an open
+# punch is almost certainly a missed clock-out from a previous day, and
+# resuming it would attach today's work to yesterday's event.
+OPEN_SHIFT_RESUME_HOURS = 18
+
+
+def open_shift_event_for(*, ambassador, tenant):
+    """The event this BA is currently CLOCKED IN on for ``tenant``, or None.
+
+    Reported from the field: a BA clocked in at 3:55, lost her session (a
+    cleared browser, a different tab, a tapped "start over"), re-identified,
+    and the standing link put her on a NEW event because she typed the store
+    address slightly differently the second time. Her words: "it's not letting
+    me go to where I clocked in before." She was stuck on the clock with no
+    way out, and her hours were sitting on an event she couldn't reach.
+
+    Find-or-create keys on the address the BA types, which is the right key for
+    "which activation is this" but the WRONG one for "where am I already
+    working". Someone with an open punch is, by definition, at the place they
+    clocked in — so an open shift wins over anything they type.
+
+    Newest first, and only within OPEN_SHIFT_RESUME_HOURS so a stale missed
+    clock-out from days ago can't hijack today's check-in.
+    """
+    from ambassadors.models import Attendance
+    from events.models import Event
+
+    if ambassador is None or tenant is None:
+        return None
+    try:
+        cutoff = dj_tz.now() - timedelta(hours=OPEN_SHIFT_RESUME_HOURS)
+        recent_ins = (
+            Attendance.objects.filter(
+                ambassador=ambassador,
+                event__tenant=tenant,
+                source__name="clock_in",
+                clock_time__gte=cutoff,
+            )
+            .order_by("-clock_time")
+            .values_list("event_id", "clock_time")[:20]
+        )
+        for event_id, punched_in in recent_ins:
+            closed = Attendance.objects.filter(
+                ambassador=ambassador,
+                event_id=event_id,
+                source__name="clock_out",
+                clock_time__gte=punched_in,
+            ).exists()
+            if not closed:
+                return (
+                    Event.objects.select_related(
+                        "tenant", "request", "retailer", "location", "state", "timezone"
+                    )
+                    .filter(id=event_id)
+                    .first()
+                )
+    except Exception:  # noqa: BLE001 — never block a check-in over this
+        logger.exception(
+            "open-shift lookup failed ambassador=%s tenant=%s",
+            getattr(ambassador, "id", None), getattr(tenant, "id", None),
+        )
+    return None
