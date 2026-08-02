@@ -639,28 +639,23 @@ def build_recap_pdf_html(
     # dropped from the PDF. Render a shared copy of those sections only for
     # custom recaps and splice it in right after the summary; the non-custom
     # branches keep their inline copies, so their output is unchanged.
-    # Each card is emitted only when the recap actually has rows. Most
-    # custom templates don't collect per-SKU samples or sales at all, so an
-    # unconditional card would put an empty "Product Samples / N/A" block on
-    # every one of those client PDFs. The legacy/template branches keep the
-    # N/A placeholder in their inline copies, so their output is unchanged.
-    def _sku_card(heading: str, items: list[str]) -> str:
-        if not items:
-            return ""
-        return f"""
+    samples_sales_html = ""
+    if is_custom_recap:
+        samples_sales_html = f"""
     <section class="card">
-      <h2>{heading}</h2>
+      <h2>Product Samples</h2>
       <ul class="list">
-        {"".join(f"<li>{safe(item)}</li>" for item in items)}
+        {"".join(f"<li>{safe(item)}</li>" for item in samples) or "<li>N/A</li>"}
+      </ul>
+    </section>
+
+    <section class="card">
+      <h2>Sales Performance</h2>
+      <ul class="list">
+        {"".join(f"<li>{safe(item)}</li>" for item in sales) or "<li>N/A</li>"}
       </ul>
     </section>
 """
-
-    samples_sales_html = ""
-    if is_custom_recap:
-        samples_sales_html = _sku_card("Product Samples", samples) + _sku_card(
-            "Sales Performance", sales
-        )
 
     return f"""
 <!doctype html>

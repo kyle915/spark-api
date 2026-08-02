@@ -108,6 +108,19 @@ class Command(BaseCommand):
             ))
             return
 
+        # Also stamp the TENANT default, so events the standing check-in link
+        # creates from here on inherit it. Without this, bulk-enabling only
+        # covers events that already exist and every new walk-in silently
+        # reverts to no-mileage.
+        tenant.default_track_mileage = enable
+        if rate is not None:
+            tenant.default_mileage_rate = rate
+        tenant.save(update_fields=["default_track_mileage", "default_mileage_rate"])
+        self.stdout.write(
+            f"Tenant default: track_mileage={enable}"
+            + (f", rate={rate}" if rate is not None else "")
+        )
+
         fields = {"track_mileage": enable, "updated_at": timezone.now()}
         if enable:
             fields["mileage_rate"] = rate

@@ -9,8 +9,10 @@ hand WeasyPrint a single composite HTML document with cover + per-
 recap sections in the order requested.
 """
 
+import sys
+from contextlib import contextmanager
 from datetime import datetime
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -259,6 +261,28 @@ def _empty_engagement_recap(name="Recap"):
     )
 
 
+@contextmanager
+def _fake_weasyprint(html_cls, css_cls):
+    """Swap a stub module in for `weasyprint` for the duration of a call.
+
+    `build_campaign_report_pdf` does `from weasyprint import HTML, CSS`
+    at call time, so replacing the entry in `sys.modules` intercepts it
+    without the real package ever being imported.
+
+    `patch("weasyprint.HTML", ...)` can't be used here: mock resolves a
+    string target by importing it, and importing weasyprint dlopens
+    Pango/GObject — which fails anywhere those native libs aren't
+    installed (e.g. macOS without `brew install pango`). That would
+    couple this module to the very dependency its docstring says the
+    coverage is designed to avoid.
+    """
+    module = ModuleType("weasyprint")
+    module.HTML = html_cls
+    module.CSS = css_cls
+    with patch.dict(sys.modules, {"weasyprint": module}):
+        yield
+
+
 def test_build_campaign_report_pdf_rejects_empty_input():
     with pytest.raises(ValueError):
         build_campaign_report_pdf(
@@ -288,7 +312,7 @@ def test_build_campaign_report_pdf_renders_cover_with_title_and_count():
         def __init__(self, string):
             captured.setdefault("css", []).append(string)
 
-    with patch("weasyprint.HTML", FakeHTML), patch("weasyprint.CSS", FakeCSS):
+    with _fake_weasyprint(FakeHTML, FakeCSS):
         out = build_campaign_report_pdf(
             title="Liquid Death · May Sampling",
             subtitle="Campaign Report",
@@ -329,7 +353,7 @@ def test_cover_shows_total_units_sold_and_drops_brand_aware():
         def __init__(self, string):  # noqa: ARG002
             pass
 
-    with patch("weasyprint.HTML", FakeHTML), patch("weasyprint.CSS", FakeCSS):
+    with _fake_weasyprint(FakeHTML, FakeCSS):
         build_campaign_report_pdf(
             title="Neutonic · Campaign Report",
             subtitle="Campaign Report",
@@ -361,7 +385,7 @@ def test_build_campaign_report_pdf_singular_label_for_one_recap():
         def __init__(self, string):  # noqa: ARG002
             pass
 
-    with patch("weasyprint.HTML", FakeHTML), patch("weasyprint.CSS", FakeCSS):
+    with _fake_weasyprint(FakeHTML, FakeCSS):
         build_campaign_report_pdf(
             title="Solo",
             subtitle="Sampling",

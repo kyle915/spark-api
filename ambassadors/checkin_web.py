@@ -988,8 +988,13 @@ def find_or_create_walkin_event(
         name = walkin_event_name(
             store_name=store_name, address=address, on_date=on_date
         )
+        # Carry the brand's mileage answer onto the event as it's born — a
+        # walk-in event has no admin to tick the per-gig box, so without this
+        # the drive control never appears on the standing link.
         event = Event.objects.create(
             tenant=tenant,
+            track_mileage=bool(getattr(tenant, "default_track_mileage", False)),
+            mileage_rate=getattr(tenant, "default_mileage_rate", None),
             name=name[:255],
             address=(address or "").strip(),
             date=day_start,

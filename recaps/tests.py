@@ -4,6 +4,7 @@ import pytest
 from asgiref.sync import sync_to_async
 from openpyxl import load_workbook
 import strawberry_django  # noqa: F401
+from strawberry.relay import from_base64, to_base64
 from django.test import override_settings
 from io import BytesIO
 
@@ -449,7 +450,9 @@ class TestApproveRecapNotifications(JobsGraphQLTestCase):
             )
 
         custom_recap, custom_recap_file_uuid = await create_custom_recap_data()
-        workbook_bytes = build_recaps_xlsx(
+        # build_recaps_xlsx walks FKs that aren't all in the select_related
+        # above, so it has to run off the event loop.
+        workbook_bytes = await sync_to_async(build_recaps_xlsx)(
             [custom_recap],
             frontend_base_url="https://spark-admin.example.com",
         )
@@ -547,8 +550,10 @@ class TestApproveRecapNotifications(JobsGraphQLTestCase):
         with (
             patch("recaps.mutations.get_gcs_client", return_value=_FakeClient()),
             patch("recaps.mutations.upload_bytes") as mock_upload_bytes,
+            # The export returns a public GCS URL (public_url), not a signed
+            # download URL — patching generate_download_url here was a no-op.
             patch(
-                "recaps.mutations.generate_download_url",
+                "recaps.mutations.public_url",
                 return_value="https://example.com/custom-recap.xlsx",
             ),
         ):
@@ -589,8 +594,8 @@ class TestApproveRecapNotifications(JobsGraphQLTestCase):
             recipient_first_name=self.rmm_user.first_name,
             reply_to_email=self.rmm_user.email,
         )
-        envelope = mailer.envelope()
-        rendered_html = envelope.render_template()
+        envelope = await sync_to_async(mailer.envelope)()
+        rendered_html = await sync_to_async(envelope.render_template)()
 
         assert envelope.template == "recaps.templates.emails.recap_approved_notification"
         assert envelope.to_emails == [self.rmm_user.email]
@@ -641,8 +646,8 @@ class TestApproveRecapNotifications(JobsGraphQLTestCase):
             recipient_first_name=self.rmm_user.first_name,
             reply_to_email=self.rmm_user.email,
         )
-        envelope = mailer.envelope()
-        rendered_html = envelope.render_template()
+        envelope = await sync_to_async(mailer.envelope)()
+        rendered_html = await sync_to_async(envelope.render_template)()
 
         assert (
             envelope.template
@@ -667,16 +672,29 @@ class TestApproveRecapNotifications(JobsGraphQLTestCase):
         assert mock_send.called
 
     @pytest.mark.asyncio
-    async def test_notify_recap_ready_for_review_skips_non_ambassador(self):
+    async def test_notify_recap_ready_for_review_skips_review_list_for_non_ambassador(
+        self,
+    ):
+        # #666: when an admin files a recap on a BA's behalf the review list
+        # is deliberately NOT broadcast to — but the filer still gets a
+        # confirmation addressed to them alone.
         with (
             override_settings(RECAP_REVIEW_COPY_EMAILS=["admin1@test.com"]),
+            patch(
+                "recaps.mutations.RecapReadyForReviewAdminMailer.__init__",
+                return_value=None,
+            ) as mock_init,
             patch("recaps.mutations.RecapReadyForReviewAdminMailer.send") as mock_send,
         ):
             await _notify_recap_ready_for_review_to_admins(
                 recap=self.recap,
                 created_by=self.spark_user,
             )
-        assert not mock_send.called
+
+        assert mock_send.called
+        recipients = mock_init.call_args.kwargs["to_emails"]
+        assert recipients == [self.spark_user.email]
+        assert "admin1@test.com" not in recipients
 
     @pytest.mark.asyncio
     async def test_recap_query_returns_only_assigned_ambassador(self):
@@ -701,12 +719,14 @@ class TestApproveRecapNotifications(JobsGraphQLTestCase):
 
         assert result.errors is None
         assert result.data is not None
-        assert result.data["recap"]["id"] == str(self.recap.id)
-        assert result.data["recap"]["ambassador"] == {"id": str(self.ambassador.id)}
+        assert result.data["recap"]["id"] == to_base64("Recap", self.recap.id)
+        assert result.data["recap"]["ambassador"] == {
+            "id": to_base64("Ambassador", self.ambassador.id)
+        }
 
     @pytest.mark.asyncio
     async def test_recaps_query_filters_by_ambassador(self):
-        other_recap = recap_models.Recap.objects.create(
+        other_recap = await sync_to_async(recap_models.Recap.objects.create)(
             name="Other ambassador recap",
             approved=False,
             event=self.event,
@@ -731,7 +751,15 @@ class TestApproveRecapNotifications(JobsGraphQLTestCase):
             }
         }
         """
-        variables = {"filters": {"ambassadorId": str(self.ambassador.id)}}
+        # The recaps LIST is hard tenant-scoped (#708): with no tenant in
+        # scope the resolver deliberately returns an empty page rather than
+        # every tenant's rows, so the filter has to carry a tenantId.
+        variables = {
+            "filters": {
+                "tenantId": str(self.tenant.id),
+                "ambassadorId": str(self.ambassador.id),
+            }
+        }
 
         result = await self._execute_query_authenticated(
             query,
@@ -746,18 +774,18 @@ class TestApproveRecapNotifications(JobsGraphQLTestCase):
         assert result.data["recaps"]["edges"] == [
             {
                 "node": {
-                    "id": str(self.recap.id),
-                    "ambassador": {"id": str(self.ambassador.id)},
+                    "id": to_base64("Recap", self.recap.id),
+                    "ambassador": {"id": to_base64("Ambassador", self.ambassador.id)},
                 }
             }
         ]
-        assert str(other_recap.id) not in {
+        assert to_base64("Recap", other_recap.id) not in {
             edge["node"]["id"] for edge in result.data["recaps"]["edges"]
         }
 
     @pytest.mark.asyncio
     async def test_recaps_query_filters_by_approved(self):
-        approved_recap = recap_models.Recap.objects.create(
+        approved_recap = await sync_to_async(recap_models.Recap.objects.create)(
             name="Approved recap",
             approved=True,
             event=self.event,
@@ -780,7 +808,8 @@ class TestApproveRecapNotifications(JobsGraphQLTestCase):
             }
         }
         """
-        variables = {"filters": {"approved": True}}
+        # Tenant-scoped list — see the note in the ambassador-filter test.
+        variables = {"filters": {"tenantId": str(self.tenant.id), "approved": True}}
 
         result = await self._execute_query_authenticated(
             query,
@@ -795,7 +824,7 @@ class TestApproveRecapNotifications(JobsGraphQLTestCase):
         assert result.data["recaps"]["edges"] == [
             {
                 "node": {
-                    "id": str(approved_recap.id),
+                    "id": to_base64("Recap", approved_recap.id),
                     "approved": True,
                 }
             }
@@ -1011,9 +1040,12 @@ class TestApproveRecapNotifications(JobsGraphQLTestCase):
         assert result.data is not None
         assert result.data["createCustomRecapTemplate"]["success"] is True
 
-        template_id = int(
+        # The schema returns Relay global IDs ("CustomRecapTemplate:<pk>"
+        # base64-encoded); decode back to the PK to query the ORM.
+        _type_name, raw_template_id = from_base64(
             result.data["createCustomRecapTemplate"]["customRecapTemplate"]["id"]
         )
+        template_id = int(raw_template_id)
 
         @sync_to_async
         def get_custom_fields():
@@ -1247,14 +1279,16 @@ class TestApproveRecapNotifications(JobsGraphQLTestCase):
             "edges": [
                 {
                     "node": {
-                        "id": str(ids["matching_template_id"]),
+                        "id": to_base64(
+                            "CustomRecapTemplate", ids["matching_template_id"]
+                        ),
                         "name": "Matching template",
                         "tenant": {
-                            "id": str(self.tenant.id),
+                            "id": to_base64("TenantType", self.tenant.id),
                             "name": self.tenant.name,
                         },
                         "eventType": {
-                            "id": str(ids["event_type_id"]),
+                            "id": to_base64("EventType", ids["event_type_id"]),
                             "name": "Template Filter Sampling",
                         },
                     }
@@ -1314,14 +1348,14 @@ class TestApproveRecapNotifications(JobsGraphQLTestCase):
         assert result.errors is None
         assert result.data is not None
         assert result.data["customRecapTemplate"] == {
-            "id": str(ids["template_id"]),
+            "id": to_base64("CustomRecapTemplate", ids["template_id"]),
             "name": "Single template",
             "tenant": {
-                "id": str(self.tenant.id),
+                "id": to_base64("TenantType", self.tenant.id),
                 "name": self.tenant.name,
             },
             "eventType": {
-                "id": str(ids["event_type_id"]),
+                "id": to_base64("EventType", ids["event_type_id"]),
                 "name": "Single Template Sampling",
             },
         }

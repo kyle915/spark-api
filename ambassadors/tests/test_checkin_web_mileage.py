@@ -209,3 +209,52 @@ class TestWebMileage(AmbassadorsGraphQLTestCase):
         ctx = checkin_web.build_public_context(self.event, self.ba)
         assert ctx["session"]["mileage"]["enabled"] is True
         assert ctx["session"]["mileage"]["active"] is not None
+
+
+@pytest.mark.django_db(transaction=True)
+class TestWalkinEventsInheritTenantMileage(AmbassadorsGraphQLTestCase):
+    """The gap that would have made the whole feature invisible.
+
+    Mileage is a per-gig toggle, but a walk-in event is created by a BA typing
+    a store into the standing link — there's no admin there to tick the box, so
+    every one of them defaulted to track_mileage=False and the drive control
+    could never appear on the exact flow it was built for.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self, db):
+        self.roles = self.setup_default_roles()
+        self.tenant = self.create_tenant(name="Feel Free Walkin")
+        self.actor = self.create_user(
+            username="actor-mi@test.com",
+            email="actor-mi@test.com",
+            role=self.roles["spark_admin"],
+        )
+
+    def _walkin(self, address):
+        # Returns (event, created) — not a bare event.
+        event, _created = checkin_web.find_or_create_walkin_event(
+            tenant=self.tenant,
+            store_name="South Congress",
+            address=address,
+            on_date=timezone.now().date(),
+            actor=self.actor,
+        )
+        return event
+
+    def test_off_by_default(self):
+        event = self._walkin("1500 S Congress Ave, Austin, TX")
+        assert event.track_mileage is False
+
+    def test_inherits_the_tenant_default(self):
+        self.tenant.default_track_mileage = True
+        self.tenant.default_mileage_rate = Decimal("0.725")
+        self.tenant.save(
+            update_fields=["default_track_mileage", "default_mileage_rate"]
+        )
+
+        event = self._walkin("2000 S Lamar Blvd, Austin, TX")
+        assert event.track_mileage is True
+        assert event.mileage_rate == Decimal("0.725")
+        # ...and that is what makes the control show up.
+        assert checkin_web._mileage_enabled(event) is True

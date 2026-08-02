@@ -248,8 +248,13 @@ def test_build_recap_pdf_html_groups_custom_fields_by_recap_section():
     assert "Custom Recap Template" not in html
     assert "Created At" not in html
     assert "Updated At" not in html
-    assert "Product Samples" not in html
-    assert "Sales Performance" not in html
+    # #706 deliberately gave custom recaps their own per-SKU cards, and
+    # renders them even with no rows (an "N/A" placeholder) so the custom
+    # layout keeps the same structure as the legacy one. Asserted from the
+    # other side in recaps/tests/test_file_category_and_pdf_samples.py
+    # (test_custom_recap_pdf_samples_section_present_when_empty).
+    assert "Product Samples" in html
+    assert "Sales Performance" in html
 
 
 # Tiny but valid JPEG: detect_image_type() only sniffs the SOI marker

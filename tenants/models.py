@@ -69,6 +69,22 @@ class Tenant(Asyncable, models.Model):
     checkin_code = models.CharField(
         max_length=32, null=True, blank=True, unique=True, db_index=True
     )
+    # Mileage defaults stamped onto events the STANDING CHECK-IN LINK creates.
+    #
+    # Mileage is a per-gig toggle (Event.track_mileage / mileage_rate), which
+    # works fine when an admin schedules the event and ticks the box. A walk-in
+    # event is born from a BA typing a store into the standing link — nobody is
+    # there to tick anything — so it defaulted to False and the drive control
+    # could never appear on the one flow that most needs it.
+    #
+    # These carry the brand's answer to "do we reimburse driving?" onto each
+    # walk-in event as it's created. The per-gig fields stay the source of
+    # truth once an event exists, so an admin can still override a single gig.
+    # Set with `set_tenant_mileage_tracking`.
+    default_track_mileage = models.BooleanField(default=False)
+    default_mileage_rate = models.DecimalField(
+        max_digits=6, decimal_places=3, null=True, blank=True
+    )
     # Per-tenant Google Sheet that mirrors the Master Tracker. Set by
     # admins via the front-end "Link Sheet" chip; the "Copy for Sheets"
     # TSV path expects this URL to live somewhere persistent. Storing
