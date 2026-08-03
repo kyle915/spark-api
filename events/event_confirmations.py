@@ -358,6 +358,12 @@ def due_reminders(now: datetime | None = None, *, grace_hours: int = 6):
     """
     now = now or timezone.now()
 
+    # A stage is due when now >= starts_at - lead, i.e. starts_at <= now + lead,
+    # so nothing beyond the LONGEST lead can possibly be due yet. Bounding the
+    # query there keeps a run reading ~a day of rows instead of every future
+    # confirmation ever written — this runs every 15 minutes forever.
+    horizon = now + timedelta(hours=max(EventConfirmation.STAGE_LEAD_HOURS.values()))
+
     confirmations = (
         EventConfirmation.objects.select_related("tenant", "timezone")
         .filter(
@@ -365,6 +371,7 @@ def due_reminders(now: datetime | None = None, *, grace_hours: int = 6):
             cancelled_at__isnull=True,
             # Never remind about a shift that has already begun.
             starts_at__gt=now,
+            starts_at__lte=horizon,
         )
     )
 
