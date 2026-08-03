@@ -36,7 +36,7 @@ HUB_SUBTITLE = "Everything you need before your first shift"
 # No count in the copy on purpose — it silently went stale the first time a
 # resource was added, and the page already numbers the cards.
 HUB_INTRO = (
-    "Work through these in order. The field guide and the video cover how we "
+    "Work through these in order. The video and the field guide cover how we "
     "run a sampling shift; the product guide and FAQ are the ones you'll want "
     "open on your phone at the table."
 )
@@ -45,20 +45,20 @@ HUB_INTRO = (
 RESOURCES: list[tuple[int, str, str, str, str, str]] = [
     (
         10,
+        "video",
+        "BA Training Video",
+        "Walkthrough of the handbook — the shift start to finish.",
+        "/training/ld/training-video.mp4",
+        "Start here · 8 min",
+    ),
+    (
+        20,
         "page",
         "Retail Sampling Guide",
         "The field guide: how to set up, how to pitch, what to wear, how to "
         "handle objections, and what a great recap looks like.",
         "/training/ld/field-guide.html",
-        "Read first",
-    ),
-    (
-        20,
-        "video",
-        "BA Training Video",
-        "Walkthrough of the handbook — the shift start to finish.",
-        "/training/ld/training-video.mp4",
-        "8 min",
+        "Read next",
     ),
     (
         30,
