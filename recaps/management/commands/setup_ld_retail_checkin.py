@@ -279,6 +279,7 @@ class Command(BaseCommand):
 
         # -- the four labelled photo buckets ------------------------------
         bucket_plan = self._plan_photo_buckets(tenant)
+        self._report_live_buckets(tenant)
 
         if not apply:
             self.stdout.write("")
@@ -393,6 +394,73 @@ class Command(BaseCommand):
                     f"relabelling in place{hint}"
                 )
         return plan
+
+    def _report_live_buckets(self, tenant) -> None:
+        """Read-only: what the check-in page will actually be served, and where
+        recent check-in photos actually landed.
+
+        Both halves are unverifiable from outside. The check-in link is a
+        standing TENANT code, so its public payload carries no event and
+        therefore no buckets until a BA identifies — there is no way to GET the
+        thing the page consumes without first writing a walk-in event and a
+        stub BA into the brand's live data. And nothing public reports which
+        category a file ended up in, which is the one fact that distinguishes
+        "four labelled dropzones" from "four dropzones that all feed one pile".
+
+        Printing both here keeps verification read-only.
+        """
+        from ambassadors.checkin_web import serialize_photo_buckets
+        from recaps.models import CustomRecapFile
+
+        self.stdout.write("")
+        # serialize_photo_buckets reads event.tenant, so a stand-in with the
+        # right tenant is all it needs — nothing is saved.
+        from events.models import Event
+
+        buckets = serialize_photo_buckets(Event(tenant=tenant))
+        self.stdout.write(f"Page will see: {len(buckets)} bucket(s)")
+        for b in buckets:
+            hint = f"  min {b['min']} — {b['helper']!r}" if b["min"] else ""
+            self.stdout.write(f"    id={b['id']:<4} {b['name']!r}{hint}")
+        missing = [
+            e.get("name")
+            for e in (tenant.checkin_photo_buckets or [])
+            if isinstance(e, dict)
+        ]
+        if len(buckets) != len(missing):
+            self.stdout.write(
+                self.style.WARNING(
+                    f"    ! {len(missing) - len(buckets)} configured bucket(s) "
+                    "have no category row and are being SKIPPED"
+                )
+            )
+
+        # Where check-in photos are actually landing. Scoped to the blob prefix
+        # the check-in upload endpoint signs, so app/admin uploads can't muddy
+        # the picture.
+        recent = (
+            CustomRecapFile.objects.filter(
+                custom_recap__tenant_id=tenant.id,
+                url__startswith="recap_files/checkin/",
+            )
+            .select_related("file_recap_category")
+            .order_by("-id")[:60]
+        )
+        tally: dict[str, int] = {}
+        for f in recent:
+            key = (
+                f.file_recap_category.name
+                if f.file_recap_category
+                else "(uncategorised)"
+            )
+            tally[key] = tally.get(key, 0) + 1
+        self.stdout.write(
+            f"Recent check-in photos ({sum(tally.values())} newest) by category:"
+        )
+        if not tally:
+            self.stdout.write("    (none yet)")
+        for name, count in sorted(tally.items(), key=lambda kv: -kv[1]):
+            self.stdout.write(f"    {count:>4}  {name}")
 
     def _ensure_photo_buckets(self, tenant, plan: list[dict]) -> list[dict]:
         """Create/relabel each bucket's category and return the ordered config
