@@ -823,6 +823,13 @@ def build_public_context(event, ambassador=None) -> dict:
             "name": tenant.name if tenant else "",
             "primaryColor": _brand_primary_color(tenant) if tenant else None,
         },
+        # Same BA-facing reference the tenant landing screen shows, repeated
+        # here so it stays reachable mid-shift once the BA is clocked in.
+        "trainingUrl": (
+            (getattr(tenant, "checkin_training_url", "") or "").strip()
+            if tenant
+            else ""
+        ),
         "template": serialize_template(event),
     }
     if ambassador is not None:
@@ -932,10 +939,22 @@ def _event_date_utc(on_date):
 
 
 def _default_event_type(tenant):
-    """The tenant's standard sampling event type, if it has one."""
+    """The event type the standing link stamps on the events it opens.
+
+    This decides WHICH RECAP FORM the BA gets: `resolve_template_for_event`
+    matches the tenant's templates on `event_type_id` before anything else.
+    Prefer the tenant's explicit `checkin_event_type`; the lowest-id fallback
+    below is arbitrary and actively wrong for a brand running more than one
+    program. Liquid Death has both an "Event Activation" and a "Retail
+    Sampling" template — picking by id would hand a retail BA the activation
+    form, and the resulting recap wouldn't look broken enough to notice.
+    """
     from events.models import EventType
 
     try:
+        pinned = getattr(tenant, "checkin_event_type", None)
+        if pinned is not None:
+            return pinned
         return (
             EventType.objects.filter(tenant=tenant)
             .order_by("id")
@@ -1040,6 +1059,8 @@ def build_tenant_context(tenant) -> dict:
         # Roaming brands pick a market instead of typing a store address.
         "locationMode": tenant_location_mode(tenant),
         "markets": tenant_markets(tenant),
+        # BA-facing reference (the brand's /training/<code> hub), if set.
+        "trainingUrl": (getattr(tenant, "checkin_training_url", "") or "").strip(),
     }
 
 

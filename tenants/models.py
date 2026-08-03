@@ -111,6 +111,23 @@ class Tenant(Asyncable, models.Model):
     # there is ONE list rather than two that drift apart. This is the override
     # for brands whose template doesn't carry one.
     checkin_markets = models.JSONField(null=True, blank=True)
+    # Which event type the standing link stamps on the events it opens — and
+    # therefore WHICH RECAP FORM a BA gets. Without this the walk-in path falls
+    # back to the tenant's lowest-id EventType, which is arbitrary: Liquid Death
+    # has both "Event Activation" and "Retail Sampling" templates, and a BA
+    # doing a retail demo would silently be handed the activation form. String
+    # reference because events.models imports from here.
+    checkin_event_type = models.ForeignKey(
+        "events.EventType",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="checkin_default_for_tenants",
+    )
+    # Optional BA-facing reference link surfaced on the check-in page (the
+    # brand's /training/<code> hub). Shown before identify and again once
+    # clocked in, because "what do I do again?" is a mid-shift question.
+    checkin_training_url = models.CharField(max_length=500, blank=True, default="")
     # Per-tenant Google Sheet that mirrors the Master Tracker. Set by
     # admins via the front-end "Link Sheet" chip; the "Copy for Sheets"
     # TSV path expects this URL to live somewhere persistent. Storing
