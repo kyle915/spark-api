@@ -19,6 +19,10 @@ from .mutations import (
     TimeZoneMutations,
 )
 from events import queries
+from events.event_confirmation_schema import (
+    EventConfirmationMutations,
+    EventConfirmationQueries,
+)
 from events.staffing_board import StaffingBoardQueries
 from events.live_board import LiveBoardQueries
 from events.payroll import PayrollQueries, PayrollMutations
@@ -41,6 +45,13 @@ class EventQueryClient(
     queries.EventQueries,
     StaffingBoardQueries,
     LiveBoardQueries,
+    # Admin-only in practice: every resolver is gated by IsClientOrSparkAdmin
+    # and scoped through _accessible_tenants. It lives on the CLIENTS schema
+    # because that's the endpoint spark-front-client actually calls
+    # (VITE_GRAPHQL_ENDPOINT → /graphql/clients) — same as LiveBoardQueries
+    # above. Adding it Spark-side only would leave the admin tab unable to
+    # reach it.
+    EventConfirmationQueries,
     PayrollQueries,
     CampaignPnlQueries,
     queries.EventTypeQueries,
@@ -114,6 +125,9 @@ class EventMutationsAmbassadors(
 class EventMutationsClient(
     EventMutations,
     PayrollMutations,
+    # Admin-gated; on the clients schema for the same endpoint reason as
+    # EventConfirmationQueries above.
+    EventConfirmationMutations,
     PublicRequestMutations,
     EventTypeMutations,
     EventStatusMutations,
