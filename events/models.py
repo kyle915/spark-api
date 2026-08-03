@@ -1354,6 +1354,15 @@ class EventConfirmation(models.Model):
 
     starts_at = models.DateTimeField(db_index=True)
     ends_at = models.DateTimeField(null=True, blank=True)
+    # THE IANA NAME IS THE SOURCE OF TRUTH for rendering, not the FK below.
+    # `TimeZone` is a lookup table that doesn't necessarily contain the zone an
+    # admin picked, and when the lookup missed, rendering silently fell back to
+    # the ops timezone — `starts_at` stayed correct, so the reminders fired on
+    # time, but the email printed the wrong hour to the BA (a 1pm Chicago shift
+    # read "11a - 2p"). Storing the name removes the dependency entirely.
+    timezone_name = models.CharField(max_length=64, blank=True, default="")
+    # Kept as an optional convenience for joins/reporting alongside
+    # Event.timezone. Never relied on for rendering.
     timezone = models.ForeignKey(
         TimeZone,
         on_delete=models.SET_NULL,
@@ -1404,18 +1413,25 @@ class EventConfirmation(models.Model):
     def tzinfo(self):
         """The venue's tzinfo for rendering, falling back to the ops timezone.
 
-        `TimeZone.offset` is deliberately NOT used: it's a single fixed number,
-        so a shift on the far side of a DST boundary would render an hour off.
-        The IANA name in `TimeZone.name` resolves the offset per-date.
+        Prefers the stored IANA name over the FK — see `timezone_name`. The FK
+        is only consulted for rows written before that column existed.
+
+        `TimeZone.offset` is deliberately NEVER used: it's a single fixed
+        number, so a shift on the far side of a DST boundary would render an
+        hour off. An IANA name resolves the offset per-date.
         """
         from zoneinfo import ZoneInfo
 
-        name = (getattr(self.timezone, "name", "") or "").strip()
-        if name:
+        for name in (
+            (self.timezone_name or "").strip(),
+            (getattr(self.timezone, "name", "") or "").strip(),
+        ):
+            if not name:
+                continue
             try:
                 return ZoneInfo(name)
             except Exception:  # noqa: BLE001 — unknown/typo'd IANA name
-                pass
+                continue
         return ZoneInfo("America/Los_Angeles")
 
     def local_start(self):

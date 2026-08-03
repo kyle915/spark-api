@@ -28,6 +28,7 @@ class Migration(migrations.Migration):
                 ('event_type_label', models.CharField(blank=True, default='', max_length=120)),
                 ('starts_at', models.DateTimeField(db_index=True)),
                 ('ends_at', models.DateTimeField(blank=True, null=True)),
+                ('timezone_name', models.CharField(blank=True, default='', max_length=64)),
                 ('products', models.JSONField(blank=True, default=list)),
                 ('send_reminders', models.BooleanField(default=True)),
                 ('cancelled_at', models.DateTimeField(blank=True, null=True)),

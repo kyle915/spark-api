@@ -481,6 +481,9 @@ class EventConfirmationMutations:
 
                     ends_at = ends_at + timedelta(days=1)
 
+            # The FK is best-effort: the lookup table doesn't necessarily carry
+            # every zone an admin can pick. `timezone_name` is what rendering
+            # actually reads, so a miss here costs nothing.
             tz_row = (
                 TimeZone.objects.filter(name=tz_name).order_by("id").first()
             )
@@ -496,6 +499,7 @@ class EventConfirmationMutations:
                 event_type_label=(input.event_type_label or "").strip(),
                 starts_at=starts_at,
                 ends_at=ends_at,
+                timezone_name=tz_name,
                 timezone=tz_row,
                 products=[str(p) for p in (input.products or [])],
                 send_reminders=bool(input.send_reminders),
