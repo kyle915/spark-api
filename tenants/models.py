@@ -45,6 +45,72 @@ def parse_recipient_emails(raw: str | None) -> list[str]:
     return out
 
 
+# The kinds of BA-facing resource a check-in page knows how to render. `kind` is
+# a RENDERING instruction, not a file type: `image` is the one that matters, and
+# it means "show this inline, big" rather than "open it". Feel Free's photo
+# release is a QR the CONSUMER scans off the BA's screen — a hyperlink is
+# useless there, because you can't scan a code with the phone displaying it.
+# `link` and `pdf` both open in a new tab; they differ only in the affordance
+# the button shows.
+CHECKIN_RESOURCE_KINDS = ("link", "pdf", "image")
+# Enough for a deck, a QR, a video and a couple of one-pagers. The list renders
+# as full-width buttons above the check-in form, so an unbounded list would push
+# the actual clock-in button off the screen.
+MAX_CHECKIN_RESOURCES = 6
+
+
+def normalize_checkin_resources(value) -> list[dict]:
+    """Coerce ``Tenant.checkin_resources`` into a safe, renderable list.
+
+    This is the ONLY gate between a JSON blob written by a management command
+    and an ``href``/``src`` on a page that needs no authentication, so it is
+    deliberately strict rather than forgiving:
+
+    * ``label`` and ``url`` are required — a button with no caption or no
+      destination is worse than no button.
+    * ``kind`` falls back to ``link`` when unrecognised, so a typo degrades to
+      "opens in a new tab" instead of dropping the resource entirely.
+    * URLs must be absolute ``http(s)`` or root-relative (``/training/...``).
+      Everything else is dropped, which is what blocks ``javascript:`` and
+      ``data:`` payloads. Protocol-relative ``//host`` is rejected too — it
+      reads as a path but resolves off-origin.
+
+    Bad entries are skipped, never raised on: a malformed row in one tenant's
+    list must not 500 the check-in page for a BA mid-shift.
+    """
+    if not isinstance(value, (list, tuple)):
+        return []
+
+    out: list[dict] = []
+    for entry in value:
+        if not isinstance(entry, dict):
+            continue
+        label = str(entry.get("label") or "").strip()[:80]
+        url = str(entry.get("url") or "").strip()
+        if not label or not url:
+            continue
+
+        low = url.lower()
+        if not (
+            low.startswith(("http://", "https://"))
+            or (url.startswith("/") and not url.startswith("//"))
+        ):
+            continue
+
+        kind = str(entry.get("kind") or "").strip().lower()
+        if kind not in CHECKIN_RESOURCE_KINDS:
+            kind = "link"
+
+        resource = {"label": label, "kind": kind, "url": url}
+        note = str(entry.get("note") or "").strip()[:120]
+        if note:
+            resource["note"] = note
+        out.append(resource)
+        if len(out) >= MAX_CHECKIN_RESOURCES:
+            break
+    return out
+
+
 class Tenant(Asyncable, models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
@@ -157,6 +223,12 @@ class Tenant(Asyncable, models.Model):
     # Optional BA-facing reference link surfaced on the check-in page (the
     # brand's /training/<code> hub). Shown before identify and again once
     # clocked in, because "what do I do again?" is a mid-shift question.
+    #
+    # SUPERSEDED for the check-in page by `checkin_resources` below, which is a
+    # list rather than one URL. Kept — not dropped — for two reasons: the
+    # event-confirmation flow reads it as the brand's "Training site" line, and
+    # migration 0040 seeds it forward so a tenant that only ever had this field
+    # keeps its card without anyone re-running a command.
     checkin_training_url = models.CharField(max_length=500, blank=True, default="")
     # Labelled photo BUCKETS on the check-in recap, in render order.
     #
@@ -201,6 +273,22 @@ class Tenant(Asyncable, models.Model):
     # single generic grid and uploads keep using the "photos" sentinel. Set
     # per-brand (Liquid Death: `setup_ld_retail_checkin`).
     checkin_photo_buckets = models.JSONField(null=True, blank=True)
+    # BA-facing resources rendered as buttons on the check-in page, in order:
+    #
+    #   [{"label": "BA Training Guide",  "kind": "pdf",   "url": "...",
+    #     "note": "23 slides"},
+    #    {"label": "Photo Release Form", "kind": "image", "url": "..."}]
+    #
+    # A list because one URL stopped being enough: Feel Free needs a training
+    # deck AND a photo-release QR, and `kind` is what lets ONE list serve both —
+    # the deck opens in a tab, the QR renders inline and large so a consumer can
+    # scan it off the BA's screen. See `normalize_checkin_resources` (which
+    # sanitises this before it ever reaches an href) and CHECKIN_RESOURCE_KINDS.
+    #
+    # Null/empty falls back to `checkin_training_url`, so nothing regresses for
+    # a tenant configured before this field existed. Set with
+    # `set_checkin_resources`.
+    checkin_resources = models.JSONField(null=True, blank=True)
     # Per-tenant Google Sheet that mirrors the Master Tracker. Set by
     # admins via the front-end "Link Sheet" chip; the "Copy for Sheets"
     # TSV path expects this URL to live somewhere persistent. Storing

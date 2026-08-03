@@ -37,6 +37,8 @@ from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.utils import timezone as dj_tz
 
+from tenants.models import normalize_checkin_resources
+
 logger = logging.getLogger(__name__)
 User = get_user_model()
 
@@ -1001,6 +1003,37 @@ def _brand_primary_color(tenant) -> str | None:
     return None
 
 
+def build_checkin_resources(tenant) -> list[dict]:
+    """The BA-facing resource buttons for this tenant's check-in page.
+
+    Prefers the `checkin_resources` list and falls back to synthesising one
+    entry from the legacy single `checkin_training_url`. The fallback is what
+    makes this safe to deploy ahead of any seeding: a tenant whose only config
+    is the old field still gets its card, whether or not migration 0036's data
+    step has run against this database.
+    """
+    if tenant is None:
+        return []
+
+    resources = normalize_checkin_resources(getattr(tenant, "checkin_resources", None))
+    if resources:
+        return resources
+
+    legacy = (getattr(tenant, "checkin_training_url", "") or "").strip()
+    if not legacy:
+        return []
+    return normalize_checkin_resources(
+        [
+            {
+                "label": "BA reference & training",
+                "kind": "link",
+                "url": legacy,
+                "note": "Field guide, video, product sheets",
+            }
+        ]
+    )
+
+
 def build_public_context(event, ambassador=None) -> dict:
     """The JSON the public page renders: event + brand + template, and — when a
     session already exists (ambassador given) — that BA's current clock/recap
@@ -1029,8 +1062,12 @@ def build_public_context(event, ambassador=None) -> dict:
             "name": tenant.name if tenant else "",
             "primaryColor": _brand_primary_color(tenant) if tenant else None,
         },
-        # Same BA-facing reference the tenant landing screen shows, repeated
-        # here so it stays reachable mid-shift once the BA is clocked in.
+        # Same BA-facing references the tenant landing screen shows, repeated
+        # here so they stay reachable mid-shift once the BA is clocked in.
+        "resources": build_checkin_resources(tenant),
+        # Legacy single-URL twin of `resources`. Still sent because the API
+        # deploys BEFORE the front-end: dropping it would blank Liquid Death's
+        # card on the live page for however long that gap lasts.
         "trainingUrl": (
             (getattr(tenant, "checkin_training_url", "") or "").strip()
             if tenant
@@ -1363,7 +1400,10 @@ def build_tenant_context(tenant) -> dict:
             {"id": str(t.id), "name": t.name or ""}
             for t in selectable_event_types(tenant)
         ],
-        # BA-facing reference (the brand's /training/<code> hub), if set.
+        # BA-facing resources (training deck, photo-release QR, the brand's
+        # /training/<code> hub) as ordered buttons. See build_checkin_resources.
+        "resources": build_checkin_resources(tenant),
+        # Legacy single-URL twin — see the note in build_public_context.
         "trainingUrl": (getattr(tenant, "checkin_training_url", "") or "").strip(),
     }
 

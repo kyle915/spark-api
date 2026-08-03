@@ -4323,6 +4323,57 @@ class SetupLdRetailCheckinView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class SetCheckinResourcesView(View):
+    """GET/POST `/internal/cron/set-checkin-resources`.
+
+    Sets the BA resource buttons on a tenant's check-in page — Feel Free's
+    training deck plus the photo-release QR the BA shows a consumer to scan.
+
+    Idempotent: the desired list is normalised and diffed against what's stored,
+    so a re-run with no content change writes nothing. Dry run by default and it
+    prints both lists, so read that before passing apply.
+
+    Params: tenant (default "feel free"), resources (JSON array, overrides the
+    built-in preset), clear, apply (default DRY RUN).
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        kwargs: dict = {}
+        for key in ("tenant", "resources"):
+            val = request.GET.get(key) or request.POST.get(key)
+            if val:
+                kwargs[key] = str(val)
+        for flag in ("apply", "clear"):
+            raw = (request.GET.get(flag) or request.POST.get(flag) or "").lower()
+            if raw in ("1", "true", "yes", "on"):
+                kwargs[flag] = True
+
+        out = io.StringIO()
+        try:
+            call_command("set_checkin_resources", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("set-checkin-resources cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc),
+                 "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse(
+            {"ok": True, "apply": bool(kwargs.get("apply")), "log": out.getvalue()}
+        )
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class SetupLdTrainingView(View):
     """GET/POST `/internal/cron/setup-ld-training`.
 
@@ -6719,6 +6770,7 @@ def _registered_views() -> dict[str, Any]:
         "setup-feel-free-checkin": SetupFeelFreeCheckinView,
         "setup-ld-training": SetupLdTrainingView,
         "setup-ld-retail-checkin": SetupLdRetailCheckinView,
+        "set-checkin-resources": SetCheckinResourcesView,
         "set-tenant-mileage-tracking": SetTenantMileageTrackingView,
         "staff-tenant-events": StaffTenantEventsView,
         "weekly-mileage-report": WeeklyMileageReportView,
