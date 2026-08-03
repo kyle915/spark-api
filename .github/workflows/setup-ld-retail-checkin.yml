@@ -1,19 +1,28 @@
 name: Setup LD retail check-in
 
-# Mints Liquid Death's retail-sampling check-in code, pins the event type the
-# link stamps, and adds the 31-SKU "Products Sampled" multi-select to their
-# EXISTING template.
+# Makes Liquid Death's ONE standing check-in link serve BOTH their programs:
+# mints/keeps the code, makes Retail Sampling and Event Activation selectable on
+# it, adds the 31-SKU "Products Sampled" multi-select to EACH program's existing
+# template, and seeds each program's own photo buckets.
 #
-# It never creates a template. LD already has "Liquid Death-Retail Sampling";
-# a second one would split the brand's recaps across two forms and halve every
-# dashboard number.
+# It never creates a template. LD already has "Liquid Death-Retail Sampling" and
+# "Liquid Death-Event Activation"; a duplicate would split the brand's recaps
+# across two forms and halve every dashboard number.
 #
-# The event-type pin is the load-bearing part: LD runs two programs, and the
-# walk-in path used to pick the tenant's lowest-id type, which could hand a
-# retail BA the Event Activation form without anything looking broken.
+# The selectable list is the load-bearing part. A second check-in link per
+# program is NOT available — `Tenant.checkin_code` is a single column, so minting
+# the second silently repoints the first and every BA holding the old URL lands
+# on the wrong program. So the BA is asked which event they're working and their
+# answer picks the form. The retail PIN stays as the fallback for a request that
+# names no program, which beats the arbitrary lowest-id event type the walk-in
+# path used before (that could hand a retail BA the 7-field activation form
+# without anything looking broken).
 #
-# Idempotent — re-running refreshes the SKU option list in place, so adding a
-# product to the line-up is just another dispatch.
+# Idempotent — re-running refreshes the SKU option lists in place and reuses the
+# categories that already exist, so adding a product to the line-up, or a bucket
+# to a program, is just another dispatch. Read the DRY RUN first: it prints the
+# brand's current categories, the buckets each program will be served (with ids),
+# and a tally of where recent check-in photos actually landed.
 
 on:
   workflow_dispatch:
@@ -31,7 +40,7 @@ on:
         required: false
         default: "https://admin.igniteproductions.co/training/LD-FZUWXT"
       skip_products:
-        description: "Don't touch the template; only mint the code + pin the event type"
+        description: "Don't touch the templates; only the code, the selectable programs and the photo buckets"
         required: false
         default: "false"
         type: choice
