@@ -1,0 +1,127 @@
+name: Event confirmations
+
+# Fires `/internal/cron/send-event-confirmations` on Cloud Run every ~15 min.
+# Sends the 24h-before and 3h-before re-sends of an event confirmation an admin
+# already sent from the "Send Event Confirmation" tab. See
+# events/management/commands/send_event_confirmations.py.
+#
+# WHY A SWEEP AND NOT A SCHEDULED JOB: there is no Redis / rqscheduler on Cloud
+# Run, so "send this in 24 hours" cannot be queued — every django-rq
+# `scheduler.schedule(...)` in this repo's history was silently dropped. This is
+# the same wall-clock-scan pattern as activation-reminders and recap-nudges, and
+# the email goes out INLINE in the web process (no worker).
+#
+# WHY IT CAN'T SPAM THE ROSTER:
+#   * Reminders are OPT-IN per send — only EventConfirmation rows an admin
+#     created with reminders enabled are eligible. A BA nobody sent a
+#     confirmation to has no row and can never be emailed by this job.
+#   * Each (confirmation, stage) is claimed in EventConfirmationSend under a
+#     unique constraint BEFORE its email is sent, so overlapping runs (or a
+#     retried Actions job) can't double-send.
+#   * Past shifts, cancelled rows, and stages whose moment predates the booking
+#     are all excluded, and `max_sends` hard-caps a single run.
+#
+# The "booked" stage is never swept — only an admin pressing Send produces it.
+#
+# Secret-gated via `X-Cron-Secret` (shared INTERNAL_CRON_SECRET, set on both the
+# Cloud Run service env and the GitHub repo secret) — see the daily-admin-digest
+# workflow for the full setup notes.
+#
+# Schedule: every 15 minutes. The command's grace window (6h) is far wider than
+# the cadence on purpose, so a reminder can't slip between two runs even with
+# GitHub Actions' cron jitter or a spell of downtime; the per-stage claim keeps
+# it to a single send either way.
+#
+# BEFORE CHANGING THE SWEEP, dispatch this with dry_run=true and read the log —
+# it reports every (confirmation, stage) it would fire without sending anything.
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Report what would fire, but send nothing"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      grace_hours:
+        description: "Drop a due reminder once it's this many hours stale"
+        required: false
+        default: "6"
+      tenant_id:
+        description: "Restrict to a single tenant id (blank = all)"
+        required: false
+        default: ""
+      max_sends:
+        description: "Hard cap on sends in one run"
+        required: false
+        default: "100"
+      preview_to:
+        description: "Send ONE sample email here and stop (no sweep, no writes)"
+        required: false
+        default: ""
+      preview_stage:
+        description: "Which stage to preview"
+        required: false
+        default: "booked"
+        type: choice
+        options:
+          - "booked"
+          - "t24"
+          - "t3"
+          - "all"
+
+jobs:
+  fire-event-confirmations:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire event-confirmations cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/send-event-confirmations
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+          GRACE_HOURS: ${{ github.event.inputs.grace_hours || '6' }}
+          TENANT_ID: ${{ github.event.inputs.tenant_id || '' }}
+          MAX_SENDS: ${{ github.event.inputs.max_sends || '100' }}
+          PREVIEW_TO: ${{ github.event.inputs.preview_to || '' }}
+          PREVIEW_STAGE: ${{ github.event.inputs.preview_stage || 'booked' }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            echo "Generate one with: openssl rand -hex 32"
+            echo "Then set it as INTERNAL_CRON_SECRET in both the repo secrets"
+            echo "and the Cloud Run service env (must match)."
+            exit 1
+          fi
+
+          # preview_to short-circuits the sweep server-side: one sample email,
+          # no writes. Everything else is ignored when it's set.
+          if [ -n "$PREVIEW_TO" ]; then
+            QS="preview_to=$(printf '%s' "$PREVIEW_TO" | sed 's/@/%40/g')"
+            QS="$QS&preview_stage=$PREVIEW_STAGE"
+            if [ -n "$TENANT_ID" ]; then
+              QS="$QS&preview_tenant_id=$TENANT_ID"
+            fi
+          else
+            QS="dry_run=$DRY_RUN&grace_hours=$GRACE_HOURS&max_sends=$MAX_SENDS"
+            if [ -n "$TENANT_ID" ]; then
+              QS="$QS&tenant_id=$TENANT_ID"
+            fi
+          fi
+
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL?$QS" \
+            -H "X-Cron-Secret: $CRON_SECRET")
+
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS — see body above."
+            exit 1
+          fi
