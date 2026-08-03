@@ -1,0 +1,63 @@
+name: Setup LD BA training hub
+
+# Seeds the Liquid Death shareable BA training hub and prints its code — the
+# /training/<code> link Ignite texts to BAs before their first shift.
+#
+# Idempotent: the hub is matched on (tenant, title) so re-running never mints a
+# second code, and each resource is matched on (hub, title) so copy or URL
+# edits land in place instead of duplicating a card. Safe to re-dispatch after
+# changing the guide, the video, or any of the descriptions.
+#
+# Run apply=false first — the dry run lists exactly what it would write and,
+# if a hub already exists, prints its current code and resource count.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tenant:
+        description: "Tenant name/slug substring"
+        required: false
+        default: "liquid death"
+      code:
+        description: "Force a specific hub code (use to re-point an already-shared link). Blank = generate/keep"
+        required: false
+        default: ""
+      video_url:
+        description: "Override the video URL — e.g. an unlisted YouTube link instead of the self-hosted MP4. Blank = keep"
+        required: false
+        default: ""
+      apply:
+        description: "Actually write (read the dry run first)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+jobs:
+  setup-ld-training:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire setup endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/setup-ld-training
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          TENANT: ${{ github.event.inputs.tenant }}
+          CODE: ${{ github.event.inputs.code }}
+          VIDEO_URL: ${{ github.event.inputs.video_url }}
+          APPLY: ${{ github.event.inputs.apply }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL" \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            --data-urlencode "tenant=$TENANT" \
+            --data-urlencode "code=$CODE" \
+            --data-urlencode "video_url=$VIDEO_URL" \
+            --data-urlencode "apply=$APPLY")
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          echo ""
+          [ "$STATUS" != "200" ] && exit 1 || exit 0
