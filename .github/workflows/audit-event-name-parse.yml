@@ -1,0 +1,71 @@
+name: Audit event name parse
+
+# Manual, READ-ONLY: explain why the Field Sampling Report drops volume.
+# Splits "overall minus the sum of the listed markets" into its two causes —
+# event names that don't parse into a market at all (grouped by a
+# digit-redacted shape, with who/what created them), and names that parse to
+# a market label the report wasn't asked for. No writes of any kind.
+# See recaps/management/commands/audit_event_name_parse.py.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tenant:
+        description: "Tenant slug or numeric id"
+        required: true
+        default: "feel-free"
+      start:
+        description: "Inclusive window start YYYY-MM-DD (blank = Jan 1 this year)"
+        required: false
+        default: ""
+      end:
+        description: "Inclusive window end YYYY-MM-DD (blank = today)"
+        required: false
+        default: ""
+      markets:
+        description: "Comma-separated market labels to check against (blank = the five FF metros)"
+        required: false
+        default: ""
+      event_type:
+        description: "Restrict to one event-type name (e.g. Field Sampling)"
+        required: false
+        default: ""
+
+jobs:
+  audit-event-name-parse:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire audit-event-name-parse cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/audit-event-name-parse
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          TENANT: ${{ github.event.inputs.tenant }}
+          START: ${{ github.event.inputs.start }}
+          END: ${{ github.event.inputs.end }}
+          MARKETS: ${{ github.event.inputs.markets }}
+          EVENT_TYPE: ${{ github.event.inputs.event_type }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -G "$CRON_URL" \
+            --data-urlencode "tenant=$TENANT" \
+            --data-urlencode "start=$START" \
+            --data-urlencode "end=$END" \
+            --data-urlencode "markets=$MARKETS" \
+            --data-urlencode "event_type=$EVENT_TYPE" \
+            -X POST \
+            -H "X-Cron-Secret: $CRON_SECRET")
+
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          echo ""
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS — see body above."
+            exit 1
+          fi

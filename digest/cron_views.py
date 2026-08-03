@@ -3592,6 +3592,66 @@ class DumpFieldSamplingView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class AuditEventNameParseView(View):
+    """GET/POST `/internal/cron/audit-event-name-parse`.
+
+    READ-ONLY: explains the Field Sampling Report's market gap — which of a
+    tenant's events parse into a market, which don't (grouped by a
+    digit-redacted name shape, with who/what created them), and which parse
+    to a label the caller didn't ask for. Fires
+    `audit_event_name_parse`; the parsed JSON is returned under `data` so a
+    GH Actions run log carries it cleanly.
+
+    Params (query or POST, all optional):
+      - tenant: slug or numeric id (default "feel-free")
+      - start / end: YYYY-MM-DD inclusive window (default this calendar year)
+      - markets: comma-separated labels to check against (default the five
+        FF metros dump_field_sampling uses)
+      - event_type: restrict to one event-type name
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _param(name: str) -> str | None:
+            return request.GET.get(name) or request.POST.get(name)
+
+        kwargs: dict = {}
+        for key in ("tenant", "start", "end", "markets"):
+            if _param(key):
+                kwargs[key] = str(_param(key))
+        if _param("event_type"):
+            kwargs["event_type"] = str(_param("event_type"))
+
+        out = io.StringIO()
+        try:
+            call_command("audit_event_name_parse", stdout=out, **kwargs)
+            raw = out.getvalue()
+            blob = raw.split("ENPARSE_JSON_START", 1)[1].split("ENPARSE_JSON_END", 1)[0]
+            data = json.loads(blob)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("audit_event_name_parse cron failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "report": out.getvalue(),
+                },
+                status=500,
+            )
+        return JsonResponse({"ok": True, "data": data})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class ExportRecapsToSheetView(View):
     """POST `/internal/cron/export-recaps-to-sheet`.
 
@@ -6754,6 +6814,7 @@ def _registered_views() -> dict[str, Any]:
         "import-demo-recaps": ImportDemoRecapsView,
         "audit-client-submissions": AuditClientSubmissionsView,
         "dump-field-sampling": DumpFieldSamplingView,
+        "audit-event-name-parse": AuditEventNameParseView,
         "export-recaps-to-sheet": ExportRecapsToSheetView,
         "export-ld-summary": ExportLdSummaryView,
         "export-girlbeer-summary": ExportGirlbeerSummaryView,
