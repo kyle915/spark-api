@@ -698,7 +698,10 @@ def submit_checkin_recap(
     Returns the created recap."""
     from recaps import heic_conversion
     from recaps import models as rmodels
-    from recaps.mutations import _resolve_file_recap_category
+    from recaps.mutations import (
+        _resolve_explicit_file_recap_category,
+        _resolve_file_recap_category,
+    )
     from utils.gcs import extract_blob_name_from_url
 
     actor = ambassador.user
@@ -857,8 +860,8 @@ def submit_checkin_recap(
             # PKs, and a tenant's own category can legitimately have PK 1 or 2.
             # LD's "Table Set Up" is PK 2, so routing it through the resolver
             # filed every table shot under "Receipts" — the same mis-file this
-            # feature exists to end. Buckets are already tenant-scoped by
-            # `allowed_category_ids`, so look them up directly.
+            # feature exists to end. `_resolve_explicit_file_recap_category` is
+            # the PK-only counterpart: tenant-scoped, no sentinel reading.
             #
             # Everything else — no category (every brand without buckets), a
             # stale id from a page loaded before the buckets changed, a forged
@@ -881,9 +884,9 @@ def submit_checkin_recap(
                     # Always tenant-scoped, so this can never reach another
                     # brand's category even if the id were somehow forged past
                     # the allow-set above.
-                    resolved = rmodels.FileRecapCategory.objects.filter(
-                        id=int(raw_category), tenant_id=event.tenant_id
-                    ).first()
+                    resolved = _resolve_explicit_file_recap_category(
+                        raw_category, tenant_id=event.tenant_id
+                    )
                 if resolved is None:
                     resolved = _resolve_file_recap_category(
                         "1", tenant_id=getattr(event, "tenant_id", None)

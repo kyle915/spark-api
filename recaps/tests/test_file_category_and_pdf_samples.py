@@ -25,9 +25,11 @@ from asgiref.sync import sync_to_async
 
 from events.models import Product, ProductType
 from recaps import models as recap_models
+from recaps import mutations as rmut
 from recaps.mutations import (
     _PHOTOS_CATEGORY_NAME,
     _RECEIPTS_CATEGORY_NAME,
+    _resolve_explicit_file_recap_category,
     _resolve_file_recap_category,
 )
 from recaps.pdf import build_recap_pdf_html
@@ -358,6 +360,174 @@ class TestSentinelSelfHealAndTenantIsolation(_Base):
         resolved = _resolve_file_recap_category(str(foreign.id), tenant_id=None)
         assert resolved is not None
         assert resolved.id == foreign.id
+
+
+@pytest.mark.django_db
+class TestExplicitPickVsRoleSentinel(_Base):
+    """PK-vs-sentinel collision, generalised past the check-in path.
+
+    ``_resolve_file_recap_category`` reads "1"/"2" as positional ROLE markers
+    (photos / receipts) BEFORE it looks at PKs — but a tenant's own category
+    can legitimately HAVE PK 1 or 2. Liquid Death's "Table Set Up" is PK 2, so
+    an explicitly chosen category filed itself under "Receipts".
+
+    ``ambassadors.checkin_web`` was fixed for its own callsite in eba7388; this
+    pins the shared resolver split that generalises it. Two paths, one each:
+
+    * ``_resolve_file_recap_category``          — role markers from widgets.
+    * ``_resolve_explicit_file_recap_category`` — real PKs the caller chose.
+
+    PKs aren't controllable in a shared test DB (the sequence keeps climbing
+    across tests), so — as in
+    ``test_checkin_photo_buckets::test_a_bucket_whose_pk_collides_with_a_sentinel_still_wins``
+    — the collision is simulated by making a real category's id ALSO read as a
+    sentinel. That is exactly the state LD is in.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self, db):
+        self.system_user = self.get_system_user()
+        self.tenant = self.create_tenant(name="Liquid Death")
+        self.cats = self._seed_categories(self.tenant)
+        # The relabelled seeded row LD actually picks in the management UI.
+        self.table_set_up = self.cats["Table setup"]
+
+    def _as_receipts_sentinel(self, category):
+        """Make `category`'s real PK also read as the receipts sentinel."""
+        from unittest.mock import patch
+
+        return patch.dict(
+            rmut._FILE_CATEGORY_SENTINEL_NAMES,
+            {str(category.id): _RECEIPTS_CATEGORY_NAME},
+            clear=False,
+        )
+
+    def test_explicit_pick_of_a_sentinel_pk_category_is_not_the_role_row(self):
+        """The headline case: an explicitly picked category whose PK collides
+        with a sentinel must resolve to ITSELF, not to photos/receipts."""
+        receipts = self.cats["Receipts"]
+        with self._as_receipts_sentinel(self.table_set_up):
+            resolved = _resolve_explicit_file_recap_category(
+                str(self.table_set_up.id), tenant_id=self.tenant.id
+            )
+        assert resolved is not None
+        assert resolved.id == self.table_set_up.id
+        assert resolved.name == "Table setup"
+        # The mis-file this exists to prevent.
+        assert resolved.id != receipts.id
+        assert resolved.name != _RECEIPTS_CATEGORY_NAME
+
+    def test_the_same_id_through_the_widget_path_still_reads_as_a_role(self):
+        """The contrast that makes the split necessary rather than cosmetic.
+
+        Same tenant, same string — the sentinel-aware helper must keep filing
+        it by ROLE, because that is what spark-mobile and the admin uploaders
+        mean when they send it. Removing the sentinel path would break them.
+        """
+        with self._as_receipts_sentinel(self.table_set_up):
+            resolved = _resolve_file_recap_category(
+                str(self.table_set_up.id), tenant_id=self.tenant.id
+            )
+        assert resolved is not None
+        assert resolved.id == self.cats["Receipts"].id
+
+    def test_widget_sentinels_are_untouched_by_the_split(self):
+        # No patching: the real "1"/"2" the clients send, still by role name.
+        assert (
+            _resolve_file_recap_category(
+                PHOTOS_SENTINEL, tenant_id=self.tenant.id
+            ).id
+            == self.cats["Sampling photos"].id
+        )
+        assert (
+            _resolve_file_recap_category(
+                RECEIPTS_SENTINEL, tenant_id=self.tenant.id
+            ).id
+            == self.cats["Receipts"].id
+        )
+
+    def test_explicit_resolver_never_self_heals_a_role_row(self):
+        """Self-heal belongs to the role path only.
+
+        An unseeded tenant asking for PK 2 has picked a row that isn't theirs —
+        that's uncategorized, not a licence to mint a "Receipts" category.
+        """
+        tenant = self.create_tenant(name="Unseeded Co")
+        assert not recap_models.FileRecapCategory.objects.filter(
+            tenant_id=tenant.id
+        ).exists()
+        resolved = _resolve_explicit_file_recap_category(
+            RECEIPTS_SENTINEL, tenant_id=tenant.id
+        )
+        assert resolved is None
+        assert not recap_models.FileRecapCategory.objects.filter(
+            tenant_id=tenant.id
+        ).exists()
+
+    def test_explicit_resolver_is_tenant_scoped(self):
+        other = self.create_tenant(name="Someone Else")
+        theirs = recap_models.FileRecapCategory.objects.create(
+            name="Their Private Bucket", tenant=other, created_by=self.system_user
+        )
+        resolved = _resolve_explicit_file_recap_category(
+            str(theirs.id), tenant_id=self.tenant.id
+        )
+        assert resolved is None
+
+    def test_explicit_resolver_maps_a_foreign_id_onto_our_same_name_row(self):
+        # Parity with the shared helper's long-standing explicit behaviour.
+        other = self.create_tenant(name="Same Names Co")
+        theirs = recap_models.FileRecapCategory.objects.create(
+            name="Table setup", tenant=other, created_by=self.system_user
+        )
+        resolved = _resolve_explicit_file_recap_category(
+            str(theirs.id), tenant_id=self.tenant.id
+        )
+        assert resolved is not None
+        assert resolved.id == self.table_set_up.id
+
+    def test_explicit_resolver_accepts_a_relay_global_id(self):
+        """The management UI picks from `fileRecapCategories`, whose `id` is a
+        relay global id — the one wire form that can never be a sentinel."""
+        import base64
+
+        global_id = base64.b64encode(
+            f"FileRecapCategoryType:{self.table_set_up.id}".encode()
+        ).decode()
+        resolved = _resolve_explicit_file_recap_category(
+            global_id, tenant_id=self.tenant.id
+        )
+        assert resolved is not None
+        assert resolved.id == self.table_set_up.id
+
+    def test_explicit_resolver_is_graceful(self):
+        # Never raises — a stray id must not lose the recap or its files.
+        assert (
+            _resolve_explicit_file_recap_category(None, tenant_id=self.tenant.id)
+            is None
+        )
+        assert (
+            _resolve_explicit_file_recap_category("", tenant_id=self.tenant.id) is None
+        )
+        assert (
+            _resolve_explicit_file_recap_category(
+                "not-an-id", tenant_id=self.tenant.id
+            )
+            is None
+        )
+        assert (
+            _resolve_explicit_file_recap_category(
+                "999999999", tenant_id=self.tenant.id
+            )
+            is None
+        )
+
+    def test_tenantless_explicit_resolver_keeps_the_legacy_global_lookup(self):
+        resolved = _resolve_explicit_file_recap_category(
+            str(self.table_set_up.id), tenant_id=None
+        )
+        assert resolved is not None
+        assert resolved.id == self.table_set_up.id
 
 
 @pytest.mark.django_db(transaction=True)

@@ -106,27 +106,137 @@ def _assert_sentinel_names_match_seeds():
 _assert_sentinel_names_match_seeds()
 
 
-def _resolve_file_recap_category(raw_id, *, tenant_id):
-    """Resolve a FileRecapCategory for an uploaded recap file — tenant-scoped,
-    semantic, and graceful.
+def _resolve_role_file_recap_category(sentinel, *, tenant_id):
+    """Resolve a positional ROLE sentinel to the tenant's OWN role category.
 
-    FileRecapCategory rows are PER-TENANT, but the upload widgets (web + mobile)
-    send a stable *positional* sentinel — "1" = photos, "2" = receipts — that is
-    a ROLE marker, not a DB PK. The old code matched the sentinel as a raw PK
+    `sentinel` is the bare string an upload widget sends as a *slot marker* —
+    "1" = the sampling-photos slot, "2" = the receipts slot. It is NOT a DB PK.
+    Returns None when `sentinel` isn't a known role marker (or there's no tenant
+    to scope to), so the caller can fall through to PK behaviour.
+
+    Never resolves cross-tenant: a role that this tenant has no category for is
+    self-healed into one rather than borrowed from whoever owns that PK.
+    """
+    sentinel_name = _FILE_CATEGORY_SENTINEL_NAMES.get(sentinel)
+    if sentinel_name is None or tenant_id is None:
+        return None
+    # 1) Exact seeded role name (fast path for tenants on the defaults).
+    by_name = models.FileRecapCategory.objects.filter(
+        tenant_id=tenant_id, name__iexact=sentinel_name
+    ).first()
+    if by_name is not None:
+        return by_name
+    # 2) Naming variant (custom-template tenants like Girl Beer): match the
+    #    role by keyword so a receipt sentinel still lands on a category
+    #    named "Receipt" / "Upload Receipt" / "Product Purchase Receipt"
+    #    rather than mis-filing into "Table setup" via the PK fallback.
+    #    Tenant-scoped; lowest id wins on ties.
+    for keyword in _FILE_CATEGORY_SENTINEL_KEYWORDS.get(sentinel, ()):
+        by_keyword = (
+            models.FileRecapCategory.objects.filter(
+                tenant_id=tenant_id, name__icontains=keyword
+            )
+            .order_by("id")
+            .first()
+        )
+        if by_keyword is not None:
+            return by_keyword
+    # 3) No matching role category for this tenant at all — SELF-HEAL: create
+    #    the tenant's own role category under the seeded default name instead
+    #    of falling through to the PK path. The PK path could only land the
+    #    file in ANOTHER tenant's category (the Girl Beer leak: a tenant
+    #    onboarded outside createTenant has no categories, so sentinel "2"
+    #    fell through to the global PK-2 "Table setup" owned by a different
+    #    tenant). Sentinels are role markers; they must never resolve
+    #    cross-tenant.
+    seeded, _created = models.FileRecapCategory.objects.get_or_create(
+        tenant_id=tenant_id, name=sentinel_name
+    )
+    return seeded
+
+
+def _resolve_explicit_file_recap_category(raw_id, *, tenant_id):
+    """Resolve a category the caller picked EXPLICITLY, by real PK.
+
+    Use this — NOT `_resolve_file_recap_category` — whenever `raw_id` is a
+    genuine FileRecapCategory primary key: a category chosen in the management
+    UI, a validated check-in bucket, an id echoed back from a previous read.
+    This resolver never reads "1"/"2" as positional role sentinels, which is
+    the entire point. A tenant's own category can legitimately HAVE PK 1 or 2
+    (Liquid Death's "Table Set Up" is PK 2), so routing a real pick through the
+    sentinel-aware helper files it under "Receipts" — the very mis-file that
+    helper exists to prevent, arrived at from the other direction.
+
+    Tenant-scoped: the tenant's own row with that exact PK, then the tenant's
+    row sharing the referenced row's name, else None — never another tenant's
+    row. (Only a tenantless call may return the raw global row.)
+
+    Accepts a relay global id or a bare int, via `resolve_id_to_int`.
+
+    Never raises — a stray category id must not lose the recap or its files.
+    """
+    if raw_id in (None, ""):
+        return None
+    try:
+        category_id = resolve_id_to_int(raw_id)
+    except (TypeError, ValueError, GraphQLError):
+        return None
+    if category_id is None:
+        return None
+    global_cat = models.FileRecapCategory.objects.filter(id=category_id).first()
+    if tenant_id is None:
+        return global_cat
+    own = models.FileRecapCategory.objects.filter(
+        tenant_id=tenant_id, id=category_id
+    ).first()
+    if own is not None:
+        return own
+    if global_cat is not None:
+        same_name = models.FileRecapCategory.objects.filter(
+            tenant_id=tenant_id, name__iexact=global_cat.name
+        ).first()
+        if same_name is not None:
+            return same_name
+    # An explicit id that is neither the tenant's own row nor name-mappable
+    # onto one resolves to None (uncategorized) — never another tenant's
+    # category. A cross-tenant category renders fine in the UI (views group
+    # by the file's category), which is exactly why this leak went unseen.
+    return None
+
+
+def _resolve_file_recap_category(raw_id, *, tenant_id):
+    """Resolve a FileRecapCategory for an upload whose id may be a ROLE MARKER.
+
+    ⚠️ Which resolver do you want?
+
+    * The value is a *positional slot marker* baked into an upload widget —
+      "1" = photos, "2" = receipts, sent per-file by spark-mobile's
+      RecapSubmitScreen, the admin SparkRecapCreate / SparkRecapView uploaders,
+      and the Connecteam importer. → THIS function.
+    * The value is a *real primary key* the user or caller explicitly chose (a
+      management-UI pick, a validated check-in bucket, an id echoed back from a
+      read). → `_resolve_explicit_file_recap_category`.
+
+    The two cases are indistinguishable from the string alone: "2" is both the
+    receipts slot marker and a perfectly valid PK. Overloading one path is what
+    filed every Liquid Death "Table Set Up" photo (PK 2) under "Receipts", so
+    pick the resolver that matches where the id came from rather than letting
+    this one guess.
+
+    FileRecapCategory rows are PER-TENANT, but the widgets send the same
+    sentinel for every brand. The old code matched that sentinel as a raw PK
     (own tenant's exact PK first, then the global row's name): because defaults
     are seeded ["Sampling photos", "Table setup", "Receipts"], the global PK 2
     is "Table setup", so a receipt sentinel "2" landed under "Table setup"
     instead of "Receipts".
 
     Resolution order:
-      1. If `raw_id` is a known positional sentinel ("1"/"2"), resolve it to the
-         tenant's OWN category — exact seeded role NAME, then role keyword, and
-         if the tenant has no matching category at all, CREATE the tenant's own
-         role category (self-heal). A sentinel never resolves cross-tenant.
-      2. Otherwise (a real explicit category id, e.g. one the user picked in the
-         category-management UI): the tenant's own row with that exact PK, then
-         the tenant's row sharing that row's name, else None — never another
-         tenant's row. (Only a tenantless call may return the raw global row.)
+      1. A known positional sentinel ("1"/"2") resolves to the tenant's OWN
+         role category — exact seeded role NAME, then role keyword, and if the
+         tenant has no matching category at all, CREATE it (self-heal). A
+         sentinel never resolves cross-tenant.
+      2. Anything else is treated as an explicit PK and handed to
+         `_resolve_explicit_file_recap_category` (tenant-scoped).
 
     Never raises — a stray category id must not lose the recap or its files.
     """
@@ -136,68 +246,13 @@ def _resolve_file_recap_category(raw_id, *, tenant_id):
     # Positional sentinel -> tenant's own category by seeded role name. We match
     # on the *string* sentinel the clients actually send ("1"/"2"); only fall
     # through to PK behavior when there is no name match for that tenant.
-    sentinel = str(raw_id).strip()
-    sentinel_name = _FILE_CATEGORY_SENTINEL_NAMES.get(sentinel)
-    if sentinel_name is not None and tenant_id is not None:
-        # 1) Exact seeded role name (fast path for tenants on the defaults).
-        by_name = models.FileRecapCategory.objects.filter(
-            tenant_id=tenant_id, name__iexact=sentinel_name
-        ).first()
-        if by_name is not None:
-            return by_name
-        # 2) Naming variant (custom-template tenants like Girl Beer): match the
-        #    role by keyword so a receipt sentinel still lands on a category
-        #    named "Receipt" / "Upload Receipt" / "Product Purchase Receipt"
-        #    rather than mis-filing into "Table setup" via the PK fallback
-        #    below. Tenant-scoped; lowest id wins on ties.
-        for keyword in _FILE_CATEGORY_SENTINEL_KEYWORDS.get(sentinel, ()):
-            by_keyword = (
-                models.FileRecapCategory.objects.filter(
-                    tenant_id=tenant_id, name__icontains=keyword
-                )
-                .order_by("id")
-                .first()
-            )
-            if by_keyword is not None:
-                return by_keyword
-        # 3) No matching role category for this tenant at all — SELF-HEAL:
-        #    create the tenant's own role category under the seeded default
-        #    name instead of falling through to the PK path. The PK path could
-        #    only land the file in ANOTHER tenant's category (the Girl Beer
-        #    leak: a tenant onboarded outside createTenant has no categories,
-        #    so sentinel "2" fell through to the global PK-2 "Table setup"
-        #    owned by a different tenant). Sentinels are role markers; they
-        #    must never resolve cross-tenant.
-        seeded, _created = models.FileRecapCategory.objects.get_or_create(
-            tenant_id=tenant_id, name=sentinel_name
-        )
-        return seeded
+    by_role = _resolve_role_file_recap_category(
+        str(raw_id).strip(), tenant_id=tenant_id
+    )
+    if by_role is not None:
+        return by_role
 
-    try:
-        category_id = resolve_id_to_int(raw_id)
-    except (TypeError, ValueError, GraphQLError):
-        return None
-    if category_id is None:
-        return None
-    global_cat = models.FileRecapCategory.objects.filter(id=category_id).first()
-    if tenant_id is not None:
-        own = models.FileRecapCategory.objects.filter(
-            tenant_id=tenant_id, id=category_id
-        ).first()
-        if own is not None:
-            return own
-        if global_cat is not None:
-            same_name = models.FileRecapCategory.objects.filter(
-                tenant_id=tenant_id, name__iexact=global_cat.name
-            ).first()
-            if same_name is not None:
-                return same_name
-        # An explicit id that is neither the tenant's own row nor name-mappable
-        # onto one resolves to None (uncategorized) — never another tenant's
-        # category. A cross-tenant category renders fine in the UI (views group
-        # by the file's category), which is exactly why this leak went unseen.
-        return None
-    return global_cat
+    return _resolve_explicit_file_recap_category(raw_id, tenant_id=tenant_id)
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
@@ -1189,6 +1244,13 @@ class RecapMutationService(SparkGraphQLMixin):
                             "No file type available. Please create a file type first."
                         )
 
+                    # ROLE SENTINEL site: every live caller of createRecap sends
+                    # the positional slot marker per file — spark-mobile's
+                    # RecapSubmitScreen ("1" photos / "2" receipt) and the admin
+                    # SparkRecapCreate form (same two). A real category PK only
+                    # reaches this field if the shelved FileUploadItem picker is
+                    # revived, and that picker feeds relay global ids, which the
+                    # resolver already routes to the explicit path.
                     file_recap_category = _resolve_file_recap_category(
                         file_input.file_recap_category_id,
                         tenant_id=getattr(event, "tenant_id", None),
@@ -1462,21 +1524,33 @@ class RecapMutationService(SparkGraphQLMixin):
                                 updated_fields.append("file_type")
 
                         if file_input.file_recap_category_id not in (None, ""):
-                            try:
-                                category_id = resolve_id_to_int(
-                                    file_input.file_recap_category_id
+                            # EXPLICIT PK, not a role marker: SparkRecapView's
+                            # saveNumbers rebuilds files[] from the ids it read
+                            # back off the recap, so this is always a real
+                            # category the file already sits in. Resolve it
+                            # tenant-scoped and WITHOUT sentinel interpretation
+                            # — a tenant whose own category is PK 1 or 2 must
+                            # keep it, not get re-filed into photos/receipts.
+                            file_recap_category = _resolve_explicit_file_recap_category(
+                                file_input.file_recap_category_id,
+                                tenant_id=getattr(event, "tenant_id", None),
+                            )
+                            if file_recap_category is None:
+                                # Nothing of ours to map it onto — usually a row
+                                # still carrying a FOREIGN category from the old
+                                # cross-tenant leak, echoed straight back to us.
+                                # Leave the file's category alone: the previous
+                                # global lookup would have re-written that
+                                # foreign row onto it, and raising here would
+                                # fail an entire recap save over legacy data.
+                                logger.warning(
+                                    "update_recap: unresolvable file category %r "
+                                    "for tenant %s; leaving file %s as-is",
+                                    file_input.file_recap_category_id,
+                                    getattr(event, "tenant_id", None),
+                                    existing_file.id,
                                 )
-                                file_recap_category = (
-                                    models.FileRecapCategory.objects.get(id=category_id)
-                                )
-                            except (
-                                models.FileRecapCategory.DoesNotExist,
-                                TypeError,
-                                ValueError,
-                                GraphQLError,
-                            ):
-                                raise GraphQLError("File recap category not found.")
-                            if (
+                            elif (
                                 existing_file.file_recap_category_id
                                 != file_recap_category.id
                             ):
@@ -2065,6 +2139,10 @@ class RecapMutationService(SparkGraphQLMixin):
                         if not file_type:
                             raise GraphQLError("No file type available.")
 
+                        # ROLE SENTINEL site: the createCustomRecap upload
+                        # widgets send the positional slot marker per file
+                        # ("1" photos / "2" receipt), same convention as
+                        # createRecap above.
                         file_recap_category = _resolve_file_recap_category(
                             file_input.file_recap_category_id,
                             tenant_id=getattr(event, "tenant_id", None),
@@ -2631,25 +2709,34 @@ class RecapMutationService(SparkGraphQLMixin):
                                         updated_fields.append("file_type")
 
                                 if file_input.file_recap_category_id not in (None, ""):
-                                    try:
-                                        category_id = resolve_id_to_int(
-                                            file_input.file_recap_category_id
+                                    # EXPLICIT PK, not a role marker — the id
+                                    # was read back off the file it belongs to.
+                                    # Tenant-scoped, no sentinel interpretation,
+                                    # so a tenant category that happens to be
+                                    # PK 1 or 2 survives the round trip.
+                                    file_recap_category = (
+                                        _resolve_explicit_file_recap_category(
+                                            file_input.file_recap_category_id,
+                                            tenant_id=getattr(
+                                                custom_recap, "tenant_id", None
+                                            ),
                                         )
-                                        file_recap_category = (
-                                            models.FileRecapCategory.objects.get(
-                                                id=category_id
-                                            )
+                                    )
+                                    if file_recap_category is None:
+                                        # Foreign/legacy id echoed back at us —
+                                        # leave the file's category alone rather
+                                        # than re-writing another tenant's row
+                                        # onto it (the old global lookup) or
+                                        # failing the whole save.
+                                        logger.warning(
+                                            "update_custom_recap: unresolvable "
+                                            "file category %r for tenant %s; "
+                                            "leaving file %s as-is",
+                                            file_input.file_recap_category_id,
+                                            getattr(custom_recap, "tenant_id", None),
+                                            existing_file.id,
                                         )
-                                    except (
-                                        models.FileRecapCategory.DoesNotExist,
-                                        TypeError,
-                                        ValueError,
-                                        GraphQLError,
-                                    ):
-                                        raise GraphQLError(
-                                            "File recap category not found."
-                                        )
-                                    if (
+                                    elif (
                                         existing_file.file_recap_category_id
                                         != file_recap_category.id
                                     ):
@@ -3762,6 +3849,15 @@ class RecapMutationService(SparkGraphQLMixin):
         `file_recap_category_id` resolves through the shared tenant-aware
         resolver (real id, "1"/"2" sentinels, or null → uncategorized).
         Auth mirrors add_custom_recap_file — foreign-tenant access blocked.
+
+        ROLE SENTINEL site. RecapCustomView's "Move to…" dropdown offers only
+        the fixed roles — "1" Sampling photos, "2" Receipts, "" Uncategorized —
+        so every live value is a slot marker, and this keeps reading them as
+        one. The moment that dropdown is widened to list the tenant's real
+        categories, those picks must arrive as relay global ids (which never
+        collide with "1"/"2") or move to
+        `_resolve_explicit_file_recap_category`; a bare "2" meaning PK 2 would
+        silently re-file into Receipts.
         """
         if not isinstance(self.input, inputs.SetCustomRecapFileCategoryInput):
             raise GraphQLError("Invalid input type.")
