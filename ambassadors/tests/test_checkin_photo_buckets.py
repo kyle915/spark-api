@@ -230,6 +230,45 @@ class TestCheckinPhotoBuckets(AmbassadorsGraphQLTestCase):
         # Not their category, and not silently uncategorised either.
         assert self._filed(recap) == {"x.jpg": "Sampling photos"}
 
+    def test_a_bucket_whose_pk_collides_with_a_sentinel_still_wins(self):
+        """The bug this caught in production.
+
+        `_resolve_file_recap_category` reads "1"/"2" as positional SENTINELS
+        (photos / receipts) BEFORE it looks at PKs — but a tenant's own
+        category can legitimately have PK 1 or 2. LD's "Table Set Up" is PK 2,
+        so routing a validated bucket id through that helper filed every table
+        shot under "Receipts": the exact mis-file these buckets exist to end.
+
+        A validated bucket id is a real PK and must resolve to itself.
+        """
+        from unittest.mock import patch
+
+        from recaps import mutations as rmut
+        from recaps.models import FileRecapCategory
+
+        FileRecapCategory.objects.create(
+            name="Receipts", tenant=self.tenant, created_by=self.actor
+        )
+        self._enable()
+        table_id = next(
+            b["id"]
+            for b in checkin_web.serialize_photo_buckets(self.event)
+            if b["name"] == "Table Set Up"
+        )
+
+        # PKs aren't controllable in a shared test DB, so simulate the exact
+        # collision instead: make this bucket's real id ALSO read as the
+        # receipts sentinel. Routing it through the sentinel-aware resolver
+        # now files it under "Receipts"; a direct PK lookup doesn't.
+        with patch.dict(
+            rmut._FILE_CATEGORY_SENTINEL_NAMES, {table_id: "Receipts"}, clear=False
+        ):
+            recap = self._submit(
+                [{"blobName": self._blob("t"), "category": table_id}]
+            )
+
+        assert self._filed(recap) == {"t.jpg": "Table Set Up"}
+
     def test_a_junk_category_falls_back(self):
         self._enable()
         recap = self._submit(

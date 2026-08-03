@@ -785,23 +785,41 @@ def submit_checkin_recap(
                 # No file types configured at all — skip photos rather than 500.
                 logger.warning("checkin recap: no FileType available; skipping photo")
                 break
-            # Which bucket the BA dropped this photo into. Brands with labelled
-            # buckets configured send the category id per file; everyone else
-            # sends nothing and gets the positional sentinel "1" — the tenant's
-            # "photos" category, the same bucket the app/web recap forms use, so
-            # the gallery groups them correctly. The fallback also covers a
-            # stale id from a page loaded before the buckets changed: a photo
-            # lands in the generic pile rather than nowhere at all.
+            # Which bucket the BA dropped this photo into.
+            #
+            # A validated bucket id is a REAL PK and must NOT go through
+            # _resolve_file_recap_category: that helper reads "1"/"2" as
+            # positional SENTINELS (photos / receipts) before it ever looks at
+            # PKs, and a tenant's own category can legitimately have PK 1 or 2.
+            # LD's "Table Set Up" is PK 2, so routing it through the resolver
+            # filed every table shot under "Receipts" — the same mis-file this
+            # feature exists to end. Buckets are already tenant-scoped by
+            # `allowed_category_ids`, so look them up directly.
+            #
+            # Everything else — no category (every brand without buckets), a
+            # stale id from a page loaded before the buckets changed, a forged
+            # one — falls back to the "1" sentinel and lands in the tenant's
+            # "photos" category, the same bucket the app/web recap forms use.
             raw_category = (
                 file_input.get("category") or file_input.get("categoryId") or ""
             )
             raw_category = str(raw_category).strip()
             if raw_category not in allowed_category_ids:
-                raw_category = "1"
+                raw_category = ""
             if raw_category not in category_cache:
-                category_cache[raw_category] = _resolve_file_recap_category(
-                    raw_category, tenant_id=getattr(event, "tenant_id", None)
-                )
+                resolved = None
+                if raw_category:
+                    # Always tenant-scoped, so this can never reach another
+                    # brand's category even if the id were somehow forged past
+                    # the allow-set above.
+                    resolved = rmodels.FileRecapCategory.objects.filter(
+                        id=int(raw_category), tenant_id=event.tenant_id
+                    ).first()
+                if resolved is None:
+                    resolved = _resolve_file_recap_category(
+                        "1", tenant_id=getattr(event, "tenant_id", None)
+                    )
+                category_cache[raw_category] = resolved
             file_recap_category = category_cache[raw_category]
             rmodels.CustomRecapFile.objects.create(
                 name=f"Web check-in photo for {name}",
