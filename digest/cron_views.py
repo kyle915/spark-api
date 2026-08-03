@@ -4270,6 +4270,55 @@ class SetupFeelFreeCheckinView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class SetupLdTrainingView(View):
+    """GET/POST `/internal/cron/setup-ld-training`.
+
+    Seeds the Liquid Death shareable BA training hub and returns its code —
+    the `/training/<code>` link Ignite texts to BAs before their first shift.
+
+    Idempotent: the hub is matched on (tenant, title) so re-running never
+    mints a second code, and resources are matched on (hub, title) so copy
+    and URL edits land in place. Safe to re-dispatch after a content change.
+
+    Params: tenant (default "liquid death"), code (force an existing code),
+    video_url (override the self-hosted MP4), apply (default DRY RUN).
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        kwargs: dict = {}
+        for key in ("tenant", "code", "video_url"):
+            val = request.GET.get(key) or request.POST.get(key)
+            if val:
+                kwargs[key] = str(val)
+        raw = (request.GET.get("apply") or request.POST.get("apply") or "").lower()
+        apply_it = raw in ("1", "true", "yes", "on")
+        if apply_it:
+            kwargs["apply"] = True
+
+        out = io.StringIO()
+        try:
+            call_command("setup_ld_training", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("setup-ld-training cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc),
+                 "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "apply": apply_it, "log": out.getvalue()})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class AddLdTypeRowsView(View):
     """GET/POST `/internal/cron/add-ld-type-rows`.
 
@@ -6361,6 +6410,7 @@ def _registered_views() -> dict[str, Any]:
         "fix-ld-orphan-log-rows": FixLdOrphanLogRowsView,
         "setup-total-wireless-checkin": SetupTotalWirelessCheckinView,
         "setup-feel-free-checkin": SetupFeelFreeCheckinView,
+        "setup-ld-training": SetupLdTrainingView,
         "set-tenant-mileage-tracking": SetTenantMileageTrackingView,
         "staff-tenant-events": StaffTenantEventsView,
         "weekly-mileage-report": WeeklyMileageReportView,

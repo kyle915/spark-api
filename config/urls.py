@@ -79,6 +79,11 @@ urlpatterns = [
     # Public, token-authenticated one-click shift-extension approval (no JWT).
     # The admin "Extension requested" email links here. See `ambassadors/views.py`.
     path("api/public/", include("ambassadors.urls")),
+    # Public, code-gated BA training hub (no JWT). A brand's BAs frequently
+    # aren't Spark users at the moment training matters — they're hired for
+    # one campaign and get a link by text — so `/training/<code>` is
+    # read-only and needs no login. See `academy/training_views.py`.
+    path("api/public/", include("academy.urls")),
     # On-demand recap photo thumbnails (utils/thumb_views.py).
     path("api/public/img/", include("utils.thumb_urls")),
     # Cloud Tasks handler endpoints (no JWT, `X-Tasks-Secret` shared-secret
