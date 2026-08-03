@@ -289,6 +289,58 @@ class TestCheckinEventTypeSelector(AmbassadorsGraphQLTestCase):
         buckets = checkin_web.serialize_photo_buckets(self._event(self.retail))
         assert [b["name"] for b in buckets] == ["Sampling photos"]
 
+    def test_the_other_programs_bucket_is_refused_on_submit(self):
+        """A BA who switched programs on a page they left open would post an id
+        this event's program never offered. It must fall back to the generic
+        pile, not file an activation's parking receipt into a retail bucket.
+        """
+        from recaps.models import CustomRecapFile, CustomRecapTemplate, FileType
+
+        photos = self._category("Sampling photos")  # the "1" sentinel target
+        table = self._category("Table Set Up")
+        parking = self._category("Expense Receipts (Parking)")
+        self.tenant.checkin_photo_buckets = {
+            "Retail Sampling": [{"name": "Table Set Up"}],
+            "Event Activation": [{"name": "Expense Receipts (Parking)"}],
+        }
+        self.tenant.save(update_fields=["checkin_photo_buckets"])
+
+        template = CustomRecapTemplate.objects.create(
+            tenant=self.tenant, name="LD-Retail", event_type=self.retail,
+            created_by=self.system_user,
+        )
+        FileType.objects.get_or_create(
+            name="image", defaults={"created_by": self.system_user}
+        )
+        ba = self.create_ambassador(
+            user=self.create_user(
+                username="ba-xprog@x.com", email="ba-xprog@x.com",
+                role=self.roles["ambassador"],
+            ),
+            is_active=False, created_by=self.system_user,
+        )
+        event = self._event(self.retail)
+
+        recap = checkin_web.submit_checkin_recap(
+            event=event, ambassador=ba, template=template, field_values=[],
+            files=[
+                {"blobName": f"recap_files/checkin/{event.uuid}/mine.jpg",
+                 "category": str(table.id)},
+                {"blobName": f"recap_files/checkin/{event.uuid}/theirs.jpg",
+                 "category": str(parking.id)},
+            ],
+            total_engagements=None,
+        )
+        filed = {
+            str(f.url.name).rsplit("/", 1)[-1]: f.file_recap_category.name
+            for f in CustomRecapFile.objects.filter(custom_recap=recap)
+        }
+        assert filed == {
+            "mine.jpg": "Table Set Up",       # this program's own bucket
+            "theirs.jpg": "Sampling photos",  # the other program's — refused
+        }
+        assert photos.id and parking.id  # both rows exist; only one was usable
+
     def test_a_flat_list_still_applies_to_every_program(self):
         """The pre-selector shape. A single-program brand configured before this
         existed must not silently lose its buckets."""
