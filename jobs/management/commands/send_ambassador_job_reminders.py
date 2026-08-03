@@ -81,13 +81,25 @@ class Command(BaseCommand):
             status__slug__in=REMINDER_ALLOWED_STATUS_SLUGS
         ).select_related("status", "ambassador__user", "job__event")
 
+        # The 24h/3h EMAIL reminders only. A tenant that sends its own shift
+        # reminders from the "Send Event Confirmation" tab sets
+        # suppress_job_reminder_emails, and its BAs would otherwise get two
+        # different-looking reminders for one shift. The sender enforces this
+        # too (jobs/tasks.py) — it's repeated here so --dry-run reports what
+        # would ACTUALLY be sent rather than counting rows the sender drops.
+        #
+        # Deliberately NOT applied to the two push specs below: those have no
+        # equivalent in the confirmation tab, so suppressing them would delete a
+        # reminder instead of replacing it.
+        emails = base.exclude(tenant__suppress_job_reminder_emails=True)
+
         # (label, queryset, sender). Each queryset is bounded so it can never
         # select a stale/past shift for the "before" reminders, and only a
         # recently-ended shift for the after-end one.
         specs = [
             (
                 "24h",
-                base.filter(
+                emails.filter(
                     reminder_sent_at__isnull=True,
                     job__event__start_time__gt=now,
                     job__event__start_time__lte=now + datetime.timedelta(hours=24),
@@ -96,7 +108,7 @@ class Command(BaseCommand):
             ),
             (
                 "3h",
-                base.filter(
+                emails.filter(
                     reminder_3h_sent_at__isnull=True,
                     job__event__start_time__gt=now,
                     job__event__start_time__lte=now + datetime.timedelta(hours=3),

@@ -606,6 +606,23 @@ def _send_ambassador_job_exact_reminder(
             )
             return 0
 
+    # Tenants whose shift reminders come from the "Send Event Confirmation" tab
+    # opt out here, so a BA doesn't get this email AND the confirmation email
+    # for the same shift. Checked in the SENDER rather than only in the cron's
+    # queryset so no caller can route around it. Push reminders are unaffected —
+    # this guard is only on the shared 24h/3h email path.
+    if getattr(
+        getattr(ambassador_job, "tenant", None), "suppress_job_reminder_emails", False
+    ):
+        logger.info(
+            "Skipping %s reminder email for ambassador_job=%s: tenant=%s uses "
+            "event confirmations for shift reminders.",
+            reminder_label,
+            ambassador_job_id,
+            ambassador_job.tenant_id,
+        )
+        return 0
+
     ambassador_user = ambassador_job.ambassador.user
     recipient_email = (ambassador_user.email or "").strip()
     if not recipient_email:

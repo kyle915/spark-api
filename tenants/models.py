@@ -246,6 +246,21 @@ class Tenant(Asyncable, models.Model):
     # not only on the daily cron — so a submitted/edited recap shows up in the
     # sheet right away. Off by default (Girl Beer stays daily). LD = True.
     recap_export_on_submit = models.BooleanField(default=False)
+    # When True, the 24h-before and 3h-before AmbassadorJob reminder EMAILS
+    # (jobs/tasks.py send_ambassador_job_24h_reminder / _3h_reminder, fired by
+    # the ambassador-job-reminders cron) are suppressed for this tenant.
+    #
+    # Why this exists: the "Send Event Confirmation" tab sends its own 24h/3h
+    # emails off EventConfirmation, so a brand using it would have a BA getting
+    # two different-looking reminders for the same shift. This is the switch
+    # that says "this tenant's shift reminders come from the confirmation tab
+    # now". Off by default, so every other brand is unaffected.
+    #
+    # SCOPE IS EMAIL ONLY. The 15-min-before and 15-min-after-end reminders on
+    # that same cron are PUSH notifications with no equivalent in the
+    # confirmation tab, so they keep firing — suppressing those would quietly
+    # delete a reminder rather than replace it.
+    suppress_job_reminder_emails = models.BooleanField(default=False)
     # When set, the recap export ALSO rebuilds a computed "Summary" dashboard
     # tab (KPIs + per-ambassador/date/store/flavor/age) as plain values — no
     # fragile in-sheet formulas. Girl Beer = "Summary". See
