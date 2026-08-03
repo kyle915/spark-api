@@ -13,8 +13,13 @@ name: Daily recap reminders
 # the same night. 30-past avoids GHA on-the-hour cron jitter.
 
 on:
-  schedule:
-    - cron: "30 2 * * *"
+  # SCHEDULE PAUSED 2026-08-03 at Kyle's request, alongside the daily admin
+  # digest. Paused here rather than via `gh workflow disable` so the state is
+  # visible in the repo instead of an invisible UI toggle. Any
+  # `workflow_dispatch` below is untouched — this can still be fired by hand.
+  # To resume, un-comment the schedule block that follows.
+  # schedule:
+  # - cron: "30 2 * * *"
   workflow_dispatch:
     inputs:
       max_age_days:

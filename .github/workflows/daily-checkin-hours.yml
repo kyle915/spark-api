@@ -11,8 +11,13 @@ name: Daily check-in hours (10pm PT)
 # empty is one people stop opening.
 
 on:
-  schedule:
-    - cron: "0 5 * * *"
+  # SCHEDULE PAUSED 2026-08-03 at Kyle's request, alongside the daily admin
+  # digest. Paused here rather than via `gh workflow disable` so the state is
+  # visible in the repo instead of an invisible UI toggle. Any
+  # `workflow_dispatch` below is untouched — this can still be fired by hand.
+  # To resume, un-comment the schedule block that follows.
+  # schedule:
+  # - cron: "0 5 * * *"
   workflow_dispatch:
     inputs:
       date:
