@@ -1,0 +1,97 @@
+name: Set tenant job reminder emails
+
+# Dispatch-only. Fires `/internal/cron/set-tenant-job-reminder-emails` to turn a
+# tenant's LEGACY 24h/3h AmbassadorJob reminder EMAILS off (or back on).
+# See tenants/management/commands/set_tenant_job_reminder_emails.py.
+#
+# Why: the "Send Event Confirmation" tab sends its own 24h-before and 3h-before
+# emails off EventConfirmation. The older ambassador-job-reminders cron sends a
+# differently-shaped 24h/3h email off AmbassadorJob. A brand on both hands a BA
+# two reminders per shift that don't look like each other. This flag says "this
+# tenant's shift reminders come from the confirmation tab now".
+#
+# SCOPE IS EMAIL ONLY. The 15-min-before and 15-min-after-end PUSH reminders on
+# that same cron have no equivalent in the confirmation tab and KEEP FIRING —
+# suppressing them would delete a reminder rather than replace one.
+#
+# BEFORE FLIPPING A BRAND: make sure its shifts really are going through the
+# confirmation tab. A brand still booked through the jobs/marketplace path that
+# nobody sends confirmations for would lose its shift reminders entirely.
+#
+# Dry-run by default: leave `apply` false to see the current -> requested state
+# without writing. `on: true` REVERSES it (restores the legacy emails).
+#
+# No schedule — this is a one-off config flip, run by hand.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tenant_slug:
+        description: "Tenant slug, e.g. liquid-death (preferred)"
+        required: false
+        default: ""
+      tenant_name:
+        description: "Tenant name, e.g. Liquid Death (used if slug is blank)"
+        required: false
+        default: ""
+      apply:
+        description: "Actually write (false = report only)"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      restore:
+        description: "RESTORE the legacy emails instead of suppressing them"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+jobs:
+  set-tenant-job-reminder-emails:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire set-tenant-job-reminder-emails cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/set-tenant-job-reminder-emails
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          TENANT_SLUG: ${{ github.event.inputs.tenant_slug || '' }}
+          TENANT_NAME: ${{ github.event.inputs.tenant_name || '' }}
+          APPLY: ${{ github.event.inputs.apply || 'false' }}
+          RESTORE: ${{ github.event.inputs.restore || 'false' }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          if [ -z "$TENANT_SLUG" ] && [ -z "$TENANT_NAME" ]; then
+            echo "::error::Pass tenant_slug or tenant_name."
+            exit 1
+          fi
+
+          # --data-urlencode so a tenant name with spaces ("Liquid Death")
+          # survives the round trip without hand-rolled escaping.
+          ARGS=(--data-urlencode "apply=$APPLY" --data-urlencode "on=$RESTORE")
+          if [ -n "$TENANT_SLUG" ]; then
+            ARGS+=(--data-urlencode "tenant_slug=$TENANT_SLUG")
+          else
+            ARGS+=(--data-urlencode "tenant_name=$TENANT_NAME")
+          fi
+
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL" \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            "${ARGS[@]}")
+
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS — see body above."
+            exit 1
+          fi
