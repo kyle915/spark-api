@@ -33,10 +33,12 @@ ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 
 HUB_TITLE = "Liquid Death — BA Training"
 HUB_SUBTITLE = "Everything you need before your first shift"
+# No count in the copy on purpose — it silently went stale the first time a
+# resource was added, and the page already numbers the cards.
 HUB_INTRO = (
-    "Work through these four in order. The field guide and the video cover "
-    "how we run a sampling shift; the product guide and FAQ are the ones "
-    "you'll want open on your phone at the table."
+    "Work through these in order. The field guide and the video cover how we "
+    "run a sampling shift; the product guide and FAQ are the ones you'll want "
+    "open on your phone at the table."
 )
 
 # (order, kind, title, description, url, meta_label)
