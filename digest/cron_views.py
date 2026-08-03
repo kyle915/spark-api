@@ -4273,13 +4273,15 @@ class SetupFeelFreeCheckinView(View):
 class SetupLdRetailCheckinView(View):
     """GET/POST `/internal/cron/setup-ld-retail-checkin`.
 
-    Mints Liquid Death's retail-sampling check-in code, pins the event type
-    the link stamps (so BAs get the Retail Sampling form and not the Event
-    Activation one), and adds the 31-SKU "Products Sampled" multi-select to
-    their EXISTING template.
+    Makes Liquid Death's ONE standing check-in link serve both their programs:
+    mints/keeps the code, makes Retail Sampling and Event Activation selectable
+    on it (keeping the retail pin as the fallback for a request that names no
+    program), adds the 31-SKU "Products Sampled" multi-select to each program's
+    template, and seeds each program's own photo buckets.
 
-    Creates no template — LD already has one, and a second would split the
-    brand's recaps. Idempotent: re-running only refreshes the option list.
+    Creates no template — LD already has both, and a duplicate would split the
+    brand's recaps. Idempotent: re-running refreshes the option lists and
+    reuses the categories that already exist.
 
     Params: tenant, code, training_url, skip_products, apply (default DRY RUN).
     """

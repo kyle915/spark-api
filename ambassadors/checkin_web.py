@@ -53,7 +53,7 @@ def resolve_event_by_code(code: str):
     if not clean:
         return None
     event = (
-        Event.objects.select_related("tenant", "request", "retailer", "location", "state", "timezone")
+        Event.objects.select_related("tenant", "request", "retailer", "location", "state", "timezone", "event_type")
         .filter(walkup_code__iexact=clean)
         .first()
     )
@@ -188,13 +188,50 @@ def serialize_template(event) -> dict | None:
     }
 
 
+def photo_bucket_specs(tenant, event_type) -> list:
+    """The configured bucket list for one PROGRAM, straight off the tenant.
+
+    ``Tenant.checkin_photo_buckets`` holds either a flat list — one set of
+    buckets for the whole brand — or a mapping keyed by event type name, for a
+    brand whose programs want different shots. Liquid Death is the second kind:
+    a retail demo has a table and a shelf to photograph, an activation has
+    neither and does have parking to expense, so a single per-brand list can
+    only ever be right for one of them.
+
+    An unknown program falls back to an explicit ``"default"`` list if the brand
+    set one, otherwise to nothing. Nothing is the right answer over "some other
+    program's list" — a retail BA offered an "Expense Receipts (Parking)"
+    dropzone is worse off than one offered the plain grid.
+    """
+    configured = getattr(tenant, "checkin_photo_buckets", None)
+    if isinstance(configured, list):
+        return configured
+    if not isinstance(configured, dict):
+        return []
+    wanted = _normalize_category_name(getattr(event_type, "name", "") or "")
+    if wanted:
+        for key, value in configured.items():
+            if _normalize_category_name(str(key)) == wanted and isinstance(value, list):
+                return value
+    shared = configured.get("default")
+    return shared if isinstance(shared, list) else []
+
+
 def serialize_photo_buckets(event) -> list[dict]:
-    """The tenant's labelled photo buckets for the recap step, in order.
+    """The labelled photo buckets for THIS event's program, in order.
 
     One entry per dropzone the page should render: ``{id, name, helper, min}``,
     where ``id`` is the tenant's OWN ``FileRecapCategory`` PK — the value the
     page sends back per file so each photo is filed under the bucket the BA put
     it in, instead of everything landing in one category.
+
+    WHICH buckets comes from the event's own event type (see
+    ``photo_bucket_specs``), because that is what the BA chose on the standing
+    link and what decides their recap form. The category ROWS stay tenant-wide:
+    a recap belongs to one event and therefore one program, so two programs
+    sharing a "Consumer Sampling Pictures" row is never ambiguous in the PDF,
+    and splitting it per program would fragment the brand's photo history for
+    no reader's benefit.
 
     Empty for every tenant that hasn't opted in (``Tenant.checkin_photo_buckets``
     unset), which is what keeps the page on its single generic grid and the
@@ -204,8 +241,8 @@ def serialize_photo_buckets(event) -> list[dict]:
     whose photos quietly fall back to the generic pile.
     """
     tenant = getattr(event, "tenant", None)
-    configured = getattr(tenant, "checkin_photo_buckets", None) or []
-    if not isinstance(configured, list) or not configured:
+    configured = photo_bucket_specs(tenant, getattr(event, "event_type", None))
+    if not configured:
         return []
 
     from recaps.models import FileRecapCategory
@@ -403,7 +440,9 @@ def record_attendance(*, amb_event, kind: str, coordinates, actor):
     )
 
 
-def walkin_event_name(*, store_name: str, address: str, on_date) -> str:
+def walkin_event_name(
+    *, store_name: str, address: str, on_date, program: str = ""
+) -> str:
     """Name a walk-in event "M/D/YYYY - <address>".
 
     This string is the title on the recap, in pickers and in exports, so it has
@@ -416,9 +455,16 @@ def walkin_event_name(*, store_name: str, address: str, on_date) -> str:
     A store name, when given and not just the brand echoed back, is appended in
     parentheses rather than dropped — "8/1/2026 - 123 Main St (Kiosk 4)".
 
+    ``program`` is the event type's name, passed only for a brand that runs more
+    than one off the same link. Since the BA now chooses their program, one
+    address on one date can legitimately hold two events; without the program in
+    the title they'd be two identically-named rows in the recap list and nobody
+    could tell the retail demo from the activation. Appended as
+    "· Event Activation".
+
     Note this is display only. Find-or-create keys on
-    (tenant, normalized address, date), NOT on the name, so changing the format
-    can never fork or merge events.
+    (tenant, normalized address, date, event type), NOT on the name, so changing
+    the format can never fork or merge events.
     """
     addr = (address or "").strip()
     store = (store_name or "").strip()
@@ -431,6 +477,9 @@ def walkin_event_name(*, store_name: str, address: str, on_date) -> str:
     # Skip a store name that adds nothing: blank, or already inside the address.
     if store and normalize_place(store) not in normalize_place(base):
         base = f"{base} ({store})"
+    label = (program or "").strip()
+    if label and normalize_place(label) not in normalize_place(base):
+        base = f"{base} · {label}"
     return base[:255]
 
 
@@ -655,8 +704,8 @@ def submit_checkin_recap(
     #  - product samples must reference one of the event's own SKUs.
     expected_blob_prefix = f"recap_files/checkin/{event.uuid}/"
     allowed_product_ids = {str(p["id"]) for p in _event_products(event)}
-    #  - a per-file category must be one of the buckets THIS tenant actually
-    #    offers. Anything else (absent, stale, forged) falls back to the
+    #  - a per-file category must be one of the buckets THIS EVENT'S PROGRAM
+    #    actually offers. Anything else (absent, stale, forged) falls back to the
     #    "photos" sentinel below, so a tenant with no buckets configured —
     #    Total Wireless, Feel Free — behaves exactly as it did before buckets
     #    existed, and a forged id can at worst pick a different bucket of the
@@ -800,6 +849,11 @@ def submit_checkin_recap(
             # stale id from a page loaded before the buckets changed, a forged
             # one — falls back to the "1" sentinel and lands in the tenant's
             # "photos" category, the same bucket the app/web recap forms use.
+            #
+            # A stale id also covers a BA who switched PROGRAMS on a page they
+            # left open: the other program's bucket isn't in this event's
+            # allow-set, so the photo lands in the generic pile rather than in a
+            # bucket this program never offered.
             raw_category = (
                 file_input.get("category") or file_input.get("categoryId") or ""
             )
@@ -934,11 +988,19 @@ def build_public_context(event, ambassador=None) -> dict:
             else ""
         ),
         "template": serialize_template(event),
-        # Labelled photo dropzones for the recap step. Empty for every brand
-        # that hasn't opted in, which is the page's signal to keep its single
-        # generic "Photos" grid.
+        # Labelled photo dropzones for the recap step, for THIS event's program.
+        # Empty for every brand that hasn't opted in, which is the page's signal
+        # to keep its single generic "Photos" grid.
         "photoBuckets": serialize_photo_buckets(event),
     }
+    # Which program this event is — so a BA who picked one can see the page
+    # agreed with them before they start filling in a 15-field form.
+    etype = getattr(event, "event_type", None)
+    if etype is not None:
+        payload["event"]["eventType"] = {
+            "id": str(etype.id),
+            "name": etype.name or "",
+        }
     if ambassador is not None:
         payload["session"] = {
             "ambassadorName": (
@@ -1045,16 +1107,59 @@ def _event_date_utc(on_date):
     return datetime.combine(on_date, time(12, 0), tzinfo=_tz.utc)
 
 
+def selectable_event_types(tenant) -> list:
+    """The programs this brand's standing link offers, in id order.
+
+    See ``Tenant.checkin_event_types``. Empty or single-entry means there is
+    nothing to choose, so the page asks nothing — the caller is expected to
+    hide the selector rather than render a one-option dropdown.
+    """
+    if tenant is None:
+        return []
+    try:
+        return list(
+            tenant.checkin_event_types.filter(tenant_id=tenant.id).order_by("id")
+        )
+    except Exception:  # noqa: BLE001 — a broken config must never close the link
+        logger.exception(
+            "selectable event types failed tenant=%s", getattr(tenant, "id", None)
+        )
+        return []
+
+
+def resolve_checkin_event_type(tenant, raw_id):
+    """The EventType a BA picked, or ``None``.
+
+    Tenant-scoped on purpose: this arrives from a PUBLIC endpoint, and an
+    unscoped lookup would let anyone stamp another brand's event type onto this
+    brand's event — which is also how they'd pull another brand's recap
+    template through ``resolve_template_for_event``. Anything we can't match
+    inside the tenant is treated as "not answered" and falls back to
+    ``_default_event_type``, so a forged or stale id can never block a
+    check-in.
+    """
+    if tenant is None or raw_id in (None, ""):
+        return None
+    from events.models import EventType
+
+    try:
+        wanted = int(str(raw_id).strip())
+    except (TypeError, ValueError):
+        return None
+    return EventType.objects.filter(tenant_id=tenant.id, id=wanted).first()
+
+
 def _default_event_type(tenant):
-    """The event type the standing link stamps on the events it opens.
+    """The event type the standing link stamps when the BA didn't choose one.
 
     This decides WHICH RECAP FORM the BA gets: `resolve_template_for_event`
     matches the tenant's templates on `event_type_id` before anything else.
-    Prefer the tenant's explicit `checkin_event_type`; the lowest-id fallback
-    below is arbitrary and actively wrong for a brand running more than one
-    program. Liquid Death has both an "Event Activation" and a "Retail
-    Sampling" template — picking by id would hand a retail BA the activation
-    form, and the resulting recap wouldn't look broken enough to notice.
+    Prefer the tenant's explicit `checkin_event_type`, then the first of its
+    selectable programs; the lowest-id fallback at the end is arbitrary and
+    actively wrong for a brand running more than one program. Liquid Death has
+    both an "Event Activation" and a "Retail Sampling" template — picking by id
+    would hand a retail BA the activation form, and the resulting recap
+    wouldn't look broken enough to notice.
     """
     from events.models import EventType
 
@@ -1062,6 +1167,9 @@ def _default_event_type(tenant):
         pinned = getattr(tenant, "checkin_event_type", None)
         if pinned is not None:
             return pinned
+        offered = selectable_event_types(tenant)
+        if offered:
+            return offered[0]
         return (
             EventType.objects.filter(tenant=tenant)
             .order_by("id")
@@ -1072,12 +1180,25 @@ def _default_event_type(tenant):
 
 
 def find_or_create_walkin_event(
-    *, tenant, store_name: str, address: str, on_date, actor
+    *, tenant, store_name: str, address: str, on_date, actor, event_type=None
 ):
-    """The event for (tenant, address, date) — found if it exists, else created.
+    """The event for (tenant, address, date, event type) — found, else created.
 
     Returns ``(event, created)``. Wrapped in a transaction with a re-check so two
     BAs tapping "start" at the same second still land on one event.
+
+    THE EVENT TYPE IS PART OF THE KEY. It didn't used to be, because a brand's
+    standing link ran one program and every walk-in event it opened carried the
+    same type. Now that the BA picks their program, "same place, same day" is no
+    longer the same activation: a retail demo and an event activation at one
+    address on one date are two different jobs with two different recap forms.
+    Keying only on (tenant, address, date) would collapse them into a single
+    event carrying a single type, and the second BA would silently be handed the
+    first BA's form — a recap that submits cleanly against the wrong template,
+    which is the failure mode nobody notices.
+
+    Several BAs working the SAME program at the same place on the same day still
+    share one event, which is the behaviour this key exists to protect.
 
     ``actor`` is REQUIRED and must be a real user: ``Event.created_by`` is NOT
     NULL, and there is no system-user fallback in app code, so a default of
@@ -1099,12 +1220,28 @@ def find_or_create_walkin_event(
     lo = day_start.replace(hour=0, minute=0)
     hi = day_start.replace(hour=23, minute=59)
 
+    chosen_type = event_type or _default_event_type(tenant)
+    type_id = getattr(chosen_type, "id", None)
+    # Only NAME the program when the brand actually runs more than one. A
+    # single-program brand's event titles stay exactly as they read today.
+    offered = selectable_event_types(tenant)
+    program = (
+        (getattr(chosen_type, "name", "") or "").strip()
+        if chosen_type is not None and len(offered) > 1
+        else ""
+    )
+
     def _match():
         # Small set (one tenant, one day), so normalize in Python rather than
         # trying to express the same collapsing in SQL.
         for ev in Event.objects.filter(tenant=tenant, date__gte=lo, date__lte=hi):
-            if normalize_place(getattr(ev, "address", "")) == key:
-                return ev
+            if normalize_place(getattr(ev, "address", "")) != key:
+                continue
+            # An untyped check-in (brand has no event types at all) keeps the
+            # old address+date behaviour and joins whatever is there.
+            if type_id is not None and getattr(ev, "event_type_id", None) != type_id:
+                continue
+            return ev
         return None
 
     with transaction.atomic():
@@ -1113,7 +1250,10 @@ def find_or_create_walkin_event(
             return existing, False
 
         name = walkin_event_name(
-            store_name=store_name, address=address, on_date=on_date
+            store_name=store_name,
+            address=address,
+            on_date=on_date,
+            program=program,
         )
         # Carry the brand's mileage answer onto the event as it's born — a
         # walk-in event has no admin to tick the per-gig box, so without this
@@ -1125,7 +1265,7 @@ def find_or_create_walkin_event(
             name=name[:255],
             address=(address or "").strip(),
             date=day_start,
-            event_type=_default_event_type(tenant),
+            event_type=chosen_type,
             created_by=actor,
             updated_by=actor,
         )
@@ -1166,6 +1306,14 @@ def build_tenant_context(tenant) -> dict:
         # Roaming brands pick a market instead of typing a store address.
         "locationMode": tenant_location_mode(tenant),
         "markets": tenant_markets(tenant),
+        # The programs on offer. Fewer than two and the page must ask nothing —
+        # a one-option dropdown is a worse version of no dropdown, and brands
+        # with a single program (Total Wireless, Feel Free) have to look exactly
+        # as they do today.
+        "eventTypes": [
+            {"id": str(t.id), "name": t.name or ""}
+            for t in selectable_event_types(tenant)
+        ],
         # BA-facing reference (the brand's /training/<code> hub), if set.
         "trainingUrl": (getattr(tenant, "checkin_training_url", "") or "").strip(),
     }
@@ -1299,7 +1447,7 @@ def open_shift_event_for(*, ambassador, tenant):
             if not closed:
                 return (
                     Event.objects.select_related(
-                        "tenant", "request", "retailer", "location", "state", "timezone"
+                        "tenant", "request", "retailer", "location", "state", "timezone", "event_type"
                     )
                     .filter(id=event_id)
                     .first()

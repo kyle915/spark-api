@@ -1,29 +1,41 @@
-"""Stand up Liquid Death's retail-sampling check-in link.
+"""Make Liquid Death's ONE standing check-in link serve BOTH their programs.
 
-LD ALREADY HAS ITS RECAP FORM — template "Liquid Death-Retail Sampling"
-(event_type "Retail Sampling"). This command does NOT create one. Seeding a
-second would split the brand's recaps across two forms and halve every
-dashboard number; the Feel Free near-miss is written up in
-`setup_feel_free_checkin`. What's missing is only:
+(Name kept for its live wiring — the `/internal/cron/setup-ld-retail-checkin`
+endpoint and the "Setup LD retail check-in" workflow both point at it. It now
+covers Retail Sampling and Event Activation.)
+
+LD ALREADY HAS BOTH RECAP FORMS — "Liquid Death-Retail Sampling" (event type
+"Retail Sampling") and "Liquid Death-Event Activation" (event type "Event
+Activation"). This command creates NEITHER. Seeding a duplicate would split the
+brand's recaps across two forms and halve every dashboard number; the Feel Free
+near-miss is written up in `setup_feel_free_checkin`. What's missing is only:
 
 1. a standing ``LD-`` check-in code on the tenant,
-2. the event type that code stamps on the events it opens,
-3. a "Products Sampled" multi-select on the existing template, and
-4. the four labelled PHOTO BUCKETS the recap step uploads into.
+2. both event types made SELECTABLE on that one link, with the retail pin kept
+   as the fallback for a request that names no program,
+3. a "Products Sampled" multi-select on each program's existing template, and
+4. the labelled PHOTO BUCKETS the recap step uploads into, per program.
 
-(2) is the subtle one. LD runs two programs — Event Activation and Retail
-Sampling — and each has its own template. The walk-in path used to pick the
-tenant's LOWEST-ID event type, so a retail BA could be handed the 7-field
-activation form and nobody would notice, because the recap still submits
-fine. Pinning ``Tenant.checkin_event_type`` makes the link deterministic.
+(2) is why this exists. A second check-in link per program looks like the
+obvious answer and is a trap: ``Tenant.checkin_code`` is a single column, so
+minting the second silently repoints the first and every BA holding the old URL
+lands on the wrong program. Making the program a question on ONE link avoids
+that — the answer is stamped on the event, and `resolve_template_for_event`
+picks the form by ``event_type_id``, machinery that already worked. Before any
+of this the walk-in path used the tenant's LOWEST-ID event type, so a retail BA
+could be handed the 7-field activation form and nobody would notice, because
+the recap still submits fine.
 
 (4) is a pair of writes that have to agree: a ``FileRecapCategory`` per bucket
 (the rows the recap PDF groups by) and ``Tenant.checkin_photo_buckets`` (the
-ordered list the check-in page renders and the submit path validates against).
-Categories are matched case/spacing-insensitively before anything is created,
-so re-running never leaves LD with both a "Table setup" and a "Table Set Up"
-— two near-identical buckets in the recap PDF is the same failure mode as the
-receipt that once landed under "Table setup".
+per-program lists the check-in page renders and the submit path validates
+against). Categories are matched case/spacing-insensitively before anything is
+created, so re-running never leaves LD with both a "Table setup" and a "Table
+Set Up" — two near-identical buckets in the recap PDF is the same failure mode
+as the receipt that once landed under "Table setup". A bucket BOTH programs want
+("Consumer Sampling Pictures") is ONE row referenced by both lists: a recap
+belongs to one event and therefore one program, so a shared row is never
+ambiguous, and splitting it would fragment LD's photo history.
 
 Dry-run by default; ``--apply`` writes. Idempotent throughout.
 """
@@ -42,9 +54,6 @@ from tenants.models import Tenant
 CODE_PREFIX = "LD-"
 # No 0/O/1/I/L — the code gets read aloud and retyped off a text message.
 ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
-
-TEMPLATE_HINT = "retail sampling"
-EVENT_TYPE_HINT = "retail sampling"
 
 PRODUCTS_SECTION = "Products Sampled"
 PRODUCTS_FIELD = "Products Sampled"
@@ -113,24 +122,52 @@ def product_options() -> list[str]:
     return [f"{cat} — {name}" for cat, names in PRODUCTS for name in names]
 
 
-# The four labelled dropzones on the check-in recap, in render order. Each one
-# is a FileRecapCategory of LD's own, so the recap PDF can finally separate the
-# table shot from the shelf shot from the receipt instead of piling all of them
-# into "Sampling photos".
+# Kyle's shot list, per program, in render order. Each entry is one labelled
+# dropzone backed by a FileRecapCategory of LD's own, so the recap PDF can
+# finally separate the table shot from the shelf shot from the receipt instead
+# of piling all of them into "Sampling photos".
+#
+# The two lists differ because the required shots are a property of the PROGRAM,
+# not the brand: a retail demo has a table and a shelf to photograph, an
+# activation has neither and does have parking to expense. "Consumer Sampling
+# Pictures" appears in both and is ONE shared category row.
 #
 # `min` is a BA-facing nudge only — the page shows a live "3 of 8" so someone
 # who's short can see it — and never blocks submit. A BA in a store parking lot
 # on one bar has to be able to finish and clock out; failed photos already
 # don't block, and a soft target must not be stricter than a failed upload.
-PHOTO_BUCKETS: list[dict] = [
-    {"name": "Table Set Up"},
-    {"name": "Product Display"},
+CONSUMER_SAMPLING: dict = {
+    "name": "Consumer Sampling Pictures",
+    "helper": "please try to upload 8+",
+    "min": 8,
+}
+
+# The programs LD runs off one link. Each names the event type to match, the
+# existing template to extend, and its own dropzones.
+#
+# The FIRST entry is the default: what the link stamps when a request carries no
+# program (an old page, a curl). Retail is the higher-volume program, so a
+# fallback that lands there is the less wrong of the two.
+PROGRAMS: list[dict] = [
     {
-        "name": "Consumer Sampling Pictures",
-        "helper": "please try to upload 8+",
-        "min": 8,
+        "event_type": "retail sampling",
+        "template": "retail sampling",
+        "photos": [
+            {"name": "Table Set Up"},
+            {"name": "Product Display"},
+            CONSUMER_SAMPLING,
+            {"name": "Product Receipt"},
+        ],
     },
-    {"name": "Product Receipt"},
+    {
+        "event_type": "event activation",
+        "template": "event activation",
+        "photos": [
+            {"name": "Activation Set Up"},
+            CONSUMER_SAMPLING,
+            {"name": "Expense Receipts (Parking)"},
+        ],
+    },
 ]
 
 # Categories that back a positional upload sentinel ("1" = photos, "2" =
@@ -149,8 +186,9 @@ def _norm(name: str | None) -> str:
 
 class Command(BaseCommand):
     help = (
-        "Mint Liquid Death's retail-sampling check-in link and add the "
-        "Products Sampled picker to their existing template (dry-run default)."
+        "Make Liquid Death's standing check-in link serve both programs: "
+        "selectable event types, per-program photo buckets, and the Products "
+        "Sampled picker on each existing template (dry-run default)."
     )
 
     def add_arguments(self, parser):
@@ -216,70 +254,92 @@ class Command(BaseCommand):
         self.stdout.write(f"Tenant     : [{tenant.id}] {tenant.name!r}")
         self.stdout.write(f"Code (now) : {tenant.checkin_code or '(none)'}")
 
-        # -- the event type that decides which form a BA gets --------------
         etypes = list(EventType.objects.filter(tenant=tenant).order_by("id"))
         if not etypes:
             raise CommandError(f"Tenant {tenant.slug!r} has no event types.")
-        retail = next(
-            (e for e in etypes if EVENT_TYPE_HINT in (e.name or "").lower()), None
+        self.stdout.write(
+            "Event types: " + ", ".join(f"[{e.id}] {e.name}" for e in etypes)
         )
-        self.stdout.write("Event types: " + ", ".join(f"[{e.id}] {e.name}" for e in etypes))
-        if retail is None:
-            raise CommandError(
-                f"No event type on {tenant.slug!r} matches {EVENT_TYPE_HINT!r} — "
-                "refusing to guess which form the link should open."
-            )
-        self.stdout.write(f"  -> pinning checkin_event_type = [{retail.id}] {retail.name!r}")
-        if etypes[0].id != retail.id:
-            self.stdout.write(
-                self.style.WARNING(
-                    f"     (without this pin the link would have used "
-                    f"[{etypes[0].id}] {etypes[0].name!r} — the wrong form)"
-                )
-            )
+        templates = list(
+            CustomRecapTemplate.objects.filter(tenant=tenant).order_by("id")
+        )
+        self.stdout.write(
+            "Templates  : "
+            + (", ".join(f"[{t.id}] {t.name!r}" for t in templates) or "(none)")
+        )
 
-        # -- the template we ADD to (never create) -------------------------
-        template = None
-        if not skip_products:
-            templates = list(
-                CustomRecapTemplate.objects.filter(tenant=tenant).order_by("id")
-            )
-            self.stdout.write("Templates  : " + ", ".join(
-                f"[{t.id}] {t.name!r}" for t in templates
-            ) or "  (none)")
-            template = next(
-                (
-                    t
-                    for t in templates
-                    if t.event_type_id == retail.id
-                    or TEMPLATE_HINT in (t.name or "").lower()
-                ),
+        # -- resolve each program: its event type and its template ---------
+        from recaps.models import CustomField
+
+        plan: list[dict] = []
+        for spec in PROGRAMS:
+            etype = next(
+                (e for e in etypes if spec["event_type"] in (e.name or "").lower()),
                 None,
             )
-            if template is None:
+            if etype is None:
                 raise CommandError(
-                    "No existing retail-sampling template found. This command "
-                    "deliberately does NOT create one — check the list above."
+                    f"No event type on {tenant.slug!r} matches "
+                    f"{spec['event_type']!r} — refusing to guess which form the "
+                    "link should open for that program."
                 )
-            from recaps.models import CustomField
+            template = None
+            if not skip_products:
+                template = next(
+                    (
+                        t
+                        for t in templates
+                        if t.event_type_id == etype.id
+                        or spec["template"] in (t.name or "").lower()
+                    ),
+                    None,
+                )
+                if template is None:
+                    raise CommandError(
+                        f"No existing template for {etype.name!r}. This command "
+                        "deliberately does NOT create one — check the list above."
+                    )
+            plan.append(
+                {"type": etype, "template": template, "photos": spec["photos"]}
+            )
 
-            existing = {
-                (f.name or "").strip().lower()
-                for f in CustomField.objects.filter(custom_recap_template=template)
-            }
-            already = PRODUCTS_FIELD.strip().lower() in existing
+        self.stdout.write("")
+        self.stdout.write("Selectable on the link (in this order):")
+        for i, entry in enumerate(plan):
+            etype = entry["type"]
             self.stdout.write(
-                f"  -> template [{template.id}] {template.name!r} "
-                f"({len(existing)} fields); {PRODUCTS_FIELD!r} "
-                + ("ALREADY PRESENT — will update options" if already else "will be ADDED")
+                f"  [{etype.id}] {etype.name!r}"
+                + ("   ← pinned default when a request names no program" if i == 0 else "")
+            )
+            tpl = entry["template"]
+            if tpl is not None:
+                names = {
+                    (f.name or "").strip().lower()
+                    for f in CustomField.objects.filter(custom_recap_template=tpl)
+                }
+                state = (
+                    "ALREADY PRESENT — options refreshed"
+                    if PRODUCTS_FIELD.strip().lower() in names
+                    else "will be ADDED"
+                )
+                self.stdout.write(
+                    f"        form: [{tpl.id}] {tpl.name!r} ({len(names)} fields); "
+                    f"{PRODUCTS_FIELD!r} {state}"
+                )
+        if etypes[0].id != plan[0]["type"].id:
+            self.stdout.write(
+                self.style.WARNING(
+                    f"  (without the pin the fallback would be "
+                    f"[{etypes[0].id}] {etypes[0].name!r} — the wrong form)"
+                )
             )
 
         opts_list = product_options()
         self.stdout.write(f"Products   : {len(opts_list)} options")
 
-        # -- the four labelled photo buckets ------------------------------
-        bucket_plan = self._plan_photo_buckets(tenant)
-        self._report_live_buckets(tenant)
+        # -- the labelled photo buckets, per program -----------------------
+        bucket_plan = self._plan_photo_buckets(tenant, plan)
+        self._report_live_buckets(tenant, plan)
 
         if not apply:
             self.stdout.write("")
@@ -290,7 +350,9 @@ class Command(BaseCommand):
             return
 
         with transaction.atomic():
-            tenant.checkin_event_type = retail
+            # The pin stays: it's the fallback for a request that carries no
+            # program, and falling back to retail beats the lowest-id type.
+            tenant.checkin_event_type = plan[0]["type"]
             if forced_code:
                 tenant.checkin_code = forced_code
             elif not tenant.checkin_code:
@@ -298,7 +360,7 @@ class Command(BaseCommand):
             if training_url:
                 tenant.checkin_training_url = training_url
             tenant.checkin_photo_buckets = self._ensure_photo_buckets(
-                tenant, bucket_plan
+                tenant, plan, bucket_plan
             )
             tenant.save(
                 update_fields=[
@@ -308,9 +370,17 @@ class Command(BaseCommand):
                     "checkin_photo_buckets",
                 ]
             )
+            # `set`, not `add` — this list is the whole truth, so dropping a
+            # program from PROGRAMS also takes it off the link.
+            tenant.checkin_event_types.set([e["type"] for e in plan])
+            self.stdout.write(
+                "  selectable = "
+                + ", ".join(f"[{e['type'].id}] {e['type'].name}" for e in plan)
+            )
 
-            if template is not None:
-                self._ensure_products_field(template, tenant, opts_list)
+            for entry in plan:
+                if entry["template"] is not None:
+                    self._ensure_products_field(entry["template"], tenant, opts_list)
 
         self.stdout.write("")
         self.stdout.write(
@@ -322,16 +392,21 @@ class Command(BaseCommand):
         )
         if tenant.checkin_training_url:
             self.stdout.write(f"Training link : {tenant.checkin_training_url}")
-        self.stdout.write(
-            "Photo buckets : "
-            + " | ".join(b["name"] for b in tenant.checkin_photo_buckets or [])
-        )
+        for key, entries in (tenant.checkin_photo_buckets or {}).items():
+            self.stdout.write(
+                f"Photo buckets : {key} — "
+                + " | ".join(b["name"] for b in entries)
+            )
 
     # -- photo buckets -------------------------------------------------------
 
-    def _plan_photo_buckets(self, tenant) -> list[dict]:
-        """Report LD's CURRENT categories, then decide per bucket: reuse the
+    def _plan_photo_buckets(self, tenant, programs: list[dict]) -> dict:
+        """Report LD's CURRENT categories, then decide per bucket NAME: reuse the
         row that already plays this role, relabel it, or create a new one.
+
+        Keyed by normalized bucket name across ALL programs, so a bucket both
+        programs want ("Consumer Sampling Pictures") is planned — and created —
+        exactly once and both lists point at the same row.
 
         Reporting first is the point — categories are shared with the app and
         admin recap forms, and the failure mode here is silent (a second
@@ -346,7 +421,7 @@ class Command(BaseCommand):
         self.stdout.write("")
         self.stdout.write(
             f"Categories : {len(existing)} on this tenant today"
-            + ("" if existing else "  (none — all four will be created)")
+            + ("" if existing else "  (none — every bucket will be created)")
         )
         for cat in existing:
             protected = " [sentinel target — never renamed]" if any(
@@ -374,28 +449,42 @@ class Command(BaseCommand):
             )
 
         self.stdout.write("")
-        self.stdout.write(f"Buckets    : {len(PHOTO_BUCKETS)} on the check-in recap")
-        plan: list[dict] = []
-        for spec in PHOTO_BUCKETS:
-            name = spec["name"]
-            match = by_norm.get(_norm(name))
-            entry = {**spec, "category": match}
-            plan.append(entry)
-            hint = (
-                f" (min {spec['min']}, {spec['helper']!r})" if spec.get("min") else ""
+        plan: dict = {}
+        for program in programs:
+            self.stdout.write(
+                f"Buckets    : {program['type'].name} — {len(program['photos'])} "
+                "dropzone(s)"
             )
-            if match is None:
-                self.stdout.write(f"    + {name!r} — will be CREATED{hint}")
-            elif match.name == name:
-                self.stdout.write(f"    = {name!r} — [{match.id}] already correct{hint}")
-            else:
-                self.stdout.write(
-                    f"    ~ {name!r} — reusing [{match.id}] {match.name!r}, "
-                    f"relabelling in place{hint}"
+            for spec in program["photos"]:
+                name = spec["name"]
+                key = _norm(name)
+                hint = (
+                    f" (min {spec['min']}, {spec['helper']!r})"
+                    if spec.get("min")
+                    else ""
                 )
+                if key in plan:
+                    self.stdout.write(
+                        f"    ⇄ {name!r} — shared with an earlier program, "
+                        f"one row{hint}"
+                    )
+                    continue
+                match = by_norm.get(key)
+                plan[key] = {**spec, "category": match}
+                if match is None:
+                    self.stdout.write(f"    + {name!r} — will be CREATED{hint}")
+                elif match.name == name:
+                    self.stdout.write(
+                        f"    = {name!r} — [{match.id}] already correct{hint}"
+                    )
+                else:
+                    self.stdout.write(
+                        f"    ~ {name!r} — reusing [{match.id}] {match.name!r}, "
+                        f"relabelling in place{hint}"
+                    )
         return plan
 
-    def _report_live_buckets(self, tenant) -> None:
+    def _report_live_buckets(self, tenant, programs: list[dict]) -> None:
         """Read-only: what the check-in page will actually be served, and where
         recent check-in photos actually landed.
 
@@ -409,31 +498,39 @@ class Command(BaseCommand):
 
         Printing both here keeps verification read-only.
         """
-        from ambassadors.checkin_web import serialize_photo_buckets
+        from ambassadors.checkin_web import (
+            photo_bucket_specs,
+            serialize_photo_buckets,
+        )
         from recaps.models import CustomRecapFile
 
         self.stdout.write("")
-        # serialize_photo_buckets reads event.tenant, so a stand-in with the
-        # right tenant is all it needs — nothing is saved.
+        # serialize_photo_buckets reads event.tenant + event.event_type, so a
+        # stand-in carrying both is all it needs — nothing is saved. Per program,
+        # because that is the grain the page is served at.
         from events.models import Event
 
-        buckets = serialize_photo_buckets(Event(tenant=tenant))
-        self.stdout.write(f"Page will see: {len(buckets)} bucket(s)")
-        for b in buckets:
-            hint = f"  min {b['min']} — {b['helper']!r}" if b["min"] else ""
-            self.stdout.write(f"    id={b['id']:<4} {b['name']!r}{hint}")
-        missing = [
-            e.get("name")
-            for e in (tenant.checkin_photo_buckets or [])
-            if isinstance(e, dict)
-        ]
-        if len(buckets) != len(missing):
+        for program in programs:
+            etype = program["type"]
+            buckets = serialize_photo_buckets(Event(tenant=tenant, event_type=etype))
             self.stdout.write(
-                self.style.WARNING(
-                    f"    ! {len(missing) - len(buckets)} configured bucket(s) "
-                    "have no category row and are being SKIPPED"
-                )
+                f"Page will see ({etype.name}): {len(buckets)} bucket(s)"
             )
+            for b in buckets:
+                hint = f"  min {b['min']} — {b['helper']!r}" if b["min"] else ""
+                self.stdout.write(f"    id={b['id']:<4} {b['name']!r}{hint}")
+            configured = [
+                e.get("name")
+                for e in photo_bucket_specs(tenant, etype)
+                if isinstance(e, dict)
+            ]
+            if len(buckets) != len(configured):
+                self.stdout.write(
+                    self.style.WARNING(
+                        f"    ! {len(configured) - len(buckets)} configured "
+                        "bucket(s) have no category row and are being SKIPPED"
+                    )
+                )
 
         # Where check-in photos are actually landing. Scoped to the blob prefix
         # the check-in upload endpoint signs, so app/admin uploads can't muddy
@@ -462,26 +559,34 @@ class Command(BaseCommand):
         for name, count in sorted(tally.items(), key=lambda kv: -kv[1]):
             self.stdout.write(f"    {count:>4}  {name}")
 
-    def _ensure_photo_buckets(self, tenant, plan: list[dict]) -> list[dict]:
-        """Create/relabel each bucket's category and return the ordered config
-        for ``Tenant.checkin_photo_buckets``.
+    def _ensure_photo_buckets(
+        self, tenant, programs: list[dict], plan: dict
+    ) -> dict:
+        """Create/relabel each bucket's category once, then return the config
+        for ``Tenant.checkin_photo_buckets`` keyed by event type name.
 
         Relabelling in place (rather than creating a second row) keeps every
         photo already filed under the old label inside the bucket it belongs
         to — a fresh row would strand LD's history in an orphan category that
         still shows up in the recap PDF.
+
+        Keyed by event type NAME rather than id so the stored config is readable
+        and survives a re-seed in another environment, matching how bucket names
+        already resolve to categories.
         """
         from recaps.models import FileRecapCategory
 
         creator = getattr(tenant, "created_by", None)
-        config: list[dict] = []
-        for entry in plan:
+        # One pass over the deduped plan, so a bucket two programs share is
+        # written once and both lists resolve to the same row.
+        for entry in plan.values():
             name = entry["name"]
             cat = entry["category"]
             if cat is None:
                 cat = FileRecapCategory.objects.create(
                     name=name, tenant_id=tenant.id, created_by=creator
                 )
+                entry["category"] = cat
                 self.stdout.write(f"  created  [{cat.id}] {name!r}")
             elif cat.name != name:
                 old = cat.name
@@ -490,12 +595,18 @@ class Command(BaseCommand):
                 self.stdout.write(f"  relabelled [{cat.id}] {old!r} → {name!r}")
             else:
                 self.stdout.write(f"  kept     [{cat.id}] {name!r}")
-            item: dict = {"name": name}
-            if entry.get("helper"):
-                item["helper"] = entry["helper"]
-            if entry.get("min"):
-                item["min"] = int(entry["min"])
-            config.append(item)
+
+        config: dict = {}
+        for program in programs:
+            entries: list[dict] = []
+            for spec in program["photos"]:
+                item: dict = {"name": spec["name"]}
+                if spec.get("helper"):
+                    item["helper"] = spec["helper"]
+                if spec.get("min"):
+                    item["min"] = int(spec["min"])
+                entries.append(item)
+            config[program["type"].name] = entries
         return config
 
     # -- writes ------------------------------------------------------------

@@ -117,12 +117,42 @@ class Tenant(Asyncable, models.Model):
     # has both "Event Activation" and "Retail Sampling" templates, and a BA
     # doing a retail demo would silently be handed the activation form. String
     # reference because events.models imports from here.
+    #
+    # This is the DEFAULT — what the link stamps when the BA wasn't asked which
+    # program they're working, or answered with something we can't trust.
+    # `checkin_event_types` below is what they actually get to choose from.
     checkin_event_type = models.ForeignKey(
         "events.EventType",
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
         related_name="checkin_default_for_tenants",
+    )
+    # The programs a BA may pick between on this brand's standing link.
+    #
+    # Pinning ONE event type (above) is right for a brand running one program
+    # and wrong for Liquid Death: they run Retail Sampling AND Event Activation
+    # off the same crew, each with its own recap form and its own photo
+    # requirements. The obvious fix — a second check-in link per program — is a
+    # trap, because `checkin_code` is a single column: minting the second link
+    # silently repoints the first, and every BA already carrying the old URL
+    # lands on the wrong program.
+    #
+    # So the program becomes a QUESTION on the link instead of a property of
+    # the link. Two or more entries here and the BA is asked "what event are you
+    # working?"; their answer is stamped on the event, and
+    # `resolve_template_for_event` picks the matching template by
+    # `event_type_id` — machinery that already worked, now fed the right input.
+    # It also joins the walk-in event key, so a retail demo and an activation at
+    # one address on one day stay two events instead of collapsing into one
+    # (see checkin_web.find_or_create_walkin_event).
+    #
+    # Fewer than two entries means nothing to choose, so the page asks nothing
+    # and behaves exactly as it did before (Total Wireless, Feel Free).
+    checkin_event_types = models.ManyToManyField(
+        "events.EventType",
+        blank=True,
+        related_name="checkin_selectable_for_tenants",
     )
     # Optional BA-facing reference link surfaced on the check-in page (the
     # brand's /training/<code> hub). Shown before identify and again once
@@ -140,11 +170,32 @@ class Tenant(Asyncable, models.Model):
     #    {"name": "Consumer Sampling Pictures",
     #     "helper": "please try to upload 8+", "min": 8}]
     #
+    # A brand running MORE THAN ONE PROGRAM keys the lists by event type name
+    # instead, because the required shots are a property of the program, not the
+    # brand — a retail demo has a table and a shelf, an activation has neither
+    # and does have parking to expense:
+    #
+    #   {"Retail Sampling":  [{"name": "Table Set Up"}, ...],
+    #    "Event Activation": [{"name": "Activation Set Up"}, ...],
+    #    "default":          [...]}          # optional, for any other program
+    #
+    # Keys are matched against the event's own event type the same fuzzy way
+    # bucket names are matched to categories, so "Retail Sampling" and
+    # "retail-sampling" are one key. A program with no entry and no "default"
+    # gets the generic grid rather than another program's list — offering a
+    # retail BA an "Expense Receipts (Parking)" dropzone would be worse than
+    # offering nothing.
+    #
     # `name` is matched against the tenant's categories at render time (see
     # checkin_web.serialize_photo_buckets) so this stays readable and survives
     # a category being re-created; `helper` and `min` are BA-facing hints only
     # — a short bucket never blocks submit, because a BA in a parking lot on
     # one bar still has to be able to finish and clock out.
+    #
+    # Two programs that want the SAME bucket share one category row. A recap
+    # belongs to one event and therefore one program, so a shared row is never
+    # ambiguous in the PDF — and splitting it per program would fragment the
+    # brand's photo history for no reader's benefit.
     #
     # NULL/empty = off, which is every tenant by default: the page keeps its
     # single generic grid and uploads keep using the "photos" sentinel. Set

@@ -149,7 +149,7 @@ def _load_session(code: str, token: str):
             return None, _err("This session doesn't match the event.", status=401, code="mismatch")
     else:
         event = (
-            Event.objects.select_related("tenant", "request", "retailer", "location", "state", "timezone")
+            Event.objects.select_related("tenant", "request", "retailer", "location", "state", "timezone", "event_type")
             .filter(id=event_id)
             .first()
         )
@@ -333,10 +333,27 @@ def public_checkin_identify(request: HttpRequest, code: str) -> HttpResponse:
             return _err("Pick the date you worked (YYYY-MM-DD).")
         if abs((on_date - dj_tz.localdate()).days) > 14:
             return _err("That date is too far from today. Ask your lead to log it.")
+
+        # WHICH PROGRAM. A brand running more than one off the same link asks
+        # the BA ("Retail Sampling" or "Event Activation"), and the answer picks
+        # their recap form via the event's type. Resolved tenant-scoped, so a
+        # forged id can't reach another brand's type — or, through it, another
+        # brand's template. Anything unresolvable is treated as unanswered and
+        # falls through to the tenant's pinned default, which is exactly what
+        # the link did before the question existed.
+        chosen_type = checkin_web.resolve_checkin_event_type(
+            target, data.get("eventTypeId") or data.get("event_type_id")
+        )
+        if chosen_type is None and len(checkin_web.selectable_event_types(target)) > 1:
+            logger.info(
+                "checkin identify: no valid event type on a multi-program link "
+                "code=%s raw=%r — using the tenant default",
+                code, data.get("eventTypeId"),
+            )
         try:
             event, _new = checkin_web.find_or_create_walkin_event(
                 tenant=target, store_name=store_name, address=address,
-                on_date=on_date, actor=ambassador.user,
+                on_date=on_date, actor=ambassador.user, event_type=chosen_type,
             )
         except ValueError as exc:
             return _err(str(exc))
