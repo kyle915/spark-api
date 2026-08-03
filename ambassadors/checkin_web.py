@@ -680,6 +680,17 @@ def _email_admins_checkin_landed(event, ambassador) -> None:
 # --------------------------------------------------------------------------
 # Recap submission
 # --------------------------------------------------------------------------
+class RecapNeedsAPhoto(ValueError):
+    """A submission would leave a recap with no photo on it at all.
+
+    Distinct from the generic failure the view reports as a 500, because this
+    one is the BA's to fix and the page can say so. Raised inside the write
+    transaction, so a refused submission rolls all of itself back — including a
+    refused EDIT, whose field values are deleted and rewritten in that same
+    block and must not be left half-replaced.
+    """
+
+
 def submit_checkin_recap(
     *,
     event,
@@ -907,6 +918,26 @@ def submit_checkin_recap(
                     heic_conversion.ensure_jpg_sibling_blob(blob_name)
                 except Exception:  # noqa: BLE001 — display convenience only
                     logger.exception("checkin recap: HEIC sibling failed %s", blob_name)
+
+        # A recap with no photo on it is not a filed shift, it's an empty row in
+        # the client's report. The page has always refused to submit one; this
+        # closes the same door on the API, which until now would accept a
+        # hand-made request with `files: []` and file exactly that.
+        #
+        # Deliberately a check on what the recap ENDS UP with, not on what this
+        # request carried:
+        #  - a request whose blobs were ALL rejected above (out-of-scope prefix,
+        #    forged path) leaves no photo behind, and is the adversarial case
+        #    this is for — counting the request's `files` would wave it through;
+        #  - an EDIT of a recap that already has photos is a shift WITH photos,
+        #    so re-submitting it carrying none is legitimate. The page happens to
+        #    block that today (`photos` state starts empty, so a BA must re-add
+        #    one to edit), but that is a page-side quirk worth fixing, and this
+        #    must not be the thing standing in the way when it is.
+        if not rmodels.CustomRecapFile.objects.filter(custom_recap=recap).exists():
+            raise RecapNeedsAPhoto(
+                f"recap for event {event.uuid} would have no photo; refusing"
+            )
 
     _finalize_recap_offthread(recap.id)
     return recap

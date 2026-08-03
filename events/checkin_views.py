@@ -520,6 +520,17 @@ def public_checkin_recap(request: HttpRequest, code: str) -> HttpResponse:
             total_engagements=total_engagements,
             product_samples=product_samples if isinstance(product_samples, list) else [],
         )
+    except checkin_web.RecapNeedsAPhoto as exc:
+        # The BA's to fix, not a server fault — so a 400 carrying the SAME
+        # sentence the page uses for its own check, and whichever layer refuses,
+        # the BA reads one message. `warning`, not `exception`: a refused
+        # request is not a bug and shouldn't page anyone.
+        logger.warning("checkin recap refused, no photo, code=%s: %s", code, exc)
+        return _err(
+            "Add at least one photo of your event.",
+            status=400,
+            code="needs_photo",
+        )
     except Exception:  # noqa: BLE001
         logger.exception("checkin recap submit failed code=%s", code)
         return _err("Couldn't submit your recap. Try again.", status=500, code="server")
