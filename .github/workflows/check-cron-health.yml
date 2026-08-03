@@ -6,8 +6,25 @@ name: check-cron-health
 # passive System Health page.
 
 on:
-  schedule:
-    - cron: "20 */6 * * *"
+  # SCHEDULE PAUSED 2026-08-03 at Kyle's request, with the other digests.
+  #
+  # READ THIS BEFORE RESUMING OR DELETING: this is the watchdog, not a report.
+  # It is the only thing that notices when a scheduled job silently stops
+  # firing — the failure that went unseen for weeks and prompted building it.
+  # With it off, a dead cron produces no symptom at all until someone notices
+  # missing work downstream.
+  #
+  # It was paused while ACTIVELY FIRING about `activation-reminders` being 2.5h
+  # overdue against a <=1h cadence, last status 200. That is a real signal, not
+  # noise: a 200 with a stale timestamp means the endpoint is healthy and the
+  # SCHEDULER isn't running it. Worth ruling out a GitHub Actions spending cap
+  # (which stops every scheduled workflow at once) before assuming cron jitter.
+  #
+  # `workflow_dispatch` is intact — fire it by hand to get a one-off heartbeat
+  # check, or read System Health -> Automations in the app for the same data
+  # without email.
+  # schedule:
+  # - cron: "20 */6 * * *"
   workflow_dispatch:
     inputs:
       dry_run:
