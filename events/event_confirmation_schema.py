@@ -56,6 +56,17 @@ class EventConfirmationFormOptions:
     timezones: list[ConfirmationTimezoneOption]
     default_timezone_name: str
     from_email: str
+    # The tenant's own programs, so the Event Type field arrives filled in
+    # instead of asking an admin to retype "Retail Sampling" on every send.
+    # `default` is `Tenant.checkin_event_type` — already the column that decides
+    # which program a check-in stamps when nobody was asked, so it's the same
+    # answer the rest of the stack would give.
+    default_event_type_label: str
+    event_type_options: list[str]
+    # Only so the Event Type field can show the admin the sentence the email
+    # will actually build ("a Liquid Death retail sampling") — the brand half of
+    # `_what_label` in events.event_confirmations.
+    brand_name: str
     # False when the tenant has no checkin_code / training URL yet — the tab
     # warns rather than silently sending an email with a missing button.
     has_recap_link: bool
@@ -198,6 +209,52 @@ def _parse_local_instant(
     return datetime.combine(day, clock).replace(tzinfo=tz)
 
 
+def _event_type_choices(tenant) -> tuple[str, list[str]]:
+    """(default label, all offerable labels) for the tenant's Event Type field.
+
+    The default is ``Tenant.checkin_event_type`` — the column that already
+    decides which program a check-in stamps when the BA wasn't asked, so the tab
+    agrees with the check-in link rather than inventing its own idea of "usual".
+    For Liquid Death that's Retail Sampling, pinned by setup_ld_retail_checkin.
+
+    Options come from ``checkin_event_types`` (the programs a BA may pick
+    between) and fall back to every EventType on the tenant, so a brand that
+    never configured the check-in link still gets a useful list.
+    """
+    from events.models import EventType
+
+    default = (
+        getattr(getattr(tenant, "checkin_event_type", None), "name", "") or ""
+    ).strip()
+
+    labels: list[str] = []
+    seen: set[str] = set()
+
+    def _add(name) -> None:
+        name = (name or "").strip()
+        if name and name.lower() not in seen:
+            seen.add(name.lower())
+            labels.append(name)
+
+    _add(default)
+    try:
+        for name in tenant.checkin_event_types.values_list("name", flat=True):
+            _add(name)
+        if len(labels) <= 1:
+            for name in EventType.objects.filter(
+                tenant_id=tenant.id
+            ).values_list("name", flat=True):
+                _add(name)
+    except Exception:  # noqa: BLE001 — the form must render regardless
+        pass
+
+    # With exactly one program on the tenant, that IS the default even if
+    # checkin_event_type was never pinned.
+    if not default and len(labels) == 1:
+        default = labels[0]
+    return default, labels
+
+
 def _products_for_event(event) -> list[str]:
     """The SKUs already recorded on the shift's request, if any.
 
@@ -267,6 +324,7 @@ class EventConfirmationQueries:
                 )
                 for z in TimeZone.objects.order_by("name").distinct("name")
             ]
+            default_label, type_options = _event_type_choices(tenant)
             return EventConfirmationFormOptions(
                 product_options=product_options(),
                 recap_url=recap,
@@ -274,6 +332,9 @@ class EventConfirmationQueries:
                 timezones=zones,
                 default_timezone_name=DEFAULT_TIMEZONE_NAME,
                 from_email=CONFIRMATION_FROM_EMAIL,
+                default_event_type_label=default_label,
+                event_type_options=type_options,
+                brand_name=(tenant.name or "").strip(),
                 has_recap_link=bool(recap),
                 has_training_link=bool(training),
             )

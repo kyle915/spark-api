@@ -6560,6 +6560,88 @@ class SendEventConfirmationsView(View):
         return JsonResponse({"ok": True, "endpoint": "send-event-confirmations"})
 
 
+@method_decorator(csrf_exempt, name="dispatch")
+class SetTenantJobReminderEmailsView(View):
+    """POST `/internal/cron/set-tenant-job-reminder-emails`.
+
+    Fires `set_tenant_job_reminder_emails` — turns a tenant's legacy 24h/3h
+    AmbassadorJob reminder EMAILS off (or back on). A brand using the "Send
+    Event Confirmation" tab sends its own 24h/3h emails, so leaving the legacy
+    ones on means two differently-shaped reminders per shift.
+
+    Email only: the 15-min-before / 15-min-after-end PUSH reminders on that same
+    cron have no equivalent in the confirmation tab and keep firing.
+
+    Dispatch-only (no schedule). Params:
+      - tenant_slug or tenant_name (required)
+      - on: "1"/"true" — RESTORE the legacy emails instead of suppressing
+      - apply: "1"/"true" — actually write (otherwise reports only)
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _param(name: str) -> str:
+            return (
+                request.GET.get(name) or request.POST.get(name) or ""
+            ).strip()
+
+        def _bool(name: str) -> bool:
+            return _param(name).lower() in ("1", "true", "yes", "on")
+
+        slug = _param("tenant_slug")
+        name = _param("tenant_name")
+        if not slug and not name:
+            return JsonResponse(
+                {"ok": False, "error": "tenant_slug or tenant_name is required"},
+                status=400,
+            )
+
+        cmd_args: list[str] = []
+        if slug:
+            cmd_args.extend(["--tenant-slug", slug])
+        else:
+            cmd_args.extend(["--tenant-name", name])
+        if _bool("on"):
+            cmd_args.append("--on")
+        if _bool("apply"):
+            cmd_args.append("--apply")
+
+        out = io.StringIO()
+        try:
+            call_command("set_tenant_job_reminder_emails", *cmd_args, stdout=out)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("set-tenant-job-reminder-emails cron failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "log": out.getvalue(),
+                },
+                status=500,
+            )
+
+        return JsonResponse(
+            {
+                "ok": True,
+                "endpoint": "set-tenant-job-reminder-emails",
+                "applied": _bool("apply"),
+                "log": out.getvalue(),
+            }
+        )
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        return JsonResponse(
+            {"ok": True, "endpoint": "set-tenant-job-reminder-emails"}
+        )
+
+
 def _registered_views() -> dict[str, Any]:
     """Map URL path → view class. Lets `digest/urls.py` mount these
     without each one being re-exported explicitly.
@@ -6572,6 +6654,7 @@ def _registered_views() -> dict[str, Any]:
         "send-open-shift-alerts": SendOpenShiftAlertsView,
         "activation-reminders": SendActivationRemindersView,
         "send-event-confirmations": SendEventConfirmationsView,
+        "set-tenant-job-reminder-emails": SetTenantJobReminderEmailsView,
         "auto-clock-out": AutoClockOutStaleShiftsView,
         "no-show-alerts": SendNoShowAlertsView,
         "pre-shift-checklists": SendPreShiftChecklistsView,

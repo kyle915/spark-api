@@ -298,3 +298,75 @@ class TestEventConfirmationGraphQL(AmbassadorsGraphQLTestCase):
 
         future = djtz.now() + timedelta(days=400)
         assert await sync_to_async(due_reminders)(future) == []
+
+    @pytest.mark.asyncio
+    async def test_event_type_prefill_comes_from_the_tenants_default(self):
+        """The Event Type field arrives filled in from
+        Tenant.checkin_event_type — the same column that decides which program
+        a check-in stamps — so the tab can't disagree with the check-in link."""
+        from events.models import EventType
+
+        def _seed():
+            retail = EventType.objects.create(
+                name="Retail Sampling",
+                tenant=self.tenant,
+                created_by=self.system_user,
+            )
+            activation = EventType.objects.create(
+                name="Event Activation",
+                tenant=self.tenant,
+                created_by=self.system_user,
+            )
+            self.tenant.checkin_event_type = retail
+            self.tenant.save(update_fields=["checkin_event_type"])
+            self.tenant.checkin_event_types.set([retail, activation])
+
+        await sync_to_async(_seed)()
+
+        result = await self._run(
+            """
+            query O($tenantId: ID!) {
+              eventConfirmationFormOptions(tenantId: $tenantId) {
+                defaultEventTypeLabel
+                eventTypeOptions
+                brandName
+              }
+            }
+            """,
+            {"tenantId": str(self.tenant.id)},
+        )
+        assert result.errors is None, result.errors
+        data = result.data["eventConfirmationFormOptions"]
+        assert data["defaultEventTypeLabel"] == "Retail Sampling"
+        # Default first, so it's the obvious pick in the datalist.
+        assert data["eventTypeOptions"][0] == "Retail Sampling"
+        assert set(data["eventTypeOptions"]) == {
+            "Retail Sampling",
+            "Event Activation",
+        }
+        assert data["brandName"] == "Liquid Death"
+
+    @pytest.mark.asyncio
+    async def test_a_tenant_with_no_pinned_program_still_gets_options(self):
+        """One event type and no pin: that type IS the default."""
+        from events.models import EventType
+
+        await sync_to_async(EventType.objects.create)(
+            name="Field Sampling",
+            tenant=self.other_tenant,
+            created_by=self.system_user,
+        )
+        result = await self._run(
+            """
+            query O($tenantId: ID!) {
+              eventConfirmationFormOptions(tenantId: $tenantId) {
+                defaultEventTypeLabel
+                eventTypeOptions
+              }
+            }
+            """,
+            {"tenantId": str(self.other_tenant.id)},
+        )
+        data = result.data["eventConfirmationFormOptions"]
+        assert data["defaultEventTypeLabel"] == "Field Sampling"
+        assert data["eventTypeOptions"] == ["Field Sampling"]
