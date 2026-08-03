@@ -188,6 +188,70 @@ def serialize_template(event) -> dict | None:
     }
 
 
+def serialize_photo_buckets(event) -> list[dict]:
+    """The tenant's labelled photo buckets for the recap step, in order.
+
+    One entry per dropzone the page should render: ``{id, name, helper, min}``,
+    where ``id`` is the tenant's OWN ``FileRecapCategory`` PK — the value the
+    page sends back per file so each photo is filed under the bucket the BA put
+    it in, instead of everything landing in one category.
+
+    Empty for every tenant that hasn't opted in (``Tenant.checkin_photo_buckets``
+    unset), which is what keeps the page on its single generic grid and the
+    submit path on the "photos" sentinel. A configured bucket whose category
+    row is missing is SKIPPED rather than invented: a bucket the submit path
+    would refuse to accept must not be offered, or the BA fills a dropzone
+    whose photos quietly fall back to the generic pile.
+    """
+    tenant = getattr(event, "tenant", None)
+    configured = getattr(tenant, "checkin_photo_buckets", None) or []
+    if not isinstance(configured, list) or not configured:
+        return []
+
+    from recaps.models import FileRecapCategory
+
+    # One query, then match by name — case/spacing-insensitive so a category
+    # renamed "Table setup" -> "Table Set Up" (or back) keeps its bucket.
+    by_name: dict[str, object] = {}
+    for cat in FileRecapCategory.objects.filter(tenant_id=tenant.id).order_by("id"):
+        by_name.setdefault(_normalize_category_name(cat.name), cat)
+
+    buckets: list[dict] = []
+    for entry in configured:
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("name") or "").strip()
+        if not name:
+            continue
+        cat = by_name.get(_normalize_category_name(name))
+        if cat is None:
+            logger.warning(
+                "checkin photo buckets: tenant %s has no category %r; skipping",
+                getattr(tenant, "slug", None),
+                name,
+            )
+            continue
+        try:
+            minimum = int(entry.get("min") or 0)
+        except (TypeError, ValueError):
+            minimum = 0
+        buckets.append(
+            {
+                "id": str(cat.id),
+                "name": name,
+                "helper": str(entry.get("helper") or "").strip(),
+                "min": max(0, minimum),
+            }
+        )
+    return buckets
+
+
+def _normalize_category_name(name: str | None) -> str:
+    """Fold a category label to a comparison key: case and non-alphanumerics
+    dropped, so "Table Set Up", "Table setup" and "table-setup" are one bucket."""
+    return re.sub(r"[^a-z0-9]+", "", (name or "").lower())
+
+
 # --------------------------------------------------------------------------
 # Identity — get-or-create a lightweight (pending) walk-up BA
 # --------------------------------------------------------------------------
@@ -591,6 +655,13 @@ def submit_checkin_recap(
     #  - product samples must reference one of the event's own SKUs.
     expected_blob_prefix = f"recap_files/checkin/{event.uuid}/"
     allowed_product_ids = {str(p["id"]) for p in _event_products(event)}
+    #  - a per-file category must be one of the buckets THIS tenant actually
+    #    offers. Anything else (absent, stale, forged) falls back to the
+    #    "photos" sentinel below, so a tenant with no buckets configured —
+    #    Total Wireless, Feel Free — behaves exactly as it did before buckets
+    #    existed, and a forged id can at worst pick a different bucket of the
+    #    brand's own rather than reach another tenant's category.
+    allowed_category_ids = {b["id"] for b in serialize_photo_buckets(event)}
 
     with transaction.atomic():
         # Idempotent: a returning/edited check-in updates its existing recap for
@@ -689,6 +760,9 @@ def submit_checkin_recap(
             )
         )
         default_file_type = None
+        # Resolve each distinct category once, not once per photo — a BA files
+        # 20 shots across 4 buckets and the resolver hits the DB every call.
+        category_cache: dict[str, object] = {}
         for file_input in files or []:
             raw = file_input.get("blobName") or file_input.get("blob_name") or file_input.get("file")
             blob_name = extract_blob_name_from_url(raw)
@@ -711,13 +785,24 @@ def submit_checkin_recap(
                 # No file types configured at all — skip photos rather than 500.
                 logger.warning("checkin recap: no FileType available; skipping photo")
                 break
-            # Every check-in upload is a photo (the upload-URL endpoint only
-            # signs image content types), so file it under the tenant's "photos"
-            # category via the positional sentinel "1" — same bucket the app/web
-            # recap forms use, so the gallery groups them correctly.
-            file_recap_category = _resolve_file_recap_category(
-                "1", tenant_id=getattr(event, "tenant_id", None)
+            # Which bucket the BA dropped this photo into. Brands with labelled
+            # buckets configured send the category id per file; everyone else
+            # sends nothing and gets the positional sentinel "1" — the tenant's
+            # "photos" category, the same bucket the app/web recap forms use, so
+            # the gallery groups them correctly. The fallback also covers a
+            # stale id from a page loaded before the buckets changed: a photo
+            # lands in the generic pile rather than nowhere at all.
+            raw_category = (
+                file_input.get("category") or file_input.get("categoryId") or ""
             )
+            raw_category = str(raw_category).strip()
+            if raw_category not in allowed_category_ids:
+                raw_category = "1"
+            if raw_category not in category_cache:
+                category_cache[raw_category] = _resolve_file_recap_category(
+                    raw_category, tenant_id=getattr(event, "tenant_id", None)
+                )
+            file_recap_category = category_cache[raw_category]
             rmodels.CustomRecapFile.objects.create(
                 name=f"Web check-in photo for {name}",
                 url=blob_name,
@@ -831,6 +916,10 @@ def build_public_context(event, ambassador=None) -> dict:
             else ""
         ),
         "template": serialize_template(event),
+        # Labelled photo dropzones for the recap step. Empty for every brand
+        # that hasn't opted in, which is the page's signal to keep its single
+        # generic "Photos" grid.
+        "photoBuckets": serialize_photo_buckets(event),
     }
     if ambassador is not None:
         payload["session"] = {

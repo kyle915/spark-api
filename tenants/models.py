@@ -128,6 +128,28 @@ class Tenant(Asyncable, models.Model):
     # brand's /training/<code> hub). Shown before identify and again once
     # clocked in, because "what do I do again?" is a mid-shift question.
     checkin_training_url = models.CharField(max_length=500, blank=True, default="")
+    # Labelled photo BUCKETS on the check-in recap, in render order.
+    #
+    # The recap step ships ONE generic "Photos" grid, so everything a BA shoots
+    # — the table, the shelf, the consumers, the receipt — lands in a single
+    # FileRecapCategory and the recap PDF can't tell them apart. Brands that
+    # want them separated get a list here; each entry is one labelled dropzone
+    # backed by one of the tenant's OWN FileRecapCategory rows:
+    #
+    #   [{"name": "Table Set Up"},
+    #    {"name": "Consumer Sampling Pictures",
+    #     "helper": "please try to upload 8+", "min": 8}]
+    #
+    # `name` is matched against the tenant's categories at render time (see
+    # checkin_web.serialize_photo_buckets) so this stays readable and survives
+    # a category being re-created; `helper` and `min` are BA-facing hints only
+    # — a short bucket never blocks submit, because a BA in a parking lot on
+    # one bar still has to be able to finish and clock out.
+    #
+    # NULL/empty = off, which is every tenant by default: the page keeps its
+    # single generic grid and uploads keep using the "photos" sentinel. Set
+    # per-brand (Liquid Death: `setup_ld_retail_checkin`).
+    checkin_photo_buckets = models.JSONField(null=True, blank=True)
     # Per-tenant Google Sheet that mirrors the Master Tracker. Set by
     # admins via the front-end "Link Sheet" chip; the "Copy for Sheets"
     # TSV path expects this URL to live somewhere persistent. Storing

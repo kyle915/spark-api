@@ -7,8 +7,9 @@ dashboard number; the Feel Free near-miss is written up in
 `setup_feel_free_checkin`. What's missing is only:
 
 1. a standing ``LD-`` check-in code on the tenant,
-2. the event type that code stamps on the events it opens, and
-3. a "Products Sampled" multi-select on the existing template.
+2. the event type that code stamps on the events it opens,
+3. a "Products Sampled" multi-select on the existing template, and
+4. the four labelled PHOTO BUCKETS the recap step uploads into.
 
 (2) is the subtle one. LD runs two programs — Event Activation and Retail
 Sampling — and each has its own template. The walk-in path used to pick the
@@ -16,11 +17,20 @@ tenant's LOWEST-ID event type, so a retail BA could be handed the 7-field
 activation form and nobody would notice, because the recap still submits
 fine. Pinning ``Tenant.checkin_event_type`` makes the link deterministic.
 
+(4) is a pair of writes that have to agree: a ``FileRecapCategory`` per bucket
+(the rows the recap PDF groups by) and ``Tenant.checkin_photo_buckets`` (the
+ordered list the check-in page renders and the submit path validates against).
+Categories are matched case/spacing-insensitively before anything is created,
+so re-running never leaves LD with both a "Table setup" and a "Table Set Up"
+— two near-identical buckets in the recap PDF is the same failure mode as the
+receipt that once landed under "Table setup".
+
 Dry-run by default; ``--apply`` writes. Idempotent throughout.
 """
 
 from __future__ import annotations
 
+import re
 import secrets
 
 from django.core.management.base import BaseCommand, CommandError
@@ -101,6 +111,40 @@ PRODUCTS: list[tuple[str, list[str]]] = [
 def product_options() -> list[str]:
     """The 31 SKUs as ``"Category — Name"`` choice values."""
     return [f"{cat} — {name}" for cat, names in PRODUCTS for name in names]
+
+
+# The four labelled dropzones on the check-in recap, in render order. Each one
+# is a FileRecapCategory of LD's own, so the recap PDF can finally separate the
+# table shot from the shelf shot from the receipt instead of piling all of them
+# into "Sampling photos".
+#
+# `min` is a BA-facing nudge only — the page shows a live "3 of 8" so someone
+# who's short can see it — and never blocks submit. A BA in a store parking lot
+# on one bar has to be able to finish and clock out; failed photos already
+# don't block, and a soft target must not be stricter than a failed upload.
+PHOTO_BUCKETS: list[dict] = [
+    {"name": "Table Set Up"},
+    {"name": "Product Display"},
+    {
+        "name": "Consumer Sampling Pictures",
+        "helper": "please try to upload 8+",
+        "min": 8,
+    },
+    {"name": "Product Receipt"},
+]
+
+# Categories that back a positional upload sentinel ("1" = photos, "2" =
+# receipts, see recaps.mutations). A bucket must never absorb one of these by
+# renaming it: the sentinel resolves by NAME, so renaming "Sampling photos"
+# would make the fallback path create a fresh "Sampling photos" beside it and
+# split LD's photos across two rows. These names are matched, then left alone.
+SENTINEL_CATEGORY_NAMES = ("Sampling photos", "Receipts")
+
+
+def _norm(name: str | None) -> str:
+    """Fold a category label for comparison — case and punctuation dropped, so
+    "Table Set Up", "Table setup" and "table-setup" are recognised as one."""
+    return re.sub(r"[^a-z0-9]+", "", (name or "").lower())
 
 
 class Command(BaseCommand):
@@ -233,6 +277,9 @@ class Command(BaseCommand):
         opts_list = product_options()
         self.stdout.write(f"Products   : {len(opts_list)} options")
 
+        # -- the four labelled photo buckets ------------------------------
+        bucket_plan = self._plan_photo_buckets(tenant)
+
         if not apply:
             self.stdout.write("")
             for o in opts_list:
@@ -249,11 +296,15 @@ class Command(BaseCommand):
                 tenant.checkin_code = self._mint_code()
             if training_url:
                 tenant.checkin_training_url = training_url
+            tenant.checkin_photo_buckets = self._ensure_photo_buckets(
+                tenant, bucket_plan
+            )
             tenant.save(
                 update_fields=[
                     "checkin_event_type",
                     "checkin_code",
                     "checkin_training_url",
+                    "checkin_photo_buckets",
                 ]
             )
 
@@ -270,6 +321,114 @@ class Command(BaseCommand):
         )
         if tenant.checkin_training_url:
             self.stdout.write(f"Training link : {tenant.checkin_training_url}")
+        self.stdout.write(
+            "Photo buckets : "
+            + " | ".join(b["name"] for b in tenant.checkin_photo_buckets or [])
+        )
+
+    # -- photo buckets -------------------------------------------------------
+
+    def _plan_photo_buckets(self, tenant) -> list[dict]:
+        """Report LD's CURRENT categories, then decide per bucket: reuse the
+        row that already plays this role, relabel it, or create a new one.
+
+        Reporting first is the point — categories are shared with the app and
+        admin recap forms, and the failure mode here is silent (a second
+        near-identical bucket, or a rename that steals a sentinel's target), so
+        the dry run has to show what exists before anything is written.
+        """
+        from recaps.models import FileRecapCategory
+
+        existing = list(
+            FileRecapCategory.objects.filter(tenant_id=tenant.id).order_by("id")
+        )
+        self.stdout.write("")
+        self.stdout.write(
+            f"Categories : {len(existing)} on this tenant today"
+            + ("" if existing else "  (none — all four will be created)")
+        )
+        for cat in existing:
+            protected = " [sentinel target — never renamed]" if any(
+                _norm(cat.name) == _norm(n) for n in SENTINEL_CATEGORY_NAMES
+            ) else ""
+            self.stdout.write(f"    [{cat.id}] {cat.name!r}{protected}")
+
+        # Lowest id wins a tie, so a duplicate pair resolves to the older row
+        # (the one history is already filed against) rather than flip-flopping.
+        by_norm: dict[str, object] = {}
+        dupes: list = []
+        for cat in existing:
+            key = _norm(cat.name)
+            if key in by_norm:
+                dupes.append(cat)
+            else:
+                by_norm[key] = cat
+        for cat in dupes:
+            self.stdout.write(
+                self.style.WARNING(
+                    f"    ! [{cat.id}] {cat.name!r} duplicates "
+                    f"[{by_norm[_norm(cat.name)].id}] — leaving it alone; "
+                    "the older row keeps the bucket"
+                )
+            )
+
+        self.stdout.write("")
+        self.stdout.write(f"Buckets    : {len(PHOTO_BUCKETS)} on the check-in recap")
+        plan: list[dict] = []
+        for spec in PHOTO_BUCKETS:
+            name = spec["name"]
+            match = by_norm.get(_norm(name))
+            entry = {**spec, "category": match}
+            plan.append(entry)
+            hint = (
+                f" (min {spec['min']}, {spec['helper']!r})" if spec.get("min") else ""
+            )
+            if match is None:
+                self.stdout.write(f"    + {name!r} — will be CREATED{hint}")
+            elif match.name == name:
+                self.stdout.write(f"    = {name!r} — [{match.id}] already correct{hint}")
+            else:
+                self.stdout.write(
+                    f"    ~ {name!r} — reusing [{match.id}] {match.name!r}, "
+                    f"relabelling in place{hint}"
+                )
+        return plan
+
+    def _ensure_photo_buckets(self, tenant, plan: list[dict]) -> list[dict]:
+        """Create/relabel each bucket's category and return the ordered config
+        for ``Tenant.checkin_photo_buckets``.
+
+        Relabelling in place (rather than creating a second row) keeps every
+        photo already filed under the old label inside the bucket it belongs
+        to — a fresh row would strand LD's history in an orphan category that
+        still shows up in the recap PDF.
+        """
+        from recaps.models import FileRecapCategory
+
+        creator = getattr(tenant, "created_by", None)
+        config: list[dict] = []
+        for entry in plan:
+            name = entry["name"]
+            cat = entry["category"]
+            if cat is None:
+                cat = FileRecapCategory.objects.create(
+                    name=name, tenant_id=tenant.id, created_by=creator
+                )
+                self.stdout.write(f"  created  [{cat.id}] {name!r}")
+            elif cat.name != name:
+                old = cat.name
+                cat.name = name
+                cat.save(update_fields=["name", "updated_at"])
+                self.stdout.write(f"  relabelled [{cat.id}] {old!r} → {name!r}")
+            else:
+                self.stdout.write(f"  kept     [{cat.id}] {name!r}")
+            item: dict = {"name": name}
+            if entry.get("helper"):
+                item["helper"] = entry["helper"]
+            if entry.get("min"):
+                item["min"] = int(entry["min"])
+            config.append(item)
+        return config
 
     # -- writes ------------------------------------------------------------
 
