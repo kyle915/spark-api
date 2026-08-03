@@ -1274,3 +1274,218 @@ class PayrollApproval(models.Model):
             f"PayrollApproval amb={self.ambassador_id} "
             f"{self.period_start}->{self.period_end}"
         )
+
+
+class EventConfirmation(models.Model):
+    """One BA's event confirmation email — the durable record that drives
+    the booked / 24h-before / 3h-before sends.
+
+    WHY THIS EXISTS AS ITS OWN ROW rather than stamps on AmbassadorEvent
+    (which is how the activation reminder and recap nudge dedupe): the shifts
+    this covers are typed into the admin tab and generally DON'T exist in
+    Spark yet — there is no roster row to hang a stamp on. Deliberately we do
+    NOT mint an Event/AmbassadorEvent to get one either: creating a booking
+    fires the "New shift offered" push (events/signals.py), syncs Google
+    Calendar and lands in dashboard KPIs, so a tab whose only job is to send
+    an email would have three loud side effects. `event` /
+    `ambassador_event` are set only when an admin picked a shift that already
+    existed, purely as a back-reference.
+
+    TIME IS STORED AS AN INSTANT, NOT A WALL-CLOCK DATE. `settings.TIME_ZONE`
+    is UTC, so anything derived from `timezone.localdate()` flips a day early
+    at 5pm Pacific. `starts_at` is an aware datetime, so "24 hours before"
+    is plain instant arithmetic that is correct in every venue timezone; the
+    `timezone` FK exists only to RENDER that instant back as the BA's local
+    wall-clock ("08/01/2026", "1p - 4p"). The date and time the email shows
+    are always derived from `starts_at`/`ends_at`, never stored separately —
+    a stored label could drift from the instant the reminders fire on.
+    """
+
+    STAGE_BOOKED = "booked"
+    STAGE_T24 = "t24"
+    STAGE_T3 = "t3"
+    STAGE_CHOICES = [
+        (STAGE_BOOKED, "Booked"),
+        (STAGE_T24, "24 hours before"),
+        (STAGE_T3, "3 hours before"),
+    ]
+    # The two stages the wall-clock sweep is allowed to fire. "booked" is only
+    # ever sent by an admin pressing Send, so the sweep must never pick it up.
+    REMINDER_STAGES = (STAGE_T24, STAGE_T3)
+    # Hours before `starts_at` each reminder stage is due.
+    STAGE_LEAD_HOURS = {STAGE_T24: 24, STAGE_T3: 3}
+
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+
+    tenant = models.ForeignKey(
+        Tenant,
+        on_delete=models.RESTRICT,
+        related_name="event_confirmations",
+    )
+    # Back-references, set only when the shift already existed in Spark.
+    # SET_NULL so deleting a shift can never take the audit trail of an email
+    # that was genuinely sent with it.
+    event = models.ForeignKey(
+        "events.Event",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="confirmations",
+    )
+    ambassador_event = models.ForeignKey(
+        "ambassadors.AmbassadorEvent",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="confirmations",
+    )
+
+    ba_name = models.CharField(max_length=255)
+    # 320 = max addr length per RFC 3696 erratum (64 local + @ + 255 domain).
+    ba_email = models.EmailField(max_length=320)
+
+    store_name = models.CharField(max_length=255, blank=True, default="")
+    address = models.TextField(blank=True, default="")
+    # Eyebrow + body label ("Retail Sampling" → "scheduled for a Liquid Death
+    # retail sampling"). Plain text rather than an EventType FK so a typed
+    # one-off doesn't require the tenant to have that event type configured.
+    event_type_label = models.CharField(max_length=120, blank=True, default="")
+
+    starts_at = models.DateTimeField(db_index=True)
+    ends_at = models.DateTimeField(null=True, blank=True)
+    # THE IANA NAME IS THE SOURCE OF TRUTH for rendering, not the FK below.
+    # `TimeZone` is a lookup table that doesn't necessarily contain the zone an
+    # admin picked, and when the lookup missed, rendering silently fell back to
+    # the ops timezone — `starts_at` stayed correct, so the reminders fired on
+    # time, but the email printed the wrong hour to the BA (a 1pm Chicago shift
+    # read "11a - 2p"). Storing the name removes the dependency entirely.
+    timezone_name = models.CharField(max_length=64, blank=True, default="")
+    # Kept as an optional convenience for joins/reporting alongside
+    # Event.timezone. Never relied on for rendering.
+    timezone = models.ForeignKey(
+        TimeZone,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="event_confirmations",
+    )
+
+    # Selected SKUs as a list of the option strings offered by the picker
+    # (recaps...setup_ld_retail_checkin.product_options). Stored as chosen so
+    # the email reproduces the admin's selection even if the SKU list changes.
+    products = models.JSONField(default=list, blank=True)
+
+    # Whether the sweep may fire t24/t3 for this row. Opt-in per send (the tab
+    # defaults it ON): a confirmation an admin never sent stays silent, so a
+    # misbehaving sweep can't reach BAs nobody chose to email.
+    send_reminders = models.BooleanField(default=True)
+    # Set when an admin calls the shift off. A cancelled row is skipped by the
+    # sweep but kept, so the record of what was already sent survives.
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="event_confirmations_created",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            # The sweep's access path: due reminders for live rows.
+            models.Index(
+                fields=["send_reminders", "cancelled_at", "starts_at"],
+                name="ev_confirm_sweep_idx",
+            ),
+            models.Index(
+                fields=["tenant", "-starts_at"],
+                name="ev_confirm_tenant_idx",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"EventConfirmation {self.ba_email} @ {self.starts_at:%Y-%m-%d %H:%M}"
+
+    @property
+    def tzinfo(self):
+        """The venue's tzinfo for rendering, falling back to the ops timezone.
+
+        Prefers the stored IANA name over the FK — see `timezone_name`. The FK
+        is only consulted for rows written before that column existed.
+
+        `TimeZone.offset` is deliberately NEVER used: it's a single fixed
+        number, so a shift on the far side of a DST boundary would render an
+        hour off. An IANA name resolves the offset per-date.
+        """
+        from zoneinfo import ZoneInfo
+
+        for name in (
+            (self.timezone_name or "").strip(),
+            (getattr(self.timezone, "name", "") or "").strip(),
+        ):
+            if not name:
+                continue
+            try:
+                return ZoneInfo(name)
+            except Exception:  # noqa: BLE001 — unknown/typo'd IANA name
+                continue
+        return ZoneInfo("America/Los_Angeles")
+
+    def local_start(self):
+        return self.starts_at.astimezone(self.tzinfo) if self.starts_at else None
+
+    def local_end(self):
+        return self.ends_at.astimezone(self.tzinfo) if self.ends_at else None
+
+
+class EventConfirmationSend(models.Model):
+    """One (confirmation, stage) send attempt — the sweep's idempotency ledger.
+
+    The unique constraint on (confirmation, stage) is the real guarantee, not
+    the queryset filter: the sweep runs every 15 minutes, and two overlapping
+    runs (or a retried GitHub Actions job) would otherwise both pass the
+    "not yet sent" check and email the BA twice. The sweep claims a stage by
+    INSERTing this row first and only sends if the insert was its own, so the
+    database — not timing — decides who sends.
+
+    `sent_at` stays NULL until the driver returns, so a row that failed
+    mid-send is distinguishable from one that succeeded and can be retried up
+    to MAX_ATTEMPTS instead of being silently dropped.
+    """
+
+    MAX_ATTEMPTS = 3
+
+    id = models.BigAutoField(primary_key=True)
+    confirmation = models.ForeignKey(
+        EventConfirmation,
+        on_delete=models.CASCADE,
+        related_name="sends",
+    )
+    stage = models.CharField(
+        max_length=16, choices=EventConfirmation.STAGE_CHOICES, db_index=True
+    )
+    # Snapshot of where it actually went — the confirmation's ba_email can be
+    # corrected later, and then it no longer says who was emailed.
+    to_email = models.EmailField(max_length=320, blank=True, default="")
+
+    sent_at = models.DateTimeField(null=True, blank=True)
+    attempts = models.PositiveSmallIntegerField(default=0)
+    last_error = models.TextField(blank=True, default="")
+
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["confirmation", "stage"],
+                name="uq_event_confirmation_stage",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        state = "sent" if self.sent_at else f"unsent({self.attempts})"
+        return f"EventConfirmationSend {self.stage} {state}"

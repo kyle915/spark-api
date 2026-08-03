@@ -1,0 +1,145 @@
+{% extends "emails/base.html" %} {% block content %}
+{% comment %}
+Replicates the confirmation Ignite was sending LD BAs by hand (see the
+"Your Liquid Death Retail Sampling – Jewel Osco | 08/01/2026 | 1p - 4p"
+reference): eyebrow, greeting, intro whose tense changes per stage, one
+details card, recap CTA, text-us line. Two things the hand-sent version
+didn't have and Kyle asked for: the training-site review block, and the fact
+all three sends (booked / 24h / 3h) are the same email with a different intro
+— so the BA sees one consistent set of details, not three differently-shaped
+messages.
+
+Table-based + inline styles throughout because Outlook ignores <div> layout
+and strips <style>; that's the same reason every other template here looks
+like this.
+
+NOTE: use {% templatetag openblock %} comment {% templatetag closeblock %} for
+anything multi-line — Django's {% templatetag openbrace %}# ... #{% templatetag closebrace %}
+form is SINGLE-LINE ONLY, so a multi-line one renders its own text straight into
+the email body (and into the plain-text alternative, where it's very visible).
+{% endcomment %}
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+  <tr>
+    <td style="font-size: 16px; color: #444444; line-height: 1.6;">
+
+      {% if eyebrow %}
+        <p style="margin: 0 0 6px 0; font-size: 12px; font-weight: 700; letter-spacing: 1.2px; text-transform: uppercase; color: #8a8a8a;">
+          {{ eyebrow }}
+        </p>
+      {% endif %}
+
+      <p style="margin: 0 0 18px 0; font-size: 24px; font-weight: 700; color: #202036; line-height: 1.3;">
+        Hey {{ ba_first_name|default:"there" }}!
+      </p>
+
+      <p style="margin: 0 0 24px 0;">{{ intro_html|safe }}</p>
+
+      {% comment %}
+      Details card. Rendered as label/value rows rather than a bordered grid so
+      it reads the same on a phone in a store aisle as on desktop.
+      {% endcomment %}
+      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #f7f7f8; border: 1px solid #e4e4e7; border-radius: 8px; margin: 0 0 26px 0;">
+        <tr>
+          <td style="padding: 22px 24px;">
+
+            {% if event_title %}
+              <p style="margin: 0 0 16px 0; font-size: 15px; color: #202036;">
+                <strong style="color: #202036;">Event:</strong> {{ event_title }}
+              </p>
+            {% endif %}
+
+            <p style="margin: 0 0 8px 0; font-size: 15px;"><strong style="color: #202036;">Details:</strong></p>
+            <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="font-size: 15px; color: #444444;">
+              {% if date_label %}
+                <tr><td style="padding: 2px 0;">Date: {{ date_label }}</td></tr>
+              {% endif %}
+              {% if store_name %}
+                <tr><td style="padding: 2px 0;">Store Name: {{ store_name }}</td></tr>
+              {% endif %}
+              {% if address %}
+                <tr><td style="padding: 2px 0;">Address: {{ address }}</td></tr>
+              {% endif %}
+              {% if time_label %}
+                <tr><td style="padding: 2px 0;">Time: {{ time_label }}</td></tr>
+              {% endif %}
+              {% if products_label %}
+                <tr><td style="padding: 2px 0;">Product to sample: {{ products_label }}</td></tr>
+              {% endif %}
+            </table>
+
+            {% if address %}
+              <p style="margin: 16px 0 6px 0; font-size: 15px;"><strong style="color: #202036;">Location:</strong></p>
+              <p style="margin: 0; font-size: 15px; color: #444444;">
+                {% if map_url %}
+                  <a href="{{ map_url }}" style="color: #444444; text-decoration: underline;">{{ address }}</a>
+                {% else %}
+                  {{ address }}
+                {% endif %}
+              </p>
+            {% endif %}
+
+          </td>
+        </tr>
+      </table>
+
+      {% if training_url %}
+        {% comment %}
+        Kyle's addition to the hand-sent version. Placed BEFORE the recap CTA on
+        purpose: it's the thing to do before the shift, and the recap button is
+        the thing to do after, so this keeps them in the order the BA meets them.
+        {% endcomment %}
+        <p style="margin: 0 0 14px 0;">
+          <strong style="color: #202036;">Before your shift,</strong> please review the
+          BA Reference &amp; Training site — it covers setup, talking points and
+          everything you'll need on site.
+        </p>
+        <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin: 0 0 26px 0;">
+          <tr>
+            <td style="border: 1px solid #202036; border-radius: 6px;">
+              <a href="{{ training_url }}" style="display: inline-block; padding: 10px 22px; color: #202036; text-decoration: none; font-weight: 600; font-size: 15px;">
+                Review Training Site
+              </a>
+            </td>
+          </tr>
+        </table>
+      {% endif %}
+
+      {% if recap_url %}
+        <p style="margin: 0 0 20px 0;">
+          Before your demo, please review the event recap form using the link below.
+          Once your activation is complete, don't forget to submit your recap—this
+          ensures your payment is processed promptly.
+        </p>
+
+        <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin: 0 0 28px 0;">
+          <tr>
+            <td style="background-color: #101014; border-radius: 6px;">
+              <a href="{{ recap_url }}" style="display: inline-block; padding: 14px 30px; color: #ffffff; text-decoration: none; font-weight: 700; font-size: 15px;">
+                Open Recap Form
+              </a>
+            </td>
+          </tr>
+        </table>
+      {% endif %}
+
+      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="margin: 0 0 20px 0;">
+        <tr><td style="border-top: 1px solid #e4e4e7; font-size: 0; line-height: 0;">&nbsp;</td></tr>
+      </table>
+
+      {% if support_phone %}
+        <p style="margin: 0 0 22px 0; color: #666666; font-size: 15px;">
+          Have any questions about your shift or setup? Simply text us at
+          <a href="tel:{{ support_phone_href }}" style="color: #666666;">{{ support_phone }}</a>.
+        </p>
+      {% endif %}
+
+      <p style="margin: 0; font-size: 12px; font-weight: 700; color: #555555;">The Ignite Team</p>
+      <p style="margin: 2px 0 0 0; font-size: 12px; color: #555555;">Ignite Productions LLC</p>
+      <p style="margin: 2px 0 0 0; font-size: 12px; color: #555555;">
+        {{ from_address }}{% if support_phone %} | {{ support_phone }}{% endif %}
+      </p>
+
+    </td>
+  </tr>
+</table>
+{% endblock %}

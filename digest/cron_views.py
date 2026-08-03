@@ -6390,6 +6390,176 @@ class ListTenantsView(View):
         )
 
 
+@method_decorator(csrf_exempt, name="dispatch")
+class SendEventConfirmationsView(View):
+    """POST `/internal/cron/send-event-confirmations`.
+
+    Fires the `send_event_confirmations` command — the 24h-before and
+    3h-before re-sends of an event confirmation an admin already sent from the
+    "Send Event Confirmation" tab. The "booked" send is never swept; only an
+    admin pressing Send produces it.
+
+    There's no Redis/rqscheduler on Cloud Run, so the delayed re-sends can't be
+    scheduled jobs — this is the wall-clock sweep that replaces them, same
+    shape as activation-reminders / recap-nudges. Sends INLINE (no worker), and
+    is fully synchronous: `asyncio.run()` on this path deadlocks.
+
+    Idempotent per (confirmation, stage) via a unique-constrained
+    EventConfirmationSend row claimed before each send, so overlapping runs
+    can't double-email a BA.
+
+    Body / query params (all optional):
+      - dry_run: "1" / "true" / "yes" — report what would fire, send nothing.
+        RUN THIS FIRST after any change; the sweep emails real BAs.
+      - grace_hours: int (default 6) — how stale a due reminder may be before
+        it's dropped, so cron downtime can't fire a "24 hours before" email an
+        hour before the shift.
+      - tenant_id: int — restrict to a single tenant.
+      - max_sends: int (default 100) — hard cap for one run.
+      - preview_to: email — send ONE sample confirmation to this address and
+        do nothing else. Writes nothing, touches no real BA. This is how you
+        verify staffing@igniteproductions.co is a verified Resend sender, since
+        the API key only exists on Cloud Run.
+      - preview_stage: booked | t24 | t3 | all (default booked).
+      - preview_tenant_id: int — build the preview from a real tenant's name
+        and recap/training links.
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _bool(name: str, default: bool = False) -> bool:
+            raw = (request.GET.get(name) or request.POST.get(name) or "").lower()
+            if not raw:
+                return default
+            return raw in ("1", "true", "yes", "on")
+
+        def _int(name: str, default: int | None) -> int | None | str:
+            raw = request.GET.get(name) or request.POST.get(name)
+            if raw is None or raw == "":
+                return default
+            try:
+                return int(raw)
+            except ValueError:
+                return "invalid"
+
+        dry_run = _bool("dry_run", default=False)
+        grace_hours = _int("grace_hours", 6)
+        tenant_id = _int("tenant_id", None)
+        max_sends = _int("max_sends", 100)
+        for name, value in (
+            ("grace_hours", grace_hours),
+            ("tenant_id", tenant_id),
+            ("max_sends", max_sends),
+        ):
+            if value == "invalid":
+                return JsonResponse(
+                    {"ok": False, "error": f"{name} must be an integer"},
+                    status=400,
+                )
+
+        # Preview short-circuits everything else: one sample email out, no
+        # sweep, no writes.
+        preview_to = (
+            request.GET.get("preview_to") or request.POST.get("preview_to") or ""
+        ).strip()
+        if preview_to:
+            preview_stage = (
+                request.GET.get("preview_stage")
+                or request.POST.get("preview_stage")
+                or "booked"
+            )
+            if preview_stage not in ("booked", "t24", "t3", "all"):
+                return JsonResponse(
+                    {
+                        "ok": False,
+                        "error": "preview_stage must be booked, t24, t3 or all",
+                    },
+                    status=400,
+                )
+            preview_args = ["--preview-to", preview_to,
+                            "--preview-stage", preview_stage]
+            preview_tenant = _int("preview_tenant_id", None)
+            if preview_tenant == "invalid":
+                return JsonResponse(
+                    {"ok": False, "error": "preview_tenant_id must be an integer"},
+                    status=400,
+                )
+            if preview_tenant is not None:
+                preview_args.extend(["--preview-tenant-id", str(preview_tenant)])
+
+            out = io.StringIO()
+            try:
+                call_command("send_event_confirmations", *preview_args, stdout=out)
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("Event confirmation preview failed")
+                return JsonResponse(
+                    {
+                        "ok": False,
+                        "error": "command-failed",
+                        "detail": str(exc),
+                        "log": out.getvalue(),
+                    },
+                    status=500,
+                )
+            log = out.getvalue()
+            return JsonResponse(
+                {
+                    # A rejected Resend send is reported in the log, not raised —
+                    # so surface it as not-ok rather than a misleading 200 "ok".
+                    "ok": "FAILED" not in log,
+                    "endpoint": "send-event-confirmations",
+                    "preview_to": preview_to,
+                    "preview_stage": preview_stage,
+                    "log": log,
+                }
+            )
+
+        cmd_args: list[str] = [
+            "--grace-hours", str(grace_hours),
+            "--max-sends", str(max_sends),
+        ]
+        if dry_run:
+            cmd_args.append("--dry-run")
+        if tenant_id is not None:
+            cmd_args.extend(["--tenant-id", str(tenant_id)])
+
+        out = io.StringIO()
+        try:
+            call_command("send_event_confirmations", *cmd_args, stdout=out)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("Event confirmations cron failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "log": out.getvalue(),
+                },
+                status=500,
+            )
+
+        return JsonResponse(
+            {
+                "ok": True,
+                "endpoint": "send-event-confirmations",
+                "dry_run": dry_run,
+                "grace_hours": grace_hours,
+                "tenant_id": tenant_id,
+                "max_sends": max_sends,
+                "log": out.getvalue(),
+            }
+        )
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        return JsonResponse({"ok": True, "endpoint": "send-event-confirmations"})
+
+
 def _registered_views() -> dict[str, Any]:
     """Map URL path → view class. Lets `digest/urls.py` mount these
     without each one being re-exported explicitly.
@@ -6401,6 +6571,7 @@ def _registered_views() -> dict[str, Any]:
         "send-recap-reminders": SendRecapRemindersView,
         "send-open-shift-alerts": SendOpenShiftAlertsView,
         "activation-reminders": SendActivationRemindersView,
+        "send-event-confirmations": SendEventConfirmationsView,
         "auto-clock-out": AutoClockOutStaleShiftsView,
         "no-show-alerts": SendNoShowAlertsView,
         "pre-shift-checklists": SendPreShiftChecklistsView,
