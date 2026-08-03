@@ -24,9 +24,24 @@ name: Daily admin digest
 # is most loaded and on-hour crons routinely run 15-20 minutes late.
 
 on:
-  schedule:
-    # Daily at 15:30 UTC (08:30 PT / 07:30 PST)
-    - cron: "30 15 * * *"
+  # SCHEDULE PAUSED 2026-08-03 at Kyle's request — the daily mail had become
+  # noise rather than signal. It was reporting a real Liquid Death backlog
+  # (74 pending approvals, 1008 unfiled recaps, rows ~4640h / 193d old), but
+  # a number that large and that stale doesn't move day to day, so a daily
+  # send to seven people told nobody anything they could act on.
+  #
+  # Paused here rather than via `gh workflow disable` so the state is visible
+  # in the repo instead of being an invisible UI toggle. `workflow_dispatch`
+  # below is untouched — the digest can still be fired by hand from Actions.
+  #
+  # To resume: un-comment the two lines below. Worth first making the digest
+  # age out or collapse long-stale entries, so it reports what CHANGED rather
+  # than restating the same backlog every morning.
+  #
+  # schedule:
+  #   # Daily at 15:30 UTC (08:30 PT / 07:30 PST)
+  #   - cron: "30 15 * * *"
+
   # Manual trigger for ad-hoc fires (debug, re-send a missed day, etc.)
   workflow_dispatch:
     inputs:
