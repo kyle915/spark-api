@@ -474,8 +474,23 @@ def walkin_event_name(
         stamp = ""
 
     base = " - ".join(p for p in (stamp, addr) if p) or store or "Walk-in event"
-    # Skip a store name that adds nothing: blank, or already inside the address.
-    if store and normalize_place(store) not in normalize_place(base):
+    # Skip a store name that adds nothing. Two shapes:
+    #
+    #  * it's already inside the title (blank, or the address echoed back);
+    #  * it CONTAINS the address — which means it isn't a store name at all but a
+    #    previous event's whole title. `recent_checkin_locations` hands the page
+    #    {name: event.name, address: event.address}, and the store autocomplete
+    #    copies that `name` into the store-name box; event names are titles
+    #    ("8/2/2026 - 1155 E State St"), never store names. That produced
+    #    "8/2/2026 - 1155 E State St (8/2/2026 - 1155 E State St · Retail
+    #    Sampling)" the moment a second program made the two strings differ.
+    #    The page no longer copies such a name, and this refuses it regardless of
+    #    caller.
+    if (
+        store
+        and normalize_place(store) not in normalize_place(base)
+        and not (addr and normalize_place(addr) in normalize_place(store))
+    ):
         base = f"{base} ({store})"
     label = (program or "").strip()
     if label and normalize_place(label) not in normalize_place(base):

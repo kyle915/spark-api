@@ -168,6 +168,31 @@ class TestCheckinEventTypeSelector(AmbassadorsGraphQLTestCase):
         assert retail_ev.name == "8/1/2026 - 55 Elm St · Retail Sampling"
         assert act_ev.name == "8/1/2026 - 55 Elm St · Event Activation"
 
+    def test_a_previous_events_title_is_not_appended_as_a_store_name(self):
+        """Caught on the live link.
+
+        `recent_checkin_locations` hands the page {name: event.name, address:
+        event.address}, and the store autocomplete copied that `name` into the
+        store-name box. Event names are TITLES, never store names, so the second
+        program's event came out called "8/2/2026 - 2 Test Way (8/2/2026 - 2 Test
+        Way · Retail Sampling) · Event Activation". The page no longer copies
+        such a name; this refuses it whatever the caller sends.
+        """
+        out = checkin_web.walkin_event_name(
+            store_name="8/1/2026 - 123 Main St · Retail Sampling",
+            address="123 Main St",
+            on_date=self.on,
+            program="Event Activation",
+        )
+        assert out == "8/1/2026 - 123 Main St · Event Activation"
+
+    def test_a_real_store_name_still_rides_along(self):
+        out = checkin_web.walkin_event_name(
+            store_name="Kiosk 4", address="123 Main St", on_date=self.on,
+            program="Retail Sampling",
+        )
+        assert out == "8/1/2026 - 123 Main St (Kiosk 4) · Retail Sampling"
+
     def test_single_program_titles_are_unchanged(self):
         """A brand running one program keeps today's exact title — no stray
         program suffix appearing on Total Wireless."""
