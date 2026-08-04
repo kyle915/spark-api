@@ -263,6 +263,34 @@ def _notes_lines(payload: dict) -> list[tuple[str, str]]:
         for name, count in sorted(by_cat.items(), key=lambda kv: (-kv[1], kv[0])):
             rows.append((f"    {name}", str(count)))
 
+    over = diag.get("consumers_exceeding_engagements") or {}
+    if over.get("count"):
+        rows.append(("", ""))
+        rows.append(
+            (
+                "Data to verify",
+                f"{over['count']} recap(s) report more consumers sampled than total "
+                f"engagements, which is not possible — together overstating consumers "
+                f"by {over.get('total_excess', 0)}. Those rows are included as filed; "
+                f"treat their consumer counts as unconfirmed.",
+            )
+        )
+
+    review = (diag.get("unapproved_or_draft_rows") or 0) + (
+        diag.get("internal_demo_rows") or 0
+    )
+    if review:
+        rows.append(("", ""))
+        rows.append(
+            (
+                "Rows to review",
+                f"{diag.get('unapproved_or_draft_rows', 0)} unapproved/draft and "
+                f"{diag.get('internal_demo_rows', 0)} internal-demo row(s) are included. "
+                f"Nothing was dropped automatically — remove them if this workbook is "
+                f"going to a client as-is.",
+            )
+        )
+
     unlinkable = diag.get("files_without_a_link") or 0
     if unlinkable:
         rows.append(("", ""))

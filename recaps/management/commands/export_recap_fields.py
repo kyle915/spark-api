@@ -186,6 +186,36 @@ class Command(BaseCommand):
                 f"receipt-looking name (normal — phone camera filenames)"
             )
 
+        self.stdout.write(
+            f"\n  structured sampled quantities (samplesDistributed basis): "
+            f"{diag['structured_samples_total']:,}"
+        )
+
+        over = diag["consumers_exceeding_engagements"]
+        if over["count"]:
+            self.stdout.write(
+                self.style.WARNING(
+                    f"\n  ⚠ {over['count']} recap(s) report MORE consumers sampled than "
+                    f"total engagements — impossible; overstates consumers by "
+                    f"{over['total_excess']:,}:"
+                )
+            )
+            for r in over["rows"][:10]:
+                self.stdout.write(
+                    f"      eng={r['engagements']:>5} consumers={r['consumers_sampled']:>5} "
+                    f"(+{r['excess']}) {r['event'][:38]}  [{r['ba']}]"
+                )
+
+        if diag["unapproved_or_draft_rows"] or diag["internal_demo_rows"]:
+            self.stdout.write(
+                self.style.WARNING(
+                    f"\n  ⚠ rows to review before sharing with a client: "
+                    f"{diag['unapproved_or_draft_rows']} unapproved/draft, "
+                    f"{diag['internal_demo_rows']} internal-demo. "
+                    f"Included (nothing is auto-dropped) — decide deliberately."
+                )
+            )
+
         if diag["duplicate_field_names_collapsed"]:
             self.stdout.write(
                 self.style.WARNING(

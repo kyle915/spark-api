@@ -73,11 +73,80 @@ from utils.gcs import extract_blob_name_from_url, public_url
 # (and vice versa). Callers surface this before anyone builds a deck on it.
 _RECEIPT_HINT_RE = re.compile(r"receipt|invoice|expense|purchase", re.IGNORECASE)
 
+# Internal test/demo events seeded for staff walkthroughs (Girl Beer has seven,
+# named "H-E-B (Internal Demo) — <city>"). Counted so nobody ships them to the
+# client inside an otherwise-real workbook. Never filtered automatically —
+# "all the recap data" means all of it; this only makes them visible.
+_INTERNAL_DEMO_RE = re.compile(r"internal\s*demo|\(demo\)|test\s*event", re.IGNORECASE)
+
+
+def _consumers_sampled_value(recap):
+    """The recap's "consumers sampled" answer as an int, or None.
+
+    Uses the same ``_CONSUMERS_SAMPLED_RE`` vocabulary the KPI matchers use, so
+    this agrees with what the dashboard counts rather than inventing a second
+    definition. Free-text/prose answers that merely mention the phrase parse to
+    None via ``_leading_int`` and are skipped.
+    """
+    from recaps.report_service import _leading_int
+    from recaps.types import _CONSUMERS_SAMPLED_RE
+
+    for cfv in recap.custom_field_value.all():
+        cf = getattr(cfv, "custom_field", None)
+        name = (getattr(cf, "name", "") or "") if cf else ""
+        if not name or not _CONSUMERS_SAMPLED_RE.search(name):
+            continue
+        parsed = _leading_int(cfv.value)
+        if parsed is not None:
+            return int(parsed)
+    return None
+
 # Column groups, used by the renderer for banding/labels.
 GROUP_IDENTITY = "Identity"
+GROUP_STRUCTURED = "Samples & Sales"
 GROUP_FILES = "Files"
 
 UNCATEGORIZED_LABEL = "Uncategorized files"
+
+
+def _structured_samples(recap) -> tuple[str, str]:
+    """The recap's ``CustomRecapProductSample`` rows → (readable, total).
+
+    These are per-product sampled QUANTITIES and they are the primary source
+    for the dashboard's ``samplesDistributed`` KPI
+    (``report_service`` sums ``custom_recap_product_sample.quantity`` before
+    falling back to any "samples given" text field). They live in their own
+    table, NOT in ``CustomFieldValue``, so a template-field-only export would
+    silently omit them — which for Girl Beer would drop the entire basis of
+    that KPI. Rendered as "Hazy IPA x12; Lager x8".
+    """
+    parts, total = [], 0
+    for s in recap.custom_recap_product_sample.all():
+        qty = int(getattr(s, "quantity", 0) or 0)
+        total += qty
+        parts.append(f"{_name_of(getattr(s, 'product', None))} x{qty}")
+    return "; ".join(parts), (str(total) if parts else "")
+
+
+def _sale_performance(recap) -> str:
+    """The recap's ``CustomRecapSalePerformance`` rows → readable string.
+
+    Per-product price by type-of-good ("Hazy IPA - 6-Pack @ $12.99"), also a
+    separate table from ``CustomFieldValue``. Included for the same reason as
+    the sample rows: it's captured recap data, so "all the recap data" has to
+    carry it.
+    """
+    parts = []
+    for row in recap.custom_recap_sale_performance.all():
+        product = _name_of(getattr(row, "product", None))
+        good = _name_of(getattr(row, "type_of_good", None))
+        price = getattr(row, "price", None)
+        label = " - ".join(p for p in (product, good) if p)
+        if price is not None:
+            label = f"{label} @ ${price:.2f}" if label else f"${price:.2f}"
+        if label:
+            parts.append(label)
+    return "; ".join(parts)
 
 
 def _as_date(value):
@@ -255,6 +324,30 @@ def _field_columns(tenant) -> tuple[list[dict], dict]:
     }
 
 
+def _structured_columns() -> list[dict]:
+    """Columns for the two structured child tables (samples + sale rows)."""
+    return [
+        {
+            "key": "product_samples",
+            "header": "Products Sampled (qty)",
+            "group": GROUP_STRUCTURED,
+            "kind": "text",
+        },
+        {
+            "key": "product_samples_total",
+            "header": "Samples Distributed (total)",
+            "group": GROUP_STRUCTURED,
+            "kind": "text",
+        },
+        {
+            "key": "sale_performance",
+            "header": "Sale Performance (product / price)",
+            "group": GROUP_STRUCTURED,
+            "kind": "text",
+        },
+    ]
+
+
 def _file_columns(tenant, *, include_uncategorized: bool) -> list[dict]:
     """One column per tenant ``FileRecapCategory``, in the tenant's own
     creation order (which matches the seeded default order), then an
@@ -309,6 +402,11 @@ def _tenant_recaps(tenant):
         .prefetch_related(
             "custom_field_value__custom_field",
             "custom_recap_files__file_recap_category",
+            # The two structured child tables — sampled quantities and sale
+            # rows. Prefetched so N recaps stay a fixed query count.
+            "custom_recap_product_sample__product",
+            "custom_recap_sale_performance__product",
+            "custom_recap_sale_performance__type_of_good",
         )
         .order_by("id")
     )
@@ -374,7 +472,8 @@ def build_recap_field_export(
         kept.append((recap, ev_date, files))
 
     file_cols = _file_columns(tenant, include_uncategorized=needs_uncategorized)
-    columns = _identity_columns() + field_cols + file_cols
+    structured_cols = _structured_columns()
+    columns = _identity_columns() + field_cols + structured_cols + file_cols
 
     # ── Pass 2: rows.
     rows: list[list] = []
@@ -383,6 +482,10 @@ def build_recap_field_export(
     receipts_outside_receipt_categories: list[dict] = []
     non_receipts_in_receipt_categories: list[dict] = []
     non_empty = {c["key"]: 0 for c in columns}
+    consumers_over_engagements: list[dict] = []
+    drafts = 0
+    internal_demo_rows = 0
+    structured_sample_total = 0
 
     for recap, ev_date, files in kept:
         meta = _recap_meta(recap, infer_retailer)
@@ -420,6 +523,32 @@ def build_recap_field_export(
                 }
             )
 
+        samples_label, samples_total = _structured_samples(recap)
+        if samples_total:
+            structured_sample_total += int(samples_total)
+
+        # Data-quality check the submit-time guard does NOT make: a recap
+        # cannot sample more consumers than it engaged. Seven Girl Beer recaps
+        # do exactly that, overstating consumers by 107 — surfaced here so the
+        # number is questioned before it reaches a deck, not after.
+        engagements = getattr(recap, "total_engagements", None)
+        consumers = _consumers_sampled_value(recap)
+        if engagements is not None and consumers is not None and consumers > engagements:
+            consumers_over_engagements.append(
+                {
+                    "recap": str(recap.uuid),
+                    "event": _event_name(recap),
+                    "ba": meta.get("ba", ""),
+                    "engagements": engagements,
+                    "consumers_sampled": consumers,
+                    "excess": consumers - engagements,
+                }
+            )
+        if not getattr(recap, "approved", False):
+            drafts += 1
+        if _INTERNAL_DEMO_RE.search(_event_name(recap) or ""):
+            internal_demo_rows += 1
+
         identity = {
             "recap_uuid": str(recap.uuid),
             "recap_id": str(recap.id),
@@ -446,6 +575,12 @@ def build_recap_field_export(
                 value = identity[key]
             elif key.startswith("field::"):
                 value = by_name.get(key[len("field::"):], "")
+            elif key == "product_samples":
+                value = samples_label
+            elif key == "product_samples_total":
+                value = samples_total
+            elif key == "sale_performance":
+                value = _sale_performance(recap)
             elif key == "file_total":
                 value = len(files)
             elif key.startswith("filecat::"):
@@ -500,6 +635,21 @@ def build_recap_field_export(
             # without checking this — it's the difference between "no photos"
             # and "photos we failed to link".
             "files_without_a_link": unlinkable_files,
+            # Structured sampled quantities — the basis of the dashboard's
+            # samplesDistributed KPI. Compare the two before quoting either.
+            "structured_samples_total": structured_sample_total,
+            # Physically impossible rows: more consumers sampled than total
+            # engagements. The submit-time guard checks conversion >100% but
+            # not this, so it reaches reports unflagged.
+            "consumers_exceeding_engagements": {
+                "count": len(consumers_over_engagements),
+                "total_excess": sum(r["excess"] for r in consumers_over_engagements),
+                "rows": consumers_over_engagements[:20],
+            },
+            # Rows a client deliverable probably should not include. Reported,
+            # never auto-dropped.
+            "unapproved_or_draft_rows": drafts,
+            "internal_demo_rows": internal_demo_rows,
             "duplicate_field_names_collapsed": field_info["duplicate_field_names"],
             "field_columns_entirely_empty": empty_columns,
             "receipt_looking_files_outside_receipt_categories": {

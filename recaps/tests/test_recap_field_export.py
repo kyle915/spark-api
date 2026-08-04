@@ -406,7 +406,104 @@ class TestRecapFieldExport(AmbassadorsGraphQLTestCase):
         assert "Other Category" not in headers
         assert payload["meta"]["row_count"] == 1
 
+    # ── structured child tables ────────────────────────────────────────
+    def _product(self, name):
+        from events.models import Product, ProductType
+
+        ptype, _ = ProductType.objects.get_or_create(
+            name="Beer", tenant=self.tenant, defaults={"created_by": self.system_user}
+        )
+        return Product.objects.create(
+            name=name,
+            product_type=ptype,
+            tenant=self.tenant,
+            created_by=self.system_user,
+        )
+
+    def test_structured_product_samples_land_in_their_own_columns(self):
+        # These live in CustomRecapProductSample, NOT CustomFieldValue — they
+        # are the basis of the samplesDistributed KPI, so a template-field-only
+        # export would silently omit the whole thing.
+        recap = self._recap(1)
+        hazy, lager = self._product("Hazy IPA"), self._product("Lager")
+        recap_models.CustomRecapProductSample.objects.create(
+            product=hazy, custom_recap=recap, quantity=12, created_by=self.system_user
+        )
+        recap_models.CustomRecapProductSample.objects.create(
+            product=lager, custom_recap=recap, quantity=8, created_by=self.system_user
+        )
+
+        payload = build_recap_field_export(self.tenant, resolve_heic=False)
+        col = self._row_dict(payload)
+        assert "Hazy IPA x12" in col["Products Sampled (qty)"]
+        assert "Lager x8" in col["Products Sampled (qty)"]
+        assert col["Samples Distributed (total)"] == "20"
+        assert payload["diagnostics"]["structured_samples_total"] == 20
+
+    def test_recap_with_no_structured_samples_leaves_them_blank(self):
+        self._recap(1)
+        payload = build_recap_field_export(self.tenant, resolve_heic=False)
+        col = self._row_dict(payload)
+        assert col["Products Sampled (qty)"] == ""
+        # Blank, not "0" — nothing was recorded, which is not a measured zero.
+        assert col["Samples Distributed (total)"] == ""
+
     # ── diagnostics ────────────────────────────────────────────────────
+    def test_consumers_exceeding_engagements_is_flagged(self):
+        # The impossible case the submit-time guard misses: more consumers
+        # sampled than total engagements.
+        consumers_field = self._field(
+            "How many consumers sampled?", self.number_type, self.sales, 9
+        )
+        event = self.create_event(name="Overcount", tenant=self.tenant, date=self.now)
+        recap = recap_models.CustomRecap.objects.create(
+            name="over", approved=True, event=event, tenant=self.tenant,
+            custom_recap_template=self.template, total_engagements=22,
+            created_by=self.system_user, updated_by=self.system_user,
+        )
+        recap_models.CustomFieldValue.objects.create(
+            value="70", custom_recap=recap, custom_field=consumers_field,
+            created_by=self.system_user,
+        )
+
+        diag = build_recap_field_export(self.tenant, resolve_heic=False)["diagnostics"]
+        over = diag["consumers_exceeding_engagements"]
+        assert over["count"] == 1
+        assert over["total_excess"] == 48
+        assert over["rows"][0]["engagements"] == 22
+        assert over["rows"][0]["consumers_sampled"] == 70
+
+    def test_plausible_consumers_are_not_flagged(self):
+        consumers_field = self._field(
+            "How many consumers sampled?", self.number_type, self.sales, 9
+        )
+        event = self.create_event(name="Fine", tenant=self.tenant, date=self.now)
+        recap = recap_models.CustomRecap.objects.create(
+            name="fine", approved=True, event=event, tenant=self.tenant,
+            custom_recap_template=self.template, total_engagements=80,
+            created_by=self.system_user, updated_by=self.system_user,
+        )
+        recap_models.CustomFieldValue.objects.create(
+            value="60", custom_recap=recap, custom_field=consumers_field,
+            created_by=self.system_user,
+        )
+        diag = build_recap_field_export(self.tenant, resolve_heic=False)["diagnostics"]
+        assert diag["consumers_exceeding_engagements"]["count"] == 0
+
+    def test_draft_and_internal_demo_rows_are_counted_not_dropped(self):
+        self._recap(1, approved=True)
+        self._recap(2, approved=False)  # draft
+        demo_event = self.create_event(
+            name="H-E-B (Internal Demo) — Austin", tenant=self.tenant, date=self.now
+        )
+        self._recap(3, event=demo_event)
+
+        payload = build_recap_field_export(self.tenant, resolve_heic=False)
+        # All three still present — nothing is silently filtered.
+        assert payload["meta"]["row_count"] == 3
+        assert payload["diagnostics"]["unapproved_or_draft_rows"] == 1
+        assert payload["diagnostics"]["internal_demo_rows"] == 1
+
     def test_entirely_empty_field_columns_are_reported(self):
         self._recap(1, [(self.samples, "5")])
         payload = build_recap_field_export(self.tenant, resolve_heic=False)
