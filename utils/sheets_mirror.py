@@ -187,40 +187,82 @@ def _chunks(seq, n):
         yield seq[i : i + n]
 
 
-def _tz_offset_minutes(request) -> int:
-    """The request's timezone offset in minutes (e.g. PDT = -420). Used to
-    render date/time columns in the event's LOCAL time instead of raw UTC."""
-    tz = getattr(request, "timezone", None)
-    off = getattr(tz, "offset", None)
-    return int(off) if isinstance(off, (int, float)) else 0
+def _state_fallback_minutes(request, when) -> int:
+    """DST-aware offset for the activation's US state; 0 when unresolvable.
+
+    Mirrors the email's no-TimeZone fallback so a request with no tz row
+    renders LOCAL time in the sheet instead of raw UTC, exactly as it does
+    in the email. Best-effort by design — a Sheets miss must never break a
+    save, so any resolution failure degrades to 0 (unshifted)."""
+    try:
+        from events.envelopes import _state_code_for_tz_fallback
+        from utils.tz import offset_minutes_for_state
+
+        code = _state_code_for_tz_fallback(request)
+        if code:
+            return offset_minutes_for_state(code, at=when) or 0
+    except Exception:
+        pass
+    return 0
 
 
-def _local(dt, offset_min: int):
+def _tz_for_request(request):
+    """How to render this request's date/time columns in LOCAL wall-clock.
+
+    Returns ``(tz_row, fallback_offset_minutes)`` for ``_local``.
+
+    The tz row is applied DST-aware and PER VALUE via ``utils.tz`` — never by
+    adding ``TimeZone.offset``. That static field holds a single fixed offset
+    (Pacific is stored as -480), so adding it under-shifts by an hour for the
+    ~8 months of DST; and because ``date`` is stored at local midnight, the
+    extra hour rolls the calendar date back a day along with it. REQ-1615's
+    Aug 9 2026 12p–4p San Bernardino activation mirrored as Sat 8/8 11a–3p —
+    one day AND one hour early, from this one cause. The request-edit, GraphQL
+    and email paths were fixed for this (see utils/tz.py); this separate write
+    path never received it.
+
+    Per value, not one shared offset: ``date`` (local midnight) and
+    ``start_time`` can straddle a DST boundary on a transition day, where a
+    single offset taken from ``start_time`` would roll the date back again."""
+    tz_row = getattr(request, "timezone", None)
+    if tz_row is not None:
+        return tz_row, 0
+    when = getattr(request, "start_time", None) or getattr(request, "date", None)
+    return None, _state_fallback_minutes(request, when)
+
+
+def _local(dt, tz):
+    """Convert `dt` to local wall-clock. `tz` is the pair from `_tz_for_request`."""
     if dt is None:
         return None
     from datetime import timedelta
 
+    from utils.tz import apply_dst_aware_offset
+
+    tz_row, fallback_min = tz
     try:
-        return dt + timedelta(minutes=offset_min)
+        if tz_row is not None:
+            return apply_dst_aware_offset(dt, tz_row)
+        return (dt + timedelta(minutes=fallback_min)).replace(tzinfo=None)
     except Exception:
         return dt
 
 
-def _fmt_date(dt, offset_min: int) -> str:
+def _fmt_date(dt, tz) -> str:
     """Local calendar date, e.g. '5/30/2026'."""
-    loc = _local(dt, offset_min)
+    loc = _local(dt, tz)
     return loc.strftime("%-m/%-d/%Y") if loc else ""
 
 
-def _fmt_time(dt, offset_min: int) -> str:
+def _fmt_time(dt, tz) -> str:
     """Local clock time, e.g. '4:00 PM'."""
-    loc = _local(dt, offset_min)
+    loc = _local(dt, tz)
     return loc.strftime("%-I:%M %p") if loc else ""
 
 
-def _fmt_dt(dt, offset_min: int) -> str:
+def _fmt_dt(dt, tz) -> str:
     """Local date + time, e.g. '5/26/2026 8:18 PM'."""
-    loc = _local(dt, offset_min)
+    loc = _local(dt, tz)
     return loc.strftime("%-m/%-d/%Y %-I:%M %p") if loc else ""
 
 
@@ -235,7 +277,7 @@ def _row_for_request(request) -> list | None:
     def s(v):
         return "" if v is None else str(v)
 
-    off = _tz_offset_minutes(request)
+    tz = _tz_for_request(request)
 
     status_name = ""
     try:
@@ -300,18 +342,18 @@ def _row_for_request(request) -> list | None:
     return [
         s(request.uuid),
         status_name,
-        _fmt_date(getattr(request, "date", None), off),
+        _fmt_date(getattr(request, "date", None), tz),
         s(getattr(tenant, "name", "")),
         request_type_name,
         retailer_name,
         distributor_name,
         s(getattr(request, "address", "")),
         state_code,
-        _fmt_time(getattr(request, "start_time", None), off),
-        _fmt_time(getattr(request, "end_time", None), off),
+        _fmt_time(getattr(request, "start_time", None), tz),
+        _fmt_time(getattr(request, "end_time", None), tz),
         rmm_label,
-        _fmt_dt(getattr(request, "created_at", None), off),
-        _fmt_dt(getattr(request, "updated_at", None), off),
+        _fmt_dt(getattr(request, "created_at", None), tz),
+        _fmt_dt(getattr(request, "updated_at", None), tz),
         spark_link,
     ]
 
@@ -460,9 +502,9 @@ def _tenant_layout(tenant) -> str:
     return (getattr(tenant, "master_tracker_layout", "") or "").strip()
 
 
-def _fmt_time_ld(dt, offset_min: int) -> str:
+def _fmt_time_ld(dt, tz) -> str:
     """LD clock style: '10a', '1p', '5:30p' — minutes omitted on the hour."""
-    loc = _local(dt, offset_min)
+    loc = _local(dt, tz)
     if not loc:
         return ""
     suffix = "a" if loc.hour < 12 else "p"
@@ -470,8 +512,8 @@ def _fmt_time_ld(dt, offset_min: int) -> str:
     return f"{hour12}{suffix}" if loc.minute == 0 else f"{hour12}:{loc.strftime('%M')}{suffix}"
 
 
-def _weekday_ld(dt, offset_min: int) -> str:
-    loc = _local(dt, offset_min)
+def _weekday_ld(dt, tz) -> str:
+    loc = _local(dt, tz)
     return loc.strftime("%A") if loc else ""
 
 
@@ -499,7 +541,7 @@ def _ld_retail_row(request) -> list | None:
     tenant = getattr(request, "tenant", None)
     if tenant is None:
         return None
-    off = _tz_offset_minutes(request)
+    tz = _tz_for_request(request)
 
     def _attr(getter):
         try:
@@ -513,11 +555,11 @@ def _ld_retail_row(request) -> list | None:
     )
     return [
         state_code,                                               # A State
-        _weekday_ld(getattr(request, "date", None), off),         # B Date (weekday)
-        _fmt_date(getattr(request, "date", None), off),           # C Date
+        _weekday_ld(getattr(request, "date", None), tz),          # B Date (weekday)
+        _fmt_date(getattr(request, "date", None), tz),            # C Date
         store,                                                    # D Store Name
-        _fmt_time_ld(getattr(request, "start_time", None), off),  # E Start Time
-        _fmt_time_ld(getattr(request, "end_time", None), off),    # F End Time
+        _fmt_time_ld(getattr(request, "start_time", None), tz),   # E Start Time
+        _fmt_time_ld(getattr(request, "end_time", None), tz),     # F End Time
         getattr(request, "address", "") or "",                    # G Address
         getattr(request, "notes", "") or "",                      # H Notes
         _skus_for_request(request),                               # I SKUs to sample

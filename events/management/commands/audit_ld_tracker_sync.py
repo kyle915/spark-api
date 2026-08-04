@@ -58,6 +58,21 @@ def _wallclock(dt) -> str:
     return dt.strftime("%-I:%M%p").lower().replace("m", "") if dt else ""
 
 
+def _effective_offset_minutes(request) -> int:
+    """The offset the mirror actually applies to this request's start_time.
+
+    Reported for diagnosis only. It is DST-aware, so it will differ from the
+    static `TimeZone.offset` column by 60 during DST — that gap IS the bug
+    every pre-fix row on the sheet was written under."""
+    from utils.tz import offset_minutes_for
+
+    tz_row = getattr(request, "timezone", None)
+    when = getattr(request, "start_time", None) or getattr(request, "date", None)
+    if tz_row is None:
+        return 0
+    return offset_minutes_for(tz_row, at=when)
+
+
 class Command(BaseCommand):
     help = (
         "Read-only: audit whether a tenant's upcoming requests reached the LD "
@@ -165,7 +180,8 @@ class Command(BaseCommand):
         for r in requests:
             uuid = str(r.uuid)
             row_idx = present.get(uuid)
-            off = _sm._tz_offset_minutes(r)
+            tz = _sm._tz_for_request(r)
+            off = _effective_offset_minutes(r)
             tzname = getattr(getattr(r, "timezone", None), "name", "") or "(no tz)"
             status = getattr(getattr(r, "status", None), "slug", "") or "?"
             store = (
@@ -184,27 +200,39 @@ class Command(BaseCommand):
             srow = sheet_rows.get(row_idx, [])
             sheet_start = str(srow[4]).strip() if len(srow) > 4 else ""
             sheet_end = str(srow[5]).strip() if len(srow) > 5 else ""
-            # The mirror's contract is stored-UTC + the venue offset. Compare the
-            # sheet against THAT: a disagreement means the row was written under a
-            # different offset than the request carries now (a stale row), which
-            # is a different defect from the offset itself being wrong.
-            expect_start = _sm._fmt_time_ld(r.start_time, off)
-            expect_end = _sm._fmt_time_ld(r.end_time, off)
-            stale = sheet_start != expect_start or sheet_end != expect_end
+            # The mirror's contract is stored-UTC converted to the venue's LOCAL
+            # wall-clock, DST-aware (utils.tz). Compare the sheet against THAT: a
+            # disagreement means the row was written under a different offset than
+            # the request resolves to now — which is what every row mirrored before
+            # the DST fix looks like (an hour early, and a day early when the date
+            # column crossed local midnight with it).
+            expect_start = _sm._fmt_time_ld(r.start_time, tz)
+            expect_end = _sm._fmt_time_ld(r.end_time, tz)
+            # Column C too: the date rolls back a day whenever the wrong offset
+            # pushes local midnight over the boundary, so a row can be right on
+            # E/F and still be filed under the wrong day.
+            sheet_date = str(srow[2]).strip() if len(srow) > 2 else ""
+            expect_date = _sm._fmt_date(r.date, tz)
+            stale = (
+                sheet_start != expect_start
+                or sheet_end != expect_end
+                or sheet_date != expect_date
+            )
             if stale:
-                time_mismatch.append((r, f"{sheet_start}-{sheet_end}",
-                                      f"{expect_start}-{expect_end}"))
+                time_mismatch.append((r, f"{sheet_date} {sheet_start}-{sheet_end}",
+                                      f"{expect_date} {expect_start}-{expect_end}"))
             # A venue offset that disagrees with the address's state is the other
             # failure mode — the sheet then faithfully renders a wrong number.
             addr = (getattr(r, "address", "") or "").strip()
             self.stdout.write(
                 f"{head}  row {row_idx}\n"
                 f"     stored (UTC) : {_raw(r.start_time)} -> {_raw(r.end_time)}\n"
-                f"     venue tz     : {tzname} offset {off} min\n"
+                f"     venue tz     : {tzname} effective offset {off} min "
+                f"(static column: {getattr(getattr(r,'timezone',None),'offset','?')})\n"
                 f"     address      : {addr[:70]}\n"
-                f"     sheet E/F    : {sheet_start!r} / {sheet_end!r}\n"
-                f"     expected     : {expect_start!r} / {expect_end!r}  "
-                f"(stored UTC + {off} min)"
+                f"     sheet C/E/F  : {sheet_date!r} / {sheet_start!r} / {sheet_end!r}\n"
+                f"     expected     : {expect_date!r} / {expect_start!r} / "
+                f"{expect_end!r}  (stored UTC -> venue local, DST-aware)"
                 + ("  <-- SHEET IS STALE" if stale else "  ok")
             )
 
