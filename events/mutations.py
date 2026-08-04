@@ -885,22 +885,25 @@ class EventMutations:
                 _assigned, _state_code, _routed = await sync_to_async(
                     route_request_sync
                 )(request)
-                if _routed:
-                    # route_request_sync persists via .update() (no
-                    # post_save), so re-sync the sheet once with the final
-                    # state + RMM and refresh the request for the response.
-                    request = await sync_to_async(
-                        models.Request.objects.select_related(
-                            "tenant",
-                            "timezone",
-                            "request_type",
-                            "retailer__location__state",
-                            "distributor__location__state",
-                            "state",
-                            "rmm_asigned",
-                        ).get
-                    )(id=request.id)
-                    await sync_to_async(upsert_request_row)(request)
+                # route_request_sync persists via .update() (no post_save), so
+                # re-sync the sheet with the final state + RMM and refresh the
+                # request for the response. Done UNCONDITIONALLY rather than
+                # `if _routed:` — changed=False just means routing stamped
+                # nothing, which is precisely when the row is most likely to be
+                # missing, and gating on it left those requests relying solely
+                # on the post_save mirror (which swallows its own failures).
+                request = await sync_to_async(
+                    models.Request.objects.select_related(
+                        "tenant",
+                        "timezone",
+                        "request_type",
+                        "retailer__location__state",
+                        "distributor__location__state",
+                        "state",
+                        "rmm_asigned",
+                    ).get
+                )(id=request.id)
+                await sync_to_async(upsert_request_row)(request)
             except Exception:
                 logger.warning(
                     "internal RMM routing failed for request=%s",
@@ -2551,18 +2554,29 @@ class PublicRequestMutations:
                 _a, _c, _routed = await sync_to_async(route_request_sync)(
                     request_with_relations
                 )
-                if _routed:
-                    request_with_relations = await sync_to_async(
-                        models.Request.objects.select_related(
-                            "tenant", "timezone", "request_type",
-                            "retailer__location__state",
-                            "distributor__location__state",
-                            "state", "rmm_asigned",
-                        ).get
-                    )(id=request_with_relations.id)
-                    from utils.sheets_mirror import upsert_request_row
+                # Re-sync UNCONDITIONALLY — not only when routing changed a
+                # field. `route_request_sync` reports changed=False whenever it
+                # stamps nothing, which is exactly the case for a request whose
+                # state never resolved. Gating the re-sync on it meant those
+                # requests got no second attempt and depended entirely on the
+                # post_save mirror — whose failure `upsert_request_row` swallows
+                # into a warning only readable via gcloud. Liquid Death's
+                # REQ-1581/1582/1583/1589/1515 all sat off MASTER_Tracker until
+                # an RMM hand-typed them, at which point the reconciler treats
+                # the hand-typed row as a twin and suppresses Spark's row for
+                # good. An unconditional retry here costs one Sheets round-trip
+                # on a path that already does several.
+                request_with_relations = await sync_to_async(
+                    models.Request.objects.select_related(
+                        "tenant", "timezone", "request_type",
+                        "retailer__location__state",
+                        "distributor__location__state",
+                        "state", "rmm_asigned",
+                    ).get
+                )(id=request_with_relations.id)
+                from utils.sheets_mirror import upsert_request_row
 
-                    await sync_to_async(upsert_request_row)(request_with_relations)
+                await sync_to_async(upsert_request_row)(request_with_relations)
             except Exception:
                 logger.warning(
                     "external-form state stamp failed for request=%s",
