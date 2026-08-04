@@ -3592,6 +3592,97 @@ class DumpFieldSamplingView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class DumpRecapFieldsView(View):
+    """GET/POST `/internal/cron/dump-recap-fields`.
+
+    READ-ONLY: the FIELD-LEVEL recap export for one tenant — one row per recap,
+    every captured custom field as its own column, plus a public URL for every
+    attached photo and receipt grouped by `FileRecapCategory`.
+
+    The counterpart to `campaign-to-date`, which returns per-Request KPI
+    *aggregates* and carries no `CustomFieldValue` rows, so it can't be widened
+    into "every answer a BA typed". Tenant-generic: columns come from whatever
+    `CustomRecapTemplate`(s) the tenant owns.
+
+    Fires `export_recap_fields --json`; the payload between the
+    RECAPFIELDS_JSON markers is returned under `data`. The response is LARGE
+    (one row per recap × every field, plus every file URL) — the paired GitHub
+    Action uploads it as an artifact and renders the XLSX from it rather than
+    printing it to the log.
+
+    Params (query or POST):
+      - tenant: id / request-url-name / name (required)
+      - start / end: YYYY-MM-DD inclusive, scoped by EVENT date (optional)
+      - dry_run: "1"/"true"/"yes" — return the report log only, no payload
+      - no_heic_resolve: "1"/"true"/"yes" — skip HEIC→JPG sibling lookups
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _param(name: str) -> str:
+            return (request.GET.get(name) or request.POST.get(name) or "").strip()
+
+        def _flag(name: str) -> bool:
+            return _param(name).lower() in ("1", "true", "yes", "on")
+
+        tenant = _param("tenant")
+        if not tenant:
+            return JsonResponse(
+                {"ok": False, "error": "tenant-required (id / name / url-name)"},
+                status=400,
+            )
+
+        kwargs: dict = {"tenant": tenant}
+        for name in ("start", "end"):
+            if _param(name):
+                kwargs[name] = _param(name)
+        dry_run = _flag("dry_run")
+        if dry_run:
+            kwargs["dry_run"] = True
+        else:
+            kwargs["as_json"] = True
+        if _flag("no_heic_resolve"):
+            kwargs["no_heic_resolve"] = True
+
+        out = io.StringIO()
+        try:
+            call_command("export_recap_fields", stdout=out, **kwargs)
+            raw = out.getvalue()
+            data = None
+            if not dry_run:
+                blob = raw.split("RECAPFIELDS_JSON_START", 1)[1].split(
+                    "RECAPFIELDS_JSON_END", 1
+                )[0]
+                data = json.loads(blob)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("export_recap_fields cron failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "report": out.getvalue(),
+                },
+                status=500,
+            )
+
+        # The human summary (row/column counts, category-sanity warnings) is
+        # small enough to keep in the response so a log carries it even when
+        # the payload itself goes to an artifact.
+        report = raw.split("RECAPFIELDS_JSON_START", 1)[0].strip()
+        return JsonResponse({"ok": True, "report": report, "data": data})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class ExportRecapsToSheetView(View):
     """POST `/internal/cron/export-recaps-to-sheet`.
 
@@ -6754,6 +6845,7 @@ def _registered_views() -> dict[str, Any]:
         "import-demo-recaps": ImportDemoRecapsView,
         "audit-client-submissions": AuditClientSubmissionsView,
         "dump-field-sampling": DumpFieldSamplingView,
+        "dump-recap-fields": DumpRecapFieldsView,
         "export-recaps-to-sheet": ExportRecapsToSheetView,
         "export-ld-summary": ExportLdSummaryView,
         "export-girlbeer-summary": ExportGirlbeerSummaryView,
