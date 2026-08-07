@@ -44,6 +44,16 @@ on:
         default: "false"
         type: choice
         options: ["false", "true"]
+      prefix:
+        description: "Brand prefix for a NEW code, e.g. BD -> BD-XXXXXX. Blank = FF- (set this for any brand that isn't Feel Free; the code is permanent)"
+        required: false
+        default: ""
+      pin_event_type:
+        description: "Also pin Tenant.checkin_event_type to the resolved event type (stops the walk-in path guessing)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
       apply:
         description: "Actually write (read the dry run first)"
         required: false
@@ -65,6 +75,8 @@ jobs:
           ADD_PHOTO_FIELD: ${{ github.event.inputs.add_photo_field }}
           LOCATION_MODE: ${{ github.event.inputs.location_mode }}
           CODE_ONLY: ${{ github.event.inputs.code_only }}
+          PREFIX: ${{ github.event.inputs.prefix }}
+          PIN_EVENT_TYPE: ${{ github.event.inputs.pin_event_type }}
           APPLY: ${{ github.event.inputs.apply }}
         run: |
           if [ -z "$CRON_SECRET" ]; then
@@ -80,6 +92,8 @@ jobs:
             --data-urlencode "add_photo_field=$ADD_PHOTO_FIELD" \
             --data-urlencode "location_mode=$LOCATION_MODE" \
             --data-urlencode "code_only=$CODE_ONLY" \
+            --data-urlencode "prefix=$PREFIX" \
+            --data-urlencode "pin_event_type=$PIN_EVENT_TYPE" \
             --data-urlencode "apply=$APPLY")
           echo "HTTP $STATUS"
           cat /tmp/cron-response.json
