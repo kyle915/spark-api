@@ -4328,7 +4328,7 @@ class SetupFeelFreeCheckinView(View):
         kwargs: dict = {}
         for key in (
             "tenant", "template_name", "event_type", "location_mode",
-            "add_photo_field", "photo_section",
+            "add_photo_field", "photo_section", "prefix",
         ):
             val = request.GET.get(key) or request.POST.get(key)
             if val:
@@ -4340,6 +4340,13 @@ class SetupFeelFreeCheckinView(View):
         co = (request.GET.get("code_only") or request.POST.get("code_only") or "").lower()
         if co in ("1", "true", "yes", "on"):
             kwargs["code_only"] = True
+        pet = (
+            request.GET.get("pin_event_type")
+            or request.POST.get("pin_event_type")
+            or ""
+        ).lower()
+        if pet in ("1", "true", "yes", "on"):
+            kwargs["pin_event_type"] = True
 
         out = io.StringIO()
         try:
