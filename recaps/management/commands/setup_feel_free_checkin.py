@@ -173,6 +173,30 @@ class Command(BaseCommand):
             ),
         )
         parser.add_argument(
+            "--prefix",
+            dest="prefix",
+            default="",
+            help=(
+                "brand prefix for a NEWLY minted code, e.g. 'BD' -> BD-XXXXXX. "
+                f"Blank keeps this command's default ({CODE_PREFIX!r}). Set it "
+                "whenever you point this at a brand that isn't Feel Free — the "
+                "code is permanent, and an FF- link on another brand misleads "
+                "every BA who reads it."
+            ),
+        )
+        parser.add_argument(
+            "--pin-event-type",
+            dest="pin_event_type",
+            action="store_true",
+            help=(
+                "also pin Tenant.checkin_event_type to the resolved event type. "
+                "Without it the walk-in path stamps the tenant's LOWEST-ID "
+                "event type, which is arbitrary — harmless while a brand has "
+                "one template (the sole-template fallback still finds the right "
+                "form) but it mislabels the event for reporting."
+            ),
+        )
+        parser.add_argument(
             "--apply",
             action="store_true",
             help="actually write (omit for a dry-run that changes nothing).",
@@ -343,6 +367,9 @@ class Command(BaseCommand):
                 tenant, creator, opts["add_photo_field"], opts["photo_section"], apply
             )
 
+        if opts.get("pin_event_type"):
+            self._pin_event_type(tenant, event_type, apply)
+
         if opts.get("code_only"):
             self.stdout.write(
                 self.style.WARNING(
@@ -350,7 +377,7 @@ class Command(BaseCommand):
                     "link resolves the brand's existing form by itself."
                 )
             )
-            self._checkin_code(tenant, apply)
+            self._checkin_code(tenant, apply, opts.get("prefix"))
             return
 
         ft_cache: dict = {}
@@ -459,7 +486,7 @@ class Command(BaseCommand):
         else:
             _run()
 
-        self._checkin_code(tenant, apply)
+        self._checkin_code(tenant, apply, opts.get("prefix"))
 
     def _add_photo_field(
         self, tenant, creator, field_name: str, section_name: str, apply: bool
@@ -568,16 +595,59 @@ class Command(BaseCommand):
 
     # ---- standing check-in link -----------------------------------------
 
-    def _checkin_code(self, tenant, apply: bool) -> None:
+    def _pin_event_type(self, tenant, event_type, apply: bool) -> None:
+        """Pin Tenant.checkin_event_type so the walk-in path stops guessing.
+
+        `_default_event_type` otherwise falls back to the tenant's lowest-id
+        EventType, which is arbitrary. With a single template the right form
+        still resolves (the sole-template fallback), but the event carries a
+        wrong type into every report that groups by it.
+        """
+        if event_type is None:
+            return
+        current = getattr(tenant, "checkin_event_type_id", None)
+        if current == event_type.id:
+            self.stdout.write(
+                f"\ncheckin_event_type already pinned to {event_type.name!r} — "
+                "left as-is."
+            )
+            return
+        if not apply:
+            self.stdout.write(
+                self.style.WARNING(
+                    f"\nDRY-RUN — would pin checkin_event_type="
+                    f"{event_type.name!r} (id {event_type.id})"
+                )
+            )
+            return
+        tenant.checkin_event_type = event_type
+        tenant.save(update_fields=["checkin_event_type"])
+        self.stdout.write(
+            self.style.SUCCESS(
+                f"\nPinned checkin_event_type={event_type.name!r} "
+                f"(id {event_type.id})"
+            )
+        )
+
+    def _checkin_code(self, tenant, apply: bool, prefix: str = "") -> None:
         """Mint (or report) the tenant's standing check-in code.
 
         Alphabet drops the characters BAs mistype off a text (0/O, 1/I/L).
         NEVER regenerated once set — the link gets pinned and shared, so
         rotating it silently breaks every copy already in circulation.
+
+        `prefix` overrides this command's Feel Free default so the same tool
+        can mint a correctly-branded code for any tenant.
         """
         import secrets
 
         from tenants.models import Tenant
+
+        raw = (prefix or "").strip().upper().rstrip("-")
+        cleaned = "".join(ch for ch in raw if ch.isalpha())
+        if raw and not 1 <= len(cleaned) <= 4:
+            raise CommandError("--prefix should be 1-4 letters, e.g. BD.")
+        code_prefix = f"{cleaned}-" if cleaned else CODE_PREFIX
 
         ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
         base = (
@@ -597,7 +667,7 @@ class Command(BaseCommand):
 
         code = None
         for _ in range(12):
-            candidate = CODE_PREFIX + "".join(
+            candidate = code_prefix + "".join(
                 secrets.choice(ALPHABET) for _ in range(6)
             )
             if not Tenant.objects.filter(checkin_code__iexact=candidate).exists():
