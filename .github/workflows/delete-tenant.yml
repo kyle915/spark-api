@@ -1,0 +1,58 @@
+name: Delete tenant (DESTRUCTIVE)
+
+# Fires `/internal/cron/delete-tenant` on Cloud Run. Removes an EMPTY duplicate
+# tenant row and its onboarding scaffolding.
+#
+# TAKES AN ID, NEVER A NAME. The failure this cleans up is that `Tenant.slug`
+# has no unique constraint, so a name can match two rows — a name-resolved
+# delete could hit the one holding the client's recaps.
+#
+# Run `Inspect tenants (read-only)` first and READ IT. Then run this with
+# apply=false and read that too. The command refuses on its own if the tenant
+# holds client work, or if any user's only membership is this tenant.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tenant_id:
+        description: "EXACT tenant id (integer). Not a name."
+        required: true
+      apply:
+        description: "Actually delete (read the dry run first)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+      allow_orphan_users:
+        description: "Proceed even if a user's only tenant is this one"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+jobs:
+  delete-tenant:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire delete-tenant endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/delete-tenant
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          TENANT_ID: ${{ github.event.inputs.tenant_id }}
+          APPLY: ${{ github.event.inputs.apply }}
+          ALLOW_ORPHAN_USERS: ${{ github.event.inputs.allow_orphan_users }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL" \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            --data-urlencode "tenant_id=$TENANT_ID" \
+            --data-urlencode "apply=$APPLY" \
+            --data-urlencode "allow_orphan_users=$ALLOW_ORPHAN_USERS")
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          echo ""
+          [ "$STATUS" != "200" ] && exit 1 || exit 0
