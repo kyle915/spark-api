@@ -4368,6 +4368,59 @@ class SetupFeelFreeCheckinView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class InspectTenantsView(View):
+    """GET/POST `/internal/cron/inspect-tenants`.
+
+    READ-ONLY inventory of every tenant matching a name/slug substring, with
+    per-relation row counts. Exists because `Tenant.slug` has no unique
+    constraint, so duplicate rows can share a name AND a slug — at which point
+    every name-based tool is ambiguous and you cannot tell which row holds the
+    client's real data.
+
+    Run this before any destructive tenant work. It writes nothing.
+
+    Params: name (required), all_relations.
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        name = (request.GET.get("name") or request.POST.get("name") or "").strip()
+        if not name:
+            return JsonResponse(
+                {"ok": False, "error": "name-required"}, status=400
+            )
+        kwargs: dict = {"name": name}
+        ar = (
+            request.GET.get("all_relations")
+            or request.POST.get("all_relations")
+            or ""
+        ).lower()
+        if ar in ("1", "true", "yes", "on"):
+            kwargs["all_relations"] = True
+
+        out = io.StringIO()
+        try:
+            call_command("inspect_tenants", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("inspect-tenants cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc),
+                 "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "log": out.getvalue()})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class SetupLdRetailCheckinView(View):
     """GET/POST `/internal/cron/setup-ld-retail-checkin`.
 
@@ -6867,6 +6920,7 @@ def _registered_views() -> dict[str, Any]:
         "fix-ld-orphan-log-rows": FixLdOrphanLogRowsView,
         "setup-total-wireless-checkin": SetupTotalWirelessCheckinView,
         "setup-feel-free-checkin": SetupFeelFreeCheckinView,
+        "inspect-tenants": InspectTenantsView,
         "setup-ld-training": SetupLdTrainingView,
         "setup-ld-retail-checkin": SetupLdRetailCheckinView,
         "set-checkin-resources": SetCheckinResourcesView,
