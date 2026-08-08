@@ -1,0 +1,50 @@
+name: Inspect tenants (read-only)
+
+# Fires `/internal/cron/inspect-tenants` on Cloud Run. Prints a per-relation
+# row count for every tenant matching a name/slug substring.
+#
+# READ ONLY — it writes nothing. Run it BEFORE any destructive tenant work:
+# `Tenant.slug` has no unique constraint, so two rows can share a name AND a
+# slug (Sipli, ids 13 and 16), and at that point no name-based tool can tell
+# you which row holds the client's real data.
+#
+# Secret-gated via `X-Cron-Secret` (shared INTERNAL_CRON_SECRET) — see the
+# daily-admin-digest workflow for the full setup notes.
+
+on:
+  workflow_dispatch:
+    inputs:
+      name:
+        description: "Tenant name/slug substring (e.g. sipli)"
+        required: true
+      all_relations:
+        description: "Also list relations with a zero count"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+jobs:
+  inspect-tenants:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire inspect endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/inspect-tenants
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          NAME: ${{ github.event.inputs.name }}
+          ALL_RELATIONS: ${{ github.event.inputs.all_relations }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL" \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            --data-urlencode "name=$NAME" \
+            --data-urlencode "all_relations=$ALL_RELATIONS")
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          echo ""
+          [ "$STATUS" != "200" ] && exit 1 || exit 0
