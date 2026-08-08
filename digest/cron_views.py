@@ -4421,6 +4421,71 @@ class InspectTenantsView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class DeleteTenantView(View):
+    """GET/POST `/internal/cron/delete-tenant`.
+
+    DESTRUCTIVE. Removes an EMPTY duplicate tenant row and its scaffolding.
+
+    Takes `tenant_id` only — never a name. The failure this cleans up is that a
+    name can match two rows, so a name-resolved delete could hit the one with
+    the client's recaps on it.
+
+    Refuses if the tenant holds client work, and refuses if any user's only
+    membership is this tenant. Dry-run unless `apply` is truthy.
+
+    Params: tenant_id (required), apply, allow_orphan_users.
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        raw_id = (
+            request.GET.get("tenant_id") or request.POST.get("tenant_id") or ""
+        ).strip()
+        if not raw_id.isdigit():
+            return JsonResponse(
+                {"ok": False, "error": "tenant-id-required",
+                 "detail": "tenant_id must be an integer id, not a name."},
+                status=400,
+            )
+
+        kwargs: dict = {"tenant_id": int(raw_id)}
+        ap = (request.GET.get("apply") or request.POST.get("apply") or "").lower()
+        apply_it = ap in ("1", "true", "yes", "on")
+        if apply_it:
+            kwargs["apply"] = True
+        ao = (
+            request.GET.get("allow_orphan_users")
+            or request.POST.get("allow_orphan_users")
+            or ""
+        ).lower()
+        if ao in ("1", "true", "yes", "on"):
+            kwargs["allow_orphan_users"] = True
+
+        out = io.StringIO()
+        try:
+            call_command("delete_tenant", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("delete-tenant cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc),
+                 "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse(
+            {"ok": True, "apply": apply_it, "log": out.getvalue()}
+        )
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class SetupLdRetailCheckinView(View):
     """GET/POST `/internal/cron/setup-ld-retail-checkin`.
 
@@ -6921,6 +6986,7 @@ def _registered_views() -> dict[str, Any]:
         "setup-total-wireless-checkin": SetupTotalWirelessCheckinView,
         "setup-feel-free-checkin": SetupFeelFreeCheckinView,
         "inspect-tenants": InspectTenantsView,
+        "delete-tenant": DeleteTenantView,
         "setup-ld-training": SetupLdTrainingView,
         "setup-ld-retail-checkin": SetupLdRetailCheckinView,
         "set-checkin-resources": SetCheckinResourcesView,
