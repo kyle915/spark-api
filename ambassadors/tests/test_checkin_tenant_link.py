@@ -302,3 +302,31 @@ class TestTenantCheckinLink(AmbassadorsGraphQLTestCase):
         )
         assert made_a is True and made_b is True
         assert a.id != b.id
+
+    def test_address_core_key_folds_directionals(self):
+        # Real Mariano's pair: admin typed "N …Ave …USA", the reverse-geocode
+        # spelled out "North …Avenue". Must collapse to one key.
+        typed = "1500 N Clybourn Ave, Chicago, IL 60610, USA"
+        geocoded = "1500 North Clybourn Avenue, Chicago, IL 60610"
+        assert (
+            checkin_web.address_core_key(typed)
+            == checkin_web.address_core_key(geocoded)
+            == "1500 n clybourn chicago il"
+        )
+
+    def test_walkin_connects_across_directional_variance(self):
+        import datetime
+
+        on = datetime.date(2026, 8, 8)
+        scheduled, made_a = checkin_web.find_or_create_walkin_event(
+            tenant=self.tenant, store_name="Mariano's",
+            address="1500 N Clybourn Ave, Chicago, IL 60610, USA",
+            on_date=on, actor=self.system_user,
+        )
+        walkin, made_b = checkin_web.find_or_create_walkin_event(
+            tenant=self.tenant, store_name="Mariano's Clybourn",
+            address="1500 North Clybourn Avenue, Chicago, IL 60610",
+            on_date=on, actor=self.system_user,
+        )
+        assert made_a is True and made_b is False
+        assert scheduled.id == walkin.id

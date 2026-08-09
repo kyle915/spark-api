@@ -1173,12 +1173,21 @@ _STREET_SUFFIXES = {
 # 92020" collapse to the same place.
 _ADDR_COUNTRY_TOKENS = {"usa", "us", "united", "states"}
 
+# Directional words → a single canonical form. A reverse-geocoder spells them
+# out ("North Clybourn Avenue") while an admin abbreviates ("N Clybourn Ave"),
+# so we fold both to the abbreviation before comparing.
+_DIRECTIONALS = {
+    "north": "n", "south": "s", "east": "e", "west": "w",
+    "northeast": "ne", "northwest": "nw", "southeast": "se", "southwest": "sw",
+}
+
 
 def address_core_key(value: str) -> str:
     """A looser "same store?" key than :func:`normalize_place`: on top of the
-    case/punctuation/space flattening it also drops street-type suffix words
-    (ave/avenue/blvd/boulevard/…) and any trailing 5-digit ZIP, so an
-    admin-typed address and its reverse-geocoded twin collapse to one place.
+    case/punctuation/space flattening it drops street-type suffix words
+    (ave/avenue/blvd/…), country tokens (usa) and any trailing 5-digit ZIP, and
+    folds directionals (north→n), so an admin-typed address and its
+    reverse-geocoded twin collapse to one place.
 
     Only trusted when the address begins with a STREET NUMBER — that keeps the
     key tight (number + street name + city/state), so it collapses suffix/ZIP
@@ -1200,7 +1209,7 @@ def address_core_key(value: str) -> str:
         # Drop a 5-digit ZIP, but never the leading street number (i == 0).
         if i > 0 and re.fullmatch(r"\d{5}", t):
             continue
-        core.append(t)
+        core.append(_DIRECTIONALS.get(t, t))
     return " ".join(core).strip()
 
 
