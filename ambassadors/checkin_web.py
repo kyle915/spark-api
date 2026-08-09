@@ -1168,6 +1168,11 @@ _STREET_SUFFIXES = {
     "bypass", "xing", "crossing", "commons", "center", "ctr", "mall",
 }
 
+# Country tokens that a reverse-geocoder tacks on (", USA") but an admin
+# rarely types — dropped so "…El Cajon, CA 92020, USA" and "…El Cajon, CA
+# 92020" collapse to the same place.
+_ADDR_COUNTRY_TOKENS = {"usa", "us", "united", "states"}
+
 
 def address_core_key(value: str) -> str:
     """A looser "same store?" key than :func:`normalize_place`: on top of the
@@ -1190,7 +1195,7 @@ def address_core_key(value: str) -> str:
         return ""
     core = []
     for i, t in enumerate(toks):
-        if t in _STREET_SUFFIXES:
+        if t in _STREET_SUFFIXES or t in _ADDR_COUNTRY_TOKENS:
             continue
         # Drop a 5-digit ZIP, but never the leading street number (i == 0).
         if i > 0 and re.fullmatch(r"\d{5}", t):

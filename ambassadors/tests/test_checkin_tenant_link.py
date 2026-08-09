@@ -251,7 +251,9 @@ class TestTenantCheckinLink(AmbassadorsGraphQLTestCase):
     # address_core_key collapses street-suffix + ZIP so they connect.
 
     def test_address_core_key_collapses_suffix_and_zip(self):
-        typed = "1201 Avocado Ave, El Cajon, CA"
+        # Real Vons pair: admin-typed schedule vs reverse-geocoded walk-in.
+        # Differs by street suffix (Ave/Boulevard), a ZIP, and a ", USA".
+        typed = "1201 Avocado Ave, El Cajon, CA 92020, USA"
         geocoded = "1201 Avocado Boulevard, El Cajon, CA 92020"
         assert (
             checkin_web.address_core_key(typed)
@@ -271,7 +273,7 @@ class TestTenantCheckinLink(AmbassadorsGraphQLTestCase):
         on = datetime.date(2026, 8, 7)
         scheduled, made_a = checkin_web.find_or_create_walkin_event(
             tenant=self.tenant, store_name="Vons",
-            address="1201 Avocado Ave, El Cajon, CA",
+            address="1201 Avocado Ave, El Cajon, CA 92020, USA",
             on_date=on, actor=self.system_user,
         )
         walkin, made_b = checkin_web.find_or_create_walkin_event(
