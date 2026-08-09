@@ -242,3 +242,63 @@ class TestTenantCheckinLink(AmbassadorsGraphQLTestCase):
         assert created_a is True and created_b is False
         assert a.id == b.id
         assert a.name.startswith("7/31/2026 - 55 Elm St")
+
+    # -- fuzzy address matching --------------------------------------------
+    # A scheduled event carries an admin-TYPED address ("1201 Avocado Ave"); a
+    # walk-in's address is REVERSE-GEOCODED from the BA's GPS ("1201 Avocado
+    # Boulevard, El Cajon, CA 92020"). normalize_place keeps those distinct, so
+    # the walk-in forked a duplicate event and the scheduled row read DUE. The
+    # address_core_key collapses street-suffix + ZIP so they connect.
+
+    def test_address_core_key_collapses_suffix_and_zip(self):
+        # Real Vons pair: admin-typed schedule vs reverse-geocoded walk-in.
+        # Differs by street suffix (Ave/Boulevard), a ZIP, and a ", USA".
+        typed = "1201 Avocado Ave, El Cajon, CA 92020, USA"
+        geocoded = "1201 Avocado Boulevard, El Cajon, CA 92020"
+        assert (
+            checkin_web.address_core_key(typed)
+            == checkin_web.address_core_key(geocoded)
+            == "1201 avocado el cajon ca"
+        )
+        # No leading street number -> untrusted (caller falls back to strict).
+        assert checkin_web.address_core_key("Avocado Plaza, El Cajon") == ""
+        # A 5-digit STREET NUMBER is kept; only trailing ZIPs are dropped.
+        assert checkin_web.address_core_key("12345 Main St").startswith("12345 ")
+
+    def test_walkin_connects_across_suffix_and_zip_variance(self):
+        # Regression for the Vons "DUE" bug: "…Ave" and reverse-geocoded
+        # "…Boulevard …92020" must land on ONE event, not fork a duplicate.
+        import datetime
+
+        on = datetime.date(2026, 8, 7)
+        scheduled, made_a = checkin_web.find_or_create_walkin_event(
+            tenant=self.tenant, store_name="Vons",
+            address="1201 Avocado Ave, El Cajon, CA 92020, USA",
+            on_date=on, actor=self.system_user,
+        )
+        walkin, made_b = checkin_web.find_or_create_walkin_event(
+            tenant=self.tenant, store_name="Vons El Cajon",
+            address="1201 Avocado Boulevard, El Cajon, CA 92020",
+            on_date=on, actor=self.system_user,
+        )
+        assert made_a is True and made_b is False
+        assert scheduled.id == walkin.id
+
+    def test_fuzzy_match_does_not_merge_different_addresses(self):
+        # The looser key stays tight: a different street NUMBER is a different
+        # place and must NOT collapse.
+        import datetime
+
+        on = datetime.date(2026, 8, 7)
+        a, made_a = checkin_web.find_or_create_walkin_event(
+            tenant=self.tenant, store_name="A",
+            address="1201 Avocado Blvd, El Cajon, CA",
+            on_date=on, actor=self.system_user,
+        )
+        b, made_b = checkin_web.find_or_create_walkin_event(
+            tenant=self.tenant, store_name="B",
+            address="1300 Avocado Blvd, El Cajon, CA",
+            on_date=on, actor=self.system_user,
+        )
+        assert made_a is True and made_b is True
+        assert a.id != b.id

@@ -1152,6 +1152,58 @@ def normalize_place(value: str) -> str:
     return re.sub(r"\s+", " ", v).strip()
 
 
+# Street-type suffix words we drop when deciding "same store" for a walk-in.
+# A scheduled event carries an admin-TYPED address ("1201 Avocado Ave"); a
+# walk-in's address is REVERSE-GEOCODED from the BA's phone GPS ("1201 Avocado
+# Boulevard, El Cajon, CA 92020"). Those name one place, but normalize_place()
+# keeps them distinct (ave≠boulevard, and one carries a ZIP), so the walk-in
+# forks a duplicate event and the scheduled row is left reading DUE. The core
+# key below collapses the two by dropping the suffix + any ZIP.
+_STREET_SUFFIXES = {
+    "ave", "avenue", "blvd", "boulevard", "st", "street", "rd", "road",
+    "dr", "drive", "ln", "lane", "ct", "court", "cir", "circle", "pl",
+    "place", "way", "ter", "terrace", "hwy", "highway", "pkwy", "parkway",
+    "sq", "square", "trl", "trail", "pike", "plaza", "row", "run", "path",
+    "loop", "aly", "alley", "expy", "expressway", "fwy", "freeway", "byp",
+    "bypass", "xing", "crossing", "commons", "center", "ctr", "mall",
+}
+
+# Country tokens that a reverse-geocoder tacks on (", USA") but an admin
+# rarely types — dropped so "…El Cajon, CA 92020, USA" and "…El Cajon, CA
+# 92020" collapse to the same place.
+_ADDR_COUNTRY_TOKENS = {"usa", "us", "united", "states"}
+
+
+def address_core_key(value: str) -> str:
+    """A looser "same store?" key than :func:`normalize_place`: on top of the
+    case/punctuation/space flattening it also drops street-type suffix words
+    (ave/avenue/blvd/boulevard/…) and any trailing 5-digit ZIP, so an
+    admin-typed address and its reverse-geocoded twin collapse to one place.
+
+    Only trusted when the address begins with a STREET NUMBER — that keeps the
+    key tight (number + street name + city/state), so it collapses suffix/ZIP
+    noise without merging genuinely different addresses. Returns "" when there's
+    no leading number; callers then fall back to the strict normalize_place key.
+    The (tenant, date, event-type) scope around the match adds further safety.
+    """
+    base = normalize_place(value)
+    if not base:
+        return ""
+    toks = base.split()
+    # Require a leading street number; without one this loose key isn't safe.
+    if not toks[0].isdigit():
+        return ""
+    core = []
+    for i, t in enumerate(toks):
+        if t in _STREET_SUFFIXES or t in _ADDR_COUNTRY_TOKENS:
+            continue
+        # Drop a 5-digit ZIP, but never the leading street number (i == 0).
+        if i > 0 and re.fullmatch(r"\d{5}", t):
+            continue
+        core.append(t)
+    return " ".join(core).strip()
+
+
 def recent_checkin_locations(tenant, limit: int = 30) -> list:
     """Distinct recent store names + addresses for this tenant, newest first.
 
@@ -1317,17 +1369,34 @@ def find_or_create_walkin_event(
         else ""
     )
 
+    core_key = address_core_key(address)
+
     def _match():
         # Small set (one tenant, one day), so normalize in Python rather than
-        # trying to express the same collapsing in SQL.
+        # trying to express the same collapsing in SQL. Two tiers:
+        #   1. EXACT  — normalize_place equality (the original behaviour).
+        #   2. FUZZY  — address_core_key equality (suffix/ZIP-insensitive), so a
+        #              reverse-geocoded walk-in address connects to the scheduled
+        #              event's admin-typed one instead of forking a duplicate.
+        # Within each tier prefer a SCHEDULED event (one born from a request) so
+        # its "DUE" clears rather than the walk-in landing on a sibling event.
+        exact: list = []
+        fuzzy: list = []
         for ev in Event.objects.filter(tenant=tenant, date__gte=lo, date__lte=hi):
-            if normalize_place(getattr(ev, "address", "")) != key:
-                continue
             # An untyped check-in (brand has no event types at all) keeps the
             # old address+date behaviour and joins whatever is there.
             if type_id is not None and getattr(ev, "event_type_id", None) != type_id:
                 continue
-            return ev
+            ev_addr = getattr(ev, "address", "")
+            if normalize_place(ev_addr) == key:
+                exact.append(ev)
+            elif core_key and address_core_key(ev_addr) == core_key:
+                fuzzy.append(ev)
+        for bucket in (exact, fuzzy):
+            if not bucket:
+                continue
+            scheduled = [e for e in bucket if getattr(e, "request_id", None)]
+            return (scheduled or bucket)[0]
         return None
 
     with transaction.atomic():
