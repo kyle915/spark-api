@@ -4421,6 +4421,63 @@ class InspectTenantsView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class OnboardTorchProductsView(View):
+    """GET/POST `/internal/cron/onboard-torch-products`.
+
+    Seeds the Torch THC catalog: 6 product lines (ProductType) and 45 SKUs,
+    pulling each can's artwork from torchdrinks.com at run time.
+
+    Idempotent, and DRY-RUN unless `apply` is truthy — so hitting this by
+    accident inventories the work instead of doing it. Artwork downloads run
+    inline; the whole catalog is ~45 small images and finishes well inside the
+    request timeout, but `skip_images` exists if the brand site is ever down.
+
+    Params: owner_email (required), apply, skip_images, force_images.
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        owner_email = (
+            request.GET.get("owner_email")
+            or request.POST.get("owner_email")
+            or ""
+        ).strip()
+        if not owner_email:
+            return JsonResponse(
+                {"ok": False, "error": "owner-email-required"}, status=400
+            )
+
+        kwargs: dict = {"owner_email": owner_email}
+        for flag in ("apply", "skip_images", "force_images"):
+            raw = (
+                request.GET.get(flag) or request.POST.get(flag) or ""
+            ).lower()
+            if raw in ("1", "true", "yes", "on"):
+                kwargs[flag] = True
+
+        out = io.StringIO()
+        try:
+            call_command("onboard_torch_products", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("onboard-torch-products cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc),
+                 "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "log": out.getvalue()})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class DeleteTenantView(View):
     """GET/POST `/internal/cron/delete-tenant`.
 
@@ -6987,6 +7044,7 @@ def _registered_views() -> dict[str, Any]:
         "setup-feel-free-checkin": SetupFeelFreeCheckinView,
         "inspect-tenants": InspectTenantsView,
         "delete-tenant": DeleteTenantView,
+        "onboard-torch-products": OnboardTorchProductsView,
         "setup-ld-training": SetupLdTrainingView,
         "setup-ld-retail-checkin": SetupLdRetailCheckinView,
         "set-checkin-resources": SetCheckinResourcesView,
