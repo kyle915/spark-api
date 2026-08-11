@@ -4449,10 +4449,25 @@ class CloneRecapTemplateView(View):
             ).strip()
 
         kwargs: dict = {}
-        for key in ("source_tenant", "name", "event_type", "owner_email"):
+        for key in (
+            "source_tenant", "name", "event_type", "owner_email",
+            "products_field",
+        ):
             value = _param(key)
             if value:
                 kwargs[key] = value
+
+        # Repeatable on the command; accept newline- or pipe-separated here so
+        # a single workflow input can carry more than one swap.
+        raw_swaps = _param("replace_text")
+        if raw_swaps:
+            kwargs["replace_text"] = [
+                part.strip()
+                for part in raw_swaps.replace("|", "\n").splitlines()
+                if part.strip()
+            ]
+        if _param("products_from_target").lower() in ("1", "true", "yes", "on"):
+            kwargs["products_from_target"] = True
         for key in ("source_template_id", "target_tenant_id"):
             value = _param(key)
             if value:

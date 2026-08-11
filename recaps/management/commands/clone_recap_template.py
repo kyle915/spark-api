@@ -100,6 +100,33 @@ class Command(BaseCommand):
             help="created_by for new rows. Defaults to the source template's owner.",
         )
         parser.add_argument(
+            "--replace-text",
+            dest="replace_text",
+            action="append",
+            default=[],
+            help=(
+                "OLD=NEW substring swap applied to the template name and every "
+                "field label. Repeatable. Use it for brand names baked into "
+                "question wording, e.g. --replace-text 'Liquid Death=Torch THC'."
+            ),
+        )
+        parser.add_argument(
+            "--products-from-target",
+            dest="products_from_target",
+            action="store_true",
+            help=(
+                "Repopulate the choice field named by --products-field with the "
+                "TARGET tenant's own products. Without this, a clone hands the "
+                "new client a dropdown of the source brand's SKUs."
+            ),
+        )
+        parser.add_argument(
+            "--products-field",
+            dest="products_field",
+            default="Products Sampled",
+            help="Field whose options --products-from-target rewrites.",
+        )
+        parser.add_argument(
             "--apply",
             action="store_true",
             help="Actually write (omit for a dry run that changes nothing).",
@@ -158,7 +185,12 @@ class Command(BaseCommand):
             )
 
         owner = self._resolve_owner(opts["owner_email"], source)
-        new_name = opts["name"] or source.name
+        swaps = self._parse_swaps(opts["replace_text"])
+        new_name = opts["name"] or self._swap(source.name, swaps)
+
+        target_options: list[str] | None = None
+        if opts["products_from_target"]:
+            target_options = self._target_product_options(opts["target_tenant_id"])
         et_name = opts["event_type"] or source.event_type.name
         event_type = EventType.objects.filter(
             tenant_id=target.id, name__iexact=et_name
@@ -200,6 +232,32 @@ class Command(BaseCommand):
                 )
             )
 
+        if swaps:
+            self.stdout.write("\n  Text swaps applied to the name and every label:")
+            for a, b in swaps:
+                self.stdout.write(f"    {a!r} -> {b!r}")
+            for section in sections:
+                for f in fields_by_section.get(section.id, []):
+                    swapped = self._swap(f.name, swaps)
+                    if swapped != f.name:
+                        self.stdout.write(f"      {f.name!r}\n        -> {swapped!r}")
+
+        if target_options is not None:
+            self.stdout.write(
+                f"\n  {opts['products_field']!r} options replaced with "
+                f"{len(target_options)} product(s) from the target tenant:"
+            )
+            for opt in target_options[:6]:
+                self.stdout.write(f"    - {opt}")
+            if len(target_options) > 6:
+                self.stdout.write(f"    ... and {len(target_options) - 6} more")
+            if not target_options:
+                raise CommandError(
+                    "--products-from-target was given but the target tenant has "
+                    "no products. Seed its catalog first, or the field would end "
+                    "up with an empty dropdown."
+                )
+
         if not apply:
             n_fields = sum(len(v) for v in fields_by_section.values())
             self.stdout.write(
@@ -210,7 +268,8 @@ class Command(BaseCommand):
             return
 
         self._clone(
-            source, sections, fields_by_section, target, owner, new_name, event_type
+            source, sections, fields_by_section, target, owner, new_name,
+            event_type, swaps, target_options, opts["products_field"],
         )
 
     # ------------------------------------------------------------------
@@ -293,6 +352,41 @@ class Command(BaseCommand):
             f"\n  {len(sections)} section(s), {total} field(s) total."
         )
 
+    def _parse_swaps(self, raw: list[str]) -> list[tuple[str, str]]:
+        swaps = []
+        for item in raw:
+            if "=" not in item:
+                raise CommandError(
+                    f"--replace-text expects OLD=NEW, got {item!r}."
+                )
+            old, new = item.split("=", 1)
+            if not old:
+                raise CommandError("--replace-text OLD side cannot be empty.")
+            swaps.append((old, new))
+        return swaps
+
+    def _swap(self, text: str, swaps: list[tuple[str, str]]) -> str:
+        for old, new in swaps:
+            text = text.replace(old, new)
+        return text
+
+    def _target_product_options(self, tenant_id: int) -> list[str]:
+        """The target tenant's product names, grouped by line then name.
+
+        The source's choice list is the source brand's SKUs; copying it
+        verbatim is the "BA gets the wrong brand's form" failure in a
+        different costume, and it is silent — the form renders fine, it just
+        asks about someone else's products.
+        """
+        from events.models import Product
+
+        return list(
+            Product.objects.filter(tenant_id=tenant_id)
+            .select_related("product_type")
+            .order_by("product_type__name", "name")
+            .values_list("name", flat=True)
+        )
+
     def _resolve_owner(self, owner_email: str | None, source):
         if owner_email:
             owner = User.objects.filter(email__iexact=owner_email).first()
@@ -302,7 +396,8 @@ class Command(BaseCommand):
         return source.created_by
 
     def _clone(
-        self, source, sections, fields_by_section, target, owner, new_name, event_type
+        self, source, sections, fields_by_section, target, owner, new_name,
+        event_type, swaps, target_options, products_field,
     ) -> None:
         made = {"template": 0, "sections": 0, "fields": 0}
         found = {"sections": 0, "fields": 0}
@@ -340,20 +435,40 @@ class Command(BaseCommand):
                 )
 
                 for f in fields_by_section.get(section.id, []):
-                    _, f_created = CustomField.objects.get_or_create(
+                    field_name = self._swap(f.name, swaps)
+                    options = list(f.options or [])
+                    if (
+                        target_options is not None
+                        and field_name.strip().lower()
+                        == products_field.strip().lower()
+                    ):
+                        options = target_options
+                    new_field, f_created = CustomField.objects.get_or_create(
                         custom_recap_template_id=template.id,
                         recap_section_id=new_section.id,
-                        name=f.name,
+                        name=field_name,
                         defaults={
                             "custom_field_type": f.custom_field_type,
                             "required": f.required,
                             "order": f.order,
-                            "options": f.options or [],
+                            "options": options,
                             "created_by": owner,
                         },
                     )
                     made["fields"] += int(f_created)
                     found["fields"] += int(not f_created)
+                    # Re-running after the catalog grew should refresh the
+                    # choice list, not leave a stale one behind.
+                    if not f_created and options and new_field.options != options:
+                        new_field.options = options
+                        new_field.updated_by = owner
+                        new_field.save(
+                            update_fields=["options", "updated_by", "updated_at"]
+                        )
+                        self.stdout.write(
+                            f"      ~ refreshed {field_name!r} options "
+                            f"({len(options)} choice(s))"
+                        )
 
         self.stdout.write("")
         self.stdout.write("=" * 72)
