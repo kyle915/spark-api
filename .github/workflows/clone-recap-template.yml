@@ -1,0 +1,79 @@
+name: Clone recap template between tenants
+
+# Fires `/internal/cron/clone-recap-template` on Cloud Run. Copies a recap
+# FORM (sections + fields) from one tenant to another. Never copies recaps.
+#
+# Three modes, and the first two write nothing:
+#   source_tenant only                    -> list that tenant's templates
+#   + source_template_id                  -> dump its full structure
+#   + target_tenant_id + apply=true       -> clone it
+#
+# Idempotent, and DRY-RUN unless apply=true, so it is safe to run while you
+# work out which template you actually want.
+#
+# Secret-gated via `X-Cron-Secret` (shared INTERNAL_CRON_SECRET) — see the
+# daily-admin-digest workflow for the full setup notes.
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_tenant:
+        description: "Source tenant name/slug substring (lists its templates)"
+        required: false
+        default: ""
+      source_template_id:
+        description: "Template id to copy FROM"
+        required: false
+        default: ""
+      target_tenant_id:
+        description: "Tenant id to copy INTO (blank = dump only)"
+        required: false
+        default: ""
+      name:
+        description: "Name for the new template (blank = same as source)"
+        required: false
+        default: ""
+      event_type:
+        description: "EventType name on the target (blank = same as source)"
+        required: false
+        default: ""
+      apply:
+        description: "Write to the DB (false = dry run)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+jobs:
+  clone-recap-template:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire clone endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/clone-recap-template
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          SOURCE_TENANT: ${{ github.event.inputs.source_tenant }}
+          SOURCE_TEMPLATE_ID: ${{ github.event.inputs.source_template_id }}
+          TARGET_TENANT_ID: ${{ github.event.inputs.target_tenant_id }}
+          TPL_NAME: ${{ github.event.inputs.name }}
+          EVENT_TYPE: ${{ github.event.inputs.event_type }}
+          APPLY: ${{ github.event.inputs.apply }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            --max-time 300 \
+            -X POST "$CRON_URL" \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            --data-urlencode "source_tenant=$SOURCE_TENANT" \
+            --data-urlencode "source_template_id=$SOURCE_TEMPLATE_ID" \
+            --data-urlencode "target_tenant_id=$TARGET_TENANT_ID" \
+            --data-urlencode "name=$TPL_NAME" \
+            --data-urlencode "event_type=$EVENT_TYPE" \
+            --data-urlencode "apply=$APPLY")
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          echo ""
+          [ "$STATUS" != "200" ] && exit 1 || exit 0
