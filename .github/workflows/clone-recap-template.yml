@@ -37,6 +37,16 @@ on:
         description: "EventType name on the target (blank = same as source)"
         required: false
         default: ""
+      replace_text:
+        description: "Label swaps, OLD=NEW, pipe-separated (e.g. Liquid Death=Torch THC)"
+        required: false
+        default: ""
+      products_from_target:
+        description: "Fill 'Products Sampled' from the TARGET tenant's catalog"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
       apply:
         description: "Write to the DB (false = dry run)"
         required: false
@@ -57,6 +67,8 @@ jobs:
           TARGET_TENANT_ID: ${{ github.event.inputs.target_tenant_id }}
           TPL_NAME: ${{ github.event.inputs.name }}
           EVENT_TYPE: ${{ github.event.inputs.event_type }}
+          REPLACE_TEXT: ${{ github.event.inputs.replace_text }}
+          PRODUCTS_FROM_TARGET: ${{ github.event.inputs.products_from_target }}
           APPLY: ${{ github.event.inputs.apply }}
         run: |
           if [ -z "$CRON_SECRET" ]; then
@@ -72,6 +84,8 @@ jobs:
             --data-urlencode "target_tenant_id=$TARGET_TENANT_ID" \
             --data-urlencode "name=$TPL_NAME" \
             --data-urlencode "event_type=$EVENT_TYPE" \
+            --data-urlencode "replace_text=$REPLACE_TEXT" \
+            --data-urlencode "products_from_target=$PRODUCTS_FROM_TARGET" \
             --data-urlencode "apply=$APPLY")
           echo "HTTP $STATUS"
           cat /tmp/cron-response.json
