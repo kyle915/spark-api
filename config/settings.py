@@ -267,8 +267,32 @@ else:
 GS_DEFAULT_ACL = None  # Use bucket's default ACL (uniform bucket-level access)
 GS_QUERYSTRING_AUTH = env.bool("GS_QUERYSTRING_AUTH", default=False)
 
-# File storage backend
-DEFAULT_FILE_STORAGE = "storages.backends.gcloud.GoogleCloudStorage"
+# File storage backend.
+#
+# This MUST be STORAGES, not DEFAULT_FILE_STORAGE. Django deprecated
+# DEFAULT_FILE_STORAGE in 4.2 and REMOVED it in 5.1; on 5.2 it is silently
+# ignored, and default_storage falls back to FileSystemStorage. That fallback
+# is invisible in dev and destructive in prod: every server-side
+# FieldFile.save() (product artwork, tenant logos) wrote to the Cloud Run
+# container's ephemeral disk while the API kept handing clients a
+# storage.googleapis.com URL for a blob that was never uploaded — a 404 per
+# image, with the DB column populated so nothing looked wrong server-side.
+# Browser uploads were unaffected because they PUT to GCS directly.
+#
+# Fall back to the filesystem only when no bucket is configured, so local dev
+# and tests don't need GCS credentials.
+STORAGES = {
+    "default": {
+        "BACKEND": (
+            "storages.backends.gcloud.GoogleCloudStorage"
+            if GS_BUCKET_NAME
+            else "django.core.files.storage.FileSystemStorage"
+        )
+    },
+    "staticfiles": {
+        "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"
+    },
+}
 
 # Media files configuration
 MEDIA_URL = f"https://storage.googleapis.com/{GS_BUCKET_NAME}/"
