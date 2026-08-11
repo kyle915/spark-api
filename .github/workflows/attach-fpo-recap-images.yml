@@ -1,0 +1,59 @@
+name: Attach FPO images to a recap
+
+# Fires `/internal/cron/attach-fpo-recap-images` on Cloud Run. Generates
+# placeholder ("for position only") photos and attaches them to a recap, one
+# per photo category the tenant has. For demoing a completed recap before real
+# field photos exist.
+#
+# DRY-RUN unless apply=true. Set remove=true to delete the placeholders (and
+# their stored blobs) again — that is how the demo gets cleaned up.
+#
+# Secret-gated via `X-Cron-Secret` (shared INTERNAL_CRON_SECRET) — see the
+# daily-admin-digest workflow for the full setup notes.
+
+on:
+  workflow_dispatch:
+    inputs:
+      recap_id:
+        description: "Recap id to attach to"
+        required: true
+      remove:
+        description: "Delete this recap's [FPO] images instead of adding"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+      apply:
+        description: "Write to the DB (false = dry run)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+jobs:
+  attach-fpo-recap-images:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire FPO endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/attach-fpo-recap-images
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          RECAP_ID: ${{ github.event.inputs.recap_id }}
+          REMOVE: ${{ github.event.inputs.remove }}
+          APPLY: ${{ github.event.inputs.apply }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            --max-time 300 \
+            -X POST "$CRON_URL" \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            --data-urlencode "recap_id=$RECAP_ID" \
+            --data-urlencode "remove=$REMOVE" \
+            --data-urlencode "apply=$APPLY")
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          echo ""
+          [ "$STATUS" != "200" ] && exit 1 || exit 0
