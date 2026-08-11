@@ -1,0 +1,77 @@
+name: Add fields to a recap template
+
+# Fires `/internal/cron/add-recap-template-fields` on Cloud Run. Appends
+# questions to an existing CustomRecapTemplate from a JSON spec.
+#
+# Run with list_types=true FIRST if you are unsure of a field type — the
+# spec's "type" must match an existing CustomRecapFieldType exactly, because
+# the renderers key off it and an unknown type renders as an invisible field.
+#
+# DRY-RUN unless apply=true, and idempotent either way: a field with the same
+# name in the same section is left alone (its options are refreshed if the
+# spec changed).
+#
+# Secret-gated via `X-Cron-Secret` (shared INTERNAL_CRON_SECRET) — see the
+# daily-admin-digest workflow for the full setup notes.
+
+on:
+  workflow_dispatch:
+    inputs:
+      list_types:
+        description: "Just list the available field types and stop"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+      template_id:
+        description: "CustomRecapTemplate id to add fields to"
+        required: false
+        default: ""
+      spec:
+        description: 'JSON array: [{"section","type","name","required","options","order"}]'
+        required: false
+        default: ""
+      create_sections:
+        description: "Create a named section if the tenant lacks it"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+      apply:
+        description: "Write to the DB (false = dry run)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+jobs:
+  add-recap-template-fields:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire add-fields endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/add-recap-template-fields
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          LIST_TYPES: ${{ github.event.inputs.list_types }}
+          TEMPLATE_ID: ${{ github.event.inputs.template_id }}
+          SPEC: ${{ github.event.inputs.spec }}
+          CREATE_SECTIONS: ${{ github.event.inputs.create_sections }}
+          APPLY: ${{ github.event.inputs.apply }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            --max-time 300 \
+            -X POST "$CRON_URL" \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            --data-urlencode "list_types=$LIST_TYPES" \
+            --data-urlencode "template_id=$TEMPLATE_ID" \
+            --data-urlencode "spec=$SPEC" \
+            --data-urlencode "create_sections=$CREATE_SECTIONS" \
+            --data-urlencode "apply=$APPLY")
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          echo ""
+          [ "$STATUS" != "200" ] && exit 1 || exit 0
