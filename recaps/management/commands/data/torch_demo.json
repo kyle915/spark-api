@@ -1,0 +1,64 @@
+{
+  "_comment": [
+    "Single demo recap for Torch THC, built so Kyle can show a client what a",
+    "completed Spark recap looks like on their own template.",
+    "",
+    "The event name carries '(SAMPLE)' on purpose. This creates a real",
+    "standalone Event + CustomRecap in prod: it stays OFF the client Master",
+    "Tracker (which is request-driven) but it DOES count toward Torch's",
+    "dashboard KPIs, the /recaps list, geo, and any sheet export. Torch has no",
+    "real activations yet so nothing is being polluted today, but the marker is",
+    "what makes it findable and removable once the demo is over.",
+    "",
+    "Numbers are internally consistent, because a client will add them up:",
+    "  87 sampled = 61 first-time + 26 already knew the brand",
+    "  87 sampled = 58 would buy + 29 would not"
+  ],
+
+  "tenant_slug": "torch-thc",
+  "template_name": "Torch THC-Retail Sampling",
+  "event_type_name": "Retail Sampling",
+  "event_status_slug": "approved",
+  "timezone_code": "EDT",
+  "state_code": "FL",
+  "external_ba_name": "Jordan Alvarez",
+  "event_name_prefix": "Torch THC Retail Sampling (SAMPLE)",
+  "date_key": "Date",
+  "address_key": "Store/Location",
+  "local_hour": 14,
+  "approved": true,
+  "engagements_field": "Total number of consumers sampled",
+
+  "rows": [
+    {
+      "Date": "2026-08-08",
+      "Store/Location": "Bayshore Beverage Co., 4412 W Kennedy Blvd, Tampa, FL 33609",
+
+      "Total number of consumers sampled": 87,
+      "First Time consumers?": 61,
+      "How many consumers that were engaged with knew about Torch THC product/brand?": 26,
+      "How many consumers would be willing to purchase the product after tasing it?": 58,
+      "How many consumers would NOT be willing to purchase the product after tasing it?": 29,
+      "How many single cans did consumers purchase?": 34,
+      "How many packs did consumers purchase?": 12,
+
+      "Demographics (general age, sex, ethnicities of consumers)": "Skewed 25-40, roughly even split male/female through the afternoon and noticeably more male after 5pm. Mixed Hispanic and white, in line with the neighborhood. A steady stream of couples shopping together, and those were the easiest conversions because one would try it and hand it to the other.",
+
+      "Consumer Feedback": "Flavor did most of the work. Several people said it tastes like an actual seltzer rather than something hempy, which was the objection they came in with. The 5mg Lite line was by far the easiest introduction for anyone who had never had a THC drink - low dose reads as 'I can try this on a Saturday afternoon.' The 60mg drew the most questions, almost all of them about how strong it actually feels and how long it lasts. Iced Tea Lemonade pulled in people who said they don't like seltzer at all.",
+
+      "Positive stories from your sampling today": "A regular who buys non-alcoholic beer every weekend tried the Black Cherry 5mg and bought a 4-pack on the spot, said it was the first thing he'd found that gives him something to hold at a cookout without drinking. Two women who came in for wine ended up leaving with the Watermelon Squeeze 25mg after tasting it twice. One customer came back about 40 minutes later with a friend specifically so the friend could try the Iced Tea Lemonade.",
+
+      "Reasons to decline to purchase?": "The most common reason by far was driving - people liked it but did not want THC before getting back in the car, and several asked if we would be back on a day they could walk over. A handful were price-sensitive comparing the 4-pack against a six-pack of beer. A few said they had had a bad experience with edibles years ago and were not willing to try any THC product regardless of dose, which no amount of explaining the 5mg would move.",
+
+      "Quotes from Consumers": "\"This tastes like a LaCroix, not like weed.\" - male, ~30\n\"Wait, 5mg is the whole can? That's actually reasonable.\" - female, ~35\n\"I'd buy this for the boat, no question.\" - male, ~45\n\"Do you have this in a bigger pack? My husband would drink these.\" - female, ~40",
+
+      "Anything you'd change or do differently?": "Get colder product out earlier - the first hour was slow partly because the cans were not fully chilled yet and warm samples of anything carbonated are a hard sell. Would also ask for the table to sit closer to the cooler doors rather than the front entrance; people entering are still in shopping mode and brush past, while people already at the coolers are deciding what to buy and stopped every time. Two flavors on ice at once worked better than four - too much choice slowed the conversation down.",
+
+      "Account Feedback": "Staff were genuinely helpful and the manager came over twice to check how it was going. They have Torch in the back cooler on the bottom shelf where it is easy to miss - the manager said he would move it to eye level next to the non-alcoholic section, which is where every customer we sent that direction expected to find it. Worth a follow-up in two weeks to confirm the reset happened and to see whether the sales bump held.",
+
+      "Account Spend Amount": 24.5,
+
+      "Products Sampled": "Black Cherry 5mg 12oz, Blue Razz Lemonade 5mg 12oz, Watermelon Squeeze 25mg 12oz, Iced Tea Lemonade 10mg 12oz"
+    }
+  ]
+}
