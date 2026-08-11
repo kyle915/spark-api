@@ -1,0 +1,10 @@
+name: tmp-list-field-types
+on: {workflow_dispatch: {}}
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          curl -sS -X POST "https://spark-api-new-490085168610.us-central1.run.app/internal/cron/add-recap-template-fields" \
+            -H "X-Cron-Secret: ${{ secrets.INTERNAL_CRON_SECRET }}" \
+            --data-urlencode "list_types=true"
