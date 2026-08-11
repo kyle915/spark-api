@@ -4421,6 +4421,77 @@ class InspectTenantsView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class CloneRecapTemplateView(View):
+    """GET/POST `/internal/cron/clone-recap-template`.
+
+    Copies a recap template (sections + fields, never recaps) from one tenant
+    to another. Three modes, mirroring the command:
+
+      source_tenant only                     -> list that tenant's templates
+      + source_template_id                   -> dump the full structure
+      + target_tenant_id (+ apply)           -> clone it
+
+    DRY-RUN unless `apply` is truthy, and idempotent when it isn't, so this is
+    safe to hit while working out which template you actually want.
+
+    Params: source_tenant, source_template_id, target_tenant_id, name,
+    event_type, owner_email, apply.
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _param(key: str) -> str:
+            return (
+                request.GET.get(key) or request.POST.get(key) or ""
+            ).strip()
+
+        kwargs: dict = {}
+        for key in ("source_tenant", "name", "event_type", "owner_email"):
+            value = _param(key)
+            if value:
+                kwargs[key] = value
+        for key in ("source_template_id", "target_tenant_id"):
+            value = _param(key)
+            if value:
+                try:
+                    kwargs[key] = int(value)
+                except ValueError:
+                    return JsonResponse(
+                        {"ok": False, "error": f"{key}-must-be-an-integer"},
+                        status=400,
+                    )
+        if _param("apply").lower() in ("1", "true", "yes", "on"):
+            kwargs["apply"] = True
+
+        if not kwargs.get("source_tenant") and not kwargs.get("source_template_id"):
+            return JsonResponse(
+                {"ok": False, "error": "source-tenant-or-template-id-required"},
+                status=400,
+            )
+
+        out = io.StringIO()
+        try:
+            call_command("clone_recap_template", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("clone-recap-template cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc),
+                 "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "log": out.getvalue()})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class OnboardTorchProductsView(View):
     """GET/POST `/internal/cron/onboard-torch-products`.
 
@@ -7045,6 +7116,7 @@ def _registered_views() -> dict[str, Any]:
         "inspect-tenants": InspectTenantsView,
         "delete-tenant": DeleteTenantView,
         "onboard-torch-products": OnboardTorchProductsView,
+        "clone-recap-template": CloneRecapTemplateView,
         "setup-ld-training": SetupLdTrainingView,
         "setup-ld-retail-checkin": SetupLdRetailCheckinView,
         "set-checkin-resources": SetCheckinResourcesView,
