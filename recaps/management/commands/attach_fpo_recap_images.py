@@ -14,6 +14,15 @@ One image per FileRecapCategory on the recap's tenant, so the demo shows the
 real grouping the client will see. Falls back to a generic retail-sampling set
 when the tenant has no categories configured.
 
+WHICH TABLE THE FILES GO IN
+    A CustomRecap and a legacy Recap can share an id — 664 exists as both — and
+    they use DIFFERENT file models: CustomRecap -> CustomRecapFile.custom_recap
+    (blob field ``url``), Recap -> RecapFile.recap (blob field ``file``).
+    Writing an id into the wrong one attaches a file to a stranger's recap and
+    the database accepts it, because the row it points at genuinely exists.
+    So the file model is derived from the resolved recap's type, never assumed,
+    and the resolved type is printed on every run.
+
 DRY-RUN by default: prints the tenant's categories and what would be attached.
 --apply writes. Idempotent — a category that already has an FPO image on this
 recap is skipped, so re-running never stacks duplicates.
@@ -34,11 +43,11 @@ from django.core.files.base import ContentFile
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
-from recaps.models import FileRecapCategory, RecapFile
+from recaps.models import FileRecapCategory
 
 User = get_user_model()
 
-# Marker in RecapFile.name so these are findable and removable later. A demo
+# Marker in the file row's name so these are findable and removable later. A demo
 # asset with no marker is a demo asset nobody can clean up.
 FPO_MARKER = "[FPO]"
 
@@ -95,12 +104,15 @@ class Command(BaseCommand):
 
     def handle(self, *args, **opts):
         apply = bool(opts["apply"])
-        recap = self._resolve_recap(opts["recap_id"])
+        recap, kind = self._resolve_recap(opts["recap_id"])
         tenant = self._tenant_of(recap)
+        file_model, fk_field, blob_field = self._file_model(kind)
 
         self.stdout.write("=" * 72)
         self.stdout.write(
-            f"RECAP : id={recap.id} uuid={recap.uuid}\n"
+            f"RECAP : id={recap.id} uuid={recap.uuid}  "
+            f"({'CustomRecap' if kind == 'custom' else 'Recap (legacy)'})\n"
+            f"FILES : {file_model.__name__}.{fk_field} -> blob in .{blob_field}\n"
             f"TENANT: [{getattr(tenant, 'id', '?')}] "
             f"{getattr(tenant, 'name', '(unknown)')!r}\n"
             f"MODE  : {'APPLY (writing)' if apply else 'DRY-RUN (no writes)'}"
@@ -108,13 +120,13 @@ class Command(BaseCommand):
         self.stdout.write("=" * 72)
 
         existing = list(
-            RecapFile.objects.filter(
-                recap_id=recap.id, name__startswith=FPO_MARKER
+            file_model.objects.filter(
+                **{fk_field: recap.id}, name__startswith=FPO_MARKER
             ).order_by("id")
         )
 
         if opts["remove"]:
-            self._remove(existing, apply)
+            self._remove(existing, blob_field, apply)
             return
 
         categories = list(
@@ -163,16 +175,17 @@ class Command(BaseCommand):
         for name, label, category in todo:
             png = self._render(label)
             with transaction.atomic():
-                rf = RecapFile(
-                    recap_id=recap.id,
+                rf = file_model(
                     name=name,
                     file_type=file_type,
                     file_recap_category=category,
                     approved=True,
                     created_by=owner,
+                    **{fk_field: recap.id},
                 )
-                rf.file.save(
-                    f"fpo-{recap.id}-{label.lower().replace(' ', '-').replace('&','and')}.png",
+                slug = label.lower().replace(" ", "-").replace("&", "and")
+                getattr(rf, blob_field).save(
+                    f"fpo-{kind}-{recap.id}-{slug}.png",
                     ContentFile(png),
                     save=False,
                 )
@@ -180,7 +193,7 @@ class Command(BaseCommand):
             made += 1
             cat_txt = f"  category={category.name!r}" if category else "  (no category)"
             self.stdout.write(
-                f"  + RecapFile id={rf.id} {name!r}  "
+                f"  + {file_model.__name__} id={rf.id} {name!r}  "
                 f"{len(png) // 1024}KB{cat_txt}"
             )
 
@@ -196,7 +209,7 @@ class Command(BaseCommand):
 
     # ------------------------------------------------------------------
 
-    def _remove(self, existing, apply: bool) -> None:
+    def _remove(self, existing, blob_field: str, apply: bool) -> None:
         if not existing:
             self.stdout.write(f"\n  No {FPO_MARKER} files on this recap.")
             return
@@ -213,8 +226,9 @@ class Command(BaseCommand):
             # Drop the stored blob too, so removing the demo doesn't leave
             # orphaned objects paying rent in the bucket.
             try:
-                if f.file:
-                    f.file.delete(save=False)
+                blob = getattr(f, blob_field, None)
+                if blob:
+                    blob.delete(save=False)
             except Exception as exc:  # noqa: BLE001 — blob may already be gone
                 self.stdout.write(
                     self.style.WARNING(f"    blob delete failed for {f.id}: {exc}")
@@ -224,13 +238,24 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS(f"\nDeleted {n} FPO file(s)."))
 
     def _resolve_recap(self, recap_id: int):
+        """Return (recap, kind). Prefers CustomRecap; ids collide across both."""
         from recaps.models import CustomRecap, Recap
 
-        for model in (CustomRecap, Recap):
-            row = model.objects.filter(id=recap_id).first()
-            if row is not None:
-                return row
+        row = CustomRecap.objects.filter(id=recap_id).first()
+        if row is not None:
+            return row, "custom"
+        row = Recap.objects.filter(id=recap_id).first()
+        if row is not None:
+            return row, "legacy"
         raise CommandError(f"No recap with id={recap_id}.")
+
+    def _file_model(self, kind: str):
+        """(model, fk field, blob field) for the resolved recap type."""
+        from recaps.models import CustomRecapFile, RecapFile
+
+        if kind == "custom":
+            return CustomRecapFile, "custom_recap_id", "url"
+        return RecapFile, "recap_id", "file"
 
     def _tenant_of(self, recap):
         for path in ("tenant", "event.tenant", "custom_recap_template.tenant"):
@@ -267,7 +292,7 @@ class Command(BaseCommand):
             or FileType.objects.first()
         )
         if ft is None:
-            raise CommandError("No FileType rows exist; cannot create a RecapFile.")
+            raise CommandError("No FileType rows exist; cannot create a file row.")
         return ft
 
     # ------------------------------------------------------------------
