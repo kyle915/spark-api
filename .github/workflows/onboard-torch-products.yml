@@ -36,6 +36,12 @@ on:
         default: "false"
         type: choice
         options: ["false", "true"]
+      report:
+        description: "READ-ONLY: list each product's image URL and whether it serves"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
 
 jobs:
   onboard-torch-products:
@@ -49,6 +55,7 @@ jobs:
           APPLY: ${{ github.event.inputs.apply }}
           SKIP_IMAGES: ${{ github.event.inputs.skip_images }}
           FORCE_IMAGES: ${{ github.event.inputs.force_images }}
+          REPORT: ${{ github.event.inputs.report }}
         run: |
           if [ -z "$CRON_SECRET" ]; then
             echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
@@ -61,7 +68,8 @@ jobs:
             --data-urlencode "owner_email=$OWNER_EMAIL" \
             --data-urlencode "apply=$APPLY" \
             --data-urlencode "skip_images=$SKIP_IMAGES" \
-            --data-urlencode "force_images=$FORCE_IMAGES")
+            --data-urlencode "force_images=$FORCE_IMAGES" \
+            --data-urlencode "report=$REPORT")
           echo "HTTP $STATUS"
           cat /tmp/cron-response.json
           echo ""
