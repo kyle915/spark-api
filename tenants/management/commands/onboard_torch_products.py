@@ -31,6 +31,7 @@ Usage::
 from __future__ import annotations
 
 import logging
+import time
 from urllib.parse import urlparse
 
 import httpx
@@ -49,6 +50,15 @@ User = get_user_model()
 TENANT_SLUG = "torch-thc"
 REQUEST_TIMEOUT = 30.0
 USER_AGENT = "Mozilla/5.0 (compatible; SparkBA-Onboarder/1.0)"
+
+# torchdrinks.com rate-limits a fast burst: seeding all 45 SKUs back-to-back
+# reliably 429s on the last handful. Space the requests out and retry a 429
+# after a pause. 45 x 1s is well inside the request timeout, and a partial
+# failure is expensive here — a product whose column is already set gets
+# SKIPPED on a normal re-run, so a 429 sticks until someone forces it.
+DOWNLOAD_SPACING_SECONDS = 1.0
+RATE_LIMIT_BACKOFF_SECONDS = 8.0
+RATE_LIMIT_RETRIES = 2
 
 # (product_type, product_name, image_url) — generated from Torch manifest.csv,
 # then hand-checked. 45 SKUs across 6 lines.
@@ -323,18 +333,35 @@ class Command(BaseCommand):
     def _attach_image(self, product: Product, url: str) -> tuple[bool, str]:
         """Download `url` into Product.image. Never raises — a brand-site
         change should cost artwork, not the product row."""
+        blob = None
+        last_error = None
         try:
             with httpx.Client(
                 timeout=REQUEST_TIMEOUT,
                 follow_redirects=True,
                 headers={"User-Agent": USER_AGENT},
             ) as client:
-                response = client.get(url)
-                response.raise_for_status()
-                blob = response.content
+                for attempt in range(RATE_LIMIT_RETRIES + 1):
+                    if attempt:
+                        time.sleep(RATE_LIMIT_BACKOFF_SECONDS)
+                    response = client.get(url)
+                    if response.status_code == 429:
+                        last_error = "429 Too Many Requests"
+                        continue
+                    response.raise_for_status()
+                    blob = response.content
+                    break
         except Exception as exc:  # noqa: BLE001
             logger.warning("Torch artwork download failed for %s: %s", url, exc)
             return False, f"IMAGE DOWNLOAD FAILED: {exc}"
+
+        if blob is None:
+            logger.warning("Torch artwork rate-limited for %s: %s", url, last_error)
+            return False, f"IMAGE DOWNLOAD FAILED: {last_error} after retries"
+
+        # Space out the next request rather than the previous one, so a run
+        # that skips most products doesn't pay the delay for them.
+        time.sleep(DOWNLOAD_SPACING_SECONDS)
 
         if not blob:
             return False, "IMAGE EMPTY (0 bytes)"
