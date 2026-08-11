@@ -4421,6 +4421,66 @@ class InspectTenantsView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class AttachFpoRecapImagesView(View):
+    """GET/POST `/internal/cron/attach-fpo-recap-images`.
+
+    Generates and attaches FPO ("for position only") placeholder photos to a
+    recap, one per photo category the tenant has. For demoing a completed recap
+    before real field photos exist.
+
+    DRY-RUN unless `apply` is truthy. `remove` deletes the placeholders (and
+    their blobs) again, which is how the demo gets cleaned up.
+
+    Params: recap_id (required), owner_email, remove, apply.
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _param(key: str) -> str:
+            return (request.GET.get(key) or request.POST.get(key) or "").strip()
+
+        raw_id = _param("recap_id")
+        if not raw_id:
+            return JsonResponse(
+                {"ok": False, "error": "recap-id-required"}, status=400
+            )
+        try:
+            kwargs: dict = {"recap_id": int(raw_id)}
+        except ValueError:
+            return JsonResponse(
+                {"ok": False, "error": "recap-id-must-be-an-integer"}, status=400
+            )
+
+        owner_email = _param("owner_email")
+        if owner_email:
+            kwargs["owner_email"] = owner_email
+        for flag in ("remove", "apply"):
+            if _param(flag).lower() in ("1", "true", "yes", "on"):
+                kwargs[flag] = True
+
+        out = io.StringIO()
+        try:
+            call_command("attach_fpo_recap_images", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("attach-fpo-recap-images cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc),
+                 "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "log": out.getvalue()})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class CloneRecapTemplateView(View):
     """GET/POST `/internal/cron/clone-recap-template`.
 
@@ -7132,6 +7192,7 @@ def _registered_views() -> dict[str, Any]:
         "delete-tenant": DeleteTenantView,
         "onboard-torch-products": OnboardTorchProductsView,
         "clone-recap-template": CloneRecapTemplateView,
+        "attach-fpo-recap-images": AttachFpoRecapImagesView,
         "setup-ld-training": SetupLdTrainingView,
         "setup-ld-retail-checkin": SetupLdRetailCheckinView,
         "set-checkin-resources": SetCheckinResourcesView,
