@@ -4421,6 +4421,78 @@ class InspectTenantsView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class AddRecapTemplateFieldsView(View):
+    """GET/POST `/internal/cron/add-recap-template-fields`.
+
+    Adds questions to an existing recap template from a JSON spec.
+
+    `list_types` prints the available field types and writes nothing — the
+    spec's "type" has to match one exactly, because the renderers key off it
+    and an unknown type renders as an invisible field.
+
+    DRY-RUN unless `apply` is truthy; idempotent either way.
+
+    Params: list_types, template_id, spec (JSON array), create_sections,
+    owner_email, apply.
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _param(key: str) -> str:
+            return (request.GET.get(key) or request.POST.get(key) or "").strip()
+
+        def _flag(key: str) -> bool:
+            return _param(key).lower() in ("1", "true", "yes", "on")
+
+        kwargs: dict = {}
+        if _flag("list_types"):
+            kwargs["list_types"] = True
+        else:
+            raw_id = _param("template_id")
+            spec = _param("spec")
+            if not raw_id or not spec:
+                return JsonResponse(
+                    {"ok": False, "error": "template-id-and-spec-required"},
+                    status=400,
+                )
+            try:
+                kwargs["template_id"] = int(raw_id)
+            except ValueError:
+                return JsonResponse(
+                    {"ok": False, "error": "template-id-must-be-an-integer"},
+                    status=400,
+                )
+            kwargs["spec"] = spec
+            for flag in ("create_sections", "apply"):
+                if _flag(flag):
+                    kwargs[flag] = True
+            owner_email = _param("owner_email")
+            if owner_email:
+                kwargs["owner_email"] = owner_email
+
+        out = io.StringIO()
+        try:
+            call_command("add_recap_template_fields", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("add-recap-template-fields cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc),
+                 "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "log": out.getvalue()})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class AttachFpoRecapImagesView(View):
     """GET/POST `/internal/cron/attach-fpo-recap-images`.
 
@@ -7193,6 +7265,7 @@ def _registered_views() -> dict[str, Any]:
         "onboard-torch-products": OnboardTorchProductsView,
         "clone-recap-template": CloneRecapTemplateView,
         "attach-fpo-recap-images": AttachFpoRecapImagesView,
+        "add-recap-template-fields": AddRecapTemplateFieldsView,
         "setup-ld-training": SetupLdTrainingView,
         "setup-ld-retail-checkin": SetupLdRetailCheckinView,
         "set-checkin-resources": SetCheckinResourcesView,
