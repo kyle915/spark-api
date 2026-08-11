@@ -177,6 +177,14 @@ class Command(BaseCommand):
             help="Create the product rows but download no artwork.",
         )
         parser.add_argument(
+            "--report",
+            action="store_true",
+            help=(
+                "READ-ONLY: list every Torch product with its resolved public "
+                "image URL and whether that URL actually serves. Writes nothing."
+            ),
+        )
+        parser.add_argument(
             "--force-images",
             dest="force_images",
             action="store_true",
@@ -223,6 +231,10 @@ class Command(BaseCommand):
             "product(s)"
         )
         self.stdout.write("=" * 72)
+
+        if opts["report"]:
+            self._report(tenant)
+            return
 
         type_names = sorted({row[0] for row in TORCH_PRODUCTS})
         stats = {
@@ -339,6 +351,74 @@ class Command(BaseCommand):
             return False, f"IMAGE SAVE FAILED: {exc}"
 
         return True, f"image {len(blob) // 1024}KB"
+
+    def _report(self, tenant: Tenant) -> None:
+        """Print each product's public image URL and whether it serves.
+
+        The GraphQL `image` field hands the frontend `public_url(blob)` and the
+        products grid uses it as a bare `<img src>`, so a row renders broken if
+        EITHER the column is empty or the object is not publicly readable. Those
+        look identical in the browser, and only this distinguishes them.
+        """
+        from utils.gcs import extract_blob_name_from_url, public_url
+
+        products = list(
+            Product.objects.filter(tenant=tenant)
+            .select_related("product_type")
+            .order_by("product_type__name", "name")
+        )
+        no_column, serves, fails = [], [], []
+
+        with httpx.Client(
+            timeout=REQUEST_TIMEOUT, follow_redirects=True,
+            headers={"User-Agent": USER_AGENT},
+        ) as client:
+            for product in products:
+                raw = product.image.name if product.image else None
+                if not raw:
+                    no_column.append(product.name)
+                    self.stdout.write(f"  NO IMAGE COLUMN  {product.name}")
+                    continue
+                url = public_url(extract_blob_name_from_url(raw))
+                try:
+                    resp = client.head(url)
+                    code = resp.status_code
+                    ctype = resp.headers.get("Content-Type", "")
+                except Exception as exc:  # noqa: BLE001
+                    fails.append((product.name, f"fetch error: {exc}"))
+                    self.stdout.write(f"  FETCH ERROR      {product.name}: {exc}")
+                    continue
+                if code == 200 and ctype.startswith("image"):
+                    serves.append(product.name)
+                    size = resp.headers.get("Content-Length", "?")
+                    self.stdout.write(
+                        f"  OK {code} {ctype:<11} {int(size) // 1024 if size.isdigit() else '?':>4}KB  "
+                        f"{product.name}"
+                    )
+                else:
+                    fails.append((product.name, f"HTTP {code} {ctype}"))
+                    self.stdout.write(
+                        f"  NOT SERVING {code} {ctype or 'no-type'}  {product.name}\n"
+                        f"      {url}"
+                    )
+
+        self.stdout.write("")
+        self.stdout.write("=" * 72)
+        line = (
+            f"{len(products)} product(s): {len(serves)} image serves OK, "
+            f"{len(no_column)} with no image set, {len(fails)} set but NOT serving."
+        )
+        self.stdout.write(
+            self.style.SUCCESS(line) if not (no_column or fails)
+            else self.style.WARNING(line)
+        )
+        if fails:
+            self.stdout.write(
+                "\nSet but not serving means the bytes uploaded and the column is "
+                "populated, but the object is not publicly readable — check that "
+                "the bucket still grants allUsers:objectViewer."
+            )
+        self.stdout.write("=" * 72)
 
     def _extension_for_url(self, url: str) -> str:
         path = urlparse(url).path

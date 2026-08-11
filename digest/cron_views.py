@@ -4451,7 +4451,7 @@ class OnboardTorchProductsView(View):
             )
 
         kwargs: dict = {"owner_email": owner_email}
-        for flag in ("apply", "skip_images", "force_images"):
+        for flag in ("apply", "skip_images", "force_images", "report"):
             raw = (
                 request.GET.get(flag) or request.POST.get(flag) or ""
             ).lower()
