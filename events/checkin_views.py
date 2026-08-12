@@ -39,6 +39,11 @@ from events.checkin_tokens import (
 
 logger = logging.getLogger(__name__)
 
+# How far the public check-in link lets a BA date their own shift.
+# Backdating is the normal case; forward-dating is almost always a typo.
+CHECKIN_MAX_PAST_DAYS = 90
+CHECKIN_MAX_FUTURE_DAYS = 14
+
 # Photo uploads only — the check-in page never uploads anything else.
 _ALLOWED_UPLOAD_TYPES = {
     "image/jpeg",
@@ -331,8 +336,26 @@ def public_checkin_identify(request: HttpRequest, code: str) -> HttpResponse:
         on_date = _parse_iso_date(date_raw)
         if on_date is None:
             return _err("Pick the date you worked (YYYY-MM-DD).")
-        if abs((on_date - dj_tz.localdate()).days) > 14:
-            return _err("That date is too far from today. Ask your lead to log it.")
+        # Asymmetric on purpose. Backdating is ordinary — a BA writes the recap
+        # up on the drive home, or the brand closes out last month's paperwork
+        # a few weeks late — so the past side is a full quarter. Forward-dating
+        # is not: you cannot recap work you have not done yet, and the only
+        # legitimate reason to be a day or two ahead is a shift that crosses
+        # midnight or a phone in a different timezone from the server.
+        #
+        # It stays bounded rather than open because a mistyped year (2025 for
+        # 2026) would otherwise create an event a year deep in the tracker,
+        # where it silently lands in the wrong KPI period and nobody looks.
+        delta = (on_date - dj_tz.localdate()).days
+        if delta > CHECKIN_MAX_FUTURE_DAYS:
+            return _err(
+                "That date is in the future. Pick the day you actually worked."
+            )
+        if -delta > CHECKIN_MAX_PAST_DAYS:
+            return _err(
+                f"That date is more than {CHECKIN_MAX_PAST_DAYS} days ago. "
+                "Ask your lead to log it."
+            )
 
         # WHICH PROGRAM. A brand running more than one off the same link asks
         # the BA ("Retail Sampling" or "Event Activation"), and the answer picks
