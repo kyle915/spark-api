@@ -1,0 +1,62 @@
+name: Export expense receipts (CSV + PDF bundle)
+
+# Fires `/internal/cron/export-expense-receipts` on Cloud Run. Same code as the
+# export button on /recaps/list, runnable without a login session.
+#
+# Scoped by EVENT date. DRY-RUN unless apply=true — the dry run reports the
+# recap count, image count and total spend without downloading any images, so
+# you can confirm the window before paying for the fetch.
+#
+# With apply=true the response carries a `PDF_URL:` line (public GCS URL).
+#
+# Secret-gated via `X-Cron-Secret` (shared INTERNAL_CRON_SECRET) — see the
+# daily-admin-digest workflow for the full setup notes.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tenant_id:
+        description: "Tenant id (e.g. 11 = Stone House Bread)"
+        required: true
+      start:
+        description: "Start date YYYY-MM-DD (inclusive)"
+        required: true
+      end:
+        description: "End date YYYY-MM-DD (inclusive)"
+        required: true
+      apply:
+        description: "Render + upload the PDF (false = summary only)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+jobs:
+  export-expense-receipts:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire export endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/export-expense-receipts
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          TENANT_ID: ${{ github.event.inputs.tenant_id }}
+          START: ${{ github.event.inputs.start }}
+          END: ${{ github.event.inputs.end }}
+          APPLY: ${{ github.event.inputs.apply }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            --max-time 900 \
+            -X POST "$CRON_URL" \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            --data-urlencode "tenant_id=$TENANT_ID" \
+            --data-urlencode "start=$START" \
+            --data-urlencode "end=$END" \
+            --data-urlencode "apply=$APPLY")
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          echo ""
+          [ "$STATUS" != "200" ] && exit 1 || exit 0
