@@ -4421,6 +4421,69 @@ class InspectTenantsView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class ExportExpenseReceiptsView(View):
+    """GET/POST `/internal/cron/export-expense-receipts`.
+
+    Builds the BA expense-receipt CSV + PDF bundle for a tenant and date range
+    — the same `recaps.receipts_export` code the /recaps/list button calls, so
+    the two can't drift. Exists because that button is a logged-in GraphQL
+    mutation and prod isn't reachable locally.
+
+    DRY-RUN unless `apply` is truthy: the summary (recap count, image count,
+    total spend) comes back without fetching images or uploading anything.
+    With apply, the response log carries a `PDF_URL:` line.
+
+    Params: tenant_id, start, end (all required), apply.
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _param(key: str) -> str:
+            return (request.GET.get(key) or request.POST.get(key) or "").strip()
+
+        raw_id, start, end = _param("tenant_id"), _param("start"), _param("end")
+        if not raw_id or not start or not end:
+            return JsonResponse(
+                {"ok": False, "error": "tenant-id-start-and-end-required"},
+                status=400,
+            )
+        try:
+            kwargs: dict = {"tenant_id": int(raw_id), "start": start, "end": end}
+        except ValueError:
+            return JsonResponse(
+                {"ok": False, "error": "tenant-id-must-be-an-integer"}, status=400
+            )
+        if _param("apply").lower() in ("1", "true", "yes", "on"):
+            kwargs["apply"] = True
+
+        out = io.StringIO()
+        try:
+            call_command("export_expense_receipts", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("export-expense-receipts cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc),
+                 "log": out.getvalue()},
+                status=500,
+            )
+        log = out.getvalue()
+        pdf_url = None
+        for line in log.splitlines():
+            if line.startswith("PDF_URL:"):
+                pdf_url = line.split("PDF_URL:", 1)[1].strip()
+        return JsonResponse({"ok": True, "pdf_url": pdf_url, "log": log})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class AddRecapTemplateFieldsView(View):
     """GET/POST `/internal/cron/add-recap-template-fields`.
 
@@ -7266,6 +7329,7 @@ def _registered_views() -> dict[str, Any]:
         "clone-recap-template": CloneRecapTemplateView,
         "attach-fpo-recap-images": AttachFpoRecapImagesView,
         "add-recap-template-fields": AddRecapTemplateFieldsView,
+        "export-expense-receipts": ExportExpenseReceiptsView,
         "setup-ld-training": SetupLdTrainingView,
         "setup-ld-retail-checkin": SetupLdRetailCheckinView,
         "set-checkin-resources": SetCheckinResourcesView,
