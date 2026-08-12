@@ -366,3 +366,59 @@ def test_build_recap_pdf_html_image_field_falls_back_to_text_when_unfetched():
 
     assert "<img" not in html
     assert blob_path in html
+
+
+def test_build_recap_pdf_html_downscales_full_res_photos():
+    """Photo-heavy recap PDFs used to inline every photo at full resolution
+    (3000-4000px / multi-MB), so a recap with many photos produced a 50MB+
+    download and a slow, timeout-prone render. Photos are now downscaled to
+    <=1400px @ q80 before base64-embedding, mirroring the campaign report."""
+    import base64
+    import os
+    import re
+
+    from PIL import Image as PILImage
+
+    # A real full-res-ish JPEG. Random noise (not a flat color, which JPEG
+    # would crush to a few KB) so the source is genuinely large, like a photo.
+    big = BytesIO()
+    PILImage.frombytes(
+        "RGB", (3000, 3000), os.urandom(3000 * 3000 * 3)
+    ).save(big, format="JPEG", quality=95)
+    big_bytes = big.getvalue()
+    assert len(big_bytes) > 500_000  # sanity: a chunky source image (MB-scale)
+
+    recap = SimpleNamespace(
+        name="Photo Recap",
+        approved=True,
+        ambassador=None,
+        location=SimpleNamespace(name="Tempe"),
+        state=SimpleNamespace(name="AZ"),
+        retailer=SimpleNamespace(name="Total Wireless"),
+        timezone=SimpleNamespace(name="Mountain"),
+        total_engagements=0,
+        used_corpo_card=False,
+        custom_recap_template=SimpleNamespace(name="Template"),
+        event=SimpleNamespace(
+            name="Store Event",
+            date=datetime(2026, 8, 8, 9, 0),
+            tenant=SimpleNamespace(slug="total-wireless"),
+        ),
+        custom_recap_product_sample=RelatedList([]),
+        custom_recap_sale_performance=RelatedList([]),
+        custom_field_value=RelatedList([]),
+    )
+
+    html = build_recap_pdf_html(
+        recap, images=[{"bytes": big_bytes, "category": "Photos"}]
+    )
+
+    # Pull the embedded JPEG data URI back out and decode it.
+    match = re.search(r"data:image/jpeg;base64,([A-Za-z0-9+/=]+)", html)
+    assert match, "expected an embedded photo data URI"
+    embedded = base64.b64decode(match.group(1))
+
+    # Downscaled: longest side capped at 1400px, and materially smaller bytes.
+    with PILImage.open(BytesIO(embedded)) as im:
+        assert max(im.size) <= 1400
+    assert len(embedded) < len(big_bytes)

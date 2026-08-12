@@ -423,7 +423,9 @@ def build_recap_pdf_html(
         # than printing the raw blob path. bytes_to_data_uri handles the
         # HEIC→JPG conversion, same as the attachments path.
         if isinstance(value, str) and value in custom_field_images:
-            data_uri = bytes_to_data_uri(custom_field_images[value])
+            data_uri = bytes_to_data_uri(
+                downscale_image_bytes(custom_field_images[value])
+            )
             if data_uri:
                 return (
                     '<div><span>{label}</span>'
@@ -450,7 +452,13 @@ def build_recap_pdf_html(
     image_groups: dict[str, list[dict[str, str]]] = {}
     for image in images:
         image_bytes = image.get("bytes") or b""
-        data_uri = bytes_to_data_uri(image_bytes)
+        # Shrink full-res phone photos before base64-embedding them into the
+        # WeasyPrint doc. A single-recap PDF used to inline every photo at
+        # 3000-4000px / multi-MB, so a photo-heavy recap produced a 50MB+
+        # download (and a slow, timeout-prone render). 1400px @ q80 is visually
+        # identical on the page but ~10-20x smaller. Mirrors the campaign
+        # report path; best-effort (keeps the original if it can't shrink it).
+        data_uri = bytes_to_data_uri(downscale_image_bytes(image_bytes))
         if not data_uri:
             continue
         category = image.get("category") or "Uncategorized"
