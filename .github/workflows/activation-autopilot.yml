@@ -1,7 +1,12 @@
 name: activation-autopilot
 
-# Email never-signed-in BAs with a shift in the next 72h (once each) + a
-# digest of the stragglers to the Ignite team. Every 6 hours + manual.
+# Email never-signed-in BAs with a shift in the next 72h (once each).
+# Every 6 hours + manual.
+#
+# The straggler DIGEST to the Ignite team is off by default (2026-08-12) — it
+# fired four times a day and repeated the same names. Set digest=true on a
+# manual run to get it. The BA-facing welcome emails are unaffected and still
+# run on schedule; they are what actually activates a BA.
 
 on:
   schedule:
@@ -14,6 +19,10 @@ on:
         default: "72"
       dry_run:
         description: "Dry run (true) — print only, send nothing"
+        required: false
+        default: "false"
+      digest:
+        description: "Also email the Ignite team the straggler digest"
         required: false
         default: "false"
 
@@ -33,6 +42,7 @@ jobs:
             -H "X-Cron-Secret: ${{ secrets.INTERNAL_CRON_SECRET }}" \
             --data-urlencode "window_hours=${{ inputs.window_hours || '72' }}" \
             --data-urlencode "dry_run=${{ inputs.dry_run || 'false' }}" \
+            --data-urlencode "digest=${{ inputs.digest || 'false' }}" \
             --max-time 540)
           echo "$BODY"
           STATUS=$(echo "$BODY" | tail -1 | awk '{print $2}')
