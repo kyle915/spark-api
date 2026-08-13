@@ -5285,7 +5285,7 @@ class ActivationAutopilotView(View):
     Emails never-signed-in BAs with a shift in the next window (once each,
     fresh welcome + temp password) and digests the stragglers to the
     Ignite team (send_activation_autopilot command). Scheduled every 6h.
-    Params: window_hours, dry_run.
+    Params: window_hours, dry_run, digest.
     """
 
     def _run(self, request: HttpRequest) -> HttpResponse:
@@ -5300,6 +5300,10 @@ class ActivationAutopilotView(View):
         cmd_args: list[str] = []
         if _get("window_hours"):
             cmd_args += ["--window-hours", _get("window_hours")]
+        # Opt-in: the straggler digest to the Ignite list is off unless asked
+        # for. The BA welcome emails this job sends are unaffected.
+        if _get("digest").lower() in ("1", "true", "yes", "on"):
+            cmd_args += ["--digest"]
         if dry_run:
             cmd_args.append("--dry-run")
 

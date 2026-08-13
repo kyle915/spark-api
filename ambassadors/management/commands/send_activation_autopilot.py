@@ -23,7 +23,12 @@ Each run, for every APPROVED booking whose event starts within the next
     the email won't save.
 
 Idempotent + best-effort: per-BA failures are logged and never abort the
-run; ``--dry-run`` prints the plan and sends/stamps nothing. Prod:
+run; ``--dry-run`` prints the plan and sends/stamps nothing.
+
+The admin straggler digest to the Ignite list is OPT-IN (``--digest``).
+It fired every 6 hours and mostly repeated the same names, so it was
+switched off 2026-08-12 at Kyle's request. The BA-facing welcome emails
+still run on schedule — those are what actually get BAs activated. Prod:
 ActivationAutopilotView (/internal/cron/activation-autopilot) + the
 activation-autopilot workflow (every 6h + manual dispatch).
 """
@@ -54,6 +59,15 @@ class Command(BaseCommand):
             type=int,
             default=WINDOW_HOURS,
             help=f"Look-ahead window for upcoming shifts (default {WINDOW_HOURS}).",
+        )
+        parser.add_argument(
+            "--digest",
+            action="store_true",
+            help=(
+                "Also email the Ignite team the straggler digest. OFF by "
+                "default — the BA welcome emails are the point of this job; "
+                "the digest is a four-times-a-day nag about the same names."
+            ),
         )
         parser.add_argument(
             "--dry-run",
@@ -145,8 +159,14 @@ class Command(BaseCommand):
             return
 
         w(f"BA welcome emails sent: {emailed}")
-        self._send_admin_digest(by_user, urgent_end)
-        w(self.style.SUCCESS("Admin digest sent."))
+        # The digest is opt-in. Turning it off does NOT weaken activation: the
+        # BA welcome emails above and the nudge stamping already ran. It only
+        # stops the internal summary to the Ignite list.
+        if opts["digest"]:
+            self._send_admin_digest(by_user, urgent_end)
+            w(self.style.SUCCESS("Admin digest sent."))
+        else:
+            w("Admin digest suppressed (pass --digest to send it).")
 
     # -- helpers -----------------------------------------------------------
 
