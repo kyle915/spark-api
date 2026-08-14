@@ -81,7 +81,10 @@ async def recap_approved_notify_view(request: HttpRequest) -> HttpResponse:
     from asgiref.sync import sync_to_async
 
     from recaps import models
-    from recaps.mutations import _notify_recap_approved_to_rmm_or_clients
+    from recaps.mutations import (
+        _ensure_recap_pdf_for_notify,
+        _notify_recap_approved_to_rmm_or_clients,
+    )
 
     try:
         body = json.loads((request.body or b"").decode("utf-8") or "{}")
@@ -127,6 +130,7 @@ async def recap_approved_notify_view(request: HttpRequest) -> HttpResponse:
         return JsonResponse({"ok": False, "error": "not-found"}, status=200)
 
     try:
+        await _ensure_recap_pdf_for_notify(recap)
         await _notify_recap_approved_to_rmm_or_clients(recap)
     except Exception:  # noqa: BLE001 — best-effort; never trigger a Cloud Tasks retry
         logger.exception(
@@ -137,4 +141,36 @@ async def recap_approved_notify_view(request: HttpRequest) -> HttpResponse:
 
     # Always 200 after attempting the (best-effort, deduped) notify so Cloud
     # Tasks acks the task and does not retry / re-send duplicate emails.
+    return JsonResponse({"ok": True})
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+async def heic_convert_view(request: HttpRequest) -> HttpResponse:
+    """POST `/api/tasks/heic-convert`.
+
+    Body JSON: ``{"kind": "blob"|"legacy", "heic_blob_name": "...", ...}``.
+    Runs HEIC→JPG after the upload transaction has committed.
+    """
+    if not _secret_ok(request):
+        return HttpResponseForbidden("Forbidden")
+
+    from asgiref.sync import sync_to_async
+
+    from recaps.heic_conversion import run_heic_convert_payload
+
+    try:
+        body = json.loads((request.body or b"").decode("utf-8") or "{}")
+    except (ValueError, UnicodeDecodeError):
+        logger.warning("heic-convert: could not parse request body.")
+        return JsonResponse({"ok": False, "error": "bad-json"}, status=200)
+
+    if not isinstance(body, dict) or not body.get("heic_blob_name"):
+        return JsonResponse({"ok": False, "error": "bad-payload"}, status=200)
+
+    try:
+        await sync_to_async(run_heic_convert_payload)(body)
+    except Exception:
+        logger.exception("heic-convert failed payload=%s", body)
+
     return JsonResponse({"ok": True})

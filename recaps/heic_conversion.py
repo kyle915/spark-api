@@ -31,6 +31,7 @@ import logging
 from typing import Optional
 
 from django.conf import settings  # noqa: F401  (kept for future quality knobs)
+from django.db import transaction
 
 from utils.gcs import download_blob_bytes, upload_bytes, public_url, blob_exists
 
@@ -222,6 +223,131 @@ def jpg_sibling_url_for_heic(heic_blob_name: str) -> Optional[str]:
     if not is_heic_blob(heic_blob_name):
         return None
     return public_url(jpg_blob_name_for(heic_blob_name))
+
+
+def _enqueue_or_run(path: str, payload: dict, fallback) -> None:
+    """Cloud Tasks when configured; else a daemon thread (inline under pytest)."""
+    import sys
+    import threading
+
+    from utils.cloud_tasks import enqueue
+
+    if enqueue(path, payload):
+        return
+    if "pytest" in sys.modules:
+        fallback()
+        return
+
+    def _safe():
+        try:
+            fallback()
+        except Exception:
+            logger.exception("HEIC convert fallback failed payload=%s", payload)
+
+    threading.Thread(target=_safe, daemon=True).start()
+
+
+def schedule_jpg_sibling_blob(heic_blob_name: str) -> None:
+    """Convert a HEIC blob after the current transaction commits.
+
+    Custom-recap path: GCS sibling only (no CustomRecapFile row).
+    ``displayUrl`` rewrites ``.heic`` → ``.jpg`` once the sibling exists.
+    """
+    if not is_heic_blob(heic_blob_name):
+        return
+
+    def _kick():
+        _enqueue_or_run(
+            "/api/tasks/heic-convert",
+            {"kind": "blob", "heic_blob_name": heic_blob_name},
+            lambda: ensure_jpg_sibling_blob(heic_blob_name),
+        )
+
+    transaction.on_commit(_kick)
+
+
+def schedule_jpg_sibling(
+    *,
+    heic_blob_name: str,
+    recap_id: int,
+    file_type,
+    file_recap_category,
+    created_by,
+) -> None:
+    """Convert a HEIC RecapFile after the current transaction commits.
+
+    Legacy path: JPG sibling blob + RecapFile row. IDs are captured now
+    so the after-commit task can re-fetch rows on its own connection.
+    """
+    if not is_heic_blob(heic_blob_name) or recap_id is None:
+        return
+    payload = {
+        "kind": "legacy",
+        "heic_blob_name": heic_blob_name,
+        "recap_id": recap_id,
+        "file_type_id": getattr(file_type, "id", None),
+        "file_recap_category_id": getattr(file_recap_category, "id", None),
+        "created_by_id": getattr(created_by, "id", None),
+    }
+
+    def _work():
+        from ambassadors.models import FileType
+        from django.contrib.auth import get_user_model
+        from recaps import models
+
+        ft = FileType.objects.filter(id=payload["file_type_id"]).first()
+        user = get_user_model().objects.filter(id=payload["created_by_id"]).first()
+        if ft is None or user is None:
+            logger.warning("HEIC sibling: missing file_type/user, skipping")
+            return
+        category = None
+        if payload["file_recap_category_id"]:
+            category = models.FileRecapCategory.objects.filter(
+                id=payload["file_recap_category_id"]
+            ).first()
+        ensure_jpg_sibling(
+            heic_blob_name=heic_blob_name,
+            recap_id=recap_id,
+            file_type=ft,
+            file_recap_category=category,
+            created_by=user,
+        )
+
+    def _kick():
+        _enqueue_or_run("/api/tasks/heic-convert", payload, _work)
+
+    transaction.on_commit(_kick)
+
+
+def run_heic_convert_payload(payload: dict) -> None:
+    """Task-handler entry: run the conversion described by ``payload``."""
+    kind = payload.get("kind")
+    blob = payload.get("heic_blob_name") or ""
+    if kind == "blob":
+        ensure_jpg_sibling_blob(blob)
+        return
+    if kind == "legacy":
+        from ambassadors.models import FileType
+        from django.contrib.auth import get_user_model
+        from recaps import models
+
+        ft = FileType.objects.filter(id=payload.get("file_type_id")).first()
+        user = get_user_model().objects.filter(id=payload.get("created_by_id")).first()
+        if ft is None or user is None:
+            logger.warning("HEIC sibling task: missing file_type/user, skipping")
+            return
+        category = None
+        if payload.get("file_recap_category_id"):
+            category = models.FileRecapCategory.objects.filter(
+                id=payload["file_recap_category_id"]
+            ).first()
+        ensure_jpg_sibling(
+            heic_blob_name=blob,
+            recap_id=payload.get("recap_id"),
+            file_type=ft,
+            file_recap_category=category,
+            created_by=user,
+        )
 
 
 def display_blob_name(blob_name: Optional[str]) -> Optional[str]:

@@ -21,6 +21,10 @@ class RecapFiltersInput(SparkGraphQLInput):
     event_address: str | None = None
     approved: bool | None = None
     edited: bool | None = None
+    # Name/code filters the web list sends (dropdowns are labeled by
+    # retailer name + 2-letter state code, not Relay ids).
+    retailer_name: str | None = None
+    state_code: str | None = None
 
 
 @strawberry.input

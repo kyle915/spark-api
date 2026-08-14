@@ -169,6 +169,16 @@ def test_custom_recap_maps_free_text_fields_to_kpis():
     assert kpis.samples_distributed == 70
 
 
+def test_custom_recap_prefers_samples_given_over_structured_sku_qty():
+    recap = _custom_recap(
+        [("Total Samples Given Out", "48"), ("Cans Sold", "9")],
+        custom_recap_product_sample=_Mgr([_Obj(quantity=2)]),
+    )
+    kpis = rs.CampaignReportKpis()
+    rs._accumulate_custom(recap, kpis)
+    assert kpis.samples_distributed == 48  # headline wins, not leftover 2
+
+
 def test_custom_recap_prefers_structured_samples_over_consumers_sampled():
     recap = _custom_recap(
         [("Consumers Sampled", "70")],

@@ -46,7 +46,7 @@ from utils.gcs import (
     get_gcs_client,
 )
 from utils.onesignal import OneSignalError, one_signal_client
-from utils.cloud_tasks import enqueue
+from utils.cloud_tasks import enqueue, enqueue_or_background
 from recaps.pdf import (
     build_recap_pdf,
     build_campaign_report_pdf,
@@ -74,6 +74,19 @@ _RECEIPTS_CATEGORY_NAME = "Receipts"
 _FILE_CATEGORY_SENTINEL_NAMES = {
     "1": _PHOTOS_CATEGORY_NAME,
     "2": _RECEIPTS_CATEGORY_NAME,
+}
+
+# Name / slug aliases the web uploaders send so "1"/"2" never collide
+# with a real FileRecapCategory PK (Liquid Death "Table Set Up" = PK 2).
+# Mobile may still send the positional sentinels; those stay mapped.
+_FILE_CATEGORY_ROLE_ALIASES = {
+    "1": "1",
+    "2": "2",
+    "sampling photos": "1",
+    "photo": "1",
+    "photos": "1",
+    "receipts": "2",
+    "receipt": "2",
 }
 
 # Keyword fallbacks for tenants whose role category isn't named the exact
@@ -117,7 +130,8 @@ def _resolve_role_file_recap_category(sentinel, *, tenant_id):
     Never resolves cross-tenant: a role that this tenant has no category for is
     self-healed into one rather than borrowed from whoever owns that PK.
     """
-    sentinel_name = _FILE_CATEGORY_SENTINEL_NAMES.get(sentinel)
+    role_key = _FILE_CATEGORY_ROLE_ALIASES.get(str(sentinel or "").strip().lower())
+    sentinel_name = _FILE_CATEGORY_SENTINEL_NAMES.get(role_key) if role_key else None
     if sentinel_name is None or tenant_id is None:
         return None
     # 1) Exact seeded role name (fast path for tenants on the defaults).
@@ -131,7 +145,7 @@ def _resolve_role_file_recap_category(sentinel, *, tenant_id):
     #    named "Receipt" / "Upload Receipt" / "Product Purchase Receipt"
     #    rather than mis-filing into "Table setup" via the PK fallback.
     #    Tenant-scoped; lowest id wins on ties.
-    for keyword in _FILE_CATEGORY_SENTINEL_KEYWORDS.get(sentinel, ()):
+    for keyword in _FILE_CATEGORY_SENTINEL_KEYWORDS.get(role_key, ()):
         by_keyword = (
             models.FileRecapCategory.objects.filter(
                 tenant_id=tenant_id, name__icontains=keyword
@@ -307,7 +321,9 @@ async def _resolve_recap_pdf_attachment(
                 pdf = qs.order_by("-id").first()
             if not pdf:
                 return None
-            blob = extract_blob_name_from_url(str(pdf.url)) or str(pdf.url)
+            # RecapFile stores the blob on ``file``; CustomRecapFile on ``url``.
+            blob_val = getattr(pdf, "url", None) or getattr(pdf, "file", None)
+            blob = extract_blob_name_from_url(str(blob_val)) or str(blob_val)
             return blob, (pdf.name or f"recap-{recap.uuid}.pdf")
         except Exception:
             return None
@@ -336,6 +352,161 @@ async def _resolve_recap_pdf_attachment(
             "content_type": "application/pdf",
         }
     ]
+
+
+def _find_existing_pdf_file(recap):
+    """Most recent PDF file row on this recap, or None."""
+    pdf_q = Q(file_type__extension__iexact=".pdf") | Q(file_type__extension__iexact="pdf")
+    if isinstance(recap, models.CustomRecap):
+        return recap.custom_recap_files.filter(pdf_q).order_by("-id").first()
+    return recap.recap_files.filter(pdf_q).order_by("-id").first()
+
+
+def _render_and_store_recap_pdf_sync(recap, user=None):
+    """Generate + persist a recap PDF if one is not already stored.
+
+    Used by the approve notify path so the email can attach the PDF
+    without regenerating on every approve. Best-effort: failures log
+    and return None (link-only email).
+    """
+    existing = _find_existing_pdf_file(recap)
+    if existing:
+        return existing
+    actor = user or getattr(recap, "updated_by", None) or getattr(recap, "created_by", None)
+    if actor is None:
+        return None
+    file_type = FileType.objects.filter(
+        Q(extension__iexact=".pdf") | Q(extension__iexact="pdf")
+    ).first()
+    if not file_type:
+        return None
+
+    import concurrent.futures as _cf
+
+    image_entries = []
+    if isinstance(recap, models.CustomRecap):
+        files = list(recap.custom_recap_files.select_related("file_type", "file_recap_category"))
+        candidates = []
+        for recap_file in files:
+            if not should_embed_recap_file(recap_file):
+                continue
+            blob_name = extract_blob_name_from_url(str(recap_file.url))
+            if blob_name:
+                candidates.append((recap_file, blob_name))
+    else:
+        files = list(recap.recap_files.select_related("file_type", "file_recap_category"))
+        candidates = []
+        for recap_file in files:
+            if not should_embed_recap_file(recap_file):
+                continue
+            blob_name = extract_blob_name_from_url(str(recap_file.file))
+            if blob_name:
+                candidates.append((recap_file, blob_name))
+
+    def _fetch_one(item):
+        recap_file, blob_name = item
+        try:
+            data = download_blob_bytes(blob_name)
+        except Exception:
+            return None
+        if not data or not is_image_bytes(data):
+            return None
+        data = downscale_image_bytes(data) or data
+        return {
+            "name": recap_file.name,
+            "bytes": data,
+            "category": (
+                recap_file.file_recap_category.name
+                if recap_file.file_recap_category
+                else "Uncategorized"
+            ),
+        }
+
+    if candidates:
+        with _cf.ThreadPoolExecutor(max_workers=16) as pool:
+            for entry in pool.map(_fetch_one, candidates):
+                if entry is not None:
+                    image_entries.append(entry)
+
+    try:
+        pdf_bytes = build_recap_pdf(recap, image_entries)
+        timestamp = django_timezone.now().strftime("%Y%m%d%H%M%S")
+        if isinstance(recap, models.CustomRecap):
+            blob_name = f"recaps/pdfs/custom-{recap.uuid}-{timestamp}.pdf"
+            upload_bytes(blob_name, pdf_bytes, content_type="application/pdf")
+            return models.CustomRecapFile.objects.create(
+                name=f"Custom Recap PDF - {recap.name}",
+                url=blob_name,
+                file_type=file_type,
+                custom_recap=recap,
+                approved=False,
+                created_by=actor,
+            )
+        blob_name = f"recaps/pdfs/{recap.uuid}-{timestamp}.pdf"
+        upload_bytes(blob_name, pdf_bytes, content_type="application/pdf")
+        return models.RecapFile.objects.create(
+            name=f"Recap PDF - {recap.name}",
+            file=blob_name,
+            file_type=file_type,
+            recap=recap,
+            approved=False,
+            created_by=actor,
+        )
+    except Exception:
+        logger.exception("recap PDF store failed recap=%s", getattr(recap, "id", None))
+        return None
+
+
+async def _ensure_recap_pdf_for_notify(recap) -> None:
+    await sync_to_async(_render_and_store_recap_pdf_sync)(recap)
+
+
+def _thread_recap_approved_notify(recap_id: int, recap_kind: str) -> None:
+    """Sync entry for the daemon-thread / Cloud Tasks fallback."""
+    import asyncio
+
+    from utils.db import fresh_db_connection
+
+    def _run():
+        async def _async():
+            model = models.CustomRecap if recap_kind == "custom" else models.Recap
+            recap = model.objects.select_related(
+                "event",
+                "event__tenant",
+                "event__rmm_asigned",
+                "event__timezone",
+                "job",
+                "retailer",
+                "timezone",
+                "ambassador",
+                "ambassador__user",
+            ).get(id=recap_id)
+            await _ensure_recap_pdf_for_notify(recap)
+            await _notify_recap_approved_to_rmm_or_clients(recap)
+
+        asyncio.run(_async())
+
+    fresh_db_connection(_run)()
+
+
+async def _kick_recap_approved_notify(recap, recap_kind: str) -> None:
+    """Always enqueue PDF generate + client email; never block approve."""
+    import sys
+
+    payload = {"recap_id": recap.id, "recap_kind": recap_kind}
+    path = "/api/tasks/recap-approved-notify"
+    enqueued = await sync_to_async(enqueue)(path, payload)
+    if enqueued:
+        return
+    if "pytest" in sys.modules:
+        await _ensure_recap_pdf_for_notify(recap)
+        await _notify_recap_approved_to_rmm_or_clients(recap)
+        return
+    enqueue_or_background(
+        path,
+        payload,
+        lambda: _thread_recap_approved_notify(recap.id, recap_kind),
+    )
 
 
 async def _resolve_recap_requestor_recipients(
@@ -1314,7 +1485,7 @@ class RecapMutationService(SparkGraphQLMixin):
                 for heic_rf in recap_files:
                     if not heic_conversion.is_heic_blob(str(heic_rf.file)):
                         continue
-                    heic_conversion.ensure_jpg_sibling(
+                    heic_conversion.schedule_jpg_sibling(
                         heic_blob_name=str(heic_rf.file),
                         recap_id=recap.id,
                         file_type=heic_rf.file_type,
@@ -2160,7 +2331,7 @@ class RecapMutationService(SparkGraphQLMixin):
                         # HEIC → JPG sibling blob so the gallery serves a
                         # plain <img> (displayUrl rewrites .heic→.jpg).
                         if heic_conversion.is_heic_blob(blob_name):
-                            heic_conversion.ensure_jpg_sibling_blob(blob_name)
+                            heic_conversion.schedule_jpg_sibling_blob(blob_name)
                 return custom_recap
 
         custom_recap = await create_custom_recap_transaction()
@@ -2670,7 +2841,7 @@ class RecapMutationService(SparkGraphQLMixin):
                                 created_by=self.user,
                             )
                             if heic_conversion.is_heic_blob(blob_name):
-                                heic_conversion.ensure_jpg_sibling_blob(blob_name)
+                                heic_conversion.schedule_jpg_sibling_blob(blob_name)
                     else:
                         blob_to_file = {
                             extract_blob_name_from_url(str(file.url)): file
@@ -2788,7 +2959,7 @@ class RecapMutationService(SparkGraphQLMixin):
                                 created_by=self.user,
                             )
                             if heic_conversion.is_heic_blob(blob_name):
-                                heic_conversion.ensure_jpg_sibling_blob(blob_name)
+                                heic_conversion.schedule_jpg_sibling_blob(blob_name)
                             final_files.append(custom_recap_file)
 
                         removed_files = list(blob_to_file.values())
@@ -3637,7 +3808,7 @@ class RecapMutationService(SparkGraphQLMixin):
                 # and Files grid render it without the in-browser libheif
                 # fallback. Best-effort — failures log + keep the HEIC.
                 if heic_conversion.is_heic_blob(blob_name):
-                    heic_conversion.ensure_jpg_sibling(
+                    heic_conversion.schedule_jpg_sibling(
                         heic_blob_name=blob_name,
                         recap_id=recap.id,
                         file_type=file_type,
@@ -3732,7 +3903,7 @@ class RecapMutationService(SparkGraphQLMixin):
                 # HEIC → JPG sibling blob so the gallery renders a plain
                 # <img> (displayUrl rewrites .heic→.jpg when present).
                 if heic_conversion.is_heic_blob(blob_name):
-                    heic_conversion.ensure_jpg_sibling_blob(blob_name)
+                    heic_conversion.schedule_jpg_sibling_blob(blob_name)
                 return custom_recap
 
         return await create_file()
@@ -3991,16 +4162,7 @@ class RecapMutationService(SparkGraphQLMixin):
                 ).get
             )(id=recap.id)
             try:
-                # Offload the slow client/RMM email + PDF to Cloud Tasks when
-                # the feature is configured so this mutation returns fast. When
-                # it's off (the default), enqueue() returns False and we run the
-                # exact same notify inline — behavior unchanged from before.
-                enqueued = await sync_to_async(enqueue)(
-                    "/api/tasks/recap-approved-notify",
-                    {"recap_id": recap.id, "recap_kind": "legacy"},
-                )
-                if not enqueued:
-                    await _notify_recap_approved_to_rmm_or_clients(recap)
+                await _kick_recap_approved_notify(recap, "legacy")
             except Exception:
                 logger.exception(
                     "recap-approved notification failed for recap=%s", recap.id
@@ -4076,16 +4238,7 @@ class RecapMutationService(SparkGraphQLMixin):
                 ).get
             )(id=custom_recap.id)
             try:
-                # Offload the slow client/RMM email + PDF to Cloud Tasks when
-                # the feature is configured so this mutation returns fast. When
-                # it's off (the default), enqueue() returns False and we run the
-                # exact same notify inline — behavior unchanged from before.
-                enqueued = await sync_to_async(enqueue)(
-                    "/api/tasks/recap-approved-notify",
-                    {"recap_id": custom_recap.id, "recap_kind": "custom"},
-                )
-                if not enqueued:
-                    await _notify_recap_approved_to_rmm_or_clients(custom_recap)
+                await _kick_recap_approved_notify(custom_recap, "custom")
             except Exception:
                 logger.exception(
                     "recap-approved notification failed for custom_recap=%s",
@@ -4193,6 +4346,10 @@ class RecapMutationService(SparkGraphQLMixin):
         await self._assert_caller_authorized_for_recap_tenant(
             recap.event.tenant_id, action="export"
         )
+
+        existing_pdf = await sync_to_async(_find_existing_pdf_file)(recap)
+        if existing_pdf:
+            return existing_pdf
 
         # Pre-filter to image-typed files BEFORE downloading — we used
         # to download every blob (including PDFs / docs / videos) then
@@ -4793,6 +4950,10 @@ class RecapMutationService(SparkGraphQLMixin):
             action="export",
             record_label="Custom recap",
         )
+
+        existing_pdf = await sync_to_async(_find_existing_pdf_file)(custom_recap)
+        if existing_pdf:
+            return existing_pdf
 
         @sync_to_async
         def build_custom_recap_pdf_bytes():

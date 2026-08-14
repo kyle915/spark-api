@@ -678,11 +678,26 @@ class Recap(Node):
     # would resolve to the bound method (not the manager), and `.all()`
     # would silently fail — returning [] for every recap in the API
     # despite the DB having the rows. Going through the model manager
-    # directly side-steps the name collision.
+    # directly side-steps the name collision. List resolvers prefetch
+    # ``recap_files`` (images only) and annotate ``_recap_files_count``.
+
+    @strawberry.field
+    def submitted_at(self) -> str | None:
+        """GraphQL alias for the persisted ``submited_at`` typo column."""
+        value = getattr(self, "submited_at", None)
+        if value is None:
+            return None
+        try:
+            return value.isoformat()
+        except AttributeError:
+            return str(value)
 
     @strawberry.field
     async def recap_file(self) -> RecapFile | None:
         """Return first linked recap file for backward compatibility."""
+        cached = _prefetched(self, "recap_files")
+        if cached is not None:
+            return min(cached, key=lambda f: f.id) if cached else None
         first = await sync_to_async(
             lambda: models.RecapFile.objects.filter(recap=self)
             .order_by("id")
@@ -694,6 +709,10 @@ class Recap(Node):
     @strawberry.field
     async def recap_file_id(self) -> strawberry.ID | None:
         """Return id for the first linked recap file."""
+        cached = _prefetched(self, "recap_files")
+        if cached is not None:
+            first = min(cached, key=lambda f: f.id) if cached else None
+            return strawberry.ID(str(first.id)) if first else None
         first = await sync_to_async(
             lambda: models.RecapFile.objects.filter(recap=self)
             .order_by("id")
@@ -704,10 +723,14 @@ class Recap(Node):
 
     @strawberry.field
     async def recap_files(self) -> List[RecapFile]:
-        """Return all recap files linked to this recap. ORM call has
-        to be wrapped in sync_to_async because Strawberry runs the
-        resolver inside the request's async loop and Django refuses
-        synchronous DB I/O there."""
+        """Return all recap files linked to this recap.
+
+        Prefer the prefetched cache (list + detail querysets already
+        prefetch ``recap_files``). A fresh ``RecapFile.objects.filter``
+        ignores that prefetch and N+1s the list."""
+        cached = _prefetched(self, "recap_files")
+        if cached is not None:
+            return sorted(cached, key=lambda f: f.id)
         return await sync_to_async(
             lambda: list(
                 models.RecapFile.objects.filter(recap=self).order_by("id")
@@ -717,9 +740,12 @@ class Recap(Node):
 
     @strawberry.field
     async def recap_files_count(self) -> int:
-        """Count of files linked to this recap. On the list these are
-        prefetched, so read the cache (no query); the per-row COUNT is
-        only the non-prefetched fallback (was an N+1 before)."""
+        """Count of files linked to this recap. List queryset annotates
+        ``_recap_files_count`` (true COUNT, not the image-only prefetch
+        length). Fall back to the prefetch cache, then a COUNT query."""
+        annotated = getattr(self, "_recap_files_count", None)
+        if annotated is not None:
+            return int(annotated)
         cached = _prefetched(self, "recap_files")
         if cached is not None:
             return len(cached)
@@ -789,6 +815,119 @@ class Recap(Node):
         if not self.event or not self.event.request:
             return []
         return list(self.event.request.requests_stores_manager.all())
+
+    @strawberry.field
+    def share_token(self) -> str:
+        """Signed public-share token for this recap. The web client
+        prefixes it onto ``/r/<token>``; the token IS the auth for
+        ``GET /api/public/recap/<token>``."""
+        from recaps.recap_tokens import make_recap_token
+
+        return make_recap_token("legacy", int(self.id))
+
+    # Flat list-card labels so RecapsQuery does not nest
+    # event → retailer → request. Same walk as CustomRecap.
+    @strawberry.field
+    async def event_date(self) -> str | None:
+        if not getattr(self, "event_id", None):
+            return None
+
+        @sync_to_async
+        def _get():
+            d = _resolve_event_date(getattr(self, "event", None))
+            return d.isoformat() if d else None
+
+        return await _get()
+
+    @strawberry.field
+    async def event_retailer(self) -> str | None:
+        if not getattr(self, "event_id", None):
+            return None
+
+        @sync_to_async
+        def _get():
+            ev = getattr(self, "event", None)
+            if ev is None:
+                rec_ret = getattr(self, "retailer", None)
+                return (getattr(rec_ret, "name", None) or "").strip() or None
+            retailer = getattr(ev, "retailer", None)
+            name = (getattr(retailer, "name", None) or "").strip() if retailer else ""
+            if name:
+                return name
+            req = getattr(ev, "request", None)
+            if req is not None:
+                req_retailer = getattr(req, "retailer", None)
+                req_name = (
+                    (getattr(req_retailer, "name", None) or "").strip()
+                    if req_retailer
+                    else ""
+                )
+                if req_name:
+                    return req_name
+                fallback = (getattr(req, "retailer_name", None) or "").strip()
+                if fallback:
+                    return fallback
+            rec_ret = getattr(self, "retailer", None)
+            return (getattr(rec_ret, "name", None) or "").strip() or None
+
+        return await _get()
+
+    @strawberry.field
+    async def event_state(self) -> str | None:
+        """2-letter code when we have a State FK; else a name or address."""
+        if not getattr(self, "event_id", None):
+            return None
+
+        @sync_to_async
+        def _get():
+            ev = getattr(self, "event", None)
+            retailer = getattr(ev, "retailer", None) if ev else None
+            r_loc = getattr(retailer, "location", None) if retailer else None
+            candidates = (
+                getattr(ev, "state", None) if ev else None,
+                getattr(r_loc, "state", None) if r_loc else None,
+                getattr(self, "state", None),
+            )
+            for st in candidates:
+                code = (getattr(st, "code", None) or "").strip() if st else ""
+                if code:
+                    return code
+                name = (getattr(st, "name", None) or "").strip() if st else ""
+                if name:
+                    return name
+            addr = (getattr(ev, "address", None) or "").strip() if ev else ""
+            return addr or None
+
+        return await _get()
+
+    @strawberry.field
+    async def request_uuid(self) -> str | None:
+        if not getattr(self, "event_id", None):
+            return None
+
+        @sync_to_async
+        def _get():
+            ev = getattr(self, "event", None)
+            req = getattr(ev, "request", None) if ev else None
+            uid = getattr(req, "uuid", None) if req else None
+            return str(uid) if uid else None
+
+        return await _get()
+
+    @strawberry.field
+    async def request_type_name(self) -> str | None:
+        if not getattr(self, "event_id", None):
+            return None
+
+        @sync_to_async
+        def _get():
+            ev = getattr(self, "event", None)
+            req = getattr(ev, "request", None) if ev else None
+            rtype = getattr(req, "request_type", None) if req else None
+            name = (getattr(rtype, "name", None) or "").strip() if rtype else ""
+            return name or None
+
+        return await _get()
 
 
 @strawberry.type
@@ -1033,9 +1172,11 @@ class CustomRecap(Node):
     async def custom_recap_files_count(self) -> int:
         """Total number of files attached to this custom recap.
 
-        Read from the prefetched `custom_recap_files` so the list card's
-        "N files" chip needs neither the file array nor a per-row COUNT."""
-
+        List queryset annotates ``_custom_recap_files_count`` so the
+        image-only hero prefetch does not under-count PDFs/receipts."""
+        annotated = getattr(self, "_custom_recap_files_count", None)
+        if annotated is not None:
+            return int(annotated)
         cached = _prefetched(self, "custom_recap_files")
         if cached is not None:
             return len(cached)
@@ -1043,6 +1184,15 @@ class CustomRecap(Node):
             lambda: self.custom_recap_files.count(),
             thread_sensitive=True,
         )()
+
+    @strawberry.field
+    def share_token(self) -> str:
+        """Signed public-share token for this custom recap. The web
+        client prefixes it onto ``/r/<token>``; the token IS the auth
+        for ``GET /api/public/recap/<token>``."""
+        from recaps.recap_tokens import make_recap_token
+
+        return make_recap_token("custom", int(self.id))
 
     # ---- Linked-event location (for the recap "Information" panel) ----
     #

@@ -12,7 +12,10 @@ from ambassadors.models import AmbassadorEvent
 from events.models import EventType, Product, ProductType
 from jobs.tests.base import JobsGraphQLTestCase
 from recaps import models as recap_models
-from recaps.envelopes import RecapApprovedNotificationMailer
+from recaps.envelopes import (
+    RecapApprovedNotificationMailer,
+    RecapReadyForReviewAdminMailer,
+)
 from recaps.excel import build_recaps_xlsx
 from recaps.mutations import _notify_recap_ready_for_review_to_admins
 
@@ -600,6 +603,11 @@ class TestApproveRecapNotifications(JobsGraphQLTestCase):
         assert envelope.template == "recaps.templates.emails.recap_approved_notification"
         assert envelope.to_emails == [self.rmm_user.email]
         assert "Activation Summary" in rendered_html
+        assert (
+            f"/recap/view/{recap.uuid}" in envelope.context["recap_link"]
+        )
+        assert envelope.context["recap_link"] != "https://spark.igniteproductions.co/"
+        assert envelope.context["extensions_text"] != "None"
 
     @pytest.mark.asyncio
     @override_settings(CLIENT_FRONTEND_URL="http://client.app")
@@ -658,6 +666,23 @@ class TestApproveRecapNotifications(JobsGraphQLTestCase):
             == f"http://client.app/recap/view-custom/{custom_recap.uuid}"
         )
         assert "Activation Summary" in rendered_html
+
+    @pytest.mark.asyncio
+    @override_settings(ADMIN_FRONTEND_URL="http://admin.app")
+    async def test_ready_for_review_mailer_uses_standard_view_url(self):
+        recap = await sync_to_async(
+            recap_models.Recap.objects.select_related("event", "event__tenant").get
+        )(id=self.recap.id)
+        mailer = RecapReadyForReviewAdminMailer(
+            recap=recap,
+            to_emails=["admin@test.com"],
+            ambassador_name="Alex",
+        )
+        envelope = await sync_to_async(mailer.envelope)()
+        assert (
+            envelope.context["review_link"]
+            == f"http://admin.app/recap/view/{recap.uuid}"
+        )
 
     @pytest.mark.asyncio
     async def test_notify_recap_ready_for_review_sends_email_for_ambassador(self):

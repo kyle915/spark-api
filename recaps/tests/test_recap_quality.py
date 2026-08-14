@@ -396,6 +396,40 @@ class TestCustomRecapQuality(AmbassadorsGraphQLTestCase):
         result = recap_quality_flags(recap.id, is_custom=True)
         assert "sold_exceeds_sampled" in _codes(result)
 
+    def test_girl_beer_samples_given_not_leftover_sku_qty(self):
+        """Albertsons Laguna Niguel 7/27 shape: 50 ENG / 9 sold / 48
+        'Total Samples Given Out' plus 2 leftover structured SKU rows.
+        Must NOT flag sold_exceeds_sampled (9 > 2 was the false positive).
+        """
+        recap = self._recap(total_engagements=50)
+        self._file(recap, "p1.jpg")
+        self._file(recap, "p2.jpg")
+        self._value(recap, "Consumer quotes", "Loved Girl Beer at Albertsons.")
+        self._value(recap, "Total Samples Given Out", "48")
+        self._value(recap, "Cans Sold", "9")
+        product_type = ProductType.objects.create(
+            name="Beverage", tenant=self.tenant, created_by=self.system_user
+        )
+        product = Product.objects.create(
+            name="Girl Beer",
+            product_type=product_type,
+            tenant=self.tenant,
+            created_by=self.system_user,
+        )
+        recap_models.CustomRecapProductSample.objects.create(
+            custom_recap=recap,
+            product=product,
+            quantity=2,
+            created_by=self.system_user,
+        )
+        result = recap_quality_flags(recap.id, is_custom=True)
+        assert "sold_exceeds_sampled" not in _codes(result)
+        sold_flag = next(
+            (f for f in result["flags"] if f["code"] == "sold_exceeds_sampled"),
+            None,
+        )
+        assert sold_flag is None
+
     def test_custom_missing_recap_neutral(self):
         assert recap_quality_flags(987654321, is_custom=True) == {
             "score": 100,

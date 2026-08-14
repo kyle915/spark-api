@@ -94,6 +94,26 @@ class TestResolveFileRecapCategoryB2(_Base):
         assert resolved.name == _PHOTOS_CATEGORY_NAME == "Sampling photos"
         assert resolved.id == self.cats_a["Sampling photos"].id
 
+    def test_category_name_and_slug_resolve_like_sentinels(self):
+        # Web uploaders send the category NAME so "2" never collides with
+        # Liquid Death's "Table Set Up" PK.
+        by_name = _resolve_file_recap_category(
+            "Sampling photos", tenant_id=self.tenant_a.id
+        )
+        by_slug = _resolve_file_recap_category(
+            "photo", tenant_id=self.tenant_a.id
+        )
+        by_receipts = _resolve_file_recap_category(
+            "Receipts", tenant_id=self.tenant_a.id
+        )
+        by_receipt = _resolve_file_recap_category(
+            "receipt", tenant_id=self.tenant_a.id
+        )
+        assert by_name.id == self.cats_a["Sampling photos"].id
+        assert by_slug.id == self.cats_a["Sampling photos"].id
+        assert by_receipts.id == self.cats_a["Receipts"].id
+        assert by_receipt.id == self.cats_a["Receipts"].id
+
     def test_sentinels_are_per_tenant(self):
         # Each tenant must get its OWN category, even though tenant B's PKs do
         # not include 1/2 at all.

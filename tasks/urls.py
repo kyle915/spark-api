@@ -14,4 +14,9 @@ urlpatterns = [
         views.recap_approved_notify_view,
         name="tasks.recap_approved_notify",
     ),
+    path(
+        "heic-convert",
+        views.heic_convert_view,
+        name="tasks.heic_convert",
+    ),
 ]

@@ -33,6 +33,46 @@ def _normalize_slug(slug: str | None) -> str:
     return (slug or "").strip().lower().replace("-", "_")
 
 
+def _extensions_text(recap) -> str:
+    """Approved shift-extension minutes for this recap's event, or an em dash.
+
+    The client email used to hardcode ``None`` even when a BA ran long.
+    Look up approved ``ShiftExtensionRequest`` rows on the event (scoped
+    to the recap's ambassador when set). Fail open to ``—`` so a missing
+    table / unexpected shape never blanks the rest of the mailer.
+    """
+    try:
+        from ambassadors.models import ShiftExtensionRequest
+
+        event = getattr(recap, "event", None)
+        if event is None:
+            return "—"
+        qs = ShiftExtensionRequest.objects.filter(
+            event=event,
+            status=ShiftExtensionRequest.STATUS_APPROVED,
+        )
+        ambassador_id = getattr(recap, "ambassador_id", None)
+        if ambassador_id:
+            qs = qs.filter(ambassador_id=ambassador_id)
+        minutes = 0
+        for row in qs:
+            minutes += int(
+                getattr(row, "approved_minutes", None)
+                or getattr(row, "minutes_requested", 0)
+                or 0
+            )
+        if minutes <= 0:
+            return "—"
+        hours, mins = divmod(minutes, 60)
+        if hours and mins:
+            return f"{hours}h {mins}m"
+        if hours:
+            return f"{hours}h"
+        return f"{mins}m"
+    except Exception:
+        return "—"
+
+
 class RecapApprovedNotificationMailer(Mailer):
     def __init__(
         self,
@@ -171,11 +211,17 @@ class RecapApprovedNotificationMailer(Mailer):
             )
         ).rstrip("/")
         is_custom_recap = isinstance(self.recap, models.CustomRecap)
-        recap_link = (
-            f"{frontend_base_url}/recap/view-custom/{self.recap.uuid}"
-            if is_custom_recap
-            else "https://spark.igniteproductions.co/"
-        )
+        if is_custom_recap:
+            recap_link = f"{frontend_base_url}/recap/view-custom/{self.recap.uuid}"
+        else:
+            admin_base_url = str(
+                getattr(
+                    settings,
+                    "ADMIN_FRONTEND_URL",
+                    "https://spark-admin.igniteproductions.co",
+                )
+            ).rstrip("/")
+            recap_link = f"{admin_base_url}/recap/view/{self.recap.uuid}"
         template = (
             "recaps.templates.emails.custom_recap_approved_notification"
             if is_custom_recap
@@ -211,7 +257,7 @@ class RecapApprovedNotificationMailer(Mailer):
                 "actual_check_in": actual_check_in,
                 "actual_check_out": actual_check_out,
                 "ba_on_site": ba_on_site,
-                "extensions_text": "None",
+                "extensions_text": _extensions_text(self.recap),
                 "photos_count": photos_count,
                 "client_specific_metrics": client_specific_metrics,
                 "recap_link": recap_link,
@@ -240,7 +286,13 @@ class RecapReadyForReviewAdminMailer(Mailer):
                 "https://spark-admin.igniteproductions.co",
             )
         ).rstrip("/")
-        review_link = f"{frontend_base_url}/recap/view-custom/{self.recap.uuid}"
+        is_custom_recap = isinstance(self.recap, models.CustomRecap)
+        view_path = (
+            f"/recap/view-custom/{self.recap.uuid}"
+            if is_custom_recap
+            else f"/recap/view/{self.recap.uuid}"
+        )
+        review_link = f"{frontend_base_url}{view_path}"
 
         return Envelope(
             subject="Recap ready for review",
