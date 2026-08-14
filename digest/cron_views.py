@@ -4877,6 +4877,90 @@ class SetupLdRetailCheckinView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class SetupTenantCheckinView(View):
+    """GET/POST `/internal/cron/setup-tenant-checkin`.
+
+    The generic form of the per-brand check-in setup endpoints: mints the
+    standing `/checkin/<code>` link for ANY tenant, pins the program(s) that
+    decide which recap form a BA is handed, and backs the photo dropzones with
+    real category rows.
+
+    Keeps an existing code unless `code` forces one — `Tenant.checkin_code` is
+    a single column, so re-minting silently repoints every BA already holding
+    the old URL.
+
+    `event_type` is repeatable on the command; accept newline- or
+    pipe-separated here so one workflow input can carry a multi-program brand,
+    first entry pinned as the default.
+
+    Params: tenant_id (preferred) or tenant, code, code_prefix, event_type,
+    photo_buckets (JSON), location_mode, training_url, apply (default DRY RUN).
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _param(key: str) -> str:
+            return (request.GET.get(key) or request.POST.get(key) or "").strip()
+
+        kwargs: dict = {}
+        for key in (
+            "tenant", "code", "code_prefix", "photo_buckets",
+            "location_mode", "training_url",
+        ):
+            value = _param(key)
+            if value:
+                kwargs[key] = value
+
+        raw_types = _param("event_type")
+        if raw_types:
+            kwargs["event_types"] = [
+                part.strip()
+                for part in raw_types.replace("|", "\n").splitlines()
+                if part.strip()
+            ]
+
+        tenant_id = _param("tenant_id")
+        if tenant_id:
+            try:
+                kwargs["tenant_id"] = int(tenant_id)
+            except ValueError:
+                return JsonResponse(
+                    {"ok": False, "error": "tenant_id-must-be-an-integer"},
+                    status=400,
+                )
+        if not kwargs.get("tenant_id") and not kwargs.get("tenant"):
+            return JsonResponse(
+                {"ok": False, "error": "tenant_id-or-tenant-required"}, status=400
+            )
+
+        if _param("apply").lower() in ("1", "true", "yes", "on"):
+            kwargs["apply"] = True
+
+        out = io.StringIO()
+        try:
+            call_command("setup_tenant_checkin", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("setup-tenant-checkin cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc),
+                 "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse(
+            {"ok": True, "apply": bool(kwargs.get("apply")), "log": out.getvalue()}
+        )
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class SetCheckinResourcesView(View):
     """GET/POST `/internal/cron/set-checkin-resources`.
 
@@ -7336,6 +7420,7 @@ def _registered_views() -> dict[str, Any]:
         "export-expense-receipts": ExportExpenseReceiptsView,
         "setup-ld-training": SetupLdTrainingView,
         "setup-ld-retail-checkin": SetupLdRetailCheckinView,
+        "setup-tenant-checkin": SetupTenantCheckinView,
         "set-checkin-resources": SetCheckinResourcesView,
         "set-tenant-mileage-tracking": SetTenantMileageTrackingView,
         "staff-tenant-events": StaffTenantEventsView,
