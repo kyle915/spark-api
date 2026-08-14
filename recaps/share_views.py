@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 
+import json
 from django.http import HttpRequest, HttpResponse, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
@@ -94,3 +95,35 @@ def public_recap_pdf_view(request: HttpRequest, token: str) -> HttpResponse:
     response = HttpResponse(pdf_bytes, content_type="application/pdf")
     response["Content-Disposition"] = f'inline; filename="recap-{slug}.pdf"'
     return response
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def public_recap_signoff_view(request: HttpRequest, token: str) -> HttpResponse:
+    verified = _verify_or_4xx(token)
+    if isinstance(verified, HttpResponse):
+        return verified
+    kind, recap_id = verified
+    recap = load_shared_recap(kind, recap_id)
+    if recap is None:
+        return JsonResponse(
+            {"error": "not_found", "message": "Recap not found."}, status=404
+        )
+    try:
+        body = json.loads(request.body.decode("utf-8") or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse(
+            {"error": "invalid", "message": "Invalid JSON."}, status=400
+        )
+    from recaps.client_signoff import apply_signoff, notify_ops_signoff
+
+    try:
+        apply_signoff(
+            recap,
+            status=str(body.get("status") or ""),
+            comment=body.get("comment"),
+        )
+    except ValueError as e:
+        return JsonResponse({"error": "invalid", "message": str(e)}, status=400)
+    notify_ops_signoff(recap, kind=kind)
+    return JsonResponse({"recap": recap_to_public_dict(kind, recap)})

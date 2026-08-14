@@ -174,3 +174,33 @@ async def heic_convert_view(request: HttpRequest) -> HttpResponse:
         logger.exception("heic-convert failed payload=%s", body)
 
     return JsonResponse({"ok": True})
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+async def connecteam_import_recap_view(request: HttpRequest) -> HttpResponse:
+    """POST `/api/tasks/connecteam-import-recap`.
+
+    Body JSON: job_id, blob_name, event_id, template_id, user_id, name.
+    Always 200 after attempting so Cloud Tasks does not retry a half-import.
+    """
+    if not _secret_ok(request):
+        return HttpResponseForbidden("Forbidden")
+
+    from recaps.mutation_parts.connecteam import run_connecteam_import_task
+
+    try:
+        body = json.loads((request.body or b"").decode("utf-8") or "{}")
+    except (ValueError, UnicodeDecodeError):
+        logger.warning("connecteam-import: could not parse request body.")
+        return JsonResponse({"ok": False, "error": "bad-json"}, status=200)
+
+    if not isinstance(body, dict) or not body.get("job_id"):
+        return JsonResponse({"ok": False, "error": "bad-payload"}, status=200)
+
+    try:
+        await run_connecteam_import_task(body)
+    except Exception:
+        logger.exception("connecteam-import failed job=%s", body.get("job_id"))
+
+    return JsonResponse({"ok": True})

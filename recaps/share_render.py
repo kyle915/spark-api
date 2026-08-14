@@ -69,6 +69,8 @@ def load_shared_recap(kind: str, recap_id: int):
                 "custom_field_value__custom_field__recap_section",
                 "custom_recap_template__custom_field__custom_field_type",
                 "custom_recap_template__custom_field__recap_section",
+                "event__tenant__themes",
+                "tenant__themes",
             )
             .filter(id=recap_id)
             .first()
@@ -106,6 +108,7 @@ def load_shared_recap(kind: str, recap_id: int):
             ),
             "consumer_feedback",
             "account_feedback",
+            "event__tenant__themes",
         )
         .filter(id=recap_id)
         .first()
@@ -127,6 +130,40 @@ def _file_public_url(blob) -> str | None:
     if not blob_name:
         return None
     return public_url(display_blob_name(blob_name) or blob_name)
+
+
+
+def _tenant_brand(recap) -> dict | None:
+    event = getattr(recap, "event", None)
+    tenant = getattr(event, "tenant", None) or getattr(recap, "tenant", None)
+    if tenant is None:
+        return None
+    manager = getattr(tenant, "themes", None)
+    themes = list(manager.all()) if manager is not None else []
+    theme = next((t for t in themes if getattr(t, "color_scheme", None) == "dark"), None)
+    if theme is None and themes:
+        theme = themes[0]
+    css = (getattr(theme, "css_variables", None) or {}) if theme else {}
+    if not isinstance(css, dict):
+        css = {}
+    return {
+        "name": getattr(tenant, "name", None),
+        "colorScheme": getattr(theme, "color_scheme", None) or "dark",
+        "primary": css.get("--color-primary"),
+        "cssVariables": css,
+    }
+
+
+def _signoff_payload(recap) -> dict | None:
+    status = (getattr(recap, "client_signoff_status", None) or "").strip()
+    if not status:
+        return None
+    at = getattr(recap, "client_signoff_at", None)
+    return {
+        "status": status,
+        "comment": getattr(recap, "client_signoff_comment", None) or "",
+        "at": at.isoformat() if hasattr(at, "isoformat") else (str(at) if at else None),
+    }
 
 
 def recap_to_public_dict(kind: str, recap) -> dict[str, Any]:
@@ -222,12 +259,31 @@ def recap_to_public_dict(kind: str, recap) -> dict[str, Any]:
                     "imageUrl": _file_public_url(raw) if is_image and raw else None,
                 }
             )
+        sold = sampled = spend = None
+        try:
+            from recaps.types import (
+                _account_spend_from_fields,
+                _consumers_sampled_from_fields,
+                _sold_units_from_fields,
+            )
+            pairs = [
+                (getattr(v.custom_field, "name", None), v.value)
+                for v in recap.custom_field_value.all()
+            ]
+            sold = _sold_units_from_fields(pairs)
+            sampled = _consumers_sampled_from_fields(pairs)
+            spend = _account_spend_from_fields(pairs)
+        except Exception:
+            sold = sampled = spend = None
         kpis = [
-            {
-                "label": "Engagements",
-                "value": recap.total_engagements,
-            }
+            {"label": "Engagements", "value": recap.total_engagements},
+            {"label": "Sold", "value": sold},
+            {"label": "Sampled", "value": sampled},
         ]
+        base = sampled or recap.total_engagements
+        if spend and base:
+            kpis.append({"label": "$ / sample", "value": round(float(spend) / base, 2)})
+        kpis = [k for k in kpis if k["value"] is not None]
     else:
         files = list(recap.recap_files.all())
         for f in files:
@@ -289,6 +345,13 @@ def recap_to_public_dict(kind: str, recap) -> dict[str, Any]:
         "samples": samples,
         "fields": fields,
         "photos": photos,
+        "brand": _tenant_brand(recap),
+        "clientSignoff": _signoff_payload(recap),
+        "sharedAt": (
+            recap.shared_at.isoformat()
+            if getattr(recap, "shared_at", None) and hasattr(recap.shared_at, "isoformat")
+            else None
+        ),
     }
 
 

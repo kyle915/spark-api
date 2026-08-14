@@ -633,6 +633,10 @@ class Recap(Node):
     uuid: str
     name: str
     approved: bool
+    shared_at: str | None
+    client_signoff_status: str
+    client_signoff_comment: str
+    client_signoff_at: str | None
     filling_for_ambassador: bool
     event: event_types.Event
     event_id: strawberry.ID
@@ -933,6 +937,14 @@ class RecapDetailResponse:
 
 
 @strawberry.type
+class BulkRecapsResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    updated_count: int = 0
+
+
+@strawberry.type
 class DeleteRecapResponse:
     """Result of deleting a legacy Recap.
 
@@ -957,6 +969,10 @@ class CustomRecap(Node):
     late: bool
     incomplete: bool
     approved: bool
+    shared_at: str | None
+    client_signoff_status: str
+    client_signoff_comment: str
+    client_signoff_at: str | None
     used_corpo_card: bool
     # Non-empty when the submit-time guard flagged implausible parsed KPIs
     # (conversion >100%, absurd counts). Surfaced so admins see a warning.
@@ -1506,6 +1522,15 @@ class CustomRecapFile(Node):
 
 
 @strawberry.type
+class RecapClientSignoffResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    recap: Recap | None = None
+    custom_recap: CustomRecap | None = None
+
+
+@strawberry.type
 class CustomRecapDetailResponse:
     success: bool
     message: str
@@ -1553,9 +1578,24 @@ class ImportConnecteamRecapPdfResponse:
     # recap. 0 means the PDF carried no usable images — the frontend uses
     # this to route the admin into the manual photo-upload workflow.
     images_attached: int = 0
+    queued: bool = False
+    job_id: str | None = None
     stats: list[ImportConnecteamRecapPdfStat] = strawberry.field(
         default_factory=list,
     )
+
+
+@strawberry.type
+class ConnecteamImportJob:
+    """Poll status for an async Connecteam PDF import."""
+
+    job_id: str
+    status: str
+    message: str | None = None
+    custom_recap: CustomRecap | None = None
+    matched_count: int = 0
+    unmatched_count: int = 0
+    images_attached: int = 0
 
 
 @strawberry.type

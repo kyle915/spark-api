@@ -1382,6 +1382,8 @@ class RecapQueries:
         )
         if filters and filters.edited is not None:
             queryset = queryset.filter(updated_by__isnull=not filters.edited)
+        if filters and getattr(filters, "shared", None) is not None:
+            queryset = queryset.filter(shared_at__isnull=not filters.shared)
         queryset = _apply_name_code_filters(
             queryset, retailer_name=retailer_name, state_code=state_code
         )
@@ -1601,6 +1603,8 @@ class RecapQueries:
         queryset = _apply_name_code_filters(
             queryset, retailer_name=retailer_name, state_code=state_code
         )
+        if filters and getattr(filters, "shared", None) is not None:
+            queryset = queryset.filter(shared_at__isnull=not filters.shared)
         queryset = (
             queryset.prefetch_related(None)
             .select_related(
@@ -1998,6 +2002,34 @@ class RecapQueries:
             return record
         except GraphQLError:
             return None
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def connecteam_import_job(
+        self,
+        info: strawberry.Info,
+        job_id: str,
+    ) -> types.ConnecteamImportJob | None:
+        """Poll an async Connecteam PDF import."""
+        from recaps.mutation_parts.connecteam import read_connecteam_job
+
+        payload = await sync_to_async(read_connecteam_job)((job_id or "").strip())
+        if not payload:
+            return None
+        recap = None
+        recap_id = payload.get("custom_recap_id")
+        if recap_id:
+            recap = await sync_to_async(
+                lambda: models.CustomRecap.objects.filter(id=recap_id).first()
+            )()
+        return types.ConnecteamImportJob(
+            job_id=job_id,
+            status=str(payload.get("status") or "pending"),
+            message=payload.get("message"),
+            custom_recap=recap,
+            matched_count=int(payload.get("matched_count") or 0),
+            unmatched_count=int(payload.get("unmatched_count") or 0),
+            images_attached=int(payload.get("images_attached") or 0),
+        )
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def recap_sections(

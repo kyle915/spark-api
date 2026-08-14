@@ -19,4 +19,9 @@ urlpatterns = [
         views.heic_convert_view,
         name="tasks.heic_convert",
     ),
+    path(
+        "connecteam-import-recap",
+        views.connecteam_import_recap_view,
+        name="tasks.connecteam_import_recap",
+    ),
 ]

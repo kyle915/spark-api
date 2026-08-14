@@ -39,6 +39,11 @@ urlpatterns = [
         name="recaps.public_recap_pdf",
     ),
     path(
+        "recap/<str:token>/signoff",
+        share_views.public_recap_signoff_view,
+        name="recaps.public_recap_signoff",
+    ),
+    path(
         "recap/<str:token>",
         share_views.public_recap_view,
         name="recaps.public_recap",
