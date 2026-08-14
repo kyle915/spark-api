@@ -4877,6 +4877,69 @@ class SetupLdRetailCheckinView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class ExportRecapPdfView(View):
+    """GET/POST `/internal/cron/export-recap-pdf`.
+
+    Renders ONE custom recap to PDF and returns its URL — the same document the
+    "Export PDF" button produces, through the same builder.
+
+    DRY-RUN unless `apply` is truthy: without it you get the image inventory and
+    field count, which is enough to confirm you have the right recap before
+    paying for the downloads.
+
+    Params: recap_id (required), apply.
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _param(key: str) -> str:
+            return (request.GET.get(key) or request.POST.get(key) or "").strip()
+
+        raw_id = _param("recap_id")
+        if not raw_id:
+            return JsonResponse(
+                {"ok": False, "error": "recap_id-required"}, status=400
+            )
+        try:
+            recap_id = int(raw_id)
+        except ValueError:
+            return JsonResponse(
+                {"ok": False, "error": "recap_id-must-be-an-integer"}, status=400
+            )
+
+        kwargs: dict = {"recap_id": recap_id}
+        if _param("apply").lower() in ("1", "true", "yes", "on"):
+            kwargs["apply"] = True
+
+        out = io.StringIO()
+        try:
+            call_command("export_recap_pdf", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("export-recap-pdf cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc),
+                 "log": out.getvalue()},
+                status=500,
+            )
+
+        log = out.getvalue()
+        url = None
+        for line in log.splitlines():
+            if line.startswith("PDF_URL:"):
+                url = line.split("PDF_URL:", 1)[1].strip()
+        return JsonResponse({"ok": True, "url": url, "log": log})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class AddTenantUserView(View):
     """GET/POST `/internal/cron/add-tenant-user`.
 
@@ -7506,6 +7569,7 @@ def _registered_views() -> dict[str, Any]:
         "setup-ld-retail-checkin": SetupLdRetailCheckinView,
         "setup-tenant-checkin": SetupTenantCheckinView,
         "add-tenant-user": AddTenantUserView,
+        "export-recap-pdf": ExportRecapPdfView,
         "set-checkin-resources": SetCheckinResourcesView,
         "set-tenant-mileage-tracking": SetTenantMileageTrackingView,
         "staff-tenant-events": StaffTenantEventsView,
