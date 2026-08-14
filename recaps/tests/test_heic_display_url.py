@@ -40,30 +40,28 @@ def test_display_blob_name_non_heic_unchanged():
     exists.assert_not_called()
 
 
-def test_display_blob_name_heic_with_sibling_rewrites_to_jpg():
-    with patch.object(heic_conversion, "blob_exists", return_value=True):
+def test_display_blob_name_heic_rewrites_to_jpg_without_gcs_head():
+    with patch.object(heic_conversion, "blob_exists") as exists:
         out = heic_conversion.display_blob_name("recaps/abc/IMG_1234.heic")
     assert out == "recaps/abc/IMG_1234.jpg"
+    exists.assert_not_called()
 
 
 def test_display_blob_name_heic_uppercase_ext_rewrites():
-    # iPhone sometimes uploads .HEIC — case-insensitive match.
-    with patch.object(heic_conversion, "blob_exists", return_value=True):
-        out = heic_conversion.display_blob_name("recaps/abc/IMG_9.HEIC")
+    out = heic_conversion.display_blob_name("recaps/abc/IMG_9.HEIC")
     assert out == "recaps/abc/IMG_9.jpg"
 
 
-def test_display_blob_name_heif_with_sibling_rewrites():
-    with patch.object(heic_conversion, "blob_exists", return_value=True):
-        out = heic_conversion.display_blob_name("recaps/abc/pic.heif")
+def test_display_blob_name_heif_rewrites():
+    out = heic_conversion.display_blob_name("recaps/abc/pic.heif")
     assert out == "recaps/abc/pic.jpg"
 
 
-def test_display_blob_name_heic_without_sibling_keeps_original():
-    # No converted sibling in the bucket yet → keep the .heic so the
-    # frontend can still try its in-browser fallback.
+def test_display_blob_name_heic_check_exists_keeps_original_when_missing():
     with patch.object(heic_conversion, "blob_exists", return_value=False):
-        out = heic_conversion.display_blob_name("recaps/abc/IMG_1234.heic")
+        out = heic_conversion.display_blob_name(
+            "recaps/abc/IMG_1234.heic", check_exists=True
+        )
     assert out == "recaps/abc/IMG_1234.heic"
 
 
@@ -114,9 +112,11 @@ def test_recapfile_display_url_heic_with_sibling():
     assert out == "https://cdn/recaps/IMG_1.jpg"
 
 
-def test_recapfile_display_url_heic_without_sibling():
+def test_recapfile_display_url_heic_without_sibling_still_rewrites():
+    # Detail resolvers no longer HEAD GCS — they always rewrite to .jpg
+    # so the GraphQL response is not gated on conversion finishing.
     out = _resolve_recapfile_display_url("recaps/IMG_1.heic", sibling_exists=False)
-    assert out == "https://cdn/recaps/IMG_1.heic"
+    assert out == "https://cdn/recaps/IMG_1.jpg"
 
 
 def test_recapfile_display_url_plain_image_unchanged():
@@ -129,9 +129,9 @@ def test_customrecapfile_display_url_heic_with_sibling():
     assert out == "https://cdn/recaps/IMG_2.jpg"
 
 
-def test_customrecapfile_display_url_heic_without_sibling():
+def test_customrecapfile_display_url_heic_without_sibling_still_rewrites():
     out = _resolve_customfile_display_url("recaps/IMG_2.heic", sibling_exists=False)
-    assert out == "https://cdn/recaps/IMG_2.heic"
+    assert out == "https://cdn/recaps/IMG_2.jpg"
 
 
 def test_customrecapfile_display_url_plain_image_unchanged():

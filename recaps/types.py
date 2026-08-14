@@ -15,7 +15,7 @@ from tenants import types as tenant_types
 from . import models
 from asgiref.sync import sync_to_async
 from utils.gcs import public_url, extract_blob_name_from_url
-from .heic_conversion import display_blob_name, is_heic_blob
+from .heic_conversion import display_blob_name
 
 
 # ---------------------------------------------------------------------------
@@ -402,13 +402,10 @@ class RecapFile(Node):
     async def display_url(self) -> str | None:
         """Browser-renderable URL for this file.
 
-        For HEIC uploads we serve the server-converted `.jpg` sibling
-        (when it exists in GCS) so the frontend can use a plain <img>
-        with no in-browser HEIC decode / bucket-CORS dependency. For
-        every other file — and for a HEIC that has no sibling yet — this
-        returns the same URL as `file`. Mirrors `file_url`'s async-safe
-        two-step column load; the HEIC→JPG rewrite + existence check run
-        inside `sync_to_async` because `blob_exists` does network I/O.
+        For HEIC uploads we serve the `.jpg` sibling path (conversion is
+        scheduled at upload) so the frontend can use a plain <img>.
+        Missing siblings 404 and the client falls back to `file`. No GCS
+        HEAD — that used to serialize N round-trips on every detail load.
         """
         field_file = self.__dict__.get("file")
         if field_file is None:
@@ -428,15 +425,12 @@ class RecapFile(Node):
         except Exception:
             blob = str(field_file)
         blob_name = extract_blob_name_from_url(blob)
-        # Hot-path guard: only HEIC needs the blob_exists() HEAD. Non-HEIC
-        # files (the vast majority) return synchronously with no thread hop,
-        # so the recaps list — which serializes thousands of file rows per
-        # request — doesn't fan out into thousands of GCS round-trips and
-        # time out ("Failed to fetch").
-        if not is_heic_blob(blob_name):
-            return public_url(blob_name)
-        display_blob = await sync_to_async(display_blob_name)(blob_name)
-        return public_url(display_blob)
+        # Rewrite HEIC → .jpg sibling in-process. Do NOT HEAD GCS here:
+        # a Liquid Death recap can have dozens of HEICs and those
+        # round-trips serialized the whole GraphQL response. Conversion
+        # is scheduled at upload; the client falls back to `file`/`url`
+        # if the sibling is not ready yet.
+        return public_url(display_blob_name(blob_name))
 
 
 @strawberry.type
@@ -1480,13 +1474,10 @@ class CustomRecapFile(Node):
     async def display_url(self) -> str | None:
         """Browser-renderable URL for this custom-recap file.
 
-        HEIC originals resolve to their server-converted `.jpg` sibling
-        (when present in GCS) so the gallery can render a plain <img>
-        without the in-browser libheif decode / bucket-CORS dependency.
-        Everything else — and a HEIC with no sibling yet — returns the
-        same URL as `url`. Async-safe: mirrors `url_str`'s deferred-column
-        load, and the HEIC rewrite + existence check run in
-        `sync_to_async` (network I/O).
+        HEIC originals resolve to their `.jpg` sibling path (conversion
+        is scheduled at upload) so the gallery can render a plain <img>.
+        Missing siblings 404 and the client falls back to `url`. No GCS
+        HEAD on the GraphQL hot path.
         """
         field_file = self.__dict__.get("url")
         if field_file is None:
@@ -1506,15 +1497,12 @@ class CustomRecapFile(Node):
         except Exception:
             blob = str(field_file)
         blob_name = extract_blob_name_from_url(blob)
-        # Hot-path guard: only HEIC needs the blob_exists() HEAD. Non-HEIC
-        # files (the vast majority) return synchronously with no thread hop,
-        # so the recaps list — which serializes thousands of file rows per
-        # request — doesn't fan out into thousands of GCS round-trips and
-        # time out ("Failed to fetch").
-        if not is_heic_blob(blob_name):
-            return public_url(blob_name)
-        display_blob = await sync_to_async(display_blob_name)(blob_name)
-        return public_url(display_blob)
+        # Rewrite HEIC → .jpg sibling in-process. Do NOT HEAD GCS here:
+        # a Liquid Death recap can have dozens of HEICs and those
+        # round-trips serialized the whole GraphQL response. Conversion
+        # is scheduled at upload; the client falls back to `file`/`url`
+        # if the sibling is not ready yet.
+        return public_url(display_blob_name(blob_name))
 
 
 @strawberry.type

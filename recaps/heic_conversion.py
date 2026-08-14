@@ -350,23 +350,27 @@ def run_heic_convert_payload(payload: dict) -> None:
         )
 
 
-def display_blob_name(blob_name: Optional[str]) -> Optional[str]:
+def display_blob_name(
+    blob_name: Optional[str],
+    *,
+    check_exists: bool = False,
+) -> Optional[str]:
     """Resolve the *viewable* blob for a recap file.
 
     - Non-HEIC blob → returned unchanged (already browser-renderable).
-    - HEIC blob with a converted `.jpg` sibling present in GCS → the
-      sibling path (so the frontend gets a plain, CORS-free <img>).
-    - HEIC blob with no sibling yet → the original `.heic` path, so the
-      frontend can still fall back to in-browser decoding.
+    - HEIC blob → the `.jpg` sibling path (conversion is scheduled at
+      upload; the front-end falls back to ``url`` if the sibling 404s).
 
-    Pure path logic + one cheap `blob_exists` HEAD check; safe to call
-    from a (sync) resolver body wrapped in ``sync_to_async``.
+    ``check_exists=True`` restores the old HEAD-to-GCS behavior (keep
+    the `.heic` when the sibling is missing). Detail/list resolvers
+    leave it off so a Liquid Death recap with dozens of HEICs does not
+    serialize N GCS round-trips into the GraphQL response.
     """
     if not blob_name:
         return blob_name
     if not is_heic_blob(blob_name):
         return blob_name
     jpg_blob = jpg_blob_name_for(blob_name)
-    if blob_exists(jpg_blob):
-        return jpg_blob
-    return blob_name
+    if check_exists and not blob_exists(jpg_blob):
+        return blob_name
+    return jpg_blob
