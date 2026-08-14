@@ -395,6 +395,12 @@ REQUEST_REVIEW_COPY_DELAY_SECONDS = env.float(
 )
 
 
+# Canonical production hosts:
+#   admin  → https://admin.igniteproductions.co
+#   client → https://spark.igniteproductions.co
+# Local defaults stay on localhost. Callers should read these settings
+# rather than hardcoding spark-admin.igniteproductions.co or
+# spark-new-admin.web.app (retired).
 CLIENT_FRONTEND_URL = env("CLIENT_FRONTEND_URL", default="http://localhost:3000")
 AMBASSADOR_FRONTEND_URL = env(
     "AMBASSADOR_FRONTEND_URL", default="http://localhost:3000"

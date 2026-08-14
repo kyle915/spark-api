@@ -218,7 +218,7 @@ class RecapApprovedNotificationMailer(Mailer):
                 getattr(
                     settings,
                     "ADMIN_FRONTEND_URL",
-                    "https://spark-admin.igniteproductions.co",
+                    "https://admin.igniteproductions.co",
                 )
             ).rstrip("/")
             recap_link = f"{admin_base_url}/recap/view/{self.recap.uuid}"
@@ -283,7 +283,7 @@ class RecapReadyForReviewAdminMailer(Mailer):
             getattr(
                 settings,
                 "ADMIN_FRONTEND_URL",
-                "https://spark-admin.igniteproductions.co",
+                "https://admin.igniteproductions.co",
             )
         ).rstrip("/")
         is_custom_recap = isinstance(self.recap, models.CustomRecap)

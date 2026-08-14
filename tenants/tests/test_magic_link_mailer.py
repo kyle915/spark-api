@@ -23,7 +23,7 @@ import pytest
 from tenants.envelopes import MagicLinkMailer
 from tenants.tests.base import BaseGraphQLTestCase
 
-WEB_LINK = "https://spark-new-admin.web.app/magic/tok-abc123"
+WEB_LINK = "https://admin.igniteproductions.co/magic/tok-abc123"
 APP_LINK = "spark://magic/tok-abc123"
 
 

@@ -4438,7 +4438,7 @@ class RequestMutations:
             base = getattr(
                 settings,
                 "ADMIN_FRONTEND_URL",
-                "https://spark-new-admin.web.app",
+                "https://admin.igniteproductions.co",
             ).rstrip("/")
             request_url = (
                 (input.request_url or "").strip()
