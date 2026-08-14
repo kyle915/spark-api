@@ -401,7 +401,9 @@ class TestExplicitPickVsRoleSentinel(_Base):
     across tests), so — as in
     ``test_checkin_photo_buckets::test_a_bucket_whose_pk_collides_with_a_sentinel_still_wins``
     — the collision is simulated by making a real category's id ALSO read as a
-    sentinel. That is exactly the state LD is in.
+    sentinel (both the role-alias map and the sentinel-names map, so a
+    high reused-DB PK like 166 is isolated and does not have to be 1 or 2).
+    That is exactly the state LD is in.
     """
 
     @pytest.fixture(autouse=True)
@@ -413,14 +415,37 @@ class TestExplicitPickVsRoleSentinel(_Base):
         self.table_set_up = self.cats["Table setup"]
 
     def _as_receipts_sentinel(self, category):
-        """Make `category`'s real PK also read as the receipts sentinel."""
+        """Make `category`'s real PK also read as the receipts sentinel.
+
+        The resolver looks up ``_FILE_CATEGORY_ROLE_ALIASES`` first, then
+        ``_FILE_CATEGORY_SENTINEL_NAMES[role_key]``. Patching only the names
+        dict works when the row happens to be PK 1/2 (those strings are
+        already aliases). On a shared ``--reuse-db`` the sequence has
+        climbed, so Table setup is 166/195/… and a names-only patch never
+        fires — the widget path then returns that row instead of Receipts
+        (166 vs 167). Patch both maps so the collision is isolated to this
+        test's own id, whatever the shared DB assigned.
+        """
+        from contextlib import ExitStack
         from unittest.mock import patch
 
-        return patch.dict(
-            rmut._FILE_CATEGORY_SENTINEL_NAMES,
-            {str(category.id): _RECEIPTS_CATEGORY_NAME},
-            clear=False,
+        pk = str(category.id)
+        stack = ExitStack()
+        stack.enter_context(
+            patch.dict(
+                rmut._FILE_CATEGORY_ROLE_ALIASES,
+                {pk: pk},
+                clear=False,
+            )
         )
+        stack.enter_context(
+            patch.dict(
+                rmut._FILE_CATEGORY_SENTINEL_NAMES,
+                {pk: _RECEIPTS_CATEGORY_NAME},
+                clear=False,
+            )
+        )
+        return stack
 
     def test_explicit_pick_of_a_sentinel_pk_category_is_not_the_role_row(self):
         """The headline case: an explicitly picked category whose PK collides
