@@ -1,0 +1,75 @@
+{
+  "_comment": [
+    "One demo recap for Resort Beverage, so Kyle can show the client what a",
+    "completed Spark recap looks like on their own template before their first",
+    "real activation runs on 08/22.",
+    "",
+    "'(SAMPLE)' is in the event name on purpose. This creates a real standalone",
+    "Event + CustomRecap in prod: it stays OFF the Master Tracker (which is",
+    "request-driven, and their 27 real activations are the requests) but it DOES",
+    "count toward Resort Beverage's dashboard KPIs, the /recaps list, geo, and",
+    "any sheet export. Their campaign starts 08/22, so today it is the only",
+    "recap they have and nothing is being diluted -- but once real recaps land,",
+    "this one is inflating the numbers. The marker is what makes it findable and",
+    "removable then.",
+    "",
+    "Dated 08/09 -- deliberately BEFORE the campaign window opens -- so it can",
+    "never be mistaken for the result of one of the 27 scheduled activations.",
+    "",
+    "Numbers are internally consistent, because a client adds them up:",
+    "  94 sampled = 66 first-time + 28 already knew the brand",
+    "  94 sampled = 61 would buy + 33 would not",
+    "",
+    "The three product names carry double spaces ('PINEAPPLE   MARGARITA')",
+    "because that is exactly how they are stored on the tenant's Product rows.",
+    "Written verbatim so the multi-select matches; see the note to Kyle about",
+    "cleaning those up."
+  ],
+
+  "tenant_slug": "resort-beverage",
+  "template_name": "Resort Beverage-Retail Sampling",
+  "event_type_name": "Retail Sampling",
+  "event_status_slug": "approved",
+  "timezone_code": "EDT",
+  "state_code": "SC",
+  "external_ba_name": "Marissa Cole",
+  "event_name_prefix": "Resort Beverage Retail Sampling (SAMPLE)",
+  "date_key": "Date",
+  "address_key": "Store/Location",
+  "local_hour": 11,
+  "approved": true,
+  "engagements_field": "Total number of consumers sampled",
+
+  "rows": [
+    {
+      "Date": "2026-08-09",
+      "Store/Location": "Harris Teeter - Oakpoint Center, 675 Folly Rd, Charleston, SC 29412",
+
+      "Total number of consumers sampled": 94,
+      "First Time consumers?": 66,
+      "How many consumers that were engaged with knew about Resort Beverage product/brand?": 28,
+      "How many consumers would be willing to purchase the product after tasing it?": 61,
+      "How many consumers would NOT be willing to purchase the product after tasing it?": 33,
+      "How many single cans did consumers purchase?": 41,
+      "How many packs did consumers purchase?": 17,
+
+      "Demographics (general age, sex, ethnicities of consumers)": "Skewed 30-55 and noticeably female through the late morning, evening out after 1pm as couples came through together. Predominantly white with a steady mix of Black and Hispanic shoppers, in line with the Folly Rd trade area. A lot of weekend-entertaining shoppers - carts with limes, chips and a case of beer already in them - which is the easiest possible setup for a margarita mix.",
+
+      "Consumer Feedback": "The most common reaction was surprise at how not-sweet it is. Several people said every mix they'd tried before tasted like candy, and that this one tasted closer to what they'd make themselves. Strawberry pulled the most first-tries but Clasico converted better once people tasted both - a few came back for the Clasico after starting with Strawberry. Pineapple was the wildcard: fewer takers, but the people who liked it liked it a lot and two bought it without tasting anything else.",
+
+      "Positive stories from your sampling today": "A woman hosting a bridal shower next weekend tasted all three and bought two bottles of Clasico and one Strawberry for the party. A regular who said he 'only drinks beer' tried Clasico on a dare from his wife and left with a bottle. One shopper flagged down a friend across the produce section to come try the Pineapple, and both bought.",
+
+      "Reasons to decline to purchase?": "The single biggest reason was simply not drinking - a meaningful share of morning shoppers don't drink alcohol at all, and once that came up the conversation was over. Price came up occasionally against the mixes already on the shelf. A handful said they make their own from scratch and weren't interested in a mix at any price. A few were mid-shop with frozen goods and said they'd come back, which mostly didn't happen.",
+
+      "Quotes from Consumers": "\"This actually tastes like a real margarita, not a Jolly Rancher.\" - female, ~40\n\"I'd put this out at a party and not tell anyone it came from a bottle.\" - male, ~45\n\"Where is this in the store? I've never seen it.\" - female, ~35\n\"The pineapple is dangerous. In a good way.\" - male, ~50",
+
+      "Anything you'd change or do differently?": "Get the samples colder and keep them that way - the first 30 minutes were slow largely because a room-temperature margarita sample is a hard sell, and the pour improved noticeably once we got ice under the pitchers. Would also ask to set up nearer the wine and spirits aisle rather than the front entrance: people coming in are still orienting and walk past, while people already shopping the alcohol set stopped nearly every time. Two flavors poured at once moved faster than three - offering all three made people deliberate instead of taste.",
+
+      "Account Feedback": "Store team was welcoming and the manager checked in twice. The product is currently in the Local Product Section, which is not where a single customer looked for it - everyone we sent to buy went to the wine and spirits aisle first and had to be redirected. The manager said he'd look at a secondary placement or a shelf talker near the mixers. Worth following up in about two weeks to see whether that moved and whether the lift held.",
+
+      "Account Spend Amount": 32.75,
+
+      "Products Sampled": "CLASICO, PINEAPPLE   MARGARITA, STRAWBERRY   MARGARITA"
+    }
+  ]
+}
