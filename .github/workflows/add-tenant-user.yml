@@ -1,0 +1,102 @@
+name: Add tenant user
+
+# Adds a person to a tenant — a client contact, an Ignite admin, or a BA — and
+# optionally emails them a sign-in link. Same work as the Invite button in the
+# admin UI, for when you're onboarding several contacts at once.
+#
+# TWO SEPARATE SWITCHES, on purpose:
+#
+#   apply        creates the account and the tenant link
+#   send_invite  emails a real person at a client
+#
+# Neither implies the other, so nobody emails an external contact by leaving a
+# default on. `send_invite` without `apply` is rejected rather than quietly
+# downgraded. An account created without an invite is inert but harmless — the
+# person simply can't sign in until a link is sent, which you can do by
+# re-running with send_invite, or from the Invite button in the UI.
+#
+# Idempotent. An existing user KEEPS their role (a role someone already set is
+# not this workflow's to overwrite), gains the tenant link if it's missing, and
+# is reactivated if they were previously removed — without that last part a
+# re-invite looks successful and lands them on "Account is inactive".
+#
+# role: client sees only their own tenant; admin sees every tenant; ambassador
+# is a BA (they get the mobile app link as the primary button in the email).
+
+on:
+  workflow_dispatch:
+    inputs:
+      email:
+        description: "Their email address"
+        required: true
+      tenant_id:
+        description: "Tenant id (required for client/ambassador — find it on /clients)"
+        required: false
+        default: ""
+      first_name:
+        description: "First name"
+        required: false
+        default: ""
+      last_name:
+        description: "Last name"
+        required: false
+        default: ""
+      role:
+        description: "Access level"
+        required: false
+        default: "client"
+        type: choice
+        options: ["client", "admin", "ambassador"]
+      apply:
+        description: "Create the account + tenant link (read the dry run first)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+      send_invite:
+        description: "EMAIL them a sign-in link — needs apply=true"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+jobs:
+  add-tenant-user:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire add-tenant-user endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/add-tenant-user
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          EMAIL: ${{ github.event.inputs.email }}
+          TENANT_ID: ${{ github.event.inputs.tenant_id }}
+          FIRST_NAME: ${{ github.event.inputs.first_name }}
+          LAST_NAME: ${{ github.event.inputs.last_name }}
+          ROLE: ${{ github.event.inputs.role }}
+          APPLY: ${{ github.event.inputs.apply }}
+          SEND_INVITE: ${{ github.event.inputs.send_invite }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            --max-time 120 \
+            -X POST "$CRON_URL" \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            --data-urlencode "email=$EMAIL" \
+            --data-urlencode "tenant_id=$TENANT_ID" \
+            --data-urlencode "first_name=$FIRST_NAME" \
+            --data-urlencode "last_name=$LAST_NAME" \
+            --data-urlencode "role=$ROLE" \
+            --data-urlencode "apply=$APPLY" \
+            --data-urlencode "send_invite=$SEND_INVITE")
+          echo "HTTP $STATUS"
+          python3 -c "
+          import json, sys
+          d = json.load(open('/tmp/cron-response.json'))
+          print(d.get('log') or '(no log)')
+          if not d.get('ok'):
+              print('ERROR:', d.get('error'), d.get('detail', ''), file=sys.stderr)
+          " || cat /tmp/cron-response.json
+          [ "$STATUS" != "200" ] && exit 1 || exit 0
