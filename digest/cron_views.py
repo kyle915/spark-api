@@ -4877,6 +4877,90 @@ class SetupLdRetailCheckinView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class AddTenantUserView(View):
+    """GET/POST `/internal/cron/add-tenant-user`.
+
+    Adds a person to a tenant (client contact, admin, or BA). Same work as the
+    `inviteUser` mutation behind the admin UI, reachable from a workflow.
+
+    TWO SEPARATE GATES, and that is deliberate: `apply` creates the account and
+    the tenant link; `send_invite` emails a real person at a client. Neither
+    implies the other, so nobody emails an external contact by mis-reading a
+    dry run. `send_invite` without `apply` is rejected rather than silently
+    downgraded.
+
+    Idempotent — an existing user keeps their role, gains the tenant link, and
+    is reactivated if they were previously removed.
+
+    Params: tenant_id, email (required), first_name, last_name, role
+    (client|admin|ambassador), apply, send_invite.
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _param(key: str) -> str:
+            return (request.GET.get(key) or request.POST.get(key) or "").strip()
+
+        def _flag(key: str) -> bool:
+            return _param(key).lower() in ("1", "true", "yes", "on")
+
+        email = _param("email")
+        if not email:
+            return JsonResponse(
+                {"ok": False, "error": "email-required"}, status=400
+            )
+
+        kwargs: dict = {"email": email, "role": _param("role") or "client"}
+        for key in ("first_name", "last_name"):
+            value = _param(key)
+            if value:
+                kwargs[key] = value
+
+        tenant_id = _param("tenant_id")
+        if tenant_id:
+            try:
+                kwargs["tenant_id"] = int(tenant_id)
+            except ValueError:
+                return JsonResponse(
+                    {"ok": False, "error": "tenant_id-must-be-an-integer"},
+                    status=400,
+                )
+
+        if _flag("apply"):
+            kwargs["apply"] = True
+        if _flag("send_invite"):
+            kwargs["send_invite"] = True
+
+        out = io.StringIO()
+        try:
+            call_command("add_tenant_user", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("add-tenant-user cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc),
+                 "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse(
+            {
+                "ok": True,
+                "apply": bool(kwargs.get("apply")),
+                "invited": bool(kwargs.get("send_invite")),
+                "log": out.getvalue(),
+            }
+        )
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class SetupTenantCheckinView(View):
     """GET/POST `/internal/cron/setup-tenant-checkin`.
 
@@ -7421,6 +7505,7 @@ def _registered_views() -> dict[str, Any]:
         "setup-ld-training": SetupLdTrainingView,
         "setup-ld-retail-checkin": SetupLdRetailCheckinView,
         "setup-tenant-checkin": SetupTenantCheckinView,
+        "add-tenant-user": AddTenantUserView,
         "set-checkin-resources": SetCheckinResourcesView,
         "set-tenant-mileage-tracking": SetTenantMileageTrackingView,
         "staff-tenant-events": StaffTenantEventsView,
