@@ -1,0 +1,62 @@
+name: Export recap PDF
+
+# Renders ONE custom recap to PDF and prints its URL — the same document the
+# "Export PDF" button on the recap page produces, through the same builder.
+#
+# For when you need the file without clicking through the app: sending a client
+# a sample recap, attaching one to an email, or checking what the PDF actually
+# looks like for a template you just built.
+#
+# Read-only against the recap. The only write is the rendered PDF uploaded to
+# GCS, so running this can't damage anything.
+#
+# Leave apply=false first: the dry run prints the recap's identity (id, uuid,
+# tenant, event) plus the image inventory, which is how you confirm you have
+# the right recap before paying for the image downloads.
+
+on:
+  workflow_dispatch:
+    inputs:
+      recap_id:
+        description: "Recap id (the number, not the uuid)"
+        required: true
+      apply:
+        description: "Render + upload (false = inventory only)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+jobs:
+  export-recap-pdf:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire export-recap-pdf endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/export-recap-pdf
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          RECAP_ID: ${{ github.event.inputs.recap_id }}
+          APPLY: ${{ github.event.inputs.apply }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            --max-time 600 \
+            -X POST "$CRON_URL" \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            --data-urlencode "recap_id=$RECAP_ID" \
+            --data-urlencode "apply=$APPLY")
+          echo "HTTP $STATUS"
+          python3 -c "
+          import json, sys
+          d = json.load(open('/tmp/cron-response.json'))
+          print(d.get('log') or '(no log)')
+          if d.get('url'):
+              print()
+              print('PDF:', d['url'])
+          if not d.get('ok'):
+              print('ERROR:', d.get('error'), d.get('detail', ''), file=sys.stderr)
+          " || cat /tmp/cron-response.json
+          [ "$STATUS" != "200" ] && exit 1 || exit 0
