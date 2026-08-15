@@ -581,16 +581,15 @@ def clock_state(*, ambassador_id: int, event_id: int) -> dict:
 
 
 def has_recap(*, ambassador_id: int, event_id: int) -> bool:
-    from recaps.models import CustomRecap, Recap
+    """True when this BA has *filed* a recap for the event.
 
-    return (
-        CustomRecap.objects.filter(
-            event_id=event_id, ambassador_id=ambassador_id
-        ).exists()
-        or Recap.objects.filter(
-            event_id=event_id, ambassador_id=ambassador_id
-        ).exists()
-    )
+    Clock-out inserts an empty Recap/CustomRecap stub. Existence-only
+    was wrong — the check-in page said "you're all set" on a blank draft.
+    Filed means submitted content (photos, metrics, or submitted_at).
+    """
+    from recaps.filed import has_filed_recap
+
+    return has_filed_recap(ambassador_id=ambassador_id, event_id=event_id)
 
 
 # --------------------------------------------------------------------------

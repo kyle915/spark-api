@@ -541,29 +541,45 @@ class Request(Node):
 
     @staticmethod
     def _recap_total(ev) -> int:
-        """Recaps (legacy + custom) on one event. DB-fallback variant: counts
-        the prefetch cache when present, else issues a COUNT query. Only call
-        this inside sync_to_async (it may touch the ORM). Called as
+        """Filed recaps (legacy + custom) on one event. Empty clock-out
+        stubs do not count. DB-fallback variant: counts the (already
+        filed-filtered) prefetch cache when present, else issues a
+        filtered COUNT. Only call this inside sync_to_async. Called as
         Request._recap_total(ev) — never via self."""
+        from recaps.filed import (
+            count_filed_from_cache,
+            custom_filed_q,
+            legacy_filed_q,
+        )
+
         ev_pc = getattr(ev, "_prefetched_objects_cache", {})
         r = ev_pc.get("recaps")
         cr = ev_pc.get("custom_recap")
-        rc = len(r) if r is not None else ev.recaps.count()
-        crc = len(cr) if cr is not None else ev.custom_recap.count()
+        rc = (
+            count_filed_from_cache(r, is_custom=False)
+            if r is not None
+            else ev.recaps.filter(legacy_filed_q()).count()
+        )
+        crc = (
+            count_filed_from_cache(cr, is_custom=True)
+            if cr is not None
+            else ev.custom_recap.filter(custom_filed_q()).count()
+        )
         return rc + crc
 
     @staticmethod
     def _recap_total_cached(ev) -> int:
-        """Recaps (legacy + custom) on one event, counted ONLY from the
-        prefetch cache — never touches the DB, so it is safe to call directly
-        in an async resolver with NO sync_to_async thread hop. The list +
-        detail querysets always prefetch both `recaps` and `custom_recap`, so
-        in practice this is the true count; a missing cache yields 0 rather
-        than risking a SynchronousOnlyOperation throw mid-render."""
+        """Filed recaps on one event, counted from the prefetch cache.
+        List prefetch is already filtered to filed rows; detail prefetch
+        loads full rows and is filtered in memory. Missing cache → 0."""
+        from recaps.filed import count_filed_from_cache
+
         ev_pc = getattr(ev, "_prefetched_objects_cache", {})
         r = ev_pc.get("recaps")
         cr = ev_pc.get("custom_recap")
-        return (len(r) if r is not None else 0) + (len(cr) if cr is not None else 0)
+        return count_filed_from_cache(r or [], is_custom=False) + (
+            count_filed_from_cache(cr or [], is_custom=True)
+        )
 
     # These three scalars are resolved once PER ROW — ~1,000× on the Master
     # Tracker. The event_set / recaps / custom_recap prefetch caches are always
@@ -573,8 +589,9 @@ class Request(Node):
 
     @strawberry.field
     async def recaps_filed_count(self) -> int:
-        """Total recaps (legacy + custom-template) filed across this request's
-        events — powers the Master Tracker RECAP chip count."""
+        """Total *filed* recaps (legacy + custom-template) across this
+        request's events — empty clock-out stubs do not count. Powers
+        the Master Tracker RECAP chip and client completion %."""
         cached = getattr(self, "_prefetched_objects_cache", {}).get("event_set")
         if cached is not None:
             return sum(Request._recap_total_cached(ev) for ev in cached)
@@ -1056,12 +1073,16 @@ class Event(Node):
 
     @strawberry.field
     async def recaps_filed_count(self) -> int:
-        """Recaps already filed for this event — legacy AND custom
-        families combined (same either-list-counts rule as the Master
-        Tracker chip). The Connecteam import picker badges rows that
-        already have one so nobody double-imports a PDF onto a finished
-        event. Prefetch-aware like the sibling resolvers; the fallback
-        is two indexed COUNTs (the picker pages 25 rows)."""
+        """Recaps already *filed* for this event — legacy AND custom
+        families combined. Empty clock-out stubs do not count.
+        Prefetch-aware like the sibling resolvers; the fallback is two
+        filtered COUNTs (the picker pages 25 rows)."""
+        from recaps.filed import (
+            count_filed_from_cache,
+            custom_filed_q,
+            legacy_filed_q,
+        )
+
         cached_legacy = getattr(self, "_prefetched_objects_cache", {}).get(
             "recaps"
         )
@@ -1071,14 +1092,14 @@ class Event(Node):
 
         def _count() -> int:
             legacy = (
-                len(cached_legacy)
+                count_filed_from_cache(cached_legacy, is_custom=False)
                 if cached_legacy is not None
-                else self.recaps.count()
+                else self.recaps.filter(legacy_filed_q()).count()
             )
             custom = (
-                len(cached_custom)
+                count_filed_from_cache(cached_custom, is_custom=True)
                 if cached_custom is not None
-                else self.custom_recap.count()
+                else self.custom_recap.filter(custom_filed_q()).count()
             )
             return legacy + custom
 

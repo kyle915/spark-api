@@ -2163,8 +2163,9 @@ class RecapQueries:
         lookback_days: int = 30,
     ) -> List[types.MissingRecapEventType]:
         """Events that already wrapped (end_time < now) but have no
-        recap row attached. Drives the /recaps/missing admin page —
-        the one-stop list for "what does my team still owe me?"
+        *filed* recap. An empty clock-out stub does not count — those
+        events still belong on /recaps/missing. Drives the admin page
+        for "what does my team still owe me?"
 
         `lookback_days` caps how far back we go so the query stays
         cheap on long-running tenants. Default 30 days; bump for
@@ -2193,6 +2194,8 @@ class RecapQueries:
                 raise GraphQLError("Invalid tenant id.")
 
         def _fetch() -> List[types.MissingRecapEventType]:
+            from recaps.filed import events_missing_filed_recap
+
             qs = (
                 event_models.Event.objects.select_related(
                     "retailer",
@@ -2223,15 +2226,16 @@ class RecapQueries:
                         last_punch__gte=cutoff,
                     )
                 )
-                # An event is missing a recap if neither the standard
-                # `recaps` nor the tenant-custom `custom_recap` tables
-                # have a row. Borjomi-style tenants file via the latter,
-                # and without this check every Borjomi event with a
-                # filed customRecap was still flagged as missing.
-                .filter(recaps__isnull=True, custom_recap__isnull=True)
-                # Newest first regardless of which shape it is — a walk-in has
-                # no end_time to sort by, so fall back to its last punch.
-                .annotate(wrapped_at=Coalesce("end_time", "last_punch"))
+                # An event is missing a recap if neither family has a
+                # *filed* row (photos / metrics / submitted_at). An empty
+                # clock-out stub must still show here — existence-only
+                # hid those shifts from /recaps/missing.
+                # Borjomi-style tenants file via custom_recap; both
+                # families go through recaps.filed.events_missing_filed_recap.
+            )
+            qs = events_missing_filed_recap(qs)
+            qs = (
+                qs.annotate(wrapped_at=Coalesce("end_time", "last_punch"))
                 .order_by("-wrapped_at")
             )
             if resolved_tenant_id is not None:

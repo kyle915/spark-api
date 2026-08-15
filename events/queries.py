@@ -1353,21 +1353,26 @@ class RequestQueriesService(BaseEventQueriesService):
         row's primary `event`, the BA-assigned chip, and the open-shift chip.
         """
         from django.db.models import Prefetch
+        from recaps.filed import custom_filed_q, legacy_filed_q
         from recaps.models import Recap, CustomRecap
 
         return self._base_queryset().prefetch_related(
             "request_product__product",
             "event_set",
-            # Count-only: id + event_id is all recapsFiledCount / recapEventUuid
-            # need. Batched IN-query, minimal columns — NOT the full recap rows
-            # the detail Field Reports panel loads, NOT correlated subqueries.
+            # Count-only filed rows: id + event_id is all recapsFiledCount /
+            # recapEventUuid need. Empty clock-out stubs are excluded here
+            # so the in-memory count matches "filed = submitted content".
             Prefetch(
                 "event_set__recaps",
-                queryset=Recap.objects.only("id", "event_id"),
+                queryset=Recap.objects.filter(legacy_filed_q()).only(
+                    "id", "event_id"
+                ),
             ),
             Prefetch(
                 "event_set__custom_recap",
-                queryset=CustomRecap.objects.only("id", "event_id"),
+                queryset=CustomRecap.objects.filter(custom_filed_q()).only(
+                    "id", "event_id"
+                ),
             ),
             "event_set__ambassadors_events",
             "event_set__open_shifts",
