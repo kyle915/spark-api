@@ -1,5 +1,6 @@
 """Approve-notify + recap data-quality helpers."""
 import logging
+import re
 
 from asgiref.sync import sync_to_async
 from django.conf import settings
@@ -15,7 +16,7 @@ from recaps.mutation_parts.pdf_helpers import (
     _ensure_recap_pdf_for_notify,
     _resolve_recap_pdf_attachment,
 )
-from tenants.models import Role, TenantedUser
+from tenants.models import Role, Tenant, TenantedUser
 from utils.cloud_tasks import enqueue, enqueue_or_background
 from utils.onesignal import OneSignalError, one_signal_client
 

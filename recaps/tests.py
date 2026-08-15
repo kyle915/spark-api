@@ -551,12 +551,15 @@ class TestApproveRecapNotifications(JobsGraphQLTestCase):
                 return _FakeBucket()
 
         with (
-            patch("recaps.mutations.get_gcs_client", return_value=_FakeClient()),
-            patch("recaps.mutations.upload_bytes") as mock_upload_bytes,
+            patch(
+                "recaps.mutation_parts.exports.get_gcs_client",
+                return_value=_FakeClient(),
+            ),
+            patch("recaps.mutation_parts.exports.upload_bytes") as mock_upload_bytes,
             # The export returns a public GCS URL (public_url), not a signed
             # download URL — patching generate_download_url here was a no-op.
             patch(
-                "recaps.mutations.public_url",
+                "recaps.mutation_parts.exports.public_url",
                 return_value="https://example.com/custom-recap.xlsx",
             ),
         ):

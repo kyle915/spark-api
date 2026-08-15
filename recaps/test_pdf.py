@@ -240,7 +240,7 @@ def test_build_recap_pdf_html_groups_custom_fields_by_recap_section():
     assert "Filling For Ambassador" not in html
     assert "Late" not in html
     assert "Incomplete" not in html
-    assert "Approved" in html
+    assert "APPROVED" in html
     assert "Job" not in html
     assert "Location" not in html
     assert "Tenant" not in html

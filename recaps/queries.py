@@ -1622,6 +1622,14 @@ class RecapQueries:
             )
             .prefetch_related(
                 Prefetch(
+                    "custom_field_value",
+                    queryset=models.CustomFieldValue.objects.select_related(
+                        "custom_field",
+                        "custom_field__custom_field_type",
+                        "custom_field__recap_section",
+                    ),
+                ),
+                Prefetch(
                     "custom_recap_files",
                     queryset=models.CustomRecapFile.objects.filter(
                         Q(url__iendswith=".jpg")
