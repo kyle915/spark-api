@@ -1151,13 +1151,19 @@ def normalize_place(value: str) -> str:
     return re.sub(r"\s+", " ", v).strip()
 
 
-# Street-type suffix words we drop when deciding "same store" for a walk-in.
+# Street-type suffix words we drop from the *core* key (number + name +
+# city/state) so ZIP/USA noise and geocoder spelling don't fork a walk-in.
 # A scheduled event carries an admin-TYPED address ("1201 Avocado Ave"); a
 # walk-in's address is REVERSE-GEOCODED from the BA's phone GPS ("1201 Avocado
 # Boulevard, El Cajon, CA 92020"). Those name one place, but normalize_place()
 # keeps them distinct (ave≠boulevard, and one carries a ZIP), so the walk-in
-# forks a duplicate event and the scheduled row is left reading DUE. The core
-# key below collapses the two by dropping the suffix + any ZIP.
+# forks a duplicate event and the scheduled row is left reading DUE.
+#
+# Dropping EVERY suffix from the key is too loose: "100 Oak St" and
+# "100 Oak Ave" in the same city collapse to the same core and a walk-in
+# attaches recap/hours/photos to the wrong event. Matching therefore also
+# compares a canonical suffix *family* (Ave↔Boulevard for the Vons
+# geocoder pair; St stays St). See :func:`addresses_fuzzy_match`.
 _STREET_SUFFIXES = {
     "ave", "avenue", "blvd", "boulevard", "st", "street", "rd", "road",
     "dr", "drive", "ln", "lane", "ct", "court", "cir", "circle", "pl",
@@ -1166,6 +1172,54 @@ _STREET_SUFFIXES = {
     "loop", "aly", "alley", "expy", "expressway", "fwy", "freeway", "byp",
     "bypass", "xing", "crossing", "commons", "center", "ctr", "mall",
 }
+
+# Geocoder / USPS spellings of the SAME road type. Ave+Blvd share a family
+# because reverse-geocode of the Vons at 1201 Avocado returns "Boulevard"
+# while ops types "Ave". St/Street is a different family — Oak St ≠ Oak Ave.
+_SUFFIX_CANON = {
+    "ave": "ave",
+    "avenue": "ave",
+    "blvd": "ave",
+    "boulevard": "ave",
+    "st": "st",
+    "street": "st",
+    "rd": "rd",
+    "road": "rd",
+    "dr": "dr",
+    "drive": "dr",
+    "ln": "ln",
+    "lane": "ln",
+    "ct": "ct",
+    "court": "ct",
+    "cir": "cir",
+    "circle": "cir",
+    "pl": "pl",
+    "place": "pl",
+    "ter": "ter",
+    "terrace": "ter",
+    "hwy": "hwy",
+    "highway": "hwy",
+    "pkwy": "pkwy",
+    "parkway": "pkwy",
+    "sq": "sq",
+    "square": "sq",
+    "trl": "trl",
+    "trail": "trl",
+    "aly": "aly",
+    "alley": "aly",
+    "expy": "expy",
+    "expressway": "expy",
+    "fwy": "fwy",
+    "freeway": "fwy",
+    "byp": "byp",
+    "bypass": "byp",
+    "xing": "xing",
+    "crossing": "xing",
+    "ctr": "ctr",
+    "center": "ctr",
+}
+for _suffix in _STREET_SUFFIXES:
+    _SUFFIX_CANON.setdefault(_suffix, _suffix)
 
 # Country tokens that a reverse-geocoder tacks on (", USA") but an admin
 # rarely types — dropped so "…El Cajon, CA 92020, USA" and "…El Cajon, CA
@@ -1181,35 +1235,67 @@ _DIRECTIONALS = {
 }
 
 
-def address_core_key(value: str) -> str:
-    """A looser "same store?" key than :func:`normalize_place`: on top of the
-    case/punctuation/space flattening it drops street-type suffix words
-    (ave/avenue/blvd/…), country tokens (usa) and any trailing 5-digit ZIP, and
-    folds directionals (north→n), so an admin-typed address and its
-    reverse-geocoded twin collapse to one place.
+def address_core_parts(value: str) -> tuple[str, str]:
+    """Split an address into ``(core_key, canonical_suffix)``.
 
-    Only trusted when the address begins with a STREET NUMBER — that keeps the
-    key tight (number + street name + city/state), so it collapses suffix/ZIP
-    noise without merging genuinely different addresses. Returns "" when there's
-    no leading number; callers then fall back to the strict normalize_place key.
-    The (tenant, date, event-type) scope around the match adds further safety.
+    ``core_key`` is number + street name + city/state (suffix/ZIP/USA
+    dropped, directionals folded). ``canonical_suffix`` is the street-type
+    family ("ave", "st", …) or "" when the address has no suffix token.
+    Returns ``("", "")`` when there's no leading street number — that key
+    isn't safe and callers fall back to :func:`normalize_place`.
     """
     base = normalize_place(value)
     if not base:
-        return ""
+        return "", ""
     toks = base.split()
     # Require a leading street number; without one this loose key isn't safe.
     if not toks[0].isdigit():
-        return ""
+        return "", ""
     core = []
+    suffix = ""
     for i, t in enumerate(toks):
-        if t in _STREET_SUFFIXES or t in _ADDR_COUNTRY_TOKENS:
+        if t in _SUFFIX_CANON:
+            if not suffix:
+                suffix = _SUFFIX_CANON[t]
+            continue
+        if t in _ADDR_COUNTRY_TOKENS:
             continue
         # Drop a 5-digit ZIP, but never the leading street number (i == 0).
         if i > 0 and re.fullmatch(r"\d{5}", t):
             continue
         core.append(_DIRECTIONALS.get(t, t))
-    return " ".join(core).strip()
+    return " ".join(core).strip(), suffix
+
+
+def address_core_key(value: str) -> str:
+    """A looser "same store?" key than :func:`normalize_place`: on top of the
+    case/punctuation/space flattening it drops street-type suffix words
+    (ave/avenue/blvd/…), country tokens (usa) and any trailing 5-digit ZIP, and
+    folds directionals (north→n).
+
+    Only trusted when the address begins with a STREET NUMBER. The stripped
+    key alone is not enough to decide "same place" — Oak St and Oak Ave share
+    a core key. Callers must use :func:`addresses_fuzzy_match`, which also
+    compares suffix families. Returns "" when there's no leading number.
+    """
+    return address_core_parts(value)[0]
+
+
+def addresses_fuzzy_match(a: str, b: str) -> bool:
+    """True when two addresses name the same place under geocoder noise.
+
+    Requires the same number + street name + city/state (ZIP/USA ignored,
+    directionals folded). Street-type suffixes must be in the same family
+    (Ave↔Boulevard for the Vons pair) or missing on one side. Different
+    families — Oak St vs Oak Ave — do not match, even in the same city.
+    """
+    key_a, suffix_a = address_core_parts(a)
+    key_b, suffix_b = address_core_parts(b)
+    if not key_a or not key_b or key_a != key_b:
+        return False
+    if suffix_a and suffix_b and suffix_a != suffix_b:
+        return False
+    return True
 
 
 def recent_checkin_locations(tenant, limit: int = 30) -> list:
@@ -1383,9 +1469,11 @@ def find_or_create_walkin_event(
         # Small set (one tenant, one day), so normalize in Python rather than
         # trying to express the same collapsing in SQL. Two tiers:
         #   1. EXACT  — normalize_place equality (the original behaviour).
-        #   2. FUZZY  — address_core_key equality (suffix/ZIP-insensitive), so a
-        #              reverse-geocoded walk-in address connects to the scheduled
-        #              event's admin-typed one instead of forking a duplicate.
+        #   2. FUZZY  — addresses_fuzzy_match (ZIP/USA-insensitive, suffix
+        #              families like Ave↔Blvd), so a reverse-geocoded walk-in
+        #              connects to the scheduled event instead of forking a
+        #              duplicate. Different street types (St vs Ave) do not
+        #              match even when the stripped core key is identical.
         # Within each tier prefer a SCHEDULED event (one born from a request) so
         # its "DUE" clears rather than the walk-in landing on a sibling event.
         exact: list = []
@@ -1398,7 +1486,7 @@ def find_or_create_walkin_event(
             ev_addr = getattr(ev, "address", "")
             if normalize_place(ev_addr) == key:
                 exact.append(ev)
-            elif core_key and address_core_key(ev_addr) == core_key:
+            elif core_key and addresses_fuzzy_match(address, ev_addr):
                 fuzzy.append(ev)
         for bucket in (exact, fuzzy):
             if not bucket:

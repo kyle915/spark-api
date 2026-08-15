@@ -303,6 +303,51 @@ class TestTenantCheckinLink(AmbassadorsGraphQLTestCase):
         assert made_a is True and made_b is True
         assert a.id != b.id
 
+    def test_addresses_fuzzy_match_suffix_families(self):
+        # Vons: Ave ↔ Boulevard is the same road (geocoder spelling).
+        assert checkin_web.addresses_fuzzy_match(
+            "1201 Avocado Ave, El Cajon, CA 92020, USA",
+            "1201 Avocado Boulevard, El Cajon, CA 92020",
+        )
+        # One side omitted the suffix — still the same number + name + city.
+        assert checkin_web.addresses_fuzzy_match(
+            "1201 Avocado, El Cajon, CA",
+            "1201 Avocado Ave, El Cajon, CA",
+        )
+        # Oak St and Oak Ave are different streets. The stripped core key
+        # is identical ("100 oak chicago il"); suffix families must differ.
+        assert checkin_web.address_core_key("100 Oak St, Chicago, IL") == (
+            checkin_web.address_core_key("100 Oak Ave, Chicago, IL")
+        )
+        assert not checkin_web.addresses_fuzzy_match(
+            "100 Oak St, Chicago, IL",
+            "100 Oak Ave, Chicago, IL",
+        )
+        assert not checkin_web.addresses_fuzzy_match(
+            "100 Main St, Austin, TX",
+            "100 Main Ave, Austin, TX 78701",
+        )
+
+    def test_fuzzy_match_does_not_merge_st_vs_ave(self):
+        # Concrete trigger: scheduled activation at 100 Main St, BA walk-in
+        # at 100 Main Ave (same city/day/program). Recap/hours must not
+        # land on the scheduled event.
+        import datetime
+
+        on = datetime.date(2026, 8, 7)
+        scheduled, made_a = checkin_web.find_or_create_walkin_event(
+            tenant=self.tenant, store_name="Main St shop",
+            address="100 Main St, Austin, TX",
+            on_date=on, actor=self.system_user,
+        )
+        walkin, made_b = checkin_web.find_or_create_walkin_event(
+            tenant=self.tenant, store_name="Main Ave shop",
+            address="100 Main Ave, Austin, TX 78701",
+            on_date=on, actor=self.system_user,
+        )
+        assert made_a is True and made_b is True
+        assert scheduled.id != walkin.id
+
     def test_address_core_key_folds_directionals(self):
         # Real Mariano's pair: admin typed "N …Ave …USA", the reverse-geocode
         # spelled out "North …Avenue". Must collapse to one key.
