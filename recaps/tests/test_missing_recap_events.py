@@ -135,12 +135,13 @@ class TestMissingRecapEvents(AmbassadorsGraphQLTestCase):
     async def test_excludes_events_with_a_recap(self):
         ev = await sync_to_async(self._past_event)(name="Already filed")
         await sync_to_async(self._ba_event)(ev)
-        # Attach a recap → event should drop out of the result.
+        # Filed = submitted content, not a blank clock-out stub.
         await sync_to_async(Recap.objects.create)(
             name="filed",
             event=ev,
             ambassador=self.ambassador,
             created_by=self.admin,
+            products_sold=6,
         )
 
         result = await self._execute_mutation(
