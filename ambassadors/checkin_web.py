@@ -915,10 +915,10 @@ def submit_checkin_recap(
                 created_by=actor,
             )
             if heic_conversion.is_heic_blob(blob_name):
-                try:
-                    heic_conversion.ensure_jpg_sibling_blob(blob_name)
-                except Exception:  # noqa: BLE001 — display convenience only
-                    logger.exception("checkin recap: HEIC sibling failed %s", blob_name)
+                # After commit, via Cloud Tasks (same path as other recap
+                # uploads). Never convert inline — 8 iPhone HEICs on LTE
+                # would block File recap for the whole request.
+                heic_conversion.schedule_jpg_sibling_blob(blob_name)
 
         # A recap with no photo on it is not a filed shift, it's an empty row in
         # the client's report. The page has always refused to submit one; this
