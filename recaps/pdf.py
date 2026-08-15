@@ -362,10 +362,48 @@ def _build_images_html(image_groups: dict[str, list[dict[str, str]]]) -> str:
     )
 
 
+_HEX_COLOR = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
+_DEFAULT_PDF_ACCENT = "#c5f546"
+
+
+def _recap_accent_color(recap) -> str:
+    """Tenant primary from theme CSS, else Spark lime. Hex only."""
+    event = getattr(recap, "event", None)
+    tenant = getattr(event, "tenant", None) or getattr(recap, "tenant", None)
+    if tenant is None:
+        return _DEFAULT_PDF_ACCENT
+    try:
+        manager = getattr(tenant, "themes", None)
+        theme = manager.first() if manager is not None else None
+        cssv = getattr(theme, "css_variables", None) or {}
+        if not isinstance(cssv, dict):
+            return _DEFAULT_PDF_ACCENT
+        raw = (
+            cssv.get("--color-primary")
+            or cssv.get("--p")
+            or cssv.get("primary")
+            or cssv.get("--recap-brand")
+        )
+        if isinstance(raw, str) and _HEX_COLOR.match(raw.strip()):
+            return raw.strip()
+    except Exception:
+        return _DEFAULT_PDF_ACCENT
+    return _DEFAULT_PDF_ACCENT
+
+
+def _recap_brand_name(recap) -> str:
+    event = getattr(recap, "event", None)
+    tenant = getattr(event, "tenant", None) or getattr(recap, "tenant", None)
+    name = (getattr(tenant, "name", None) or "").strip()
+    return name or "Spark"
+
+
 def build_recap_pdf_html(
     recap,
     images: Iterable[dict[str, bytes]],
     custom_field_images: dict[str, bytes] | None = None,
+    *,
+    public_share: bool = False,
 ) -> str:
     # Image-type custom fields (e.g. "Product Purchase Receipt (Image)")
     # store a GCS blob path as their value. The resolver pre-fetches those
@@ -665,7 +703,26 @@ def build_recap_pdf_html(
     </section>
 """
 
-    status_chip = "APPROVED" if recap.approved else "DRAFT"
+    if public_share:
+        eyebrow = f'{safe(_recap_brand_name(recap))} <span class="lime">recap</span>'
+        subtitle = "Shared recap"
+        # Public download is a leave-behind the email already called ready.
+        # Never print DRAFT on that path — approved stays APPROVED, drafts
+        # get no status chip.
+        if recap.approved:
+            badge_html = (
+                '<div class="badge badge-lime"><span>APPROVED</span></div>'
+            )
+        else:
+            badge_html = ""
+    else:
+        eyebrow = 'Spark <span class="lime">by Ignite</span>'
+        subtitle = "Field recap"
+        status_chip = "APPROVED" if recap.approved else "DRAFT"
+        badge_class = "badge-lime" if recap.approved else "badge-draft"
+        badge_html = (
+            f'<div class="badge {badge_class}"><span>{status_chip}</span></div>'
+        )
     return f"""
 <!doctype html>
 <html>
@@ -676,13 +733,11 @@ def build_recap_pdf_html(
   <body>
     <header class="header">
       <div>
-        <p class="eyebrow">Spark <span class="lime">by Ignite</span></p>
+        <p class="eyebrow">{eyebrow}</p>
         <h1>{safe(recap.name)}</h1>
-        <p class="subtitle">Field recap</p>
+        <p class="subtitle">{subtitle}</p>
       </div>
-      <div class="badge {"badge-lime" if recap.approved else "badge-draft"}">
-        <span>{status_chip}</span>
-      </div>
+      {badge_html}
     </header>
 
     {summary_html}
@@ -719,13 +774,19 @@ def build_recap_pdf(
     recap,
     images: Iterable[dict[str, bytes]],
     custom_field_images: dict[str, bytes] | None = None,
+    *,
+    public_share: bool = False,
 ) -> bytes:
     from weasyprint import HTML, CSS
 
-    html = build_recap_pdf_html(recap, images, custom_field_images=custom_field_images)
-
-    css = CSS(
-        string=_PDF_BASE_CSS + """
+    html = build_recap_pdf_html(
+        recap,
+        images,
+        custom_field_images=custom_field_images,
+        public_share=public_share,
+    )
+    accent = _recap_accent_color(recap) if public_share else _DEFAULT_PDF_ACCENT
+    theme_css = """
         @page { background: #0a0d09; margin: 0.65in; }
         body { color: #f2f3ee; background: #0a0d09; }
         h1 {
@@ -892,7 +953,9 @@ def build_recap_pdf(
             font-style: italic;
         }
         """
-    )
+    if accent != _DEFAULT_PDF_ACCENT:
+        theme_css = theme_css.replace(_DEFAULT_PDF_ACCENT, accent)
+    css = CSS(string=_PDF_BASE_CSS + theme_css)
 
     return HTML(string=html).write_pdf(stylesheets=[css])
 

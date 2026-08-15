@@ -422,3 +422,47 @@ def test_build_recap_pdf_html_downscales_full_res_photos():
     with PILImage.open(BytesIO(embedded)) as im:
         assert max(im.size) <= 1400
     assert len(embedded) < len(big_bytes)
+
+
+def _share_recap(*, approved: bool):
+    return SimpleNamespace(
+        name="Shared Recap",
+        approved=approved,
+        ambassador=None,
+        location=SimpleNamespace(name="Austin"),
+        state=SimpleNamespace(name="TX"),
+        retailer=SimpleNamespace(name="HEB"),
+        timezone=SimpleNamespace(name="Central"),
+        total_engagements=10,
+        used_corpo_card=False,
+        custom_recap_template=SimpleNamespace(name="Template"),
+        event=SimpleNamespace(
+            name="Store Event",
+            date=datetime(2026, 8, 8, 9, 0),
+            tenant=SimpleNamespace(name="Girl Beer", slug="girl-beer"),
+        ),
+        custom_recap_product_sample=RelatedList([]),
+        custom_recap_sale_performance=RelatedList([]),
+        custom_field_value=RelatedList([]),
+    )
+
+
+def test_public_share_pdf_omits_draft_chip():
+    html = build_recap_pdf_html(_share_recap(approved=False), [], public_share=True)
+    assert "DRAFT" not in html
+    assert "Girl Beer" in html
+    assert "Shared recap" in html
+    assert "badge-draft" not in html
+
+
+def test_public_share_pdf_keeps_approved_chip():
+    html = build_recap_pdf_html(_share_recap(approved=True), [], public_share=True)
+    assert "APPROVED" in html
+    assert "DRAFT" not in html
+    assert "Girl Beer" in html
+
+
+def test_internal_pdf_still_prints_draft_chip():
+    html = build_recap_pdf_html(_share_recap(approved=False), [])
+    assert "DRAFT" in html
+    assert "badge-draft" in html
