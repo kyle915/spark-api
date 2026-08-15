@@ -177,9 +177,10 @@ class TestConfirmationContent:
         # Real <a href> with a full https URL — a styled <td> with no href
         # (or href="" / a relative /training/ path) is what made the iPhone
         # button look tappable and do nothing.
-        assert 'href="https://admin.igniteproductions.co/training/LD-FZUWXT"' in html
-        assert 'href="https://admin.igniteproductions.co/checkin/LD-TNBJ8K"' in html
+        assert 'href="https://client.igniteproductions.co/training/LD-FZUWXT"' in html
+        assert 'href="https://client.igniteproductions.co/checkin/LD-TNBJ8K"' in html
         assert "spark.igniteproductions.co" not in html
+        assert "admin.igniteproductions.co" not in html
         assert env.from_email == "Ignite Productions <staffing@igniteproductions.co>"
 
     @pytest.mark.parametrize(
@@ -202,12 +203,15 @@ class TestConfirmationContent:
 # ---------------------------------------------------------------------------
 
 class TestPublicEmailUrls:
-    def test_absolute_public_url_rewrites_spark_and_relative_paths(self):
+    def test_absolute_public_url_rewrites_spark_admin_and_relative_paths(self):
         assert absolute_public_url(
             "https://spark.igniteproductions.co/training/LD-FZUWXT"
-        ) == "https://admin.igniteproductions.co/training/LD-FZUWXT"
-        assert absolute_public_url("/training/LD-FZUWXT") == (
+        ) == "https://client.igniteproductions.co/training/LD-FZUWXT"
+        assert absolute_public_url(
             "https://admin.igniteproductions.co/training/LD-FZUWXT"
+        ) == "https://client.igniteproductions.co/training/LD-FZUWXT"
+        assert absolute_public_url("/training/LD-FZUWXT") == (
+            "https://client.igniteproductions.co/training/LD-FZUWXT"
         )
         assert absolute_public_url(
             "https://client.igniteproductions.co/training/LD-FZUWXT"
@@ -219,10 +223,10 @@ class TestPublicEmailUrls:
     def test_training_url_uses_stored_absolute_link(self):
         tenant = _tenant()
         assert training_url_for(tenant) == (
-            "https://admin.igniteproductions.co/training/LD-FZUWXT"
+            "https://client.igniteproductions.co/training/LD-FZUWXT"
         )
         assert recap_url_for(tenant) == (
-            "https://admin.igniteproductions.co/checkin/LD-TNBJ8K"
+            "https://client.igniteproductions.co/checkin/LD-TNBJ8K"
         )
 
     @pytest.mark.django_db
@@ -238,7 +242,7 @@ class TestPublicEmailUrls:
             is_active=True,
         )
         assert training_url_for(tenant) == (
-            "https://admin.igniteproductions.co/training/LD-HUBFALL"
+            "https://client.igniteproductions.co/training/LD-HUBFALL"
         )
 
     @pytest.mark.django_db

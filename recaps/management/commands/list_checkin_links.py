@@ -24,7 +24,7 @@ from django.core.management.base import BaseCommand
 
 from tenants.models import Tenant
 
-BASE_URL = "https://admin.igniteproductions.co"
+BASE_URL = "https://client.igniteproductions.co"
 
 
 class Command(BaseCommand):

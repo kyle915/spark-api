@@ -387,7 +387,7 @@ class Command(BaseCommand):
             self.style.SUCCESS(f"Check-in code : {tenant.checkin_code}")
         )
         self.stdout.write(
-            f"Link          : https://admin.igniteproductions.co/checkin/"
+            f"Link          : https://client.igniteproductions.co/checkin/"
             f"{tenant.checkin_code}"
         )
         if tenant.checkin_training_url:

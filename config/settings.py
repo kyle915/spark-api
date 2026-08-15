@@ -406,6 +406,12 @@ AMBASSADOR_FRONTEND_URL = env(
     "AMBASSADOR_FRONTEND_URL", default="http://localhost:3000"
 )
 ADMIN_FRONTEND_URL = env("ADMIN_FRONTEND_URL", default="http://localhost:3000")
+# BA-facing check-in / training / recap-form origin. Field phones have
+# failed to resolve admin.; mint client. unless an override is set.
+PUBLIC_CHECKIN_BASE_URL = env(
+    "PUBLIC_CHECKIN_BASE_URL",
+    default="https://client.igniteproductions.co",
+)
 # Absolute base for backend-rendered public pages linked from emails (e.g. the
 # one-click shift-extension approval page under /api/public/). Falls back to the
 # Cloud Run service URL so prod emails work without extra config.

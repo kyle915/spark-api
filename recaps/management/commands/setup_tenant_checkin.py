@@ -407,7 +407,7 @@ class Command(BaseCommand):
         if not apply:
             self.stdout.write("")
             self.stdout.write(
-                f"DRY-RUN — would serve https://admin.igniteproductions.co"
+                f"DRY-RUN — would serve https://client.igniteproductions.co"
                 f"/checkin/{new_code}\nRe-run with --apply to write."
             )
             return
@@ -440,7 +440,7 @@ class Command(BaseCommand):
         self.stdout.write("=" * 72)
         self.stdout.write(self.style.SUCCESS(f"CHECKIN_CODE: {tenant.checkin_code}"))
         self.stdout.write(
-            f"CHECKIN_URL: https://admin.igniteproductions.co"
+            f"CHECKIN_URL: https://client.igniteproductions.co"
             f"/checkin/{tenant.checkin_code}"
         )
         self.stdout.write("=" * 72)
