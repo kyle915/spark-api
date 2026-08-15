@@ -87,21 +87,31 @@ the email body (and into the plain-text alternative, where it's very visible).
         Kyle's addition to the hand-sent version. Placed BEFORE the recap CTA on
         purpose: it's the thing to do before the shift, and the recap button is
         the thing to do after, so this keeps them in the order the BA meets them.
+
+        The control MUST be a real <a href="https://..."> filling a table cell
+        (bgcolor on the td, padding + white text on the a). A bordered td with
+        an inner inline-block link looks like a button on iOS Mail dark mode
+        but only the text is tappable — and wrapping "Review Training Site"
+        onto two lines makes even that miss. The raw URL under the button is
+        the fallback when a client still swallows the styled tap target.
         {% endcomment %}
         <p style="margin: 0 0 14px 0;">
           <strong style="color: #202036;">Before your shift,</strong> please review the
           BA Reference &amp; Training site — it covers setup, talking points and
           everything you'll need on site.
         </p>
-        <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin: 0 0 26px 0;">
+        <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin: 0 0 8px 0;">
           <tr>
-            <td style="border: 1px solid #202036; border-radius: 6px;">
-              <a href="{{ training_url }}" style="display: inline-block; padding: 10px 22px; color: #202036; text-decoration: none; font-weight: 600; font-size: 15px;">
+            <td align="center" bgcolor="#202036" style="background-color: #202036; border-radius: 6px; mso-padding-alt: 14px 30px;">
+              <a href="{{ training_url }}" target="_blank" rel="noopener noreferrer" style="display: inline-block; padding: 14px 30px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 15px; line-height: 1.2; font-weight: 700; color: #ffffff !important; text-decoration: none; border-radius: 6px; white-space: nowrap;">
                 Review Training Site
               </a>
             </td>
           </tr>
         </table>
+        <p style="margin: 0 0 26px 0; font-size: 13px; line-height: 1.5; color: #666666; word-break: break-all;">
+          Or open: <a href="{{ training_url }}" target="_blank" rel="noopener noreferrer" style="color: #202036; text-decoration: underline;">{{ training_url }}</a>
+        </p>
       {% endif %}
 
       {% if recap_url %}
@@ -111,15 +121,18 @@ the email body (and into the plain-text alternative, where it's very visible).
           ensures your payment is processed promptly.
         </p>
 
-        <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin: 0 0 28px 0;">
+        <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin: 0 0 8px 0;">
           <tr>
-            <td style="background-color: #101014; border-radius: 6px;">
-              <a href="{{ recap_url }}" style="display: inline-block; padding: 14px 30px; color: #ffffff; text-decoration: none; font-weight: 700; font-size: 15px;">
+            <td align="center" bgcolor="#101014" style="background-color: #101014; border-radius: 6px; mso-padding-alt: 14px 30px;">
+              <a href="{{ recap_url }}" target="_blank" rel="noopener noreferrer" style="display: inline-block; padding: 14px 30px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 15px; line-height: 1.2; font-weight: 700; color: #ffffff !important; text-decoration: none; border-radius: 6px; white-space: nowrap;">
                 Open Recap Form
               </a>
             </td>
           </tr>
         </table>
+        <p style="margin: 0 0 28px 0; font-size: 13px; line-height: 1.5; color: #666666; word-break: break-all;">
+          Or open: <a href="{{ recap_url }}" target="_blank" rel="noopener noreferrer" style="color: #202036; text-decoration: underline;">{{ recap_url }}</a>
+        </p>
       {% endif %}
 
       <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="margin: 0 0 20px 0;">

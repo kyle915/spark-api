@@ -8,10 +8,12 @@ opening line, so the BA reads one consistent set of details.
 Three things the rest of the stack has taught us, encoded here:
 
 * **The links are read, never hardcoded.** The recap URL is built from
-  ``Tenant.checkin_code`` and the training URL is ``Tenant.checkin_training_url``.
-  Both are live columns other work is actively changing (the check-in link now
-  asks the BA which program they're on, and its photo buckets moved), so a
-  literal URL in this module would be correct only until the next deploy.
+  ``Tenant.checkin_code`` and the training URL is ``Tenant.checkin_training_url``
+  (falling back to the tenant's active ``TrainingHub`` code). Both are live
+  columns other work is actively changing (the check-in link now asks the BA
+  which program they're on, and its photo buckets moved), so a literal URL in
+  this module would be correct only until the next deploy. Spark hosts are
+  rewritten to admin.igniteproductions.co before they land in the email.
 
 * **Time is instant arithmetic, never a local date.** ``settings.TIME_ZONE`` is
   UTC, so ``timezone.localdate()`` is the UTC date and every naive "now"
@@ -34,7 +36,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlparse, urlunparse
 
 from django.conf import settings
 from django.db import transaction
@@ -56,6 +58,13 @@ SUPPORT_PHONE = "775.406.0435"
 SUPPORT_PHONE_HREF = "+17754060435"
 
 DEFAULT_CHECKIN_BASE_URL = "https://admin.igniteproductions.co"
+# spark.igniteproductions.co 301s to client and must not be minted in emails.
+# Same list recaps.envelopes rewrites; keep them in lockstep.
+_RETIRED_FRONTEND_HOSTS = (
+    "spark.igniteproductions.co",
+    "spark-admin.web.app",
+    "spark-new-admin.web.app",
+)
 
 # `product_options()` prefixes every SKU with its category so 31 options stay
 # scannable in a dropdown on a phone ("Iced Tea — Sweet Reaper"). The email is
@@ -111,6 +120,54 @@ def display_products(products) -> list[str]:
 # Tenant-derived links
 # ---------------------------------------------------------------------------
 
+def public_page_base() -> str:
+    """Absolute https origin for BA-facing public pages (check-in, training).
+
+    Never spark.igniteproductions.co — that host 301s to client and must
+    not be minted in emails. ``PUBLIC_CHECKIN_BASE_URL`` wins when set to a
+    real public host; otherwise the admin production origin.
+    """
+    raw = (getattr(settings, "PUBLIC_CHECKIN_BASE_URL", "") or "").strip()
+    if raw:
+        canon = absolute_public_url(raw, allow_relative=False)
+        if canon:
+            return canon.rstrip("/")
+    return DEFAULT_CHECKIN_BASE_URL
+
+
+def absolute_public_url(raw: str, *, allow_relative: bool = True) -> str:
+    """Turn a stored training/check-in value into an email-safe https URL.
+
+    Empty, ``#``, and javascript voids become ``""`` so the template can
+    hide the button instead of rendering an unclickable ``<a href="">``.
+    Relative paths get the public origin. Retired spark hosts are rewritten
+    onto admin.igniteproductions.co. Client and admin hosts are left alone.
+    """
+    value = (raw or "").strip()
+    if not value or value in {"#", "javascript:void(0)", "javascript:void(0);"}:
+        return ""
+    if value.startswith("//"):
+        value = "https:" + value
+    if value.startswith("/"):
+        if not allow_relative:
+            return ""
+        return public_page_base().rstrip("/") + value
+    if not value.startswith(("http://", "https://")):
+        value = "https://" + value.lstrip("/")
+
+    parsed = urlparse(value)
+    host = (parsed.hostname or "").lower()
+    if host in _RETIRED_FRONTEND_HOSTS:
+        parsed = parsed._replace(
+            scheme="https",
+            netloc="admin.igniteproductions.co",
+        )
+        value = urlunparse(parsed)
+    elif value.startswith("http://") and "igniteproductions.co" in host:
+        value = "https://" + value[len("http://"):]
+    return value
+
+
 def recap_url_for(tenant) -> str:
     """The tenant's standing check-in/recap link, or "" when it has no code.
 
@@ -121,16 +178,45 @@ def recap_url_for(tenant) -> str:
     code = (getattr(tenant, "checkin_code", "") or "").strip()
     if not code:
         return ""
-    base = (
-        getattr(settings, "PUBLIC_CHECKIN_BASE_URL", "")
-        or DEFAULT_CHECKIN_BASE_URL
-    ).rstrip("/")
-    return f"{base}/checkin/{code}"
+    return f"{public_page_base()}/checkin/{code}"
 
 
 def training_url_for(tenant) -> str:
-    """The tenant's BA reference/training site, or "" when unset."""
-    return (getattr(tenant, "checkin_training_url", "") or "").strip()
+    """The tenant's BA reference/training site as an absolute https URL.
+
+    Prefers ``Tenant.checkin_training_url`` (canonicalized so a relative
+    path or a spark host still becomes a tappable email link). Falls back
+    to the tenant's active ``TrainingHub`` code — ``setup_ld_training``
+    mints the hub but does not always copy the URL onto the tenant, and
+    an empty variable would render an unclickable button.
+    """
+    stored = absolute_public_url(
+        getattr(tenant, "checkin_training_url", "") or ""
+    )
+    if stored:
+        return stored
+    code = _training_hub_code(tenant)
+    if code:
+        return f"{public_page_base()}/training/{code}"
+    return ""
+
+
+def _training_hub_code(tenant) -> str:
+    pk = getattr(tenant, "pk", None)
+    if not pk:
+        return ""
+    try:
+        from academy.models import TrainingHub
+
+        hub = (
+            TrainingHub.objects.filter(tenant_id=pk, is_active=True)
+            .exclude(code="")
+            .order_by("-updated_at")
+            .first()
+        )
+    except Exception:  # noqa: BLE001 — email send must not die on academy
+        return ""
+    return (getattr(hub, "code", "") or "").strip()
 
 
 # ---------------------------------------------------------------------------

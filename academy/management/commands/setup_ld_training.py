@@ -220,6 +220,14 @@ class Command(BaseCommand):
                 )
                 touched += 1
 
+            link = f"https://admin.igniteproductions.co/training/{hub.code}"
+            # Event confirmations read Tenant.checkin_training_url, not the hub
+            # row. Copy the minted link over when the column is empty so the
+            # Review Training Site button gets a real https href.
+            if not (tenant.checkin_training_url or "").strip():
+                tenant.checkin_training_url = link
+                tenant.save(update_fields=["checkin_training_url"])
+
         self.stdout.write("")
         self.stdout.write(
             self.style.SUCCESS(
@@ -227,6 +235,4 @@ class Command(BaseCommand):
                 f"[{hub.id}] code={hub.code} — {touched} resources ensured."
             )
         )
-        self.stdout.write(
-            f"Link   : https://admin.igniteproductions.co/training/{hub.code}"
-        )
+        self.stdout.write(f"Link   : {link}")

@@ -27,11 +27,14 @@ from django.core.management import call_command
 from django.utils import timezone as djtz
 
 from events.event_confirmations import (
+    absolute_public_url,
     build_context,
     build_subject,
     due_reminders,
     format_time_range,
+    recap_url_for,
     send_confirmation_stage,
+    training_url_for,
 )
 from events.models import EventConfirmation, EventConfirmationSend, TimeZone
 from tenants.models import Tenant
@@ -171,6 +174,12 @@ class TestConfirmationContent:
             assert artifact not in html
         assert "Open Recap Form" in html
         assert "Review Training Site" in html
+        # Real <a href> with a full https URL — a styled <td> with no href
+        # (or href="" / a relative /training/ path) is what made the iPhone
+        # button look tappable and do nothing.
+        assert 'href="https://admin.igniteproductions.co/training/LD-FZUWXT"' in html
+        assert 'href="https://admin.igniteproductions.co/checkin/LD-TNBJ8K"' in html
+        assert "spark.igniteproductions.co" not in html
         assert env.from_email == "Ignite Productions <staffing@igniteproductions.co>"
 
     @pytest.mark.parametrize(
@@ -186,6 +195,57 @@ class TestConfirmationContent:
         s = datetime(2026, 8, 1, *start, tzinfo=CHICAGO)
         e = datetime(2026, 8, 1, *end, tzinfo=CHICAGO) if end else None
         assert format_time_range(s, e) == expected
+
+
+# ---------------------------------------------------------------------------
+# Training / recap URLs — must be absolute https, never spark, never empty href
+# ---------------------------------------------------------------------------
+
+class TestPublicEmailUrls:
+    def test_absolute_public_url_rewrites_spark_and_relative_paths(self):
+        assert absolute_public_url(
+            "https://spark.igniteproductions.co/training/LD-FZUWXT"
+        ) == "https://admin.igniteproductions.co/training/LD-FZUWXT"
+        assert absolute_public_url("/training/LD-FZUWXT") == (
+            "https://admin.igniteproductions.co/training/LD-FZUWXT"
+        )
+        assert absolute_public_url(
+            "https://client.igniteproductions.co/training/LD-FZUWXT"
+        ) == "https://client.igniteproductions.co/training/LD-FZUWXT"
+        assert absolute_public_url("") == ""
+        assert absolute_public_url("#") == ""
+
+    @pytest.mark.django_db
+    def test_training_url_uses_stored_absolute_link(self):
+        tenant = _tenant()
+        assert training_url_for(tenant) == (
+            "https://admin.igniteproductions.co/training/LD-FZUWXT"
+        )
+        assert recap_url_for(tenant) == (
+            "https://admin.igniteproductions.co/checkin/LD-TNBJ8K"
+        )
+
+    @pytest.mark.django_db
+    def test_training_url_falls_back_to_training_hub(self):
+        from academy.models import TrainingHub
+
+        tenant = _tenant(checkin_training_url="")
+        assert training_url_for(tenant) == ""
+        TrainingHub.objects.create(
+            tenant=tenant,
+            code="LD-HUBFALL",
+            title="Liquid Death — BA Training",
+            is_active=True,
+        )
+        assert training_url_for(tenant) == (
+            "https://admin.igniteproductions.co/training/LD-HUBFALL"
+        )
+
+    @pytest.mark.django_db
+    def test_training_url_empty_when_tenant_has_neither(self):
+        tenant = _tenant(checkin_training_url="", checkin_code="")
+        assert training_url_for(tenant) == ""
+        assert recap_url_for(tenant) == ""
 
 
 # ---------------------------------------------------------------------------
