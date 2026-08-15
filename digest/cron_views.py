@@ -4877,6 +4877,59 @@ class SetupLdRetailCheckinView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class ListCheckinLinksView(View):
+    """GET/POST `/internal/cron/list-checkin-links`.
+
+    Every live walk-up check-in link and what each is wired to — the pinned
+    program, the recap form that program opens, and the photo buckets the page
+    will actually serve.
+
+    READ-ONLY, so there is no apply flag and no way to break anything with it.
+    Exists because the failure modes here are silent: an unpinned link hands
+    BAs an arbitrary recap form, and a photo bucket with no category row is
+    dropped at render without a word.
+
+    Params: tenant_id (optional — default is every tenant with a code).
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        kwargs: dict = {}
+        raw_id = (
+            request.GET.get("tenant_id") or request.POST.get("tenant_id") or ""
+        ).strip()
+        if raw_id:
+            try:
+                kwargs["tenant_id"] = int(raw_id)
+            except ValueError:
+                return JsonResponse(
+                    {"ok": False, "error": "tenant_id-must-be-an-integer"},
+                    status=400,
+                )
+
+        out = io.StringIO()
+        try:
+            call_command("list_checkin_links", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("list-checkin-links cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc),
+                 "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "log": out.getvalue()})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class ExportRecapPdfView(View):
     """GET/POST `/internal/cron/export-recap-pdf`.
 
@@ -7570,6 +7623,7 @@ def _registered_views() -> dict[str, Any]:
         "setup-tenant-checkin": SetupTenantCheckinView,
         "add-tenant-user": AddTenantUserView,
         "export-recap-pdf": ExportRecapPdfView,
+        "list-checkin-links": ListCheckinLinksView,
         "set-checkin-resources": SetCheckinResourcesView,
         "set-tenant-mileage-tracking": SetTenantMileageTrackingView,
         "staff-tenant-events": StaffTenantEventsView,
