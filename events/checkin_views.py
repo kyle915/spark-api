@@ -431,6 +431,33 @@ def public_checkin_clock(request: HttpRequest, code: str) -> HttpResponse:
         except (TypeError, ValueError):
             coordinates = None
 
+    clock_time = None
+    if source_name == "clock_in":
+        raw_when = (
+            data.get("clockedInAt")
+            or data.get("clocked_in_at")
+            or data.get("occurredAt")
+        )
+        try:
+            clock_time = checkin_web.parse_client_clock_time(raw_when)
+        except checkin_web.ClientClockTimeError as exc:
+            return _err(str(exc), status=400, code=exc.reason)
+
+    # Already on the clock: a queued flush (or a double-tap) must not insert
+    # a second clock_in. Same for an idempotency key the client retries.
+    state = checkin_web.clock_state(
+        ambassador_id=ambassador.id, event_id=event.id
+    )
+    idem = (data.get("idempotencyKey") or data.get("idempotency_key") or "")
+    idem = str(idem).strip()[:80]
+    idem_key = (
+        f"checkin-clock-idemp:{event.id}:{ambassador.id}:{idem}" if idem else ""
+    )
+    if source_name == "clock_in" and state.get("state") == "clocked_in":
+        return JsonResponse({"clock": state, "alreadyIn": True})
+    if source_name == "clock_in" and idem_key and cache.get(idem_key):
+        return JsonResponse({"clock": state, "alreadyIn": True, "replayed": True})
+
     try:
         amb_event, _created = checkin_web.ensure_walkup_booking(
             event, ambassador, actor=ambassador.user
@@ -440,6 +467,7 @@ def public_checkin_clock(request: HttpRequest, code: str) -> HttpResponse:
             kind=source_name,
             coordinates=coordinates,
             actor=ambassador.user,
+            clock_time=clock_time,
         )
         # Same coordinates, but PLOTTED: Attendance records the punch,
         # LocationPing is what the admin map and GPS trail actually read.
@@ -452,6 +480,8 @@ def public_checkin_clock(request: HttpRequest, code: str) -> HttpResponse:
         # First clock-IN → email admins so the pending walk-up gets seen.
         if source_name == "clock_in":
             checkin_web.notify_checkin_landed_if_first(event, ambassador)
+            if idem_key:
+                cache.set(idem_key, 1, timeout=24 * 3600)
         state = checkin_web.clock_state(
             ambassador_id=ambassador.id, event_id=event.id
         )

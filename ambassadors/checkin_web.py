@@ -31,11 +31,12 @@ import logging
 import re
 import secrets
 
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone as dt_timezone
 
 from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.utils import timezone as dj_tz
+from django.utils.dateparse import parse_datetime
 
 from tenants.models import normalize_checkin_resources
 
@@ -427,13 +428,65 @@ def _ensure_source(name: str):
     return source
 
 
-def record_attendance(*, amb_event, kind: str, coordinates, actor):
+# A BA who tapped Clock in at 3pm with no bars will flush at 5pm. Accept the
+# client timestamp so payroll matches the tap, but refuse a future stamp or
+# one older than a day (that's not "I lost service", that's a rewritten shift).
+CLOCKED_IN_MAX_AGE = timedelta(hours=24)
+CLOCKED_IN_FUTURE_SKEW = timedelta(minutes=2)
+
+
+class ClientClockTimeError(ValueError):
+    """``clockedInAt`` was present but not usable. ``reason`` is the JSON error code."""
+
+    def __init__(self, reason: str, message: str):
+        self.reason = reason
+        super().__init__(message)
+
+
+def parse_client_clock_time(raw, *, now=None):
+    """Parse optional client ``clockedInAt`` (ISO).
+
+    ``None`` / blank → ``None`` (caller uses server now). Invalid / future /
+    older than 24h → ``ClientClockTimeError``.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    parsed = parse_datetime(raw.strip())
+    if parsed is None:
+        # JS ``toISOString()`` is fine; some phones send ``+00:00`` already.
+        try:
+            parsed = datetime.fromisoformat(raw.strip().replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ClientClockTimeError(
+                "invalid", "clockedInAt must be an ISO timestamp."
+            ) from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt_timezone.utc)
+    now = now or dj_tz.now()
+    if parsed > now + CLOCKED_IN_FUTURE_SKEW:
+        raise ClientClockTimeError(
+            "future", "That clock-in time is in the future."
+        )
+    if parsed < now - CLOCKED_IN_MAX_AGE:
+        raise ClientClockTimeError(
+            "too_old", "That clock-in time is too old to use."
+        )
+    return parsed
+
+
+def record_attendance(*, amb_event, kind: str, coordinates, actor, clock_time=None):
     """Insert one clock ``Attendance`` row (kind = ``"clock_in"``/``"clock_out"``).
-    Mirrors ``ambassadors/mutations._record_attendance``."""
+    Mirrors ``ambassadors/mutations._record_attendance``.
+
+    ``clock_time`` is the moment the BA meant — tap time on an offline queue
+    flush — and falls back to server now when the client didn't send one.
+    """
     from ambassadors.models import Attendance
 
     return Attendance.objects.create(
-        clock_time=dj_tz.now(),
+        clock_time=clock_time or dj_tz.now(),
         coordinates=coordinates,
         ambassador=amb_event.ambassador,
         job=None,
