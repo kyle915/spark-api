@@ -220,7 +220,7 @@ class Command(BaseCommand):
                 )
                 touched += 1
 
-            link = f"https://admin.igniteproductions.co/training/{hub.code}"
+            link = f"https://client.igniteproductions.co/training/{hub.code}"
             # Event confirmations read Tenant.checkin_training_url, not the hub
             # row. Copy the minted link over when the column is empty so the
             # Review Training Site button gets a real https href.

@@ -652,7 +652,7 @@ class Command(BaseCommand):
         ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
         base = (
             getattr(settings, "PUBLIC_CHECKIN_BASE_URL", "")
-            or "https://admin.igniteproductions.co"
+            or "https://client.igniteproductions.co"
         ).rstrip("/")
 
         self.stdout.write("\n" + "=" * 68)

@@ -12,8 +12,9 @@ Three things the rest of the stack has taught us, encoded here:
   (falling back to the tenant's active ``TrainingHub`` code). Both are live
   columns other work is actively changing (the check-in link now asks the BA
   which program they're on, and its photo buckets moved), so a literal URL in
-  this module would be correct only until the next deploy. Spark hosts are
-  rewritten to admin.igniteproductions.co before they land in the email.
+  this module would be correct only until the next deploy. Spark and admin
+  hosts are rewritten to client.igniteproductions.co before they land in
+  the email — field phones have failed to resolve admin.
 
 * **Time is instant arithmetic, never a local date.** ``settings.TIME_ZONE`` is
   UTC, so ``timezone.localdate()`` is the UTC date and every naive "now"
@@ -57,14 +58,16 @@ CONFIRMATION_REPLY_TO = "staffing@igniteproductions.co"
 SUPPORT_PHONE = "775.406.0435"
 SUPPORT_PHONE_HREF = "+17754060435"
 
-DEFAULT_CHECKIN_BASE_URL = "https://admin.igniteproductions.co"
-# spark.igniteproductions.co 301s to client and must not be minted in emails.
-# Same list recaps.envelopes rewrites; keep them in lockstep.
+DEFAULT_CHECKIN_BASE_URL = "https://client.igniteproductions.co"
+# Field phones have failed to resolve admin. (ERR_NAME_NOT_RESOLVED).
+# spark. 301s to client. Never mint either in BA-facing emails.
 _RETIRED_FRONTEND_HOSTS = (
     "spark.igniteproductions.co",
     "spark-admin.web.app",
     "spark-new-admin.web.app",
+    "admin.igniteproductions.co",
 )
+_FIELD_HOST = "client.igniteproductions.co"
 
 # `product_options()` prefixes every SKU with its category so 31 options stay
 # scannable in a dropdown on a phone ("Iced Tea — Sweet Reaper"). The email is
@@ -123,9 +126,10 @@ def display_products(products) -> list[str]:
 def public_page_base() -> str:
     """Absolute https origin for BA-facing public pages (check-in, training).
 
-    Never spark.igniteproductions.co — that host 301s to client and must
-    not be minted in emails. ``PUBLIC_CHECKIN_BASE_URL`` wins when set to a
-    real public host; otherwise the admin production origin.
+    Always client.igniteproductions.co in production. spark. 301s there
+    and admin. has failed to resolve on field phones, so neither is minted
+    in emails. ``PUBLIC_CHECKIN_BASE_URL`` wins when set to a real public
+    host that is not a retired/admin alias.
     """
     raw = (getattr(settings, "PUBLIC_CHECKIN_BASE_URL", "") or "").strip()
     if raw:
@@ -140,8 +144,8 @@ def absolute_public_url(raw: str, *, allow_relative: bool = True) -> str:
 
     Empty, ``#``, and javascript voids become ``""`` so the template can
     hide the button instead of rendering an unclickable ``<a href="">``.
-    Relative paths get the public origin. Retired spark hosts are rewritten
-    onto admin.igniteproductions.co. Client and admin hosts are left alone.
+    Relative paths get the public origin. Retired spark hosts and admin.
+    are rewritten onto client.igniteproductions.co.
     """
     value = (raw or "").strip()
     if not value or value in {"#", "javascript:void(0)", "javascript:void(0);"}:
@@ -160,7 +164,7 @@ def absolute_public_url(raw: str, *, allow_relative: bool = True) -> str:
     if host in _RETIRED_FRONTEND_HOSTS:
         parsed = parsed._replace(
             scheme="https",
-            netloc="admin.igniteproductions.co",
+            netloc=_FIELD_HOST,
         )
         value = urlunparse(parsed)
     elif value.startswith("http://") and "igniteproductions.co" in host:
