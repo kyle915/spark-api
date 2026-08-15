@@ -29,10 +29,10 @@ def _format_dt_no_tz(
 def _checkin_deep_link(*, tenant, event=None) -> str:
     """HTTPS check-in URL for BA assign/reminder emails.
 
-    Same origin + path as event confirmations: ``/checkin/<code>`` on
-    admin (or the public check-in host). Never ``spark://`` — those
-    scheme links fail in mail clients and the BA already works in the
-    browser check-in page.
+    Same origin + path as event confirmations: ``recap_url_for`` /
+    ``public_page_base()`` (client.igniteproductions.co). Never
+    ``spark://`` and never admin — field BAs work in the browser
+    check-in page on the client host.
     """
     from events.event_confirmations import public_page_base, recap_url_for
 

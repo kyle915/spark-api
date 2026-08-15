@@ -1,14 +1,18 @@
-"""Assign/reminder emails mint /checkin URLs, never spark://."""
+"""Assign/reminder emails mint /checkin URLs on client, never spark:// or admin."""
 
 from types import SimpleNamespace
 
+from events.event_confirmations import public_page_base, recap_url_for
 from jobs.envelopes import _checkin_deep_link
 
 
 def test_checkin_deep_link_uses_tenant_standing_code():
     tenant = SimpleNamespace(checkin_code="LD-TNBJ8K")
     url = _checkin_deep_link(tenant=tenant)
-    assert url == "https://admin.igniteproductions.co/checkin/LD-TNBJ8K"
+    assert url == recap_url_for(tenant)
+    assert url == f"{public_page_base()}/checkin/LD-TNBJ8K"
+    assert "client.igniteproductions.co" in url
+    assert "admin.igniteproductions.co" not in url
     assert not url.startswith("spark://")
 
 
@@ -16,8 +20,8 @@ def test_checkin_deep_link_falls_back_to_event_walkup():
     tenant = SimpleNamespace(checkin_code="")
     event = SimpleNamespace(walkup_code="EVT12345")
     url = _checkin_deep_link(tenant=tenant, event=event)
-    assert url.endswith("/checkin/EVT12345")
-    assert url.startswith("https://")
+    assert url == f"{public_page_base()}/checkin/EVT12345"
+    assert "admin.igniteproductions.co" not in url
 
 
 def test_checkin_deep_link_empty_when_no_code():
