@@ -112,13 +112,24 @@
     </td>
   </tr>
 
+  {% if report_url %}
+  <tr>
+    <td align="center" style="padding: 20px 0 8px 0;">
+      <a href="{{ report_url }}"
+         style="display:inline-block;background:#c5f546;color:#0a0d09;padding:12px 22px;border-radius:999px;font-family:Georgia,'Times New Roman',serif;font-weight:700;font-size:14px;text-decoration:none;letter-spacing:-0.01em;">
+        View the live report →
+      </a>
+    </td>
+  </tr>
+  {% endif %}
+
   <!-- Attachment note -->
   <tr>
     <td style="padding: 12px 0 4px 0;">
       <p style="margin: 0; font-size: 13px; line-height: 1.55; color: #555555;">
-        📎 Attached: a {{ recap_count }}-recap PDF with field-level photos and
-        consumer-engagement numbers. Reply with any questions — we keep the
-        BA-level raw data on file if you'd like it broken down further.
+        A PDF is attached. The live report has the same photos and numbers
+        if you'd rather open it in a browser. Reply with any questions —
+        we keep the BA-level raw data on file if you'd like it broken down further.
       </p>
     </td>
   </tr>

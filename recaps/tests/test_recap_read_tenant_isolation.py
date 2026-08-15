@@ -304,7 +304,7 @@ class TestRecapReadTenantIsolation(AmbassadorsGraphQLTestCase):
         rf = await sync_to_async(self._make_recap_file)(recap)
 
         with patch(
-            "recaps.mutations.public_url",
+            "recaps.mutation_parts.exports.public_url",
             return_value="https://example.test/blob",
         ):
             result = await self._execute_mutation_authenticated(
@@ -324,7 +324,7 @@ class TestRecapReadTenantIsolation(AmbassadorsGraphQLTestCase):
         rf = await sync_to_async(self._make_recap_file)(recap)
 
         with patch(
-            "recaps.mutations.public_url",
+            "recaps.mutation_parts.exports.public_url",
             return_value="https://example.test/blob",
         ):
             result = await self._execute_mutation_authenticated(
@@ -346,7 +346,7 @@ class TestRecapReadTenantIsolation(AmbassadorsGraphQLTestCase):
         crf = await sync_to_async(self._make_custom_recap_file)(recap)
 
         with patch(
-            "recaps.mutations.public_url",
+            "recaps.mutation_parts.exports.public_url",
             return_value="https://example.test/blob",
         ):
             result = await self._execute_mutation_authenticated(
@@ -519,14 +519,14 @@ class TestRecapReadTenantIsolation(AmbassadorsGraphQLTestCase):
         recap = await sync_to_async(self._make_recap)(self.event)
 
         with patch(
-            "recaps.mutations.build_recaps_xlsx", return_value=b"PK\x03\x04"
+            "recaps.mutation_parts.exports.build_recaps_xlsx", return_value=b"PK\x03\x04"
         ), patch(
-            "recaps.mutations.upload_bytes", return_value=None
+            "recaps.mutation_parts.exports.upload_bytes", return_value=None
         ), patch(
-            "recaps.mutations.public_url",
+            "recaps.mutation_parts.exports.public_url",
             return_value="https://example.test/x.xlsx",
         ), patch(
-            "recaps.mutations.get_gcs_client"
+            "recaps.mutation_parts.exports.get_gcs_client"
         ) as gcs:
             gcs.return_value.bucket.return_value.list_blobs.return_value = []
             result = await self._execute_mutation_authenticated(
@@ -547,14 +547,14 @@ class TestRecapReadTenantIsolation(AmbassadorsGraphQLTestCase):
         )
 
         with patch(
-            "recaps.mutations.build_recaps_xlsx", return_value=b"PK\x03\x04"
+            "recaps.mutation_parts.exports.build_recaps_xlsx", return_value=b"PK\x03\x04"
         ), patch(
-            "recaps.mutations.upload_bytes", return_value=None
+            "recaps.mutation_parts.exports.upload_bytes", return_value=None
         ), patch(
-            "recaps.mutations.public_url",
+            "recaps.mutation_parts.exports.public_url",
             return_value="https://example.test/x.xlsx",
         ), patch(
-            "recaps.mutations.get_gcs_client"
+            "recaps.mutation_parts.exports.get_gcs_client"
         ) as gcs:
             gcs.return_value.bucket.return_value.list_blobs.return_value = []
             result = await self._execute_mutation_authenticated(

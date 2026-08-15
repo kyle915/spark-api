@@ -4,7 +4,7 @@ import strawberry
 from asgiref.sync import sync_to_async
 from graphql import GraphQLError
 
-from django.db.models import QuerySet, Model, Prefetch, Q, Max
+from django.db.models import QuerySet, Model, Prefetch, Q, Max, Count
 from django.db.models.functions import Coalesce
 
 from recaps import types
@@ -34,18 +34,43 @@ from utils.graphql.relay import (
 
 
 # Page ceiling for the web "Your recaps" LIST resolvers (`recaps` +
-# `customRecaps` on the clients schema). The web admin loads the whole
-# tenant in one page and does date-range / search / status / retailer /
-# state filtering CLIENT-SIDE over the returned rows, so the default 50-row
-# cap meant only the newest ~50 recaps were ever reachable while totalCount
-# correctly reported the full set (Liquid Death: 830 total, paging stuck at
-# ~50, date-search blind to anything older). Lifting the ceiling lets a
-# single large `first` page through the complete tenant set so every
-# client-side filter operates over all of it. Same lever as the Master
-# Tracker `requests` resolver (#633, max_limit=2000). default_limit is left
-# at the service default, so callers that pass no `first` still get a small
-# page.
-RECAPS_LIST_MAX_LIMIT = 2000
+# `customRecaps` on the clients schema). Filters (status / retailer /
+# state / RMM / ambassador / date / search) run SERVER-SIDE, so a
+# 50-row page is enough — the old 2000 pull existed only because the
+# web list filtered in the browser (Liquid Death blew a 50-row cap).
+RECAPS_LIST_MAX_LIMIT = 50
+
+
+def _apply_name_code_filters(
+    queryset: QuerySet,
+    *,
+    retailer_name: str | None = None,
+    state_code: str | None = None,
+) -> QuerySet:
+    """Apply the web-list retailer-name / state-code filters.
+
+    The Spark recaps list dropdowns are labeled by retailer NAME and
+    2-letter state CODE (not Relay ids). Match the same sources the
+    cards display: recap FK, event retailer, request retailer, event
+    state, and a ``, TX``-style address fallback for address-only events.
+    """
+    name = (retailer_name or "").strip()
+    if name:
+        queryset = queryset.filter(
+            Q(retailer__name__iexact=name)
+            | Q(event__retailer__name__iexact=name)
+            | Q(event__request__retailer__name__iexact=name)
+        )
+    code = (state_code or "").strip()
+    if code:
+        queryset = queryset.filter(
+            Q(state__code__iexact=code)
+            | Q(event__state__code__iexact=code)
+            | Q(event__retailer__location__state__code__iexact=code)
+            | Q(event__address__icontains=f", {code}")
+            | Q(event__address__icontains=f" {code} ")
+        )
+    return queryset
 
 
 class BaseRecapQueriesService(SparkGraphQLMixin):
@@ -81,8 +106,14 @@ class BaseRecapQueriesService(SparkGraphQLMixin):
                     ),
                 ),
                 "consumer_engagements",
-                "product_samples",
-                "sales_performance",
+                Prefetch(
+                    "product_samples",
+                    queryset=models.ProductSamples.objects.select_related("product"),
+                ),
+                Prefetch(
+                    "sales_performance",
+                    queryset=models.SalesPerformance.objects.select_related("product"),
+                ),
                 "consumer_feedback",
                 "account_feedback",
                 Prefetch(
@@ -146,7 +177,14 @@ class BaseRecapQueriesService(SparkGraphQLMixin):
         if approved is not None:
             queryset = queryset.filter(approved=approved)
         if q:
-            queryset = queryset.filter(name__icontains=q)
+            queryset = queryset.filter(
+                Q(name__icontains=q)
+                | Q(event__name__icontains=q)
+                | Q(event__address__icontains=q)
+                | Q(retailer__name__icontains=q)
+                | Q(event__retailer__name__icontains=q)
+                | Q(event__request__retailer__name__icontains=q)
+            )
         return queryset
 
     def get_ordered_queryset(
@@ -795,6 +833,14 @@ class CustomRecapQueriesService(SparkGraphQLMixin):
                 "event",
                 "event__event_type",
                 "event__timezone",
+                "event__retailer",
+                "event__retailer__location",
+                "event__retailer__location__state",
+                "event__location",
+                "event__location__state",
+                "event__state",
+                "event__request",
+                "event__request__retailer",
                 "ambassador",
                 "ambassador__user",
                 "job",
@@ -878,12 +924,15 @@ class CustomRecapQueriesService(SparkGraphQLMixin):
         if ambassador_id:
             queryset = queryset.filter(ambassador_id=ambassador_id)
         if retailer_id:
-            queryset = queryset.filter(retailer_id=retailer_id)
+            queryset = queryset.filter(
+                Q(retailer_id=retailer_id) | Q(event__retailer_id=retailer_id)
+            )
         if location_id:
             queryset = queryset.filter(location_id=location_id)
         if state_id:
             queryset = queryset.filter(
                 Q(state_id=state_id)
+                | Q(event__state_id=state_id)
                 | Q(job__event__retailer__location__state_id=state_id)
             )
         if event_date:
@@ -899,7 +948,13 @@ class CustomRecapQueriesService(SparkGraphQLMixin):
         if edited is not None:
             queryset = queryset.filter(updated_by__isnull=not edited)
         if q:
-            queryset = queryset.filter(name__icontains=q)
+            queryset = queryset.filter(
+                Q(name__icontains=q)
+                | Q(event__name__icontains=q)
+                | Q(event__address__icontains=q)
+                | Q(retailer__name__icontains=q)
+                | Q(event__retailer__name__icontains=q)
+            )
         return queryset
 
     def get_ordered_queryset(
@@ -1303,6 +1358,8 @@ class RecapQueries:
         end_date = filters.end_date if filters else None
         event_address = filters.event_address if filters else None
         approved = filters.approved if filters else None
+        retailer_name = filters.retailer_name if filters else None
+        state_code = filters.state_code if filters else None
         # Force approved=True for client users — they never see drafts.
         # Overrides whatever the client (or a stale frontend filter) sent.
         if await _is_client_only_user(info):
@@ -1325,6 +1382,47 @@ class RecapQueries:
         )
         if filters and filters.edited is not None:
             queryset = queryset.filter(updated_by__isnull=not filters.edited)
+        if filters and getattr(filters, "shared", None) is not None:
+            queryset = queryset.filter(shared_at__isnull=not filters.shared)
+        queryset = _apply_name_code_filters(
+            queryset, retailer_name=retailer_name, state_code=state_code
+        )
+        # List cards only need hero + count + flat event labels.
+        # Drop the fat default prefetches (engagements/samples/sales).
+        queryset = (
+            queryset.prefetch_related(None)
+            .select_related(
+                "event",
+                "event__retailer",
+                "event__retailer__location",
+                "event__retailer__location__state",
+                "event__state",
+                "event__request",
+                "event__request__retailer",
+                "event__request__request_type",
+                "ambassador",
+                "ambassador__user",
+                "retailer",
+                "state",
+            )
+            .annotate(_recap_files_count=Count("recap_files", distinct=True))
+            .prefetch_related(
+                Prefetch(
+                    "recap_files",
+                    queryset=models.RecapFile.objects.filter(
+                        Q(file__iendswith=".jpg")
+                        | Q(file__iendswith=".jpeg")
+                        | Q(file__iendswith=".png")
+                        | Q(file__iendswith=".webp")
+                        | Q(file__iendswith=".gif")
+                        | Q(file__iendswith=".heic")
+                        | Q(file__iendswith=".heif")
+                    )
+                    .select_related("file_recap_category", "file_type")
+                    .order_by("id"),
+                ),
+            )
+        )
 
         return await service.get_connection(
             tenant_id=tenant_id,
@@ -1345,15 +1443,6 @@ class RecapQueries:
             after=after,
             last=last,
             before=before,
-            # Lift the page ceiling for the "Your recaps" LIST so the web
-            # admin can pull the whole tenant in one page. The list applies
-            # date-range / search / status / retailer / state filters
-            # CLIENT-SIDE over the rows it received, so a 50-row cap meant
-            # only the newest ~50 recaps were ever reachable (Liquid Death:
-            # totalCount=830 but paging stuck at ~50 and date-search found
-            # nothing older). Same class of fix as the Master Tracker
-            # `requests` resolver (#633). default_limit is unchanged, so
-            # callers that pass no `first` still get the small default page.
             max_limit=RECAPS_LIST_MAX_LIMIT,
             queryset=queryset,
         )
@@ -1486,6 +1575,8 @@ class RecapQueries:
         event_address = filters.event_address if filters else None
         approved = filters.approved if filters else None
         edited = filters.edited if filters else None
+        retailer_name = filters.retailer_name if filters else None
+        state_code = filters.state_code if filters else None
 
         # Force approved=True for client users on custom recaps too.
         if await _is_client_only_user(info):
@@ -1509,6 +1600,51 @@ class RecapQueries:
             edited=edited,
             q=q,
         )
+        queryset = _apply_name_code_filters(
+            queryset, retailer_name=retailer_name, state_code=state_code
+        )
+        if filters and getattr(filters, "shared", None) is not None:
+            queryset = queryset.filter(shared_at__isnull=not filters.shared)
+        queryset = (
+            queryset.prefetch_related(None)
+            .select_related(
+                "event",
+                "event__retailer",
+                "event__state",
+                "ambassador",
+                "ambassador__user",
+                "retailer",
+                "state",
+                "custom_recap_template",
+            )
+            .annotate(
+                _custom_recap_files_count=Count("custom_recap_files", distinct=True)
+            )
+            .prefetch_related(
+                Prefetch(
+                    "custom_field_value",
+                    queryset=models.CustomFieldValue.objects.select_related(
+                        "custom_field",
+                        "custom_field__custom_field_type",
+                        "custom_field__recap_section",
+                    ),
+                ),
+                Prefetch(
+                    "custom_recap_files",
+                    queryset=models.CustomRecapFile.objects.filter(
+                        Q(url__iendswith=".jpg")
+                        | Q(url__iendswith=".jpeg")
+                        | Q(url__iendswith=".png")
+                        | Q(url__iendswith=".webp")
+                        | Q(url__iendswith=".gif")
+                        | Q(url__iendswith=".heic")
+                        | Q(url__iendswith=".heif")
+                    )
+                    .select_related("file_type", "file_recap_category")
+                    .order_by("id"),
+                ),
+            )
+        )
 
         return await service.get_connection(
             tenant_id=resolved_tenant_id,
@@ -1531,10 +1667,6 @@ class RecapQueries:
             after=after,
             last=last,
             before=before,
-            # Same ceiling lift as the legacy `recaps` resolver above —
-            # the "Your recaps" page merges legacy + custom and filters
-            # both client-side, so the custom half needs the full tenant
-            # set returnable too. default_limit unchanged.
             max_limit=RECAPS_LIST_MAX_LIMIT,
             queryset=queryset,
         )
@@ -1880,6 +2012,34 @@ class RecapQueries:
             return None
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def connecteam_import_job(
+        self,
+        info: strawberry.Info,
+        job_id: str,
+    ) -> types.ConnecteamImportJob | None:
+        """Poll an async Connecteam PDF import."""
+        from recaps.mutation_parts.connecteam import read_connecteam_job
+
+        payload = await sync_to_async(read_connecteam_job)((job_id or "").strip())
+        if not payload:
+            return None
+        recap = None
+        recap_id = payload.get("custom_recap_id")
+        if recap_id:
+            recap = await sync_to_async(
+                lambda: models.CustomRecap.objects.filter(id=recap_id).first()
+            )()
+        return types.ConnecteamImportJob(
+            job_id=job_id,
+            status=str(payload.get("status") or "pending"),
+            message=payload.get("message"),
+            custom_recap=recap,
+            matched_count=int(payload.get("matched_count") or 0),
+            unmatched_count=int(payload.get("unmatched_count") or 0),
+            images_attached=int(payload.get("images_attached") or 0),
+        )
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def recap_sections(
         self,
         info: strawberry.Info,
@@ -2003,8 +2163,9 @@ class RecapQueries:
         lookback_days: int = 30,
     ) -> List[types.MissingRecapEventType]:
         """Events that already wrapped (end_time < now) but have no
-        recap row attached. Drives the /recaps/missing admin page —
-        the one-stop list for "what does my team still owe me?"
+        *filed* recap. An empty clock-out stub does not count — those
+        events still belong on /recaps/missing. Drives the admin page
+        for "what does my team still owe me?"
 
         `lookback_days` caps how far back we go so the query stays
         cheap on long-running tenants. Default 30 days; bump for
@@ -2033,6 +2194,8 @@ class RecapQueries:
                 raise GraphQLError("Invalid tenant id.")
 
         def _fetch() -> List[types.MissingRecapEventType]:
+            from recaps.filed import events_missing_filed_recap
+
             qs = (
                 event_models.Event.objects.select_related(
                     "retailer",
@@ -2063,15 +2226,16 @@ class RecapQueries:
                         last_punch__gte=cutoff,
                     )
                 )
-                # An event is missing a recap if neither the standard
-                # `recaps` nor the tenant-custom `custom_recap` tables
-                # have a row. Borjomi-style tenants file via the latter,
-                # and without this check every Borjomi event with a
-                # filed customRecap was still flagged as missing.
-                .filter(recaps__isnull=True, custom_recap__isnull=True)
-                # Newest first regardless of which shape it is — a walk-in has
-                # no end_time to sort by, so fall back to its last punch.
-                .annotate(wrapped_at=Coalesce("end_time", "last_punch"))
+                # An event is missing a recap if neither family has a
+                # *filed* row (photos / metrics / submitted_at). An empty
+                # clock-out stub must still show here — existence-only
+                # hid those shifts from /recaps/missing.
+                # Borjomi-style tenants file via custom_recap; both
+                # families go through recaps.filed.events_missing_filed_recap.
+            )
+            qs = events_missing_filed_recap(qs)
+            qs = (
+                qs.annotate(wrapped_at=Coalesce("end_time", "last_punch"))
                 .order_by("-wrapped_at")
             )
             if resolved_tenant_id is not None:

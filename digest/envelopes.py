@@ -1,5 +1,14 @@
+from django.conf import settings
+
 from utils.mailer import Envelope, Mailer
 from .services import TenantDigest
+
+
+def _admin_frontend_url() -> str:
+    return str(
+        getattr(settings, "ADMIN_FRONTEND_URL", "")
+        or "https://admin.igniteproductions.co"
+    ).rstrip("/")
 
 
 class AdminDigestMailer(Mailer):
@@ -14,11 +23,11 @@ class AdminDigestMailer(Mailer):
         digest: TenantDigest,
         *,
         to_emails: list[str],
-        web_app_base_url: str = "https://spark-new-admin.web.app",
+        web_app_base_url: str | None = None,
     ):
         self.digest = digest
         self.to_emails = to_emails
-        self.web_app_base_url = web_app_base_url.rstrip("/")
+        self.web_app_base_url = (web_app_base_url or _admin_frontend_url()).rstrip("/")
 
     def envelope(self) -> Envelope:
         d = self.digest
@@ -61,11 +70,11 @@ class ExecutiveSummaryMailer(Mailer):
         summary: ExecutiveSummary,
         *,
         to_emails: list[str],
-        web_app_base_url: str = "https://spark-new-admin.web.app",
+        web_app_base_url: str | None = None,
     ):
         self.summary = summary
         self.to_emails = to_emails
-        self.web_app_base_url = web_app_base_url.rstrip("/")
+        self.web_app_base_url = (web_app_base_url or _admin_frontend_url()).rstrip("/")
 
     def envelope(self) -> Envelope:
         s = self.summary

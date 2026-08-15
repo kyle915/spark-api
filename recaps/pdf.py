@@ -665,6 +665,7 @@ def build_recap_pdf_html(
     </section>
 """
 
+    status_chip = "APPROVED" if recap.approved else "DRAFT"
     return f"""
 <!doctype html>
 <html>
@@ -675,11 +676,12 @@ def build_recap_pdf_html(
   <body>
     <header class="header">
       <div>
-        <h1>Recap Report</h1>
-        <p class="subtitle">{safe(recap.name)}</p>
+        <p class="eyebrow">Spark <span class="lime">by Ignite</span></p>
+        <h1>{safe(recap.name)}</h1>
+        <p class="subtitle">Field recap</p>
       </div>
-      <div class="badge">
-        <span>{"Approved" if recap.approved else "Pending"}</span>
+      <div class="badge {"badge-lime" if recap.approved else "badge-draft"}">
+        <span>{status_chip}</span>
       </div>
     </header>
 
@@ -706,7 +708,7 @@ _PDF_BASE_CSS = """
             margin: 0.7in;
         }
         body {
-            font-family: "Helvetica", "Arial", sans-serif;
+            font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
             color: #1f2933;
             background: #f5f6f8;
             font-size: 11px;
@@ -724,41 +726,70 @@ def build_recap_pdf(
 
     css = CSS(
         string=_PDF_BASE_CSS + """
+        @page { background: #0a0d09; margin: 0.65in; }
+        body { color: #f2f3ee; background: #0a0d09; }
         h1 {
-            font-size: 28px;
+            font-size: 26px;
             margin: 0 0 4px 0;
+            letter-spacing: -0.03em;
+            color: #f2f3ee;
         }
         h2 {
-            font-size: 16px;
+            font-size: 11px;
             margin: 0 0 10px 0;
+            text-transform: uppercase;
+            letter-spacing: 0.16em;
+            color: #c5f546;
         }
+        .eyebrow {
+            margin: 0 0 6px 0;
+            font-size: 11px;
+            letter-spacing: -0.02em;
+            font-weight: 700;
+            color: #f2f3ee;
+        }
+        .eyebrow .lime { color: #c5f546; }
         .subtitle {
             margin: 0;
-            font-size: 12px;
-            color: #52606d;
+            font-size: 10px;
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
+            color: rgba(242, 243, 238, 0.5);
         }
         .header {
             display: flex;
             justify-content: space-between;
             align-items: center;
             margin-bottom: 18px;
+            padding-bottom: 14px;
+            border-bottom: 1px solid #1f2418;
         }
         .badge {
-            background: #111827;
-            color: #f9fafb;
-            padding: 8px 14px;
+            padding: 6px 12px;
             border-radius: 999px;
-            font-weight: 600;
-            font-size: 10px;
+            font-weight: 700;
+            font-size: 9px;
             text-transform: uppercase;
-            letter-spacing: 0.08em;
+            letter-spacing: 0.12em;
+            border: 1px solid #1f2418;
+            color: rgba(242, 243, 238, 0.7);
+        }
+        .badge-lime {
+            color: #0a0d09;
+            background: #c5f546;
+            border-color: #c5f546;
+        }
+        .badge-draft {
+            color: #ef5a2a;
+            background: rgba(239, 90, 42, 0.12);
+            border-color: rgba(239, 90, 42, 0.4);
         }
         .card {
-            background: #ffffff;
-            border-radius: 12px;
+            background: #11140e;
+            border: 1px solid #1f2418;
+            border-radius: 16px;
             padding: 14px 16px;
-            box-shadow: 0 6px 16px rgba(15, 23, 42, 0.08);
-            margin-bottom: 16px;
+            margin-bottom: 14px;
         }
         .grid {
             display: grid;
@@ -767,19 +798,20 @@ def build_recap_pdf(
         }
         .grid div span {
             display: block;
-            font-size: 9px;
-            color: #6b7280;
+            font-size: 8px;
+            color: rgba(242, 243, 238, 0.45);
             text-transform: uppercase;
-            letter-spacing: 0.08em;
+            letter-spacing: 0.12em;
             margin-bottom: 4px;
         }
         .grid div strong {
-            font-size: 12px;
-            color: #111827;
+            font-size: 13px;
+            color: #f2f3ee;
         }
         .list {
             margin: 0;
             padding-left: 16px;
+            color: #f2f3ee;
         }
         .list li {
             margin-bottom: 4px;
@@ -789,20 +821,21 @@ def build_recap_pdf(
         }
         .stack span {
             display: block;
-            font-size: 9px;
-            color: #6b7280;
+            font-size: 8px;
+            color: rgba(242, 243, 238, 0.45);
             text-transform: uppercase;
-            letter-spacing: 0.08em;
+            letter-spacing: 0.12em;
             margin-bottom: 4px;
         }
         .stack p {
             margin: 0;
             font-size: 11px;
-            color: #111827;
+            color: #f2f3ee;
         }
         .stack figure {
             margin: 4px 0 0 0;
-            background: #f3f4f6;
+            background: #161a12;
+            border: 1px solid #1f2418;
             border-radius: 10px;
             padding: 8px;
             text-align: center;
@@ -817,7 +850,7 @@ def build_recap_pdf(
         .stack figcaption {
             margin-top: 6px;
             font-size: 9px;
-            color: #6b7280;
+            color: rgba(242, 243, 238, 0.5);
         }
         .gallery {
             display: grid;
@@ -829,14 +862,15 @@ def build_recap_pdf(
         }
         .image-group h3 {
             margin: 0 0 8px 0;
-            font-size: 12px;
+            font-size: 10px;
             text-transform: uppercase;
-            letter-spacing: 0.08em;
-            color: #6b7280;
+            letter-spacing: 0.14em;
+            color: rgba(242, 243, 238, 0.5);
         }
         .gallery figure {
             margin: 0;
-            background: #f3f4f6;
+            background: #161a12;
+            border: 1px solid #1f2418;
             border-radius: 10px;
             padding: 8px;
             text-align: center;
@@ -850,10 +884,11 @@ def build_recap_pdf(
         .gallery figcaption {
             margin-top: 6px;
             font-size: 9px;
+            color: rgba(242, 243, 238, 0.5);
         }
         .empty {
             margin: 0;
-            color: #9ca3af;
+            color: rgba(242, 243, 238, 0.4);
             font-style: italic;
         }
         """

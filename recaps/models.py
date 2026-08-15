@@ -37,6 +37,9 @@ class Recap(models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     name = models.TextField(null=False)
+    # Persisted typo — do not rename the column. ``submitted_at`` is the
+    # Python / GraphQL alias so callers can use the correct spelling
+    # without breaking existing writes to ``submited_at``.
     submited_at = models.DateTimeField(null=True)
     total_engagements = models.IntegerField(null=True)
     products_sold = models.IntegerField(null=True)
@@ -50,6 +53,13 @@ class Recap(models.Model):
         max_digits=10, decimal_places=4, null=True
     )
     approved = models.BooleanField(default=False)
+    # Set when ops copies/emails the /r/:token link. Pipeline "Shared"
+    # is derived from this — not a new status enum.
+    shared_at = models.DateTimeField(null=True, blank=True)
+    # Client leave-behind sign-off (Looks good / Need more photos).
+    client_signoff_status = models.CharField(max_length=32, blank=True, default="")
+    client_signoff_comment = models.TextField(blank=True, default="")
+    client_signoff_at = models.DateTimeField(null=True, blank=True)
     traffic_description = models.CharField(max_length=255, null=True)
     competitive_presence = models.CharField(max_length=255, null=True)
 
@@ -137,6 +147,15 @@ class Recap(models.Model):
             # filesort over the (capped, up to 2000-row) result set.
             models.Index(fields=["-created_at"], name="rc_recap_created_idx"),
         ]
+
+    @property
+    def submitted_at(self):
+        """Correct-spelling alias for the persisted ``submited_at`` column."""
+        return self.submited_at
+
+    @submitted_at.setter
+    def submitted_at(self, value):
+        self.submited_at = value
 
 
 class RecapFile(models.Model):
@@ -415,6 +434,10 @@ class CustomRecap(models.Model):
     late = models.BooleanField(default=False)
     incomplete = models.BooleanField(default=False)
     approved = models.BooleanField(default=False)
+    shared_at = models.DateTimeField(null=True, blank=True)
+    client_signoff_status = models.CharField(max_length=32, blank=True, default="")
+    client_signoff_comment = models.TextField(blank=True, default="")
+    client_signoff_at = models.DateTimeField(null=True, blank=True)
     used_corpo_card = models.BooleanField(default=False)
 
     # Submit-time data-quality guard: non-empty when this recap's parsed

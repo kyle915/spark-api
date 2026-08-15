@@ -115,6 +115,7 @@ class Command(BaseCommand):
         self._apply_logo(tenant, force, dry_run)
         self._apply_theme(tenant, force, dry_run)
         self._apply_campaign_images(tenant, force, dry_run)
+        self._apply_campaign_copy(tenant, force, dry_run)
 
     # ------------------------------------------------------------------
     def _apply_logo(self, tenant: Tenant, force: bool, dry_run: bool) -> None:
@@ -228,6 +229,35 @@ class Command(BaseCommand):
             self.stdout.write(self.style.SUCCESS(
                 f"  + {label}: saved {len(blob) // 1024}KB -> {blob_name}"
             ))
+
+    # ------------------------------------------------------------------
+    def _apply_campaign_copy(
+        self, tenant: Tenant, force: bool, dry_run: bool
+    ) -> None:
+        """Replace leftover joke/placeholder rebate copy on /c/girlbeer."""
+        description = (
+            "Bought Girl Beer? Photograph your receipt and submit it here. "
+            "Once we verify the purchase, we'll send your rebate to the PayPal "
+            "email you enter."
+        )
+
+        try:
+            campaign = ReceiptCampaign.objects.get(
+                tenant=tenant, slug=CAMPAIGN_SLUG
+            )
+        except ReceiptCampaign.DoesNotExist:
+            return
+        raw = (campaign.description or "").strip()
+        needs_copy = (not raw) or ("connor" in raw.lower()) or force
+        if not needs_copy:
+            self.stdout.write("  - campaign copy: already set (skip)")
+            return
+        if dry_run:
+            self.stdout.write("  - campaign copy: would set rebate description")
+            return
+        campaign.description = description
+        campaign.save(update_fields=["description", "updated_at"])
+        self.stdout.write(self.style.SUCCESS("  + campaign copy: rebate description"))
 
     # ------------------------------------------------------------------
     def _download(self, url: str) -> bytes:

@@ -259,10 +259,9 @@ def _accumulate_custom(custom_recap, kpis: CampaignReportKpis) -> None:
 
     ``total_engagements`` is a typed column on CustomRecap. The four
     consumer numbers + sold units come from the free-text CustomFieldValue
-    rows (label-matched, parsed). ``samplesDistributed`` prefers the
-    structured ``custom_recap_product_sample`` quantities, falling back to
-    the "consumers sampled" custom field (which the recap cards treat as
-    the sampling headline) when no structured samples exist.
+    rows (label-matched, parsed).     ``samplesDistributed`` prefers the free-text "Total Samples Given Out"
+    headline, then structured ``custom_recap_product_sample`` quantities,
+    then the "consumers sampled" custom field.
     """
     kpis.total_engagements += int(getattr(custom_recap, "total_engagements", 0) or 0)
 
@@ -303,11 +302,12 @@ def _accumulate_custom(custom_recap, kpis: CampaignReportKpis) -> None:
         for s in _all(custom_recap, "custom_recap_product_sample")
     )
     samples_given = _samples_given_from_fields(pairs)
-    if structured_samples:
-        kpis.samples_distributed += structured_samples
-    elif samples_given is not None:
-        # Free-text "Total Samples Given Out" headline (Girl Beer).
+    if samples_given is not None:
+        # Free-text "Total Samples Given Out" headline (Girl Beer) wins
+        # over leftover SKU rows on CustomRecapProductSample.
         kpis.samples_distributed += int(samples_given)
+    elif structured_samples:
+        kpis.samples_distributed += structured_samples
     elif consumers_sampled is not None:
         kpis.samples_distributed += int(consumers_sampled)
 

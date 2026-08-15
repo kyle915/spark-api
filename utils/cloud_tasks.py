@@ -109,3 +109,29 @@ def enqueue(path: str, payload: dict) -> bool:
         (resp.text or "")[:500],
     )
     return False
+
+
+def enqueue_or_background(path: str, payload: dict, fallback) -> None:
+    """Enqueue to Cloud Tasks, else run ``fallback`` off the request.
+
+    Under pytest the fallback runs inline so mutation tests can assert
+    side effects (mailer.send). In production without Cloud Tasks it
+    runs on a daemon thread so approve/create return immediately.
+    ``fallback`` is a zero-arg callable (sync).
+    """
+    import sys
+    import threading
+
+    if enqueue(path, payload):
+        return
+    if "pytest" in sys.modules:
+        fallback()
+        return
+
+    def _safe():
+        try:
+            fallback()
+        except Exception:
+            logger.exception("cloud_tasks background fallback failed for %s", path)
+
+    threading.Thread(target=_safe, daemon=True).start()

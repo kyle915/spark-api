@@ -358,14 +358,24 @@ def _gather_custom_facts(custom_recap) -> _RecapFacts:
     facts.cans_sold = cans_sold if saw_sold else None
     facts.packs_sold = packs_sold if saw_sold else None
 
+    # Prefer the free-text "Total Samples Given Out" headline (Girl Beer
+    # Albertsons Laguna Niguel: 48 given vs 2 leftover SKU rows). Structured
+    # CustomRecapProductSample qty is often leftover inventory, not samples
+    # handed out — comparing sold against it false-flags sold_exceeds_sampled.
+    from recaps.types import _samples_given_from_fields
+
+    samples_given = _samples_given_from_fields(pairs)
     structured_samples = CustomRecapProductSample.objects.filter(
         custom_recap=custom_recap
     ).aggregate(total=Sum("quantity"))["total"]
-    if structured_samples:
+    if samples_given is not None:
+        facts.samples_distributed = int(samples_given)
+    elif structured_samples:
         facts.samples_distributed = int(structured_samples)
     elif saw_consumers:
-        # Fallback mirrors report_service: with no structured samples, the
-        # "consumers sampled" headline doubles as samples-distributed.
+        # Fallback mirrors report_service: with no samples-given field and
+        # no structured samples, the "consumers sampled" headline doubles
+        # as samples-distributed.
         facts.samples_distributed = consumers_reached
     else:
         facts.samples_distributed = None

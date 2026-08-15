@@ -12,7 +12,10 @@ from ambassadors.models import AmbassadorEvent
 from events.models import EventType, Product, ProductType
 from jobs.tests.base import JobsGraphQLTestCase
 from recaps import models as recap_models
-from recaps.envelopes import RecapApprovedNotificationMailer
+from recaps.envelopes import (
+    RecapApprovedNotificationMailer,
+    RecapReadyForReviewAdminMailer,
+)
 from recaps.excel import build_recaps_xlsx
 from recaps.mutations import _notify_recap_ready_for_review_to_admins
 
@@ -548,12 +551,15 @@ class TestApproveRecapNotifications(JobsGraphQLTestCase):
                 return _FakeBucket()
 
         with (
-            patch("recaps.mutations.get_gcs_client", return_value=_FakeClient()),
-            patch("recaps.mutations.upload_bytes") as mock_upload_bytes,
+            patch(
+                "recaps.mutation_parts.exports.get_gcs_client",
+                return_value=_FakeClient(),
+            ),
+            patch("recaps.mutation_parts.exports.upload_bytes") as mock_upload_bytes,
             # The export returns a public GCS URL (public_url), not a signed
             # download URL — patching generate_download_url here was a no-op.
             patch(
-                "recaps.mutations.public_url",
+                "recaps.mutation_parts.exports.public_url",
                 return_value="https://example.com/custom-recap.xlsx",
             ),
         ):
@@ -600,9 +606,16 @@ class TestApproveRecapNotifications(JobsGraphQLTestCase):
         assert envelope.template == "recaps.templates.emails.recap_approved_notification"
         assert envelope.to_emails == [self.rmm_user.email]
         assert "Activation Summary" in rendered_html
+        from recaps.recap_tokens import make_recap_token
+
+        expected_token = make_recap_token("legacy", int(recap.id))
+        assert envelope.context["recap_link"].endswith(f"/r/{expected_token}")
+        assert "/recap/view-custom/" not in envelope.context["recap_link"]
+        assert envelope.context["recap_link"] != "https://spark.igniteproductions.co/"
+        assert envelope.context["extensions_text"] != "None"
 
     @pytest.mark.asyncio
-    @override_settings(CLIENT_FRONTEND_URL="http://client.app")
+    @override_settings(ADMIN_FRONTEND_URL="http://admin.app")
     async def test_custom_recap_approved_mailer_template_renders(self):
         @sync_to_async
         def create_custom_recap():
@@ -653,11 +666,31 @@ class TestApproveRecapNotifications(JobsGraphQLTestCase):
             envelope.template
             == "recaps.templates.emails.custom_recap_approved_notification"
         )
+        from recaps.recap_tokens import make_recap_token
+
+        expected_token = make_recap_token("custom", int(custom_recap.id))
         assert (
             envelope.context["recap_link"]
-            == f"http://client.app/recap/view-custom/{custom_recap.uuid}"
+            == f"http://admin.app/r/{expected_token}"
         )
         assert "Activation Summary" in rendered_html
+
+    @pytest.mark.asyncio
+    @override_settings(ADMIN_FRONTEND_URL="http://admin.app")
+    async def test_ready_for_review_mailer_uses_standard_view_url(self):
+        recap = await sync_to_async(
+            recap_models.Recap.objects.select_related("event", "event__tenant").get
+        )(id=self.recap.id)
+        mailer = RecapReadyForReviewAdminMailer(
+            recap=recap,
+            to_emails=["admin@test.com"],
+            ambassador_name="Alex",
+        )
+        envelope = await sync_to_async(mailer.envelope)()
+        assert (
+            envelope.context["review_link"]
+            == f"http://admin.app/recap/view/{recap.uuid}"
+        )
 
     @pytest.mark.asyncio
     async def test_notify_recap_ready_for_review_sends_email_for_ambassador(self):

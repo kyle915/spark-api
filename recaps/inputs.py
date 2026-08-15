@@ -21,6 +21,12 @@ class RecapFiltersInput(SparkGraphQLInput):
     event_address: str | None = None
     approved: bool | None = None
     edited: bool | None = None
+    # Name/code filters the web list sends (dropdowns are labeled by
+    # retailer name + 2-letter state code, not Relay ids).
+    retailer_name: str | None = None
+    state_code: str | None = None
+    # True = shared_at is set (link copied / emailed). False = not yet shared.
+    shared: bool | None = None
 
 
 @strawberry.input
@@ -239,6 +245,28 @@ class ApproveRecapInput(SparkGraphQLInput):
 class ApproveCustomRecapInput(SparkGraphQLInput):
     id: strawberry.ID
     approved: bool
+
+
+@strawberry.input
+class BulkApproveRecapsInput(SparkGraphQLInput):
+    recap_ids: List[strawberry.ID] | None = None
+    custom_recap_ids: List[strawberry.ID] | None = None
+    approved: bool = True
+
+
+@strawberry.input
+class MarkRecapsSharedInput(SparkGraphQLInput):
+    recap_ids: List[strawberry.ID] | None = None
+    custom_recap_ids: List[strawberry.ID] | None = None
+
+
+@strawberry.input
+class RecapClientSignoffInput(SparkGraphQLInput):
+    # One of recap_id / custom_recap_id. Public token path is HTTP, not this.
+    recap_id: strawberry.ID | None = None
+    custom_recap_id: strawberry.ID | None = None
+    status: str
+    comment: str | None = None
 
 
 @strawberry.input
@@ -584,10 +612,12 @@ class ImportConnecteamRecapPdfInput(SparkGraphQLInput):
 
     event_id: strawberry.ID
     custom_recap_template_id: strawberry.ID
-    # Base64-encoded PDF bytes. Avoids needing multipart upload spec
-    # in the GraphQL transport. ~530KB encoded for a typical 400KB
-    # Connecteam recap PDF — well under any practical request limit.
-    pdf_base64: str
+    # Preferred: GCS blob path after a signed-URL PUT (getUploadUrl).
+    # Do not send 100MB PDFs as GraphQL base64.
+    pdf_gcs_path: str | None = None
+    # Legacy: base64-encoded PDF bytes. Optional; used by older clients
+    # and tests. New UI uploads to GCS and sends pdf_gcs_path instead.
+    pdf_base64: str | None = None
     # Optional override name; if blank we derive "Imported · <date>".
     name: str | None = None
 

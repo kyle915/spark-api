@@ -397,6 +397,22 @@ def _load_campaign_or_404(slug: str):
     return campaign
 
 
+GIRLBEER_REBATE_DESCRIPTION = (
+    "Bought Girl Beer? Photograph your receipt and submit it here. "
+    "Once we verify the purchase, we'll send your rebate to the PayPal "
+    "email you enter."
+)
+
+
+def _public_campaign_description(campaign) -> str:
+    """Copy shown on /c/:slug. Replaces leftover placeholder jokes."""
+    raw = (campaign.description or "").strip()
+    slug = (getattr(campaign, "slug", "") or "").strip().lower()
+    if slug == "girlbeer" and (not raw or "connor" in raw.lower()):
+        return GIRLBEER_REBATE_DESCRIPTION
+    return raw
+
+
 def _campaign_display_payload(campaign) -> dict[str, Any]:
     """The subset of campaign/brand info the public upload page renders."""
     reward = campaign.reward_amount or Decimal("0")
@@ -418,7 +434,7 @@ def _campaign_display_payload(campaign) -> dict[str, Any]:
         "brandName": brand,
         "tenantRequestUrlName": tenant_request_url_name,
         "headline": campaign.headline or "",
-        "description": campaign.description or "",
+        "description": _public_campaign_description(campaign),
         "product": campaign.product or "",
         "rewardAmount": f"{reward:.2f}",
         "rewardLabel": f"${reward:.2f}",

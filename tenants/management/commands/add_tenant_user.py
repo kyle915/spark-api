@@ -241,7 +241,7 @@ class Command(BaseCommand):
             {"u": user.id, "e": user.email}, salt="spark.magic-link.v1"
         )
         base = getattr(
-            settings, "ADMIN_FRONTEND_URL", "https://spark-new-admin.web.app"
+            settings, "ADMIN_FRONTEND_URL", "https://admin.igniteproductions.co"
         ).rstrip("/")
         link = f"{base}/magic/{token}"
 

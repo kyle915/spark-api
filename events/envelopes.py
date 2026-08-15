@@ -52,8 +52,8 @@ def _admin_request_url(request: models.Request | None) -> str:
     """Canonical deep-link to the request detail page on the admin site.
 
     Reads ADMIN_FRONTEND_URL from settings (set to
-    https://admin.igniteproductions.co on Cloud Run; falls back to the
-    *.web.app default in local/dev). Every transactional email should
+    https://admin.igniteproductions.co on Cloud Run; falls back to that
+    canonical host if the setting is missing). Every transactional email should
     surface this so the reviewer goes straight to the request instead
     of landing on /requests/list and hunting for it.
     """
@@ -62,7 +62,7 @@ def _admin_request_url(request: models.Request | None) -> str:
     base = getattr(
         settings,
         "ADMIN_FRONTEND_URL",
-        "https://spark-new-admin.web.app",
+        "https://admin.igniteproductions.co",
     ).rstrip("/")
     return f"{base}/request/view/{request.uuid}"
 
@@ -538,9 +538,6 @@ class RequestCreatedNotificationMailer(Mailer):
 
     def envelope(self) -> Envelope:
         offset = _get_timezone_offset_minutes(self.request)
-        request_url = (
-            f"{settings.CLIENT_FRONTEND_URL.rstrip('/')}/request/view/{self.request.uuid}"
-        )
         return Envelope(
             subject="New request created",
             template="events.templates.emails.request_created_notification",
@@ -550,7 +547,7 @@ class RequestCreatedNotificationMailer(Mailer):
                 "products": _request_product_names(self.request),
                 "location": self.location,
                 "recipient_name": self.recipient_name or "",
-                "request_url": request_url,
+                "request_url": _admin_request_url(self.request),
                 "request_date": _format_dt_no_tz(
                     self.request.date, "%B %d, %Y", offset
                 ),
@@ -665,7 +662,7 @@ class RmmAssignedRequestMailer(Mailer):
             )
 
         admin_base = getattr(
-            settings, "ADMIN_FRONTEND_URL", "https://spark-new-admin.web.app",
+            settings, "ADMIN_FRONTEND_URL", "https://admin.igniteproductions.co",
         ).rstrip("/")
         # Mint a signed token bound to the first recipient. RMM emails
         # are typically To: a single mapped client + CC: the Ignite team,

@@ -33,6 +33,46 @@ def _normalize_slug(slug: str | None) -> str:
     return (slug or "").strip().lower().replace("-", "_")
 
 
+def _extensions_text(recap) -> str:
+    """Approved shift-extension minutes for this recap's event, or an em dash.
+
+    The client email used to hardcode ``None`` even when a BA ran long.
+    Look up approved ``ShiftExtensionRequest`` rows on the event (scoped
+    to the recap's ambassador when set). Fail open to ``—`` so a missing
+    table / unexpected shape never blanks the rest of the mailer.
+    """
+    try:
+        from ambassadors.models import ShiftExtensionRequest
+
+        event = getattr(recap, "event", None)
+        if event is None:
+            return "—"
+        qs = ShiftExtensionRequest.objects.filter(
+            event=event,
+            status=ShiftExtensionRequest.STATUS_APPROVED,
+        )
+        ambassador_id = getattr(recap, "ambassador_id", None)
+        if ambassador_id:
+            qs = qs.filter(ambassador_id=ambassador_id)
+        minutes = 0
+        for row in qs:
+            minutes += int(
+                getattr(row, "approved_minutes", None)
+                or getattr(row, "minutes_requested", 0)
+                or 0
+            )
+        if minutes <= 0:
+            return "—"
+        hours, mins = divmod(minutes, 60)
+        if hours and mins:
+            return f"{hours}h {mins}m"
+        if hours:
+            return f"{hours}h"
+        return f"{mins}m"
+    except Exception:
+        return "—"
+
+
 class RecapApprovedNotificationMailer(Mailer):
     def __init__(
         self,
@@ -163,19 +203,24 @@ class RecapApprovedNotificationMailer(Mailer):
             if client_metrics
             else "Samples distributed, leads captured, survey responses"
         )
-        frontend_base_url = str(
+        # Public leave-behind lives at /r/:shareToken on admin (tenant-
+        # branded PublicRecap). The old /recap/view-custom/:uuid path
+        # pointed at the stale spark. host and required a login.
+        from recaps.recap_tokens import make_recap_token
+
+        admin_base_url = str(
             getattr(
                 settings,
-                "CLIENT_FRONTEND_URL",
-                "https://spark.igniteproductions.co",
+                "ADMIN_FRONTEND_URL",
+                "https://admin.igniteproductions.co",
             )
         ).rstrip("/")
         is_custom_recap = isinstance(self.recap, models.CustomRecap)
-        recap_link = (
-            f"{frontend_base_url}/recap/view-custom/{self.recap.uuid}"
-            if is_custom_recap
-            else "https://spark.igniteproductions.co/"
+        share_token = make_recap_token(
+            "custom" if is_custom_recap else "legacy",
+            int(self.recap.id),
         )
+        recap_link = f"{admin_base_url}/r/{share_token}"
         template = (
             "recaps.templates.emails.custom_recap_approved_notification"
             if is_custom_recap
@@ -211,7 +256,7 @@ class RecapApprovedNotificationMailer(Mailer):
                 "actual_check_in": actual_check_in,
                 "actual_check_out": actual_check_out,
                 "ba_on_site": ba_on_site,
-                "extensions_text": "None",
+                "extensions_text": _extensions_text(self.recap),
                 "photos_count": photos_count,
                 "client_specific_metrics": client_specific_metrics,
                 "recap_link": recap_link,
@@ -237,10 +282,16 @@ class RecapReadyForReviewAdminMailer(Mailer):
             getattr(
                 settings,
                 "ADMIN_FRONTEND_URL",
-                "https://spark-admin.igniteproductions.co",
+                "https://admin.igniteproductions.co",
             )
         ).rstrip("/")
-        review_link = f"{frontend_base_url}/recap/view-custom/{self.recap.uuid}"
+        is_custom_recap = isinstance(self.recap, models.CustomRecap)
+        view_path = (
+            f"/recap/view-custom/{self.recap.uuid}"
+            if is_custom_recap
+            else f"/recap/view/{self.recap.uuid}"
+        )
+        review_link = f"{frontend_base_url}{view_path}"
 
         return Envelope(
             subject="Recap ready for review",
@@ -315,6 +366,28 @@ class CampaignReportMailer(Mailer):
         self.pdf_bytes = pdf_bytes
         self.pdf_filename = pdf_filename
 
+    def _report_url(self) -> str:
+        """Public /report/:token on admin (same host as recap leave-behinds)."""
+        request_id = self.event_meta.get("request_id")
+        if not request_id:
+            return ""
+        try:
+            from recaps.report_tokens import make_report_token
+
+            token = make_report_token(int(request_id))
+        except Exception:
+            return ""
+        from django.conf import settings
+
+        base = str(
+            getattr(settings, "ADMIN_FRONTEND_URL", "")
+            or getattr(settings, "CLIENT_FRONTEND_URL", "")
+            or "https://admin.igniteproductions.co"
+        ).rstrip("/")
+        if "spark.igniteproductions.co" in base:
+            base = "https://admin.igniteproductions.co"
+        return f"{base}/report/{token}"
+
     def envelope(self) -> Envelope:
         action_chip = (
             f"{self.recap_count} recap{'s' if self.recap_count != 1 else ''}"
@@ -343,6 +416,7 @@ class CampaignReportMailer(Mailer):
                 "date_label": self.event_meta.get("date_label"),
                 "state_label": self.event_meta.get("state_label"),
                 "location_label": self.event_meta.get("location_label"),
+                "report_url": self._report_url(),
             },
             attachments=[
                 {

@@ -1,28 +1,18 @@
 """
 Regression coverage for the "Your recaps" LIST resolvers (`recaps` and
-`customRecaps` on the clients schema) returning the FULL tenant set.
+`customRecaps` on the clients schema).
 
-The web admin loads the whole tenant in one page and does date-range /
-search / status / retailer / state filtering CLIENT-SIDE over the rows it
-received. The connection previously capped at max_limit=50, so on a tenant
-with hundreds of recaps (Liquid Death: 830) only the newest ~50 were ever
-reachable: paging couldn't pass the cap and a date filter set to an old
-window found nothing, even though totalCount correctly reported the full
-count. The fix lifts the page ceiling on these two resolvers
-(RECAPS_LIST_MAX_LIMIT = 2000) so one large `first` pages through the
-complete tenant set (same class of fix as the Master Tracker `requests`
-resolver, #633).
-
-These tests assert:
-- a single `first` larger than the OLD cap returns ALL of a tenant's
-  recaps (legacy + custom), reconciling edges with totalCount;
-- a date-range filter set to an OLD window surfaces the matching older
-  recaps (which live beyond the newest-50 the old cap returned), proving
-  date-search reaches any date once the full set is returnable.
+Filters (status / retailer / state / date / search) run SERVER-SIDE, so
+the page ceiling is 50 again (RECAPS_LIST_MAX_LIMIT). A `first` larger
+than 50 is clamped; totalCount still reports the full tenant set.
+Date-range / approved / retailer_name / state_code / q filters must
+narrow the queryset so older matches surface in the first page.
 """
 
 import pytest
 from datetime import datetime, timedelta, timezone as _tz
+
+from asgiref.sync import sync_to_async
 
 from ambassadors.tests.base import AmbassadorsGraphQLTestCase
 from recaps import models as recap_models
@@ -32,25 +22,59 @@ from recaps import models as recap_models
 RECAP_COUNT = 60
 
 RECAPS_QUERY = """
-query Recaps($tenantId: ID, $first: Int, $startDate: String, $endDate: String) {
+query Recaps(
+  $tenantId: ID
+  $first: Int
+  $startDate: String
+  $endDate: String
+  $approved: Boolean
+  $retailerName: String
+  $stateCode: String
+  $q: String
+) {
   recaps(
-    filters: { tenantId: $tenantId, startDate: $startDate, endDate: $endDate }
+    filters: {
+      tenantId: $tenantId
+      startDate: $startDate
+      endDate: $endDate
+      approved: $approved
+      retailerName: $retailerName
+      stateCode: $stateCode
+    }
+    q: $q
     first: $first
   ) {
     totalCount
-    edges { node { uuid name event { name date } } }
+    edges { node { uuid name approved event { name date } } }
   }
 }
 """
 
 CUSTOM_RECAPS_QUERY = """
-query CustomRecaps($tenantId: ID, $first: Int, $startDate: String, $endDate: String) {
+query CustomRecaps(
+  $tenantId: ID
+  $first: Int
+  $startDate: String
+  $endDate: String
+  $approved: Boolean
+  $retailerName: String
+  $stateCode: String
+  $q: String
+) {
   customRecaps(
-    filters: { tenantId: $tenantId, startDate: $startDate, endDate: $endDate }
+    filters: {
+      tenantId: $tenantId
+      startDate: $startDate
+      endDate: $endDate
+      approved: $approved
+      retailerName: $retailerName
+      stateCode: $stateCode
+    }
+    q: $q
     first: $first
   ) {
     totalCount
-    edges { node { uuid name event { name date } } }
+    edges { node { uuid name approved event { name date } } }
   }
 }
 """
@@ -166,9 +190,9 @@ class TestRecapsListReachAll(AmbassadorsGraphQLTestCase):
         )
 
     @pytest.mark.asyncio
-    async def test_legacy_recaps_all_reachable_in_one_page(self):
-        # A single `first` larger than the OLD cap must return EVERY recap
-        # for the tenant — not just the newest 50.
+    async def test_legacy_recaps_page_is_capped_total_count_is_full(self):
+        # first:1000 is clamped to RECAPS_LIST_MAX_LIMIT (50). totalCount
+        # still reports the full tenant set so the UI can "Load more".
         result = await self._execute_query_authenticated(
             RECAPS_QUERY,
             {"tenantId": str(self.tenant.id), "first": 1000},
@@ -178,14 +202,12 @@ class TestRecapsListReachAll(AmbassadorsGraphQLTestCase):
         assert result.errors is None, f"errored: {result.errors}"
         conn = result.data["recaps"]
         assert conn["totalCount"] == RECAP_COUNT, conn["totalCount"]
-        # edges reconcile with totalCount — the whole set came back.
-        assert len(conn["edges"]) == RECAP_COUNT, len(conn["edges"])
+        assert len(conn["edges"]) == 50, len(conn["edges"])
         names = {e["node"]["name"] for e in conn["edges"]}
-        assert len(names) == RECAP_COUNT
         assert "GB recap" not in names  # tenant scoping preserved
 
     @pytest.mark.asyncio
-    async def test_custom_recaps_all_reachable_in_one_page(self):
+    async def test_custom_recaps_page_is_capped_total_count_is_full(self):
         result = await self._execute_query_authenticated(
             CUSTOM_RECAPS_QUERY,
             {"tenantId": str(self.tenant.id), "first": 1000},
@@ -195,7 +217,7 @@ class TestRecapsListReachAll(AmbassadorsGraphQLTestCase):
         assert result.errors is None, f"errored: {result.errors}"
         conn = result.data["customRecaps"]
         assert conn["totalCount"] == RECAP_COUNT, conn["totalCount"]
-        assert len(conn["edges"]) == RECAP_COUNT, len(conn["edges"])
+        assert len(conn["edges"]) == 50, len(conn["edges"])
         names = {e["node"]["name"] for e in conn["edges"]}
         assert "GB custom recap" not in names  # tenant scoping preserved
 
@@ -210,7 +232,7 @@ class TestRecapsListReachAll(AmbassadorsGraphQLTestCase):
             RECAPS_QUERY,
             {
                 "tenantId": str(self.tenant.id),
-                "first": 1000,
+                "first": 50,
                 "startDate": start,
                 "endDate": end,
             },
@@ -232,7 +254,7 @@ class TestRecapsListReachAll(AmbassadorsGraphQLTestCase):
             CUSTOM_RECAPS_QUERY,
             {
                 "tenantId": str(self.tenant.id),
-                "first": 1000,
+                "first": 50,
                 "startDate": start,
                 "endDate": end,
             },
@@ -245,3 +267,54 @@ class TestRecapsListReachAll(AmbassadorsGraphQLTestCase):
         names = {e["node"]["name"] for e in conn["edges"]}
         expected = {f"LD custom recap {i:03d}" for i in range(10)}
         assert names == expected, names
+
+    @pytest.mark.asyncio
+    async def test_approved_filter_needs_review(self):
+        draft = self.legacy_recaps[0]
+        draft.approved = False
+        await sync_to_async(draft.save)(update_fields=["approved"])
+        result = await self._execute_query_authenticated(
+            RECAPS_QUERY,
+            {"tenantId": str(self.tenant.id), "first": 50, "approved": False},
+            self.spark_admin,
+            self.endpoint_path,
+        )
+        assert result.errors is None, f"errored: {result.errors}"
+        conn = result.data["recaps"]
+        assert conn["totalCount"] == 1
+        assert conn["edges"][0]["node"]["name"] == draft.name
+        assert conn["edges"][0]["node"]["approved"] is False
+
+    @pytest.mark.asyncio
+    async def test_q_filter_matches_recap_name(self):
+        result = await self._execute_query_authenticated(
+            RECAPS_QUERY,
+            {"tenantId": str(self.tenant.id), "first": 50, "q": "LD recap 003"},
+            self.spark_admin,
+            self.endpoint_path,
+        )
+        assert result.errors is None, f"errored: {result.errors}"
+        conn = result.data["recaps"]
+        names = {e["node"]["name"] for e in conn["edges"]}
+        assert "LD recap 003" in names
+        assert conn["totalCount"] >= 1
+        assert conn["totalCount"] < RECAP_COUNT
+
+    @pytest.mark.asyncio
+    async def test_state_code_filter_matches_address_fallback(self):
+        recap = self.legacy_recaps[5]
+        event = recap.event
+        event.address = "100 Cool Spring, TX 78205"
+        await sync_to_async(event.save)(update_fields=["address"])
+        result = await self._execute_query_authenticated(
+            RECAPS_QUERY,
+            {"tenantId": str(self.tenant.id), "first": 50, "stateCode": "TX"},
+            self.spark_admin,
+            self.endpoint_path,
+        )
+        assert result.errors is None, f"errored: {result.errors}"
+        conn = result.data["recaps"]
+        names = {e["node"]["name"] for e in conn["edges"]}
+        assert recap.name in names
+        assert conn["totalCount"] >= 1
+        assert conn["totalCount"] < RECAP_COUNT

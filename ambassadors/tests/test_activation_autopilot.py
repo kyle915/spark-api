@@ -73,7 +73,7 @@ class TestActivationAutopilot(AmbassadorsGraphQLTestCase):
 
     def test_dark_ba_with_imminent_shift_is_emailed_and_stamped(self):
         ae = self._shift_in_hours(48)
-        log = self._run()
+        log = self._run("--digest")
         self.mock_welcome.assert_called_once()  # fresh welcome + temp password
         self.mock_digest.assert_called_once()  # admin heads-up
         ae.refresh_from_db()
@@ -99,9 +99,9 @@ class TestActivationAutopilot(AmbassadorsGraphQLTestCase):
 
     def test_already_stamped_ba_is_not_re_emailed(self):
         self._shift_in_hours(48)
-        first = self._run()
+        first = self._run("--digest")
         assert self.mock_welcome.call_count == 1
-        second = self._run()
+        second = self._run("--digest")
         # Second run: still dark + in window (still in the digest), but the
         # stage-1 stamp means no second password reset.
         assert self.mock_welcome.call_count == 0

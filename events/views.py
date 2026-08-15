@@ -82,6 +82,27 @@ def _verify_approval_token(token: str) -> tuple[int, str]:
     return int(request_id_str), recipient_email
 
 
+def _public_product_names(req: models.Request) -> list[str]:
+    """SKU names the approval email already lists."""
+    try:
+        from events.envelopes import _request_product_names
+
+        return list(_request_product_names(req) or [])
+    except Exception:
+        return []
+
+
+def _public_ba_count(req: models.Request) -> int | None:
+    """BA count the requestor asked for (notes: 'BA count: N')."""
+    import re
+
+    notes = getattr(req, "notes", None) or ""
+    match = re.search(r"BA count:\s*(\d+)", notes, re.I)
+    if match:
+        return int(match.group(1))
+    return None
+
+
 def _serialize_request_for_public(req: models.Request) -> dict[str, Any]:
     """Render the subset of request fields the public approval page needs.
 
@@ -130,6 +151,8 @@ def _serialize_request_for_public(req: models.Request) -> dict[str, Any]:
             getattr(getattr(req, "request_type", None), "name", "") or ""
         ),
         "distributor": getattr(getattr(req, "distributor", None), "name", "") or "",
+        "products": _public_product_names(req),
+        "baCount": _public_ba_count(req),
         "requestorName": getattr(req, "client_name", "") or "",
         "requestorEmail": (
             getattr(req, "requestor_email", "")
@@ -352,7 +375,7 @@ def _load_request_or_404(request_id: int) -> models.Request | HttpResponse:
             "retailer__location__state",
             "distributor__location__state",
             "request_type",
-        ).get(id=request_id)
+        ).prefetch_related("request_product__product").get(id=request_id)
     except models.Request.DoesNotExist:
         return JsonResponse(
             {"error": "not_found", "message": "Request not found."}, status=404

@@ -2731,6 +2731,16 @@ async def _do_attendance(info, input, *, kind: str) -> "ShiftAttendanceResponse"
             logging.getLogger(__name__).exception(
                 "Referral first-shift hook failed (clock-out unaffected)."
             )
+        try:
+            from recaps.clock_out_recap import start_recap_on_clock_out
+
+            await sync_to_async(start_recap_on_clock_out)(att.id)
+        except Exception:  # noqa: BLE001 — never break clock-out
+            import logging
+
+            logging.getLogger(__name__).exception(
+                "Clock-out recap start failed (clock-out unaffected)."
+            )
 
     return ShiftAttendanceResponse(
         success=True,

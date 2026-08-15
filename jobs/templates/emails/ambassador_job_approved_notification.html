@@ -1,78 +1,167 @@
-{% extends "emails/base.html" %} {% block content %}
-<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
-  <tr>
-    <td style="font-size: 16px; color: #444444; line-height: 1.6;">
-      <p style="margin: 0 0 18px 0;">Hi {{ recipient_first_name|default:"there" }},</p>
+{% load static %}<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Your activation is staffed</title>
+    <style type="text/css">
+      @media only screen and (max-width: 600px) {
+        .shell { width: 100% !important; }
+        .pad   { padding-left: 24px !important; padding-right: 24px !important; }
+        .hero  { font-size: 28px !important; line-height: 32px !important; }
+      }
+    </style>
+  </head>
+  <body
+    style="margin:0;padding:0;background:#f4f4f0;
+           font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,
+                       'Helvetica Neue',Arial,sans-serif;
+           color:#0a0d09;">
+    <table role="presentation" cellspacing="0" cellpadding="0" border="0"
+           width="100%" style="background:#f4f4f0;">
+      <tr>
+        <td align="center" style="padding:24px 12px;">
+          <table role="presentation" cellspacing="0" cellpadding="0" border="0"
+                 width="600" class="shell"
+                 style="width:600px;max-width:600px;
+                        background:#ffffff;border-radius:18px;
+                        overflow:hidden;
+                        box-shadow:0 1px 2px rgba(10,13,9,0.04);">
 
-      <p style="margin: 0 0 20px 0;">
-        Good news - your activation is fully staffed and confirmed. Here's who's bringing your brand to life:
-      </p>
+            <tr>
+              <td class="pad" style="padding:24px 40px;background:#0a0d09;">
+                <img src="https://admin.igniteproductions.co/legal/spark-logo-full.png"
+                     alt="Spark by Ignite"
+                     width="180" height="auto"
+                     style="display:block;height:auto;border:0;outline:none;
+                            text-decoration:none;" />
+              </td>
+            </tr>
 
-      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="border: 1px solid #d8d8d8; border-collapse: collapse; margin: 0 0 28px 0;">
-        <tr>
-          <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Request ID</td>
-          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ request_id|default:"-" }}</td>
-        </tr>
-        <tr>
-          <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Brand / Campaign</td>
-          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ brand_name|default:"-" }} - {{ campaign_name|default:"-" }}</td>
-        </tr>
-        <tr>
-          <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Location</td>
-          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ location_name|default:"-" }}</td>
-        </tr>
-        <tr>
-          <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Date</td>
-          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ activation_date|default:"-" }}</td>
-        </tr>
-        <tr>
-          <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Time</td>
-          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ start_time|default:"-" }} - {{ end_time|default:"-" }}</td>
-        </tr>
-        <tr>
-          <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Activation Fee</td>
-          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">Per your SOW</td>
-        </tr>
-        <tr>
-          <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">BA(s) Assigned</td>
-          <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ bas_assigned|default:"-" }} Brand Ambassador(s)</td>
-        </tr>
-      </table>
+            <tr>
+              <td class="pad" style="padding:36px 40px 8px 40px;">
+                <p style="margin:0 0 4px 0;
+                          font-family:'Courier New',Courier,monospace;
+                          font-size:10px;letter-spacing:0.22em;
+                          color:#5a6354;">
+                  STAFFED · CONFIRMED
+                </p>
+                <h1 class="hero"
+                    style="margin:0;
+                           font-family:Georgia,'Times New Roman',serif;
+                           font-weight:700;font-size:34px;line-height:38px;
+                           letter-spacing:-0.02em;color:#0a0d09;">
+                  You're all set, {{ recipient_first_name|default:"there" }}.
+                </h1>
+              </td>
+            </tr>
 
-      <h3 style="margin: 0 0 12px 0; color: #202036; font-size: 32px;">What Your Team Will Deliver</h3>
-      <ul style="margin: 0 0 28px 20px; padding: 0; color: #444444;">
-        <li style="margin: 0 0 8px 0;">On-site brand representation per your campaign brief</li>
-        <li style="margin: 0 0 8px 0;">Real-time check-in/check-out via Spark (GPS-verified)</li>
-        <li style="margin: 0 0 8px 0;">Photo documentation of setup and activation</li>
-        <li style="margin: 0 0 8px 0;">Post-activation recap with performance notes</li>
-        <li style="margin: 0;">Any client-specific deliverables outlined in your SOW (e.g., lead capture, sample counts, survey responses)</li>
-      </ul>
+            <tr>
+              <td class="pad" style="padding:16px 40px 4px 40px;">
+                <p style="margin:0;font-size:15px;line-height:22px;color:#3b4034;">
+                  Your activation is fully staffed and confirmed. Here's who's
+                  bringing the brand to life.
+                </p>
+              </td>
+            </tr>
 
-      <h3 style="margin: 0 0 12px 0; color: #202036; font-size: 32px;">Extensions &amp; Overages</h3>
-      <p style="margin: 0; color: #444444;">
-        If the activation runs beyond the agreed scope, our team will request approval in real time through Spark. Extensions are billed in 30-minute blocks at the rate specified in your SOW. No surprises, no after-the-fact invoices you didn't see coming.
-      </p>
+            <tr>
+              <td class="pad" style="padding:24px 40px 16px 40px;">
+                <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%"
+                       style="border:1px solid #eeeae0;border-radius:12px;border-collapse:separate;border-spacing:0;overflow:hidden;">
+                  <tr>
+                    <td style="padding:10px 14px;border-bottom:1px solid #eeeae0;font-size:12px;font-weight:700;color:#3b4034;width:140px;">Request ID</td>
+                    <td style="padding:10px 14px;border-bottom:1px solid #eeeae0;font-size:12px;color:#0a0d09;font-family:'Courier New',Courier,monospace;">{{ request_id|default:"—" }}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:10px 14px;border-bottom:1px solid #eeeae0;font-size:12px;font-weight:700;color:#3b4034;">Brand / Campaign</td>
+                    <td style="padding:10px 14px;border-bottom:1px solid #eeeae0;font-size:13px;color:#0a0d09;">{{ brand_name|default:"—" }}{% if campaign_name %} — {{ campaign_name }}{% endif %}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:10px 14px;border-bottom:1px solid #eeeae0;font-size:12px;font-weight:700;color:#3b4034;">Location</td>
+                    <td style="padding:10px 14px;border-bottom:1px solid #eeeae0;font-size:13px;color:#0a0d09;">{{ location_name|default:"—" }}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:10px 14px;border-bottom:1px solid #eeeae0;font-size:12px;font-weight:700;color:#3b4034;">Date</td>
+                    <td style="padding:10px 14px;border-bottom:1px solid #eeeae0;font-size:13px;color:#0a0d09;">{{ activation_date|default:"—" }}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:10px 14px;border-bottom:1px solid #eeeae0;font-size:12px;font-weight:700;color:#3b4034;">Time</td>
+                    <td style="padding:10px 14px;border-bottom:1px solid #eeeae0;font-size:13px;color:#0a0d09;">{{ start_time|default:"—" }} – {{ end_time|default:"—" }}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:10px 14px;font-size:12px;font-weight:700;color:#3b4034;">BA(s) assigned</td>
+                    <td style="padding:10px 14px;font-size:13px;color:#0a0d09;">{{ bas_assigned|default:"—" }} brand ambassador(s)</td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
 
-      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="margin: 24px 0; border: 2px solid #f15a24; background-color: #f2eae6;">
-        <tr>
-          <td align="center" style="padding: 24px 16px;">
-            <a href="https://spark.igniteproductions.co/" style="text-decoration: none; color: #202036; font-size: 22px; font-weight: 800; display: inline-block;">
-              📋 View Activation Details in Spark
-            </a>
-          </td>
-        </tr>
-      </table>
+            <tr>
+              <td class="pad" style="padding:8px 40px 4px 40px;">
+                <p style="margin:0 0 8px 0;
+                          font-family:Georgia,'Times New Roman',serif;
+                          font-weight:700;font-size:18px;
+                          letter-spacing:-0.01em;color:#0a0d09;">
+                  What your team will deliver
+                </p>
+                <ul style="margin:0;padding-left:18px;font-size:13px;line-height:20px;color:#3b4034;">
+                  <li>On-site brand representation per your campaign brief</li>
+                  <li>GPS-verified check-in and check-out</li>
+                  <li>Photo documentation of setup and the activation</li>
+                  <li>A recap in your inbox when they wrap</li>
+                </ul>
+                <p style="margin:14px 0 0 0;font-size:12px;line-height:18px;color:#7a8074;">
+                  If the activation runs past the agreed scope, we'll ask before
+                  billing an extension. Need to change the date or location?
+                  Reply to this email.
+                </p>
+              </td>
+            </tr>
 
-      <p style="margin: 24px 0 8px 0; color: #444444;">
-        Need to adjust the date, time, or location? Reach out to your rep or reply here. We're flexible - just give us as much lead time as you can.
-      </p>
-      <p style="margin: 0 0 18px 0; color: #444444;">
-        We're locked and loaded. Let's make this one a highlight reel.
-      </p>
-      <p style="margin: 0; font-size: 12px; font-weight: 700; color: #555555;">The Ignite Team</p>
-      <p style="margin: 2px 0 0 0; font-size: 12px; color: #555555;">Ignite Productions LLC</p>
-      <p style="margin: 2px 0 0 0; font-size: 12px; color: #555555;">events@igniteproductions.co | 775.406.0435</p>
-    </td>
-  </tr>
-</table>
-{% endblock %}
+            <tr>
+              <td class="pad" align="center" style="padding:24px 40px 4px 40px;">
+                <a href="https://client.igniteproductions.co/login"
+                   style="display:inline-block;
+                          background:#c5f546;color:#0a0d09;
+                          padding:12px 22px;border-radius:999px;
+                          font-family:Georgia,'Times New Roman',serif;
+                          font-weight:700;font-size:14px;
+                          text-decoration:none;letter-spacing:-0.01em;">
+                  Open your client portal →
+                </a>
+              </td>
+            </tr>
+
+            <tr>
+              <td class="pad" style="padding:24px 40px 4px 40px;">
+                <p style="margin:0;font-size:14px;line-height:20px;color:#3b4034;">
+                  — Spark, Ignite Productions
+                </p>
+              </td>
+            </tr>
+
+            <tr>
+              <td class="pad" style="padding:8px 40px 0 40px;">
+                <hr style="border:0;border-top:1px solid #ef5a2a;margin:0;" />
+              </td>
+            </tr>
+
+            <tr>
+              <td class="pad" style="padding:16px 40px 36px 40px;">
+                <p style="margin:0;font-size:12px;line-height:18px;color:#7a8074;">
+                  Questions?
+                  <a href="mailto:staffing@igniteproductions.co"
+                     style="color:#ef5a2a;text-decoration:none;">
+                    staffing@igniteproductions.co
+                  </a>
+                  · 775-406-0435
+                </p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>

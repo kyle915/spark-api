@@ -430,11 +430,10 @@ def _build_walkup_row(amb_event) -> WalkupShiftType:
             dist = None
     has_recap = False
     try:
-        from recaps.models import CustomRecap, Recap
+        from recaps.filed import has_filed_recap
 
-        has_recap = (
-            CustomRecap.objects.filter(event=event, ambassador=amb).exists()
-            or Recap.objects.filter(event=event, ambassador=amb).exists()
+        has_recap = has_filed_recap(
+            ambassador_id=amb.id, event_id=event.id
         )
     except Exception:  # noqa: BLE001 — recap presence is decorative
         has_recap = False

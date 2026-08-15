@@ -15,7 +15,7 @@ from tenants import types as tenant_types
 from . import models
 from asgiref.sync import sync_to_async
 from utils.gcs import public_url, extract_blob_name_from_url
-from .heic_conversion import display_blob_name, is_heic_blob
+from .heic_conversion import display_blob_name
 
 
 # ---------------------------------------------------------------------------
@@ -402,13 +402,10 @@ class RecapFile(Node):
     async def display_url(self) -> str | None:
         """Browser-renderable URL for this file.
 
-        For HEIC uploads we serve the server-converted `.jpg` sibling
-        (when it exists in GCS) so the frontend can use a plain <img>
-        with no in-browser HEIC decode / bucket-CORS dependency. For
-        every other file — and for a HEIC that has no sibling yet — this
-        returns the same URL as `file`. Mirrors `file_url`'s async-safe
-        two-step column load; the HEIC→JPG rewrite + existence check run
-        inside `sync_to_async` because `blob_exists` does network I/O.
+        For HEIC uploads we serve the `.jpg` sibling path (conversion is
+        scheduled at upload) so the frontend can use a plain <img>.
+        Missing siblings 404 and the client falls back to `file`. No GCS
+        HEAD — that used to serialize N round-trips on every detail load.
         """
         field_file = self.__dict__.get("file")
         if field_file is None:
@@ -428,15 +425,12 @@ class RecapFile(Node):
         except Exception:
             blob = str(field_file)
         blob_name = extract_blob_name_from_url(blob)
-        # Hot-path guard: only HEIC needs the blob_exists() HEAD. Non-HEIC
-        # files (the vast majority) return synchronously with no thread hop,
-        # so the recaps list — which serializes thousands of file rows per
-        # request — doesn't fan out into thousands of GCS round-trips and
-        # time out ("Failed to fetch").
-        if not is_heic_blob(blob_name):
-            return public_url(blob_name)
-        display_blob = await sync_to_async(display_blob_name)(blob_name)
-        return public_url(display_blob)
+        # Rewrite HEIC → .jpg sibling in-process. Do NOT HEAD GCS here:
+        # a Liquid Death recap can have dozens of HEICs and those
+        # round-trips serialized the whole GraphQL response. Conversion
+        # is scheduled at upload; the client falls back to `file`/`url`
+        # if the sibling is not ready yet.
+        return public_url(display_blob_name(blob_name))
 
 
 @strawberry.type
@@ -639,6 +633,10 @@ class Recap(Node):
     uuid: str
     name: str
     approved: bool
+    shared_at: str | None
+    client_signoff_status: str
+    client_signoff_comment: str
+    client_signoff_at: str | None
     filling_for_ambassador: bool
     event: event_types.Event
     event_id: strawberry.ID
@@ -678,11 +676,26 @@ class Recap(Node):
     # would resolve to the bound method (not the manager), and `.all()`
     # would silently fail — returning [] for every recap in the API
     # despite the DB having the rows. Going through the model manager
-    # directly side-steps the name collision.
+    # directly side-steps the name collision. List resolvers prefetch
+    # ``recap_files`` (images only) and annotate ``_recap_files_count``.
+
+    @strawberry.field
+    def submitted_at(self) -> str | None:
+        """GraphQL alias for the persisted ``submited_at`` typo column."""
+        value = getattr(self, "submited_at", None)
+        if value is None:
+            return None
+        try:
+            return value.isoformat()
+        except AttributeError:
+            return str(value)
 
     @strawberry.field
     async def recap_file(self) -> RecapFile | None:
         """Return first linked recap file for backward compatibility."""
+        cached = _prefetched(self, "recap_files")
+        if cached is not None:
+            return min(cached, key=lambda f: f.id) if cached else None
         first = await sync_to_async(
             lambda: models.RecapFile.objects.filter(recap=self)
             .order_by("id")
@@ -694,6 +707,10 @@ class Recap(Node):
     @strawberry.field
     async def recap_file_id(self) -> strawberry.ID | None:
         """Return id for the first linked recap file."""
+        cached = _prefetched(self, "recap_files")
+        if cached is not None:
+            first = min(cached, key=lambda f: f.id) if cached else None
+            return strawberry.ID(str(first.id)) if first else None
         first = await sync_to_async(
             lambda: models.RecapFile.objects.filter(recap=self)
             .order_by("id")
@@ -704,10 +721,14 @@ class Recap(Node):
 
     @strawberry.field
     async def recap_files(self) -> List[RecapFile]:
-        """Return all recap files linked to this recap. ORM call has
-        to be wrapped in sync_to_async because Strawberry runs the
-        resolver inside the request's async loop and Django refuses
-        synchronous DB I/O there."""
+        """Return all recap files linked to this recap.
+
+        Prefer the prefetched cache (list + detail querysets already
+        prefetch ``recap_files``). A fresh ``RecapFile.objects.filter``
+        ignores that prefetch and N+1s the list."""
+        cached = _prefetched(self, "recap_files")
+        if cached is not None:
+            return sorted(cached, key=lambda f: f.id)
         return await sync_to_async(
             lambda: list(
                 models.RecapFile.objects.filter(recap=self).order_by("id")
@@ -717,9 +738,12 @@ class Recap(Node):
 
     @strawberry.field
     async def recap_files_count(self) -> int:
-        """Count of files linked to this recap. On the list these are
-        prefetched, so read the cache (no query); the per-row COUNT is
-        only the non-prefetched fallback (was an N+1 before)."""
+        """Count of files linked to this recap. List queryset annotates
+        ``_recap_files_count`` (true COUNT, not the image-only prefetch
+        length). Fall back to the prefetch cache, then a COUNT query."""
+        annotated = getattr(self, "_recap_files_count", None)
+        if annotated is not None:
+            return int(annotated)
         cached = _prefetched(self, "recap_files")
         if cached is not None:
             return len(cached)
@@ -790,6 +814,119 @@ class Recap(Node):
             return []
         return list(self.event.request.requests_stores_manager.all())
 
+    @strawberry.field
+    def share_token(self) -> str:
+        """Signed public-share token for this recap. The web client
+        prefixes it onto ``/r/<token>``; the token IS the auth for
+        ``GET /api/public/recap/<token>``."""
+        from recaps.recap_tokens import make_recap_token
+
+        return make_recap_token("legacy", int(self.id))
+
+    # Flat list-card labels so RecapsQuery does not nest
+    # event → retailer → request. Same walk as CustomRecap.
+    @strawberry.field
+    async def event_date(self) -> str | None:
+        if not getattr(self, "event_id", None):
+            return None
+
+        @sync_to_async
+        def _get():
+            d = _resolve_event_date(getattr(self, "event", None))
+            return d.isoformat() if d else None
+
+        return await _get()
+
+    @strawberry.field
+    async def event_retailer(self) -> str | None:
+        if not getattr(self, "event_id", None):
+            return None
+
+        @sync_to_async
+        def _get():
+            ev = getattr(self, "event", None)
+            if ev is None:
+                rec_ret = getattr(self, "retailer", None)
+                return (getattr(rec_ret, "name", None) or "").strip() or None
+            retailer = getattr(ev, "retailer", None)
+            name = (getattr(retailer, "name", None) or "").strip() if retailer else ""
+            if name:
+                return name
+            req = getattr(ev, "request", None)
+            if req is not None:
+                req_retailer = getattr(req, "retailer", None)
+                req_name = (
+                    (getattr(req_retailer, "name", None) or "").strip()
+                    if req_retailer
+                    else ""
+                )
+                if req_name:
+                    return req_name
+                fallback = (getattr(req, "retailer_name", None) or "").strip()
+                if fallback:
+                    return fallback
+            rec_ret = getattr(self, "retailer", None)
+            return (getattr(rec_ret, "name", None) or "").strip() or None
+
+        return await _get()
+
+    @strawberry.field
+    async def event_state(self) -> str | None:
+        """2-letter code when we have a State FK; else a name or address."""
+        if not getattr(self, "event_id", None):
+            return None
+
+        @sync_to_async
+        def _get():
+            ev = getattr(self, "event", None)
+            retailer = getattr(ev, "retailer", None) if ev else None
+            r_loc = getattr(retailer, "location", None) if retailer else None
+            candidates = (
+                getattr(ev, "state", None) if ev else None,
+                getattr(r_loc, "state", None) if r_loc else None,
+                getattr(self, "state", None),
+            )
+            for st in candidates:
+                code = (getattr(st, "code", None) or "").strip() if st else ""
+                if code:
+                    return code
+                name = (getattr(st, "name", None) or "").strip() if st else ""
+                if name:
+                    return name
+            addr = (getattr(ev, "address", None) or "").strip() if ev else ""
+            return addr or None
+
+        return await _get()
+
+    @strawberry.field
+    async def request_uuid(self) -> str | None:
+        if not getattr(self, "event_id", None):
+            return None
+
+        @sync_to_async
+        def _get():
+            ev = getattr(self, "event", None)
+            req = getattr(ev, "request", None) if ev else None
+            uid = getattr(req, "uuid", None) if req else None
+            return str(uid) if uid else None
+
+        return await _get()
+
+    @strawberry.field
+    async def request_type_name(self) -> str | None:
+        if not getattr(self, "event_id", None):
+            return None
+
+        @sync_to_async
+        def _get():
+            ev = getattr(self, "event", None)
+            req = getattr(ev, "request", None) if ev else None
+            rtype = getattr(req, "request_type", None) if req else None
+            name = (getattr(rtype, "name", None) or "").strip() if rtype else ""
+            return name or None
+
+        return await _get()
+
 
 @strawberry.type
 class RecapDetailResponse:
@@ -797,6 +934,14 @@ class RecapDetailResponse:
     message: str
     client_mutation_id: strawberry.ID | None = None
     recap: Recap | None = None
+
+
+@strawberry.type
+class BulkRecapsResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    updated_count: int = 0
 
 
 @strawberry.type
@@ -824,6 +969,10 @@ class CustomRecap(Node):
     late: bool
     incomplete: bool
     approved: bool
+    shared_at: str | None
+    client_signoff_status: str
+    client_signoff_comment: str
+    client_signoff_at: str | None
     used_corpo_card: bool
     # Non-empty when the submit-time guard flagged implausible parsed KPIs
     # (conversion >100%, absurd counts). Surfaced so admins see a warning.
@@ -1033,9 +1182,11 @@ class CustomRecap(Node):
     async def custom_recap_files_count(self) -> int:
         """Total number of files attached to this custom recap.
 
-        Read from the prefetched `custom_recap_files` so the list card's
-        "N files" chip needs neither the file array nor a per-row COUNT."""
-
+        List queryset annotates ``_custom_recap_files_count`` so the
+        image-only hero prefetch does not under-count PDFs/receipts."""
+        annotated = getattr(self, "_custom_recap_files_count", None)
+        if annotated is not None:
+            return int(annotated)
         cached = _prefetched(self, "custom_recap_files")
         if cached is not None:
             return len(cached)
@@ -1043,6 +1194,15 @@ class CustomRecap(Node):
             lambda: self.custom_recap_files.count(),
             thread_sensitive=True,
         )()
+
+    @strawberry.field
+    def share_token(self) -> str:
+        """Signed public-share token for this custom recap. The web
+        client prefixes it onto ``/r/<token>``; the token IS the auth
+        for ``GET /api/public/recap/<token>``."""
+        from recaps.recap_tokens import make_recap_token
+
+        return make_recap_token("custom", int(self.id))
 
     # ---- Linked-event location (for the recap "Information" panel) ----
     #
@@ -1330,13 +1490,10 @@ class CustomRecapFile(Node):
     async def display_url(self) -> str | None:
         """Browser-renderable URL for this custom-recap file.
 
-        HEIC originals resolve to their server-converted `.jpg` sibling
-        (when present in GCS) so the gallery can render a plain <img>
-        without the in-browser libheif decode / bucket-CORS dependency.
-        Everything else — and a HEIC with no sibling yet — returns the
-        same URL as `url`. Async-safe: mirrors `url_str`'s deferred-column
-        load, and the HEIC rewrite + existence check run in
-        `sync_to_async` (network I/O).
+        HEIC originals resolve to their `.jpg` sibling path (conversion
+        is scheduled at upload) so the gallery can render a plain <img>.
+        Missing siblings 404 and the client falls back to `url`. No GCS
+        HEAD on the GraphQL hot path.
         """
         field_file = self.__dict__.get("url")
         if field_file is None:
@@ -1356,15 +1513,21 @@ class CustomRecapFile(Node):
         except Exception:
             blob = str(field_file)
         blob_name = extract_blob_name_from_url(blob)
-        # Hot-path guard: only HEIC needs the blob_exists() HEAD. Non-HEIC
-        # files (the vast majority) return synchronously with no thread hop,
-        # so the recaps list — which serializes thousands of file rows per
-        # request — doesn't fan out into thousands of GCS round-trips and
-        # time out ("Failed to fetch").
-        if not is_heic_blob(blob_name):
-            return public_url(blob_name)
-        display_blob = await sync_to_async(display_blob_name)(blob_name)
-        return public_url(display_blob)
+        # Rewrite HEIC → .jpg sibling in-process. Do NOT HEAD GCS here:
+        # a Liquid Death recap can have dozens of HEICs and those
+        # round-trips serialized the whole GraphQL response. Conversion
+        # is scheduled at upload; the client falls back to `file`/`url`
+        # if the sibling is not ready yet.
+        return public_url(display_blob_name(blob_name))
+
+
+@strawberry.type
+class RecapClientSignoffResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    recap: Recap | None = None
+    custom_recap: CustomRecap | None = None
 
 
 @strawberry.type
@@ -1415,9 +1578,24 @@ class ImportConnecteamRecapPdfResponse:
     # recap. 0 means the PDF carried no usable images — the frontend uses
     # this to route the admin into the manual photo-upload workflow.
     images_attached: int = 0
+    queued: bool = False
+    job_id: str | None = None
     stats: list[ImportConnecteamRecapPdfStat] = strawberry.field(
         default_factory=list,
     )
+
+
+@strawberry.type
+class ConnecteamImportJob:
+    """Poll status for an async Connecteam PDF import."""
+
+    job_id: str
+    status: str
+    message: str | None = None
+    custom_recap: CustomRecap | None = None
+    matched_count: int = 0
+    unmatched_count: int = 0
+    images_attached: int = 0
 
 
 @strawberry.type

@@ -94,6 +94,26 @@ class TestResolveFileRecapCategoryB2(_Base):
         assert resolved.name == _PHOTOS_CATEGORY_NAME == "Sampling photos"
         assert resolved.id == self.cats_a["Sampling photos"].id
 
+    def test_category_name_and_slug_resolve_like_sentinels(self):
+        # Web uploaders send the category NAME so "2" never collides with
+        # Liquid Death's "Table Set Up" PK.
+        by_name = _resolve_file_recap_category(
+            "Sampling photos", tenant_id=self.tenant_a.id
+        )
+        by_slug = _resolve_file_recap_category(
+            "photo", tenant_id=self.tenant_a.id
+        )
+        by_receipts = _resolve_file_recap_category(
+            "Receipts", tenant_id=self.tenant_a.id
+        )
+        by_receipt = _resolve_file_recap_category(
+            "receipt", tenant_id=self.tenant_a.id
+        )
+        assert by_name.id == self.cats_a["Sampling photos"].id
+        assert by_slug.id == self.cats_a["Sampling photos"].id
+        assert by_receipts.id == self.cats_a["Receipts"].id
+        assert by_receipt.id == self.cats_a["Receipts"].id
+
     def test_sentinels_are_per_tenant(self):
         # Each tenant must get its OWN category, even though tenant B's PKs do
         # not include 1/2 at all.
@@ -381,7 +401,9 @@ class TestExplicitPickVsRoleSentinel(_Base):
     across tests), so — as in
     ``test_checkin_photo_buckets::test_a_bucket_whose_pk_collides_with_a_sentinel_still_wins``
     — the collision is simulated by making a real category's id ALSO read as a
-    sentinel. That is exactly the state LD is in.
+    sentinel (both the role-alias map and the sentinel-names map, so a
+    high reused-DB PK like 166 is isolated and does not have to be 1 or 2).
+    That is exactly the state LD is in.
     """
 
     @pytest.fixture(autouse=True)
@@ -393,14 +415,37 @@ class TestExplicitPickVsRoleSentinel(_Base):
         self.table_set_up = self.cats["Table setup"]
 
     def _as_receipts_sentinel(self, category):
-        """Make `category`'s real PK also read as the receipts sentinel."""
+        """Make `category`'s real PK also read as the receipts sentinel.
+
+        The resolver looks up ``_FILE_CATEGORY_ROLE_ALIASES`` first, then
+        ``_FILE_CATEGORY_SENTINEL_NAMES[role_key]``. Patching only the names
+        dict works when the row happens to be PK 1/2 (those strings are
+        already aliases). On a shared ``--reuse-db`` the sequence has
+        climbed, so Table setup is 166/195/… and a names-only patch never
+        fires — the widget path then returns that row instead of Receipts
+        (166 vs 167). Patch both maps so the collision is isolated to this
+        test's own id, whatever the shared DB assigned.
+        """
+        from contextlib import ExitStack
         from unittest.mock import patch
 
-        return patch.dict(
-            rmut._FILE_CATEGORY_SENTINEL_NAMES,
-            {str(category.id): _RECEIPTS_CATEGORY_NAME},
-            clear=False,
+        pk = str(category.id)
+        stack = ExitStack()
+        stack.enter_context(
+            patch.dict(
+                rmut._FILE_CATEGORY_ROLE_ALIASES,
+                {pk: pk},
+                clear=False,
+            )
         )
+        stack.enter_context(
+            patch.dict(
+                rmut._FILE_CATEGORY_SENTINEL_NAMES,
+                {pk: _RECEIPTS_CATEGORY_NAME},
+                clear=False,
+            )
+        )
+        return stack
 
     def test_explicit_pick_of_a_sentinel_pk_category_is_not_the_role_row(self):
         """The headline case: an explicitly picked category whose PK collides

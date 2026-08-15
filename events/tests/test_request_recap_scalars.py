@@ -14,6 +14,8 @@ import pytest
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 
+from django.utils import timezone
+
 from events import models as em
 from events.types import Request as RequestGQL
 from recaps import models as rm
@@ -81,8 +83,14 @@ class TestRequestRecapScalars(EventsGraphQLTestCase):
         )
         self.ev_a = self.create_event(name="Day 1", tenant=self.tenant, request=self.req)
         self.create_event(name="Day 2", tenant=self.tenant, request=self.req)
-        rm.Recap.objects.create(name="r1", event=self.ev_a, created_by=self.sys, updated_by=self.sys)
-        rm.Recap.objects.create(name="r2", event=self.ev_a, created_by=self.sys, updated_by=self.sys)
+        rm.Recap.objects.create(
+            name="r1", event=self.ev_a, created_by=self.sys, updated_by=self.sys,
+            products_sold=12,
+        )
+        rm.Recap.objects.create(
+            name="r2", event=self.ev_a, created_by=self.sys, updated_by=self.sys,
+            total_engagements=40,
+        )
         et = self.create_event_type("Sampling", self.tenant)
         tpl = rm.CustomRecapTemplate.objects.create(
             name="tpl", event_type=et, tenant=self.tenant, created_by=self.sys
@@ -90,6 +98,11 @@ class TestRequestRecapScalars(EventsGraphQLTestCase):
         rm.CustomRecap.objects.create(
             name="cr", event=self.ev_a, tenant=self.tenant,
             custom_recap_template=tpl, created_by=self.sys, updated_by=self.sys,
+            submitted_at=timezone.now(),
+        )
+        # Empty clock-out stub — must NOT increment recapsFiledCount.
+        rm.Recap.objects.create(
+            name="stub", event=self.ev_a, created_by=self.sys, updated_by=self.sys,
         )
 
     @pytest.mark.asyncio
@@ -104,7 +117,7 @@ class TestRequestRecapScalars(EventsGraphQLTestCase):
         assert res.errors is None, res.errors
         nodes = [e["node"] for e in res.data["requests"]["edges"]]
         row = next(n for n in nodes if n["uuid"] == str(self.req.uuid))
-        assert row["recapsFiledCount"] == 3  # 2 legacy + 1 custom
+        assert row["recapsFiledCount"] == 3  # 2 legacy + 1 custom; stub excluded
         assert row["eventsCount"] == 2
         assert row["recapEventUuid"] == str(self.ev_a.uuid)
 
@@ -202,8 +215,14 @@ class TestRequestRecapScalars(EventsGraphQLTestCase):
             created_by=self.sys,
         )
         ev2 = self.create_event(name="R2 Day 1", tenant=self.tenant, request=req2)
-        rm.Recap.objects.create(name="r3", event=ev2, created_by=self.sys, updated_by=self.sys)
-        rm.Recap.objects.create(name="r4", event=ev2, created_by=self.sys, updated_by=self.sys)
+        rm.Recap.objects.create(
+            name="r3", event=ev2, created_by=self.sys, updated_by=self.sys,
+            products_sold=1,
+        )
+        rm.Recap.objects.create(
+            name="r4", event=ev2, created_by=self.sys, updated_by=self.sys,
+            products_sold=2,
+        )
 
         with CaptureQueriesContext(connection) as ctx2:
             data2 = fetch()

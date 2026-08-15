@@ -50,6 +50,7 @@ class TestMissingRecapWalkins(AmbassadorsGraphQLTestCase):
         """Run the resolver's queryset the way the resolver does."""
         from django.db.models import Max, Q
         from django.db.models.functions import Coalesce
+        from recaps.filed import events_missing_filed_recap
 
         now = dj_tz.now()
         cutoff = now - _dt.timedelta(days=days)
@@ -63,11 +64,11 @@ class TestMissingRecapWalkins(AmbassadorsGraphQLTestCase):
                     last_punch__gte=cutoff,
                 )
             )
-            .filter(recaps__isnull=True, custom_recap__isnull=True)
             .filter(tenant_id=self.tenant.id)
-            .annotate(wrapped_at=Coalesce("end_time", "last_punch"))
-            .order_by("-wrapped_at")
         )
+        qs = events_missing_filed_recap(qs).annotate(
+            wrapped_at=Coalesce("end_time", "last_punch")
+        ).order_by("-wrapped_at")
         return set(qs.values_list("id", flat=True))
 
     def test_a_finished_walkin_with_no_recap_is_surfaced(self):
@@ -112,3 +113,19 @@ class TestMissingRecapWalkins(AmbassadorsGraphQLTestCase):
         ev = self._walkin_event()
         self._punch(ev, "clock_in", dj_tz.now() - _dt.timedelta(days=45))
         assert ev.id not in self._missing_event_ids(days=30)
+
+    def test_empty_clock_out_stub_still_counts_as_missing(self):
+        """A Recap row with no content is not filed — still chase it."""
+        from recaps.models import Recap
+
+        ev = self._walkin_event()
+        long_ago = dj_tz.now() - _dt.timedelta(hours=WALKIN_WRAP_GRACE_HOURS + 2)
+        self._punch(ev, "clock_in", long_ago)
+        self._punch(ev, "clock_out", long_ago + _dt.timedelta(hours=1))
+        Recap.objects.create(
+            name="clock-out stub",
+            event=ev,
+            created_by=self.system_user,
+            updated_by=self.system_user,
+        )
+        assert ev.id in self._missing_event_ids()

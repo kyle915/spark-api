@@ -524,7 +524,7 @@ MAGIC_LINK_TTL_SECONDS = 60 * 30  # 30 min
 
 
 def _build_magic_link(token: str, redirect: str | None) -> str:
-    base = getattr(settings, "ADMIN_FRONTEND_URL", "https://spark-new-admin.web.app").rstrip("/")
+    base = getattr(settings, "ADMIN_FRONTEND_URL", "https://admin.igniteproductions.co").rstrip("/")
     suffix = f"?next={quote(redirect)}" if redirect else ""
     return f"{base}/magic/{token}{suffix}"
 
@@ -668,7 +668,7 @@ class SparkUserMutations:
             {"u": user.id, "e": user.email, "k": "pwd"},
             salt="spark.password-reset.v1",
         )
-        base = getattr(settings, "ADMIN_FRONTEND_URL", "https://spark-new-admin.web.app").rstrip("/")
+        base = getattr(settings, "ADMIN_FRONTEND_URL", "https://admin.igniteproductions.co").rstrip("/")
         link = f"{base}/reset-password/{token}"
 
         try:
@@ -876,7 +876,7 @@ class SparkUserMutations:
             {"u": user.id, "e": user.email}, salt="spark.magic-link.v1",
         )
         base = getattr(
-            settings, "ADMIN_FRONTEND_URL", "https://spark-new-admin.web.app",
+            settings, "ADMIN_FRONTEND_URL", "https://admin.igniteproductions.co",
         ).rstrip("/")
         link = f"{base}/magic/{token}"
         # Also hand the mobile app deep-link so an invited BA can open the
