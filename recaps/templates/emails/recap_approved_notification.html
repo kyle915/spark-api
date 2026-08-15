@@ -50,23 +50,23 @@
 
       <h3 style="margin: 0 0 12px 0; color: #202036; font-size: 32px;">Deliverables Included</h3>
       <ul style="margin: 0 0 28px 20px; padding: 0; color: #444444;">
-        <li style="margin: 0 0 8px 0;"><strong>Photos:</strong> {{ photos_count|default:"0" }} activation photos attached / available in Spark</li>
+        <li style="margin: 0 0 8px 0;"><strong>Photos:</strong> {{ photos_count|default:"0" }} activation photos in the recap below</li>
         <li style="margin: 0 0 8px 0;"><strong>Recap:</strong> Post-activation performance recap (reviewed and approved by Ignite)</li>
         <li style="margin: 0;"><strong>Client-Specific Metrics:</strong> <em>{{ client_specific_metrics|default:"Samples distributed, leads captured, survey responses" }}</em></li>
       </ul>
 
-      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="margin: 24px 0; border: 2px solid #f15a24; background-color: #f2eae6;">
+      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="margin: 24px 0;">
         <tr>
-          <td align="center" style="padding: 24px 16px;">
-            <a href="{{ recap_link }}" style="text-decoration: none; color: #202036; font-size: 22px; font-weight: 800; display: inline-block;">
-              📸 View Full Recap in Spark
+          <td align="center" style="padding: 8px 0;">
+            <a href="{{ recap_link }}" style="display:inline-block;background:#c5f546;color:#0a0d09;padding:12px 22px;border-radius:999px;font-family:Georgia,'Times New Roman',serif;font-weight:700;font-size:14px;text-decoration:none;letter-spacing:-0.01em;">
+              View the recap →
             </a>
           </td>
         </tr>
       </table>
 
       <p style="margin: 24px 0 8px 0; color: #444444;">
-        We love hearing what worked and what we can improve. If you have feedback on this activation, just reply to this email or drop a note in Spark - it goes directly to our ops team.
+        We love hearing what worked and what we can improve. If you have feedback on this activation, just reply to this email — it goes directly to our ops team.
       </p>
       <p style="margin: 0 0 18px 0; color: #444444;">
         Thanks for letting us bring this one to life. Already looking forward to the next one.

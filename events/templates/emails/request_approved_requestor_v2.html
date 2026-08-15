@@ -150,26 +150,6 @@
               </td>
             </tr>
 
-            {% if request_url %}
-            <!-- Deep-link to the request detail page on the admin app.
-                 Reviewer / requestor lands directly on the right record
-                 instead of /requests/list. -->
-            <tr>
-              <td class="pad" align="center" style="padding:20px 40px 4px 40px;">
-                <a href="{{ request_url }}"
-                   style="display:inline-block;
-                          background:#c5f546;color:#0a0d09;
-                          padding:12px 22px;border-radius:999px;
-                          font-family:Georgia,'Times New Roman',serif;
-                          font-weight:700;font-size:14px;
-                          text-decoration:none;letter-spacing:-0.01em;
-                          box-shadow:0 0 0 1px #b2dd41 inset;">
-                  View request in Spark →
-                </a>
-              </td>
-            </tr>
-            {% endif %}
-
             <!-- What happens next -->
             <tr>
               <td class="pad" style="padding:24px 40px 4px 40px;">
