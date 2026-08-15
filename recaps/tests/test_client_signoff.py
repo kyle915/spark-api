@@ -57,3 +57,102 @@ def test_public_signoff_url_is_mounted():
     assert reverse("recaps.public_recap_signoff", args=[token]).endswith(
         f"/recap/{token}/signoff"
     )
+
+
+def test_need_more_photos_emails_and_pushes_ambassador(monkeypatch):
+    from recaps.client_signoff import NEED_MORE_PHOTOS, notify_ambassador_need_photos
+
+    envelopes = []
+    pushes = []
+
+    monkeypatch.setattr(
+        "utils.mailer.Mailer.send_now",
+        lambda self: envelopes.append(self.envelope()),
+    )
+    monkeypatch.setattr(
+        "ambassadors.push._send_push_to_user_sync",
+        lambda user_id, **kw: pushes.append((user_id, kw)) or 0,
+    )
+
+    class _User:
+        id = 9
+        email = "ba@example.com"
+
+    class _Amb:
+        user = _User()
+        email = None
+        user_id = 9
+
+    class _Event:
+        id = 1
+        name = "Costco Austin"
+        uuid = "evt-1"
+
+    class _Recap:
+        name = "LD recap"
+        ambassador = _Amb()
+        event = _Event()
+        client_signoff_status = NEED_MORE_PHOTOS
+        client_signoff_comment = "need store shots"
+
+    notify_ambassador_need_photos(_Recap())
+    assert len(envelopes) == 1
+    assert envelopes[0].to_emails == ["ba@example.com"]
+    assert "More photos" in envelopes[0].subject
+    assert pushes == [
+        (
+            9,
+            {
+                "title": "More photos needed",
+                "body": "The client asked for more photos on Costco Austin. Note: need store shots",
+                "data": {"screen": "recap", "eventUuid": "evt-1"},
+            },
+        )
+    ]
+
+
+def test_ops_need_photos_notifies_ambassador_even_without_admins(monkeypatch):
+    from recaps.client_signoff import NEED_MORE_PHOTOS, notify_ops_signoff
+
+    called = []
+    monkeypatch.setattr(
+        "recaps.client_signoff.notify_ambassador_need_photos",
+        lambda recap: called.append(recap),
+    )
+    monkeypatch.setattr(
+        "events.mutations._get_spark_admin_emails",
+        lambda: [],
+    )
+
+    class _Recap:
+        name = "LD recap"
+        client_signoff_status = NEED_MORE_PHOTOS
+        client_signoff_comment = ""
+        event = None
+
+    recap = _Recap()
+    notify_ops_signoff(recap, kind="legacy")
+    assert called == [recap]
+
+
+def test_ops_looks_good_does_not_notify_ambassador(monkeypatch):
+    from recaps.client_signoff import LOOKS_GOOD, notify_ops_signoff
+
+    called = []
+    monkeypatch.setattr(
+        "recaps.client_signoff.notify_ambassador_need_photos",
+        lambda recap: called.append(recap),
+    )
+    monkeypatch.setattr(
+        "events.mutations._get_spark_admin_emails",
+        lambda: [],
+    )
+
+    class _Recap:
+        name = "LD recap"
+        client_signoff_status = LOOKS_GOOD
+        client_signoff_comment = ""
+        event = None
+
+    notify_ops_signoff(_Recap(), kind="legacy")
+    assert called == []

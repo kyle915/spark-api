@@ -366,6 +366,28 @@ class CampaignReportMailer(Mailer):
         self.pdf_bytes = pdf_bytes
         self.pdf_filename = pdf_filename
 
+    def _report_url(self) -> str:
+        """Public /report/:token on admin (same host as recap leave-behinds)."""
+        request_id = self.event_meta.get("request_id")
+        if not request_id:
+            return ""
+        try:
+            from recaps.report_tokens import make_report_token
+
+            token = make_report_token(int(request_id))
+        except Exception:
+            return ""
+        from django.conf import settings
+
+        base = str(
+            getattr(settings, "ADMIN_FRONTEND_URL", "")
+            or getattr(settings, "CLIENT_FRONTEND_URL", "")
+            or "https://admin.igniteproductions.co"
+        ).rstrip("/")
+        if "spark.igniteproductions.co" in base:
+            base = "https://admin.igniteproductions.co"
+        return f"{base}/report/{token}"
+
     def envelope(self) -> Envelope:
         action_chip = (
             f"{self.recap_count} recap{'s' if self.recap_count != 1 else ''}"
@@ -394,6 +416,7 @@ class CampaignReportMailer(Mailer):
                 "date_label": self.event_meta.get("date_label"),
                 "state_label": self.event_meta.get("state_label"),
                 "location_label": self.event_meta.get("location_label"),
+                "report_url": self._report_url(),
             },
             attachments=[
                 {

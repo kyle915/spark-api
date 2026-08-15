@@ -4234,6 +4234,11 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
                         f"{len(unique_retailers) - 3} more"
                     )
 
+            request_ids = [
+                ev.request_id
+                for ev in events_seen
+                if getattr(ev, "request_id", None)
+            ]
             event_meta = {
                 "event_count": event_count,
                 "event_label": event_label,
@@ -4241,6 +4246,7 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
                 "state_label": state_label,
                 "location_label": location_label,
                 "client_name": tenant_name or None,
+                "request_id": request_ids[0] if request_ids else None,
             }
 
             pdf_bytes = build_campaign_report_pdf(

@@ -389,3 +389,45 @@ def test_share_token_rejects_tampered_token():
     token = make_report_token(1)
     with pytest.raises(BadSignature):
         verify_report_token(token + "tamper")
+
+
+
+def test_campaign_report_mailer_includes_live_url(settings):
+    from recaps.envelopes import CampaignReportMailer
+
+    settings.ADMIN_FRONTEND_URL = "https://admin.igniteproductions.co"
+    mailer = CampaignReportMailer(
+        recipients=["buyer@brand.com"],
+        campaign_title="LD Q3",
+        campaign_subtitle="Texas",
+        cover_message=None,
+        recap_count=3,
+        total_consumers=100,
+        sender_tenant_name="Liquid Death",
+        pdf_bytes=b"%PDF-1.4",
+        pdf_filename="ld.pdf",
+        event_meta={"request_id": 42, "location_label": "Austin"},
+    )
+    ctx = mailer.envelope().context
+    url = ctx["report_url"]
+    assert url.startswith("https://admin.igniteproductions.co/report/")
+    token = url.rsplit("/", 1)[-1]
+    assert verify_report_token(token) == 42
+
+
+def test_campaign_report_mailer_omits_url_without_request_id():
+    from recaps.envelopes import CampaignReportMailer
+
+    mailer = CampaignReportMailer(
+        recipients=["buyer@brand.com"],
+        campaign_title="LD Q3",
+        campaign_subtitle="Texas",
+        cover_message=None,
+        recap_count=1,
+        total_consumers=None,
+        sender_tenant_name="Liquid Death",
+        pdf_bytes=b"%PDF-1.4",
+        pdf_filename="ld.pdf",
+        event_meta={},
+    )
+    assert mailer.envelope().context["report_url"] == ""
