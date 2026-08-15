@@ -1048,6 +1048,7 @@ def build_public_context(event, ambassador=None) -> dict:
     start = getattr(event, "start_time", None)
     end = getattr(event, "end_time", None)
     day = getattr(event, "date", None)
+    req = getattr(event, "request", None)
     payload = {
         "event": {
             "uuid": str(event.uuid),
@@ -1056,6 +1057,12 @@ def build_public_context(event, ambassador=None) -> dict:
             "startTime": start.isoformat() if start else None,
             "endTime": end.isoformat() if end else None,
             "date": day.isoformat() if day else None,
+            "storeManagerName": (
+                (getattr(req, "store_manager_name", None) or "").strip() or None
+            ),
+            "storeManagerPhone": (
+                (getattr(req, "store_manager_phone", None) or "").strip() or None
+            ),
         },
         "brand": {
             "name": tenant.name if tenant else "",

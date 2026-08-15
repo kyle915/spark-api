@@ -454,6 +454,8 @@ def render_shared_recap_pdf(kind: str, recap) -> bytes:
         candidates, field_candidates = _custom_image_candidates(recap)
         images = _fetch_images(candidates)
         field_images = _fetch_field_images(field_candidates)
-        return build_recap_pdf(recap, images, custom_field_images=field_images)
+        return build_recap_pdf(
+            recap, images, custom_field_images=field_images, public_share=True
+        )
     images = _fetch_images(_legacy_image_candidates(recap))
-    return build_recap_pdf(recap, images)
+    return build_recap_pdf(recap, images, public_share=True)

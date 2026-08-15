@@ -26,6 +26,25 @@ def _format_dt_no_tz(
     return formatted
 
 
+def _checkin_deep_link(*, tenant, event=None) -> str:
+    """HTTPS check-in URL for BA assign/reminder emails.
+
+    Same origin + path as event confirmations: ``/checkin/<code>`` on
+    admin (or the public check-in host). Never ``spark://`` — those
+    scheme links fail in mail clients and the BA already works in the
+    browser check-in page.
+    """
+    from events.event_confirmations import public_page_base, recap_url_for
+
+    url = recap_url_for(tenant) if tenant is not None else ""
+    if url:
+        return url
+    walkup = (getattr(event, "walkup_code", None) or "").strip()
+    if walkup:
+        return f"{public_page_base()}/checkin/{walkup}"
+    return ""
+
+
 class AmbassadorJobApprovedNotificationMailer(Mailer):
     def __init__(
         self,
@@ -359,7 +378,7 @@ def _build_job_booking_email_context(job: "models.Job") -> dict[str, object]:
     else:
         pay = "-"
 
-    deep_link = f"spark://my-gigs/{job.uuid}"
+    deep_link = _checkin_deep_link(tenant=tenant, event=event)
 
     return {
         "request_id": request_id,
@@ -762,7 +781,7 @@ def _build_ambassador_job_email_context(
     activation_date = _format_dt_no_tz(start_dt, "%m/%d/%Y", offset_minutes)
     start_time = _format_dt_no_tz(start_dt, "%I:%M %p", offset_minutes)
     end_time = _format_dt_no_tz(end_dt, "%I:%M %p", offset_minutes)
-    deep_link = f"spark://my-gigs/{ambassador_job.id}"
+    deep_link = _checkin_deep_link(tenant=tenant, event=event)
 
     return {
         "request_id": request_id,

@@ -230,6 +230,16 @@ class TestClientWeeklyDigest(AmbassadorsGraphQLTestCase):
         assert "awaiting approval" in env.subject
         # Template-based email (no attachments, unlike the monthly PDF report).
         assert not env.attachments
+        ctx = env.context
+        assert ctx["links"]["approvals"].endswith("/my-approvals")
+        assert ctx["links"]["tracker"].endswith("/requests/list")
+        assert "/master-tracker" not in ctx["links"]["tracker"]
+        assert ctx["links"]["approvals"].rstrip("/").endswith("my-approvals")
+        assert "spark.igniteproductions.co" not in ctx["links"]["approvals"]
+        assert "spark.igniteproductions.co" not in ctx["links"]["tracker"]
+        pending_url = ctx["pending"][0]["url"]
+        assert "/request/view/" in pending_url
+        assert "spark.igniteproductions.co" not in pending_url
 
     def test_dry_run_sends_nothing(self):
         with mock.patch.object(
@@ -291,3 +301,13 @@ class TestClientWeeklyDigest(AmbassadorsGraphQLTestCase):
         ) as mock_send:
             call_command("send_client_weekly_digest")
         assert mock_send.call_count == 0
+
+    def test_client_base_url_skips_retired_spark_host(self, settings):
+        from recaps.envelopes import _client_base_url
+
+        settings.CLIENT_FRONTEND_URL = "https://spark.igniteproductions.co"
+        settings.ADMIN_FRONTEND_URL = "https://admin.igniteproductions.co"
+        assert _client_base_url() == "https://admin.igniteproductions.co"
+
+        settings.CLIENT_FRONTEND_URL = "https://client.igniteproductions.co"
+        assert _client_base_url() == "https://client.igniteproductions.co"

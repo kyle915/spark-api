@@ -525,9 +525,33 @@ class ClientMonthlyReportMailer(Mailer):
 
 
 def _client_base_url() -> str:
-    """Client-app base URL for digest deep-links (no trailing slash)."""
-    base = getattr(settings, "CLIENT_FRONTEND_URL", "") or ""
-    return base.rstrip("/")
+    """Client/admin origin for digest deep-links (no trailing slash).
+
+    Prefer the client host, then admin. Never mint spark. — that host
+    301s and the digest CTAs must land on pages a client can open
+    (``/my-approvals``, ``/requests/list``), not AdminOnly chrome.
+    """
+    from urllib.parse import urlparse
+
+    retired = {
+        "spark.igniteproductions.co",
+        "spark-admin.web.app",
+        "spark-new-admin.web.app",
+    }
+    candidates = (
+        getattr(settings, "CLIENT_FRONTEND_URL", "") or "",
+        getattr(settings, "ADMIN_FRONTEND_URL", "") or "",
+        "https://admin.igniteproductions.co",
+    )
+    for raw in candidates:
+        base = str(raw).strip().rstrip("/")
+        if not base:
+            continue
+        host = (urlparse(base).hostname or "").lower()
+        if host in retired:
+            continue
+        return base
+    return "https://admin.igniteproductions.co"
 
 
 def _fmt_when(value: "datetime.datetime | None", *, with_time: bool = True) -> str:
@@ -650,8 +674,8 @@ class ClientWeeklyDigestMailer(Mailer):
             "pending_overflow": d.pending_overflow,
             "links": {
                 "dashboard": f"{base}/" if base else "",
-                "tracker": f"{base}/master-tracker" if base else "",
-                "approvals": f"{base}/approvals" if base else "",
+                "tracker": f"{base}/requests/list" if base else "",
+                "approvals": f"{base}/my-approvals" if base else "",
             },
         }
 

@@ -27,16 +27,23 @@
                 </td>
               </tr>
             </table>
+            {% if deep_link %}
             <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="display: inline-table; margin-bottom: 8px;">
               <tr>
                 <td align="center" style="border: 2px solid #111111; border-radius: 6px;">
-                  <a href="{{ deep_link }}" style="display: inline-block; padding: 10px 16px; border-radius: 6px; color: #111111 !important; text-decoration: none; font-weight: 700;">Open Spark App</a>
+                  <a href="{{ deep_link }}" target="_blank" rel="noopener noreferrer" style="display: inline-block; padding: 10px 16px; border-radius: 6px; color: #111111 !important; text-decoration: none; font-weight: 700;">Open check-in</a>
                 </td>
               </tr>
             </table>
+            {% endif %}
           </td>
         </tr>
       </table>
+      {% if deep_link %}
+      <p style="margin: 0 0 8px 0; font-size: 13px; line-height: 1.5; color: #666666; word-break: break-all;">
+        Or open check-in: <a href="{{ deep_link }}" target="_blank" rel="noopener noreferrer" style="color: #202036; text-decoration: underline;">{{ deep_link }}</a>
+      </p>
+      {% endif %}
 
       <hr style="border: 0; border-top: 1px solid #eeeeee; margin: 24px 0;">
 
@@ -137,7 +144,7 @@
         </li>
         <li><strong>5. Recap &amp; Wrap-Up</strong>
           <ul style="padding-left: 18px; margin: 8px 0 0 0;">
-            <li>Open the <a href="{{ deep_link }}">Spark App</a> to complete your recap.</li>
+            <li>{% if deep_link %}Open <a href="{{ deep_link }}" target="_blank" rel="noopener noreferrer">check-in</a> to complete your recap.{% else %}Open check-in to complete your recap.{% endif %}</li>
             <li>Check the recap form when you arrive so you know what photos/details are required.</li>
             <li>Submit your recap before leaving (use the last 10 minutes of your shift to finalize)</li>
             <li>Payment is only processed upon completion of the recap.</li>
