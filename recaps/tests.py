@@ -603,14 +603,16 @@ class TestApproveRecapNotifications(JobsGraphQLTestCase):
         assert envelope.template == "recaps.templates.emails.recap_approved_notification"
         assert envelope.to_emails == [self.rmm_user.email]
         assert "Activation Summary" in rendered_html
-        assert (
-            f"/recap/view/{recap.uuid}" in envelope.context["recap_link"]
-        )
+        from recaps.recap_tokens import make_recap_token
+
+        expected_token = make_recap_token("legacy", int(recap.id))
+        assert envelope.context["recap_link"].endswith(f"/r/{expected_token}")
+        assert "/recap/view-custom/" not in envelope.context["recap_link"]
         assert envelope.context["recap_link"] != "https://spark.igniteproductions.co/"
         assert envelope.context["extensions_text"] != "None"
 
     @pytest.mark.asyncio
-    @override_settings(CLIENT_FRONTEND_URL="http://client.app")
+    @override_settings(ADMIN_FRONTEND_URL="http://admin.app")
     async def test_custom_recap_approved_mailer_template_renders(self):
         @sync_to_async
         def create_custom_recap():
@@ -661,9 +663,12 @@ class TestApproveRecapNotifications(JobsGraphQLTestCase):
             envelope.template
             == "recaps.templates.emails.custom_recap_approved_notification"
         )
+        from recaps.recap_tokens import make_recap_token
+
+        expected_token = make_recap_token("custom", int(custom_recap.id))
         assert (
             envelope.context["recap_link"]
-            == f"http://client.app/recap/view-custom/{custom_recap.uuid}"
+            == f"http://admin.app/r/{expected_token}"
         )
         assert "Activation Summary" in rendered_html
 

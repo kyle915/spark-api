@@ -203,25 +203,24 @@ class RecapApprovedNotificationMailer(Mailer):
             if client_metrics
             else "Samples distributed, leads captured, survey responses"
         )
-        frontend_base_url = str(
+        # Public leave-behind lives at /r/:shareToken on admin (tenant-
+        # branded PublicRecap). The old /recap/view-custom/:uuid path
+        # pointed at the stale spark. host and required a login.
+        from recaps.recap_tokens import make_recap_token
+
+        admin_base_url = str(
             getattr(
                 settings,
-                "CLIENT_FRONTEND_URL",
-                "https://spark.igniteproductions.co",
+                "ADMIN_FRONTEND_URL",
+                "https://admin.igniteproductions.co",
             )
         ).rstrip("/")
         is_custom_recap = isinstance(self.recap, models.CustomRecap)
-        if is_custom_recap:
-            recap_link = f"{frontend_base_url}/recap/view-custom/{self.recap.uuid}"
-        else:
-            admin_base_url = str(
-                getattr(
-                    settings,
-                    "ADMIN_FRONTEND_URL",
-                    "https://admin.igniteproductions.co",
-                )
-            ).rstrip("/")
-            recap_link = f"{admin_base_url}/recap/view/{self.recap.uuid}"
+        share_token = make_recap_token(
+            "custom" if is_custom_recap else "legacy",
+            int(self.recap.id),
+        )
+        recap_link = f"{admin_base_url}/r/{share_token}"
         template = (
             "recaps.templates.emails.custom_recap_approved_notification"
             if is_custom_recap
