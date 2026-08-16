@@ -3,7 +3,9 @@ from __future__ import annotations
 import base64
 import json
 import re
+from functools import lru_cache
 from io import BytesIO
+from pathlib import Path
 from typing import Iterable
 
 from PIL import Image, ImageOps
@@ -11,6 +13,57 @@ from pillow_heif import register_heif_opener
 
 # We import WeasyPrint lazily inside build_recap_pdf to avoid startup crashes
 # when the native dependencies are missing.
+
+
+# Same product mark the admin sidebar / login / recap chrome serve
+# (`/legal/spark-logo.png`). The API already ships those bytes as
+# tenants/static/tenants/spark_logo.png. Black-on-transparent; invert
+# RGB for the dark branded PDF so WeasyPrint does not need CSS filter.
+SPARK_MARK_URL = "https://admin.igniteproductions.co/legal/spark-logo.png"
+_SPARK_MARK_PATH = (
+    Path(__file__).resolve().parent.parent / "tenants/static/tenants/spark_logo.png"
+)
+_TASING = re.compile(r"\btasing\b", re.I)
+
+
+def _display_field_label(raw: str | None) -> str:
+    """Sentence-case shouting labels and fix TASING — display only."""
+    s = _TASING.sub("tasting", (raw or "").strip())
+    letters = re.sub(r"[^A-Za-z]", "", s)
+    if len(letters) >= 8:
+        upper = len(re.sub(r"[^A-Z]", "", letters))
+        if upper / len(letters) >= 0.85:
+            s = s.lower()
+            s = re.sub(
+                r"(^|[.?!]\s+)([a-z])",
+                lambda m: m.group(1) + m.group(2).upper(),
+                s,
+            )
+    return s
+
+
+@lru_cache(maxsize=2)
+def _spark_mark_src(*, invert: bool) -> str:
+    """Data-URI of the real Spark mark. Invert RGB for dark chrome."""
+    try:
+        data = _SPARK_MARK_PATH.read_bytes()
+        if invert:
+            with Image.open(BytesIO(data)) as im:
+                im = im.convert("RGBA")
+                r, g, b, a = im.split()
+                inv = Image.merge(
+                    "RGBA",
+                    (ImageOps.invert(r), ImageOps.invert(g), ImageOps.invert(b), a),
+                )
+                buf = BytesIO()
+                inv.save(buf, format="PNG")
+                data = buf.getvalue()
+        uri = bytes_to_data_uri(data)
+        if uri:
+            return uri
+    except Exception:
+        pass
+    return SPARK_MARK_URL
 
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif"}
@@ -404,6 +457,7 @@ def build_recap_pdf_html(
     custom_field_images: dict[str, bytes] | None = None,
     *,
     public_share: bool = False,
+    invert_spark_mark: bool = True,
 ) -> str:
     # Image-type custom fields (e.g. "Product Purchase Receipt (Image)")
     # store a GCS blob path as their value. The resolver pre-fetches those
@@ -469,9 +523,12 @@ def build_recap_pdf_html(
                     '<div><span>{label}</span>'
                     '<figure><img src="{src}" />'
                     "<figcaption>{label}</figcaption></figure></div>"
-                ).format(label=safe(field_name), src=data_uri)
+                ).format(label=safe(_display_field_label(field_name)), src=data_uri)
         # Non-image field (or image bytes that failed to decode): text.
-        return f"<div><span>{safe(field_name)}</span><p>{safe(value)}</p></div>"
+        return (
+            f"<div><span>{safe(_display_field_label(field_name))}</span>"
+            f"<p>{safe(value)}</p></div>"
+        )
 
     custom_fields_html = ""
     if custom_field_sections:
@@ -704,7 +761,10 @@ def build_recap_pdf_html(
 """
 
     if public_share:
-        eyebrow = f'{safe(_recap_brand_name(recap))} <span class="lime">recap</span>'
+        eyebrow_html = (
+            f'<p class="eyebrow">{safe(_recap_brand_name(recap))} '
+            f'<span class="lime">recap</span></p>'
+        )
         subtitle = "Shared recap"
         # Public download is a leave-behind the email already called ready.
         # Never print DRAFT on that path — approved stays APPROVED, drafts
@@ -716,13 +776,14 @@ def build_recap_pdf_html(
         else:
             badge_html = ""
     else:
-        eyebrow = 'Spark <span class="lime">by Ignite</span>'
+        eyebrow_html = ""
         subtitle = "Field recap"
         status_chip = "APPROVED" if recap.approved else "DRAFT"
         badge_class = "badge-lime" if recap.approved else "badge-draft"
         badge_html = (
             f'<div class="badge {badge_class}"><span>{status_chip}</span></div>'
         )
+    mark_src = _spark_mark_src(invert=invert_spark_mark)
     return f"""
 <!doctype html>
 <html>
@@ -733,7 +794,8 @@ def build_recap_pdf_html(
   <body>
     <header class="header">
       <div>
-        <p class="eyebrow">{eyebrow}</p>
+        <img class="spark-mark" src="{mark_src}" alt="Spark by Ignite" />
+        {eyebrow_html}
         <h1>{safe(recap.name)}</h1>
         <p class="subtitle">{subtitle}</p>
       </div>
@@ -767,6 +829,12 @@ _PDF_BASE_CSS = """
             color: #1f2933;
             background: #f5f6f8;
             font-size: 11px;
+        }
+        .spark-mark {
+            height: 22px;
+            width: auto;
+            display: block;
+            margin: 0 0 8px 0;
         }"""
 
 
@@ -882,10 +950,9 @@ def build_recap_pdf(
         }
         .stack span {
             display: block;
-            font-size: 8px;
-            color: rgba(242, 243, 238, 0.45);
-            text-transform: uppercase;
-            letter-spacing: 0.12em;
+            font-size: 10px;
+            color: rgba(242, 243, 238, 0.55);
+            letter-spacing: 0.01em;
             margin-bottom: 4px;
         }
         .stack p {
@@ -1190,7 +1257,9 @@ def build_campaign_report_pdf(
 
     detail_pages: list[str] = []
     for idx, (recap, images) in enumerate(recaps_with_images):
-        body = _extract_body(build_recap_pdf_html(recap, images))
+        body = _extract_body(
+            build_recap_pdf_html(recap, images, invert_spark_mark=False)
+        )
         # Force each detail block to start on a fresh page (the cover
         # owns the first page).
         detail_pages.append(
@@ -1328,10 +1397,9 @@ def build_campaign_report_pdf(
         .stack div { margin-bottom: 10px; }
         .stack span {
             display: block;
-            font-size: 9px;
+            font-size: 10px;
             color: #6b7280;
-            text-transform: uppercase;
-            letter-spacing: 0.08em;
+            letter-spacing: 0.01em;
             margin-bottom: 4px;
         }
         .stack p { margin: 0; font-size: 11px; color: #111827; }

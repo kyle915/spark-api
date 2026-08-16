@@ -4,6 +4,8 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from recaps.pdf import (
+    SPARK_MARK_URL,
+    _display_field_label,
     build_recap_pdf_html,
     bytes_to_data_uri,
     detect_image_type,
@@ -255,6 +257,24 @@ def test_build_recap_pdf_html_groups_custom_fields_by_recap_section():
     # (test_custom_recap_pdf_samples_section_present_when_empty).
     assert "Product Samples" in html
     assert "Sales Performance" in html
+    assert 'class="spark-mark"' in html
+    assert 'alt="Spark by Ignite"' in html
+    assert "data:image/png;base64," in html or SPARK_MARK_URL in html
+    assert 'Spark <span class="lime">by Ignite</span>' not in html
+
+
+def test_display_field_label_sentence_cases_and_fixes_tasing():
+    assert (
+        _display_field_label("TOTAL NUMBER OF CONSUMERS SAMPLED")
+        == "Total number of consumers sampled"
+    )
+    assert (
+        _display_field_label(
+            "HOW MANY CONSUMERS WOULD BE WILLING TO PURCHASE THE PRODUCT AFTER TASING IT?"
+        )
+        == "How many consumers would be willing to purchase the product after tasting it?"
+    )
+    assert _display_field_label("First-time consumers") == "First-time consumers"
 
 
 # Tiny but valid JPEG: detect_image_type() only sniffs the SOI marker
@@ -364,7 +384,8 @@ def test_build_recap_pdf_html_image_field_falls_back_to_text_when_unfetched():
     # No custom_field_images passed → legacy behavior (text).
     html = build_recap_pdf_html(recap, images=[])
 
-    assert "<img" not in html
+    assert f'<img src="{blob_path}"' not in html
+    assert "<p>" + blob_path + "</p>" in html
     assert blob_path in html
 
 
@@ -453,6 +474,30 @@ def test_public_share_pdf_omits_draft_chip():
     assert "Girl Beer" in html
     assert "Shared recap" in html
     assert "badge-draft" not in html
+    assert 'class="spark-mark"' in html
+    assert 'Spark <span class="lime">by Ignite</span>' not in html
+
+
+def test_custom_field_pdf_sentence_cases_tasing_label():
+    recap = _share_recap(approved=True)
+    recap.custom_field_value = RelatedList(
+        [
+            SimpleNamespace(
+                value="12",
+                custom_field=SimpleNamespace(
+                    name=(
+                        "HOW MANY CONSUMERS WOULD BE WILLING TO PURCHASE "
+                        "THE PRODUCT AFTER TASING IT?"
+                    ),
+                    recap_section=SimpleNamespace(name="Consumer Engagement"),
+                ),
+            )
+        ]
+    )
+    html = build_recap_pdf_html(recap, [])
+    assert "tasting" in html
+    assert "TASING" not in html
+    assert "How many consumers would be willing to purchase" in html
 
 
 def test_public_share_pdf_keeps_approved_chip():
