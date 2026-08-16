@@ -40,33 +40,41 @@ from tenants.models import (
 # field guide and PDFs. That buys no GCS credentials, no CORS preflight, and
 # versioning with the app; `firebase.json` already grants `/training/**` a
 # 7-day Cache-Control (matched last, so it beats the blanket no-store rule).
-ASSET_BASE = "https://admin.igniteproductions.co"
+# Mint on client.igniteproductions.co — field phones have failed DNS on admin.
+def _asset_base() -> str:
+    from events.event_confirmations import public_page_base
+
+    return public_page_base()
+
 
 # Per-brand defaults, keyed by the same loose tenant needle the other setup
 # commands take. Keeping them here rather than in the workflow inputs means the
 # QR/deck URLs are reviewable in git instead of living only in a form field
-# somebody has to retype correctly at 6am.
-PRESETS: dict[str, list[dict]] = {
-    "feel free": [
-        {
-            "label": "BA Training Guide",
-            "kind": "pdf",
-            "url": f"{ASSET_BASE}/training/ff/ba-training-guide.pdf",
-            "note": "Summer street sampling deck · 23 slides",
-        },
-        {
-            "label": "Photo Release Form",
-            "kind": "image",
-            # Encodes https://app.waiverforever.com/pending/3dXd8QiEzV1785507605
-            # — Botanic Tonics' "Consent & Release Agreement for Use of
-            # Product". Regenerated at 1230px from that URL rather than shipping
-            # the 300px screenshot, so it stays sharp when the page blows it up
-            # full-width; a blurry QR is a QR that doesn't scan.
-            "url": f"{ASSET_BASE}/training/ff/photo-release-qr.png",
-            "note": "Show this — the consumer scans it to sign",
-        },
-    ],
-}
+# somebody has to retype correctly at 6am. Built at call time so
+# PUBLIC_CHECKIN_BASE_URL is honoured.
+def _presets() -> dict[str, list[dict]]:
+    base = _asset_base()
+    return {
+        "feel free": [
+            {
+                "label": "BA Training Guide",
+                "kind": "pdf",
+                "url": f"{base}/training/ff/ba-training-guide.pdf",
+                "note": "Summer street sampling deck · 23 slides",
+            },
+            {
+                "label": "Photo Release Form",
+                "kind": "image",
+                # Encodes https://app.waiverforever.com/pending/3dXd8QiEzV1785507605
+                # — Botanic Tonics' "Consent & Release Agreement for Use of
+                # Product". Regenerated at 1230px from that URL rather than shipping
+                # the 300px screenshot, so it stays sharp when the page blows it up
+                # full-width; a blurry QR is a QR that doesn't scan.
+                "url": f"{base}/training/ff/photo-release-qr.png",
+                "note": "Show this — the consumer scans it to sign",
+            },
+        ],
+    }
 
 
 class Command(BaseCommand):
@@ -134,13 +142,14 @@ class Command(BaseCommand):
                 )
             return cleaned
 
-        key = next((k for k in PRESETS if k in needle.lower()), None)
+        presets = _presets()
+        key = next((k for k in presets if k in needle.lower()), None)
         if key is None:
             raise CommandError(
                 f"No built-in preset for {needle!r} — pass --resources '<json>' "
-                f"or --clear. Presets: {', '.join(sorted(PRESETS))}."
+                f"or --clear. Presets: {', '.join(sorted(presets))}."
             )
-        return normalize_checkin_resources(PRESETS[key])
+        return normalize_checkin_resources(presets[key])
 
     def _show(self, title: str, resources: list[dict]) -> None:
         self.stdout.write(f"{title} ({len(resources)}):")
@@ -175,7 +184,7 @@ class Command(BaseCommand):
         )
         if tenant.checkin_code:
             self.stdout.write(
-                f"Link       : {ASSET_BASE}/checkin/{tenant.checkin_code}"
+                f"Link       : {_asset_base()}/checkin/{tenant.checkin_code}"
             )
         # The legacy field still feeds the event-confirmation "Training site"
         # line, so print it — it explains any card that shows up unbidden.

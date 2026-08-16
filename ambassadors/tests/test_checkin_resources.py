@@ -31,8 +31,27 @@ from ambassadors import checkin_web
 from ambassadors.tests.base import AmbassadorsGraphQLTestCase
 from tenants.models import MAX_CHECKIN_RESOURCES, normalize_checkin_resources
 
-# What `set_checkin_resources` seeds for Feel Free.
+# What `set_checkin_resources` seeds for Feel Free (client host — field
+# phones have failed DNS on admin.).
 FF_RESOURCES = [
+    {
+        "label": "BA Training Guide",
+        "kind": "pdf",
+        "url": "https://client.igniteproductions.co/training/ff/ba-training-guide.pdf",
+        "note": "Summer street sampling deck · 23 slides",
+    },
+    {
+        "label": "Photo Release Form",
+        "kind": "image",
+        "url": "https://client.igniteproductions.co/training/ff/photo-release-qr.png",
+        "note": "Show this — the consumer scans it to sign",
+    },
+]
+
+# Stored-as-admin fixtures: the page must rewrite these onto client.
+LEGACY_URL = "https://admin.igniteproductions.co/training/LD-FZUWXT"
+LEGACY_PUBLIC_URL = "https://client.igniteproductions.co/training/LD-FZUWXT"
+FF_ADMIN_RESOURCES = [
     {
         "label": "BA Training Guide",
         "kind": "pdf",
@@ -46,8 +65,6 @@ FF_RESOURCES = [
         "note": "Show this — the consumer scans it to sign",
     },
 ]
-
-LEGACY_URL = "https://admin.igniteproductions.co/training/LD-FZUWXT"
 
 
 class TestNormalizeCheckinResources:
@@ -169,7 +186,7 @@ class TestCheckinResourcesPayload(AmbassadorsGraphQLTestCase):
             {
                 "label": "BA reference & training",
                 "kind": "link",
-                "url": LEGACY_URL,
+                "url": LEGACY_PUBLIC_URL,
                 "note": "Field guide, video, product sheets",
             }
         ]
@@ -194,7 +211,8 @@ class TestCheckinResourcesPayload(AmbassadorsGraphQLTestCase):
 
         ctx = checkin_web.build_tenant_context(self.tenant)
         assert len(ctx["resources"]) == 2
-        assert ctx["trainingUrl"] == LEGACY_URL
+        assert ctx["trainingUrl"] == LEGACY_PUBLIC_URL
+        assert "admin.igniteproductions.co" not in ctx["trainingUrl"]
 
     def test_a_poisoned_row_never_reaches_the_payload(self):
         self.tenant.checkin_resources = [
@@ -244,6 +262,9 @@ class TestSetCheckinResourcesCommand(AmbassadorsGraphQLTestCase):
             "BA Training Guide",
             "Photo Release Form",
         ]
+        for row in self.tenant.checkin_resources:
+            assert row["url"].startswith("https://client.igniteproductions.co/")
+            assert "admin.igniteproductions.co" not in row["url"]
 
     def test_re_running_is_idempotent(self):
         self._run(tenant="Feel Free Command", apply=True)
@@ -261,7 +282,10 @@ class TestSetCheckinResourcesCommand(AmbassadorsGraphQLTestCase):
         self.tenant.refresh_from_db()
         # None, not [] — so the tenant behaves exactly like an untouched one.
         assert self.tenant.checkin_resources is None
-        assert checkin_web.build_checkin_resources(self.tenant)[0]["url"] == LEGACY_URL
+        assert (
+            checkin_web.build_checkin_resources(self.tenant)[0]["url"]
+            == LEGACY_PUBLIC_URL
+        )
 
     def test_a_rejected_entry_refuses_the_whole_write(self):
         """Seeding 1 of 2 buttons without saying so is how a brand ends up
@@ -288,3 +312,21 @@ class TestSetCheckinResourcesCommand(AmbassadorsGraphQLTestCase):
         self.create_tenant(name="Nobody Brand Here")
         with pytest.raises(CommandError):
             self._run(tenant="Nobody Brand Here")
+
+
+@pytest.mark.django_db(transaction=True)
+class TestCheckinResourcesRewriteAdminHost(AmbassadorsGraphQLTestCase):
+    @pytest.fixture(autouse=True)
+    def setup(self, db):
+        self.roles = self.setup_default_roles()
+        self.tenant = self.create_tenant(name="Feel Free Stored Admin")
+
+    def test_stored_admin_pdf_urls_are_rewritten_to_client(self):
+        """Prod still has admin-seeded Feel Free rows; the page must not
+        hand those hosts to a field phone."""
+        self.tenant.checkin_resources = FF_ADMIN_RESOURCES
+        self.tenant.save(update_fields=["checkin_resources"])
+
+        got = checkin_web.build_checkin_resources(self.tenant)
+        assert [r["url"] for r in got] == [r["url"] for r in FF_RESOURCES]
+        assert all("admin.igniteproductions.co" not in r["url"] for r in got)

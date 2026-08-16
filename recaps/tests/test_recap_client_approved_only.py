@@ -50,6 +50,14 @@ query CustomRecaps($tenantId: ID, $approved: Boolean, $first: Int) {
 }
 """
 
+EVENT_CUSTOM_RECAPS_QUERY = """
+query EventCustomRecaps($uuid: ID!) {
+  event(uuid: $uuid) {
+    customRecaps { uuid name approved }
+  }
+}
+"""
+
 
 @pytest.mark.django_db(transaction=True)
 class TestRecapClientApprovedOnly(AmbassadorsGraphQLTestCase):
@@ -221,3 +229,30 @@ class TestRecapClientApprovedOnly(AmbassadorsGraphQLTestCase):
         names = {e["node"]["name"] for e in conn["edges"]}
         assert names == {"Approved custom recap"}, names
         assert conn["totalCount"] == 1
+
+    @pytest.mark.asyncio
+    async def test_event_custom_recaps_admin_sees_drafts(self):
+        result = await self._execute_query_authenticated(
+            EVENT_CUSTOM_RECAPS_QUERY,
+            {"uuid": str(self.event.uuid)},
+            self.spark_admin,
+            self.endpoint_path,
+        )
+        assert result.errors is None, f"errored: {result.errors}"
+        names = {r["name"] for r in result.data["event"]["customRecaps"]}
+        assert names == {"Approved custom recap", "Draft custom recap"}, names
+
+    @pytest.mark.asyncio
+    async def test_event_custom_recaps_client_sees_only_approved(self):
+        # Nested Event.customRecaps was the leak: the customRecaps *query*
+        # already filtered, but a Request/Event page still returned drafts.
+        result = await self._execute_query_authenticated(
+            EVENT_CUSTOM_RECAPS_QUERY,
+            {"uuid": str(self.event.uuid)},
+            self.client_user,
+            self.endpoint_path,
+        )
+        assert result.errors is None, f"errored: {result.errors}"
+        names = {r["name"] for r in result.data["event"]["customRecaps"]}
+        assert names == {"Approved custom recap"}, names
+        assert "Draft custom recap" not in names

@@ -1069,20 +1069,50 @@ def build_checkin_resources(tenant) -> list[dict]:
 
     resources = normalize_checkin_resources(getattr(tenant, "checkin_resources", None))
     if resources:
-        return resources
+        return _public_resource_urls(resources)
 
     legacy = (getattr(tenant, "checkin_training_url", "") or "").strip()
     if not legacy:
         return []
-    return normalize_checkin_resources(
-        [
-            {
-                "label": "BA reference & training",
-                "kind": "link",
-                "url": legacy,
-                "note": "Field guide, video, product sheets",
-            }
-        ]
+    return _public_resource_urls(
+        normalize_checkin_resources(
+            [
+                {
+                    "label": "BA reference & training",
+                    "kind": "link",
+                    "url": legacy,
+                    "note": "Field guide, video, product sheets",
+                }
+            ]
+        )
+    )
+
+
+def _public_resource_urls(resources: list[dict]) -> list[dict]:
+    """Rewrite stored admin/spark hosts onto the BA-facing client origin.
+
+    Feel Free PDFs were seeded with admin.igniteproductions.co; field
+    phones have failed DNS on that host. ``absolute_public_url`` is the
+    same rewrite event-confirmation emails already use.
+    """
+    from events.event_confirmations import absolute_public_url
+
+    out: list[dict] = []
+    for row in resources:
+        url = absolute_public_url(row.get("url") or "")
+        if not url:
+            continue
+        out.append({**row, "url": url})
+    return out
+
+
+def _public_training_url(tenant) -> str:
+    if tenant is None:
+        return ""
+    from events.event_confirmations import absolute_public_url
+
+    return absolute_public_url(
+        getattr(tenant, "checkin_training_url", "") or ""
     )
 
 
@@ -1127,11 +1157,7 @@ def build_public_context(event, ambassador=None) -> dict:
         # Legacy single-URL twin of `resources`. Still sent because the API
         # deploys BEFORE the front-end: dropping it would blank Liquid Death's
         # card on the live page for however long that gap lasts.
-        "trainingUrl": (
-            (getattr(tenant, "checkin_training_url", "") or "").strip()
-            if tenant
-            else ""
-        ),
+        "trainingUrl": _public_training_url(tenant),
         "template": serialize_template(event),
         # Labelled photo dropzones for the recap step, for THIS event's program.
         # Empty for every brand that hasn't opted in, which is the page's signal
@@ -1541,7 +1567,7 @@ def build_tenant_context(tenant) -> dict:
         # /training/<code> hub) as ordered buttons. See build_checkin_resources.
         "resources": build_checkin_resources(tenant),
         # Legacy single-URL twin — see the note in build_public_context.
-        "trainingUrl": (getattr(tenant, "checkin_training_url", "") or "").strip(),
+        "trainingUrl": _public_training_url(tenant),
     }
 
 

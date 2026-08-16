@@ -410,7 +410,8 @@ def test_campaign_report_mailer_includes_live_url(settings):
     )
     ctx = mailer.envelope().context
     url = ctx["report_url"]
-    assert url.startswith("https://admin.igniteproductions.co/report/")
+    assert url.startswith("https://client.igniteproductions.co/report/")
+    assert "admin.igniteproductions.co" not in url
     token = url.rsplit("/", 1)[-1]
     assert verify_report_token(token) == 42
 
