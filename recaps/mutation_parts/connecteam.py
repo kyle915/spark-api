@@ -126,7 +126,7 @@ async def execute_connecteam_import_from_bytes(
     # import modal's "Recap title" field) always wins; the generic
     # "Imported from Connecteam" stamp is only the last resort for an
     # event with no name.
-    name = (input.name or "").strip()
+    name = (name or "").strip()
     if not name:
         ev_name = (getattr(event, "name", "") or "").strip()
         ev_date = getattr(event, "date", None)
