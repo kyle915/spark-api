@@ -15,6 +15,18 @@ def _jpeg_bytes(width=1200, height=800) -> bytes:
     return out.getvalue()
 
 
+def _jpeg_with_orientation(orientation, width=2000, height=1000) -> bytes:
+    """A JPEG whose pixels are stored one way but tagged to display rotated.
+    Orientation 6 = "rotate 90° for display", so a 2000x1000 landscape source
+    should DISPLAY as 1000x2000 portrait."""
+    img = Image.new("RGB", (width, height), (90, 120, 40))
+    exif = img.getexif()
+    exif[0x0112] = orientation  # 0x0112 = EXIF Orientation tag
+    out = io.BytesIO()
+    img.save(out, format="JPEG", exif=exif)
+    return out.getvalue()
+
+
 @pytest.fixture
 def gcs(monkeypatch):
     """In-memory stand-in for the GCS helpers the view uses."""
@@ -51,6 +63,20 @@ class TestThumbEndpoint:
         assert thumb.width == 400
         # Aspect ratio preserved (1200x800 → 400x266ish).
         assert 260 <= thumb.height <= 270
+
+    def test_applies_exif_orientation(self, client, gcs):
+        # A 2000x1000 landscape source tagged orientation=6 should DISPLAY as
+        # 1000x2000 portrait. The thumbnail must bake that rotation in, not
+        # resize the raw sideways pixels (the "sideways in the grid" bug).
+        gcs["recaps/rotated.jpg"] = _jpeg_with_orientation(6, 2000, 1000)
+        resp = client.get(self.URL, {"path": "recaps/rotated.jpg", "w": "400"})
+        assert resp.status_code == 302
+        thumb = Image.open(
+            io.BytesIO(gcs["thumbs/w400/recaps/rotated.jpg.jpg"])
+        )
+        # Corrected orientation → portrait 400x800, not sideways 400x200.
+        assert thumb.width == 400
+        assert thumb.height == 800
 
     def test_existing_thumb_skips_regeneration(self, client, gcs, monkeypatch):
         gcs["thumbs/w400/recaps/photo.jpg.jpg"] = b"cached"

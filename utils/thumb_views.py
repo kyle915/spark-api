@@ -91,10 +91,17 @@ def thumb(request: HttpRequest) -> HttpResponse:
         if data is None or len(data) > _MAX_ORIGINAL_BYTES:
             return _redirect(original_url)
 
-        from PIL import Image
+        from PIL import Image, ImageOps
 
         img = Image.open(io.BytesIO(data))
         img.load()
+        # Bake in the photo's EXIF rotation before resizing. Phones store a
+        # sideways shot as raw landscape pixels + an orientation tag; Pillow's
+        # resize + save drops that tag, so without this the thumbnail shows the
+        # un-rotated (sideways) pixels, while the full-res original still
+        # carries the tag and the browser displays it correctly — the "sideways
+        # in the grid, right when opened" bug. Mirrors the recap PDF path.
+        img = ImageOps.exif_transpose(img) or img
         if img.mode not in ("RGB", "L"):
             img = img.convert("RGB")
         # Never upscale — a photo narrower than the target is fine as-is.
