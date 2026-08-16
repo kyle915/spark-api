@@ -203,24 +203,19 @@ class RecapApprovedNotificationMailer(Mailer):
             if client_metrics
             else "Samples distributed, leads captured, survey responses"
         )
-        # Public leave-behind lives at /r/:shareToken on admin (tenant-
-        # branded PublicRecap). The old /recap/view-custom/:uuid path
-        # pointed at the stale spark. host and required a login.
+        # Public leave-behind lives at /r/:shareToken on the client
+        # host (tenant-branded PublicRecap). Field phones have failed
+        # DNS on admin.; the old /recap/view-custom/:uuid path pointed
+        # at spark. and required a login.
+        from events.event_confirmations import public_page_base
         from recaps.recap_tokens import make_recap_token
 
-        admin_base_url = str(
-            getattr(
-                settings,
-                "ADMIN_FRONTEND_URL",
-                "https://admin.igniteproductions.co",
-            )
-        ).rstrip("/")
         is_custom_recap = isinstance(self.recap, models.CustomRecap)
         share_token = make_recap_token(
             "custom" if is_custom_recap else "legacy",
             int(self.recap.id),
         )
-        recap_link = f"{admin_base_url}/r/{share_token}"
+        recap_link = f"{public_page_base()}/r/{share_token}"
         template = (
             "recaps.templates.emails.custom_recap_approved_notification"
             if is_custom_recap
@@ -367,7 +362,7 @@ class CampaignReportMailer(Mailer):
         self.pdf_filename = pdf_filename
 
     def _report_url(self) -> str:
-        """Public /report/:token on admin (same host as recap leave-behinds)."""
+        """Public /report/:token on the client host (same as recap leave-behinds)."""
         request_id = self.event_meta.get("request_id")
         if not request_id:
             return ""
@@ -377,16 +372,9 @@ class CampaignReportMailer(Mailer):
             token = make_report_token(int(request_id))
         except Exception:
             return ""
-        from django.conf import settings
+        from events.event_confirmations import public_page_base
 
-        base = str(
-            getattr(settings, "ADMIN_FRONTEND_URL", "")
-            or getattr(settings, "CLIENT_FRONTEND_URL", "")
-            or "https://admin.igniteproductions.co"
-        ).rstrip("/")
-        if "spark.igniteproductions.co" in base:
-            base = "https://admin.igniteproductions.co"
-        return f"{base}/report/{token}"
+        return f"{public_page_base()}/report/{token}"
 
     def envelope(self) -> Envelope:
         action_chip = (

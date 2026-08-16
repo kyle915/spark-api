@@ -610,6 +610,10 @@ class TestApproveRecapNotifications(JobsGraphQLTestCase):
 
         expected_token = make_recap_token("legacy", int(recap.id))
         assert envelope.context["recap_link"].endswith(f"/r/{expected_token}")
+        assert envelope.context["recap_link"].startswith(
+            "https://client.igniteproductions.co/r/"
+        )
+        assert "admin.igniteproductions.co" not in envelope.context["recap_link"]
         assert "/recap/view-custom/" not in envelope.context["recap_link"]
         assert envelope.context["recap_link"] != "https://spark.igniteproductions.co/"
         assert envelope.context["extensions_text"] != "None"
@@ -671,8 +675,9 @@ class TestApproveRecapNotifications(JobsGraphQLTestCase):
         expected_token = make_recap_token("custom", int(custom_recap.id))
         assert (
             envelope.context["recap_link"]
-            == f"http://admin.app/r/{expected_token}"
+            == f"https://client.igniteproductions.co/r/{expected_token}"
         )
+        assert "admin.igniteproductions.co" not in envelope.context["recap_link"]
         assert "Activation Summary" in rendered_html
 
     @pytest.mark.asyncio
