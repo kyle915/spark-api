@@ -12,6 +12,27 @@ from pillow_heif import register_heif_opener
 # when the native dependencies are missing.
 
 
+# Same product mark the admin sidebar / login serve. Black-on-transparent
+# so it reads on the light PDF page (the FE inverts this file for dark chrome).
+SPARK_MARK_URL = "https://admin.igniteproductions.co/legal/spark-logo.png"
+_TASING = re.compile(r"\btasing\b", re.I)
+
+def _display_field_label(raw: str | None) -> str:
+    """Sentence-case shouting labels and fix TASING — display only."""
+    s = _TASING.sub("tasting", (raw or "").strip())
+    letters = re.sub(r"[^A-Za-z]", "", s)
+    if len(letters) >= 8:
+        upper = len(re.sub(r"[^A-Z]", "", letters))
+        if upper / len(letters) >= 0.85:
+            s = s.lower()
+            s = re.sub(
+                r"(^|[.?!]\s+)([a-z])",
+                lambda m: m.group(1) + m.group(2).upper(),
+                s,
+            )
+    return s
+
+
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif"}
 HEIF_BRANDS = {
     b"heic",
@@ -237,7 +258,7 @@ def build_recap_pdf_html(recap, images: Iterable[dict[str, bytes]]) -> str:
     <section class="card">
       <h2>{safe(section_name)}</h2>
       <div class="stack">
-        {"".join(f"<div><span>{safe(field_name)}</span><p>{safe(value)}</p></div>" for field_name, value in fields)}
+        {"".join(f"<div><span>{safe(_display_field_label(field_name))}</span><p>{safe(value)}</p></div>" for field_name, value in fields)}
       </div>
     </section>
 """
@@ -438,6 +459,7 @@ def build_recap_pdf_html(recap, images: Iterable[dict[str, bytes]]) -> str:
   <body>
     <header class="header">
       <div>
+        <img class="spark-mark" src="{SPARK_MARK_URL}" alt="Spark by Ignite" />
         <h1>Recap Report</h1>
         <p class="subtitle">{safe(recap.name)}</p>
       </div>
@@ -482,6 +504,12 @@ def build_recap_pdf(recap, images: Iterable[dict[str, bytes]]) -> bytes:
 
     css = CSS(
         string=_PDF_BASE_CSS + """
+        .spark-mark {
+            height: 22px;
+            width: auto;
+            display: block;
+            margin: 0 0 8px 0;
+        }
         h1 {
             font-size: 28px;
             margin: 0 0 4px 0;

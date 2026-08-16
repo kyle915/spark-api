@@ -4,6 +4,8 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from recaps.pdf import (
+    SPARK_MARK_URL,
+    _display_field_label,
     build_recap_pdf_html,
     bytes_to_data_uri,
     detect_image_type,
@@ -250,3 +252,20 @@ def test_build_recap_pdf_html_groups_custom_fields_by_recap_section():
     assert "Updated At" not in html
     assert "Product Samples" not in html
     assert "Sales Performance" not in html
+    assert SPARK_MARK_URL in html
+    assert 'class="spark-mark"' in html
+    assert 'Spark <span class="lime">by Ignite</span>' not in html
+
+
+def test_display_field_label_sentence_cases_and_fixes_tasing():
+    assert (
+        _display_field_label("TOTAL NUMBER OF CONSUMERS SAMPLED")
+        == "Total number of consumers sampled"
+    )
+    assert (
+        _display_field_label(
+            "HOW MANY CONSUMERS WOULD BE WILLING TO PURCHASE THE PRODUCT AFTER TASING IT?"
+        )
+        == "How many consumers would be willing to purchase the product after tasting it?"
+    )
+    assert _display_field_label("First-time consumers") == "First-time consumers"
