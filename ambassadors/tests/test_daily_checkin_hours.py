@@ -95,8 +95,11 @@ class TestDailyCheckinHours(AmbassadorsGraphQLTestCase):
         assert "7h 00m" in out, "should span first in (9) to last out (16)"
 
     def test_defaults_to_today_without_a_date(self):
-        now = dj_tz.now().astimezone(PT)
-        self._punch("clock_in", now - _dt.timedelta(hours=2))
-        self._punch("clock_out", now - _dt.timedelta(hours=1))
+        # Pin punches to today's PT calendar day. `now - 2h` crosses
+        # midnight and the command's default "today" then reports no_activity.
+        today = dj_tz.now().astimezone(PT).date()
+        noon = _dt.datetime.combine(today, _dt.time(12, 0), tzinfo=PT)
+        self._punch("clock_in", noon - _dt.timedelta(hours=2))
+        self._punch("clock_out", noon - _dt.timedelta(hours=1))
         out = self._run()
         assert "1 shift(s)" in out
