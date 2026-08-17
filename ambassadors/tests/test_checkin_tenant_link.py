@@ -179,10 +179,13 @@ class TestTenantCheckinLink(AmbassadorsGraphQLTestCase):
     def test_tenant_context_sends_the_same_logo_fields_as_spark_form(self):
         """Walk-up /checkin must feed TenantLogo the same image / logoUrl /
         requestUrlName tenantPublic already sends spark-form."""
+        from django.test import override_settings
+
         self.tenant.request_url_name = "ighn-liquid-death"
         self.tenant.image = "tenants/images/ld-logo.png"
         self.tenant.save(update_fields=["request_url_name", "image"])
-        payload = checkin_web.build_tenant_context(self.tenant)
+        with override_settings(GS_BUCKET_NAME="spark-test-bucket"):
+            payload = checkin_web.build_tenant_context(self.tenant)
         brand = payload["brand"]
         assert brand["requestUrlName"] == "ighn-liquid-death"
         assert brand["image"]
