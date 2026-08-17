@@ -447,6 +447,7 @@ class TestMailer:
                 mailer.dispatch()
                 mock_driver.send.assert_called_once_with(mock_envelope)
 
+    @override_settings(RQ_ENABLED=True)
     @patch('utils.mailer.Queues')
     def test_mailer_send_enqueues_task(self, mock_queues_class):
         """Test send enqueues email task to RQ."""
@@ -479,7 +480,7 @@ class TestMailer:
             mailer.send_now()
             mock_dispatch.assert_called_once()
 
-    @override_settings(MAIL_DRIVER="resend")
+    @override_settings(MAIL_DRIVER="resend", RQ_ENABLED=True)
     @patch("utils.mailer.resend.Emails.send", return_value={"id": "re_inline"})
     @patch(
         "utils.mailer.Queues",
@@ -515,6 +516,28 @@ class TestMailer:
         att = params["attachments"][0]
         assert att["filename"] == "recap-727.pdf"
         assert base64.b64decode(att["content"]) == pdf
+
+    @override_settings(MAIL_DRIVER="resend", RQ_ENABLED=False)
+    @patch("utils.mailer.resend.Emails.send", return_value={"id": "re_no_redis"})
+    @patch("utils.mailer.Queues")
+    def test_send_skips_redis_when_rq_disabled(
+        self, mock_queues_class, mock_resend_send
+    ):
+        """Cloud Run: missing REDIS_URL means inline Resend, no localhost dial."""
+
+        class ReadyMailer(Mailer):
+            def envelope(self):
+                return Envelope(
+                    subject="Your activation recap is ready",
+                    to_emails=["events@example.com"],
+                    html="<p>Recap</p>",
+                )
+
+        with patch.object(Mailer, "_build_logo_attachment", return_value=None):
+            ReadyMailer().send()
+
+        mock_queues_class.assert_not_called()
+        mock_resend_send.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_mailer_send_async(self):

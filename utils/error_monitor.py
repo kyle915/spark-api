@@ -142,6 +142,11 @@ class ErrorEventLogHandler(logging.Handler):
                 return
             if record.name.startswith(_EXCLUDED_LOGGER_PREFIXES):
                 return
+            # Prod Cloud Run has no Redis. Connection-refused to the old
+            # localhost:6379 default is expected noise, not an incident.
+            message = record.getMessage()
+            if "localhost:6379" in message or "127.0.0.1:6379" in message:
+                return
             signature = f"{record.name}:{record.funcName}"
             tb = ""
             if record.exc_info and record.exc_info[0] is not None:

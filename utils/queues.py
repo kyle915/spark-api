@@ -1,10 +1,19 @@
-import django_rq
-from django_rq.queues import DjangoRQ
 import logging
-
 from typing import Callable
 
+from django.conf import settings
+from django_rq.queues import DjangoRQ
+
 logger = logging.getLogger(__name__)
+
+
+def rq_is_enabled() -> bool:
+    """True only when REDIS_URL / CELERY_BROKER_URL is set (or DEBUG localhost).
+
+    Cloud Run leaves Redis unset; callers must run work inline instead of
+    opening localhost:6379 (connection-refused + Spark alerts).
+    """
+    return bool(getattr(settings, "RQ_ENABLED", False))
 
 
 class Queue:
@@ -26,7 +35,12 @@ class Queue:
         To ensure the job is enqueued on the right queue without confusing
         RQ's API, we fetch the concrete queue instance and call its
         `enqueue` method directly.
+
+        When Redis is not configured (Cloud Run), run the callable inline
+        so we never open localhost:6379.
         """
+        if not rq_is_enabled():
+            return func(*args, **kwargs)
         try:
             return self.get_queue().enqueue(func, *args, **kwargs)
         except Exception as e:
@@ -39,6 +53,8 @@ class Queue:
             raise e
 
     def get_queue(self) -> DjangoRQ:
+        import django_rq
+
         return django_rq.get_queue(self.name)
 
 

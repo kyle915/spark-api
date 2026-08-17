@@ -320,25 +320,28 @@ if GOOGLE_CALENDAR_CREDENTIALS_JSON:
 else:
     GOOGLE_CALENDAR_CREDENTIALS = None
 
-# Django-RQ Configuration
+# Django-RQ / Redis. Optional — Cloud Run has no Memorystore, and the
+# mailer already falls back to inline Resend. Do NOT default to
+# localhost:6379 when DEBUG is False: that connection-refused on every
+# mail and paged Spark alerts. Local/CI (DEBUG=True) still use docker
+# Redis. REDIS_URL wins; CELERY_BROKER_URL is the legacy alias.
+REDIS_URL = env("REDIS_URL", default=env("CELERY_BROKER_URL", default=""))
+if not REDIS_URL and DEBUG:
+    REDIS_URL = "redis://localhost:6379/0"
+RQ_ENABLED = bool(REDIS_URL)
+_rq_url = REDIS_URL or "redis://localhost:6379/0"
 RQ_QUEUES = {
     "default": {
-        "HOST": "localhost",
-        "PORT": 6379,
-        "DB": 0,
-        "URL": env("CELERY_BROKER_URL", default="redis://localhost:6379/0"),
+        "URL": _rq_url,
+        "ASYNC": RQ_ENABLED,
     },
     "high": {
-        "HOST": "localhost",
-        "PORT": 6379,
-        "DB": 0,
-        "URL": env("CELERY_BROKER_URL", default="redis://localhost:6379/0"),
+        "URL": _rq_url,
+        "ASYNC": RQ_ENABLED,
     },
     "low": {
-        "HOST": "localhost",
-        "PORT": 6379,
-        "DB": 0,
-        "URL": env("CELERY_BROKER_URL", default="redis://localhost:6379/0"),
+        "URL": _rq_url,
+        "ASYNC": RQ_ENABLED,
     },
 }
 
