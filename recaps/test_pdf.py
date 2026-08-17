@@ -6,6 +6,7 @@ from unittest.mock import patch
 from recaps.pdf import (
     SPARK_MARK_URL,
     _display_field_label,
+    _display_product_name,
     _spark_mark_src,
     build_recap_pdf_html,
     bytes_to_data_uri,
@@ -310,6 +311,15 @@ def test_display_field_label_sentence_cases_and_fixes_tasing():
         == "How many consumers would be willing to purchase the product after tasting it?"
     )
     assert _display_field_label("First-time consumers") == "First-time consumers"
+
+
+def test_display_product_name_keeps_flavor_identity():
+    assert (
+        _display_product_name("SPARKLING WATER - STRAWBERRY TERROR")
+        == "Sparkling water · Strawberry Terror"
+    )
+    assert _display_product_name("LIQUID DEATH") == "Liquid Death"
+    assert _display_product_name("Strawberry Terror") == "Strawberry Terror"
 
 
 # Tiny but valid JPEG: detect_image_type() only sniffs the SOI marker

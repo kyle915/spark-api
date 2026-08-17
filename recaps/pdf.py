@@ -42,6 +42,29 @@ def _display_field_label(raw: str | None) -> str:
     return s
 
 
+def _display_product_name(raw: str | None) -> str:
+    """Readable SKU identity: 'SPARKLING WATER - STRAWBERRY TERROR'
+    → 'Sparkling water · Strawberry Terror'."""
+    s = (raw or "").strip()
+    if not s:
+        return s
+
+    def shouting(text: str) -> bool:
+        letters = re.sub(r"[^A-Za-z]", "", text)
+        if len(letters) < 8:
+            return False
+        upper = len(re.sub(r"[^A-Z]", "", letters))
+        return upper / len(letters) >= 0.85
+
+    parts = re.split(r"\s+[-–—]\s+", s)
+    if len(parts) == 1:
+        return s.title() if shouting(s) else s
+    head, *flavors = parts
+    shown_head = head[:1].upper() + head[1:].lower() if shouting(head) else head
+    shown_flavors = [p.title() if shouting(p) else p for p in flavors]
+    return " · ".join([shown_head, *shown_flavors])
+
+
 @lru_cache(maxsize=2)
 def _spark_mark_src(*, invert: bool = False) -> str:
     """Data-URI of the real Spark mark. Keep black-on-transparent for light PDFs."""
@@ -490,7 +513,9 @@ def build_recap_pdf_html(
         recap, "custom_recap_product_sample"
     )
     for sample in product_samples:
-        product_name = getattr(sample.product, "name", "Unknown product")
+        product_name = _display_product_name(
+            getattr(sample.product, "name", "Unknown product")
+        )
         samples.append(f"{product_name} - Qty: {sample.quantity}")
 
     sales = []
@@ -498,8 +523,12 @@ def build_recap_pdf_html(
         recap, "custom_recap_sale_performance"
     )
     for sale in sales_performance:
-        product_name = getattr(sale.product, "name", "Unknown product")
-        type_name = getattr(sale.type_of_good, "name", "Unknown type")
+        product_name = _display_product_name(
+            getattr(sale.product, "name", "Unknown product")
+        )
+        type_name = _display_product_name(
+            getattr(sale.type_of_good, "name", "Unknown type")
+        )
         sales.append(f"{product_name} ({type_name}) - ${sale.price}")
 
     feedback = _related_items(recap, "consumer_feedback")
@@ -525,9 +554,23 @@ def build_recap_pdf_html(
                     "<figcaption>{label}</figcaption></figure></div>"
                 ).format(label=safe(_display_field_label(field_name)), src=data_uri)
         # Non-image field (or image bytes that failed to decode): text.
+        display_value = value
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+                if isinstance(parsed, list) and all(
+                    isinstance(item, str) for item in parsed
+                ):
+                    display_value = ", ".join(
+                        _display_product_name(item) for item in parsed
+                    )
+                else:
+                    display_value = _display_product_name(value)
+            except Exception:
+                display_value = _display_product_name(value)
         return (
             f"<div><span>{safe(_display_field_label(field_name))}</span>"
-            f"<p>{safe(value)}</p></div>"
+            f"<p>{safe(display_value)}</p></div>"
         )
 
     custom_fields_html = ""
@@ -535,7 +578,7 @@ def build_recap_pdf_html(
         custom_fields_html = "".join(
             f"""
     <section class="card">
-      <h2>{safe(section_name)}</h2>
+      <h2>{safe(_display_field_label(section_name))}</h2>
       <div class="stack">
         {"".join(_render_custom_field(field_name, value) for field_name, value in fields)}
       </div>
