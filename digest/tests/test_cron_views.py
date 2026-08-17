@@ -1081,3 +1081,59 @@ class TestCronEndpointsAreCsrfExempt:
             assert getattr(match.func, "csrf_exempt", False) is True, (
                 f"{url} view is not csrf_exempt"
             )
+
+
+RESEND_RECAP_APPROVED_URL = "/internal/cron/resend-recap-approved-since"
+
+
+@pytest.mark.django_db
+class TestResendRecapApprovedSinceCronView:
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        self.client = Client()
+
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    @patch("digest.cron_views.call_command")
+    def test_dry_run_default_passes_since(self, mock_call):
+        mock_call.return_value = None
+        resp = self.client.post(
+            RESEND_RECAP_APPROVED_URL,
+            {"since": "2026-07-04"},
+            HTTP_X_CRON_SECRET=VALID_SECRET,
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ok"] is True
+        assert body["execute"] is False
+        assert body["html_only"] is False
+        args, _kwargs = mock_call.call_args
+        assert args[0] == "resend_recap_approved_since"
+        assert "--since" in args
+        assert "2026-07-04" in args
+        assert "--dry-run" in args
+        assert "--html-only" not in args
+
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    @patch("digest.cron_views.call_command")
+    def test_execute_html_only(self, mock_call):
+        mock_call.return_value = None
+        resp = self.client.post(
+            RESEND_RECAP_APPROVED_URL,
+            {"since": "2026-07-04", "execute": "true", "html_only": "true"},
+            HTTP_X_CRON_SECRET=VALID_SECRET,
+        )
+        assert resp.status_code == 200
+        args, _kwargs = mock_call.call_args
+        assert "--dry-run" not in args
+        assert "--html-only" in args
+
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    @patch("digest.cron_views.call_command")
+    def test_missing_since_returns_400(self, mock_call):
+        resp = self.client.post(
+            RESEND_RECAP_APPROVED_URL,
+            HTTP_X_CRON_SECRET=VALID_SECRET,
+        )
+        assert resp.status_code == 400
+        assert resp.json()["error"] == "since-required"
+        mock_call.assert_not_called()

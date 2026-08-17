@@ -1,4 +1,5 @@
 """PDF attach / render helpers used by approve-notify and generate*Pdf."""
+import base64
 import logging
 
 from asgiref.sync import sync_to_async
@@ -76,10 +77,14 @@ async def _resolve_recap_pdf_attachment(
     if not pdf_bytes:
         return None
     safe_name = friendly_name if friendly_name.lower().endswith(".pdf") else f"{friendly_name}.pdf"
+    # Resend's Python SDK JSON-encodes the send payload. Raw bytes raise
+    # ``Object of type bytes is not JSON serializable`` and the request
+    # never leaves Cloud Run. Campaign / monthly report mailers already
+    # send base64; keep this path on the same contract.
     return [
         {
             "filename": safe_name,
-            "content": pdf_bytes,
+            "content": base64.b64encode(pdf_bytes).decode("ascii"),
             "content_type": "application/pdf",
         }
     ]

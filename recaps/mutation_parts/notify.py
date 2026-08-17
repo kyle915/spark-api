@@ -44,12 +44,18 @@ def _load_recap_for_approved_notify(recap_id: int, recap_kind: str):
     )
 
 
-def _thread_recap_approved_notify(recap_id: int, recap_kind: str) -> None:
+def _thread_recap_approved_notify(
+    recap_id: int, recap_kind: str, *, html_only: bool = False
+) -> None:
     """Sync entry for thread fallback / one-shot resend.
 
     Must not run sync ORM inside ``asyncio.run`` — that raises
     ``SynchronousOnlyOperation`` and is why client "recap is ready" mail
     never left after approve (Spark alert since 2026-08-15).
+
+    ``html_only=True`` skips PDF generate/attach so a recovery blast
+    can ship the working link-only email (recap #727 sample) without
+    waiting on a deploy or OOMing Cloud Run.
     """
     from asgiref.sync import async_to_sync
     from django.db import close_old_connections
@@ -58,8 +64,11 @@ def _thread_recap_approved_notify(recap_id: int, recap_kind: str) -> None:
 
     def _run():
         recap = _load_recap_for_approved_notify(recap_id, recap_kind)
-        async_to_sync(_ensure_recap_pdf_for_notify)(recap)
-        async_to_sync(_notify_recap_approved_to_rmm_or_clients)(recap)
+        if not html_only:
+            async_to_sync(_ensure_recap_pdf_for_notify)(recap)
+        async_to_sync(_notify_recap_approved_to_rmm_or_clients)(
+            recap, html_only=html_only
+        )
 
     close_old_connections()
     try:
@@ -186,6 +195,8 @@ def _collect_recap_approved_recipients(
 
 async def _notify_recap_approved_to_rmm_or_clients(
     recap: models.Recap | models.CustomRecap,
+    *,
+    html_only: bool = False,
 ) -> None:
     recipients, reply_to_email = await sync_to_async(
         _collect_recap_approved_recipients
@@ -194,7 +205,11 @@ async def _notify_recap_approved_to_rmm_or_clients(
         return
 
     # Resolve PDF once and reuse — saves one GCS fetch per recipient.
-    attachments = await _resolve_recap_pdf_attachment(recap)
+    # Recovery blasts can skip the attach so a bytes-serialization bug
+    # (or a Redis-down PDF render) cannot 23x the Spark alert again.
+    attachments = (
+        None if html_only else await _resolve_recap_pdf_attachment(recap)
+    )
 
     for email, first_name in recipients:
         mailer = RecapApprovedNotificationMailer(
