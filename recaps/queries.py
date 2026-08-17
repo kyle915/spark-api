@@ -1362,7 +1362,12 @@ class RecapQueries:
         state_code = filters.state_code if filters else None
         # Force approved=True for client users — they never see drafts.
         # Overrides whatever the client (or a stale frontend filter) sent.
-        if await _is_client_only_user(info):
+        # Also ignore `shared`: that flag is an admin publish step, not
+        # the client visibility gate. A stale frontend that defaulted
+        # My Recaps to shared=true hid every approved-but-unshared recap
+        # (Feel Free: 118 approved, 0 shared).
+        client_only = await _is_client_only_user(info)
+        if client_only:
             approved = True
         queryset = service.get_ordered_queryset(
             tenant_id=tenant_id,
@@ -1382,7 +1387,11 @@ class RecapQueries:
         )
         if filters and filters.edited is not None:
             queryset = queryset.filter(updated_by__isnull=not filters.edited)
-        if filters and getattr(filters, "shared", None) is not None:
+        if (
+            filters
+            and getattr(filters, "shared", None) is not None
+            and not client_only
+        ):
             queryset = queryset.filter(shared_at__isnull=not filters.shared)
         queryset = _apply_name_code_filters(
             queryset, retailer_name=retailer_name, state_code=state_code
@@ -1579,7 +1588,10 @@ class RecapQueries:
         state_code = filters.state_code if filters else None
 
         # Force approved=True for client users on custom recaps too.
-        if await _is_client_only_user(info):
+        # Ignore `shared` the same way as the legacy recaps list — clients
+        # see every approved recap, not only ones stamped shared_at.
+        client_only = await _is_client_only_user(info)
+        if client_only:
             approved = True
 
         queryset = service.get_ordered_queryset(
@@ -1603,7 +1615,11 @@ class RecapQueries:
         queryset = _apply_name_code_filters(
             queryset, retailer_name=retailer_name, state_code=state_code
         )
-        if filters and getattr(filters, "shared", None) is not None:
+        if (
+            filters
+            and getattr(filters, "shared", None) is not None
+            and not client_only
+        ):
             queryset = queryset.filter(shared_at__isnull=not filters.shared)
         queryset = (
             queryset.prefetch_related(None)

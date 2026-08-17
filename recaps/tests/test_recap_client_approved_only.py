@@ -17,11 +17,17 @@ Two enforcement paths exist and are both covered here:
   2. A real client-role login is forced to approved-only by the server
      (`_is_client_only_user`) even if no `approved` filter is sent — a
      stale frontend can't expose drafts to an actual client.
+  3. A stale frontend that defaulted My Recaps to `shared=true` must NOT
+     hide approved-but-unshared recaps from a real client. `shared` is an
+     admin publish step, not the client visibility gate. Admins can still
+     filter shared vs not-shared.
 
 Tests assert:
 - admin with no approved filter sees BOTH approved and draft recaps;
 - admin passing approved=true (the client view) sees ONLY approved;
 - a real client user sees ONLY approved even with no filter;
+- a real client sending shared=true still sees approved unshared recaps;
+- admin sending shared=true does not see unshared approved recaps;
 - the same for customRecaps.
 """
 
@@ -33,8 +39,8 @@ from recaps import models as recap_models
 
 
 RECAPS_QUERY = """
-query Recaps($tenantId: ID, $approved: Boolean, $first: Int) {
-  recaps(filters: { tenantId: $tenantId, approved: $approved }, first: $first) {
+query Recaps($tenantId: ID, $approved: Boolean, $shared: Boolean, $first: Int) {
+  recaps(filters: { tenantId: $tenantId, approved: $approved, shared: $shared }, first: $first) {
     totalCount
     edges { node { uuid name approved } }
   }
@@ -42,8 +48,8 @@ query Recaps($tenantId: ID, $approved: Boolean, $first: Int) {
 """
 
 CUSTOM_RECAPS_QUERY = """
-query CustomRecaps($tenantId: ID, $approved: Boolean, $first: Int) {
-  customRecaps(filters: { tenantId: $tenantId, approved: $approved }, first: $first) {
+query CustomRecaps($tenantId: ID, $approved: Boolean, $shared: Boolean, $first: Int) {
+  customRecaps(filters: { tenantId: $tenantId, approved: $approved, shared: $shared }, first: $first) {
     totalCount
     edges { node { uuid name approved } }
   }
@@ -254,5 +260,64 @@ class TestRecapClientApprovedOnly(AmbassadorsGraphQLTestCase):
         )
         assert result.errors is None, f"errored: {result.errors}"
         names = {r["name"] for r in result.data["event"]["customRecaps"]}
+        assert names == {"Approved custom recap"}, names
+        assert "Draft custom recap" not in names
+
+    @pytest.mark.asyncio
+    async def test_real_client_shared_true_still_sees_approved(self):
+        # Stale Client "My Recaps" sent shared=true. Approved recaps that
+        # were never marked shared must still show — that is the pile the
+        # client was emailed. Drafts stay hidden.
+        result = await self._execute_query_authenticated(
+            RECAPS_QUERY,
+            {
+                "tenantId": str(self.tenant.id),
+                "approved": True,
+                "shared": True,
+                "first": 50,
+            },
+            self.client_user,
+            self.endpoint_path,
+        )
+        assert result.errors is None, f"errored: {result.errors}"
+        conn = result.data["recaps"]
+        names = {e["node"]["name"] for e in conn["edges"]}
+        assert names == {"Approved recap"}, names
+        assert "Draft recap" not in names
+
+    @pytest.mark.asyncio
+    async def test_admin_shared_true_hides_unshared_approved(self):
+        result = await self._execute_query_authenticated(
+            RECAPS_QUERY,
+            {
+                "tenantId": str(self.tenant.id),
+                "approved": True,
+                "shared": True,
+                "first": 50,
+            },
+            self.spark_admin,
+            self.endpoint_path,
+        )
+        assert result.errors is None, f"errored: {result.errors}"
+        conn = result.data["recaps"]
+        names = {e["node"]["name"] for e in conn["edges"]}
+        assert names == set(), names
+
+    @pytest.mark.asyncio
+    async def test_custom_real_client_shared_true_still_sees_approved(self):
+        result = await self._execute_query_authenticated(
+            CUSTOM_RECAPS_QUERY,
+            {
+                "tenantId": str(self.tenant.id),
+                "approved": True,
+                "shared": True,
+                "first": 50,
+            },
+            self.client_user,
+            self.endpoint_path,
+        )
+        assert result.errors is None, f"errored: {result.errors}"
+        conn = result.data["customRecaps"]
+        names = {e["node"]["name"] for e in conn["edges"]}
         assert names == {"Approved custom recap"}, names
         assert "Draft custom recap" not in names
