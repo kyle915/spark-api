@@ -58,6 +58,12 @@ class TestErrorMonitor:
         assert err.call_count == 1
         assert info.call_count == 1
 
+    def test_localhost_redis_noise_is_not_recorded(self):
+        before = BackendErrorEvent.objects.count()
+        logger = logging.getLogger("spark.test.monitor")
+        logger.error("Error 111 connecting to localhost:6379. Connection refused.")
+        assert BackendErrorEvent.objects.count() == before
+
     def test_resend_missing_id_logs_error(self):
         from utils.mailer import Envelope, ResendMailDriver
 

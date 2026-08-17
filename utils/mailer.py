@@ -20,7 +20,7 @@ from django_rq import job
 from django.core.mail import EmailMultiAlternatives
 from rq import Retry
 
-from utils.queues import Queues
+from utils.queues import Queues, rq_is_enabled
 
 resend.api_key = settings.RESEND_API_KEY
 
@@ -490,6 +490,17 @@ class Mailer:
         """
         envelope: Envelope = self.envelope()
         envelope = self._prepare_envelope(envelope)
+
+        # Cloud Run has no Redis. Skip the queue entirely so we never
+        # open localhost:6379 (connection-refused ERROR logs → Spark alerts).
+        if not rq_is_enabled():
+            try:
+                self.get_driver().send(envelope)
+            except Exception as inline_exc:
+                logger.exception(
+                    "Inline mail send failed: %s", inline_exc,
+                )
+            return
         try:
             queues = Queues()
             if delay_seconds and delay_seconds > 0:

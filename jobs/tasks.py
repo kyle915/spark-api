@@ -116,6 +116,10 @@ def _reminder_scheduler_or_none():
     .schedule()/.cancel() where the failure would hit an ERROR-level log path
     and the backend error monitor.
     """
+    from django.conf import settings
+
+    if not getattr(settings, "RQ_ENABLED", False):
+        return None
     try:
         scheduler = django_rq.get_scheduler("default")
         scheduler.connection.ping()
