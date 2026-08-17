@@ -69,6 +69,11 @@ class Command(BaseCommand):
             self.stdout.write("-" * 72)
             self.stdout.write(f"[{t.id}] {t.name}")
             self.stdout.write(f"  {BASE_URL}/checkin/{t.checkin_code}")
+            recap = (getattr(t, "checkin_recap_code", None) or "").strip()
+            if recap:
+                self.stdout.write(
+                    f"  recap-only   : {BASE_URL}/checkin/{recap}  (no time clock)"
+                )
             self.stdout.write(
                 f"  location mode : {t.checkin_location_mode}"
                 + ("  (BA types a store address)" if t.checkin_location_mode == "address" else "  (BA picks a market)")
