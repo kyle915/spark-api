@@ -6,6 +6,7 @@ import pytest
 from PIL import Image
 
 from utils import thumb_views
+from utils.thumb_views import _is_non_image_blob
 
 
 def _jpeg_bytes(width=1200, height=800) -> bytes:
@@ -47,6 +48,20 @@ def gcs(monkeypatch):
         thumb_views, "public_url", lambda name: f"https://gcs/{name}"
     )
     return store
+
+
+class TestNonImageDetection:
+    def test_recap_pdf_path_and_magic(self):
+        blob = (
+            "recaps/pdfs/custom-01a00c6a-0960-7074-a5a5-d4f0f6dd1a76"
+            "-20260816212122.pdf"
+        )
+        assert _is_non_image_blob(blob) is True
+        assert _is_non_image_blob("recaps/photos/mystery", b"%PDF-1.4 x") is True
+        assert _is_non_image_blob("recaps/notes.csv") is True
+        assert _is_non_image_blob("recaps/photo.jpg") is False
+        assert _is_non_image_blob("recaps/photo.heic") is False
+        assert _is_non_image_blob("recaps/photos/mystery") is False
 
 
 @pytest.mark.django_db
@@ -100,11 +115,43 @@ class TestThumbEndpoint:
         assert resp.status_code == 302
         assert "thumbs/w400" in resp["Location"]
 
-    def test_non_image_degrades_to_original(self, client, gcs):
-        gcs["recaps/doc.pdf"] = b"%PDF-1.4 not an image"
-        resp = client.get(self.URL, {"path": "recaps/doc.pdf", "w": "400"})
-        assert resp.status_code == 302
-        assert resp["Location"] == "https://gcs/recaps/doc.pdf"
+    def test_pdf_is_skipped_without_pillow(self, client, gcs, monkeypatch, caplog):
+        blob = (
+            "recaps/pdfs/custom-01a00c6a-0960-7074-a5a5-d4f0f6dd1a76"
+            "-20260816212122.pdf"
+        )
+        gcs[blob] = b"%PDF-1.4 recap document"
+
+        def boom(name):
+            raise AssertionError(f"downloaded non-image blob {name}")
+
+        monkeypatch.setattr(thumb_views, "download_blob_bytes", boom)
+        with caplog.at_level("ERROR"):
+            resp = client.get(self.URL, {"path": blob, "w": "400"})
+        assert resp.status_code == 404
+        assert f"thumbs/w400/{blob}.jpg" not in gcs
+        assert "Thumb generation failed" not in caplog.text
+
+    def test_pdf_magic_bytes_skip_misnamed_blob(self, client, gcs, caplog):
+        # No extension → no guessed content-type; skip is from %PDF magic.
+        gcs["recaps/photos/mystery"] = b"%PDF-1.4 not an image"
+        with caplog.at_level("ERROR"):
+            resp = client.get(
+                self.URL, {"path": "recaps/photos/mystery", "w": "400"}
+            )
+        assert resp.status_code == 404
+        assert "thumbs/w400/recaps/photos/mystery.jpg" not in gcs
+        assert "Thumb generation failed" not in caplog.text
+
+    def test_non_image_content_type_is_skipped(self, client, gcs, monkeypatch):
+        gcs["recaps/notes.csv"] = b"name,cans\nA,2"
+
+        def boom(name):
+            raise AssertionError(f"downloaded non-image blob {name}")
+
+        monkeypatch.setattr(thumb_views, "download_blob_bytes", boom)
+        resp = client.get(self.URL, {"path": "recaps/notes.csv", "w": "400"})
+        assert resp.status_code == 404
 
     def test_small_original_is_not_upscaled(self, client, gcs):
         gcs["recaps/tiny.jpg"] = _jpeg_bytes(width=200, height=150)
