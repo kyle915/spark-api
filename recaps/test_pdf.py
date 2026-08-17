@@ -6,6 +6,8 @@ from unittest.mock import patch
 from recaps.pdf import (
     SPARK_MARK_URL,
     _display_field_label,
+    _display_product_name,
+    _spark_mark_src,
     build_recap_pdf_html,
     bytes_to_data_uri,
     detect_image_type,
@@ -263,6 +265,40 @@ def test_build_recap_pdf_html_groups_custom_fields_by_recap_section():
     assert 'Spark <span class="lime">by Ignite</span>' not in html
 
 
+def test_spark_mark_stays_dark_on_light_pdf():
+    """White recap PDF must use the black mark — never invert to white-on-white."""
+    _spark_mark_src.cache_clear()
+    dark_mark = _spark_mark_src(invert=False)
+    inverted = _spark_mark_src(invert=True)
+    recap = SimpleNamespace(
+        name="Recap Name",
+        approved=False,
+        ambassador=None,
+        job=None,
+        retailer=None,
+        total_engagements=1,
+        products_sold=None,
+        total_earnings=None,
+        total_cans_sold=None,
+        total_packs_sold=None,
+        submited_at=None,
+        event=SimpleNamespace(
+            name="Store Event",
+            date=datetime(2026, 8, 16, 9, 0),
+            tenant=SimpleNamespace(slug="liquid-death"),
+        ),
+        consumer_engagements=RelatedList([]),
+        product_samples=RelatedList([]),
+        sales_performance=RelatedList([]),
+        consumer_feedback=RelatedList([]),
+        account_feedback=RelatedList([]),
+    )
+    html = build_recap_pdf_html(recap, [])
+    assert dark_mark in html or SPARK_MARK_URL in html
+    if inverted.startswith("data:") and inverted != dark_mark:
+        assert inverted not in html
+
+
 def test_display_field_label_sentence_cases_and_fixes_tasing():
     assert (
         _display_field_label("TOTAL NUMBER OF CONSUMERS SAMPLED")
@@ -275,6 +311,15 @@ def test_display_field_label_sentence_cases_and_fixes_tasing():
         == "How many consumers would be willing to purchase the product after tasting it?"
     )
     assert _display_field_label("First-time consumers") == "First-time consumers"
+
+
+def test_display_product_name_keeps_flavor_identity():
+    assert (
+        _display_product_name("SPARKLING WATER - STRAWBERRY TERROR")
+        == "Sparkling water · Strawberry Terror"
+    )
+    assert _display_product_name("LIQUID DEATH") == "Liquid Death"
+    assert _display_product_name("Strawberry Terror") == "Strawberry Terror"
 
 
 # Tiny but valid JPEG: detect_image_type() only sniffs the SOI marker

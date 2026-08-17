@@ -17,8 +17,8 @@ from pillow_heif import register_heif_opener
 
 # Same product mark the admin sidebar / login / recap chrome serve
 # (`/legal/spark-logo.png`). The API already ships those bytes as
-# tenants/static/tenants/spark_logo.png. Black-on-transparent; invert
-# RGB for the dark branded PDF so WeasyPrint does not need CSS filter.
+# tenants/static/tenants/spark_logo.png. Black-on-transparent — recap
+# PDFs are white, so do not invert the mark.
 SPARK_MARK_URL = "https://admin.igniteproductions.co/legal/spark-logo.png"
 _SPARK_MARK_PATH = (
     Path(__file__).resolve().parent.parent / "tenants/static/tenants/spark_logo.png"
@@ -42,9 +42,32 @@ def _display_field_label(raw: str | None) -> str:
     return s
 
 
+def _display_product_name(raw: str | None) -> str:
+    """Readable SKU identity: 'SPARKLING WATER - STRAWBERRY TERROR'
+    → 'Sparkling water · Strawberry Terror'."""
+    s = (raw or "").strip()
+    if not s:
+        return s
+
+    def shouting(text: str) -> bool:
+        letters = re.sub(r"[^A-Za-z]", "", text)
+        if len(letters) < 8:
+            return False
+        upper = len(re.sub(r"[^A-Z]", "", letters))
+        return upper / len(letters) >= 0.85
+
+    parts = re.split(r"\s+[-–—]\s+", s)
+    if len(parts) == 1:
+        return s.title() if shouting(s) else s
+    head, *flavors = parts
+    shown_head = head[:1].upper() + head[1:].lower() if shouting(head) else head
+    shown_flavors = [p.title() if shouting(p) else p for p in flavors]
+    return " · ".join([shown_head, *shown_flavors])
+
+
 @lru_cache(maxsize=2)
-def _spark_mark_src(*, invert: bool) -> str:
-    """Data-URI of the real Spark mark. Invert RGB for dark chrome."""
+def _spark_mark_src(*, invert: bool = False) -> str:
+    """Data-URI of the real Spark mark. Keep black-on-transparent for light PDFs."""
     try:
         data = _SPARK_MARK_PATH.read_bytes()
         if invert:
@@ -457,7 +480,7 @@ def build_recap_pdf_html(
     custom_field_images: dict[str, bytes] | None = None,
     *,
     public_share: bool = False,
-    invert_spark_mark: bool = True,
+    invert_spark_mark: bool = False,
 ) -> str:
     # Image-type custom fields (e.g. "Product Purchase Receipt (Image)")
     # store a GCS blob path as their value. The resolver pre-fetches those
@@ -490,7 +513,9 @@ def build_recap_pdf_html(
         recap, "custom_recap_product_sample"
     )
     for sample in product_samples:
-        product_name = getattr(sample.product, "name", "Unknown product")
+        product_name = _display_product_name(
+            getattr(sample.product, "name", "Unknown product")
+        )
         samples.append(f"{product_name} - Qty: {sample.quantity}")
 
     sales = []
@@ -498,8 +523,12 @@ def build_recap_pdf_html(
         recap, "custom_recap_sale_performance"
     )
     for sale in sales_performance:
-        product_name = getattr(sale.product, "name", "Unknown product")
-        type_name = getattr(sale.type_of_good, "name", "Unknown type")
+        product_name = _display_product_name(
+            getattr(sale.product, "name", "Unknown product")
+        )
+        type_name = _display_product_name(
+            getattr(sale.type_of_good, "name", "Unknown type")
+        )
         sales.append(f"{product_name} ({type_name}) - ${sale.price}")
 
     feedback = _related_items(recap, "consumer_feedback")
@@ -525,9 +554,23 @@ def build_recap_pdf_html(
                     "<figcaption>{label}</figcaption></figure></div>"
                 ).format(label=safe(_display_field_label(field_name)), src=data_uri)
         # Non-image field (or image bytes that failed to decode): text.
+        display_value = value
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+                if isinstance(parsed, list) and all(
+                    isinstance(item, str) for item in parsed
+                ):
+                    display_value = ", ".join(
+                        _display_product_name(item) for item in parsed
+                    )
+                else:
+                    display_value = _display_product_name(value)
+            except Exception:
+                display_value = _display_product_name(value)
         return (
             f"<div><span>{safe(_display_field_label(field_name))}</span>"
-            f"<p>{safe(value)}</p></div>"
+            f"<p>{safe(display_value)}</p></div>"
         )
 
     custom_fields_html = ""
@@ -535,7 +578,7 @@ def build_recap_pdf_html(
         custom_fields_html = "".join(
             f"""
     <section class="card">
-      <h2>{safe(section_name)}</h2>
+      <h2>{safe(_display_field_label(section_name))}</h2>
       <div class="stack">
         {"".join(_render_custom_field(field_name, value) for field_name, value in fields)}
       </div>
@@ -855,35 +898,35 @@ def build_recap_pdf(
     )
     accent = _recap_accent_color(recap) if public_share else _DEFAULT_PDF_ACCENT
     theme_css = """
-        @page { background: #0a0d09; margin: 0.65in; }
-        body { color: #f2f3ee; background: #0a0d09; }
+        @page { background: #f6f6f2; margin: 0.65in; }
+        body { color: #14160f; background: #f6f6f2; }
         h1 {
             font-size: 26px;
             margin: 0 0 4px 0;
             letter-spacing: -0.03em;
-            color: #f2f3ee;
+            color: #14160f;
         }
         h2 {
             font-size: 11px;
             margin: 0 0 10px 0;
             text-transform: uppercase;
             letter-spacing: 0.16em;
-            color: #c5f546;
+            color: #3f5c12;
         }
         .eyebrow {
             margin: 0 0 6px 0;
             font-size: 11px;
             letter-spacing: -0.02em;
             font-weight: 700;
-            color: #f2f3ee;
+            color: #14160f;
         }
-        .eyebrow .lime { color: #c5f546; }
+        .eyebrow .lime { color: #3f5c12; }
         .subtitle {
             margin: 0;
             font-size: 10px;
             letter-spacing: 0.14em;
             text-transform: uppercase;
-            color: rgba(242, 243, 238, 0.5);
+            color: #5c6154;
         }
         .header {
             display: flex;
@@ -891,7 +934,7 @@ def build_recap_pdf(
             align-items: center;
             margin-bottom: 18px;
             padding-bottom: 14px;
-            border-bottom: 1px solid #1f2418;
+            border-bottom: 1px solid #e2e4d8;
         }
         .badge {
             padding: 6px 12px;
@@ -900,22 +943,23 @@ def build_recap_pdf(
             font-size: 9px;
             text-transform: uppercase;
             letter-spacing: 0.12em;
-            border: 1px solid #1f2418;
-            color: rgba(242, 243, 238, 0.7);
+            border: 1px solid #e2e4d8;
+            color: #5c6154;
+            background: transparent;
         }
         .badge-lime {
-            color: #0a0d09;
-            background: #c5f546;
-            border-color: #c5f546;
+            color: #3f5c12;
+            background: transparent;
+            border-color: rgba(63, 92, 18, 0.45);
         }
         .badge-draft {
             color: #ef5a2a;
-            background: rgba(239, 90, 42, 0.12);
-            border-color: rgba(239, 90, 42, 0.4);
+            background: transparent;
+            border-color: rgba(239, 90, 42, 0.55);
         }
         .card {
-            background: #11140e;
-            border: 1px solid #1f2418;
+            background: #ffffff;
+            border: 1px solid #e2e4d8;
             border-radius: 16px;
             padding: 14px 16px;
             margin-bottom: 14px;
@@ -928,46 +972,58 @@ def build_recap_pdf(
         .grid div span {
             display: block;
             font-size: 8px;
-            color: rgba(242, 243, 238, 0.45);
-            text-transform: uppercase;
-            letter-spacing: 0.12em;
+            color: #5c6154;
+            letter-spacing: 0.04em;
             margin-bottom: 4px;
         }
         .grid div strong {
             font-size: 13px;
-            color: #f2f3ee;
+            color: #14160f;
         }
         .list {
             margin: 0;
             padding-left: 16px;
-            color: #f2f3ee;
+            color: #14160f;
         }
         .list li {
             margin-bottom: 4px;
         }
         .stack div {
-            margin-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            flex-wrap: wrap;
+            gap: 12px;
+            padding: 8px 0;
+            margin-bottom: 0;
+            border-bottom: 1px solid #e2e4d8;
         }
         .stack span {
             display: block;
+            flex: 1;
+            min-width: 0;
             font-size: 10px;
-            color: rgba(242, 243, 238, 0.55);
+            color: #5c6154;
             letter-spacing: 0.01em;
-            margin-bottom: 4px;
+            margin-bottom: 0;
         }
         .stack p {
             margin: 0;
             font-size: 11px;
-            color: #f2f3ee;
+            color: #14160f;
+            font-weight: 600;
+            text-align: right;
+            max-width: 46%;
         }
         .stack figure {
             margin: 4px 0 0 0;
-            background: #161a12;
-            border: 1px solid #1f2418;
+            background: #f3f4f6;
+            border: 1px solid #e2e4d8;
             border-radius: 10px;
             padding: 8px;
             text-align: center;
             max-width: 320px;
+            flex-basis: 100%;
         }
         .stack figure img {
             max-width: 100%;
@@ -978,7 +1034,7 @@ def build_recap_pdf(
         .stack figcaption {
             margin-top: 6px;
             font-size: 9px;
-            color: rgba(242, 243, 238, 0.5);
+            color: #5c6154;
         }
         .gallery {
             display: grid;
@@ -993,12 +1049,12 @@ def build_recap_pdf(
             font-size: 10px;
             text-transform: uppercase;
             letter-spacing: 0.14em;
-            color: rgba(242, 243, 238, 0.5);
+            color: #5c6154;
         }
         .gallery figure {
             margin: 0;
-            background: #161a12;
-            border: 1px solid #1f2418;
+            background: #f3f4f6;
+            border: 1px solid #e2e4d8;
             border-radius: 10px;
             padding: 8px;
             text-align: center;
@@ -1012,11 +1068,11 @@ def build_recap_pdf(
         .gallery figcaption {
             margin-top: 6px;
             font-size: 9px;
-            color: rgba(242, 243, 238, 0.5);
+            color: #5c6154;
         }
         .empty {
             margin: 0;
-            color: rgba(242, 243, 238, 0.4);
+            color: #7a7f70;
             font-style: italic;
         }
         """
