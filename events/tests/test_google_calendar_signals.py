@@ -214,6 +214,24 @@ class TestGoogleCalendarSignals:
         # Signal should not trigger sync (will be handled by AmbassadorEvent signal)
         mock_add.assert_not_called()
 
+    @patch('events.signals.queues.default.add')
+    def test_event_coordinate_update_skips_calendar_sync(self, mock_add):
+        """Coordinate backfill / check-in state stamps must not re-sync calendars."""
+        event = Event.objects.create(
+            name="Test Event",
+            tenant=self.tenant,
+            event_type=self.event_type,
+            status=self.event_status,
+            address="123 Test St",
+            request=self.request,
+            created_by=self.client_user
+        )
+        mock_add.reset_mock()
+
+        event.coordinates = [38.9, -94.3]
+        event.save(update_fields=["coordinates"])
+        mock_add.assert_not_called()
+
     @patch('events.jobs.google_calendar_jobs.EventGoogleCalendarJob')
     def test_ambassador_event_created_triggers_sync(self, mock_job_class):
         """Test that AmbassadorEvent creation triggers sync via EventGoogleCalendarJob."""

@@ -35,6 +35,23 @@ from utils.queues import Queues
 logger = logging.getLogger(__name__)
 queues: Queues = Queues()
 
+# Event.save(update_fields=[...]) for these columns is not a calendar change
+# (check-in state stamp, coordinate backfill, walk-up codes). Syncing on
+# every one of those writes is what turned one bad admin token into ×203
+# Spark alerts for a single event.
+_CALENDAR_SKIP_UPDATE_FIELDS = frozenset({
+    "state",
+    "coordinates",
+    "walkup_code",
+    "walkup_code_expires_at",
+    "track_mileage",
+    "mileage_rate",
+    "exclude_from_dashboard",
+    "updated_at",
+    "updated_by",
+})
+
+
 @receiver(post_save, sender=Event)
 def sync_event_on_create_or_update(sender, instance: Event, created: bool, **kwargs):
     user = instance.created_by
@@ -42,6 +59,10 @@ def sync_event_on_create_or_update(sender, instance: Event, created: bool, **kwa
     if user and user.role and user.role._is_ambassador:
         logger.info(
             f"Event {instance.id} created by ambassador, skipping sync (will be handled by AmbassadorEvent)")
+        return
+
+    update_fields = kwargs.get("update_fields")
+    if update_fields is not None and set(update_fields).issubset(_CALENDAR_SKIP_UPDATE_FIELDS):
         return
 
     # Calendar sync is best-effort. Cloud Run has no Redis, so RQ enqueue
