@@ -17,20 +17,20 @@ name: Recap field export (XLSX)
 #     gh run download <run-id>
 #
 # Only the compact report (row/column counts, files-by-category, and the
-# category-sanity warnings) prints in the log. Secret-gated via X-Cron-Secret
-# (shared INTERNAL_CRON_SECRET) — the secret is a HEADER, never in the URL.
+# category-sanity warnings) prints in the log. On failure, `error` + `detail`
+# print too — a CommandError happens before any report, which is why a 7s
+# 500 used to look empty. Secret-gated via X-Cron-Secret (shared
+# INTERNAL_CRON_SECRET) — the secret is a HEADER, never in the URL.
 #
-# Note on refs: this dispatch YAML lives on `main` (that's where
-# workflow_dispatch resolves from), but the renderer it runs —
-# scripts/build_recap_workbook.py + utils/workbook.py — ships with the app code
-# on `develop`. So the checkout step names `develop` explicitly. If that script
-# ever moves to main, drop the `ref`.
+# Product code (and this YAML) lives on `develop`. Cloud Run deploys from
+# develop. The renderer — scripts/build_recap_workbook.py + utils/workbook.py
+# — is checked out from develop even when the dispatch is started from main.
 
 on:
   workflow_dispatch:
     inputs:
       tenant:
-        description: "Tenant: id, request-url-name, or name (e.g. 'girl-beer' or '10')."
+        description: "Tenant: id, slug, request-url-name, or name (e.g. 'torch-thc' or '10')."
         required: true
         type: string
       start:
@@ -84,25 +84,27 @@ jobs:
             -H "X-Cron-Secret: $CRON_SECRET")
           echo "HTTP $STATUS"
 
-          # Only the human report goes to the log — the payload is enormous and
-          # grepping the log for it is what made the campaign-to-date log
-          # useless. The full JSON is an artifact.
+          # Report only on success (payload is enormous). On failure, print
+          # error/detail — those are what a 500 actually carries.
           if command -v jq >/dev/null 2>&1; then
-            jq -r '.report // "(no report)"' response.json
+            jq -r '.report // empty' response.json
+            jq -r 'if .ok == false then "error: \(.error // "")\ndetail: \(.detail // "")" else empty end' response.json
           else
-            head -c 2000 response.json
+            head -c 4000 response.json
           fi
 
           if [ "$STATUS" != "200" ]; then
-            echo "::error::Cron endpoint returned $STATUS — see the report above."
+            echo "::error::Cron endpoint returned $STATUS — see error/detail above."
             exit 1
           fi
 
       - name: Upload raw JSON payload
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: recap-field-export-json
           path: response.json
+          if-no-files-found: ignore
 
       - name: Install renderer dependency
         if: ${{ github.event.inputs.dry_run != 'true' }}
