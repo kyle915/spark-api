@@ -400,6 +400,11 @@ class Request(Node):
     reviewed: bool
     scheduling_status: str | None = None
     is_non_active_product_required: bool | None = None
+    account_spend_amount: str | None = None
+    event_assets_needed: str | None = None
+    load_in_time: str | None = None
+    onsite_poc: str | None = None
+    additional_team_details: str | None = None
     store_number: str | None = None
     notes: str | None = None
     coordinates: List[float]
