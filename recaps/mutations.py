@@ -1533,6 +1533,22 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
                             created_by=self.user,
                         )
 
+                    from recaps.types import _consumers_sampled_from_fields
+
+                    sampled = _consumers_sampled_from_fields(
+                        [
+                            (cfv.custom_field.name, cfv.value)
+                            for cfv in models.CustomFieldValue.objects.filter(
+                                custom_recap=custom_recap
+                            ).select_related("custom_field")
+                        ]
+                    )
+                    if sampled is not None:
+                        custom_recap.total_engagements = sampled
+                        custom_recap.save(
+                            update_fields=["total_engagements", "updated_at"]
+                        )
+
                 if self.input.product_samples is not None:
                     for sample in self.input.product_samples:
                         if not self._has_complete_product_sample(sample):
@@ -2002,6 +2018,22 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
                             )
                         )
                     custom_field_values_to_delete.delete()
+
+                    from recaps.types import _consumers_sampled_from_fields
+
+                    sampled = _consumers_sampled_from_fields(
+                        [
+                            (cfv.custom_field.name, cfv.value)
+                            for cfv in models.CustomFieldValue.objects.filter(
+                                custom_recap=custom_recap
+                            ).select_related("custom_field")
+                        ]
+                    )
+                    if sampled is not None:
+                        custom_recap.total_engagements = sampled
+                        custom_recap.save(
+                            update_fields=["total_engagements", "updated_at"]
+                        )
 
                 if self.input.product_samples is not None:
                     models.CustomRecapProductSample.objects.filter(
