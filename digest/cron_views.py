@@ -32,6 +32,7 @@ from typing import Any
 
 from django.conf import settings
 from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.http import HttpRequest, HttpResponse, JsonResponse
 from django.utils.decorators import method_decorator
 from django.views import View
@@ -3611,7 +3612,7 @@ class DumpRecapFieldsView(View):
     printing it to the log.
 
     Params (query or POST):
-      - tenant: id / request-url-name / name (required)
+      - tenant: id / slug / request-url-name / name (required)
       - start / end: YYYY-MM-DD inclusive, scoped by EVENT date (optional)
       - dry_run: "1"/"true"/"yes" — return the report log only, no payload
       - no_heic_resolve: "1"/"true"/"yes" — skip HEIC→JPG sibling lookups
@@ -3631,7 +3632,7 @@ class DumpRecapFieldsView(View):
         tenant = _param("tenant")
         if not tenant:
             return JsonResponse(
-                {"ok": False, "error": "tenant-required (id / name / url-name)"},
+                {"ok": False, "error": "tenant-required (id / slug / name / url-name)"},
                 status=400,
             )
 
@@ -3657,6 +3658,30 @@ class DumpRecapFieldsView(View):
                     "RECAPFIELDS_JSON_END", 1
                 )[0]
                 data = json.loads(blob)
+        except CommandError as exc:
+            # A wrong/stale tenant slug used to 500 the hourly job (and fire
+            # backend error alerts) on every tick. Skip instead of crashing.
+            msg = str(exc)
+            if msg.startswith("No tenant matches") or "is ambiguous" in msg:
+                logger.warning("export_recap_fields cron skipped: %s", msg)
+                return JsonResponse(
+                    {
+                        "ok": True,
+                        "skipped": True,
+                        "reason": "tenant-not-found",
+                        "detail": msg,
+                    }
+                )
+            logger.exception("export_recap_fields cron failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": msg,
+                    "report": out.getvalue(),
+                },
+                status=500,
+            )
         except Exception as exc:  # noqa: BLE001 — surface to caller
             logger.exception("export_recap_fields cron failed")
             return JsonResponse(

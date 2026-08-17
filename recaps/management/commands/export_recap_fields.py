@@ -40,7 +40,9 @@ class Command(BaseCommand):
     help = "Read-only: export one row per recap with every captured field + file links."
 
     def add_arguments(self, parser):
-        parser.add_argument("--tenant", required=True, help="id, request-url-name, or name")
+        parser.add_argument(
+            "--tenant", required=True, help="id, slug, request-url-name, or name"
+        )
         parser.add_argument("--start", default=None, help="YYYY-MM-DD inclusive (EVENT date)")
         parser.add_argument("--end", default=None, help="YYYY-MM-DD inclusive (EVENT date)")
         parser.add_argument(

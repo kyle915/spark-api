@@ -28,6 +28,7 @@ REPAIR_MISSING_EVENTS_URL = (
 REPAIR_EVENT_DATES_URL = "/internal/cron/repair-event-dates"
 BACKFILL_EVENT_COORDS_URL = "/internal/cron/backfill-event-coordinates"
 BACKFILL_AMBASSADOR_COORDS_URL = "/internal/cron/backfill-ambassador-coordinates"
+DUMP_RECAP_FIELDS_URL = "/internal/cron/dump-recap-fields"
 
 VALID_SECRET = "test-cron-secret-value-only-for-tests"
 
@@ -1184,4 +1185,83 @@ class TestResendRecapApprovedSinceCronView:
         )
         assert resp.status_code == 400
         assert resp.json()["error"] == "since-required"
+        mock_call.assert_not_called()
+
+
+@pytest.mark.django_db
+class TestDumpRecapFieldsCronView:
+    """`/internal/cron/dump-recap-fields` must not 500 on a missing tenant.
+
+    The hourly scheduler passes tenant slug (`torch-thc`). A CommandError
+    used to become HTTP 500 + an error-monitor email every hour.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        self.client = Client()
+
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    @patch("digest.cron_views.call_command")
+    def test_missing_tenant_skips_instead_of_500(self, mock_call):
+        from django.core.management.base import CommandError
+
+        mock_call.side_effect = CommandError("No tenant matches 'torch-thc'.")
+        resp = self.client.post(
+            DUMP_RECAP_FIELDS_URL,
+            {"tenant": "torch-thc"},
+            HTTP_X_CRON_SECRET=VALID_SECRET,
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ok"] is True
+        assert body["skipped"] is True
+        assert body["reason"] == "tenant-not-found"
+        assert "torch-thc" in body["detail"]
+
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    @patch("digest.cron_views.call_command")
+    def test_other_command_error_still_500s(self, mock_call):
+        from django.core.management.base import CommandError
+
+        mock_call.side_effect = CommandError("bad date (expected YYYY-MM-DD): nope")
+        resp = self.client.post(
+            DUMP_RECAP_FIELDS_URL,
+            {"tenant": "torch-thc", "start": "nope"},
+            HTTP_X_CRON_SECRET=VALID_SECRET,
+        )
+        assert resp.status_code == 500
+        assert resp.json()["ok"] is False
+
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    @patch("digest.cron_views.call_command")
+    def test_success_returns_payload(self, mock_call):
+        def _write(*args, **kwargs):
+            kwargs["stdout"].write(
+                "Girl Beer — field-level recap export\n"
+                "RECAPFIELDS_JSON_START\n"
+                '{"meta": {"row_count": 1}}\n'
+                "RECAPFIELDS_JSON_END\n"
+            )
+
+        mock_call.side_effect = _write
+        resp = self.client.post(
+            DUMP_RECAP_FIELDS_URL,
+            {"tenant": "torch-thc"},
+            HTTP_X_CRON_SECRET=VALID_SECRET,
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ok"] is True
+        assert body["data"]["meta"]["row_count"] == 1
+        assert "skipped" not in body
+
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    @patch("digest.cron_views.call_command")
+    def test_missing_tenant_param_returns_400(self, mock_call):
+        resp = self.client.post(
+            DUMP_RECAP_FIELDS_URL,
+            HTTP_X_CRON_SECRET=VALID_SECRET,
+        )
+        assert resp.status_code == 400
+        assert resp.json()["error"].startswith("tenant-required")
         mock_call.assert_not_called()

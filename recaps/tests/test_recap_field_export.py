@@ -609,6 +609,26 @@ class TestExportRecapFieldsCommand(AmbassadorsGraphQLTestCase):
         raw = self._run(tenant="Girl Beer Cmd", dry_run=True)
         assert "Girl Beer Cmd" in raw
 
+    def test_resolves_tenant_by_slug(self):
+        self.tenant.slug = "torch-thc"
+        self.tenant.request_url_name = "keee-torch-thc"
+        self.tenant.save(update_fields=["slug", "request_url_name"])
+        raw = self._run(tenant="torch-thc", dry_run=True)
+        assert "Girl Beer Cmd" in raw
+
+    def test_resolves_tenant_by_request_url_name(self):
+        self.tenant.slug = "torch-thc"
+        self.tenant.request_url_name = "keee-torch-thc"
+        self.tenant.save(update_fields=["slug", "request_url_name"])
+        raw = self._run(tenant="keee-torch-thc", dry_run=True)
+        assert "Girl Beer Cmd" in raw
+
+    def test_unknown_tenant_is_a_clean_command_error(self):
+        from django.core.management.base import CommandError
+
+        with pytest.raises(CommandError, match="No tenant matches"):
+            self._run(tenant="does-not-exist", dry_run=True)
+
     def test_bad_date_is_a_clean_command_error(self):
         from django.core.management.base import CommandError
 

@@ -31,11 +31,26 @@ from tenants.models import Tenant
 
 
 def _resolve_tenant(ident: str) -> Tenant:
-    """Find a tenant by numeric id, exact request-url-name, or name (icontains)."""
+    """Find a tenant by numeric id, slug, request-url-name, or name.
+
+    Slug is the identifier crons actually pass (Torch is ``torch-thc``).
+    ``request_url_name`` is the public form slug (``keee-torch-thc``). Those
+    are different strings; looking up only the form slug 500s the hourly
+    recap-field dump when the scheduler uses the tenant slug.
+    """
+    ident = (ident or "").strip()
+    if not ident:
+        raise CommandError(f"No tenant matches {ident!r}.")
     if ident.isdigit():
         t = Tenant.objects.filter(id=int(ident)).first()
         if t:
             return t
+    slug_matches = list(Tenant.objects.filter(slug__iexact=ident)[:5])
+    if len(slug_matches) == 1:
+        return slug_matches[0]
+    if len(slug_matches) > 1:
+        names = ", ".join(f"{m.id}:{m.name}" for m in slug_matches)
+        raise CommandError(f"{ident!r} is ambiguous — matches: {names}. Use the id.")
     t = Tenant.objects.filter(request_url_name__iexact=ident).first()
     if t:
         return t
@@ -52,7 +67,7 @@ class Command(BaseCommand):
     help = "Read-only per-recap consumers-sampled breakdown for one tenant."
 
     def add_arguments(self, parser):
-        parser.add_argument("--tenant", required=True, help="id, request-url-name, or name")
+        parser.add_argument("--tenant", required=True, help="id, slug, request-url-name, or name")
         parser.add_argument("--year", type=int, default=None, help="calendar year (default: current)")
         parser.add_argument("--all-time", action="store_true", help="ignore the year window")
 
