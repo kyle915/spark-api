@@ -399,6 +399,7 @@ class Request(Node):
     decline_reason: str | None = None
     reviewed: bool
     scheduling_status: str | None = None
+    is_non_active_product_required: bool | None = None
     store_number: str | None = None
     notes: str | None = None
     coordinates: List[float]
