@@ -15,10 +15,13 @@ afterwards, so:
   1. Resolve the blob name (accepts a raw blob path or the public
      storage.googleapis.com URL the API already hands out).
   2. If `thumbs/w{w}/{blob}.jpg` exists → 302 to its public URL.
-  3. Else download the original, Pillow-resize to `w` wide, store the
+  3. Non-image blobs (recap PDFs, guessed non-image content-type, `%PDF`
+     magic) → 404. Recap PDFs are documents, not gallery photos; Pillow
+     cannot identify them and used to fire a backend-error alert.
+  4. Else download the original, Pillow-resize to `w` wide, store the
      JPEG thumb back in GCS, then 302.
-  4. Anything unexpected (non-image bytes, missing blob, oversized
-     original, Pillow failure) → 302 to the ORIGINAL public URL, so the
+  5. Anything unexpected (missing blob, oversized original, Pillow
+     failure on a real photo) → 302 to the ORIGINAL public URL, so the
      UI degrades to exactly today's behavior rather than a broken image.
 
 Unauthenticated by design: the originals live in a bucket with
@@ -31,9 +34,11 @@ from __future__ import annotations
 
 import io
 import logging
+import mimetypes
 
 from django.http import HttpRequest, HttpResponse, HttpResponseRedirect
 from django.views.decorators.http import require_GET
+from PIL import UnidentifiedImageError
 
 from utils.gcs import (
     blob_exists,
@@ -52,6 +57,9 @@ _MAX_ORIGINAL_BYTES = 40 * 1024 * 1024
 _JPEG_QUALITY = 78
 # Browsers may cache the redirect itself; the thumb object is immutable.
 _REDIRECT_CACHE = "public, max-age=86400"
+_PDF_MAGIC = b"%PDF"
+# Not enough signal to skip Pillow — some uploads have no useful type.
+_UNKNOWN_CONTENT_TYPES = frozenset({"", "application/octet-stream"})
 
 
 def _thumb_blob_name(blob: str, width: int) -> str:
@@ -64,6 +72,35 @@ def _redirect(url: str) -> HttpResponse:
     resp = HttpResponseRedirect(url)
     resp["Cache-Control"] = _REDIRECT_CACHE
     return resp
+
+
+def _not_an_image() -> HttpResponse:
+    """Quiet skip for documents. Do not logger.exception — that alerts."""
+    resp = HttpResponse(status=404)
+    resp["Cache-Control"] = _REDIRECT_CACHE
+    return resp
+
+
+def _guessed_content_type(blob: str) -> str:
+    guessed, _ = mimetypes.guess_type(blob)
+    return (guessed or "").lower()
+
+
+def _is_non_image_blob(blob: str, data: bytes | None = None) -> bool:
+    """True for PDFs and other documents that must never reach Pillow."""
+    name = blob.split("?", 1)[0].lower()
+    if name.startswith("recaps/pdfs/") or name.endswith(".pdf"):
+        return True
+    content_type = _guessed_content_type(name)
+    if (
+        content_type
+        and content_type not in _UNKNOWN_CONTENT_TYPES
+        and not content_type.startswith("image/")
+    ):
+        return True
+    if data is not None and data.startswith(_PDF_MAGIC):
+        return True
+    return False
 
 
 @require_GET
@@ -83,6 +120,9 @@ def thumb(request: HttpRequest) -> HttpResponse:
     original_url = public_url(blob) or ""
     thumb_blob = _thumb_blob_name(blob, width)
 
+    if _is_non_image_blob(blob):
+        return _not_an_image()
+
     try:
         if blob_exists(thumb_blob):
             return _redirect(public_url(thumb_blob) or original_url)
@@ -90,6 +130,8 @@ def thumb(request: HttpRequest) -> HttpResponse:
         data = download_blob_bytes(blob)
         if data is None or len(data) > _MAX_ORIGINAL_BYTES:
             return _redirect(original_url)
+        if _is_non_image_blob(blob, data):
+            return _not_an_image()
 
         from PIL import Image, ImageOps
 
@@ -114,6 +156,10 @@ def thumb(request: HttpRequest) -> HttpResponse:
         img.save(out, format="JPEG", quality=_JPEG_QUALITY, optimize=True)
         upload_bytes(thumb_blob, out.getvalue(), content_type="image/jpeg")
         return _redirect(public_url(thumb_blob) or original_url)
+    except UnidentifiedImageError:
+        # Bytes that looked like they might be a photo but aren't. Quiet 404
+        # so a stray CSV/PDF-without-extension does not fire an alert.
+        return _not_an_image()
     except Exception:  # noqa: BLE001 — degrade to the original, never break
         logger.exception("Thumb generation failed for blob=%r", blob)
         return _redirect(original_url) if original_url else HttpResponse(
