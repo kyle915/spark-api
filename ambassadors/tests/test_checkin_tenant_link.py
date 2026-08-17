@@ -14,6 +14,7 @@ pins down.
 import uuid
 
 import pytest
+from django.test import override_settings
 
 from ambassadors import checkin_web
 from ambassadors.models import AmbassadorEvent
@@ -182,7 +183,9 @@ class TestTenantCheckinLink(AmbassadorsGraphQLTestCase):
         self.tenant.request_url_name = "ighn-liquid-death"
         self.tenant.image = "tenants/images/ld-logo.png"
         self.tenant.save(update_fields=["request_url_name", "image"])
-        payload = checkin_web.build_tenant_context(self.tenant)
+        # public_url returns None when GS_BUCKET_NAME is empty (CI default).
+        with override_settings(GS_BUCKET_NAME="test-bucket"):
+            payload = checkin_web.build_tenant_context(self.tenant)
         brand = payload["brand"]
         assert brand["requestUrlName"] == "ighn-liquid-death"
         assert brand["image"]
