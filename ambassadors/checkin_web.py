@@ -1214,6 +1214,43 @@ def _brand_primary_color(tenant) -> str | None:
     return None
 
 
+def _brand_image_url(tenant) -> str | None:
+    """Same public URL tenantPublic.image returns, so /checkin and
+    /spark-form feed TenantLogo the same mark."""
+    if tenant is None:
+        return None
+    field_file = getattr(tenant, "image", None)
+    if not field_file:
+        return None
+    try:
+        blob = field_file.name
+    except Exception:
+        blob = str(field_file)
+    if not blob:
+        return None
+    from utils.gcs import extract_blob_name_from_url, public_url
+
+    return public_url(extract_blob_name_from_url(blob))
+
+
+def _brand_payload(tenant) -> dict:
+    image = _brand_image_url(tenant)
+    slug = ""
+    if tenant is not None:
+        slug = (
+            getattr(tenant, "request_url_name", None)
+            or getattr(tenant, "slug", None)
+            or ""
+        )
+    return {
+        "name": (getattr(tenant, "name", None) or "") if tenant else "",
+        "primaryColor": _brand_primary_color(tenant) if tenant else None,
+        "image": image,
+        "logoUrl": image,
+        "requestUrlName": slug or None,
+    }
+
+
 def build_checkin_resources(tenant) -> list[dict]:
     """The BA-facing resource buttons for this tenant's check-in page.
 
@@ -1306,10 +1343,7 @@ def build_public_context(event, ambassador=None) -> dict:
                 (getattr(req, "store_manager_phone", None) or "").strip() or None
             ),
         },
-        "brand": {
-            "name": tenant.name if tenant else "",
-            "primaryColor": _brand_primary_color(tenant) if tenant else None,
-        },
+        "brand": _brand_payload(tenant),
         # Same BA-facing references the tenant landing screen shows, repeated
         # here so they stay reachable mid-shift once the BA is clocked in.
         "resources": build_checkin_resources(tenant),
@@ -1706,10 +1740,7 @@ def build_tenant_context(tenant) -> dict:
     return {
         "mode": "tenant",
         "needsEventDetails": True,
-        "brand": {
-            "name": getattr(tenant, "name", "") or "",
-            "primaryColor": _brand_primary_color(tenant),
-        },
+        "brand": _brand_payload(tenant),
         "recentLocations": recent_checkin_locations(tenant),
         # Roaming brands pick a market instead of typing a store address.
         "locationMode": tenant_location_mode(tenant),
