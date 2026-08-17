@@ -60,17 +60,34 @@ jobs:
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
 
-      # `gcloud run deploy --source .` does the full happy path:
-      # zips the source, ships to Cloud Build, builds the Dockerfile,
-      # pushes the resulting image to Artifact Registry, updates the
-      # Cloud Run service while preserving all existing env vars,
-      # secrets, Cloud SQL connections, and traffic settings.
+      # `gcloud run deploy --source .` zips the source, ships to Cloud
+      # Build, builds the Dockerfile, and updates the service while
+      # preserving env vars, secrets, and Cloud SQL connections.
+      # Traffic is handled in the next step: a named-revision pin
+      # from the previous deploy would otherwise leave the new
+      # revision at 0%.
       #
       # --quiet skips the "deploy to <env>?" interactive prompt.
       - name: Deploy to Cloud Run
         run: |
           gcloud run deploy "$CLOUD_RUN_SERVICE" \
             --source . \
+            --region "$GCP_REGION" \
+            --project "$GCP_PROJECT_ID" \
+            --quiet
+
+      # Once a previous deploy pinned 100% to a named revision, Cloud
+      # Run creates the next revision at 0% and leaves the pin. Move
+      # 100% onto the revision this deploy just created. Tagged
+      # revisions (e.g. gb-catchup) stay tagged with 0%.
+      - name: Route 100% traffic to the new revision
+        run: |
+          NEW_REVISION=$(gcloud run services describe "$CLOUD_RUN_SERVICE" \
+            --region "$GCP_REGION" --project "$GCP_PROJECT_ID" \
+            --format='value(status.latestCreatedRevisionName)')
+          echo "Routing 100% traffic to $NEW_REVISION"
+          gcloud run services update-traffic "$CLOUD_RUN_SERVICE" \
+            --to-revisions="${NEW_REVISION}=100" \
             --region "$GCP_REGION" \
             --project "$GCP_PROJECT_ID" \
             --quiet
@@ -113,16 +130,24 @@ jobs:
             --project="$GCP_PROJECT_ID" \
             --quiet
 
-      # Smoke check after the deploy — assert the new revision is
-      # ready and `serverInfo.databaseOk` is true. Catches the case
-      # where the container starts but can't reach Postgres (e.g. a
-      # bad secret or missing Cloud SQL connection annotation).
+      # Smoke check after the deploy — assert the newly created
+      # revision is the one serving traffic and `serverInfo.databaseOk`
+      # is true. Using latestReadyRevisionName alone is a false pass
+      # when traffic is still pinned to the previous revision.
       - name: Verify deployment
         run: |
-          REVISION=$(gcloud run services describe "$CLOUD_RUN_SERVICE" \
+          CREATED=$(gcloud run services describe "$CLOUD_RUN_SERVICE" \
+            --region "$GCP_REGION" --project "$GCP_PROJECT_ID" \
+            --format='value(status.latestCreatedRevisionName)')
+          LIVE=$(gcloud run services describe "$CLOUD_RUN_SERVICE" \
             --region "$GCP_REGION" --project "$GCP_PROJECT_ID" \
             --format='value(status.latestReadyRevisionName)')
-          echo "Live revision: $REVISION"
+          echo "Created revision: $CREATED"
+          echo "Live revision: $LIVE"
+          if [ "$CREATED" != "$LIVE" ]; then
+            echo "::error::New revision $CREATED is not serving traffic (live is $LIVE)."
+            exit 1
+          fi
           RESPONSE=$(curl -s -X POST \
             "https://spark-api-new-490085168610.us-central1.run.app/api/v483927/graphql/spark" \
             -H "Content-Type: application/json" \
@@ -130,5 +155,9 @@ jobs:
           echo "$RESPONSE"
           if ! echo "$RESPONSE" | grep -q '"databaseOk": true'; then
             echo "::error::serverInfo.databaseOk is false — DB unreachable on the new revision."
+            exit 1
+          fi
+          if ! echo "$RESPONSE" | grep -q "\"revision\": \"$LIVE\""; then
+            echo "::error::serverInfo.revision does not match live revision $LIVE."
             exit 1
           fi
