@@ -470,6 +470,12 @@ class CreateRequestInput(BaseNameableInput):
     # Torch form: "Is Non-Active Product Required?" Yes/No.
     # Auto-mapped onto Request.is_non_active_product_required.
     is_non_active_product_required: bool | None = None
+    # Torch On-Premise / Event Activation extras. Auto-mapped onto Request.
+    account_spend_amount: str | None = None
+    event_assets_needed: str | None = None
+    load_in_time: str | None = None
+    onsite_poc: str | None = None
+    additional_team_details: str | None = None
     store_number: str | None = None
     client_name: str | None = None
     client_email: str | None = None
@@ -545,6 +551,12 @@ class CreateRequestWithDependenciesInput(BaseNameableInput):
     # Torch public form: "Is Non-Active Product Required?" Yes/No.
     # Auto-mapped onto Request.is_non_active_product_required.
     is_non_active_product_required: bool | None = None
+    # Torch On-Premise / Event Activation extras. Auto-mapped onto Request.
+    account_spend_amount: str | None = None
+    event_assets_needed: str | None = None
+    load_in_time: str | None = None
+    onsite_poc: str | None = None
+    additional_team_details: str | None = None
     store_number: str | None = None
     client_name: str
     client_email: str

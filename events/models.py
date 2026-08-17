@@ -398,6 +398,13 @@ class Request(models.Model):
     # Torch public request form ("Is Non-Active Product Required?").
     # Nullable so Liquid Death / Feel Free / legacy rows stay untouched.
     is_non_active_product_required = models.BooleanField(null=True, blank=True)
+    # Torch On-Premise: "Account Spend Amount". Hidden for other types.
+    account_spend_amount = models.CharField(max_length=64, null=True, blank=True)
+    # Torch Event Activation extras. Hidden unless that request type is selected.
+    event_assets_needed = models.TextField(null=True, blank=True)
+    load_in_time = models.CharField(max_length=64, null=True, blank=True)
+    onsite_poc = models.CharField(max_length=254, null=True, blank=True)
+    additional_team_details = models.TextField(null=True, blank=True)
     store_number = models.CharField(max_length=254, null=True)
     coordinates = ArrayField(
         models.FloatField(),
