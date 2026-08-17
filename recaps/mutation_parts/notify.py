@@ -5,7 +5,6 @@ import re
 from asgiref.sync import sync_to_async
 from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.utils import timezone as django_timezone
 
 from recaps import models
 from recaps.envelopes import (
@@ -17,98 +16,116 @@ from recaps.mutation_parts.pdf_helpers import (
     _resolve_recap_pdf_attachment,
 )
 from tenants.models import Role, Tenant, TenantedUser
-from utils.cloud_tasks import enqueue, enqueue_or_background
+from utils.cloud_tasks import enqueue
 from utils.onesignal import OneSignalError, one_signal_client
 
 User = get_user_model()
 logger = logging.getLogger("recaps.mutations")
 
+_RECAP_APPROVED_SELECT_RELATED = (
+    "event",
+    "event__tenant",
+    "event__rmm_asigned",
+    "event__timezone",
+    "event__request",
+    "event__request__created_by",
+    "job",
+    "retailer",
+    "timezone",
+    "ambassador",
+    "ambassador__user",
+)
+
+
+def _load_recap_for_approved_notify(recap_id: int, recap_kind: str):
+    model = models.CustomRecap if recap_kind == "custom" else models.Recap
+    return model.objects.select_related(*_RECAP_APPROVED_SELECT_RELATED).get(
+        id=recap_id
+    )
+
+
 def _thread_recap_approved_notify(recap_id: int, recap_kind: str) -> None:
-    """Sync entry for the daemon-thread / Cloud Tasks fallback."""
-    import asyncio
+    """Sync entry for thread fallback / one-shot resend.
+
+    Must not run sync ORM inside ``asyncio.run`` — that raises
+    ``SynchronousOnlyOperation`` and is why client "recap is ready" mail
+    never left after approve (Spark alert since 2026-08-15).
+    """
+    from asgiref.sync import async_to_sync
+    from django.db import close_old_connections
 
     from utils.db import fresh_db_connection
 
     def _run():
-        async def _async():
-            model = models.CustomRecap if recap_kind == "custom" else models.Recap
-            recap = model.objects.select_related(
-                "event",
-                "event__tenant",
-                "event__rmm_asigned",
-                "event__timezone",
-                "job",
-                "retailer",
-                "timezone",
-                "ambassador",
-                "ambassador__user",
-            ).get(id=recap_id)
-            await _ensure_recap_pdf_for_notify(recap)
-            await _notify_recap_approved_to_rmm_or_clients(recap)
+        recap = _load_recap_for_approved_notify(recap_id, recap_kind)
+        async_to_sync(_ensure_recap_pdf_for_notify)(recap)
+        async_to_sync(_notify_recap_approved_to_rmm_or_clients)(recap)
 
-        asyncio.run(_async())
-
-    fresh_db_connection(_run)()
+    close_old_connections()
+    try:
+        fresh_db_connection(_run)()
+    finally:
+        close_old_connections()
 
 
 async def _kick_recap_approved_notify(recap, recap_kind: str) -> None:
-    """Always enqueue PDF generate + client email; never block approve."""
-    import sys
-
+    """Enqueue PDF + client email, or send on this request if the queue is off."""
     payload = {"recap_id": recap.id, "recap_kind": recap_kind}
     path = "/api/tasks/recap-approved-notify"
     enqueued = await sync_to_async(enqueue)(path, payload)
     if enqueued:
         return
-    if "pytest" in sys.modules:
-        await _ensure_recap_pdf_for_notify(recap)
-        await _notify_recap_approved_to_rmm_or_clients(recap)
-        return
-    enqueue_or_background(
-        path,
-        payload,
-        lambda: _thread_recap_approved_notify(recap.id, recap_kind),
-    )
+    # Production Cloud Tasks env is still unset. Approve used to spawn a
+    # daemon thread that died in Django ORM before mailer.send(). Send
+    # inline so the client actually gets "recap is ready".
+    await _ensure_recap_pdf_for_notify(recap)
+    await _notify_recap_approved_to_rmm_or_clients(recap)
 
 
-async def _resolve_recap_requestor_recipients(
+def _collect_requestor_recipients(
     recap: models.Recap | models.CustomRecap,
 ) -> list[tuple[str, str]]:
     """Pull the original request's requestor (created_by + the
     requestor_email override). Returns a list of (email, first_name)
     tuples, deduped, ready to merge into the approval recipient set.
     """
-    def _collect() -> list[tuple[str, str]]:
-        out: list[tuple[str, str]] = []
-        seen: set[str] = set()
-        try:
-            req = getattr(recap.event, "request", None)
-        except Exception:
-            req = None
-        if not req:
-            return out
-
-        def add(email: str | None, first: str | None):
-            e = (email or "").strip()
-            if not e or e.lower() in seen:
-                return
-            seen.add(e.lower())
-            out.append((e, (first or "").strip()))
-
-        # `requestor_email` is the public-form override — wins if set.
-        add(getattr(req, "requestor_email", None), None)
-        # Authenticated creator (admin/client portal submission).
-        cb = getattr(req, "created_by", None)
-        if cb:
-            add(getattr(cb, "email", None), getattr(cb, "first_name", None))
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    try:
+        req = getattr(recap.event, "request", None)
+    except Exception:
+        req = None
+    if not req:
         return out
 
-    return await sync_to_async(_collect)()
+    def add(email: str | None, first: str | None):
+        e = (email or "").strip()
+        if not e or e.lower() in seen:
+            return
+        seen.add(e.lower())
+        out.append((e, (first or "").strip()))
+
+    # `requestor_email` is the public-form override — wins if set.
+    add(getattr(req, "requestor_email", None), None)
+    # Authenticated creator (admin/client portal submission).
+    cb = getattr(req, "created_by", None)
+    if cb:
+        add(getattr(cb, "email", None), getattr(cb, "first_name", None))
+    return out
 
 
-async def _notify_recap_approved_to_rmm_or_clients(
+async def _resolve_recap_requestor_recipients(
     recap: models.Recap | models.CustomRecap,
-) -> None:
+) -> list[tuple[str, str]]:
+    return await sync_to_async(_collect_requestor_recipients)(recap)
+
+
+def _collect_recap_approved_recipients(
+    recap: models.Recap | models.CustomRecap,
+) -> tuple[list[tuple[str, str]], str]:
+    """Same recipient set as approve-notify: RMM + client-role users +
+    Tenant.recap_recipient_emails + requestor. Returns (recipients, reply_to).
+    """
     event = recap.event
     rmm_user = getattr(event, "rmm_asigned", None)
     fallback_reply_to = "events@igniteproductions.co"
@@ -116,10 +133,6 @@ async def _notify_recap_approved_to_rmm_or_clients(
         getattr(rmm_user, "email", None) or ""
     ).strip() or fallback_reply_to
 
-    # Build recipient list: the event's RMM (if assigned) + the tenant's
-    # client contacts (always) + the original requestor (request.created_by
-    # + requestor_email). Per-row dedupe so an address matching more than
-    # one role still gets a single email.
     recipients: list[tuple[str, str]] = []
     seen: set[str] = set()
 
@@ -137,7 +150,7 @@ async def _notify_recap_approved_to_rmm_or_clients(
     # an RMM fallback. The client should receive the approved recap whether
     # or not an RMM is assigned, and regardless of how the BA/recap was
     # created (e.g. an admin manually filing for an externally-staffed BA).
-    client_rows = await sync_to_async(list)(
+    client_rows = list(
         TenantedUser.objects.filter(
             tenant_id=event.tenant_id,
             is_active=True,
@@ -152,11 +165,11 @@ async def _notify_recap_approved_to_rmm_or_clients(
     # a human, so staff can list addresses on Tenant.recap_recipient_emails
     # (comma/newline/semicolon-separated). Parsed best-effort and deduped
     # through the same _push() as the RMM/client/requestor rows.
-    configured = await sync_to_async(
-        lambda: Tenant.objects.filter(id=event.tenant_id)
+    configured = (
+        Tenant.objects.filter(id=event.tenant_id)
         .values_list("recap_recipient_emails", flat=True)
         .first()
-    )()
+    )
     for token in re.split(r"[,\n;]+", configured or ""):
         candidate = token.strip()
         if "@" in candidate and "." in candidate:
@@ -165,9 +178,18 @@ async def _notify_recap_approved_to_rmm_or_clients(
     # Add the original requestor — same activation owner the admin
     # CC's on the request approval email. Closes the loop: requestor
     # → request approved → recap filed → recap approved.
-    for email, first in await _resolve_recap_requestor_recipients(recap):
+    for email, first in _collect_requestor_recipients(recap):
         _push(email, first)
 
+    return recipients, reply_to_email
+
+
+async def _notify_recap_approved_to_rmm_or_clients(
+    recap: models.Recap | models.CustomRecap,
+) -> None:
+    recipients, reply_to_email = await sync_to_async(
+        _collect_recap_approved_recipients
+    )(recap)
     if not recipients:
         return
 
