@@ -25,6 +25,7 @@ RECAPS_QUERY = """
 query Recaps(
   $tenantId: ID
   $first: Int
+  $after: String
   $startDate: String
   $endDate: String
   $approved: Boolean
@@ -43,8 +44,10 @@ query Recaps(
     }
     q: $q
     first: $first
+    after: $after
   ) {
     totalCount
+    pageInfo { hasNextPage endCursor }
     edges { node { uuid name approved event { name date } } }
   }
 }
@@ -54,6 +57,7 @@ CUSTOM_RECAPS_QUERY = """
 query CustomRecaps(
   $tenantId: ID
   $first: Int
+  $after: String
   $startDate: String
   $endDate: String
   $approved: Boolean
@@ -72,8 +76,10 @@ query CustomRecaps(
     }
     q: $q
     first: $first
+    after: $after
   ) {
     totalCount
+    pageInfo { hasNextPage endCursor }
     edges { node { uuid name approved event { name date } } }
   }
 }
@@ -318,3 +324,80 @@ class TestRecapsListReachAll(AmbassadorsGraphQLTestCase):
         assert recap.name in names
         assert conn["totalCount"] >= 1
         assert conn["totalCount"] < RECAP_COUNT
+
+    @pytest.mark.asyncio
+    async def test_growing_first_without_after_repeats_page_one(self):
+        # The web list used to "load more" by bumping first 50 → 100.
+        # The API clamps first to 50, so that query is page 1 again.
+        page1 = await self._execute_query_authenticated(
+            RECAPS_QUERY,
+            {"tenantId": str(self.tenant.id), "first": 50},
+            self.spark_admin,
+            self.endpoint_path,
+        )
+        grown = await self._execute_query_authenticated(
+            RECAPS_QUERY,
+            {"tenantId": str(self.tenant.id), "first": 100},
+            self.spark_admin,
+            self.endpoint_path,
+        )
+        assert page1.errors is None and grown.errors is None
+        ids1 = [e["node"]["uuid"] for e in page1.data["recaps"]["edges"]]
+        ids_grown = [e["node"]["uuid"] for e in grown.data["recaps"]["edges"]]
+        assert ids1 == ids_grown
+        assert len(ids1) == 50
+        assert page1.data["recaps"]["pageInfo"]["hasNextPage"] is True
+
+    @pytest.mark.asyncio
+    async def test_after_cursor_returns_the_next_legacy_page(self):
+        page1 = await self._execute_query_authenticated(
+            RECAPS_QUERY,
+            {"tenantId": str(self.tenant.id), "first": 50},
+            self.spark_admin,
+            self.endpoint_path,
+        )
+        assert page1.errors is None, page1.errors
+        conn1 = page1.data["recaps"]
+        end = conn1["pageInfo"]["endCursor"]
+        assert end
+        page2 = await self._execute_query_authenticated(
+            RECAPS_QUERY,
+            {"tenantId": str(self.tenant.id), "first": 50, "after": end},
+            self.spark_admin,
+            self.endpoint_path,
+        )
+        assert page2.errors is None, page2.errors
+        conn2 = page2.data["recaps"]
+        ids1 = {e["node"]["uuid"] for e in conn1["edges"]}
+        ids2 = {e["node"]["uuid"] for e in conn2["edges"]}
+        assert ids1.isdisjoint(ids2)
+        assert len(ids2) == RECAP_COUNT - 50
+        assert conn2["pageInfo"]["hasNextPage"] is False
+        assert conn2["totalCount"] == RECAP_COUNT
+
+    @pytest.mark.asyncio
+    async def test_after_cursor_returns_the_next_custom_page(self):
+        page1 = await self._execute_query_authenticated(
+            CUSTOM_RECAPS_QUERY,
+            {"tenantId": str(self.tenant.id), "first": 50},
+            self.spark_admin,
+            self.endpoint_path,
+        )
+        assert page1.errors is None, page1.errors
+        conn1 = page1.data["customRecaps"]
+        end = conn1["pageInfo"]["endCursor"]
+        assert end
+        page2 = await self._execute_query_authenticated(
+            CUSTOM_RECAPS_QUERY,
+            {"tenantId": str(self.tenant.id), "first": 50, "after": end},
+            self.spark_admin,
+            self.endpoint_path,
+        )
+        assert page2.errors is None, page2.errors
+        conn2 = page2.data["customRecaps"]
+        ids1 = {e["node"]["uuid"] for e in conn1["edges"]}
+        ids2 = {e["node"]["uuid"] for e in conn2["edges"]}
+        assert ids1.isdisjoint(ids2)
+        assert len(ids2) == RECAP_COUNT - 50
+        assert conn2["pageInfo"]["hasNextPage"] is False
+        assert conn2["totalCount"] == RECAP_COUNT
