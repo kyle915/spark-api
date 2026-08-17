@@ -467,6 +467,9 @@ class CreateRequestInput(BaseNameableInput):
     # "already_scheduled" | "needs_scheduling" — required in the UI; the
     # service maps it straight onto Request.scheduling_status.
     scheduling_status: str | None = None
+    # Torch form: "Is Non-Active Product Required?" Yes/No.
+    # Auto-mapped onto Request.is_non_active_product_required.
+    is_non_active_product_required: bool | None = None
     store_number: str | None = None
     client_name: str | None = None
     client_email: str | None = None
@@ -539,6 +542,9 @@ class CreateRequestWithDependenciesInput(BaseNameableInput):
     # "already_scheduled" | "needs_scheduling" — required in the public
     # form; auto-mapped onto Request.scheduling_status by the service.
     scheduling_status: str | None = None
+    # Torch public form: "Is Non-Active Product Required?" Yes/No.
+    # Auto-mapped onto Request.is_non_active_product_required.
+    is_non_active_product_required: bool | None = None
     store_number: str | None = None
     client_name: str
     client_email: str

@@ -395,6 +395,9 @@ class Request(models.Model):
         null=True,
         blank=True,
     )
+    # Torch public request form ("Is Non-Active Product Required?").
+    # Nullable so Liquid Death / Feel Free / legacy rows stay untouched.
+    is_non_active_product_required = models.BooleanField(null=True, blank=True)
     store_number = models.CharField(max_length=254, null=True)
     coordinates = ArrayField(
         models.FloatField(),
