@@ -1,3 +1,4 @@
+import base64
 import datetime
 import logging
 import mimetypes
@@ -24,6 +25,55 @@ from utils.queues import Queues
 resend.api_key = settings.RESEND_API_KEY
 
 logger = logging.getLogger(__name__)
+
+
+def json_safe_attachment_content(content: Any) -> Any:
+    """Make attachment content JSON-serializable for the Resend SDK.
+
+    ``resend.Emails.send`` posts ``json=params``. Raw ``bytes`` raise
+    ``Object of type bytes is not JSON serializable`` and the request
+    never leaves the server — that is why approve-with-PDF died in prod
+    after the inline Resend fallback (Redis is down on Cloud Run).
+
+    The Python SDK accepts a base64 string or ``list[int]``. Campaign
+    reports already send base64; recap PDFs were still raw bytes.
+    """
+    if isinstance(content, (bytes, bytearray, memoryview)):
+        return base64.b64encode(bytes(content)).decode("ascii")
+    return content
+
+
+def json_safe_attachments(
+    attachments: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """Copy attachments with JSON-safe ``content`` values."""
+    safe: list[dict[str, Any]] = []
+    for attachment in attachments or []:
+        if not isinstance(attachment, dict):
+            continue
+        item = dict(attachment)
+        if "content" in item:
+            item["content"] = json_safe_attachment_content(item["content"])
+        safe.append(item)
+    return safe
+
+
+def attachment_bytes(content: Any) -> bytes | None:
+    """Decode attachment content back to raw bytes for Mailpit/SMTP."""
+    if content is None:
+        return None
+    if isinstance(content, memoryview):
+        return content.tobytes()
+    if isinstance(content, (bytes, bytearray)):
+        return bytes(content)
+    if isinstance(content, list):
+        return bytes(content)
+    if isinstance(content, str):
+        try:
+            return base64.b64decode(content, validate=True)
+        except Exception:
+            return content.encode("utf-8")
+    return None
 
 
 def html_to_text(html: str) -> str:
@@ -158,7 +208,7 @@ class Envelope:
         if self.cc_emails:
             payload["cc"] = self.cc_emails
         if self.attachments:
-            payload["attachments"] = self.attachments
+            payload["attachments"] = json_safe_attachments(self.attachments)
         return payload
 
     @staticmethod
@@ -212,7 +262,7 @@ class ResendMailDriver(MailDriver):
         if envelope.cc_emails:
             params["cc"] = envelope.cc_emails
         if envelope.attachments:
-            params["attachments"] = envelope.attachments
+            params["attachments"] = json_safe_attachments(envelope.attachments)
         result = resend.Emails.send(params)
         # When the API key is invalid or the FROM domain isn't verified,
         # the SDK still returns a payload (no exception) but `id` is
@@ -258,16 +308,13 @@ class MailpitMailDriver(MailDriver):
         email.attach_alternative(html_content, "text/html")
         for attachment in envelope.attachments or []:
             filename = attachment.get("filename") or "attachment"
-            content = attachment.get("content")
-            if content is None:
+            payload = attachment_bytes(attachment.get("content"))
+            if payload is None:
                 continue
             mimetype = attachment.get("content_type") or mimetypes.guess_type(
                 filename
             )[0] or "application/octet-stream"
             maintype, subtype = mimetype.split("/", 1)
-            payload = bytes(content) if isinstance(content, list) else content
-            if isinstance(payload, str):
-                payload = payload.encode("utf-8")
 
             part = MIMEBase(maintype, subtype)
             part.set_payload(payload)

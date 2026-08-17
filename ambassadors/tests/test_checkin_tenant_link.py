@@ -184,7 +184,7 @@ class TestTenantCheckinLink(AmbassadorsGraphQLTestCase):
         self.tenant.image = "tenants/images/ld-logo.png"
         self.tenant.save(update_fields=["request_url_name", "image"])
         # public_url returns None when GS_BUCKET_NAME is empty (CI default).
-        with override_settings(GS_BUCKET_NAME="test-bucket"):
+        with override_settings(GS_BUCKET_NAME="spark-test-bucket"):
             payload = checkin_web.build_tenant_context(self.tenant)
         brand = payload["brand"]
         assert brand["requestUrlName"] == "ighn-liquid-death"

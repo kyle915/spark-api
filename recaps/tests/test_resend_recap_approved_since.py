@@ -161,8 +161,26 @@ class TestResendRecapApprovedSince(JobsGraphQLTestCase):
                 "--since=2026-08-15",
                 stdout=out,
             )
-        send.assert_called_once_with(recap.id, "legacy")
+        send.assert_called_once_with(recap.id, "legacy", html_only=False)
         assert "sent=1" in out.getvalue()
+
+    def test_html_only_skips_pdf_path(self):
+        since = parse_since("2026-08-15")
+        recap = self._make_recap(
+            approved=True, updated_at=since + timedelta(hours=1), name="HTML"
+        )
+        out = io.StringIO()
+        with patch(
+            "recaps.mutation_parts.notify._thread_recap_approved_notify"
+        ) as send:
+            call_command(
+                "resend_recap_approved_since",
+                "--since=2026-08-15",
+                "--html-only",
+                stdout=out,
+            )
+        send.assert_called_once_with(recap.id, "legacy", html_only=True)
+        assert "html_only=True" in out.getvalue()
 
     def test_thread_notify_sends_and_does_not_crash(self):
         recap = self._make_recap(

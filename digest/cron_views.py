@@ -5420,6 +5420,72 @@ class ResendBaWelcomeView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class ResendRecapApprovedSinceView(View):
+    """POST `/internal/cron/resend-recap-approved-since`.
+
+    Re-send client/RMM "Your activation recap is ready" for recaps
+    approved on or after ``since`` (YYYY-MM-DD, America/Los_Angeles).
+    Does not re-send Ignite internal review/suspect-numbers alerts.
+    Dry-run by default. Params: since, execute, html_only, recap_id, kind.
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _get(name: str) -> str:
+            return (request.GET.get(name) or request.POST.get(name) or "").strip()
+
+        since = _get("since")
+        if not since:
+            return JsonResponse({"ok": False, "error": "since-required"}, status=400)
+        execute = _get("execute").lower() in ("1", "true", "yes", "on")
+        html_only = _get("html_only").lower() in ("1", "true", "yes", "on")
+        recap_id = _get("recap_id")
+        kind = _get("kind")
+        cmd_args = ["--since", since]
+        if not execute:
+            cmd_args.append("--dry-run")
+        if html_only:
+            cmd_args.append("--html-only")
+        if recap_id:
+            cmd_args.extend(["--recap-id", recap_id])
+        if kind in ("legacy", "custom"):
+            cmd_args.extend(["--kind", kind])
+
+        out = io.StringIO()
+        try:
+            call_command("resend_recap_approved_since", *cmd_args, stdout=out)
+        except Exception as exc:
+            logger.exception("resend-recap-approved-since cron failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "exception": _concise_exc(exc),
+                    "log": out.getvalue(),
+                },
+                status=500,
+            )
+        return JsonResponse(
+            {
+                "ok": True,
+                "execute": execute,
+                "html_only": html_only,
+                "since": since,
+                "log": out.getvalue(),
+            }
+        )
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class RetextTenantEventsView(View):
     """POST `/internal/cron/retext-tenant-events`.
 
@@ -7632,6 +7698,7 @@ def _registered_views() -> dict[str, Any]:
         "recap-data-health": RecapDataHealthView,
         "audit-ba-accounts": AuditBaAccountsView,
         "resend-ba-welcome": ResendBaWelcomeView,
+        "resend-recap-approved-since": ResendRecapApprovedSinceView,
         "retext-tenant-events": RetextTenantEventsView,
         "backfill-ld-master-tracker": BackfillLdMasterTrackerView,
         "ld-data-census": LdDataCensusView,
