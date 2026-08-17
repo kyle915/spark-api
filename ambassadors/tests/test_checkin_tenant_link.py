@@ -176,6 +176,19 @@ class TestTenantCheckinLink(AmbassadorsGraphQLTestCase):
         assert payload["brand"]["name"] == self.tenant.name
         assert isinstance(payload["recentLocations"], list)
 
+    def test_tenant_context_sends_the_same_logo_fields_as_spark_form(self):
+        """Walk-up /checkin must feed TenantLogo the same image / logoUrl /
+        requestUrlName tenantPublic already sends spark-form."""
+        self.tenant.request_url_name = "ighn-liquid-death"
+        self.tenant.image = "tenants/images/ld-logo.png"
+        self.tenant.save(update_fields=["request_url_name", "image"])
+        payload = checkin_web.build_tenant_context(self.tenant)
+        brand = payload["brand"]
+        assert brand["requestUrlName"] == "ighn-liquid-death"
+        assert brand["image"]
+        assert brand["logoUrl"] == brand["image"]
+        assert "ld-logo.png" in brand["image"]
+
     def test_recent_locations_dedupe_by_normalized_address(self):
         Event.objects.create(
             tenant=self.tenant, name="TW A", address="1155 E State St, Trenton, NJ",
