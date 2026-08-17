@@ -38,6 +38,8 @@ LIQUID_DEATH_TERRITORY: dict[str, list[str]] = {
     "pat@liquiddeath.com": [
         "PA", "MD", "DE", "WA", "AK",
     ],
+    # WI (and Midwest) RMM: Timothy Reed. Recap-approved "ready" mail
+    # goes to this assigned RMM plus every Liquid Death client-role user.
     "t.reed@liquiddeath.com": [
         "WI", "IL", "IN", "OH", "IA", "MN", "KS", "NE", "MO", "MI", "ND", "SD",
     ],

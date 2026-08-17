@@ -458,9 +458,11 @@ INTERNAL_CRON_SECRET = env("INTERNAL_CRON_SECRET", default="")
 # in the background. See `utils/cloud_tasks.py` and `tasks/views.py`.
 #
 # FEATURE FLAG: this path is OFF unless ALL FOUR of the vars below are set
-# (non-empty). When OFF, `enqueue()` returns False and approval falls back
-# to the exact inline notify behavior — byte-for-byte unchanged from before
-# this feature existed. The GCP project comes from the existing
+# (non-empty). When OFF, `enqueue()` returns False and approval sends the
+# client/RMM notify **inline on the request**. Do not put that work on a
+# daemon thread: the Aug 2026 fallback crashed with SynchronousOnlyOperation
+# (sync ORM inside asyncio.run / a connection from another thread) before
+# mailer.send(), so "recap is ready" never left. The GCP project comes from the existing
 # GS_PROJECT_ID. No new Python dependency: we call the Cloud Tasks REST API
 # with Application Default Credentials (same auth as receipts/ocr.py).
 #

@@ -112,26 +112,40 @@ def enqueue(path: str, payload: dict) -> bool:
 
 
 def enqueue_or_background(path: str, payload: dict, fallback) -> None:
-    """Enqueue to Cloud Tasks, else run ``fallback`` off the request.
+    """Enqueue to Cloud Tasks, else run ``fallback`` so the work still happens.
 
-    Under pytest the fallback runs inline so mutation tests can assert
-    side effects (mailer.send). In production without Cloud Tasks it
-    runs on a daemon thread so approve/create return immediately.
-    ``fallback`` is a zero-arg callable (sync).
+    When Cloud Tasks is not configured (production today), run the
+    fallback **inline on this request**. A daemon-thread fallback used to
+    crash with ``SynchronousOnlyOperation`` before ``mailer.send()`` —
+    Django forbids using a connection created in another thread / an
+    async context, and the worker also did sync ORM inside ``asyncio.run``.
+
+    If Cloud Tasks *is* configured but enqueue fails, run the fallback
+    on a daemon thread after closing this thread's DB connections so the
+    worker opens its own. ``fallback`` is a zero-arg sync callable.
     """
-    import sys
     import threading
+
+    from django.db import close_old_connections
 
     if enqueue(path, payload):
         return
-    if "pytest" in sys.modules:
+
+    if not _is_enabled():
         fallback()
         return
 
+    # Queue is configured but CreateTask failed. Don't inherit this
+    # request's connection into the worker thread.
+    close_old_connections()
+
     def _safe():
+        close_old_connections()
         try:
             fallback()
         except Exception:
             logger.exception("cloud_tasks background fallback failed for %s", path)
+        finally:
+            close_old_connections()
 
     threading.Thread(target=_safe, daemon=True).start()
