@@ -382,9 +382,15 @@ def _file_columns(tenant, *, include_uncategorized: bool) -> list[dict]:
 def _tenant_recaps(tenant):
     """Every custom recap for the tenant, with the joins the row builder needs.
 
-    Widens ``recap_sheet_export._tenant_recaps`` with the event/location/state/
-    request joins and the file prefetch, so building N rows stays a fixed
-    number of queries rather than N×5.
+    Widens ``recap_sheet_export._tenant_recaps`` with the event/location/state
+    joins and the file prefetch, so building N rows stays a fixed number of
+    queries rather than N×5.
+
+    Deliberately does NOT ``select_related("event__request")``. The export only
+    needs ``Event.request_id`` (the FK already on Event). Joining Request
+    SELECTs every Request column, so a deploy that lands new Request fields
+    (941/943 and friends) before migrate finishes — or a stale ORM vs DB —
+    500s this dump even though it never reads those columns.
     """
     return (
         CustomRecap.objects.filter(tenant=tenant)
@@ -393,7 +399,6 @@ def _tenant_recaps(tenant):
             "event__location",
             "event__state",
             "event__retailer",
-            "event__request",
             "ambassador",
             "ambassador__user",
             "state",

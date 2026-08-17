@@ -1,0 +1,133 @@
+name: Recap field export (XLSX)
+
+# Manually fires `/internal/cron/dump-recap-fields` on Cloud Run — READ-ONLY.
+# The FIELD-LEVEL recap export for ONE tenant: one row per recap, every
+# captured custom-template field as its own column, plus a public URL for
+# every attached photo and receipt grouped by FileRecapCategory.
+#
+# This is NOT campaign-to-date. That endpoint returns per-Request KPI
+# *aggregates* (11 computed numbers) and carries no CustomFieldValue rows, so
+# it can't be widened into "every answer a BA actually typed". This one is the
+# raw captured data.
+#
+# The JSON response is uploaded as an artifact (it's far too big for the step
+# log), and the job then renders it into a client-ready workbook — XLSX plus
+# two CSVs — uploaded as a second artifact. Download with:
+#
+#     gh run download <run-id>
+#
+# Only the compact report (row/column counts, files-by-category, and the
+# category-sanity warnings) prints in the log. On failure, `error` + `detail`
+# print too — a CommandError happens before any report, which is why a 7s
+# 500 used to look empty. Secret-gated via X-Cron-Secret (shared
+# INTERNAL_CRON_SECRET) — the secret is a HEADER, never in the URL.
+#
+# Product code (and this YAML) lives on `develop`. Cloud Run deploys from
+# develop. The renderer — scripts/build_recap_workbook.py + utils/workbook.py
+# — is checked out from develop even when the dispatch is started from main.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tenant:
+        description: "Tenant: id, slug, request-url-name, or name (e.g. 'torch-thc' or '10')."
+        required: true
+        type: string
+      start:
+        description: "Optional window start, YYYY-MM-DD (inclusive, by EVENT date)."
+        required: false
+        type: string
+      end:
+        description: "Optional window end, YYYY-MM-DD (inclusive, by EVENT date)."
+        required: false
+        type: string
+      dry_run:
+        description: "Report row/column counts + category sanity only; build no workbook."
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  export-recap-fields:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out the renderer (lives with the app code on develop)
+        uses: actions/checkout@v4
+        with:
+          ref: develop
+
+      - name: Fire dump-recap-fields cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/dump-recap-fields
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          TENANT: ${{ github.event.inputs.tenant }}
+          START: ${{ github.event.inputs.start }}
+          END: ${{ github.event.inputs.end }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+
+          # URL-encode the tenant (it may be a name with spaces).
+          TENANT_ENC=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$TENANT")
+          QS="tenant=$TENANT_ENC"
+          [ -n "$START" ] && QS="$QS&start=$START"
+          [ -n "$END" ]   && QS="$QS&end=$END"
+          [ "$DRY_RUN" = "true" ] && QS="$QS&dry_run=1"
+
+          STATUS=$(curl -sS -o response.json -w '%{http_code}' \
+            -X POST "$CRON_URL?$QS" \
+            -H "X-Cron-Secret: $CRON_SECRET")
+          echo "HTTP $STATUS"
+
+          # Report only on success (payload is enormous). On failure, print
+          # error/detail — those are what a 500 actually carries.
+          if command -v jq >/dev/null 2>&1; then
+            jq -r '.report // empty' response.json
+            jq -r 'if .ok == false then "error: \(.error // "")\ndetail: \(.detail // "")" else empty end' response.json
+          else
+            head -c 4000 response.json
+          fi
+
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS — see error/detail above."
+            exit 1
+          fi
+
+      - name: Upload raw JSON payload
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: recap-field-export-json
+          path: response.json
+          if-no-files-found: ignore
+
+      - name: Install renderer dependency
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        run: python3 -m pip install --quiet openpyxl
+
+      - name: Build the workbook (XLSX + CSVs)
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        env:
+          TENANT: ${{ github.event.inputs.tenant }}
+        run: |
+          set -euo pipefail
+          # A filesystem-safe stem from the tenant input.
+          STEM=$(printf '%s' "$TENANT" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | sed 's/^-//;s/-$//')
+          [ -n "$STEM" ] || STEM="tenant"
+          python3 scripts/build_recap_workbook.py response.json "$STEM-recaps"
+          ls -la "$STEM-recaps".*
+
+      - name: Upload workbook
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: recap-field-export-workbook
+          path: |
+            *-recaps.xlsx
+            *-recaps.csv
+            *-recaps-files.csv
