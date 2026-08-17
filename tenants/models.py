@@ -135,6 +135,17 @@ class Tenant(Asyncable, models.Model):
     checkin_code = models.CharField(
         max_length=32, null=True, blank=True, unique=True, db_index=True
     )
+    # Recap-only twin of `checkin_code` for 3rd-party / agency filers who are
+    # NOT on Spark's time clock. Same `/checkin/<code>` page, but the payload
+    # sets `recapOnly` and the clock / sampling-stop / ping endpoints refuse
+    # it. Identity + store + date + the same recap questions as the BA link.
+    #
+    # A SEPARATE column on purpose: `checkin_code` is one durable BA clock
+    # URL, and overwriting it would silently repoint every ambassador already
+    # holding TH-2HRV3D (and every other brand's standing link). NULL = off.
+    checkin_recap_code = models.CharField(
+        max_length=32, null=True, blank=True, unique=True, db_index=True
+    )
     # Mileage defaults stamped onto events the STANDING CHECK-IN LINK creates.
     #
     # Mileage is a per-gig toggle (Event.track_mileage / mileage_rate), which

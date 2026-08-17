@@ -107,6 +107,30 @@ def _rate_limited() -> JsonResponse:
     )
 
 
+def _is_recap_only(code: str) -> bool:
+    kind, target = checkin_web.resolve_checkin_target(code)
+    return kind == "tenant" and checkin_web.is_recap_only_code(code, target)
+
+
+def _stamp_recap_only(payload: dict, code: str, tenant) -> dict:
+    """Mark a standing-link payload as recap-only and drop clock leftovers."""
+    recap_only = checkin_web.is_recap_only_code(code, tenant)
+    payload["recapOnly"] = recap_only
+    if recap_only:
+        payload["unfiledShifts"] = []
+    return payload
+
+
+def _reject_clock_on_recap_link(code: str):
+    if _is_recap_only(code):
+        return _err(
+            "This link is for filing a recap only — it has no time clock.",
+            status=403,
+            code="recap_only",
+        )
+    return None
+
+
 def _parse_iso_date(value: str):
     """Parse a YYYY-MM-DD string from the store step, or None."""
     from datetime import date as _date
@@ -213,9 +237,12 @@ def public_checkin_context(request: HttpRequest, code: str) -> HttpResponse:
                 payload["unfiledShifts"] = checkin_web.unfiled_shifts_for(
                     ambassador=ambassador, tenant=target
                 )
-                return JsonResponse(payload)
+                return JsonResponse(_stamp_recap_only(payload, code, target))
         try:
-            return JsonResponse(checkin_web.build_tenant_context(target))
+            recap_only = checkin_web.is_recap_only_code(code, target)
+            return JsonResponse(
+                checkin_web.build_tenant_context(target, recap_only=recap_only)
+            )
         except Exception:  # noqa: BLE001
             logger.exception("checkin tenant context failed code=%s", code)
             return _err("Couldn't load this check-in.", status=500, code="server")
@@ -283,10 +310,17 @@ def public_checkin_identify(request: HttpRequest, code: str) -> HttpResponse:
         first_name = first_name.strip()
         last_name = last_name.strip()
 
+    recap_only = kind == "tenant" and checkin_web.is_recap_only_code(code, target)
+
     if not first_name:
         return _err("Enter your name so we can credit your work.")
     if not phone:
-        return _err("Enter a phone number so your lead can confirm you.")
+        if recap_only:
+            phone = checkin_web.recap_only_identity_phone(
+                first_name=first_name, last_name=last_name, email=email
+            )
+        else:
+            return _err("Enter a phone number so your lead can confirm you.")
 
     # Identify the BA FIRST. On a standing tenant link the event may not exist
     # yet and Event.created_by is NOT NULL, so we need a real user in hand
@@ -313,8 +347,12 @@ def public_checkin_identify(request: HttpRequest, code: str) -> HttpResponse:
         # to where I clocked in before". She was stuck on the clock with no way
         # to clock out. Someone with an open punch is at the place they clocked
         # in, whatever they type now, so the open shift wins.
-        resumed = checkin_web.open_shift_event_for(
-            ambassador=ambassador, tenant=target
+        resumed = (
+            None
+            if recap_only
+            else checkin_web.open_shift_event_for(
+                ambassador=ambassador, tenant=target
+            )
         )
         if resumed is not None:
             event = resumed
@@ -401,7 +439,7 @@ def public_checkin_identify(request: HttpRequest, code: str) -> HttpResponse:
         )
         if existing is not None:
             event = existing
-        elif on_date < dj_tz.localdate():
+        elif on_date < dj_tz.localdate() and not recap_only:
             return _err(
                 "No check-in found for that date. Pick a day you actually "
                 "clocked in, or ask your lead to log it."
@@ -433,6 +471,7 @@ def public_checkin_identify(request: HttpRequest, code: str) -> HttpResponse:
         payload["unfiledShifts"] = checkin_web.unfiled_shifts_for(
             ambassador=ambassador, tenant=target
         )
+        _stamp_recap_only(payload, code, target)
     payload["sessionToken"] = token
     payload["ambassadorEventUuid"] = str(amb_event.uuid)
     return JsonResponse(payload)
@@ -454,7 +493,7 @@ def public_checkin_unfiled_recaps(request: HttpRequest, code: str) -> HttpRespon
         return _rate_limited()
 
     kind, target = checkin_web.resolve_checkin_target(code)
-    if kind != "tenant":
+    if kind != "tenant" or checkin_web.is_recap_only_code(code, target):
         return JsonResponse({"shifts": []})
 
     data = _body(request)
@@ -483,6 +522,9 @@ def public_checkin_unfiled_recaps(request: HttpRequest, code: str) -> HttpRespon
 def public_checkin_clock(request: HttpRequest, code: str) -> HttpResponse:
     if _over_limit("clock-ip", _client_ip(request), limit=40, window=300):
         return _rate_limited()
+    blocked = _reject_clock_on_recap_link(code)
+    if blocked is not None:
+        return blocked
     data = _body(request)
     loaded, err = _load_session(code, data.get("session") or "")
     if err is not None:
@@ -643,6 +685,10 @@ def public_checkin_recap(request: HttpRequest, code: str) -> HttpResponse:
     force_new = bool(data.get("forceNew") or data.get("asNew"))
     if kind != "tenant":
         force_new = False
+    elif checkin_web.is_recap_only_code(code, _target):
+        # Agency filers submit many recaps on the same store/day without a
+        # clock; never overwrite the previous filing.
+        force_new = True
 
     try:
         checkin_web.submit_checkin_recap(
@@ -735,6 +781,9 @@ def public_checkin_where(request: HttpRequest, code: str) -> HttpResponse:
 def public_checkin_ping(request: HttpRequest, code: str) -> HttpResponse:
     if _over_limit("ping-ip", _client_ip(request), limit=240, window=3600):
         return _rate_limited()
+    blocked = _reject_clock_on_recap_link(code)
+    if blocked is not None:
+        return blocked
     data = _body(request)
     loaded, err = _load_session(code, data.get("session") or "")
     if err is not None:
@@ -788,6 +837,9 @@ def _mileage_coords(data) -> list | None:
 def public_checkin_mileage_start(request: HttpRequest, code: str) -> HttpResponse:
     if _over_limit("mileage-ip", _client_ip(request), limit=60, window=3600):
         return _rate_limited()
+    blocked = _reject_clock_on_recap_link(code)
+    if blocked is not None:
+        return blocked
     data = _body(request)
     loaded, err = _load_session(code, data.get("session") or "")
     if err is not None:
@@ -807,6 +859,9 @@ def public_checkin_mileage_start(request: HttpRequest, code: str) -> HttpRespons
 def public_checkin_mileage_stop(request: HttpRequest, code: str) -> HttpResponse:
     if _over_limit("mileage-ip", _client_ip(request), limit=60, window=3600):
         return _rate_limited()
+    blocked = _reject_clock_on_recap_link(code)
+    if blocked is not None:
+        return blocked
     data = _body(request)
     loaded, err = _load_session(code, data.get("session") or "")
     if err is not None:
@@ -837,6 +892,9 @@ def public_checkin_mileage_stop(request: HttpRequest, code: str) -> HttpResponse
 def public_checkin_sampling_stop(request: HttpRequest, code: str) -> HttpResponse:
     if _over_limit("stop-ip", _client_ip(request), limit=120, window=3600):
         return _rate_limited()
+    blocked = _reject_clock_on_recap_link(code)
+    if blocked is not None:
+        return blocked
     data = _body(request)
     loaded, err = _load_session(code, data.get("session") or "")
     if err is not None:

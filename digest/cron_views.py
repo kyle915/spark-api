@@ -5206,6 +5206,8 @@ class SetupTenantCheckinView(View):
 
         if _param("apply").lower() in ("1", "true", "yes", "on"):
             kwargs["apply"] = True
+        if _param("recap_only").lower() in ("1", "true", "yes", "on"):
+            kwargs["recap_only"] = True
 
         out = io.StringIO()
         try:
