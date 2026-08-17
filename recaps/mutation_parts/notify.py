@@ -135,7 +135,7 @@ def _thread_recap_approved_notify(
 
 async def _kick_recap_approved_notify(recap, recap_kind: str) -> None:
     """Enqueue PDF + client email, or send on this request if the queue is off."""
-    if is_girl_beer_recap(recap):
+    if await sync_to_async(is_girl_beer_recap)(recap):
         await sync_to_async(stamp_client_notified)(recap, reason="girl-beer")
         logger.info(
             "Girl Beer recap %s: marked client_notified_at, skipped SMTP",
@@ -261,7 +261,7 @@ async def _notify_recap_approved_to_rmm_or_clients(
     *,
     html_only: bool = False,
 ) -> None:
-    if is_girl_beer_recap(recap):
+    if await sync_to_async(is_girl_beer_recap)(recap):
         await sync_to_async(stamp_client_notified)(recap, reason="girl-beer")
         return
     if getattr(recap, "client_notified_at", None):

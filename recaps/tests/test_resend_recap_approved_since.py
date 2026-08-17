@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
 
 import pytest
+from asgiref.sync import async_to_sync
 from django.core.management import call_command
 from django.utils import timezone
 
@@ -16,7 +17,10 @@ from recaps.management.commands.resend_recap_approved_since import (
     approved_recaps_since,
     parse_since,
 )
-from recaps.mutation_parts.notify import _thread_recap_approved_notify
+from recaps.mutation_parts.notify import (
+    _kick_recap_approved_notify,
+    _thread_recap_approved_notify,
+)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -422,3 +426,25 @@ class TestResendRecapApprovedSince(JobsGraphQLTestCase):
         threading.Thread(target=_run).start()
         assert done.wait(timeout=10)
         assert errors == []
+
+    def test_kick_from_async_does_not_hit_sync_orm(self):
+        since = parse_since("2026-08-15")
+        recap = self._make_custom(
+            approved=True, updated_at=since + timedelta(hours=1), name="Async kick"
+        )
+        recap = recap_models.CustomRecap.objects.get(pk=recap.pk)
+        with (
+            patch(
+                "recaps.mutation_parts.notify.enqueue",
+                return_value=False,
+            ),
+            patch(
+                "recaps.mutation_parts.notify._ensure_recap_pdf_for_notify",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "recaps.mutation_parts.notify.RecapApprovedNotificationMailer.send"
+            ) as mock_send,
+        ):
+            async_to_sync(_kick_recap_approved_notify)(recap, "custom")
+        assert mock_send.called
