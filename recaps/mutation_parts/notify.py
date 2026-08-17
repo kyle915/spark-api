@@ -5,6 +5,7 @@ import re
 from asgiref.sync import sync_to_async
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.utils import timezone
 
 from recaps import models
 from recaps.envelopes import (
@@ -21,6 +22,56 @@ from utils.onesignal import OneSignalError, one_signal_client
 
 User = get_user_model()
 logger = logging.getLogger("recaps.mutations")
+
+# Kyle: do not send Girl Beer recap-approved client mail. Stamp
+# client_notified_at so catch-up / future approves skip SMTP.
+GIRL_BEER_TENANT_SLUGS = frozenset({"girl-beer", "girlbeer"})
+
+
+def recap_tenant(recap: models.Recap | models.CustomRecap):
+    tenant = getattr(recap, "tenant", None)
+    if tenant is not None:
+        return tenant
+    event = getattr(recap, "event", None)
+    return getattr(event, "tenant", None) if event is not None else None
+
+
+def is_girl_beer_recap(recap: models.Recap | models.CustomRecap) -> bool:
+    tenant = recap_tenant(recap)
+    if tenant is None:
+        return False
+    slug = (getattr(tenant, "slug", None) or "").strip().lower()
+    name = (getattr(tenant, "name", None) or "").strip().lower()
+    url_name = (getattr(tenant, "request_url_name", None) or "").strip().lower()
+    if slug in GIRL_BEER_TENANT_SLUGS:
+        return True
+    if name == "girl beer":
+        return True
+    if url_name in GIRL_BEER_TENANT_SLUGS or url_name.endswith("-girl-beer"):
+        return True
+    return False
+
+
+def stamp_client_notified(
+    recap: models.Recap | models.CustomRecap, *, reason: str = ""
+) -> bool:
+    """Stamp client_notified_at without bumping updated_at (QuerySet.update)."""
+    if getattr(recap, "client_notified_at", None):
+        return False
+    now = timezone.now()
+    updated = type(recap).objects.filter(
+        pk=recap.pk, client_notified_at__isnull=True
+    ).update(client_notified_at=now)
+    if updated:
+        recap.client_notified_at = now
+        logger.info(
+            "Stamped client_notified_at recap=%s model=%s reason=%s",
+            recap.pk,
+            type(recap).__name__,
+            reason,
+        )
+    return bool(updated)
+
 
 _RECAP_APPROVED_SELECT_RELATED = (
     "event",
@@ -64,6 +115,11 @@ def _thread_recap_approved_notify(
 
     def _run():
         recap = _load_recap_for_approved_notify(recap_id, recap_kind)
+        if is_girl_beer_recap(recap):
+            stamp_client_notified(recap, reason="girl-beer")
+            return
+        if getattr(recap, "client_notified_at", None):
+            return
         if not html_only:
             async_to_sync(_ensure_recap_pdf_for_notify)(recap)
         async_to_sync(_notify_recap_approved_to_rmm_or_clients)(
@@ -79,6 +135,13 @@ def _thread_recap_approved_notify(
 
 async def _kick_recap_approved_notify(recap, recap_kind: str) -> None:
     """Enqueue PDF + client email, or send on this request if the queue is off."""
+    if is_girl_beer_recap(recap):
+        await sync_to_async(stamp_client_notified)(recap, reason="girl-beer")
+        logger.info(
+            "Girl Beer recap %s: marked client_notified_at, skipped SMTP",
+            getattr(recap, "id", None),
+        )
+        return
     payload = {"recap_id": recap.id, "recap_kind": recap_kind}
     path = "/api/tasks/recap-approved-notify"
     enqueued = await sync_to_async(enqueue)(path, payload)
@@ -198,10 +261,17 @@ async def _notify_recap_approved_to_rmm_or_clients(
     *,
     html_only: bool = False,
 ) -> None:
+    if is_girl_beer_recap(recap):
+        await sync_to_async(stamp_client_notified)(recap, reason="girl-beer")
+        return
+    if getattr(recap, "client_notified_at", None):
+        return
+
     recipients, reply_to_email = await sync_to_async(
         _collect_recap_approved_recipients
     )(recap)
     if not recipients:
+        await sync_to_async(stamp_client_notified)(recap, reason="no-recipients")
         return
 
     # Resolve PDF once and reuse — saves one GCS fetch per recipient.
@@ -227,6 +297,10 @@ async def _notify_recap_approved_to_rmm_or_clients(
                 email,
                 getattr(recap, "id", None),
             )
+
+    # Stamp even if some recipients failed so a catch-up cannot re-spam
+    # the ones that already got mail.
+    await sync_to_async(stamp_client_notified)(recap, reason="sent")
 
 
 async def _notify_recap_approved_to_ambassador_by_push(
