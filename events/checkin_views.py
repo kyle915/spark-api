@@ -32,6 +32,8 @@ from django.views.decorators.http import require_http_methods
 from ambassadors import checkin_web
 from events.checkin_tokens import (
     BadSignature,
+    CHECKIN_SESSION_MAX_AGE_SECONDS,
+    CHECKIN_TENANT_SESSION_MAX_AGE_SECONDS,
     SignatureExpired,
     make_checkin_session_token,
     read_checkin_session_token,
@@ -141,10 +143,22 @@ def _load_session(code: str, token: str):
         return None, _err("This link is no longer active.", status=404, code="not_found")
     if not token:
         return None, _err("Your check-in session is missing. Reload the link.", status=401, code="no_session")
+    # Standing links keep a session long enough to file a late recap
+    # (Friday's shift, Sunday night). Per-event codes stay at 2 days.
+    max_age = (
+        CHECKIN_TENANT_SESSION_MAX_AGE_SECONDS
+        if kind == "tenant"
+        else CHECKIN_SESSION_MAX_AGE_SECONDS
+    )
     try:
-        event_id, amb_id = read_checkin_session_token(token)
+        event_id, amb_id = read_checkin_session_token(token, max_age=max_age)
     except SignatureExpired:
-        return None, _err("Your check-in session expired. Reload the link.", status=401, code="expired")
+        expired = (
+            "Your check-in session expired. Start over and pick the date you worked."
+            if kind == "tenant"
+            else "Your check-in session expired. Reload the link."
+        )
+        return None, _err(expired, status=401, code="expired")
     except (BadSignature, ValueError):
         return None, _err("Invalid check-in session.", status=401, code="bad_session")
 
@@ -196,6 +210,9 @@ def public_checkin_context(request: HttpRequest, code: str) -> HttpResponse:
                 event, ambassador = loaded
                 payload = checkin_web.build_public_context(event, ambassador)
                 payload["mode"] = "tenant"
+                payload["unfiledShifts"] = checkin_web.unfiled_shifts_for(
+                    ambassador=ambassador, tenant=target
+                )
                 return JsonResponse(payload)
         try:
             return JsonResponse(checkin_web.build_tenant_context(target))
@@ -373,16 +390,33 @@ def public_checkin_identify(request: HttpRequest, code: str) -> HttpResponse:
                 "code=%s raw=%r — using the tenant default",
                 code, data.get("eventTypeId"),
             )
-        try:
-            event, _new = checkin_web.find_or_create_walkin_event(
-                tenant=target, store_name=store_name, address=address,
-                on_date=on_date, actor=ambassador.user, event_type=chosen_type,
+        # Prefer a shift this BA already clocked that day. Feel Free shares
+        # one event per market per day; landing on that event is what lets
+        # Rocio file Friday's recap on Sunday instead of inventing a new one.
+        existing = checkin_web.existing_shift_event_for(
+            ambassador=ambassador,
+            tenant=target,
+            on_date=on_date,
+            address=address,
+        )
+        if existing is not None:
+            event = existing
+        elif on_date < dj_tz.localdate():
+            return _err(
+                "No check-in found for that date. Pick a day you actually "
+                "clocked in, or ask your lead to log it."
             )
-        except ValueError as exc:
-            return _err(str(exc))
-        except Exception:  # noqa: BLE001
-            logger.exception("checkin tenant event resolve failed code=%s", code)
-            return _err("Couldn't set up your event. Try again.", status=500, code="server")
+        else:
+            try:
+                event, _new = checkin_web.find_or_create_walkin_event(
+                    tenant=target, store_name=store_name, address=address,
+                    on_date=on_date, actor=ambassador.user, event_type=chosen_type,
+                )
+            except ValueError as exc:
+                return _err(str(exc))
+            except Exception:  # noqa: BLE001
+                logger.exception("checkin tenant event resolve failed code=%s", code)
+                return _err("Couldn't set up your event. Try again.", status=500, code="server")
 
     try:
         amb_event, _created = checkin_web.ensure_walkup_booking(
@@ -396,9 +430,49 @@ def public_checkin_identify(request: HttpRequest, code: str) -> HttpResponse:
     payload = checkin_web.build_public_context(event, ambassador)
     if kind == "tenant":
         payload["mode"] = "tenant"
+        payload["unfiledShifts"] = checkin_web.unfiled_shifts_for(
+            ambassador=ambassador, tenant=target
+        )
     payload["sessionToken"] = token
     payload["ambassadorEventUuid"] = str(amb_event.uuid)
     return JsonResponse(payload)
+
+
+# --------------------------------------------------------------------------
+# POST unfiled recaps (standing link — list shifts still missing a recap)
+# --------------------------------------------------------------------------
+@csrf_exempt
+@require_http_methods(["POST"])
+def public_checkin_unfiled_recaps(request: HttpRequest, code: str) -> HttpResponse:
+    """Shifts this BA already clocked that still need a recap.
+
+    Used by the standing identify step so a BA who forgot Friday can tap
+    that day instead of defaulting to today and getting stuck. Identity
+    is the same phone-keyed stub identify uses — no session required.
+    """
+    if _over_limit("unfiled-ip", _client_ip(request), limit=20, window=300):
+        return _rate_limited()
+
+    kind, target = checkin_web.resolve_checkin_target(code)
+    if kind != "tenant":
+        return JsonResponse({"shifts": []})
+
+    data = _body(request)
+    phone = (data.get("phone") or "").strip()
+    if not phone:
+        return JsonResponse({"shifts": []})
+
+    ambassador = checkin_web.find_checkin_ambassador(phone=phone)
+    if ambassador is None:
+        return JsonResponse({"shifts": []})
+
+    return JsonResponse(
+        {
+            "shifts": checkin_web.unfiled_shifts_for(
+                ambassador=ambassador, tenant=target
+            )
+        }
+    )
 
 
 # --------------------------------------------------------------------------
@@ -563,6 +637,13 @@ def public_checkin_recap(request: HttpRequest, code: str) -> HttpResponse:
     if not isinstance(field_values, list) or not isinstance(files, list):
         return _err("Malformed recap.")
 
+    # Standing tenant links may file more than one recap on the same event
+    # (same market, same day). Per-event codes stay one-per-activation.
+    kind, _target = checkin_web.resolve_checkin_target(code)
+    force_new = bool(data.get("forceNew") or data.get("asNew"))
+    if kind != "tenant":
+        force_new = False
+
     try:
         checkin_web.submit_checkin_recap(
             event=event,
@@ -572,6 +653,7 @@ def public_checkin_recap(request: HttpRequest, code: str) -> HttpResponse:
             files=files,
             total_engagements=total_engagements,
             product_samples=product_samples if isinstance(product_samples, list) else [],
+            force_new=force_new,
         )
     except checkin_web.RecapNeedsAPhoto as exc:
         # The BA's to fix, not a server fault — so a 400 carrying the SAME
