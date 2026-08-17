@@ -60,6 +60,9 @@ class Recap(models.Model):
     client_signoff_status = models.CharField(max_length=32, blank=True, default="")
     client_signoff_comment = models.TextField(blank=True, default="")
     client_signoff_at = models.DateTimeField(null=True, blank=True)
+    # Set when client/RMM "recap is ready" mail is sent, or when we
+    # internally mark it sent without SMTP (Girl Beer: do not email).
+    client_notified_at = models.DateTimeField(null=True, blank=True)
     traffic_description = models.CharField(max_length=255, null=True)
     competitive_presence = models.CharField(max_length=255, null=True)
 
@@ -438,6 +441,9 @@ class CustomRecap(models.Model):
     client_signoff_status = models.CharField(max_length=32, blank=True, default="")
     client_signoff_comment = models.TextField(blank=True, default="")
     client_signoff_at = models.DateTimeField(null=True, blank=True)
+    # Set when client/RMM "recap is ready" mail is sent, or when we
+    # internally mark it sent without SMTP (Girl Beer: do not email).
+    client_notified_at = models.DateTimeField(null=True, blank=True)
     used_corpo_card = models.BooleanField(default=False)
 
     # Submit-time data-quality guard: non-empty when this recap's parsed

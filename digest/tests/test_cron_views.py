@@ -1129,6 +1129,54 @@ class TestResendRecapApprovedSinceCronView:
 
     @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
     @patch("digest.cron_views.call_command")
+    def test_resume_batch_params(self, mock_call):
+        mock_call.return_value = None
+        resp = self.client.post(
+            RESEND_RECAP_APPROVED_URL,
+            {
+                "since": "2026-07-04",
+                "execute": "true",
+                "html_only": "true",
+                "kind": "custom",
+                "after_id": "406",
+                "exclude_id": "727",
+                "limit": "25",
+            },
+            HTTP_X_CRON_SECRET=VALID_SECRET,
+        )
+        assert resp.status_code == 200
+        args, _kwargs = mock_call.call_args
+        assert "--dry-run" not in args
+        assert "--html-only" in args
+        assert "--kind" in args
+        assert "custom" in args
+        assert "--after-id" in args
+        assert "406" in args
+        assert "--exclude-id" in args
+        assert "727" in args
+        assert "--limit" in args
+        assert "25" in args
+
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    @patch("digest.cron_views.call_command")
+    def test_mark_girl_beer_param(self, mock_call):
+        mock_call.return_value = None
+        resp = self.client.post(
+            RESEND_RECAP_APPROVED_URL,
+            {
+                "since": "2026-07-04",
+                "execute": "true",
+                "mark_girl_beer": "true",
+            },
+            HTTP_X_CRON_SECRET=VALID_SECRET,
+        )
+        assert resp.status_code == 200
+        args, _kwargs = mock_call.call_args
+        assert "--mark-girl-beer" in args
+        assert "--dry-run" not in args
+
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    @patch("digest.cron_views.call_command")
     def test_missing_since_returns_400(self, mock_call):
         resp = self.client.post(
             RESEND_RECAP_APPROVED_URL,

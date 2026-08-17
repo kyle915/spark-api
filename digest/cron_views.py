@@ -5426,7 +5426,9 @@ class ResendRecapApprovedSinceView(View):
     Re-send client/RMM "Your activation recap is ready" for recaps
     approved on or after ``since`` (YYYY-MM-DD, America/Los_Angeles).
     Does not re-send Ignite internal review/suspect-numbers alerts.
-    Dry-run by default. Params: since, execute, html_only, recap_id, kind.
+    Girl Beer is marked sent without SMTP. Dry-run by default.
+    Params: since, execute, html_only, recap_id, kind, after_id,
+    through_id, exclude_id, limit, mark_girl_beer, mark_notified.
     """
 
     def _run(self, request: HttpRequest) -> HttpResponse:
@@ -5442,17 +5444,36 @@ class ResendRecapApprovedSinceView(View):
             return JsonResponse({"ok": False, "error": "since-required"}, status=400)
         execute = _get("execute").lower() in ("1", "true", "yes", "on")
         html_only = _get("html_only").lower() in ("1", "true", "yes", "on")
+        mark_girl_beer = _get("mark_girl_beer").lower() in ("1", "true", "yes", "on")
+        mark_notified = _get("mark_notified").lower() in ("1", "true", "yes", "on")
         recap_id = _get("recap_id")
         kind = _get("kind")
+        after_id = _get("after_id")
+        through_id = _get("through_id")
+        exclude_id = _get("exclude_id")
+        limit = _get("limit")
         cmd_args = ["--since", since]
         if not execute:
             cmd_args.append("--dry-run")
         if html_only:
             cmd_args.append("--html-only")
+        if mark_girl_beer:
+            cmd_args.append("--mark-girl-beer")
+        if mark_notified:
+            cmd_args.append("--mark-notified")
         if recap_id:
             cmd_args.extend(["--recap-id", recap_id])
         if kind in ("legacy", "custom"):
             cmd_args.extend(["--kind", kind])
+        if after_id:
+            cmd_args.extend(["--after-id", after_id])
+        if through_id:
+            cmd_args.extend(["--through-id", through_id])
+        if limit:
+            cmd_args.extend(["--limit", limit])
+        for token in exclude_id.replace(" ", "").split(","):
+            if token:
+                cmd_args.extend(["--exclude-id", token])
 
         out = io.StringIO()
         try:
@@ -5473,7 +5494,12 @@ class ResendRecapApprovedSinceView(View):
                 "ok": True,
                 "execute": execute,
                 "html_only": html_only,
+                "mark_girl_beer": mark_girl_beer,
+                "mark_notified": mark_notified,
                 "since": since,
+                "after_id": after_id,
+                "through_id": through_id,
+                "limit": limit,
                 "log": out.getvalue(),
             }
         )
