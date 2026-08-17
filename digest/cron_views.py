@@ -3659,28 +3659,20 @@ class DumpRecapFieldsView(View):
                 )[0]
                 data = json.loads(blob)
         except CommandError as exc:
-            # A wrong/stale tenant slug used to 500 the hourly job (and fire
-            # backend error alerts) on every tick. Skip instead of crashing.
-            msg = str(exc)
-            if msg.startswith("No tenant matches") or "is ambiguous" in msg:
-                logger.warning("export_recap_fields cron skipped: %s", msg)
-                return JsonResponse(
-                    {
-                        "ok": True,
-                        "skipped": True,
-                        "reason": "tenant-not-found",
-                        "detail": msg,
-                    }
-                )
-            logger.exception("export_recap_fields cron failed")
+            # Unknown tenant / bad dates are caller errors, not Internal
+            # Server Error. Returning 500 here is what made Spark alert
+            # `django.request:log_response` for this path with an empty
+            # traceback. 400 still fails the GitHub Action (non-200) without
+            # pretending the export ran.
+            logger.info("export_recap_fields cron rejected: %s", exc)
             return JsonResponse(
                 {
                     "ok": False,
                     "error": "command-failed",
-                    "detail": msg,
+                    "detail": str(exc),
                     "report": out.getvalue(),
                 },
-                status=500,
+                status=400,
             )
         except Exception as exc:  # noqa: BLE001 — surface to caller
             logger.exception("export_recap_fields cron failed")
@@ -3688,7 +3680,7 @@ class DumpRecapFieldsView(View):
                 {
                     "ok": False,
                     "error": "command-failed",
-                    "detail": str(exc),
+                    "detail": f"{type(exc).__name__}: {exc}",
                     "report": out.getvalue(),
                 },
                 status=500,

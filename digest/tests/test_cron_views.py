@@ -1193,7 +1193,8 @@ class TestDumpRecapFieldsCronView:
     """`/internal/cron/dump-recap-fields` must not 500 on a missing tenant.
 
     The hourly scheduler passes tenant slug (`torch-thc`). A CommandError
-    used to become HTTP 500 + an error-monitor email every hour.
+    used to become HTTP 500 + an error-monitor email every hour. 400 still
+    fails GitHub Actions without pretending the export ran.
     """
 
     @pytest.fixture(autouse=True)
@@ -1202,7 +1203,7 @@ class TestDumpRecapFieldsCronView:
 
     @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
     @patch("digest.cron_views.call_command")
-    def test_missing_tenant_skips_instead_of_500(self, mock_call):
+    def test_missing_tenant_is_400_not_500(self, mock_call):
         from django.core.management.base import CommandError
 
         mock_call.side_effect = CommandError("No tenant matches 'torch-thc'.")
@@ -1211,16 +1212,15 @@ class TestDumpRecapFieldsCronView:
             {"tenant": "torch-thc"},
             HTTP_X_CRON_SECRET=VALID_SECRET,
         )
-        assert resp.status_code == 200
+        assert resp.status_code == 400
         body = resp.json()
-        assert body["ok"] is True
-        assert body["skipped"] is True
-        assert body["reason"] == "tenant-not-found"
+        assert body["ok"] is False
+        assert body["error"] == "command-failed"
         assert "torch-thc" in body["detail"]
 
     @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
     @patch("digest.cron_views.call_command")
-    def test_other_command_error_still_500s(self, mock_call):
+    def test_bad_date_is_400_not_500(self, mock_call):
         from django.core.management.base import CommandError
 
         mock_call.side_effect = CommandError("bad date (expected YYYY-MM-DD): nope")
@@ -1229,8 +1229,27 @@ class TestDumpRecapFieldsCronView:
             {"tenant": "torch-thc", "start": "nope"},
             HTTP_X_CRON_SECRET=VALID_SECRET,
         )
-        assert resp.status_code == 500
+        assert resp.status_code == 400
         assert resp.json()["ok"] is False
+
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    @patch("digest.cron_views.call_command")
+    def test_programming_error_names_the_exception_in_detail(self, mock_call):
+        from django.db.utils import ProgrammingError
+
+        mock_call.side_effect = ProgrammingError(
+            'column "account_spend_amount" does not exist'
+        )
+        resp = self.client.post(
+            DUMP_RECAP_FIELDS_URL,
+            {"tenant": "torch-thc", "dry_run": "1"},
+            HTTP_X_CRON_SECRET=VALID_SECRET,
+        )
+        assert resp.status_code == 500
+        body = resp.json()
+        assert body["ok"] is False
+        assert "ProgrammingError" in body["detail"]
+        assert "account_spend_amount" in body["detail"]
 
     @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
     @patch("digest.cron_views.call_command")
