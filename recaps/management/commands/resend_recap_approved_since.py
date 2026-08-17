@@ -113,6 +113,14 @@ class Command(BaseCommand):
             default="",
             help="Limit to legacy Recap or CustomRecap when using --recap-id.",
         )
+        parser.add_argument(
+            "--html-only",
+            action="store_true",
+            help=(
+                "Skip PDF generate/attach. Sends the same HTML + public "
+                "link as the working recap #727 sample."
+            ),
+        )
 
     def handle(self, *args, **opts):
         from recaps.mutation_parts.notify import (
@@ -124,6 +132,7 @@ class Command(BaseCommand):
         recap_id = opts["recap_id"] or None
         kind = opts["kind"] or None
         dry_run = opts["dry_run"]
+        html_only = opts["html_only"]
 
         rows = list(approved_recaps_since(since, recap_id=recap_id, kind=kind))
         unique_to: set[str] = set()
@@ -141,7 +150,9 @@ class Command(BaseCommand):
             if dry_run:
                 continue
             try:
-                _thread_recap_approved_notify(recap.id, recap_kind)
+                _thread_recap_approved_notify(
+                    recap.id, recap_kind, html_only=html_only
+                )
                 sent += 1
             except Exception:
                 failed += 1
@@ -154,7 +165,7 @@ class Command(BaseCommand):
         summary = (
             f"recaps={len(rows)} unique_to={len(unique_to)} "
             f"sent={sent} failed={failed} dry_run={dry_run} "
-            f"since={since.isoformat()}"
+            f"html_only={html_only} since={since.isoformat()}"
         )
         self.stdout.write(self.style.SUCCESS(summary))
         logger.info("resend_recap_approved_since %s", summary)

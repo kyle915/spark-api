@@ -9,6 +9,8 @@ This module tests:
 - Mailer class (all methods)
 - MailChain class (all methods)
 """
+import base64
+import json
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 from django.test import override_settings
@@ -22,6 +24,9 @@ from utils.mailer import (
     send_email_task,
     Mailer,
     MailChain,
+    json_safe_attachment_content,
+    json_safe_attachments,
+    attachment_bytes,
 )
 
 
@@ -172,6 +177,30 @@ class TestEnvelope:
         with pytest.raises(ValueError, match="Key subject is required"):
             Envelope.from_dict(payload)
 
+    def test_compile_bytes_attachments_are_json_serializable(self):
+        """Recap PDFs used to be raw bytes — compile() must JSON-dump."""
+        pdf = b"%PDF-1.4 recap-727"
+        envelope = Envelope(
+            subject="Your activation recap is ready",
+            from_email="from@example.com",
+            to_emails=["to@example.com"],
+            html="<p>Recap</p>",
+            headers={},
+            attachments=[
+                {
+                    "filename": "recap-727.pdf",
+                    "content": pdf,
+                    "content_type": "application/pdf",
+                }
+            ],
+        )
+        payload = envelope.compile()
+        dumped = json.dumps(payload)
+        assert "recap-727.pdf" in dumped
+        encoded = payload["attachments"][0]["content"]
+        assert isinstance(encoded, str)
+        assert base64.b64decode(encoded) == pdf
+
 
 @pytest.mark.django_db
 class TestMailDrivers:
@@ -246,6 +275,72 @@ class TestMailDrivers:
                 "<html>Rendered</html>", "text/html"
             )
             mock_email_instance.send.assert_called_once()
+
+    @patch("utils.mailer.resend.Emails.send", return_value={"id": "re_test"})
+    def test_resend_mail_driver_encodes_bytes_attachments(self, mock_resend_send):
+        """Inline Resend path: raw PDF bytes must become JSON-safe base64."""
+        driver = ResendMailDriver()
+        pdf = b"%PDF-1.4 bytes-not-json"
+        envelope = Envelope(
+            subject="Your activation recap is ready",
+            from_email="from@example.com",
+            to_emails=["to@example.com"],
+            html="<p>Recap</p>",
+            attachments=[
+                {
+                    "filename": "recap-727.pdf",
+                    "content": pdf,
+                    "content_type": "application/pdf",
+                }
+            ],
+        )
+        driver.send(envelope)
+        params = mock_resend_send.call_args[0][0]
+        json.dumps(params)
+        att = params["attachments"][0]
+        assert att["filename"] == "recap-727.pdf"
+        assert isinstance(att["content"], str)
+        assert base64.b64decode(att["content"]) == pdf
+
+    @patch("utils.mailer.resend.Emails.send", return_value={"id": "re_test"})
+    def test_resend_mail_driver_does_not_double_encode_base64(self, mock_resend_send):
+        """Campaign reports already send base64 — leave those strings alone."""
+        driver = ResendMailDriver()
+        pdf = b"%PDF-1.4 already-encoded"
+        encoded = base64.b64encode(pdf).decode("ascii")
+        envelope = Envelope(
+            subject="Campaign report",
+            from_email="from@example.com",
+            to_emails=["to@example.com"],
+            html="<p>Report</p>",
+            attachments=[
+                {
+                    "filename": "ld.pdf",
+                    "content": encoded,
+                    "content_type": "application/pdf",
+                }
+            ],
+        )
+        driver.send(envelope)
+        att = mock_resend_send.call_args[0][0]["attachments"][0]
+        assert att["content"] == encoded
+
+    def test_json_safe_attachment_helpers(self):
+        pdf = b"%PDF-1.4"
+        assert json_safe_attachment_content(pdf) == base64.b64encode(pdf).decode(
+            "ascii"
+        )
+        listed = list(pdf)
+        assert json_safe_attachment_content(listed) == listed
+        encoded = base64.b64encode(pdf).decode("ascii")
+        assert json_safe_attachment_content(encoded) == encoded
+        safe = json_safe_attachments(
+            [{"filename": "x.pdf", "content": pdf, "content_type": "application/pdf"}]
+        )
+        json.dumps(safe)
+        assert attachment_bytes(safe[0]["content"]) == pdf
+        assert attachment_bytes(listed) == pdf
+        assert attachment_bytes(pdf) == pdf
 
     @override_settings(MAIL_DRIVER="mailpit")
     def test_mail_drivers_default_driver(self):
@@ -383,6 +478,43 @@ class TestMailer:
         with patch.object(mailer, 'dispatch') as mock_dispatch:
             mailer.send_now()
             mock_dispatch.assert_called_once()
+
+    @override_settings(MAIL_DRIVER="resend")
+    @patch("utils.mailer.resend.Emails.send", return_value={"id": "re_inline"})
+    @patch(
+        "utils.mailer.Queues",
+        side_effect=ConnectionRefusedError("[Errno 61] Connection refused"),
+    )
+    def test_inline_resend_fallback_sends_bytes_attachments(
+        self, _mock_queues, mock_resend_send
+    ):
+        """Prod Cloud Run: Redis is down, so send() goes inline to Resend."""
+        pdf = b"%PDF-1.4 recap-727"
+
+        class RecapPdfMailer(Mailer):
+            def envelope(self):
+                return Envelope(
+                    subject="Your activation recap is ready",
+                    to_emails=["events@example.com"],
+                    html="<p>Recap</p>",
+                    attachments=[
+                        {
+                            "filename": "recap-727.pdf",
+                            "content": pdf,
+                            "content_type": "application/pdf",
+                        }
+                    ],
+                )
+
+        with patch.object(Mailer, "_build_logo_attachment", return_value=None):
+            RecapPdfMailer().send()
+
+        mock_resend_send.assert_called_once()
+        params = mock_resend_send.call_args[0][0]
+        json.dumps(params)
+        att = params["attachments"][0]
+        assert att["filename"] == "recap-727.pdf"
+        assert base64.b64decode(att["content"]) == pdf
 
     @pytest.mark.asyncio
     async def test_mailer_send_async(self):
