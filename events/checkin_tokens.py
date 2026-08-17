@@ -25,8 +25,15 @@ from django.core.signing import BadSignature, SignatureExpired, TimestampSigner
 _CHECKIN_SESSION_SALT = "checkin.session.v1"
 
 # 2 days — comfortably covers a shift plus a late/next-morning recap, matching
-# the walk-up code's own expiry grace (ambassadors/walkup.py).
+# the walk-up code's own expiry grace (ambassadors/walkup.py). Per-event
+# links stay on this window: one activation, one session.
 CHECKIN_SESSION_MAX_AGE_SECONDS = 2 * 24 * 60 * 60
+
+# Standing tenant links (Feel Free / FF-*) let a BA file a recap days after
+# they clocked out — Friday's shift, Sunday night. The identify date picker
+# already accepts 90 days back; the session token has to last as long or
+# "Your check-in session expired" is the thing that "is not letting me."
+CHECKIN_TENANT_SESSION_MAX_AGE_SECONDS = 90 * 24 * 60 * 60
 
 
 def _signer() -> TimestampSigner:
@@ -57,6 +64,7 @@ __all__ = [
     "make_checkin_session_token",
     "read_checkin_session_token",
     "CHECKIN_SESSION_MAX_AGE_SECONDS",
+    "CHECKIN_TENANT_SESSION_MAX_AGE_SECONDS",
     "BadSignature",
     "SignatureExpired",
 ]

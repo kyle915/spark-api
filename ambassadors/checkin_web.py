@@ -391,6 +391,25 @@ def get_or_create_checkin_ambassador(
     return ambassador, created
 
 
+def find_checkin_ambassador(*, phone: str):
+    """The existing walk-up stub for this phone, or None.
+
+    Lookup only — the unfiled-recaps list must not mint a stub just because
+    someone opened the standing link. Identity is the same phone-derived
+    ``@walkup.spark`` email ``get_or_create_checkin_ambassador`` uses.
+    """
+    from ambassadors.models import Ambassador
+
+    phone_digits = _normalize_phone(phone)
+    if not phone_digits:
+        return None
+    lookup_email = _synth_email(phone_digits)
+    user = User.objects.filter(email__iexact=lookup_email).first()
+    if user is None:
+        return None
+    return Ambassador.objects.filter(user=user).first()
+
+
 # --------------------------------------------------------------------------
 # Booking + attendance
 # --------------------------------------------------------------------------
@@ -645,6 +664,128 @@ def has_recap(*, ambassador_id: int, event_id: int) -> bool:
     return has_filed_recap(ambassador_id=ambassador_id, event_id=event_id)
 
 
+def existing_shift_event_for(*, ambassador, tenant, on_date, address: str = ""):
+    """Event this BA already clocked on for ``tenant`` on ``on_date``.
+
+    Standing-check-in recaps belong to a real shift. A BA filing Friday's
+    recap on Sunday must land on Friday's event — not a new one invented
+    from today's form defaults. Prefer an address/market match when they
+    typed one; otherwise the newest clock-in that day.
+    """
+    from django.db.models import Q
+
+    from ambassadors.models import Attendance
+
+    if ambassador is None or tenant is None or on_date is None:
+        return None
+
+    day_start = _event_date_utc(on_date)
+    lo = day_start.replace(hour=0, minute=0, second=0, microsecond=0)
+    hi = day_start.replace(hour=23, minute=59, second=59, microsecond=999999)
+    # clock_time is stored in UTC; a US evening punch can sit on either
+    # side of the noon-UTC event.date. A 14-hour pad covers every US zone.
+    clock_lo = day_start - timedelta(hours=14)
+    clock_hi = day_start + timedelta(hours=14)
+
+    rows = (
+        Attendance.objects.filter(
+            ambassador=ambassador,
+            event__tenant=tenant,
+            source__name="clock_in",
+        )
+        .filter(
+            Q(event__date__gte=lo, event__date__lte=hi)
+            | Q(clock_time__gte=clock_lo, clock_time__lte=clock_hi)
+        )
+        .select_related(
+            "event",
+            "event__tenant",
+            "event__request",
+            "event__retailer",
+            "event__location",
+            "event__state",
+            "event__timezone",
+            "event__event_type",
+        )
+        .order_by("-clock_time")
+    )
+
+    events = []
+    seen: set[int] = set()
+    for att in rows:
+        ev = att.event
+        if ev is None or ev.id in seen:
+            continue
+        seen.add(ev.id)
+        events.append(ev)
+    if not events:
+        return None
+
+    if address:
+        key = normalize_place(address)
+        core = address_core_key(address)
+        for ev in events:
+            ev_addr = ev.address or ""
+            if key and normalize_place(ev_addr) == key:
+                return ev
+            if core and address_core_key(ev_addr) == core:
+                return ev
+    return events[0]
+
+
+def unfiled_shifts_for(*, ambassador, tenant, limit: int = 8) -> list[dict]:
+    """Recent clocked shifts that still need a filed recap.
+
+    The standing identify step lists these so a BA who forgot Friday can
+    tap that shift instead of re-typing today's date and getting stuck.
+    """
+    from ambassadors.models import Attendance
+    from recaps.filed import has_filed_recap
+
+    if ambassador is None or tenant is None:
+        return []
+
+    cutoff = dj_tz.now() - timedelta(days=90)
+    rows = (
+        Attendance.objects.filter(
+            ambassador=ambassador,
+            event__tenant=tenant,
+            source__name="clock_in",
+            clock_time__gte=cutoff,
+        )
+        .select_related("event")
+        .order_by("-clock_time")
+    )
+
+    out: list[dict] = []
+    seen: set[int] = set()
+    for att in rows:
+        ev = att.event
+        if ev is None or ev.id in seen:
+            continue
+        seen.add(ev.id)
+        if has_filed_recap(ambassador_id=ambassador.id, event_id=ev.id):
+            continue
+        clock = clock_state(ambassador_id=ambassador.id, event_id=ev.id)
+        day = getattr(ev, "date", None)
+        event_date = None
+        if day is not None:
+            event_date = day.date().isoformat() if hasattr(day, "date") else str(day)[:10]
+        out.append(
+            {
+                "eventDate": event_date,
+                "name": ev.name or "",
+                "address": ev.address or "",
+                "clockInAt": clock.get("clockInAt"),
+                "clockOutAt": clock.get("clockOutAt"),
+                "clockState": clock.get("state"),
+            }
+        )
+        if len(out) >= limit:
+            break
+    return out
+
+
 # --------------------------------------------------------------------------
 # Admin alert — "a web check-in just landed"
 # --------------------------------------------------------------------------
@@ -754,6 +895,7 @@ def submit_checkin_recap(
     files: list[dict],
     total_engagements: int | None,
     product_samples: list[dict] | None = None,
+    force_new: bool = False,
 ):
     """Create a ``CustomRecap`` (+ field values, photos, product samples) for a
     walk-up BA, attributed to their own user. Replicates the write path in
@@ -796,15 +938,32 @@ def submit_checkin_recap(
     allowed_category_ids = {b["id"] for b in serialize_photo_buckets(event)}
 
     with transaction.atomic():
-        # Idempotent: a returning/edited check-in updates its existing recap for
-        # this (event, BA) rather than filing a duplicate that would inflate KPIs
-        # (the page offers "Edit recap"; a flaky-network double-submit hits this
-        # too). Field values + product samples are replaced; photos are additive.
+        # Default is idempotent: a returning/edited check-in updates its
+        # existing recap for this (event, BA) rather than filing a duplicate
+        # (the page offers "Edit recap"; a flaky-network double-submit hits
+        # this too). Field values + product samples are replaced; photos are
+        # additive.
+        #
+        # Standing tenant links (Feel Free) are the exception: a BA can work
+        # more than one shift in the same market on the same calendar day, and
+        # those share ONE event. `force_new` files another recap instead of
+        # overwriting the first. An empty clock-out stub is still reused so
+        # we don't leave a blank row next to a real one. Per-event codes
+        # never pass force_new — Liquid Death activations stay one-per-event.
         recap = (
             rmodels.CustomRecap.objects.filter(event=event, ambassador=ambassador)
             .order_by("-id")
             .first()
         )
+        if recap is not None and force_new:
+            from recaps.filed import custom_filed_q
+
+            if (
+                rmodels.CustomRecap.objects.filter(id=recap.id)
+                .filter(custom_filed_q())
+                .exists()
+            ):
+                recap = None
         if recap is None:
             recap = rmodels.CustomRecap.objects.create(
                 name=name,
