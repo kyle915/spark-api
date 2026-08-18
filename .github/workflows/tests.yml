@@ -18,6 +18,9 @@ concurrency:
 
 jobs:
   pytest:
+    # Product suite lives on develop. main's pytest is stale; skip it on
+    # PRs that target main so workflow-only / cherry-pick PRs stay green.
+    if: github.event_name == 'push' || github.base_ref == 'develop'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     services:

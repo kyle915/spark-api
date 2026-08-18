@@ -581,7 +581,7 @@ class QuerySpark(GoogleCalendarQueries, TenantThemingQuery):
                 last=last,
                 before=before,
                 default_limit=10,
-                max_limit=100,
+                max_limit=500,
             )
         except ValueError as exc:
             raise GraphQLError(str(exc)) from exc
@@ -885,7 +885,7 @@ class QueryClients(
                 last=last,
                 before=before,
                 default_limit=10,
-                max_limit=100,
+                max_limit=500,
             )
         except ValueError as exc:
             raise GraphQLError(str(exc)) from exc
@@ -974,7 +974,7 @@ class QueryMobile(TenantThemingQuery):
                 last=last,
                 before=before,
                 default_limit=10,
-                max_limit=100,
+                max_limit=500,
             )
         except ValueError as exc:
             raise GraphQLError(str(exc)) from exc

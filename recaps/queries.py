@@ -2410,7 +2410,7 @@ class RecapQueries:
                 last=last,
                 before=before,
                 default_limit=30,
-                max_limit=100,
+                max_limit=500,
             )
 
         queryset = service.get_ordered_queryset(
@@ -2426,7 +2426,7 @@ class RecapQueries:
             before=before,
             queryset=queryset,
             default_limit=30,
-            max_limit=100,
+            max_limit=500,
         )
 
 

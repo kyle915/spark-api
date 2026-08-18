@@ -271,8 +271,8 @@ class ChatThread:
         """Paginated, newest-first message list. before_uuid is the
         cursor for older pages — pass the oldest currently-loaded
         message's uuid and you get the previous page. first capped at
-        100 to keep payloads bounded."""
-        first = min(max(first, 1), 100)
+        500 to keep payloads bounded."""
+        first = min(max(first, 1), 500)
 
         @sync_to_async
         def _fetch():
