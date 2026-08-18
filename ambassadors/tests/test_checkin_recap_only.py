@@ -8,7 +8,7 @@ The load-bearing behaviours:
 
 * minting the recap code must NOT repoint the BA clock URL
 * clock / ping / sampling-stop refuse the recap code
-* a past date still find-or-creates (agencies never clocked in)
+* a past date find-or-creates on BOTH codes (no prior punch required)
 * identify does not require a phone
 """
 from __future__ import annotations
@@ -124,7 +124,8 @@ class TestRecapOnlyCheckinLink(AmbassadorsGraphQLTestCase):
         body = res.json()
         assert body["event"]["date"].startswith(past.isoformat())
 
-    def test_clock_code_still_refuses_a_past_date_without_a_punch(self):
+    def test_clock_code_past_date_without_a_punch_mints_the_event(self):
+        """BA clock links mint from typed store + date — same as TH-AGENCY."""
         past = dj_tz.localdate() - _dt.timedelta(days=5)
         res = self.http.post(
             reverse(
@@ -140,8 +141,11 @@ class TestRecapOnlyCheckinLink(AmbassadorsGraphQLTestCase):
             },
             content_type="application/json",
         )
-        assert res.status_code == 400
-        assert "No check-in found for that date" in res.json()["message"]
+        assert res.status_code == 200, res.content
+        body = res.json()
+        assert body.get("sessionToken")
+        assert body["event"]["date"].startswith(past.isoformat())
+        assert "chipman" in (body["event"]["address"] or "").lower()
 
     def test_clock_endpoint_refuses_the_recap_link(self):
         identified = self._identify()
