@@ -30,6 +30,8 @@ name: Setup tenant check-in link
 # exactly which buckets would be created, reused or relabelled.
 
 on:
+  # Dispatch only. This hits production and can mint Tenant.checkin_code —
+  # a push trigger would fire on every merge with empty inputs and 500.
   workflow_dispatch:
     inputs:
       tenant_id:
@@ -75,6 +77,7 @@ on:
 
 jobs:
   setup-tenant-checkin:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - name: Fire setup endpoint
@@ -95,6 +98,10 @@ jobs:
             echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
             exit 1
           fi
+          if [ -z "$TENANT_ID" ] && [ -z "$TENANT" ]; then
+            echo "::notice::No tenant_id or tenant given — skipping. Dispatch this workflow with a tenant; it does not run on push."
+            exit 0
+          fi
           STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
             --max-time 300 \
             -X POST "$CRON_URL" \
@@ -112,11 +119,30 @@ jobs:
           # The command's own report is the point of this workflow, and it
           # arrives as one JSON-escaped string. Print it as real lines so the
           # dry run is readable without copy-pasting it somewhere else.
-          python3 -c "
-          import json, sys
-          d = json.load(open('/tmp/cron-response.json'))
+          STATUS="$STATUS" APPLY="$APPLY" python3 -c "
+          import json, os, sys
+          status = os.environ.get('STATUS', '')
+          apply = (os.environ.get('APPLY') or '').strip().lower()
+          try:
+              d = json.load(open('/tmp/cron-response.json'))
+          except Exception:
+              sys.stdout.write(open('/tmp/cron-response.json').read() if os.path.exists('/tmp/cron-response.json') else '(no body)\n')
+              print(f'::error::setup-tenant-checkin returned HTTP {status} with a non-JSON body.')
+              sys.exit(1)
           print(d.get('log') or '(no log)')
-          if not d.get('ok'):
-              print('ERROR:', d.get('error'), d.get('detail', ''), file=sys.stderr)
-          " || cat /tmp/cron-response.json
-          [ "$STATUS" != "200" ] && exit 1 || exit 0
+          if d.get('ok') and status == '200':
+              sys.exit(0)
+          err = d.get('error') or ''
+          detail = d.get('detail') or ''
+          msg = ' '.join(p for p in (err, detail) if p).strip() or f'HTTP {status}'
+          # Multi-program tenants refuse a blank event_type. A dry run that
+          # hits that is a missing input, not a crash — skip so merge-adjacent
+          # dispatches don't page. apply=true still fails so we never write
+          # an unpinned link.
+          if 'no --event-type given' in detail and apply not in ('true', '1', 'yes', 'on'):
+              print(f'::warning::{msg}')
+              print('Dry-run skipped — re-dispatch with event_type set to the program(s), one per line.')
+              sys.exit(0)
+          print(f'::error::{msg}')
+          sys.exit(1)
+          "
