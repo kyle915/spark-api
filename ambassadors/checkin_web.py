@@ -1990,6 +1990,29 @@ def build_tenant_context(tenant, *, recap_only: bool = False) -> dict:
     }
 
 
+def checkin_recap_open_url(recap) -> str:
+    """Client-host permalink for the recap-submitted ops mailer CTA.
+
+    Walk-up filings are CustomRecap rows; the document lives at
+    ``/recap/view-custom/:uuid``. Legacy Recap uses ``/recap/view/:uuid``.
+    Always mint ``client.igniteproductions.co`` (never admin or spark.) so
+    the click lands on that brand's recap, not a tenant-less /recaps list.
+    """
+    from events.event_confirmations import public_page_base
+    from recaps import models as rmodels
+
+    base = public_page_base().rstrip("/")
+    uuid = getattr(recap, "uuid", None)
+    if uuid:
+        path = (
+            f"/recap/view-custom/{uuid}"
+            if isinstance(recap, rmodels.CustomRecap)
+            else f"/recap/view/{uuid}"
+        )
+        return f"{base}{path}"
+    return f"{base}/recaps/list"
+
+
 def notify_checkin_recap_submitted(recap) -> None:
     """Email the field-ops crew the moment a recap lands from the check-in link.
 
@@ -2029,14 +2052,12 @@ def notify_checkin_recap_submitted(recap) -> None:
     who = who or "A field rep"
     phone = getattr(amb, "phone", None) or ""
 
-    base = (getattr(settings, "ADMIN_FRONTEND_URL", "") or "").rstrip("/")
+    open_url = checkin_recap_open_url(recap)
     link = (
-        f"<div style='margin:16px 0 4px'><a href='{base}/recaps' "
+        f"<div style='margin:16px 0 4px'><a href='{escape(open_url)}' "
         "style='display:inline-block;background:#c5f546;color:#0a0d09;"
         "padding:10px 18px;border-radius:10px;text-decoration:none;"
         "font-weight:700'>Open recaps</a></div>"
-        if base and base != "http://localhost:3000"
-        else ""
     )
     rows = "".join(
         f"<p style='color:#555;margin:2px 0'>{escape(label)}: {escape(str(value))}</p>"
@@ -2050,7 +2071,8 @@ def notify_checkin_recap_submitted(recap) -> None:
     html = (
         "<div style='font-family:system-ui,sans-serif;color:#14181a'>"
         f"<p style='font-size:15px;margin:0'><strong>{escape(who)}</strong> just "
-        f"submitted a recap for <strong>{escape(where)}</strong>.</p>"
+        f"submitted a recap for <a href='{escape(open_url)}' "
+        f"style='color:#14181a'><strong>{escape(where)}</strong></a>.</p>"
         f"{rows}"
         "<p style='color:#555;margin-top:12px'>Approving it logs their hours.</p>"
         f"{link}</div>"
