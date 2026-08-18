@@ -91,33 +91,11 @@ async def _resolve_recap_pdf_attachment(
 
 
 def _find_existing_pdf_file(recap):
-    """Most recent STILL-FRESH PDF file row on this recap, or None.
-
-    A stored recap PDF bakes in the recap's state at render time — the
-    APPROVED/DRAFT status chip (see ``recaps.pdf``) and every field value. So a
-    PDF built before the recap last changed is stale: it keeps serving DRAFT
-    after an approval, or old numbers after an edit, because every download /
-    approve-email path reuses whatever this returns instead of rebuilding.
-
-    Treat a PDF generated at or before the recap's last modification as stale
-    (return ``None``) so the caller regenerates. ``updated_at`` is ``auto_now``
-    on both the recap and the file; a fresh render creates a new file row but
-    does NOT touch the recap, so the freshly built PDF's ``created_at`` sits
-    after ``recap.updated_at`` and is reused until the recap next changes.
-    """
+    """Most recent PDF file row on this recap, or None."""
     pdf_q = Q(file_type__extension__iexact=".pdf") | Q(file_type__extension__iexact="pdf")
     if isinstance(recap, models.CustomRecap):
-        latest = recap.custom_recap_files.filter(pdf_q).order_by("-id").first()
-    else:
-        latest = recap.recap_files.filter(pdf_q).order_by("-id").first()
-    if latest is None:
-        return None
-    recap_touched = getattr(recap, "updated_at", None)
-    pdf_made = getattr(latest, "created_at", None)
-    if recap_touched and pdf_made and recap_touched > pdf_made:
-        # Recap changed after this PDF was built → stale; force a rebuild.
-        return None
-    return latest
+        return recap.custom_recap_files.filter(pdf_q).order_by("-id").first()
+    return recap.recap_files.filter(pdf_q).order_by("-id").first()
 
 
 def _render_and_store_recap_pdf_sync(recap, user=None):
