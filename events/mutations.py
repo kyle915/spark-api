@@ -42,6 +42,10 @@ from .routing import (
     ROUTED_TENANT_SLUGS,
     suppress_cc,
 )
+from .torch_portal import (
+    should_auto_approve_public_request,
+    torch_request_approved_lists,
+)
 from utils.gcs import (
     delete_blob,
     download_blob_bytes,
@@ -2479,6 +2483,15 @@ class PublicRequestMutations:
                 await service.set_tenant_from_request_url_name(
                     request_url_name=request_url_name
                 )
+            tenant_for_gate = await sync_to_async(
+                lambda: Tenant.objects.filter(id=service.tenant_id).first()
+            )()
+            # Torch public spark-form ONLY. LD / Feel Free / Girl Beer / KKC
+            # stay pending until a human approves.
+            if should_auto_approve_public_request(
+                request_url_name, tenant_for_gate
+            ):
+                service.auto_approve = True
             request: models.Request = await service.save()
             request_with_relations: models.Request = await sync_to_async(
                 models.Request.objects.select_related(
@@ -2490,6 +2503,33 @@ class PublicRequestMutations:
                 ).get
             )(id=request.id)
             location = await _resolve_request_location(request_with_relations)
+            if should_auto_approve_public_request(
+                request_url_name, getattr(request_with_relations, "tenant", None)
+            ):
+                await _materialize_approved_event_for_request(
+                    request_with_relations, None
+                )
+                try:
+                    await sync_to_async(models.RequestActivityLog.objects.create)(
+                        tenant=request_with_relations.tenant,
+                        request=request_with_relations,
+                        kind=models.RequestActivityLog.KIND_STATUS_CHANGED,
+                        actor_user=None,
+                        summary="Public Torch form · auto-approved",
+                        metadata={"from": "pending", "to": "approved"},
+                    )
+                except Exception:
+                    pass
+                await _notify_torch_portal_request_approved(
+                    request_with_relations, location, delay_seconds=1
+                )
+                return build_mutation_response(
+                    types.RequestDetailResponse,
+                    success=True,
+                    message="Request created successfully.",
+                    input_obj=input,
+                    request=request_with_relations,
+                )
             await _notify_notification_group_users_for_request_created(
                 request_with_relations, location, delay_seconds=0
             )
@@ -2687,16 +2727,9 @@ class RequestWithDependenciesMutationService(BaseMutationService):
             elif self.tenant_id:
                 request.tenant_id = self.tenant_id
 
-            if self.is_public:
-                pending_status = models.RequestStatus.objects.get_by_slug(
-                    slug="pending", tenant=request.tenant_id
-                )
-                if not pending_status:
-                    raise GraphQLError(
-                        "Pending status not found. Please ensure you have a status with slug 'pending'."
-                    )
-                request.status = pending_status
-            elif self.auto_approve:
+            # auto_approve wins over is_public so the Torch public form can
+            # land approved. Other public spark-forms never set auto_approve.
+            if self.auto_approve:
                 approval_status = models.RequestStatus.objects.get_by_slug(
                     slug="approved", tenant=request.tenant_id
                 )
@@ -2707,6 +2740,15 @@ class RequestWithDependenciesMutationService(BaseMutationService):
                 request.status = approval_status
                 if self.user:
                     request.approved_by = self.user
+            elif self.is_public:
+                pending_status = models.RequestStatus.objects.get_by_slug(
+                    slug="pending", tenant=request.tenant_id
+                )
+                if not pending_status:
+                    raise GraphQLError(
+                        "Pending status not found. Please ensure you have a status with slug 'pending'."
+                    )
+                request.status = pending_status
             else:
                 pending_status = models.RequestStatus.objects.get_by_slug(
                     slug="pending", tenant=request.tenant_id
@@ -3256,6 +3298,33 @@ async def _notify_requestor_for_request_auto_approved(
         location=location,
         delay_seconds=delay_seconds,
     )
+
+
+async def _notify_torch_portal_request_approved(
+    request: models.Request,
+    location: models.Location | None,
+    delay_seconds: int | float | None = None,
+) -> None:
+    """Approved-request mail for the Torch public spark-form only.
+
+    Recipients are the requestor plus the Torch-specific list (Liberty +
+    Ignite). Does not use the global Ignite CC roll-up.
+    """
+    requestor_email = await _resolve_requestor_email(request)
+    if requestor_email:
+        request.requestor_email = requestor_email
+    to_emails, cc_emails = torch_request_approved_lists(requestor_email)
+    if not to_emails:
+        return
+    mailer = RequestorRequestApprovedMailer(
+        request=request,
+        location=location,
+        to_emails=to_emails,
+        cc_emails=cc_emails,
+        approver_email_fallback="Spark (auto-approved)",
+        auto_approved=True,
+    )
+    await sync_to_async(mailer.send)(delay_seconds=delay_seconds)
 
 
 async def _resolve_requestor_email(request: models.Request) -> str:

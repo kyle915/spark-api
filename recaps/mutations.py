@@ -80,6 +80,7 @@ from recaps.mutation_parts.notify import (  # noqa: F401
     _compute_recap_data_quality_flags,
     _guard_recap_data_quality,
     _kick_recap_approved_notify,
+    _kick_torch_portal_recap_submit_notify,
     _notify_recap_approved_to_ambassador_by_push,
     _notify_recap_approved_to_rmm_or_clients,
     _notify_recap_ready_for_review_to_admins,
@@ -855,6 +856,7 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
             ambassador=ambassador,
         )
         await _notify_recap_ready_for_review_to_admins(recap, self.user)
+        await _kick_torch_portal_recap_submit_notify(recap, "legacy")
         return recap
 
     async def update_recap(self) -> models.Recap:
@@ -1639,6 +1641,7 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
         # are implausible (runs after commit — reads the saved field values).
         await _guard_recap_data_quality(custom_recap)
         await _notify_recap_ready_for_review_to_admins(custom_recap, self.user)
+        await _kick_torch_portal_recap_submit_notify(custom_recap, "custom")
         return custom_recap
 
     async def update_custom_recap(self) -> models.CustomRecap:

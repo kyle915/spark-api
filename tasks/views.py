@@ -95,6 +95,7 @@ async def recap_approved_notify_view(request: HttpRequest) -> HttpResponse:
 
     recap_id = body.get("recap_id")
     recap_kind = body.get("recap_kind")
+    html_only = bool(body.get("html_only"))
     if not isinstance(recap_id, int) or recap_kind not in ("legacy", "custom"):
         logger.warning(
             "recap-approved-notify: bad payload recap_id=%r recap_kind=%r",
@@ -114,6 +115,8 @@ async def recap_approved_notify_view(request: HttpRequest) -> HttpResponse:
                 "event__tenant",
                 "event__rmm_asigned",
                 "event__timezone",
+                "event__request",
+                "event__request__created_by",
                 "job",
                 "retailer",
                 "timezone",
@@ -130,8 +133,9 @@ async def recap_approved_notify_view(request: HttpRequest) -> HttpResponse:
         return JsonResponse({"ok": False, "error": "not-found"}, status=200)
 
     try:
-        await _ensure_recap_pdf_for_notify(recap)
-        await _notify_recap_approved_to_rmm_or_clients(recap)
+        if not html_only:
+            await _ensure_recap_pdf_for_notify(recap)
+        await _notify_recap_approved_to_rmm_or_clients(recap, html_only=html_only)
     except Exception:  # noqa: BLE001 — best-effort; never trigger a Cloud Tasks retry
         logger.exception(
             "recap-approved-notify failed for %s recap=%s",

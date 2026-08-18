@@ -68,9 +68,16 @@
             <tr>
               <td class="pad" style="padding:16px 40px 4px 40px;">
                 <p style="margin:0;font-size:15px;line-height:22px;color:#3b4034;">
-                  {% if reviewed_by_name %}<strong>{{ reviewed_by_name }}</strong>{% else %}The brand POC{% endif %}
+                  {% if auto_approved %}
+                  This sampling request is approved. Ignite will staff a BA
+                  and you'll get a calendar invite shortly.
+                  {% elif reviewed_by_name %}<strong>{{ reviewed_by_name }}</strong>
                   approved your activation request. Ignite will staff a BA
                   and you'll get a calendar invite shortly.
+                  {% else %}The brand POC
+                  approved your activation request. Ignite will staff a BA
+                  and you'll get a calendar invite shortly.
+                  {% endif %}
                 </p>
               </td>
             </tr>
@@ -138,6 +145,42 @@
                   <tr>
                     <td style="padding:10px 14px;border-bottom:1px solid #eeeae0;font-size:12px;font-weight:700;color:#3b4034;">Distributor</td>
                     <td style="padding:10px 14px;border-bottom:1px solid #eeeae0;font-size:13px;color:#0a0d09;">{{ distributor_name }}</td>
+                  </tr>
+                  {% endif %}
+                  {% if account_spend_amount %}
+                  <tr>
+                    <td style="padding:10px 14px;border-bottom:1px solid #eeeae0;font-size:12px;font-weight:700;color:#3b4034;">Account Spend</td>
+                    <td style="padding:10px 14px;border-bottom:1px solid #eeeae0;font-size:13px;color:#0a0d09;">{{ account_spend_amount }}</td>
+                  </tr>
+                  {% endif %}
+                  {% if event_assets_needed %}
+                  <tr>
+                    <td style="padding:10px 14px;border-bottom:1px solid #eeeae0;font-size:12px;font-weight:700;color:#3b4034;">Event Assets</td>
+                    <td style="padding:10px 14px;border-bottom:1px solid #eeeae0;font-size:13px;color:#0a0d09;">{{ event_assets_needed }}</td>
+                  </tr>
+                  {% endif %}
+                  {% if load_in_time %}
+                  <tr>
+                    <td style="padding:10px 14px;border-bottom:1px solid #eeeae0;font-size:12px;font-weight:700;color:#3b4034;">Load-in Time</td>
+                    <td style="padding:10px 14px;border-bottom:1px solid #eeeae0;font-size:13px;color:#0a0d09;">{{ load_in_time }}</td>
+                  </tr>
+                  {% endif %}
+                  {% if onsite_poc %}
+                  <tr>
+                    <td style="padding:10px 14px;border-bottom:1px solid #eeeae0;font-size:12px;font-weight:700;color:#3b4034;">On-site POC</td>
+                    <td style="padding:10px 14px;border-bottom:1px solid #eeeae0;font-size:13px;color:#0a0d09;">{{ onsite_poc }}</td>
+                  </tr>
+                  {% endif %}
+                  {% if additional_team_details %}
+                  <tr>
+                    <td style="padding:10px 14px;border-bottom:1px solid #eeeae0;font-size:12px;font-weight:700;color:#3b4034;">Additional Team Details</td>
+                    <td style="padding:10px 14px;border-bottom:1px solid #eeeae0;font-size:13px;color:#0a0d09;">{{ additional_team_details }}</td>
+                  </tr>
+                  {% endif %}
+                  {% if request_notes %}
+                  <tr>
+                    <td style="padding:10px 14px;border-bottom:1px solid #eeeae0;font-size:12px;font-weight:700;color:#3b4034;">Notes</td>
+                    <td style="padding:10px 14px;border-bottom:1px solid #eeeae0;font-size:13px;color:#0a0d09;">{{ request_notes }}</td>
                   </tr>
                   {% endif %}
                   <tr>
