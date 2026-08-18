@@ -317,6 +317,7 @@ class RequestorRequestApprovedMailer(Mailer):
         to_emails: list[str],
         cc_emails: list[str] | None = None,
         approver_email_fallback: str | None = None,
+        auto_approved: bool = False,
     ) -> None:
         self.request = request
         self.location = location
@@ -327,6 +328,7 @@ class RequestorRequestApprovedMailer(Mailer):
         # but isn't (or can't be resolved to) a Spark user. Lets the email
         # still name who approved instead of showing a bare "-".
         self.approver_email_fallback = approver_email_fallback
+        self.auto_approved = auto_approved
 
     def envelope(self) -> Envelope:
         offset = _get_timezone_offset_minutes(self.request)
@@ -422,6 +424,19 @@ class RequestorRequestApprovedMailer(Mailer):
                 "request_end_time": _format_dt_no_tz(
                     self.request.end_time, "%I:%M %p", offset
                 ),
+                "auto_approved": self.auto_approved,
+                "account_spend_amount": getattr(
+                    self.request, "account_spend_amount", None
+                ),
+                "event_assets_needed": getattr(
+                    self.request, "event_assets_needed", None
+                ),
+                "load_in_time": getattr(self.request, "load_in_time", None),
+                "onsite_poc": getattr(self.request, "onsite_poc", None),
+                "additional_team_details": getattr(
+                    self.request, "additional_team_details", None
+                ),
+                "request_notes": getattr(self.request, "notes", None),
             },
         )
 

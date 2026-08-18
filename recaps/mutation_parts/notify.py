@@ -7,6 +7,7 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 
+from events.torch_portal import is_torch_tenant, torch_recap_submit_lists
 from recaps import models
 from recaps.envelopes import (
     RecapApprovedNotificationMailer,
@@ -133,7 +134,9 @@ def _thread_recap_approved_notify(
         close_old_connections()
 
 
-async def _kick_recap_approved_notify(recap, recap_kind: str) -> None:
+async def _kick_recap_approved_notify(
+    recap, recap_kind: str, *, html_only: bool = False
+) -> None:
     """Enqueue PDF + client email, or send on this request if the queue is off."""
     if await sync_to_async(is_girl_beer_recap)(recap):
         await sync_to_async(stamp_client_notified)(recap, reason="girl-beer")
@@ -142,7 +145,11 @@ async def _kick_recap_approved_notify(recap, recap_kind: str) -> None:
             getattr(recap, "id", None),
         )
         return
-    payload = {"recap_id": recap.id, "recap_kind": recap_kind}
+    payload = {
+        "recap_id": recap.id,
+        "recap_kind": recap_kind,
+        "html_only": html_only,
+    }
     path = "/api/tasks/recap-approved-notify"
     enqueued = await sync_to_async(enqueue)(path, payload)
     if enqueued:
@@ -150,8 +157,50 @@ async def _kick_recap_approved_notify(recap, recap_kind: str) -> None:
     # Production Cloud Tasks env is still unset. Approve used to spawn a
     # daemon thread that died in Django ORM before mailer.send(). Send
     # inline so the client actually gets "recap is ready".
-    await _ensure_recap_pdf_for_notify(recap)
-    await _notify_recap_approved_to_rmm_or_clients(recap)
+    if not html_only:
+        await _ensure_recap_pdf_for_notify(recap)
+    await _notify_recap_approved_to_rmm_or_clients(recap, html_only=html_only)
+
+
+def is_torch_portal_recap(recap: models.Recap | models.CustomRecap) -> bool:
+    """True for Torch portal activations — not standing BA / other brands.
+
+    Prefer an Event linked to a request (the public form create). If we
+    cannot tie to a request, still notify when the Torch recap has a
+    requestor email (3rd-party TH-AGENCY filings that carry one).
+    """
+    if is_girl_beer_recap(recap):
+        return False
+    tenant = recap_tenant(recap)
+    if not is_torch_tenant(tenant):
+        return False
+    try:
+        req = getattr(recap.event, "request", None)
+    except Exception:
+        req = None
+    if req is not None:
+        return True
+    return bool(_collect_requestor_recipients(recap))
+
+
+async def _kick_torch_portal_recap_submit_notify(recap, recap_kind: str) -> None:
+    """On recap submit: email Torch portal requestor + Liberty + events + Nevena.
+
+    Link-only (html_only) so Cloud Tasks JSON stays serializable — no raw
+    PDF bytes. Stamps client_notified_at so a later admin approve does not
+    re-blast. Girl Beer and non-Torch recaps are no-ops.
+    """
+    try:
+        if await sync_to_async(is_girl_beer_recap)(recap):
+            return
+        if not await sync_to_async(is_torch_portal_recap)(recap):
+            return
+        await _kick_recap_approved_notify(recap, recap_kind, html_only=True)
+    except Exception:
+        logger.exception(
+            "torch portal recap submit notify failed recap=%s",
+            getattr(recap, "id", None),
+        )
 
 
 def _collect_requestor_recipients(
@@ -197,7 +246,16 @@ def _collect_recap_approved_recipients(
 ) -> tuple[list[tuple[str, str]], str]:
     """Same recipient set as approve-notify: RMM + client-role users +
     Tenant.recap_recipient_emails + requestor. Returns (recipients, reply_to).
+
+    Torch portal recaps use the four-party list (requestor + Liberty +
+    events + Nevena) instead of the RMM / client-role blast.
     """
+    if is_torch_portal_recap(recap):
+        requestors = [email for email, _first in _collect_requestor_recipients(recap)]
+        to_emails, cc_emails = torch_recap_submit_lists(requestors)
+        recipients = [(email, "") for email in [*to_emails, *cc_emails]]
+        return recipients, "events@igniteproductions.co"
+
     event = recap.event
     rmm_user = getattr(event, "rmm_asigned", None)
     fallback_reply_to = "events@igniteproductions.co"
