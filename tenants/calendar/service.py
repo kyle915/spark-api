@@ -29,6 +29,16 @@ _CALENDAR_HTTP_TIMEOUT_SECONDS = 10
 logger = logging.getLogger(__name__)
 
 
+def _format_exc(exc: BaseException) -> str:
+    """Exception label that stays useful when str(exc) is empty.
+
+    cryptography.fernet.InvalidToken and TimeoutError() both stringify to "".
+    """
+    text = str(exc).strip()
+    name = type(exc).__name__
+    return f"{name}: {text}" if text else name
+
+
 class GoogleCalendarService:
     """Service for interacting with Google Calendar API."""
 
@@ -67,12 +77,25 @@ class GoogleCalendarService:
         if not connection:
             return None
 
-        # Get decrypted tokens
-        access_token = connection.get_access_token()
-        refresh_token = connection.get_refresh_token()
+        # Decrypt can raise cryptography.fernet.InvalidToken with an EMPTY
+        # str() — the 2026-08-17 Spark alert flood (event 2073 ×203, user 1)
+        # was exactly that, logged as "Error syncing event … for user 1:"
+        # with no traceback because the caller used logger.error(f"{exc}").
+        try:
+            access_token = connection.get_access_token()
+            refresh_token = connection.get_refresh_token()
+        except Exception as e:
+            logger.warning(
+                "Failed to decrypt Google Calendar tokens for user %s: %s",
+                self.user.id,
+                _format_exc(e),
+                exc_info=True,
+            )
+            self._deactivate_connection(connection, reason="token decrypt failed")
+            return None
 
         if not access_token:
-            logger.error(f"No access token for user {self.user.id}")
+            logger.warning(f"No access token for user {self.user.id}")
             return None
 
         credentials = Credentials(
@@ -102,19 +125,26 @@ class GoogleCalendarService:
                     connection.save()
                     logger.info(f"Refreshed token for user {self.user.id}")
                 except RefreshError as e:
-                    logger.error(
-                        f"Failed to refresh token for user {self.user.id}: {e}"
+                    logger.warning(
+                        "Failed to refresh token for user %s: %s",
+                        self.user.id,
+                        _format_exc(e),
                     )
                     if self._is_invalid_grant_error(e):
-                        self._deactivate_connection(connection)
+                        self._deactivate_connection(
+                            connection, reason="invalid_grant"
+                        )
                     return None
                 except Exception as e:
-                    logger.error(
-                        f"Failed to refresh token for user {self.user.id}: {e}"
+                    logger.warning(
+                        "Failed to refresh token for user %s: %s",
+                        self.user.id,
+                        _format_exc(e),
+                        exc_info=True,
                     )
                     return None
             else:
-                logger.error(
+                logger.warning(
                     f"Token expired and no refresh token for user {self.user.id}"
                 )
                 return None
@@ -132,14 +162,17 @@ class GoogleCalendarService:
                 return True
         return False
 
-    def _deactivate_connection(self, connection: GoogleCalendarConnection) -> None:
+    def _deactivate_connection(
+        self, connection: GoogleCalendarConnection, reason: str = "invalid_grant"
+    ) -> None:
         """Deactivate broken OAuth connection so the user can reconnect cleanly."""
         connection.is_active = False
         connection.updated_by = self.user
         connection.save(update_fields=["is_active", "updated_by", "updated_at"])
         logger.warning(
-            "Deactivated Google Calendar connection for user %s due to invalid_grant; user must reconnect.",
+            "Deactivated Google Calendar connection for user %s (%s); user must reconnect.",
             self.user.id,
+            reason,
         )
 
     def _get_service(self):
@@ -148,10 +181,19 @@ class GoogleCalendarService:
         if not credentials:
             return None
 
-        http = AuthorizedHttp(
-            credentials, http=httplib2.Http(timeout=_CALENDAR_HTTP_TIMEOUT_SECONDS)
-        )
-        return build("calendar", "v3", http=http)
+        try:
+            http = AuthorizedHttp(
+                credentials, http=httplib2.Http(timeout=_CALENDAR_HTTP_TIMEOUT_SECONDS)
+            )
+            return build("calendar", "v3", http=http)
+        except Exception as e:
+            logger.warning(
+                "Failed to build Google Calendar client for user %s: %s",
+                self.user.id,
+                _format_exc(e),
+                exc_info=True,
+            )
+            return None
 
     def _ensure_service_and_connection(
         self,
@@ -167,14 +209,14 @@ class GoogleCalendarService:
         """
         service = self._get_service()
         if not service:
-            logger.error(
+            logger.warning(
                 f"Cannot perform operation: no service for user {self.user.id}"
             )
             return None, None
 
         connection = self._get_connection()
         if not connection:
-            logger.error(
+            logger.warning(
                 f"Cannot perform operation: no active connection for user {self.user.id}"
             )
             return None, None

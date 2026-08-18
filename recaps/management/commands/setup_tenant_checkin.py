@@ -180,6 +180,16 @@ class Command(BaseCommand):
             help="BA reference link on the check-in page. Blank = leave as-is.",
         )
         parser.add_argument(
+            "--recap-only",
+            dest="recap_only",
+            action="store_true",
+            help=(
+                "Mint/keep Tenant.checkin_recap_code — a second URL that skips "
+                "the time clock (3rd-party / agency recaps). Does NOT touch "
+                "checkin_code, the BA clock link."
+            ),
+        )
+        parser.add_argument(
             "--apply",
             action="store_true",
             help="Actually write. Without this the command only reports.",
@@ -215,7 +225,10 @@ class Command(BaseCommand):
         for _ in range(50):
             body = "".join(secrets.choice(ALPHABET) for _ in range(CODE_BODY_LENGTH))
             candidate = f"{prefix}-{body}"
-            if not Tenant.objects.filter(checkin_code=candidate).exists():
+            taken = Tenant.objects.filter(checkin_code=candidate).exists() or (
+                Tenant.objects.filter(checkin_recap_code=candidate).exists()
+            )
+            if not taken:
                 return candidate
         raise CommandError("Could not mint an unused check-in code.")
 
@@ -320,6 +333,8 @@ class Command(BaseCommand):
     def handle(self, *args, **opts):
         apply = bool(opts["apply"])
         tenant = self._resolve_tenant(opts["tenant_id"], opts["tenant"])
+        if opts.get("recap_only"):
+            return self._handle_recap_only(tenant, opts)
         forced_code = (opts["code"] or "").strip().upper()
         training_url = (opts["training_url"] or "").strip()
         location_mode = opts["location_mode"]
@@ -443,6 +458,56 @@ class Command(BaseCommand):
             f"CHECKIN_URL: https://client.igniteproductions.co"
             f"/checkin/{tenant.checkin_code}"
         )
+        self.stdout.write("=" * 72)
+
+    def _handle_recap_only(self, tenant, opts) -> None:
+        """Mint the recap-only URL without touching the BA clock code."""
+        apply = bool(opts["apply"])
+        forced = (opts["code"] or "").strip().upper()
+        prefix = (opts["code_prefix"] or _derive_prefix(tenant)).strip().upper().rstrip("-")
+        existing = (tenant.checkin_recap_code or "").strip()
+        if forced:
+            new_code = forced
+        elif existing:
+            new_code = existing
+        else:
+            new_code = self._mint_code(prefix) if apply else f"{prefix}-XXXXXX"
+
+        self.stdout.write("=" * 72)
+        self.stdout.write(
+            f"TENANT     : [{tenant.id}] {tenant.name!r} / {tenant.slug!r}\n"
+            f"CLOCK CODE : {tenant.checkin_code or '(none)'}  (untouched)\n"
+            f"RECAP CODE : {existing or '(none yet)'}\n"
+            f"MODE       : {'APPLY (writing)' if apply else 'DRY-RUN (no writes)'}"
+        )
+        self.stdout.write("=" * 72)
+        if tenant.checkin_event_type_id is None:
+            self.stdout.write(
+                self.style.WARNING(
+                    "  No pinned checkin_event_type — recap-only still needs "
+                    "the BA link's program pin so filers get the right form."
+                )
+            )
+        if not apply:
+            self.stdout.write("")
+            self.stdout.write(
+                f"DRY-RUN — would serve https://client.igniteproductions.co"
+                f"/checkin/{new_code}  (recap-only, no time clock)\n"
+                "Re-run with --apply to write."
+            )
+            return
+        if existing and existing.upper() == new_code:
+            self.stdout.write(f"\nKEEPING recap code {existing}.")
+        tenant.checkin_recap_code = new_code
+        tenant.save(update_fields=["checkin_recap_code"])
+        self.stdout.write("")
+        self.stdout.write("=" * 72)
+        self.stdout.write(self.style.SUCCESS(f"CHECKIN_RECAP_CODE: {tenant.checkin_recap_code}"))
+        self.stdout.write(
+            f"CHECKIN_RECAP_URL: https://client.igniteproductions.co"
+            f"/checkin/{tenant.checkin_recap_code}"
+        )
+        self.stdout.write("NO TIME CLOCK. Name + date + store + recap questions only.")
         self.stdout.write("=" * 72)
 
     # -- buckets -----------------------------------------------------------

@@ -172,37 +172,51 @@ class TestGoogleCalendarTasks:
 
     @patch('events.tasks.GoogleCalendarService')
     def test_sync_event_to_google_calendar_user_not_found(self, mock_service_class):
-        """Test that sync raises User.DoesNotExist when user doesn't exist."""
+        """Missing user is swallowed — retries cannot help and alerts should not fire."""
         mock_service = MagicMock()
         mock_service_class.return_value = mock_service
 
-        with pytest.raises(User.DoesNotExist):
-            sync_event_to_google_calendar(99999, self.event.id)
+        result = sync_event_to_google_calendar(99999, self.event.id)
 
+        assert result is None
         mock_service_class.assert_not_called()
 
     @patch('events.tasks.GoogleCalendarService')
     def test_sync_event_to_google_calendar_event_not_found(self, mock_service_class):
-        """Test that sync raises Event.DoesNotExist when event doesn't exist."""
+        """Missing event is swallowed — retries cannot help and alerts should not fire."""
         mock_service = MagicMock()
         mock_service_class.return_value = mock_service
 
-        with pytest.raises(Event.DoesNotExist):
-            sync_event_to_google_calendar(self.user.id, 99999)
+        result = sync_event_to_google_calendar(self.user.id, 99999)
 
+        assert result is None
         mock_service_class.assert_not_called()
 
     @patch('events.tasks.GoogleCalendarService')
     def test_sync_event_to_google_calendar_sync_fails(self, mock_service_class):
-        """Test that sync raises exception when sync_event returns None."""
+        """A None return from Google is a warning, not a raise (inline Cloud Run)."""
         mock_service = MagicMock()
         mock_service.sync_event.return_value = None
         mock_service_class.return_value = mock_service
 
-        with pytest.raises(Exception, match="Failed to create Google Calendar event"):
-            sync_event_to_google_calendar(self.user.id, self.event.id)
+        result = sync_event_to_google_calendar(self.user.id, self.event.id)
 
+        assert result is None
         mock_service_class.assert_called_once_with(self.user)
+        mock_service.sync_event.assert_called_once()
+
+    @patch('events.tasks.GoogleCalendarService')
+    def test_sync_event_to_google_calendar_empty_exception_does_not_raise(
+        self, mock_service_class
+    ):
+        """Fernet InvalidToken stringifies to '' — must not bubble or 500 the fan-out."""
+        mock_service = MagicMock()
+        mock_service.sync_event.side_effect = Exception()
+        mock_service_class.return_value = mock_service
+
+        result = sync_event_to_google_calendar(self.user.id, self.event.id)
+
+        assert result is None
         mock_service.sync_event.assert_called_once()
 
     @patch('events.tasks.GoogleCalendarService')
@@ -221,19 +235,18 @@ class TestGoogleCalendarTasks:
 
     @patch('events.tasks.GoogleCalendarService')
     def test_sync_event_to_google_calendar_no_request(self, mock_service_class):
-        """Test event sync still runs when event has no request."""
+        """Walk-in events with no start_time skip calendar sync instead of 500ing."""
         mock_service = MagicMock()
-        mock_service.sync_event.return_value = "google_event_123"
         mock_service_class.return_value = mock_service
 
         self.event.request = None
-        self.event.save(update_fields=["request"])
+        self.event.start_time = None
+        self.event.save(update_fields=["request", "start_time"])
 
         result = sync_event_to_google_calendar(self.user.id, self.event.id)
 
         assert result is None
-        mock_service_class.assert_called_once_with(self.user)
-        mock_service.sync_event.assert_called_once()
+        mock_service_class.assert_not_called()
 
     @patch('events.jobs.google_calendar_jobs.EventGoogleCalendarJob')
     def test_sync_event_to_all_connected_users(self, mock_job_class):
@@ -253,6 +266,6 @@ class TestGoogleCalendarTasks:
         assert result is None
 
     def test_sync_event_to_all_connected_users_event_not_found(self):
-        """Test that sync_event_to_all_connected_users raises Event.DoesNotExist."""
-        with pytest.raises(Event.DoesNotExist):
-            sync_event_to_all_connected_users(99999, self.tenant.id)
+        """Missing event is swallowed so the inline Cloud Run path does not 500."""
+        result = sync_event_to_all_connected_users(99999, self.tenant.id)
+        assert result is None

@@ -6,13 +6,17 @@ from django_rq import job
 from rq import Retry
 
 from events.models import Event
-from ambassadors.models import AmbassadorEvent
 from tenants.models import User, GoogleCalendarConnection
 from tenants.calendar.service import GoogleCalendarService
-from utils.queues import Queues
-from utils.utils import ROLE_ID
 
 logger = logging.getLogger(__name__)
+
+
+def _format_exc(exc: BaseException) -> str:
+    """Exception label that stays useful when str(exc) is empty."""
+    text = str(exc).strip()
+    name = type(exc).__name__
+    return f"{name}: {text}" if text else name
 
 
 @job('default', retry=Retry(max=3, interval=[60, 120, 240]))
@@ -20,9 +24,10 @@ def sync_event_to_google_calendar(user_id: int, event_id: int):
     """
     Sync an event to a user's Google Calendar.
 
-    Args:
-        user_id: ID of the user whose calendar to sync to
-        event_id: ID of the event to sync
+    Per-user Google failures (bad token, 403, timeout, missing start_time)
+    are logged and swallowed. Cloud Run runs these jobs inline, so raising
+    here used to abort the whole fan-out and spam Spark alerts (event 2073
+    ×203 on 2026-08-17).
     """
     try:
         user = User.objects.get(id=user_id)
@@ -42,6 +47,17 @@ def sync_event_to_google_calendar(user_id: int, event_id: int):
                 f"User {user_id} does not have active Google Calendar connection")
             return
 
+        has_start = event.start_time or (
+            event.request.start_time if event.request else None
+        )
+        if not has_start:
+            logger.info(
+                "Skipping Google Calendar sync for event %s user %s — no start_time",
+                event_id,
+                user_id,
+            )
+            return
+
         event_type_name = event.event_type.name if event.event_type else None
         status_name = event.status.name if event.status else None
         service = GoogleCalendarService(user)
@@ -55,24 +71,21 @@ def sync_event_to_google_calendar(user_id: int, event_id: int):
             logger.info(
                 f"Successfully synced event {event_id} to Google Calendar for user {user_id} with google event id {google_event_id}")
         else:
-            logger.error(
+            logger.warning(
                 f"Failed to sync event {event_id} to Google Calendar for user {user_id}")
-            # RQ will automatically retry on exception (up to max retries)
-            raise Exception("Failed to create Google Calendar event")
 
     except User.DoesNotExist:
-        logger.error(f"User {user_id} not found")
-        # Don't retry on missing user
-        raise
+        logger.warning(f"User {user_id} not found")
     except Event.DoesNotExist:
-        logger.error(f"Event {event_id} not found")
-        # Don't retry on missing event
-        raise
+        logger.warning(f"Event {event_id} not found")
     except Exception as exc:
-        logger.error(
-            f"Error syncing event {event_id} to Google Calendar for user {user_id}: {exc}")
-        # RQ will automatically retry on exception (up to max retries with exponential backoff)
-        raise
+        logger.warning(
+            "Error syncing event %s to Google Calendar for user %s: %s",
+            event_id,
+            user_id,
+            _format_exc(exc),
+            exc_info=True,
+        )
 
 
 @job('default', retry=Retry(max=3, interval=[60, 120, 240]))
@@ -83,10 +96,11 @@ def sync_event_to_all_connected_users(event_id: int, tenant_id: int = None):
         job.handle()
 
     except Event.DoesNotExist:
-        logger.error(f"Event {event_id} not found")
-        # Don't retry on missing event
-        raise
+        logger.warning(f"Event {event_id} not found")
     except Exception as exc:
-        logger.error(f"Error syncing event {event_id} to all users: {exc}")
-        # RQ will automatically retry on exception (up to max retries with exponential backoff)
-        raise
+        logger.warning(
+            "Error syncing event %s to all users: %s",
+            event_id,
+            _format_exc(exc),
+            exc_info=True,
+        )

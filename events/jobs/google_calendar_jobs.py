@@ -71,15 +71,27 @@ class EventGoogleCalendarJob:
 
     def send_to_user(self, user: User):
         from events.tasks import sync_event_to_google_calendar
-        # Check if the user has an active Google Calendar connection
-        # otherwise, skip
-        if not hasattr(user, "google_calendar_connection") \
-                or not user.google_calendar_connection.is_active:
-            self.logger.warning(
-                f"User {user.id} does not have an active Google Calendar connection")
+        if user is None:
             return
-        self.queues.default.add(
-            sync_event_to_google_calendar, user.id, self.event.id)
+        # Isolate per-user failures. Cloud Run runs calendar jobs inline, so
+        # one bad token / 403 / decrypt error used to abort the whole fan-out
+        # and alert 200+ times for a single event.
+        try:
+            if not hasattr(user, "google_calendar_connection") \
+                    or not user.google_calendar_connection.is_active:
+                self.logger.warning(
+                    f"User {user.id} does not have an active Google Calendar connection")
+                return
+            self.queues.default.add(
+                sync_event_to_google_calendar, user.id, self.event.id)
+        except Exception as exc:
+            self.logger.warning(
+                "Skipping calendar sync for event %s user %s: %s",
+                self.event.id,
+                getattr(user, "id", None),
+                f"{type(exc).__name__}: {exc}" if str(exc).strip() else type(exc).__name__,
+                exc_info=True,
+            )
 
     def get_tenanted_users(self, role: Role):
         return TenantedUser.objects.filter(

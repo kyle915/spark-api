@@ -574,6 +574,19 @@ class TestEventGoogleCalendarJob:
         # Should not queue anything
         mock_queues.default.add.assert_not_called()
 
+    @patch('events.jobs.google_calendar_jobs.Queues')
+    def test_send_to_user_failure_does_not_abort_fanout(self, mock_queues_class):
+        """One bad calendar user must not stop sync for everyone else."""
+        mock_queues = MagicMock()
+        mock_queues.default.add.side_effect = [Exception(), None]
+        mock_queues_class.return_value = mock_queues
+
+        job = EventGoogleCalendarJob(self.event.id)
+        job.send_to_user(self.admin_user)
+        job.send_to_user(self.admin_user2)
+
+        assert mock_queues.default.add.call_count == 2
+
     def test_get_tenanted_users(self):
         """Test that get_tenanted_users filters correctly."""
         job = EventGoogleCalendarJob(self.event.id)

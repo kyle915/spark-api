@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import hashlib
 import logging
 import re
 import secrets
@@ -1436,7 +1437,40 @@ def resolve_checkin_target(code: str):
     tenant = Tenant.objects.filter(checkin_code__iexact=clean).first()
     if tenant is not None:
         return "tenant", tenant
+    tenant = Tenant.objects.filter(checkin_recap_code__iexact=clean).first()
+    if tenant is not None:
+        return "tenant", tenant
     return None, None
+
+
+def is_recap_only_code(code: str, tenant) -> bool:
+    """True when ``code`` is this tenant's 3rd-party recap-only URL.
+
+    The BA clock link (`checkin_code`) is tried first in resolve, so a
+    mistaken duplicate of the two codes would still clock. This helper is
+    the page/API switch for skipping punch.
+    """
+    recap = (getattr(tenant, "checkin_recap_code", None) or "").strip()
+    return bool(recap) and recap.lower() == (code or "").strip().lower()
+
+
+def recap_only_identity_phone(
+    *, first_name: str, last_name: str, email: str | None
+) -> str:
+    """Stable fake phone so a 3rd-party filer without a number reuses one stub.
+
+    Walk-up identity is phone-keyed (``checkin-{digits}@walkup.spark``). Agency
+    recaps only require a name; hashing name+email keeps the same person on
+    the same ambassador without colliding with a real NANP number.
+    """
+    raw = (
+        f"{(first_name or '').strip().lower()}|"
+        f"{(last_name or '').strip().lower()}|"
+        f"{(email or '').strip().lower()}"
+    )
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    n = int(digest[:12], 16) % (10**10)
+    return f"000{n:010d}"
 
 
 def normalize_place(value: str) -> str:
@@ -1534,6 +1568,88 @@ def recent_checkin_locations(tenant, limit: int = 30) -> list:
         out.append({"name": row.get("name") or "", "address": row.get("address") or ""})
         if len(out) >= limit:
             break
+    return out
+
+
+def _store_display_name(name: str, address: str) -> str:
+    """A picker label that names the STORE, not the walk-in event title.
+
+    Walk-in events are titled "8/17/2026 - 1648 NW Chipman Road… (Torch
+    Sampling - Total Wine & More (Lee's Summit))" — dumping that into a
+    <select> is unreadable. Prefer a parenthetical store, then strip a
+    "Torch Sampling - " prefix, then the address itself.
+    """
+    n = (name or "").strip()
+    a = (address or "").strip()
+    if not n:
+        return a
+    addr_key = normalize_place(a)[:24] if a else ""
+    if addr_key and addr_key in normalize_place(n):
+        if "(" in n and n.endswith(")"):
+            inner = n[n.rfind("(") + 1 : -1].strip()
+            if inner:
+                return inner
+        return a
+    if re.match(r"^\d{1,2}/\d{1,2}/\d{4}", n):
+        if "(" in n and n.endswith(")"):
+            inner = n[n.rfind("(") + 1 : -1].strip()
+            if inner:
+                return inner
+        return a
+    stripped = re.sub(r"^(torch sampling\s*-\s*)", "", n, flags=re.I).strip()
+    return stripped or n
+
+
+def checkin_store_options(tenant, limit: int = 200) -> list:
+    """Unique store name + address for the recap-only picker.
+
+    Account Map / Master Tracker venues (Request rows) first, then Retailer
+    rows, then recent events. Deduped by normalize_place(address) so 202
+    Total Wine tracker rows collapse to the ~32 unique stores. Sorted by
+    name so a 3rd-party filer can find a location instead of free-typing.
+    """
+    from events.models import Event, Request, Retailer
+
+    seen: set = set()
+    out: list = []
+
+    def _add(name: str, address: str) -> None:
+        addr = (address or "").strip()
+        key = normalize_place(addr)
+        if not key or key in seen:
+            return
+        if len(out) >= limit:
+            return
+        seen.add(key)
+        label = _store_display_name(name, addr)
+        out.append({"name": label, "address": addr})
+
+    req_rows = (
+        Request.objects.filter(tenant=tenant, deleted_at__isnull=True)
+        .exclude(address="")
+        .values("address", "retailer_address", "retailer_name", "retailer__name", "name")
+    )
+    for row in req_rows:
+        addr = (row.get("address") or row.get("retailer_address") or "").strip()
+        name = (
+            (row.get("retailer_name") or "").strip()
+            or (row.get("retailer__name") or "").strip()
+            or (row.get("name") or "").strip()
+        )
+        _add(name, addr)
+
+    for row in Retailer.objects.filter(tenant=tenant).exclude(address__isnull=True).exclude(address="").values("name", "address"):
+        _add(row.get("name") or "", row.get("address") or "")
+
+    for row in (
+        Event.objects.filter(tenant=tenant)
+        .exclude(address="")
+        .order_by("-id")
+        .values("name", "address")[: limit * 4]
+    ):
+        _add(row.get("name") or "", row.get("address") or "")
+
+    out.sort(key=lambda x: ((x.get("name") or x.get("address") or "").lower()))
     return out
 
 
@@ -1749,17 +1865,25 @@ def find_or_create_walkin_event(
     return event, True
 
 
-def build_tenant_context(tenant) -> dict:
+def build_tenant_context(tenant, *, recap_only: bool = False) -> dict:
     """Payload for a standing tenant link before any event exists.
 
     ``needsEventDetails`` tells the page to ask for store + date first; the rest
     of the flow is identical to the per-event link once identify resolves one.
+    ``recap_only`` is the 3rd-party twin: no clock, store picker from Account
+    Map / Master Tracker venues, same recap questions once they identify.
     """
+    stores = (
+        checkin_store_options(tenant)
+        if recap_only
+        else recent_checkin_locations(tenant)
+    )
     return {
         "mode": "tenant",
         "needsEventDetails": True,
+        "recapOnly": bool(recap_only),
         "brand": _brand_payload(tenant),
-        "recentLocations": recent_checkin_locations(tenant),
+        "recentLocations": stores,
         # Roaming brands pick a market instead of typing a store address.
         "locationMode": tenant_location_mode(tenant),
         "markets": tenant_markets(tenant),

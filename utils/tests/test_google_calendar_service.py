@@ -211,3 +211,17 @@ class TestGoogleCalendarService:
         connection = service._get_connection()
 
         assert connection is None
+
+    def test_decrypt_failure_deactivates_connection(self):
+        """Corrupt/unreadable tokens deactivate the connection instead of 500ing."""
+        from cryptography.fernet import InvalidToken
+
+        service = GoogleCalendarService(self.user)
+        with patch.object(
+            GoogleCalendarConnection, "get_access_token", side_effect=InvalidToken()
+        ):
+            creds = service._get_credentials()
+
+        assert creds is None
+        self.connection.refresh_from_db()
+        assert self.connection.is_active is False
