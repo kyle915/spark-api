@@ -234,7 +234,13 @@ class TestStandingRecapRepeat(AmbassadorsGraphQLTestCase):
         assert body["event"]["uuid"] == str(event.uuid)
         assert body["session"]["clock"]["state"] == "clocked_out"
 
-    def test_identify_past_date_without_a_shift_is_refused(self):
+    def test_identify_past_date_without_a_shift_mints_the_event(self):
+        """Walk-up Start check-in is self-serve — no prior punch required.
+
+        KKC-QC9Y58 hit this as a 400 ("No check-in found for that date")
+        when a BA typed a Boston address for a day they had never clocked.
+        Standing links mint/find-or-create from location + date instead.
+        """
         friday = dj_tz.localdate() - _dt.timedelta(days=2)
         res = self.http.post(
             reverse(
@@ -250,8 +256,38 @@ class TestStandingRecapRepeat(AmbassadorsGraphQLTestCase):
             },
             content_type="application/json",
         )
-        assert res.status_code == 400
-        assert "No check-in found for that date" in res.json()["message"]
+        assert res.status_code == 200, res.content
+        body = res.json()
+        assert body.get("sessionToken")
+        assert body["event"]["date"].startswith(friday.isoformat())
+        assert "austin" in (body["event"]["address"] or "").lower()
+
+    def test_identify_today_without_a_shift_mints_from_typed_address(self):
+        """KKC Start check-in: typed store, today, nobody clocked yet."""
+        today = dj_tz.localdate()
+        res = self.http.post(
+            reverse(
+                "events.public_checkin_identify",
+                kwargs={"code": self.tenant.checkin_code},
+            ),
+            data={
+                "firstName": "Francisco",
+                "lastName": "Calva Villalta",
+                "phone": "5550100888",
+                "eventDate": today.isoformat(),
+                "address": "4 Jersey Street, Boston, MA 02115",
+            },
+            content_type="application/json",
+        )
+        assert res.status_code == 200, res.content
+        body = res.json()
+        assert body.get("sessionToken")
+        assert body["event"]["date"].startswith(today.isoformat())
+        assert "jersey" in (body["event"]["address"] or "").lower()
+        assert Event.objects.filter(
+            tenant=self.tenant,
+            address="4 Jersey Street, Boston, MA 02115",
+        ).exists()
 
     def test_event_code_ignores_force_new(self):
         """Liquid Death booked activations stay one recap per event."""

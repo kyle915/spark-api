@@ -436,6 +436,13 @@ def public_checkin_identify(request: HttpRequest, code: str) -> HttpResponse:
         # Prefer a shift this BA already clocked that day. Feel Free shares
         # one event per market per day; landing on that event is what lets
         # Rocio file Friday's recap on Sunday instead of inventing a new one.
+        #
+        # No punch is not a refusal. Standing walk-up links (KKC, Torch BA,
+        # Feel Free, TH-AGENCY) are self-serve: typed/GPS location + date
+        # mint or join the walk-in event. The old "must have clocked in"
+        # gate 400'd KKC Start check-in on a Boston address the BA had
+        # never punched — including "today" when the phone date is still
+        # yesterday in UTC.
         existing = checkin_web.existing_shift_event_for(
             ambassador=ambassador,
             tenant=target,
@@ -444,11 +451,6 @@ def public_checkin_identify(request: HttpRequest, code: str) -> HttpResponse:
         )
         if existing is not None:
             event = existing
-        elif on_date < dj_tz.localdate() and not recap_only:
-            return _err(
-                "No check-in found for that date. Pick a day you actually "
-                "clocked in, or ask your lead to log it."
-            )
         else:
             try:
                 event, _new = checkin_web.find_or_create_walkin_event(
