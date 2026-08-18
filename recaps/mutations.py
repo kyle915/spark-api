@@ -3531,6 +3531,69 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
 
         return custom_recap
 
+    async def map_custom_recap_store(self) -> models.CustomRecap:
+        """Admin confirms a maybe-match / chain for a 3rd-party typed store."""
+        if not isinstance(self.input, inputs.MapCustomRecapStoreInput):
+            raise GraphQLError("Invalid input type.")
+
+        try:
+            custom_recap_id = resolve_id_to_int(self.input.id)
+            custom_recap = await sync_to_async(
+                models.CustomRecap.objects.select_related("event").get
+            )(id=custom_recap_id)
+        except (models.CustomRecap.DoesNotExist, TypeError, ValueError, GraphQLError):
+            raise GraphQLError("Custom recap not found.")
+
+        await self._assert_caller_authorized_for_recap_tenant(
+            custom_recap.tenant_id,
+            action="update",
+            block_ambassadors=True,
+            record_label="Custom recap",
+        )
+
+        from events.models import Retailer
+
+        raw = self.input.retailer_id
+
+        def _load_retailer():
+            try:
+                pk = resolve_id_to_int(raw)
+            except (TypeError, ValueError, GraphQLError):
+                pk = None
+            qs = Retailer.objects.filter(tenant_id=custom_recap.tenant_id)
+            if pk is not None:
+                found = qs.filter(id=pk).first()
+                if found is not None:
+                    return found
+            return qs.filter(uuid=str(raw).strip()).first()
+
+        retailer = await sync_to_async(_load_retailer)()
+        if retailer is None:
+            raise GraphQLError("Retailer not found.")
+
+        @sync_to_async
+        def map_store():
+            with transaction.atomic():
+                custom_recap.retailer = retailer
+                custom_recap.store_mapping_status = "mapped"
+                custom_recap.updated_by = self.user
+                custom_recap.save(
+                    update_fields=[
+                        "retailer",
+                        "store_mapping_status",
+                        "updated_by",
+                        "updated_at",
+                    ]
+                )
+                event = custom_recap.event
+                if event is not None and event.retailer_id is None:
+                    event.retailer = retailer
+                    event.updated_by = self.user
+                    event.save(update_fields=["retailer", "updated_by", "updated_at"])
+                return custom_recap
+
+        return await map_store()
+
     async def bulk_approve_recaps(self) -> int:
         """Approve/decline many recaps. Reuses the single-row path so
         hours-logging + notify stay identical."""
@@ -5491,6 +5554,31 @@ class RecapMutations:
                 input_obj=input,
             )
 
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def map_custom_recap_store(
+        self,
+        info: strawberry.Info,
+        input: inputs.MapCustomRecapStoreInput,
+    ) -> types.CustomRecapDetailResponse:
+        """Map a 3rd-party typed store to a retailer or chain."""
+        try:
+            service = RecapMutationService.with_input(input)
+            await service.set_user(info)
+            custom_recap = await service.map_custom_recap_store()
+            return build_mutation_response(
+                types.CustomRecapDetailResponse,
+                success=True,
+                message="Store mapped.",
+                input_obj=input,
+                custom_recap=custom_recap,
+            )
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.CustomRecapDetailResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
 
     @relay.mutation(permission_classes=[StrictIsAuthenticated])
     async def bulk_approve_recaps(
