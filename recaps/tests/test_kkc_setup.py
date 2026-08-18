@@ -141,8 +141,15 @@ class TestKkcSetupCommand(BaseGraphQLTestCase):
         assert tenant.checkin_location_mode == Tenant.CHECKIN_LOCATION_ADDRESS
         assert tenant.checkin_photo_buckets == PHOTO_BUCKETS
         assert tenant.checkin_event_type is not None
-        assert "Retail Sampling" in tenant.checkin_event_type.name
-        assert EventType.objects.filter(tenant=tenant).count() >= 3
+        assert tenant.checkin_event_type.name == "Event"
+        assert list(
+            tenant.checkin_event_types.values_list("name", flat=True)
+        ) == ["Event"]
+        assert list(
+            EventType.objects.filter(tenant=tenant)
+            .order_by("id")
+            .values_list("name", flat=True)
+        ) == ["Event"]
         assert FileRecapCategory.objects.filter(tenant=tenant).count() >= 2
         assert FileRecapCategory.objects.filter(
             tenant=tenant, name="Consumer Sampling Pictures"
@@ -165,6 +172,7 @@ class TestKkcSetupCommand(BaseGraphQLTestCase):
         assert "Consumer Feedback/Quotes" in names
         assert not any("City" == n for n in names)
         assert not any("Sampling Location #1" in n for n in names)
+        assert tpl.event_type.name == "Event"
 
         # Re-apply keeps the minted code.
         code = tenant.checkin_code
@@ -172,6 +180,53 @@ class TestKkcSetupCommand(BaseGraphQLTestCase):
         tenant.refresh_from_db()
         assert tenant.checkin_code == code
         assert "already set" in log2
+
+    def test_reapply_moves_template_off_retail_and_retires_extras(self):
+        """Prod already had three types + the Field Sampling template on
+        Retail Sampling. A second apply must land on Event only without
+        rotating the standing code."""
+        from events.models import EventType
+        from recaps.models import CustomRecapTemplate
+        from tenants.models import Tenant
+
+        self._run(tenant="krispy", apply=True)
+        tenant = Tenant.objects.get(slug=TENANT_SLUG)
+        code = tenant.checkin_code
+        event = tenant.checkin_event_type
+        retail = EventType.objects.create(
+            name="Retail Sampling",
+            slug="retail-sampling",
+            tenant=tenant,
+            created_by=self.user,
+            is_default=True,
+        )
+        EventType.objects.create(
+            name="On-Premise Sampling",
+            slug="on-premise-sampling",
+            tenant=tenant,
+            created_by=self.user,
+            is_default=False,
+        )
+        tpl = CustomRecapTemplate.objects.get(tenant=tenant, name=TEMPLATE_NAME)
+        tpl.event_type = retail
+        tpl.save(update_fields=["event_type"])
+        tenant.checkin_event_type = retail
+        tenant.save(update_fields=["checkin_event_type"])
+        tenant.checkin_event_types.set([retail, event])
+
+        log = self._run(tenant="krispy", apply=True)
+        tenant.refresh_from_db()
+        tpl.refresh_from_db()
+        assert tenant.checkin_code == code
+        assert "already set" in log
+        assert tenant.checkin_event_type.name == "Event"
+        assert tpl.event_type.name == "Event"
+        assert list(
+            EventType.objects.filter(tenant=tenant).values_list("name", flat=True)
+        ) == ["Event"]
+        assert list(tenant.checkin_event_types.values_list("name", flat=True)) == [
+            "Event"
+        ]
 
 
 @pytest.mark.django_db
