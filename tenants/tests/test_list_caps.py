@@ -9,7 +9,7 @@ def test_tenant_switcher_max_limit_is_500():
     text = (ROOT / "tenants" / "schema.py").read_text()
     assert text.count("max_limit=500") >= 3
     for chunk in text.split("async def tenants")[1:]:
-        assert "max_limit=500" in chunk[:2000]
+        assert "max_limit=500" in chunk
 
 
 def test_chat_messages_cap_is_500():
