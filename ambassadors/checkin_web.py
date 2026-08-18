@@ -897,6 +897,7 @@ def submit_checkin_recap(
     total_engagements: int | None,
     product_samples: list[dict] | None = None,
     force_new: bool = False,
+    third_party: bool = False,
 ):
     """Create a ``CustomRecap`` (+ field values, photos, product samples) for a
     walk-up BA, attributed to their own user. Replicates the write path in
@@ -980,12 +981,15 @@ def submit_checkin_recap(
                 tenant_id=event.tenant_id,
                 custom_recap_template=template,
                 created_by=actor,
+                is_third_party=third_party,
             )
         else:
             recap.submitted_at = dj_tz.now()
             recap.total_engagements = total_engagements
             recap.custom_recap_template = template
             recap.updated_by = actor
+            if third_party:
+                recap.is_third_party = True
             recap.save(
                 update_fields=[
                     "submitted_at",
@@ -993,6 +997,7 @@ def submit_checkin_recap(
                     "custom_recap_template",
                     "updated_by",
                     "updated_at",
+                    *(["is_third_party"] if third_party else []),
                 ]
             )
             rmodels.CustomFieldValue.objects.filter(custom_recap=recap).delete()

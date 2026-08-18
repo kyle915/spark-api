@@ -212,4 +212,41 @@ class TestRecapOnlyCheckinLink(AmbassadorsGraphQLTestCase):
             content_type="application/json",
         )
         assert second.status_code == 200, second.content
-        assert CustomRecap.objects.filter(event=event).count() == 2
+        recaps = list(CustomRecap.objects.filter(event=event))
+        assert len(recaps) == 2
+        assert all(r.is_third_party for r in recaps)
+
+    def test_clock_code_recap_is_not_third_party(self):
+        res = self.http.post(
+            reverse(
+                "events.public_checkin_identify",
+                kwargs={"code": self.clock_code},
+            ),
+            data={
+                "firstName": "Sam",
+                "lastName": "Walker",
+                "phone": "5550100123",
+                "eventDate": dj_tz.localdate().isoformat(),
+                "address": "1648 NW Chipman Road, LEE'S SUMMIT, MO 64081",
+            },
+            content_type="application/json",
+        )
+        assert res.status_code == 200, res.content
+        body = res.json()
+        event = Event.objects.get(uuid=body["event"]["uuid"])
+        blob = f"recap_files/checkin/{event.uuid}/shot.jpg"
+        filed = self.http.post(
+            reverse(
+                "events.public_checkin_recap",
+                kwargs={"code": self.clock_code},
+            ),
+            data={
+                "session": body["sessionToken"],
+                "fieldValues": [],
+                "files": [{"blobName": blob}],
+            },
+            content_type="application/json",
+        )
+        assert filed.status_code == 200, filed.content
+        recap = CustomRecap.objects.get(event=event)
+        assert recap.is_third_party is False

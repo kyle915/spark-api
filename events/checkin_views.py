@@ -700,6 +700,7 @@ def public_checkin_recap(request: HttpRequest, code: str) -> HttpResponse:
             total_engagements=total_engagements,
             product_samples=product_samples if isinstance(product_samples, list) else [],
             force_new=force_new,
+            third_party=checkin_web.is_recap_only_code(code, _target),
         )
     except checkin_web.RecapNeedsAPhoto as exc:
         # The BA's to fix, not a server fault — so a 400 carrying the SAME
