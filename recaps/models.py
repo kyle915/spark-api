@@ -482,6 +482,12 @@ class CustomRecap(models.Model):
     # display (a real Spark BA takes precedence). Mirrors Recap.external_ba_name.
     external_ba_name = models.CharField(max_length=255, null=True, blank=True)
 
+    # True only when filed through Tenant.checkin_recap_code (the 3rd-party
+    # / external agency link). Distinct from external_ba_name — a write-in
+    # BA who isn't in Spark yet. BA walk-up recaps via checkin_code stay
+    # False so Spark can badge agency filings without confusing the two.
+    is_third_party = models.BooleanField(default=False)
+
     job = models.ForeignKey(
         Job,
         on_delete=models.RESTRICT,
