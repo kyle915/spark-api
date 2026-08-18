@@ -44,6 +44,10 @@ TENANT_NAME = "Krispy Krunchy Chicken"
 TENANT_SLUG = "krispy-krunchy-chicken"
 TEMPLATE_NAME = "Krispy Krunchy Chicken · Field Sampling Recap"
 CODE_PREFIX = "KKC-"
+# KKC runs one program. Clock-in, request, and walk-up all stamp this —
+# Retail Sampling / On-Premise Sampling are seeded by createTenant and
+# then retired so they never show up as a picker.
+PROGRAM_NAME = "Event"
 
 # Taken from the Field Sampling Recap PDF, minus the three questions Kyle
 # pulled off the form (City, Sampling Location #1 + map, location-#1 sample
@@ -134,8 +138,8 @@ class Command(BaseCommand):
             dest="event_type",
             default=None,
             help=(
-                "event type name substring. Default: prefer 'sampling', "
-                "else the tenant's first."
+                "event type name substring. Default: Event "
+                "(KKC is a single program)."
             ),
         )
         parser.add_argument(
@@ -225,9 +229,16 @@ class Command(BaseCommand):
                         "created_by": creator,
                     },
                 )
+                if template.event_type_id != event_type.id:
+                    template.event_type = event_type
+                    template.save(update_fields=["event_type"])
+                    self.stdout.write(
+                        f"  Re-pointed template event_type → {event_type.name!r}"
+                    )
                 self.stdout.write(
                     f"\nTemplate {'CREATED' if made else 'exists'} "
-                    f"(id {template.id}, uuid {template.uuid})"
+                    f"(id {template.id}, uuid {template.uuid}, "
+                    f"event_type={event_type.name!r})"
                 )
 
             for s_idx, (section_name, fields) in enumerate(SPEC):
@@ -309,6 +320,7 @@ class Command(BaseCommand):
 
         self._photo_buckets(tenant, creator, apply)
         self._pin_event_type(tenant, event_type, apply)
+        self._retire_other_programs(tenant, event_type, apply)
         self._location_mode(tenant, apply)
         self._checkin_code(tenant, apply, opts.get("prefix"))
 
@@ -466,7 +478,10 @@ class Command(BaseCommand):
             qs = EventType.objects.filter(tenant_id=tenant.id).order_by("id")
 
         if hint:
-            match = qs.filter(name__icontains=hint).first()
+            match = (
+                qs.filter(name__iexact=hint).first()
+                or qs.filter(name__icontains=hint).first()
+            )
             if not match:
                 raise CommandError(
                     f"No event type on tenant {tenant.slug!r} matches {hint!r}."
@@ -477,8 +492,10 @@ class Command(BaseCommand):
             .select_related("event_type")
             .first()
         )
+        # Event, not sampling — KKC is one program. Preferring "sampling"
+        # silently pinned Retail Sampling and left the BA a picker of three.
         return (
-            qs.filter(name__icontains="sampling").first()
+            qs.filter(name__iexact=PROGRAM_NAME).first()
             or (existing.event_type if existing else None)
             or qs.first()
         )
@@ -581,6 +598,60 @@ class Command(BaseCommand):
             )
         if apply:
             tenant.checkin_event_types.set([event_type])
+            if not event_type.is_default:
+                from events.models import EventType
+
+                EventType.objects.filter(tenant_id=tenant.id, is_default=True).exclude(
+                    pk=event_type.pk
+                ).update(is_default=False)
+                event_type.is_default = True
+                event_type.save(update_fields=["is_default"])
+
+    def _retire_other_programs(self, tenant, event_type, apply: bool) -> None:
+        """Leave Event as the only EventType so request + walk-up have no picker.
+
+        createTenant seeds Retail Sampling / On-Premise Sampling / Event.
+        Those extras stay in the catalog until we repoint events + the recap
+        template onto Event and delete them. RESTRICT FKs block a plain delete.
+        """
+        from events.models import Event, EventType
+        from recaps.models import CustomRecapTemplate
+
+        if event_type is None:
+            return
+        others = list(
+            EventType.objects.filter(tenant_id=tenant.id)
+            .exclude(pk=event_type.pk)
+            .order_by("id")
+        )
+        if not others:
+            self.stdout.write("\nNo other event types — Event is the only program.")
+            return
+        self.stdout.write("\nOther event types (will not be selectable):")
+        for extra in others:
+            n_events = Event.objects.filter(event_type=extra).count()
+            n_tpl = CustomRecapTemplate.objects.filter(event_type=extra).count()
+            refs = []
+            if n_events:
+                refs.append(f"{n_events} event(s)→{event_type.name}")
+            if n_tpl:
+                refs.append(f"{n_tpl} template(s)→{event_type.name}")
+            ref_txt = f"  [{', '.join(refs)}]" if refs else "  [unused]"
+            if not apply:
+                self.stdout.write(
+                    self.style.WARNING(
+                        f"    would retire {extra.name!r}{ref_txt}"
+                    )
+                )
+                continue
+            Event.objects.filter(event_type=extra).update(event_type=event_type)
+            CustomRecapTemplate.objects.filter(event_type=extra).update(
+                event_type=event_type
+            )
+            extra.delete()
+            self.stdout.write(
+                self.style.SUCCESS(f"    retired {extra.name!r}{ref_txt}")
+            )
 
     def _location_mode(self, tenant, apply: bool) -> None:
         from tenants.models import Tenant

@@ -4390,9 +4390,10 @@ class SetupKrispyKrunchyCheckinView(View):
 
     The KKC twin of setup-feel-free-checkin: creates the tenant if missing
     (createTenant-style seeds), seeds the Field Sampling Recap template off
-    the client's PDF (minus City / Sampling Location #1 / sample time), mints
-    the standing ``KKC-`` check-in code, pins Retail Sampling, and labels the
-    photo buckets.
+    the client's PDF (minus City / Sampling Location #1 / sample time),     mints
+    the standing ``KKC-`` check-in code, pins Event (and retires Retail
+    Sampling / On-Premise Sampling so there is no program picker), and labels
+    the photo buckets.
 
     Idempotent: get_or_create for the template, and an existing checkin_code
     is left alone (rotating it breaks every copy already shared).
