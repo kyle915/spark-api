@@ -2722,6 +2722,8 @@ class ProductQueries:
             last=last,
             before=before,
             queryset=queryset,
+            default_limit=100,
+            max_limit=1000,
         )
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
