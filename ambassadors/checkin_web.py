@@ -1040,6 +1040,24 @@ def submit_checkin_recap(
                 created_by=actor,
             )
 
+        # Torch (and most retail templates) already ask "total number of
+        # consumers sampled". That IS Spark's engagements metric — copy it
+        # onto CustomRecap.total_engagements so the BA isn't asked twice
+        # and the recap PDF / KPI still get a number.
+        from recaps.types import _consumers_sampled_from_fields
+
+        sampled = _consumers_sampled_from_fields(
+            [
+                (cfv.custom_field.name, cfv.value)
+                for cfv in rmodels.CustomFieldValue.objects.filter(
+                    custom_recap=recap
+                ).select_related("custom_field")
+            ]
+        )
+        if sampled is not None:
+            recap.total_engagements = sampled
+            recap.save(update_fields=["total_engagements", "updated_at"])
+
         for sample in product_samples or []:
             raw_pid = sample.get("productId") or sample.get("product_id")
             qty = sample.get("quantity")
