@@ -985,6 +985,10 @@ class CustomRecap(Node):
     ambassador: ambassador_types.Ambassador | None
     external_ba_name: str | None
     is_third_party: bool
+    typed_store_name: str
+    typed_store_address: str
+    store_mapping_status: str
+    store_suggestions: JSON
     job_id: strawberry.ID | None
     job: job_types.Job | None
     retailer_id: strawberry.ID | None

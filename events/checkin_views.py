@@ -386,6 +386,11 @@ def public_checkin_identify(request: HttpRequest, code: str) -> HttpResponse:
                 return _err("Pick your market from the list.")
             address = canon or market
             store_name = ""
+        elif recap_only:
+            if not store_name:
+                return _err("Enter the store name.")
+            if not address:
+                return _err("Enter the store address.")
         elif not address:
             return _err("Enter the store address so your work is logged to the right place.")
         on_date = _parse_iso_date(date_raw)

@@ -488,6 +488,14 @@ class CustomRecap(models.Model):
     # False so Spark can badge agency filings without confusing the two.
     is_third_party = models.BooleanField(default=False)
 
+    # Typed store from the 3rd-party agency link (free-text, not a picker).
+    # store_mapping_status is "" for normal recaps, "unmatched" until an
+    # admin confirms a maybe-match / chain, then "mapped".
+    typed_store_name = models.CharField(max_length=255, blank=True, default="")
+    typed_store_address = models.TextField(blank=True, default="")
+    store_mapping_status = models.CharField(max_length=16, blank=True, default="")
+    store_suggestions = models.JSONField(blank=True, default=list)
+
     job = models.ForeignKey(
         Job,
         on_delete=models.RESTRICT,

@@ -24,7 +24,7 @@ from django.utils import timezone as dj_tz
 
 from ambassadors import checkin_web
 from ambassadors.tests.base import AmbassadorsGraphQLTestCase
-from events.models import Event
+from events.models import Event, Retailer
 from recaps.models import (
     CustomRecap,
     CustomRecapFieldType,
@@ -92,28 +92,19 @@ class TestRecapOnlyCheckinLink(AmbassadorsGraphQLTestCase):
         assert kind == "tenant"
         assert not checkin_web.is_recap_only_code(self.clock_code, target)
 
-    def test_tenant_context_flags_recap_only_and_lists_stores(self):
-        Event.objects.create(
-            tenant=self.tenant,
-            name="Torch Sampling - Total Wine & More (Lee's Summit)",
-            address="1648 NW Chipman Road, LEE'S SUMMIT, MO 64081",
-            created_by=self.system_user,
-        )
-        Event.objects.create(
-            tenant=self.tenant,
-            name="Torch Sampling - Total Wine & More (Lee's Summit)",
-            address="1648 nw chipman road, lee's summit, mo 64081",
-            created_by=self.system_user,
-        )
+    def test_tenant_context_flags_recap_only_without_a_store_picker(self):
         payload = checkin_web.build_tenant_context(self.tenant, recap_only=True)
         assert payload["recapOnly"] is True
         assert payload["mode"] == "tenant"
-        addrs = [s["address"] for s in payload["recentLocations"]]
-        keys = {checkin_web.normalize_place(a) for a in addrs}
-        assert len(keys) == len(addrs)
-        assert any("chipman" in checkin_web.normalize_place(a) for a in addrs)
-        names = [s["name"] for s in payload["recentLocations"]]
-        assert any("Total Wine" in n for n in names)
+        assert payload["recentLocations"] == []
+
+    def test_identify_requires_typed_store_name_and_address(self):
+        missing_name = self._identify(storeName="")
+        assert missing_name.status_code == 400
+        assert "store name" in missing_name.json()["message"].lower()
+        missing_addr = self._identify(address="")
+        assert missing_addr.status_code == 400
+        assert "store address" in missing_addr.json()["message"].lower()
 
     def test_identify_without_phone_creates_a_session(self):
         res = self._identify()
@@ -215,6 +206,8 @@ class TestRecapOnlyCheckinLink(AmbassadorsGraphQLTestCase):
         recaps = list(CustomRecap.objects.filter(event=event))
         assert len(recaps) == 2
         assert all(r.is_third_party for r in recaps)
+        assert all(r.store_mapping_status == "unmatched" for r in recaps)
+        assert all(r.typed_store_address for r in recaps)
 
     def test_clock_code_recap_is_not_third_party(self):
         res = self.http.post(
@@ -250,3 +243,29 @@ class TestRecapOnlyCheckinLink(AmbassadorsGraphQLTestCase):
         assert filed.status_code == 200, filed.content
         recap = CustomRecap.objects.get(event=event)
         assert recap.is_third_party is False
+        assert recap.store_mapping_status == ""
+
+    def test_suggest_store_matches_national_and_address(self):
+        chain = Retailer.objects.create(
+            tenant=self.tenant,
+            name="Total Wine & More",
+            is_national=True,
+            created_by=self.system_user,
+        )
+        store = Retailer.objects.create(
+            tenant=self.tenant,
+            name="Total Wine & More",
+            address="1648 NW Chipman Road, LEE'S SUMMIT, MO 64081",
+            created_by=self.system_user,
+        )
+        hits = checkin_web.suggest_store_matches(
+            self.tenant,
+            "Total Wine Lees Summit",
+            "1648 NW Chipman Road, Lee's Summit, MO 64081",
+        )
+        uuids = {h["uuid"] for h in hits}
+        assert str(store.uuid) in uuids
+        assert str(chain.uuid) in uuids
+        top = hits[0]
+        assert top["uuid"] == str(store.uuid)
+        assert "address" in top["reason"].lower()

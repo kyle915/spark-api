@@ -1621,6 +1621,10 @@ class RecapQueries:
             and not client_only
         ):
             queryset = queryset.filter(shared_at__isnull=not filters.shared)
+        if filters and getattr(filters, "needs_store_map", None) and not client_only:
+            queryset = queryset.filter(
+                is_third_party=True, store_mapping_status="unmatched"
+            )
         queryset = (
             queryset.prefetch_related(None)
             .select_related(

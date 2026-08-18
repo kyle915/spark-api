@@ -32,6 +32,8 @@ class RecapFiltersInput(SparkGraphQLInput):
 @strawberry.input
 class CustomRecapFiltersInput(RecapFiltersInput):
     custom_recap_template_id: strawberry.ID | None = None
+    # Admin queue: 3rd-party filings whose typed store is not mapped yet.
+    needs_store_map: bool | None = None
 
 
 @strawberry.input
@@ -245,6 +247,12 @@ class ApproveRecapInput(SparkGraphQLInput):
 class ApproveCustomRecapInput(SparkGraphQLInput):
     id: strawberry.ID
     approved: bool
+
+
+@strawberry.input
+class MapCustomRecapStoreInput(SparkGraphQLInput):
+    id: strawberry.ID
+    retailer_id: strawberry.ID
 
 
 @strawberry.input

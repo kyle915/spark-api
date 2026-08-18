@@ -966,6 +966,10 @@ def submit_checkin_recap(
                 .exists()
             ):
                 recap = None
+        typed_name = _store_display_name(
+            getattr(event, "name", "") or "", getattr(event, "address", "") or ""
+        )
+        typed_addr = (getattr(event, "address", "") or "").strip()
         if recap is None:
             recap = rmodels.CustomRecap.objects.create(
                 name=name,
@@ -982,6 +986,16 @@ def submit_checkin_recap(
                 custom_recap_template=template,
                 created_by=actor,
                 is_third_party=third_party,
+                typed_store_name=typed_name[:255] if third_party else "",
+                typed_store_address=typed_addr if third_party else "",
+                store_mapping_status="unmatched" if third_party else "",
+                store_suggestions=(
+                    suggest_store_matches(
+                        getattr(event, "tenant", None), typed_name, typed_addr
+                    )
+                    if third_party
+                    else []
+                ),
             )
         else:
             recap.submitted_at = dj_tz.now()
@@ -1640,6 +1654,78 @@ def checkin_store_options(tenant, limit: int = 200) -> list:
     return out
 
 
+def suggest_store_matches(tenant, name: str, address: str, limit: int = 8) -> list:
+    """Maybe-matches for a typed 3rd-party store (never auto-applied).
+
+    Scores tenant Retailer rows (national chain vs regional store) and
+    Account Map / Master Tracker Request venues. Admin confirms one.
+    """
+    from events.models import Request, Retailer
+
+    if tenant is None:
+        return []
+
+    name_n = normalize_place(name)
+    addr_n = normalize_place(address)
+    addr_core = address_core_key(address)
+    name_tokens = set(name_n.split()) if name_n else set()
+    scored: dict = {}
+
+    def _add(retailer, score: int, reason: str, kind: str) -> None:
+        if retailer is None or score < 35:
+            return
+        key = str(retailer.uuid)
+        prev = scored.get(key)
+        if prev and prev["score"] >= score:
+            return
+        scored[key] = {
+            "uuid": key,
+            "name": retailer.name or "",
+            "address": retailer.address or "",
+            "kind": kind,
+            "isNational": bool(retailer.is_national),
+            "score": int(score),
+            "reason": reason,
+        }
+
+    for retailer in Retailer.objects.filter(tenant=tenant):
+        rname = normalize_place(retailer.name or "")
+        raddr = normalize_place(retailer.address or "")
+        rcore = address_core_key(retailer.address or "")
+        if addr_n and raddr and addr_n == raddr:
+            _add(retailer, 95, "Maybe this store — same address", "store")
+            continue
+        if addr_core and rcore and addr_core == rcore:
+            _add(retailer, 82, "Maybe this store — same street", "store")
+        overlap = name_tokens & set(rname.split()) if rname else set()
+        if len(overlap) >= 2:
+            score = 50 + 10 * min(len(overlap), 4)
+            if retailer.is_national:
+                _add(retailer, min(score, 70), "Maybe the national account", "chain")
+            elif addr_n and raddr and (set(addr_n.split()) & set(raddr.split())):
+                _add(retailer, min(score + 15, 88), "Maybe this regional store", "store")
+            else:
+                _add(retailer, min(score, 65), "Maybe this regional chain", "chain")
+        elif overlap and retailer.is_national:
+            _add(retailer, 48, "Maybe the national account", "chain")
+
+    for row in Request.objects.filter(
+        tenant=tenant, deleted_at__isnull=True, retailer_id__isnull=False
+    ).select_related("retailer"):
+        if row.retailer_id is None:
+            continue
+        req_addr = row.address or row.retailer_address or ""
+        req_name = row.retailer_name or getattr(row.retailer, "name", "") or ""
+        if addr_n and normalize_place(req_addr) == addr_n:
+            _add(row.retailer, 92, "On the Account Map at this address", "store")
+        elif addr_core and address_core_key(req_addr) == addr_core:
+            _add(row.retailer, 80, "On the Account Map — same street", "store")
+        elif name_tokens and len(name_tokens & set(normalize_place(req_name).split())) >= 2:
+            _add(row.retailer, 60, "On the Account Map / Master Tracker", "store")
+
+    return sorted(scored.values(), key=lambda x: -x["score"])[:limit]
+
+
 def _event_date_utc(on_date):
     """A calendar date stored as NOON UTC.
 
@@ -1857,14 +1943,10 @@ def build_tenant_context(tenant, *, recap_only: bool = False) -> dict:
 
     ``needsEventDetails`` tells the page to ask for store + date first; the rest
     of the flow is identical to the per-event link once identify resolves one.
-    ``recap_only`` is the 3rd-party twin: no clock, store picker from Account
-    Map / Master Tracker venues, same recap questions once they identify.
+    ``recap_only`` is the 3rd-party twin: no clock, typed store name +
+    address (admin maps maybe-matches later), same recap questions.
     """
-    stores = (
-        checkin_store_options(tenant)
-        if recap_only
-        else recent_checkin_locations(tenant)
-    )
+    stores = [] if recap_only else recent_checkin_locations(tenant)
     return {
         "mode": "tenant",
         "needsEventDetails": True,
