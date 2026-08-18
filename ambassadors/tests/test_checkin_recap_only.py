@@ -18,6 +18,7 @@ import json
 import uuid
 
 import pytest
+from django.core.cache import cache
 from django.test import Client as DjangoClient
 from django.urls import reverse
 from django.utils import timezone as dj_tz
@@ -37,6 +38,7 @@ from recaps.models import (
 class TestRecapOnlyCheckinLink(AmbassadorsGraphQLTestCase):
     @pytest.fixture(autouse=True)
     def setup(self, db):
+        cache.clear()
         self.system_user = self.get_system_user()
         self.roles = self.setup_default_roles()
         uid = str(uuid.uuid4())[:8]

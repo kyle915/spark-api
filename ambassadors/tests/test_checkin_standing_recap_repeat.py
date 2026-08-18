@@ -13,6 +13,7 @@ import datetime as _dt
 import uuid
 
 import pytest
+from django.core.cache import cache
 from django.test import Client as DjangoClient
 from django.urls import reverse
 from django.utils import timezone as dj_tz
@@ -34,6 +35,7 @@ from recaps.models import (
 class TestStandingRecapRepeat(AmbassadorsGraphQLTestCase):
     @pytest.fixture(autouse=True)
     def setup(self, db):
+        cache.clear()
         self.roles = self.setup_default_roles()
         self.actor = self.get_system_user()
         uid = str(uuid.uuid4())[:8]
