@@ -405,6 +405,8 @@ class Request(models.Model):
     load_in_time = models.CharField(max_length=64, null=True, blank=True)
     onsite_poc = models.CharField(max_length=254, null=True, blank=True)
     additional_team_details = models.TextField(null=True, blank=True)
+    # Torch spark-form: "How many cases to be shipped?" (5MG+10MG gate).
+    cases_to_be_shipped = models.CharField(max_length=32, null=True, blank=True)
     store_number = models.CharField(max_length=254, null=True)
     coordinates = ArrayField(
         models.FloatField(),

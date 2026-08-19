@@ -476,6 +476,8 @@ class CreateRequestInput(BaseNameableInput):
     load_in_time: str | None = None
     onsite_poc: str | None = None
     additional_team_details: str | None = None
+    # Torch spark-form: "How many cases to be shipped?" Auto-mapped onto Request.
+    cases_to_be_shipped: str | None = None
     store_number: str | None = None
     client_name: str | None = None
     client_email: str | None = None
@@ -557,6 +559,8 @@ class CreateRequestWithDependenciesInput(BaseNameableInput):
     load_in_time: str | None = None
     onsite_poc: str | None = None
     additional_team_details: str | None = None
+    # Torch spark-form: "How many cases to be shipped?" Auto-mapped onto Request.
+    cases_to_be_shipped: str | None = None
     store_number: str | None = None
     client_name: str
     client_email: str

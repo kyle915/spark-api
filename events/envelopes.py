@@ -436,6 +436,9 @@ class RequestorRequestApprovedMailer(Mailer):
                 "additional_team_details": getattr(
                     self.request, "additional_team_details", None
                 ),
+                "cases_to_be_shipped": getattr(
+                    self.request, "cases_to_be_shipped", None
+                ),
                 "request_notes": getattr(self.request, "notes", None),
             },
         )
