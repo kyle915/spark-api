@@ -99,3 +99,38 @@ class TestResumeOpenShift(AmbassadorsGraphQLTestCase):
         assert checkin_web.open_shift_event_for(
             ambassador=self.ambassador, tenant=self.tenant
         ) is None
+
+    def test_open_shift_on_another_calendar_day_is_not_resumed(self):
+        """Alicia: leftover Sunday clock-in must not steal Wednesday."""
+        sunday = dj_tz.localdate() - _dt.timedelta(days=3)
+        today = dj_tz.localdate()
+        ev = Event.objects.create(
+            tenant=self.tenant, name="Sunday Miami", address="Miami, FL",
+            date=checkin_web._event_date_utc(sunday),
+            created_by=self.system_user,
+        )
+        self._punch(ev, "clock_in", dj_tz.now() - _dt.timedelta(hours=2))
+        assert checkin_web.open_shift_event_for(
+            ambassador=self.ambassador, tenant=self.tenant, on_date=today
+        ) is None
+        found = checkin_web.open_shift_event_for(
+            ambassador=self.ambassador, tenant=self.tenant, on_date=sunday
+        )
+        assert found is not None and found.id == ev.id
+
+    def test_existing_shift_does_not_bind_today_to_a_sunday_event(self):
+        """A Wednesday-morning punch on Sunday's event must not attach today."""
+        sunday = dj_tz.localdate() - _dt.timedelta(days=3)
+        today = dj_tz.localdate()
+        ev = Event.objects.create(
+            tenant=self.tenant, name="Sunday Miami", address="Miami, FL",
+            date=checkin_web._event_date_utc(sunday),
+            created_by=self.system_user,
+        )
+        self._punch(ev, "clock_in", dj_tz.now() - _dt.timedelta(hours=1))
+        assert checkin_web.existing_shift_event_for(
+            ambassador=self.ambassador,
+            tenant=self.tenant,
+            on_date=today,
+            address="Miami, FL",
+        ) is None

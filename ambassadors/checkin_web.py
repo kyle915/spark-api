@@ -32,7 +32,7 @@ import logging
 import re
 import secrets
 
-from datetime import datetime, timedelta, timezone as dt_timezone
+from datetime import date as date_cls, datetime, timedelta, timezone as dt_timezone
 
 from django.contrib.auth import get_user_model
 from django.db import transaction
@@ -719,6 +719,11 @@ def existing_shift_event_for(*, ambassador, tenant, on_date, address: str = ""):
             continue
         seen.add(ev.id)
         events.append(ev)
+    # clock_time's 14-hour pad can surface a leftover punch on a DIFFERENT
+    # calendar day's event (Alicia clocked into Sunday Miami on Wednesday
+    # morning via a persisted session). Never attach today's identify to
+    # that event — find-or-create should mint the day they picked.
+    events = [ev for ev in events if event_calendar_date(ev) == on_date]
     if not events:
         return None
 
@@ -768,13 +773,10 @@ def unfiled_shifts_for(*, ambassador, tenant, limit: int = 8) -> list[dict]:
         if has_filed_recap(ambassador_id=ambassador.id, event_id=ev.id):
             continue
         clock = clock_state(ambassador_id=ambassador.id, event_id=ev.id)
-        day = getattr(ev, "date", None)
-        event_date = None
-        if day is not None:
-            event_date = day.date().isoformat() if hasattr(day, "date") else str(day)[:10]
+        cal = event_calendar_date(ev)
         out.append(
             {
-                "eventDate": event_date,
+                "eventDate": cal.isoformat() if cal else None,
                 "name": ev.name or "",
                 "address": ev.address or "",
                 "clockInAt": clock.get("clockInAt"),
@@ -876,6 +878,31 @@ def _email_admins_checkin_landed(event, ambassador) -> None:
 # --------------------------------------------------------------------------
 # Recap submission
 # --------------------------------------------------------------------------
+_FEEL_FREE_SLUGS = frozenset(
+    {"feel-free", "feelfree", "bl00-feel-free", "bl00feelfree"}
+)
+
+
+def is_feel_free_tenant(tenant) -> bool:
+    """True for the Feel Free brand only (standing link FF-YMMK3Q).
+
+    Torch / Liquid Death / KKC / Girl Beer must not match — those stay
+    human-reviewed (or, for Torch requests, the separate spark-form
+    auto-approve). Name/slug/url-name all accepted because live rows
+    have used each.
+    """
+    if tenant is None:
+        return False
+    slug = (getattr(tenant, "slug", None) or "").strip().lower()
+    name = (getattr(tenant, "name", None) or "").strip().lower()
+    url = (getattr(tenant, "request_url_name", None) or "").strip().lower()
+    if slug in _FEEL_FREE_SLUGS or slug.endswith("-feel-free"):
+        return True
+    if url in _FEEL_FREE_SLUGS or url.endswith("-feel-free"):
+        return True
+    return name == "feel free"
+
+
 class RecapNeedsAPhoto(ValueError):
     """A submission would leave a recap with no photo on it at all.
 
@@ -970,6 +997,7 @@ def submit_checkin_recap(
             getattr(event, "name", "") or "", getattr(event, "address", "") or ""
         )
         typed_addr = (getattr(event, "address", "") or "").strip()
+        auto_approve = is_feel_free_tenant(getattr(event, "tenant", None))
         if recap is None:
             recap = rmodels.CustomRecap.objects.create(
                 name=name,
@@ -996,6 +1024,7 @@ def submit_checkin_recap(
                     if third_party
                     else []
                 ),
+                approved=auto_approve,
             )
         else:
             recap.submitted_at = dj_tz.now()
@@ -1004,6 +1033,8 @@ def submit_checkin_recap(
             recap.updated_by = actor
             if third_party:
                 recap.is_third_party = True
+            if auto_approve:
+                recap.approved = True
             recap.save(
                 update_fields=[
                     "submitted_at",
@@ -1012,6 +1043,7 @@ def submit_checkin_recap(
                     "updated_by",
                     "updated_at",
                     *(["is_third_party"] if third_party else []),
+                    *(["approved"] if auto_approve else []),
                 ]
             )
             rmodels.CustomFieldValue.objects.filter(custom_recap=recap).delete()
@@ -1190,6 +1222,20 @@ def submit_checkin_recap(
                 f"recap for event {event.uuid} would have no photo; refusing"
             )
 
+    if recap.approved:
+        from ambassadors.walkup import approve_booking_for_recap
+
+        try:
+            approve_booking_for_recap(
+                ambassador_id=ambassador.id,
+                event_id=event.id,
+                actor=actor,
+            )
+        except Exception:  # noqa: BLE001 — never fail a filed recap on hours
+            logger.exception(
+                "checkin recap: auto-approve booking failed recap=%s", recap.id
+            )
+
     _finalize_recap_offthread(recap.id)
     return recap
 
@@ -1206,6 +1252,7 @@ def _finalize_recap_offthread(recap_id: int) -> None:
         from recaps import models as rmodels
         from recaps.mutations import (
             _guard_recap_data_quality,
+            _kick_recap_approved_notify,
             _notify_recap_ready_for_review_to_admins,
         )
 
@@ -1217,10 +1264,20 @@ def _finalize_recap_offthread(recap_id: int) -> None:
             await _guard_recap_data_quality(recap)
         except Exception:  # noqa: BLE001
             logger.exception("checkin recap: data-quality guard failed id=%s", recap_id)
-        try:
-            await _notify_recap_ready_for_review_to_admins(recap, created_by)
-        except Exception:  # noqa: BLE001
-            logger.exception("checkin recap: notify-admins failed id=%s", recap_id)
+        if recap.approved:
+            # Feel Free auto-approve: skip NEEDS REVIEW, send the same
+            # client mail a human approve would (Girl Beer still no-ops).
+            try:
+                await _kick_recap_approved_notify(recap, "custom")
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    "checkin recap: auto-approve notify failed id=%s", recap_id
+                )
+        else:
+            try:
+                await _notify_recap_ready_for_review_to_admins(recap, created_by)
+            except Exception:  # noqa: BLE001
+                logger.exception("checkin recap: notify-admins failed id=%s", recap_id)
         # Field-ops crew for the check-in link specifically — nobody is
         # watching a queue for these, so the submission has to reach a person.
         try:
@@ -1756,9 +1813,32 @@ def _event_date_utc(on_date):
     event would report a day early everywhere the work actually happened. Noon
     UTC reads as 2am–8am on the intended date across every US zone.
     """
-    from datetime import datetime, time, timezone as _tz
+    from datetime import time
 
-    return datetime.combine(on_date, time(12, 0), tzinfo=_tz.utc)
+    return datetime.combine(on_date, time(12, 0), tzinfo=dt_timezone.utc)
+
+
+def event_calendar_date(event) -> date_cls | None:
+    """The civil date ``Event.date`` was stored to represent.
+
+    Walk-in events are stamped noon UTC, so the UTC date *is* the intended
+    calendar day in every US zone. Do not convert the instant into a US
+    timezone first — midnight UTC would then read as the previous evening.
+    """
+    day = getattr(event, "date", None)
+    if day is None:
+        return None
+    if isinstance(day, datetime):
+        if day.tzinfo is not None:
+            return day.astimezone(dt_timezone.utc).date()
+        return day.date()
+    if isinstance(day, date_cls):
+        return day
+    raw = str(day)
+    try:
+        return date_cls.fromisoformat(raw[:10])
+    except ValueError:
+        return None
 
 
 def selectable_event_types(tenant) -> list:
@@ -2099,7 +2179,7 @@ def notify_checkin_recap_submitted(recap) -> None:
 OPEN_SHIFT_RESUME_HOURS = 18
 
 
-def open_shift_event_for(*, ambassador, tenant):
+def open_shift_event_for(*, ambassador, tenant, on_date=None):
     """The event this BA is currently CLOCKED IN on for ``tenant``, or None.
 
     Reported from the field: a BA clocked in at 3:55, lost her session (a
@@ -2112,7 +2192,12 @@ def open_shift_event_for(*, ambassador, tenant):
     Find-or-create keys on the address the BA types, which is the right key for
     "which activation is this" but the WRONG one for "where am I already
     working". Someone with an open punch is, by definition, at the place they
-    clocked in — so an open shift wins over anything they type.
+    clocked in — so an open shift wins over anything they type **on the same
+    calendar day**.
+
+    ``on_date`` is the date the BA picked. A leftover Sunday clock-in must
+    not steal Wednesday's identify onto Sunday's market event (Feel Free:
+    Alicia, Aug 2026). Same-day resume still ignores a retyped address.
 
     Newest first, and only within OPEN_SHIFT_RESUME_HOURS so a stale missed
     clock-out from days ago can't hijack today's check-in.
@@ -2142,13 +2227,18 @@ def open_shift_event_for(*, ambassador, tenant):
                 clock_time__gte=punched_in,
             ).exists()
             if not closed:
-                return (
+                event = (
                     Event.objects.select_related(
                         "tenant", "request", "retailer", "location", "state", "timezone", "event_type"
                     )
                     .filter(id=event_id)
                     .first()
                 )
+                if event is None:
+                    continue
+                if on_date is not None and event_calendar_date(event) != on_date:
+                    continue
+                return event
     except Exception:  # noqa: BLE001 — never block a check-in over this
         logger.exception(
             "open-shift lookup failed ambassador=%s tenant=%s",

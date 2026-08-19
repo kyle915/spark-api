@@ -364,3 +364,114 @@ class TestStandingRecapRepeat(AmbassadorsGraphQLTestCase):
         assert (
             CustomRecap.objects.filter(event=event, ambassador=self.ba).count() == 2
         )
+
+    def test_identify_today_does_not_resume_a_leftover_sunday_shift(self):
+        """Alicia: eventDate=Wednesday must mint today, not Sunday's open punch."""
+        sunday = dj_tz.localdate() - _dt.timedelta(days=3)
+        today = dj_tz.localdate()
+        leftover = self._event(
+            name="Sunday Miami", address="Miami, FL", on_date=sunday
+        )
+        stub, _ = checkin_web.get_or_create_checkin_ambassador(
+            first_name="Alicia", last_name="Archie", phone="3059007912", email=None
+        )
+        source, _ = Source.objects.get_or_create(name="clock_in")
+        Attendance.objects.create(
+            ambassador=stub,
+            event=leftover,
+            source=source,
+            clock_time=dj_tz.now() - _dt.timedelta(hours=2),
+        )
+        res = self.http.post(
+            reverse(
+                "events.public_checkin_identify",
+                kwargs={"code": self.tenant.checkin_code},
+            ),
+            data={
+                "firstName": "Alicia",
+                "lastName": "Archie",
+                "phone": "3059007912",
+                "eventDate": today.isoformat(),
+                "address": "Miami, FL",
+            },
+            content_type="application/json",
+        )
+        assert res.status_code == 200, res.content
+        body = res.json()
+        assert body["event"]["uuid"] != str(leftover.uuid)
+        assert body["event"]["date"].startswith(today.isoformat())
+
+    def test_feel_free_standing_recap_is_auto_approved(self):
+        self.tenant.name = "Feel Free"
+        self.tenant.request_url_name = "bl00-feel-free"
+        self.tenant.save(update_fields=["name", "request_url_name"])
+        today = dj_tz.localdate()
+        event = self._event(name="Miami", address="Miami, FL", on_date=today)
+        recap = self._submit(event, [{"blobName": self._blob(event, "ff")}])
+        recap.refresh_from_db()
+        assert recap.approved is True
+
+    def test_other_brand_standing_recap_stays_unapproved(self):
+        today = dj_tz.localdate()
+        event = self._event(name="Austin", address="Austin, TX", on_date=today)
+        recap = self._submit(event, [{"blobName": self._blob(event, "x")}])
+        recap.refresh_from_db()
+        assert recap.approved is False
+
+    def test_identify_same_day_still_resumes_an_open_shift(self):
+        """Lost session, same calendar day: still land on the open event."""
+        today = dj_tz.localdate()
+        ev = self._event(name="Today store", address="100 Main St", on_date=today)
+        stub, _ = checkin_web.get_or_create_checkin_ambassador(
+            first_name="Joy", last_name="H", phone="5550100444", email=None
+        )
+        source, _ = Source.objects.get_or_create(name="clock_in")
+        Attendance.objects.create(
+            ambassador=stub,
+            event=ev,
+            source=source,
+            clock_time=dj_tz.now() - _dt.timedelta(hours=2),
+        )
+        res = self.http.post(
+            reverse(
+                "events.public_checkin_identify",
+                kwargs={"code": self.tenant.checkin_code},
+            ),
+            data={
+                "firstName": "Joy",
+                "lastName": "H",
+                "phone": "5550100444",
+                "eventDate": today.isoformat(),
+                "address": "100 Main Street",
+            },
+            content_type="application/json",
+        )
+        assert res.status_code == 200, res.content
+        assert res.json()["event"]["uuid"] == str(ev.uuid)
+
+
+class TestFeelFreeTenantGate:
+    def test_only_the_feel_free_brand_matches(self):
+        from types import SimpleNamespace
+
+        def t(**kw):
+            base = {"slug": "", "name": "", "request_url_name": ""}
+            base.update(kw)
+            return SimpleNamespace(**base)
+
+        assert checkin_web.is_feel_free_tenant(
+            t(slug="feel-free", name="Feel Free", request_url_name="bl00-feel-free")
+        )
+        assert checkin_web.is_feel_free_tenant(t(request_url_name="bl00-feel-free"))
+        assert not checkin_web.is_feel_free_tenant(
+            t(slug="keee-torch-thc", name="Torch", request_url_name="keee-torch-thc")
+        )
+        assert not checkin_web.is_feel_free_tenant(
+            t(slug="liquid-death", name="Liquid Death", request_url_name="ighn-liquid-death")
+        )
+        assert not checkin_web.is_feel_free_tenant(
+            t(slug="krispy-krunchy", name="Krispy Krunchy Chicken")
+        )
+        assert not checkin_web.is_feel_free_tenant(
+            t(slug="girl-beer", name="Girl Beer")
+        )
