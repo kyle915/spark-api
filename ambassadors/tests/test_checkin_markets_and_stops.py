@@ -221,6 +221,19 @@ class TestSamplingStops(AmbassadorsGraphQLTestCase):
         assert len(ctx["session"]["stops"]) == 1
         assert ctx["session"]["stops"][0]["name"] == "stop one"
 
+    def test_clocked_in_context_includes_location_mode(self):
+        """Feel Free's stop card keys off this. The landing payload already
+        sent it; dropping it after identify hid Log this stop on the clock."""
+        assert checkin_web.build_public_context(self.event, self.ba)[
+            "locationMode"
+        ] == "address"
+        self.tenant.checkin_location_mode = Tenant.CHECKIN_LOCATION_MARKET
+        self.tenant.save(update_fields=["checkin_location_mode"])
+        self.event.refresh_from_db()
+        assert checkin_web.build_public_context(self.event, self.ba)[
+            "locationMode"
+        ] == "market"
+
     def test_stops_are_scoped_to_the_ba_who_logged_them(self):
         """Several BAs share a market event; each sees only their own trail."""
         other_user = self.create_user(

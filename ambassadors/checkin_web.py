@@ -1394,6 +1394,10 @@ def build_public_context(event, ambassador=None) -> dict:
         # Empty for every brand that hasn't opted in, which is the page's signal
         # to keep its single generic "Photos" grid.
         "photoBuckets": serialize_photo_buckets(event),
+        # Same key the standing-link landing payload sends. Without it the
+        # clocked-in page cannot tell market (Feel Free) from store (Torch)
+        # and hides Log this stop.
+        "locationMode": tenant_location_mode(tenant),
     }
     # Which program this event is — so a BA who picked one can see the page
     # agreed with them before they start filling in a 15-field form.
