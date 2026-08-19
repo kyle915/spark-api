@@ -338,32 +338,32 @@ def public_checkin_identify(request: HttpRequest, code: str) -> HttpResponse:
     # the date and we find-or-create it. Several BAs at the same store on the
     # same day resolve to the SAME event (see find_or_create_walkin_event).
     event = target if kind == "event" else None
+    on_date = None
     if kind == "tenant":
-        # ALREADY ON THE CLOCK? Resume that shift and ignore what they typed.
-        #
-        # Reported from the field: a BA clocked in at 3:55, lost her session,
-        # re-identified, and landed on a NEW event because she spelled the
-        # store slightly differently the second time — "it's not letting me go
-        # to where I clocked in before". She was stuck on the clock with no way
-        # to clock out. Someone with an open punch is at the place they clocked
-        # in, whatever they type now, so the open shift wins.
+        date_raw = (data.get("eventDate") or data.get("date") or "").strip()
+        on_date = _parse_iso_date(date_raw)
+        if date_raw and on_date is None:
+            return _err("Pick the date you worked (YYYY-MM-DD).")
+        # Same-day open punch: resume even if they retyped the store
+        # (lost session used to fork a second event). A leftover punch
+        # from another calendar day must NOT win — Feel Free Alicia
+        # picked Wednesday and landed on Sunday's still-open market.
         resumed = (
             None
             if recap_only
             else checkin_web.open_shift_event_for(
-                ambassador=ambassador, tenant=target
+                ambassador=ambassador, tenant=target, on_date=on_date
             )
         )
         if resumed is not None:
             event = resumed
             logger.info(
-                "checkin identify resumed open shift ambassador=%s event=%s",
-                ambassador.id, resumed.id,
+                "checkin identify resumed open shift ambassador=%s event=%s on_date=%s",
+                ambassador.id, resumed.id, on_date,
             )
     if kind == "tenant" and event is None:
         address = (data.get("address") or data.get("storeAddress") or "").strip()
         store_name = (data.get("storeName") or data.get("eventName") or "").strip()
-        date_raw = (data.get("eventDate") or data.get("date") or "").strip()
 
         # ROAMING brands pick a market; the market becomes the event's location
         # key, so everyone working Austin today shares one event instead of
@@ -393,7 +393,6 @@ def public_checkin_identify(request: HttpRequest, code: str) -> HttpResponse:
                 return _err("Enter the store address.")
         elif not address:
             return _err("Enter the store address so your work is logged to the right place.")
-        on_date = _parse_iso_date(date_raw)
         if on_date is None:
             return _err("Pick the date you worked (YYYY-MM-DD).")
         # Asymmetric on purpose. Backdating is ordinary — a BA writes the recap
