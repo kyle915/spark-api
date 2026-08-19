@@ -653,6 +653,55 @@ def clock_state(*, ambassador_id: int, event_id: int) -> dict:
     }
 
 
+def abandon_open_clock(*, ambassador, event) -> dict:
+    """Clock out a leftover open punch without filing or deleting a recap.
+
+    Standing-link localStorage keeps a 90-day session keyed only by the
+    walk-up code. Reopening FF-* on Wednesday restores Saturday's event,
+    and Clock in punches that leftover day. Closing the punch (not the
+    recap) lets identify mint today's market/store event.
+
+    Already-closed shifts are a no-op. Empty clock-out Recap stubs are
+    not filed — we never delete a recap here.
+    """
+    empty = {
+        "state": "not_started",
+        "clockInAt": None,
+        "clockOutAt": None,
+    }
+    if ambassador is None or event is None:
+        return {"cleared": False, "clockedOut": False, "clock": empty}
+    state = clock_state(ambassador_id=ambassador.id, event_id=event.id)
+    if state.get("state") != "clocked_in":
+        return {"cleared": True, "clockedOut": False, "clock": state}
+
+    amb_event, _created = ensure_walkup_booking(
+        event, ambassador, actor=ambassador.user
+    )
+    record_attendance(
+        amb_event=amb_event,
+        kind="clock_out",
+        coordinates=None,
+        actor=ambassador.user,
+    )
+    try:
+        from ambassadors.models import MileageSession
+
+        session = active_mileage_session(ambassador=ambassador, event=event)
+        if session is not None:
+            session.status = MileageSession.STATUS_CANCELED
+            session.ended_at = dj_tz.now()
+            session.save(update_fields=["status", "ended_at", "updated_at"])
+    except Exception:  # noqa: BLE001 — mileage must never block a clear
+        logger.exception(
+            "clear-clock mileage close failed ambassador=%s event=%s",
+            getattr(ambassador, "id", None),
+            getattr(event, "id", None),
+        )
+    state = clock_state(ambassador_id=ambassador.id, event_id=event.id)
+    return {"cleared": True, "clockedOut": True, "clock": state}
+
+
 def has_recap(*, ambassador_id: int, event_id: int) -> bool:
     """True when this BA has *filed* a recap for the event.
 

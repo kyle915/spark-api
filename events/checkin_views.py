@@ -13,6 +13,7 @@ Routes (mounted under ``/api/public/`` in ``events/urls.py``):
     GET  checkin/<code>                → event + brand + template (+ session state)
     POST checkin/<code>/identify       → {sessionToken, session}
     POST checkin/<code>/clock          → {clock}
+    POST checkin/<code>/clear-clock    → {cleared, clockedOut, clock}
     POST checkin/<code>/upload-url     → {uploadUrl, blobName}
     POST checkin/<code>/recap          → {success}
 """
@@ -611,6 +612,47 @@ def public_checkin_clock(request: HttpRequest, code: str) -> HttpResponse:
         logger.exception("checkin clock failed code=%s kind=%s", code, source_name)
         return _err("Couldn't record that. Try again.", status=500, code="server")
     return JsonResponse({"clock": state})
+
+
+# --------------------------------------------------------------------------
+# POST clear leftover clock-in (standing link — start a new day)
+# --------------------------------------------------------------------------
+@csrf_exempt
+@require_http_methods(["POST"])
+def public_checkin_clear_clock(request: HttpRequest, code: str) -> HttpResponse:
+    """Close a leftover open punch so the BA can start today's check-in.
+
+    Does not delete recaps. Recap-only agency links have no clock — still
+    200 so the page can drop the restored session and pick a new date.
+    """
+    if _over_limit("clear-clock-ip", _client_ip(request), limit=40, window=300):
+        return _rate_limited()
+    data = _body(request)
+    loaded, err = _load_session(code, data.get("session") or "")
+    if err is not None:
+        return err
+    event, ambassador = loaded
+    if _is_recap_only(code):
+        state = checkin_web.clock_state(
+            ambassador_id=ambassador.id, event_id=event.id
+        )
+        return JsonResponse(
+            {"cleared": True, "clockedOut": False, "clock": state}
+        )
+    try:
+        result = checkin_web.abandon_open_clock(
+            ambassador=ambassador, event=event
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("checkin clear-clock failed code=%s", code)
+        return _err("Couldn't clear that clock-in. Try again.", status=500, code="server")
+    logger.info(
+        "checkin clear-clock ambassador=%s event=%s clocked_out=%s",
+        ambassador.id,
+        event.id,
+        result.get("clockedOut"),
+    )
+    return JsonResponse(result)
 
 
 # --------------------------------------------------------------------------
