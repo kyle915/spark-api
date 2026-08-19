@@ -4,8 +4,17 @@ import strawberry
 from asgiref.sync import sync_to_async
 from graphql import GraphQLError
 
-from django.db.models import QuerySet, Model, Prefetch, Q, Max, Count
-from django.db.models.functions import Coalesce
+from django.db.models import (
+    CharField,
+    QuerySet,
+    Model,
+    Prefetch,
+    Q,
+    Max,
+    Count,
+    Value,
+)
+from django.db.models.functions import Coalesce, Concat
 
 from recaps import types
 from recaps import models
@@ -46,13 +55,19 @@ def _apply_name_code_filters(
     *,
     retailer_name: str | None = None,
     state_code: str | None = None,
+    ambassador_name: str | None = None,
 ) -> QuerySet:
-    """Apply the web-list retailer-name / state-code filters.
+    """Apply the web-list retailer-name / state-code / BA-name filters.
 
     The Spark recaps list dropdowns are labeled by retailer NAME and
     2-letter state CODE (not Relay ids). Match the same sources the
     cards display: recap FK, event retailer, request retailer, event
     state, and a ``, TX``-style address fallback for address-only events.
+
+    BA name is a contains-match on the linked Ambassador's first/last/
+    full name and on ``external_ba_name`` (write-in / 3rd-party BAs).
+    The ambassadors list resolver hard-caps at 50, so the Recaps filter
+    cannot rely on picking an ``ambassador_id`` from that dropdown.
     """
     name = (retailer_name or "").strip()
     if name:
@@ -69,6 +84,20 @@ def _apply_name_code_filters(
             | Q(event__retailer__location__state__code__iexact=code)
             | Q(event__address__icontains=f", {code}")
             | Q(event__address__icontains=f" {code} ")
+        )
+    ba = (ambassador_name or "").strip()
+    if ba:
+        full_name = Concat(
+            Coalesce("ambassador__user__first_name", Value("")),
+            Value(" "),
+            Coalesce("ambassador__user__last_name", Value("")),
+            output_field=CharField(),
+        )
+        queryset = queryset.annotate(_ba_full_name=full_name).filter(
+            Q(_ba_full_name__icontains=ba)
+            | Q(ambassador__user__first_name__icontains=ba)
+            | Q(ambassador__user__last_name__icontains=ba)
+            | Q(external_ba_name__icontains=ba)
         )
     return queryset
 
@@ -1360,6 +1389,9 @@ class RecapQueries:
         approved = filters.approved if filters else None
         retailer_name = filters.retailer_name if filters else None
         state_code = filters.state_code if filters else None
+        ambassador_name = (
+            getattr(filters, "ambassador_name", None) if filters else None
+        )
         # Force approved=True for client users — they never see drafts.
         # Overrides whatever the client (or a stale frontend filter) sent.
         # Also ignore `shared`: that flag is an admin publish step, not
@@ -1394,7 +1426,10 @@ class RecapQueries:
         ):
             queryset = queryset.filter(shared_at__isnull=not filters.shared)
         queryset = _apply_name_code_filters(
-            queryset, retailer_name=retailer_name, state_code=state_code
+            queryset,
+            retailer_name=retailer_name,
+            state_code=state_code,
+            ambassador_name=ambassador_name,
         )
         # List cards only need hero + count + flat event labels.
         # Drop the fat default prefetches (engagements/samples/sales).
@@ -1586,6 +1621,9 @@ class RecapQueries:
         edited = filters.edited if filters else None
         retailer_name = filters.retailer_name if filters else None
         state_code = filters.state_code if filters else None
+        ambassador_name = (
+            getattr(filters, "ambassador_name", None) if filters else None
+        )
 
         # Force approved=True for client users on custom recaps too.
         # Ignore `shared` the same way as the legacy recaps list — clients
@@ -1613,7 +1651,10 @@ class RecapQueries:
             q=q,
         )
         queryset = _apply_name_code_filters(
-            queryset, retailer_name=retailer_name, state_code=state_code
+            queryset,
+            retailer_name=retailer_name,
+            state_code=state_code,
+            ambassador_name=ambassador_name,
         )
         if (
             filters

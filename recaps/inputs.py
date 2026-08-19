@@ -12,6 +12,11 @@ class RecapFiltersInput(SparkGraphQLInput):
     event_type: strawberry.ID | None = None
     rmm_asigned_id: strawberry.ID | None = None
     ambassador_id: strawberry.ID | None = None
+    # Partial BA name. The web Recaps list types this instead of picking
+    # from the 50-cap ambassadors dropdown (which omitted most of the
+    # roster). Matches linked Ambassador first/last/full name and the
+    # write-in external_ba_name. Empty / whitespace = no BA name filter.
+    ambassador_name: str | None = None
     retailer_id: strawberry.ID | None = None
     location_id: strawberry.ID | None = None
     state_id: strawberry.ID | None = None
