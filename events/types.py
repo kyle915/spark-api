@@ -405,6 +405,7 @@ class Request(Node):
     load_in_time: str | None = None
     onsite_poc: str | None = None
     additional_team_details: str | None = None
+    cases_to_be_shipped: str | None = None
     store_number: str | None = None
     notes: str | None = None
     coordinates: List[float]
