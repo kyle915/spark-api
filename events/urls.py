@@ -52,6 +52,11 @@ urlpatterns = [
         name="events.public_checkin_clock",
     ),
     path(
+        "checkin/<str:code>/clear-clock",
+        checkin_views.public_checkin_clear_clock,
+        name="events.public_checkin_clear_clock",
+    ),
+    path(
         "checkin/<str:code>/upload-url",
         checkin_views.public_checkin_upload_url,
         name="events.public_checkin_upload_url",
