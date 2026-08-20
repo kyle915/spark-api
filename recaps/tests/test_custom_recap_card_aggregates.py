@@ -173,6 +173,12 @@ def test_consumers_sampled_singular_consumer():
     assert _consumers_sampled_from_fields(fields) == 42
 
 
+def test_consumers_sampled_interact_with_question():
+    # G7 / Total Wireless BA Event Recap: "interact with" is the same KPI.
+    fields = [("How many consumers did you interact with?", "80")]
+    assert _consumers_sampled_from_fields(fields) == 80
+
+
 def test_consumers_sampled_returns_first_match():
     fields = [
         ("Consumers Sampled", "10"),
