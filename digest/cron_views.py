@@ -4437,6 +4437,54 @@ class SetupKrispyKrunchyCheckinView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class BackfillTorchPublicFormSheetView(View):
+    """GET/POST `/internal/cron/backfill-torch-public-form-sheet`.
+
+    Append specific Torch public spark-form requests to the retail-schedule
+    Google Sheet. Requires ``ids`` (e.g. 1980,1981) so the Binny bulk import
+    cannot flood the workbook. Dry-run unless apply=1.
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        ids = (request.GET.get("ids") or request.POST.get("ids") or "").strip()
+        if not ids:
+            return JsonResponse(
+                {"ok": False, "error": "ids-required"}, status=400
+            )
+        raw = (request.GET.get("apply") or request.POST.get("apply") or "").lower()
+        apply_it = raw in ("1", "true", "yes", "on")
+        kwargs: dict = {"ids": ids}
+        if apply_it:
+            kwargs["apply"] = True
+
+        out = io.StringIO()
+        try:
+            call_command("backfill_torch_public_form_sheet", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("backfill-torch-public-form-sheet cron failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "log": out.getvalue(),
+                },
+                status=500,
+            )
+        return JsonResponse({"ok": True, "apply": apply_it, "log": out.getvalue()})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class InspectTenantsView(View):
     """GET/POST `/internal/cron/inspect-tenants`.
 
@@ -7775,6 +7823,7 @@ def _registered_views() -> dict[str, Any]:
         "setup-total-wireless-checkin": SetupTotalWirelessCheckinView,
         "setup-feel-free-checkin": SetupFeelFreeCheckinView,
         "setup-krispy-krunchy-checkin": SetupKrispyKrunchyCheckinView,
+        "backfill-torch-public-form-sheet": BackfillTorchPublicFormSheetView,
         "inspect-tenants": InspectTenantsView,
         "delete-tenant": DeleteTenantView,
         "onboard-torch-products": OnboardTorchProductsView,
