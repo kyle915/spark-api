@@ -12,6 +12,7 @@ from django.utils import timezone
 from django_rq import job
 from rq import Retry
 
+from ambassadors.push import _send_push_to_user_sync
 from jobs.envelopes import (
     AmbassadorEventReminder3HoursMailer,
     AmbassadorEventReminderMailer,
@@ -22,7 +23,11 @@ from jobs.notification_rules import (
     _event_start_datetime,
     _to_utc_aware,
 )
-from utils.onesignal import OneSignalError, one_signal_client
+from utils.onesignal import (
+    OneSignalError,
+    one_signal_client,
+    onesignal_delivered,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -674,6 +679,76 @@ def send_ambassador_job_3h_reminder(
     )
 
 
+def _deliver_ambassador_job_push(
+    ambassador_job: AmbassadorJob,
+    *,
+    title: str,
+    message: str,
+    url: str,
+    data: dict[str, str],
+) -> int:
+    """Send a shift reminder via OneSignal, then Expo if needed.
+
+    Returns 1 if a device was reached, 0 if the BA has no push subscription
+    (attempt complete — caller should stamp so the cron does not retry), or
+    -1 on an unexpected OneSignal/Expo failure (caller should not stamp).
+
+    Missing/unsubscribed OneSignal players are expected: spark-mobile
+    registers Expo tokens, not OneSignal.login. Those must not logger.exception
+    (ERROR → Spark alert email).
+    """
+    user = ambassador_job.ambassador.user
+    user_uuid = getattr(user, "uuid", None)
+    delivered = False
+    unexpected = False
+
+    if user_uuid:
+        try:
+            body = async_to_sync(one_signal_client.send_push)(
+                external_ids=[str(user_uuid)],
+                title=title,
+                message=message,
+                url=url,
+                data=data,
+            )
+            delivered = onesignal_delivered(body)
+        except OneSignalError as exc:
+            unexpected = True
+            logger.warning(
+                "OneSignal reminder push failed for ambassador_job=%s: %s",
+                ambassador_job.id,
+                exc,
+            )
+
+    if not delivered:
+        try:
+            expo_ok = _send_push_to_user_sync(
+                user.pk,
+                title=title,
+                body=message,
+                data=data,
+            )
+            delivered = expo_ok > 0
+        except Exception:
+            unexpected = True
+            logger.warning(
+                "Expo reminder push failed for ambassador_job=%s",
+                ambassador_job.id,
+                exc_info=True,
+            )
+
+    if delivered:
+        return 1
+    if unexpected:
+        return -1
+    logger.info(
+        "No push subscription for ambassador_job=%s user_id=%s",
+        ambassador_job.id,
+        getattr(user, "id", None),
+    )
+    return 0
+
+
 @job("default", retry=Retry(max=3, interval=[60, 120, 240]))
 def send_ambassador_job_15m_reminder_push(
     ambassador_job_id: int,
@@ -713,29 +788,27 @@ def send_ambassador_job_15m_reminder_push(
         return 0
 
     deep_link = f"spark://my-gigs/{ambassador_job.id}"
-    try:
-        async_to_sync(one_signal_client.send_push)(
-            external_ids=[str(user_uuid)],
-            title="Your event starts in 15 minutes",
-            message=f"{ambassador_job.job.name} starts soon. Please head to your location.",
-            url=deep_link,
-            data={
-                "type": "event_starting_soon_15m",
-                "job_id": str(ambassador_job.job.id),
-                "ambassador_job_id": str(ambassador_job.id),
-                "deep_link": deep_link,
-            },
-        )
-    except OneSignalError:
-        logger.exception(
-            "Failed to send 15m reminder push for ambassador_job=%s",
-            ambassador_job_id,
-        )
+    title = "Your event starts in 15 minutes"
+    message = f"{ambassador_job.job.name} starts soon. Please head to your location."
+    data = {
+        "type": "event_starting_soon_15m",
+        "job_id": str(ambassador_job.job.id),
+        "ambassador_job_id": str(ambassador_job.id),
+        "deep_link": deep_link,
+    }
+    result = _deliver_ambassador_job_push(
+        ambassador_job,
+        title=title,
+        message=message,
+        url=deep_link,
+        data=data,
+    )
+    if result < 0:
         return 0
 
     ambassador_job.reminder_15m_sent_at = _to_utc_aware(timezone.now())
     ambassador_job.save(update_fields=["reminder_15m_sent_at"])
-    return 1
+    return result
 
 
 @job("default", retry=Retry(max=3, interval=[60, 120, 240]))
@@ -796,29 +869,24 @@ def send_ambassador_job_end_15m_reminder_push(
         )
         push_type = "event_ended_clock_out_recap_15m"
 
-    try:
-        async_to_sync(one_signal_client.send_push)(
-            external_ids=[str(user_uuid)],
-            title=title,
-            message=message,
-            url=deep_link,
-            data={
-                "type": push_type,
-                "job_id": str(ambassador_job.job.id),
-                "ambassador_job_id": str(ambassador_job.id),
-                "deep_link": deep_link,
-            },
-        )
-    except OneSignalError:
-        logger.exception(
-            "Failed to send end+15m reminder push for ambassador_job=%s",
-            ambassador_job_id,
-        )
+    result = _deliver_ambassador_job_push(
+        ambassador_job,
+        title=title,
+        message=message,
+        url=deep_link,
+        data={
+            "type": push_type,
+            "job_id": str(ambassador_job.job.id),
+            "ambassador_job_id": str(ambassador_job.id),
+            "deep_link": deep_link,
+        },
+    )
+    if result < 0:
         return 0
 
     ambassador_job.reminder_end_15m_sent_at = _to_utc_aware(timezone.now())
     ambassador_job.save(update_fields=["reminder_end_15m_sent_at"])
-    return 1
+    return result
 
 
 @job("default", retry=Retry(max=1, interval=[60]))
