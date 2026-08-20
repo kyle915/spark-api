@@ -134,6 +134,11 @@ jobs:
       # revision is the one serving traffic and `serverInfo.databaseOk`
       # is true. Using latestReadyRevisionName alone is a false pass
       # when traffic is still pinned to the previous revision.
+      #
+      # Cloud Run's GFE can keep serving the previous revision for a
+      # short window after update-traffic reports 100% on the new one
+      # (fed2b1b: 21-minute traffic route, then serverInfo still
+      # 00659). Retry until the live revision answers or we time out.
       - name: Verify deployment
         run: |
           CREATED=$(gcloud run services describe "$CLOUD_RUN_SERVICE" \
@@ -144,20 +149,33 @@ jobs:
             --format='value(status.latestReadyRevisionName)')
           echo "Created revision: $CREATED"
           echo "Live revision: $LIVE"
+          echo "Traffic:"
+          gcloud run services describe "$CLOUD_RUN_SERVICE" \
+            --region "$GCP_REGION" --project "$GCP_PROJECT_ID" \
+            --format='yaml(status.traffic)'
           if [ "$CREATED" != "$LIVE" ]; then
             echo "::error::New revision $CREATED is not serving traffic (live is $LIVE)."
             exit 1
           fi
-          RESPONSE=$(curl -s -X POST \
-            "https://spark-api-new-490085168610.us-central1.run.app/api/v483927/graphql/spark" \
-            -H "Content-Type: application/json" \
-            -d '{"query":"{ serverInfo { revision databaseOk } }"}')
-          echo "$RESPONSE"
+          URL="https://spark-api-new-490085168610.us-central1.run.app/api/v483927/graphql/spark"
+          QUERY='{"query":"{ serverInfo { revision databaseOk } }"}'
+          RESPONSE=""
+          for i in $(seq 1 18); do
+            RESPONSE=$(curl -sS -m 20 -X POST "$URL" \
+              -H "Content-Type: application/json" \
+              -H "Cache-Control: no-cache" \
+              -d "$QUERY" || true)
+            echo "Attempt $i: $RESPONSE"
+            if echo "$RESPONSE" | grep -q '"databaseOk": true' \
+              && echo "$RESPONSE" | grep -q "\"revision\": \"$LIVE\""; then
+              echo "Verified $LIVE is serving."
+              exit 0
+            fi
+            sleep 10
+          done
           if ! echo "$RESPONSE" | grep -q '"databaseOk": true'; then
             echo "::error::serverInfo.databaseOk is false — DB unreachable on the new revision."
             exit 1
           fi
-          if ! echo "$RESPONSE" | grep -q "\"revision\": \"$LIVE\""; then
-            echo "::error::serverInfo.revision does not match live revision $LIVE."
-            exit 1
-          fi
+          echo "::error::serverInfo.revision does not match live revision $LIVE."
+          exit 1
