@@ -16,6 +16,7 @@ from jobs.tasks import (
     send_ambassador_job_3h_reminder,
 )
 from jobs.tests.base import JobsGraphQLTestCase
+from utils.onesignal import OneSignalError
 
 
 @pytest.mark.django_db(transaction=True)
@@ -362,6 +363,88 @@ class TestSendUpcomingAmbassadorEvent15MinutesReminders(BaseReminderTestCase):
 
         assert sent == 0
         mock_async_to_sync.assert_not_called()
+        ambassador_job.refresh_from_db()
+        assert ambassador_job.reminder_15m_sent_at is None
+
+    @patch("jobs.tasks._send_push_to_user_sync", return_value=0)
+    @patch("jobs.tasks.async_to_sync")
+    @patch("jobs.tasks.timezone.now")
+    def test_no_onesignal_player_stamps_quietly(
+        self, mock_now, mock_async_to_sync, mock_expo
+    ):
+        trigger_at = datetime(2026, 3, 18, 19, 15, tzinfo=dt_timezone.utc)
+        mock_now.return_value = trigger_at
+        ambassador_job = self._build_ambassador_job(
+            event_start_time=datetime(2026, 3, 18, 19, 30, tzinfo=dt_timezone.utc)
+        )
+        mock_async_to_sync.return_value.return_value = {
+            "id": "",
+            "errors": {"invalid_aliases": {"external_id": ["missing-user"]}},
+        }
+
+        with patch("jobs.tasks.logger") as mock_logger:
+            sent = send_ambassador_job_15m_reminder_push(
+                ambassador_job.id, trigger_at.isoformat()
+            )
+
+        assert sent == 0
+        mock_expo.assert_called_once()
+        mock_logger.exception.assert_not_called()
+        mock_logger.info.assert_called()
+        ambassador_job.refresh_from_db()
+        assert ambassador_job.reminder_15m_sent_at == trigger_at
+
+    @patch("jobs.tasks._send_push_to_user_sync", return_value=1)
+    @patch("jobs.tasks.async_to_sync")
+    @patch("jobs.tasks.timezone.now")
+    def test_falls_back_to_expo_when_onesignal_has_no_player(
+        self, mock_now, mock_async_to_sync, mock_expo
+    ):
+        trigger_at = datetime(2026, 3, 18, 19, 15, tzinfo=dt_timezone.utc)
+        mock_now.return_value = trigger_at
+        ambassador_job = self._build_ambassador_job(
+            event_start_time=datetime(2026, 3, 18, 19, 30, tzinfo=dt_timezone.utc)
+        )
+        mock_async_to_sync.return_value.return_value = {
+            "id": "",
+            "errors": ["All included players are not subscribed"],
+        }
+
+        sent = send_ambassador_job_15m_reminder_push(
+            ambassador_job.id, trigger_at.isoformat()
+        )
+
+        assert sent == 1
+        mock_expo.assert_called_once()
+        expo_kwargs = mock_expo.call_args.kwargs
+        assert expo_kwargs["title"] == "Your event starts in 15 minutes"
+        assert expo_kwargs["data"]["type"] == "event_starting_soon_15m"
+        ambassador_job.refresh_from_db()
+        assert ambassador_job.reminder_15m_sent_at == trigger_at
+
+    @patch("jobs.tasks._send_push_to_user_sync", return_value=0)
+    @patch("jobs.tasks.async_to_sync")
+    @patch("jobs.tasks.timezone.now")
+    def test_unexpected_onesignal_error_does_not_stamp(
+        self, mock_now, mock_async_to_sync, mock_expo
+    ):
+        trigger_at = datetime(2026, 3, 18, 19, 15, tzinfo=dt_timezone.utc)
+        mock_now.return_value = trigger_at
+        ambassador_job = self._build_ambassador_job(
+            event_start_time=datetime(2026, 3, 18, 19, 30, tzinfo=dt_timezone.utc)
+        )
+        mock_async_to_sync.return_value.side_effect = OneSignalError(
+            "OneSignal request failed with status 500: boom"
+        )
+
+        with patch("jobs.tasks.logger") as mock_logger:
+            sent = send_ambassador_job_15m_reminder_push(
+                ambassador_job.id, trigger_at.isoformat()
+            )
+
+        assert sent == 0
+        mock_expo.assert_called_once()
+        mock_logger.exception.assert_not_called()
         ambassador_job.refresh_from_db()
         assert ambassador_job.reminder_15m_sent_at is None
 
