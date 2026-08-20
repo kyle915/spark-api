@@ -237,6 +237,117 @@ class TestSipliSetupCommand(BaseGraphQLTestCase):
         ) == {EVENT_PROGRAM, RETAIL_PROGRAM}
         assert CustomRecapTemplate.objects.filter(tenant=tenant).count() == 2
 
+    def _replace_event_template_with_leftover(self, tenant, with_recap: bool):
+        """Reproduce prod: leftover Event Activation template, lower id.
+
+        Retiring seeded ``Event`` repointed ``Sipli - Event Activation Recap``
+        onto Event Activation *before* the PDF template existed, so
+        ``order_by("id").first()`` would pick the leftover. Drop the named
+        PDF clone, insert that leftover, then the next apply recreates the
+        named template at a higher id — same race as prod.
+        """
+        from ambassadors.checkin_web import resolve_template_for_event
+        from events.models import Event
+        from recaps.models import CustomField, CustomRecap, CustomRecapTemplate
+
+        event_tpl = CustomRecapTemplate.objects.get(
+            tenant=tenant, name=EVENT_TEMPLATE_NAME
+        )
+        event_type = event_tpl.event_type
+        CustomField.objects.filter(custom_recap_template=event_tpl).delete()
+        event_tpl.delete()
+        leftover = CustomRecapTemplate.objects.create(
+            tenant=tenant,
+            name="Sipli - Event Activation Recap",
+            event_type=event_type,
+            product_samples=False,
+            sales_performance=False,
+            layout={},
+            created_by=self.user,
+        )
+        recap = None
+        event = Event.objects.create(
+            name="Sipli leftover event",
+            tenant=tenant,
+            address="1 Main St",
+            event_type=event_type,
+            created_by=self.user,
+        )
+        if with_recap:
+            recap = CustomRecap.objects.create(
+                name="old event recap",
+                event=event,
+                tenant=tenant,
+                custom_recap_template=leftover,
+                created_by=self.user,
+            )
+        return leftover, event, recap, resolve_template_for_event
+
+    def test_reapply_deletes_unused_leftover_so_walkup_hits_pdf(self):
+        from recaps.models import CustomField, CustomRecapTemplate
+        from tenants.models import Tenant
+
+        self._run(tenant="sipli", apply=True)
+        tenant = Tenant.objects.get(slug=TENANT_SLUG)
+        leftover, event, _, resolve = self._replace_event_template_with_leftover(
+            tenant, with_recap=False
+        )
+        leftover_id = leftover.id
+        assert resolve(event).id == leftover_id
+
+        log = self._run(tenant="sipli", apply=True)
+        assert "deleted" in log
+        assert not CustomRecapTemplate.objects.filter(pk=leftover_id).exists()
+        pdf = CustomRecapTemplate.objects.get(
+            tenant=tenant, name=EVENT_TEMPLATE_NAME
+        )
+        assert CustomRecapTemplate.objects.filter(
+            tenant=tenant, event_type=pdf.event_type
+        ).count() == 1
+        assert CustomRecapTemplate.objects.filter(tenant=tenant).count() == 2
+        event.refresh_from_db()
+        picked = resolve(event)
+        assert picked.id == pdf.id
+        names = list(
+            CustomField.objects.filter(custom_recap_template=picked)
+            .order_by("recap_section__order", "order", "id")
+            .values_list("name", flat=True)
+        )
+        assert names == EVENT_FIELD_NAMES
+
+    def test_reapply_folds_leftover_with_recaps_into_pdf_name(self):
+        from recaps.models import CustomField, CustomRecap, CustomRecapTemplate
+        from tenants.models import Tenant
+
+        self._run(tenant="sipli", apply=True)
+        tenant = Tenant.objects.get(slug=TENANT_SLUG)
+        leftover, event, recap, resolve = self._replace_event_template_with_leftover(
+            tenant, with_recap=True
+        )
+        leftover_id = leftover.id
+
+        log = self._run(tenant="sipli", apply=True)
+        assert "renamed leftover" in log
+        leftover.refresh_from_db()
+        assert leftover.id == leftover_id
+        assert leftover.name == EVENT_TEMPLATE_NAME
+        recap.refresh_from_db()
+        assert recap.custom_recap_template_id == leftover_id
+        assert CustomRecap.objects.filter(pk=recap.id).exists()
+        assert CustomRecapTemplate.objects.filter(
+            tenant=tenant, event_type=leftover.event_type
+        ).count() == 1
+        event.refresh_from_db()
+        picked = resolve(event)
+        # Filed recap on the leftover still wins; after fold that's the PDF.
+        assert picked.id == leftover_id
+        names = list(
+            CustomField.objects.filter(custom_recap_template=leftover)
+            .order_by("recap_section__order", "order", "id")
+            .values_list("name", flat=True)
+        )
+        assert names == EVENT_FIELD_NAMES
+
 
 @pytest.mark.django_db
 class TestSipliSetupCronView:

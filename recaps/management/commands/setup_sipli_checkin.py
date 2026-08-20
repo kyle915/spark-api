@@ -348,6 +348,12 @@ class Command(BaseCommand):
         self._photo_buckets(tenant, creator, apply)
         self._pin_programs(tenant, event_type, retail_type, apply)
         self._retire_other_programs(tenant, event_type, retail_type, apply)
+        # Retiring "Event" can repoint a leftover template onto Event
+        # Activation. resolve_template_for_event picks the lowest id, so
+        # that leftover would win over the PDF form until we fold it.
+        self._fold_extra_templates(
+            tenant, event_type, retail_type, creator, apply, ft_cache
+        )
         self._location_mode(tenant, apply)
         self._checkin_code(tenant, apply, opts.get("prefix"))
 
@@ -818,6 +824,106 @@ class Command(BaseCommand):
             self.stdout.write(
                 self.style.SUCCESS(f"    retired {extra.name!r}{ref_txt}")
             )
+
+    def _delete_template(self, template) -> None:
+        from recaps.models import CustomField
+
+        CustomField.objects.filter(custom_recap_template=template).delete()
+        template.delete()
+
+    def _fold_extra_templates(
+        self, tenant, event_type, retail_type, creator, apply: bool, ft_cache: dict
+    ) -> None:
+        """Leave one named template per program so walk-up hits the PDF form.
+
+        ``resolve_template_for_event`` does
+        ``filter(event_type_id=...).order_by("id").first()``. A leftover
+        like ``Sipli - Event Activation Recap`` that got repointed off
+        retired Event wins over ``Sipli · Event Sampling Recap`` because
+        it has the lower id. Unused leftovers are deleted. Leftovers with
+        recaps keep their rows: drop the empty named clone, rename the
+        leftover, then upsert the PDF fields onto it.
+        """
+        from recaps.models import CustomRecap, CustomRecapTemplate
+
+        pairs = [
+            (event_type, EVENT_TEMPLATE_NAME, EVENT_SPEC),
+            (retail_type, RETAIL_TEMPLATE_NAME, RETAIL_SPEC),
+        ]
+        reupsert: list = []
+        for et, keep_name, spec in pairs:
+            tpls = list(
+                CustomRecapTemplate.objects.filter(
+                    tenant_id=tenant.id, event_type=et
+                ).order_by("id")
+            )
+            keepers = [t for t in tpls if t.name == keep_name]
+            extras = [t for t in tpls if t.name != keep_name]
+            if not extras:
+                continue
+            self.stdout.write(f"\nExtra templates on {et.name!r}:")
+            for extra in extras:
+                n = CustomRecap.objects.filter(
+                    custom_recap_template=extra
+                ).count()
+                keeper = keepers[0] if keepers else None
+                n_keep = (
+                    CustomRecap.objects.filter(
+                        custom_recap_template=keeper
+                    ).count()
+                    if keeper
+                    else 0
+                )
+                if n == 0:
+                    msg = (
+                        f"    leftover {extra.name!r} (id {extra.id}, "
+                        f"0 recaps)"
+                    )
+                    if not apply:
+                        self.stdout.write(
+                            self.style.WARNING(f"{msg} — would delete")
+                        )
+                        continue
+                    self._delete_template(extra)
+                    self.stdout.write(self.style.SUCCESS(f"{msg} — deleted"))
+                    continue
+                if keeper and n_keep == 0:
+                    msg = (
+                        f"    leftover {extra.name!r} (id {extra.id}, "
+                        f"{n} recap(s)); empty {keep_name!r} would lose "
+                        f"walk-up (resolve_template order_by id)"
+                    )
+                    if not apply:
+                        self.stdout.write(
+                            self.style.WARNING(
+                                f"{msg} — would drop empty {keep_name!r} "
+                                "and rename leftover, then upsert PDF fields"
+                            )
+                        )
+                        continue
+                    self._delete_template(keeper)
+                    extra.name = keep_name
+                    extra.save(update_fields=["name"])
+                    keepers = [extra]
+                    reupsert.append((keep_name, et, spec))
+                    self.stdout.write(
+                        self.style.SUCCESS(
+                            f"{msg} — renamed leftover to {keep_name!r}"
+                        )
+                    )
+                    continue
+                self.stdout.write(
+                    self.style.WARNING(
+                        f"    leftover {extra.name!r} (id {extra.id}, "
+                        f"{n} recap(s)) AND {keep_name!r} also has recaps "
+                        "— left both"
+                    )
+                )
+        if apply:
+            for keep_name, et, spec in reupsert:
+                self._upsert_template(
+                    tenant, keep_name, et, spec, creator, apply, ft_cache
+                )
 
     def _location_mode(self, tenant, apply: bool) -> None:
         from tenants.models import Tenant
