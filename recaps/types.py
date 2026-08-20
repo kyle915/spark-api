@@ -81,8 +81,14 @@ _SOLD_EXCLUDE_RE = re.compile(
 # "—" forever with the number sitting right there in the recap. Kept narrow
 # (the words stay adjacent apart from "did you") so it can't swallow prose;
 # _SAMPLED_DESC_EXCLUDE_RE below remains the backstop for descriptive fields.
+#
+# The third alternative is Total Wireless / G7's BA Event Recap wording:
+# "How many consumers did you interact with?" — same count, same KPI.
 _CONSUMERS_SAMPLED_RE = re.compile(
-    r"consumers?\s+sampled|consumers?\s+did\s+you\s+sample", re.IGNORECASE
+    r"consumers?\s+sampled|"
+    r"consumers?\s+did\s+you\s+sample|"
+    r"consumers?\s+did\s+you\s+interact",
+    re.IGNORECASE,
 )
 
 # A field can MENTION "consumers sampled" in its label yet be a free-text

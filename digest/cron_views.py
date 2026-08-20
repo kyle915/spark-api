@@ -4437,6 +4437,58 @@ class SetupKrispyKrunchyCheckinView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class SetupG7EntertainmentCheckinView(View):
+    """GET/POST `/internal/cron/setup-g7-entertainment-checkin`.
+
+    The G7 twin of setup-krispy-krunchy-checkin: creates the tenant if
+    missing (createTenant-style seeds), seeds the BA Event Recap template
+    off the client's PDF (minus Date / Event Location), mints the standing
+    ``G7-`` check-in code, pins Event (and retires Retail Sampling /
+    On-Premise Sampling so there is no program picker), and labels the
+    photo buckets. Recaps stay human-reviewed.
+
+    Idempotent: get_or_create for the template, and an existing checkin_code
+    is left alone (rotating it breaks every copy already shared).
+
+    Params: tenant (default "g7"), template_name, event_type, prefix,
+    apply (default DRY RUN).
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        kwargs: dict = {}
+        for key in ("tenant", "template_name", "event_type", "prefix"):
+            val = request.GET.get(key) or request.POST.get(key)
+            if val:
+                kwargs[key] = str(val)
+        raw = (request.GET.get("apply") or request.POST.get("apply") or "").lower()
+        apply_it = raw in ("1", "true", "yes", "on")
+        if apply_it:
+            kwargs["apply"] = True
+
+        out = io.StringIO()
+        try:
+            call_command("setup_g7_entertainment_checkin", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("setup-g7-entertainment-checkin cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc),
+                 "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "apply": apply_it, "log": out.getvalue()})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class BackfillTorchPublicFormSheetView(View):
     """GET/POST `/internal/cron/backfill-torch-public-form-sheet`.
 
@@ -7823,6 +7875,7 @@ def _registered_views() -> dict[str, Any]:
         "setup-total-wireless-checkin": SetupTotalWirelessCheckinView,
         "setup-feel-free-checkin": SetupFeelFreeCheckinView,
         "setup-krispy-krunchy-checkin": SetupKrispyKrunchyCheckinView,
+        "setup-g7-entertainment-checkin": SetupG7EntertainmentCheckinView,
         "backfill-torch-public-form-sheet": BackfillTorchPublicFormSheetView,
         "inspect-tenants": InspectTenantsView,
         "delete-tenant": DeleteTenantView,
