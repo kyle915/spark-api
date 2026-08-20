@@ -46,6 +46,7 @@ from .torch_portal import (
     should_auto_approve_public_request,
     torch_request_approved_lists,
 )
+from utils.torch_public_form_sheet import append_torch_public_form_row
 from utils.gcs import (
     delete_blob,
     download_blob_bytes,
@@ -2500,9 +2501,24 @@ class PublicRequestMutations:
                     "request_type",
                     "retailer__location__state",
                     "distributor__location__state",
-                ).get
+                    "state",
+                )
+                .prefetch_related("request_product__product")
+                .get
             )(id=request.id)
             location = await _resolve_request_location(request_with_relations)
+            # Torch public spark-form only. Binny bulk / admin creates skip
+            # this path. Sheets miss must never 500 the form.
+            try:
+                await sync_to_async(append_torch_public_form_row)(
+                    request_with_relations, request_url_name
+                )
+            except Exception:
+                logger.warning(
+                    "torch public-form sheet append failed for request=%s",
+                    getattr(request_with_relations, "id", None),
+                    exc_info=True,
+                )
             if should_auto_approve_public_request(
                 request_url_name, getattr(request_with_relations, "tenant", None)
             ):

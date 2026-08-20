@@ -108,6 +108,7 @@ class TestTorchPortalAutoApprove(EventsGraphQLTestCase):
             patch("events.mutations.RequestorRequestCreatedMailer"),
             patch("events.mutations.RequestCreatedNotificationMailer"),
             patch("events.mutations.RmmAssignedRequestMailer"),
+            patch("events.mutations.append_torch_public_form_row") as sheet_append,
         ):
             result = await self._execute_mutation(
                 CREATE_BY_URL,
@@ -139,6 +140,8 @@ class TestTorchPortalAutoApprove(EventsGraphQLTestCase):
             assert expected.lower() in cc_lower
         assert kwargs["auto_approved"] is True
         mailer.send.assert_called()
+        sheet_append.assert_called_once()
+        assert sheet_append.call_args.args[1] == "keee-torch-thc"
 
     @pytest.mark.asyncio
     async def test_liquid_death_public_form_stays_pending(self):
@@ -147,6 +150,7 @@ class TestTorchPortalAutoApprove(EventsGraphQLTestCase):
             patch("events.mutations.RequestorRequestCreatedMailer.send"),
             patch("events.mutations.RequestCreatedNotificationMailer.send"),
             patch("events.mutations.RmmAssignedRequestMailer.send"),
+            patch("events.mutations.append_torch_public_form_row") as sheet_append,
         ):
             result = await self._execute_mutation(
                 CREATE_BY_URL,
@@ -167,6 +171,8 @@ class TestTorchPortalAutoApprove(EventsGraphQLTestCase):
             request__uuid=payload["request"]["uuid"]
         ).afirst()
         assert event is None
+        sheet_append.assert_called_once()
+        assert sheet_append.call_args.args[1] == "ighn-liquid-death"
 
     @pytest.mark.asyncio
     async def test_torch_url_against_other_tenant_stays_pending(self):
@@ -176,6 +182,7 @@ class TestTorchPortalAutoApprove(EventsGraphQLTestCase):
             patch("events.mutations.RequestorRequestCreatedMailer.send"),
             patch("events.mutations.RequestCreatedNotificationMailer.send"),
             patch("events.mutations.RmmAssignedRequestMailer.send"),
+            patch("events.mutations.append_torch_public_form_row"),
         ):
             result = await self._execute_mutation(
                 CREATE_BY_URL,
