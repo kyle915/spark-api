@@ -278,3 +278,32 @@ async def test_send_push_survives_closed_executor_thread_connection(user, device
     finally:
         # Don't leak the poisoned/closed wrapper into later tests.
         await sync_to_async(lambda: connections["default"].close())()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_enqueue_push_inline_fallback_failure_is_quiet():
+    """The queue-down inline fallback is best-effort: a failed send logs
+    WARNING, never raises, and must not page the error monitor — this path
+    paged as OperationalError:ambassadors.push:enqueue_push (2026-08)."""
+    from django.db.utils import OperationalError
+    from django.test import override_settings
+
+    from ambassadors.push import enqueue_push
+    from digest.models import BackendErrorEvent
+
+    with (
+        override_settings(PUSH_ENABLED=True),
+        patch("utils.queues.Queues") as mock_queues,
+        patch(
+            "ambassadors.push._send_push_to_user_sync",
+            side_effect=OperationalError("the connection is closed"),
+        ),
+    ):
+        mock_queues.return_value.default.add.side_effect = RuntimeError(
+            "redis down"
+        )
+        enqueue_push(1, title="t", body="b")  # must not raise
+
+    assert not BackendErrorEvent.objects.filter(
+        signature__contains="ambassadors.push:enqueue_push"
+    ).exists()

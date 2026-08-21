@@ -252,7 +252,12 @@ async def send_push_to_user(
         logger.warning("expo push relay failed for user_id=%s: %s", user_id, exc)
         return 0
     except Exception:
-        logger.exception("unexpected expo push failure for user_id=%s", user_id)
+        # Best-effort: callers leave rows unstamped and retry on the next
+        # run. WARNING, not exception — a relay hiccup must not page the
+        # error monitor once per BA per run.
+        logger.warning(
+            "unexpected expo push failure for user_id=%s", user_id, exc_info=True
+        )
         return 0
 
     now = timezone.now()
@@ -347,7 +352,10 @@ async def send_silent_update_check_push(
         logger.warning("expo push relay failed for silent update-check broadcast: %s", exc)
         return (0, len(devices))
     except Exception:
-        logger.exception("unexpected expo push failure for silent update-check broadcast")
+        logger.warning(
+            "unexpected expo push failure for silent update-check broadcast",
+            exc_info=True,
+        )
         return (0, len(devices))
 
     now = timezone.now()
@@ -486,7 +494,14 @@ def enqueue_push(
         try:
             _send_push_to_user_sync(user_id, title=title, body=body, data=data)
         except Exception:
-            logger.exception("inline push fallback failed for user_id=%s", user_id)
+            # Best-effort, like every other push path in this module:
+            # WARNING, not exception — a failed inline fallback must not
+            # page the error monitor (the 2026-08 stale-executor-connection
+            # bug surfaced here as OperationalError:ambassadors.push:
+            # enqueue_push).
+            logger.warning(
+                "inline push fallback failed for user_id=%s", user_id, exc_info=True
+            )
 
 
 # NOTE: the django-rq future-dated schedulers that used to live here
