@@ -157,6 +157,27 @@ class TestSendShiftConfirmations(AmbassadorsGraphQLTestCase):
         ae.refresh_from_db()
         assert ae.confirmation_requested_at is None
 
+    def test_push_failure_is_quiet_and_left_unstamped(self):
+        """A failed send must NOT page the error monitor — ERROR-level logs
+        become BackendErrorEvent alerts, and this exact site paged 215× on
+        the stale executor-thread connection (2026-07). WARNING instead, and
+        the row stays unstamped so the next hourly run retries."""
+        from django.db.utils import OperationalError
+
+        from digest.models import BackendErrorEvent
+
+        ae = self._shift_starting_in(20)
+        self.mock_send.side_effect = OperationalError("the connection is closed")
+        out = self._run()
+        ae.refresh_from_db()
+        assert ae.confirmation_requested_at is None  # unstamped → retried
+        assert "1 failed" in out
+        # The error monitor feeds on ERROR-level logs; a WARNING leaves it
+        # with nothing to record.
+        assert not BackendErrorEvent.objects.filter(
+            signature__contains="send_shift_confirmations"
+        ).exists()
+
     def test_dry_run_sends_and_stamps_nothing(self):
         ae = self._shift_starting_in(20)
         self._run("--dry-run")

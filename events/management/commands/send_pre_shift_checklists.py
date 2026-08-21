@@ -99,6 +99,7 @@ class Command(BaseCommand):
         sent = 0
         stamped_ids: list[int] = []
         unreachable = 0
+        failed = 0
         for r in rosters:
             user_id = getattr(r.ambassador, "user_id", None)
             if not user_id or user_id not in device_user_ids:
@@ -135,10 +136,17 @@ class Command(BaseCommand):
                 sent += 1
                 stamped_ids.append(r.id)
             except Exception:
-                logger.exception(
+                # Best-effort: the row stays UNSTAMPED so the next run
+                # retries. WARNING, not exception — a per-BA send failure
+                # must not page the error monitor once per row per run
+                # (same stale-executor-connection incident as the
+                # shift-confirmation pager, 2026-07).
+                logger.warning(
                     "pre-shift checklist push failed amb=%s event=%s",
                     r.ambassador_id, r.event_id,
+                    exc_info=True,
                 )
+                failed += 1
 
         # Stamp in one bulk update so a second run in the same window can't
         # double-send. Only stamp rows we actually pushed.
@@ -149,8 +157,8 @@ class Command(BaseCommand):
 
         self.stdout.write(
             f"pre-shift checklists: sent {sent}, stamped {len(stamped_ids)}, "
-            f"skipped {unreachable} unreachable, across {len(rosters)} "
-            f"roster row(s) in window."
+            f"skipped {unreachable} unreachable, {failed} failed, across "
+            f"{len(rosters)} roster row(s) in window."
         )
 
     @staticmethod

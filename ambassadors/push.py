@@ -39,6 +39,7 @@ from typing import Any
 
 from asgiref.sync import sync_to_async
 from django.contrib.auth import get_user_model
+from django.db import connections
 from django.utils import timezone
 
 from utils.expo_push import (
@@ -59,7 +60,47 @@ User = get_user_model()
 DEFAULT_ANDROID_CHANNEL = "default"
 
 
-@sync_to_async
+def _close_thread_connections() -> None:
+    """Close every Django DB connection held by the CURRENT thread.
+
+    Load-bearing for push sends: their DB work runs on asgiref's shared
+    single-thread executor (see ``_send_push_to_user_sync``), a long-lived
+    thread Django's request_started/request_finished cleanup never reaches
+    — those signals fire on the ASGI event-loop thread and connections are
+    thread-local. CONN_MAX_AGE recycling and CONN_HEALTH_CHECKS only run
+    off those signals too, so the executor thread's connection is opened
+    once and never validated. When Cloud SQL drops it for idleness, the
+    wrapper keeps the dead psycopg handle and every query fails with
+    ``OperationalError: the connection is closed`` until the whole Cloud
+    Run instance recycles (the shift-confirmation cron paged on this 215
+    times, 2026-07). Closing around each use keeps that thread's
+    connection perpetually fresh.
+    """
+    for conn in connections.all(initialized_only=True):
+        try:
+            conn.close()
+        except Exception:
+            pass  # closing must never break a send
+
+
+def _db_sync(func):
+    """``sync_to_async`` (thread-sensitive) wrapper with connection hygiene.
+
+    Use for every ORM touch inside the async send path so none of them can
+    inherit a stale connection from the long-lived executor thread.
+    """
+
+    @sync_to_async
+    def _inner(*args, **kwargs):
+        _close_thread_connections()
+        try:
+            return func(*args, **kwargs)
+        finally:
+            _close_thread_connections()
+
+    return _inner
+
+
 def _record_push_notification(
     user_id: int,
     title: str,
@@ -70,7 +111,8 @@ def _record_push_notification(
 
     Logged regardless of device reachability, so the BA's Notifications inbox
     reflects everything we sent (push delivery itself is fire-and-forget and
-    keeps no history). Never raises into the caller.
+    keeps no history). Never raises into the caller. Plain sync — call via
+    ``_db_sync`` so it never runs on a stale executor-thread connection.
     """
     from .models import PushNotification
 
@@ -118,11 +160,11 @@ def _push_category(data: "dict[str, Any] | None") -> "str | None":
     return None
 
 
-@sync_to_async
 def _is_push_category_muted(user_id: int, category: str) -> bool:
-    """True if the user has explicitly turned this category off.
+    """True when the user has explicitly turned this category off.
 
     Missing PushPreference row → all categories on (returns False).
+    Plain sync — call via ``_db_sync``.
     """
     from .models import PushPreference
 
@@ -158,7 +200,7 @@ async def send_push_to_user(
     # Notifications inbox should reflect everything we sent even when no device
     # is currently reachable. Best-effort: a logging failure never blocks send.
     try:
-        await _record_push_notification(user_id, title, body, data)
+        await _db_sync(_record_push_notification)(user_id, title, body, data)
     except Exception:
         logger.warning(
             "failed to record push notification for user_id=%s", user_id, exc_info=True
@@ -170,7 +212,7 @@ async def send_push_to_user(
     # block a send (fail open).
     try:
         category = _push_category(data)
-        if category and await _is_push_category_muted(user_id, category):
+        if category and await _db_sync(_is_push_category_muted)(user_id, category):
             logger.info(
                 "push suppressed by preference user_id=%s category=%s", user_id, category
             )
@@ -180,7 +222,7 @@ async def send_push_to_user(
             "push preference check failed for user_id=%s", user_id, exc_info=True
         )
 
-    devices = await sync_to_async(
+    devices = await _db_sync(
         lambda: list(
             PushDevice.objects.filter(user_id=user_id, is_active=True).only(
                 "id", "token", "platform"
@@ -210,7 +252,12 @@ async def send_push_to_user(
         logger.warning("expo push relay failed for user_id=%s: %s", user_id, exc)
         return 0
     except Exception:
-        logger.exception("unexpected expo push failure for user_id=%s", user_id)
+        # Best-effort: callers leave rows unstamped and retry on the next
+        # run. WARNING, not exception — a relay hiccup must not page the
+        # error monitor once per BA per run.
+        logger.warning(
+            "unexpected expo push failure for user_id=%s", user_id, exc_info=True
+        )
         return 0
 
     now = timezone.now()
@@ -233,7 +280,6 @@ async def send_push_to_user(
                 ticket.message,
             )
 
-    @sync_to_async
     def mark_devices():
         if invalid_ids:
             PushDevice.objects.filter(id__in=invalid_ids).update(is_active=False)
@@ -241,10 +287,13 @@ async def send_push_to_user(
             PushDevice.objects.filter(id__in=used_ids).update(last_used_at=now)
 
     try:
-        await mark_devices()
+        await _db_sync(mark_devices)()
     except Exception:
-        # Don't let bookkeeping failures hide the push outcome.
-        logger.exception("failed to update PushDevice rows after send")
+        # Don't let bookkeeping failures hide the push outcome — and don't
+        # page the error monitor for them either (best-effort by design).
+        logger.warning(
+            "failed to update PushDevice rows after send", exc_info=True
+        )
 
     return ok_count
 
@@ -275,7 +324,7 @@ async def send_silent_update_check_push(
     """
     client = client or expo_push_client
 
-    devices = await sync_to_async(
+    devices = await _db_sync(
         lambda: list(PushDevice.objects.filter(is_active=True).only("id", "token", "platform"))
     )()
     if not devices:
@@ -303,7 +352,10 @@ async def send_silent_update_check_push(
         logger.warning("expo push relay failed for silent update-check broadcast: %s", exc)
         return (0, len(devices))
     except Exception:
-        logger.exception("unexpected expo push failure for silent update-check broadcast")
+        logger.warning(
+            "unexpected expo push failure for silent update-check broadcast",
+            exc_info=True,
+        )
         return (0, len(devices))
 
     now = timezone.now()
@@ -325,7 +377,6 @@ async def send_silent_update_check_push(
                 ticket.message,
             )
 
-    @sync_to_async
     def mark_devices():
         if invalid_ids:
             PushDevice.objects.filter(id__in=invalid_ids).update(is_active=False)
@@ -333,9 +384,12 @@ async def send_silent_update_check_push(
             PushDevice.objects.filter(id__in=used_ids).update(last_used_at=now)
 
     try:
-        await mark_devices()
+        await _db_sync(mark_devices)()
     except Exception:
-        logger.exception("failed to update PushDevice rows after update-check broadcast")
+        logger.warning(
+            "failed to update PushDevice rows after update-check broadcast",
+            exc_info=True,
+        )
 
     return (ok_count, len(devices))
 
@@ -376,6 +430,12 @@ def _send_push_to_user_sync(
     executor (a *different* thread) and completes — no deadlock from any
     caller. This is the same dedicated-thread path that already worked in prod
     for the inline async fallback (#820).
+
+    That shared executor thread is immortal, so its Django DB connection is
+    never touched by request-boundary cleanup and goes stale between cron
+    runs — every ORM call inside the send therefore goes through
+    ``_db_sync``, which closes the thread's connections around each use
+    (see ``_close_thread_connections``).
     """
 
     def _run() -> int:
@@ -434,7 +494,14 @@ def enqueue_push(
         try:
             _send_push_to_user_sync(user_id, title=title, body=body, data=data)
         except Exception:
-            logger.exception("inline push fallback failed for user_id=%s", user_id)
+            # Best-effort, like every other push path in this module:
+            # WARNING, not exception — a failed inline fallback must not
+            # page the error monitor (the 2026-08 stale-executor-connection
+            # bug surfaced here as OperationalError:ambassadors.push:
+            # enqueue_push).
+            logger.warning(
+                "inline push fallback failed for user_id=%s", user_id, exc_info=True
+            )
 
 
 # NOTE: the django-rq future-dated schedulers that used to live here
