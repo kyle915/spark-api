@@ -29,6 +29,7 @@ from django.db.models.functions import Cast, Coalesce
 
 from events import types
 from events import models
+from events import admin_payloads
 from tenants.models import Tenant, TenantedUser, Role
 from events.inputs import (
     EventFiltersInput,
@@ -1389,6 +1390,23 @@ class RequestStoreManagerQueriesService(BaseEventQueriesService):
         return models.RequestStoreManager
 
 
+async def _scoped_requests(
+    info: strawberry.Info,
+    tenant_id: strawberry.ID | None,
+):
+    """Tenant-scoped, soft-delete-aware Request queryset for skinny payloads.
+
+    Module-level because Strawberry passes root=None as `self` on query
+    resolvers — a `self._scoped_requests(...)` helper would crash.
+    """
+    service = RequestQueriesService()
+    resolved_tenant_id = await service.resolve_tenant_id(
+        info,
+        tenant_id=tenant_id,
+    )
+    return admin_payloads.scoped_requests(resolved_tenant_id)
+
+
 @strawberry.type
 class RequestQueries:
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
@@ -1575,6 +1593,84 @@ class RequestQueries:
             default_limit=100,
             max_limit=2000,
         )
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def sidebar_request_counts(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID | None = None,
+    ) -> types.SidebarRequestCounts:
+        """Tracker / approvals / recaps-due badges without downloading requests."""
+        qs = await _scoped_requests(info, tenant_id)
+
+        def _go():
+            data = admin_payloads.compute_sidebar_request_counts(qs)
+            return types.SidebarRequestCounts(
+                tracker=data.tracker,
+                approvals=data.approvals,
+                approvals_sla_breach=data.approvals_sla_breach,
+                upcoming=data.upcoming,
+                done_30d=data.done_30d,
+                recaps_due=data.recaps_due,
+            )
+
+        return await sync_to_async(_go)()
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def sidebar_alert_candidates(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID | None = None,
+    ) -> List[types.SidebarAlertCandidate]:
+        """Last-48h pending/approved/declined rows for the unread-alerts chip."""
+        qs = await _scoped_requests(info, tenant_id)
+
+        def _go():
+            return [
+                types.SidebarAlertCandidate(
+                    id=row.id,
+                    created_at=row.created_at,
+                    updated_at=row.updated_at,
+                    status_slug=row.status_slug,
+                )
+                for row in admin_payloads.list_alert_candidates(qs)
+            ]
+
+        return await sync_to_async(_go)()
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def account_map_pins(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID | None = None,
+        first: int | None = None,
+    ) -> List[types.AccountMapPin]:
+        """Account Map pins: lat/lng, retailer, status, name/address. Cap 2000."""
+        qs = await _scoped_requests(info, tenant_id)
+        limit = admin_payloads.ACCOUNT_MAP_CAP
+        if first is not None:
+            if first <= 0:
+                raise GraphQLError("first must be greater than 0.")
+            limit = min(first, admin_payloads.ACCOUNT_MAP_CAP)
+
+        def _go():
+            return [
+                types.AccountMapPin(
+                    id=pin.id,
+                    name=pin.name,
+                    address=pin.address,
+                    lat=pin.lat,
+                    lng=pin.lng,
+                    status_slug=pin.status_slug,
+                    date=pin.date,
+                    retailer_name=pin.retailer_name,
+                    location_name=pin.location_name,
+                    state_code=pin.state_code,
+                )
+                for pin in admin_payloads.list_account_map_pins(qs, limit=limit)
+            ]
+
+        return await sync_to_async(_go)()
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def request(

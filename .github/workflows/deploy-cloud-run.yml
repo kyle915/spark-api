@@ -67,14 +67,22 @@ jobs:
       # from the previous deploy would otherwise leave the new
       # revision at 0%.
       #
-      # --quiet skips the "deploy to <env>?" interactive prompt.
+      # --min-instances 1 keeps one warm container so the first
+      # morning click is not a scale-from-zero stall. --quiet skips
+      # the "deploy to <env>?" interactive prompt.
       - name: Deploy to Cloud Run
         run: |
           gcloud run deploy "$CLOUD_RUN_SERVICE" \
             --source . \
             --region "$GCP_REGION" \
             --project "$GCP_PROJECT_ID" \
+            --min-instances 1 \
             --quiet
+
+      # Schema migrate + Girl Beer template repair once per deploy.
+      # Request-serving containers skip both on boot (entrypoint.sh).
+      - name: Run migrate on the new revision
+        run: python3 scripts/deploy_migrate_job.py
 
       # Once a previous deploy pinned 100% to a named revision, Cloud
       # Run creates the next revision at 0% and leaves the pin. Move

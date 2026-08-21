@@ -43,7 +43,7 @@ RUN chmod +x /code/scripts/entrypoint.sh
 
 EXPOSE 8000
 
-# Entry-point honors $PORT (Cloud Run injects this — typically 8080)
-# and runs `manage.py migrate --noinput` before exec'ing hypercorn,
-# so each new image lands its migrations on first container boot.
+# Entry-point honors $PORT (Cloud Run injects this — typically 8080).
+# Migrate + Girl Beer repair run on deploy (migrate-only job), not on
+# every container boot. HEIC JPG backfill still starts in the background.
 CMD ["/code/scripts/entrypoint.sh"]

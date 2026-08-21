@@ -1206,3 +1206,41 @@ class NotifyNoteMentionResponse:
     client_mutation_id: strawberry.ID | None = None
     sent_count: int = 0
     failed_emails: List[str] | None = None
+
+
+@strawberry.type
+class SidebarRequestCounts:
+    """Integer badges the admin sidebar used to tally from 2,000 Request rows."""
+
+    tracker: int
+    approvals: int
+    approvals_sla_breach: int
+    upcoming: int
+    done_30d: int
+    recaps_due: int
+
+
+@strawberry.type
+class SidebarAlertCandidate:
+    """Recent request activity the sidebar unread-alerts chip keys locally."""
+
+    id: strawberry.ID
+    created_at: str
+    updated_at: str
+    status_slug: str
+
+
+@strawberry.type
+class AccountMapPin:
+    """One plottable request for Account Map. No Master Tracker rollups."""
+
+    id: strawberry.ID
+    name: str
+    address: str
+    lat: float
+    lng: float
+    status_slug: str
+    date: str | None
+    retailer_name: str
+    location_name: str
+    state_code: str
