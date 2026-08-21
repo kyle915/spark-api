@@ -28,8 +28,9 @@ Three things the rest of the stack has taught us, encoded here:
   goes out, so a sweep running every 15 minutes (or two overlapping runs)
   cannot double-send.
 
-The only Liquid-Death-specific piece in the whole feature is the SKU list the
-picker offers; everything here is tenant-generic.
+The SKU picker is tenant-specific (Liquid Death keeps the spark-form list;
+everyone else reads the live Product catalog, with Torch's onboard list as
+a fallback). Everything else here is tenant-generic.
 """
 
 from __future__ import annotations
@@ -69,11 +70,85 @@ _RETIRED_FRONTEND_HOSTS = (
 )
 _FIELD_HOST = "client.igniteproductions.co"
 
-# `product_options()` prefixes every SKU with its category so 31 options stay
-# scannable in a dropdown on a phone ("Iced Tea — Sweet Reaper"). The email is
-# prose, where the prefix is noise and the reference send didn't have it, so
-# it's stripped back to the bare SKU for display only.
+# The picker prefixes every SKU with its category so a long list stays
+# scannable on a phone ("Iced Tea 10mg — Raspberry 10mg 12oz"). The email is
+# prose, where the prefix is noise, so it's stripped back to the bare SKU
+# for display only.
 PRODUCT_CATEGORY_SEPARATOR = " — "
+
+
+def _norm_tenant_key(value: str | None) -> str:
+    return (value or "").strip().lower()
+
+
+def is_liquid_death_tenant(tenant) -> bool:
+    """True for the Liquid Death brand (spark-form ighn-liquid-death)."""
+    slug = _norm_tenant_key(getattr(tenant, "slug", None))
+    url = _norm_tenant_key(getattr(tenant, "request_url_name", None))
+    name = _norm_tenant_key(getattr(tenant, "name", None))
+    if slug in {"liquid-death", "ighn-liquid-death"}:
+        return True
+    if url in {"ighn-liquid-death", "liquid-death"}:
+        return True
+    return name == "liquid death"
+
+
+def catalog_product_options(tenant) -> list[str]:
+    """Live Product rows as ``Type — Name``, matching the LD picker format."""
+    from events.models import Product
+
+    pk = getattr(tenant, "pk", None) or getattr(tenant, "id", None)
+    if not pk:
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    rows = (
+        Product.objects.filter(tenant_id=pk)
+        .select_related("product_type")
+        .order_by("product_type__name", "name")
+    )
+    for product in rows:
+        name = (product.name or "").strip()
+        if not name:
+            continue
+        cat = (getattr(product.product_type, "name", "") or "").strip()
+        label = f"{cat}{PRODUCT_CATEGORY_SEPARATOR}{name}" if cat else name
+        key = label.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(label)
+    return out
+
+
+def confirmation_product_options(tenant) -> list[str]:
+    """SKU picker values for the Event Confirmation tab.
+
+    Liquid Death keeps the hardcoded spark-form list so the picker and
+    ``/spark-form/ighn-liquid-death`` cannot drift. Every other tenant
+    reads live Product rows. Torch falls back to the onboard catalog so
+    an unseeded test tenant still offers Torch SKUs instead of LD water.
+    """
+    if is_liquid_death_tenant(tenant):
+        from recaps.management.commands.setup_ld_retail_checkin import (
+            product_options as ld_product_options,
+        )
+
+        return ld_product_options()
+
+    live = catalog_product_options(tenant)
+    if live:
+        return live
+
+    from events.torch_portal import is_torch_tenant
+
+    if is_torch_tenant(tenant):
+        from tenants.management.commands.onboard_torch_products import (
+            torch_product_options,
+        )
+
+        return torch_product_options()
+    return []
 
 
 # ---------------------------------------------------------------------------
