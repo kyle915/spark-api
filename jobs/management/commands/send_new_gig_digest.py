@@ -141,9 +141,12 @@ class Command(BaseCommand):
                 )
                 sent += 1
             except Exception:
-                logger.exception(
+                # Best-effort: WARNING, not exception — a per-BA push
+                # failure must not page the error monitor.
+                logger.warning(
                     "new-gig digest push failed amb=%s user=%s",
                     amb.id, amb.user_id,
+                    exc_info=True,
                 )
 
         self.stdout.write(

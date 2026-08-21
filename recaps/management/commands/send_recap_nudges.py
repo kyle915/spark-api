@@ -168,9 +168,12 @@ class Command(BaseCommand):
                 sent += 1
                 stamped_ids.append(r.id)
             except Exception:
-                logger.exception(
+                # Best-effort: WARNING, not exception — a per-BA push
+                # failure must not page the error monitor.
+                logger.warning(
                     "recap nudge push failed amb=%s event=%s",
                     r.ambassador_id, r.event_id,
+                    exc_info=True,
                 )
 
         # Stamp only rows we actually pushed, in one bulk update, so the next

@@ -149,6 +149,25 @@ class TestSendActivationReminders(AmbassadorsGraphQLTestCase):
         ae.refresh_from_db()
         assert ae.activation_reminder_sent_at is None
 
+    def test_push_failure_is_quiet_and_left_unstamped(self):
+        """Same pager class as the shift-confirmation ×215 incident: a failed
+        send must log WARNING (ERROR-level logs become BackendErrorEvent
+        alerts — this site paged as OperationalError:send_activation_reminders)
+        and leave the row unstamped so the next run retries."""
+        from django.db.utils import OperationalError
+
+        from digest.models import BackendErrorEvent
+
+        ae = self._shift_starting_in(15)
+        self.mock_send.side_effect = OperationalError("the connection is closed")
+        out = self._run()
+        ae.refresh_from_db()
+        assert ae.activation_reminder_sent_at is None  # unstamped → retried
+        assert "1 failed" in out
+        assert not BackendErrorEvent.objects.filter(
+            signature__contains="send_activation_reminders"
+        ).exists()
+
     def test_dry_run_sends_nothing_and_stamps_nothing(self):
         ae = self._shift_starting_in(15)
         self._run("--dry-run")

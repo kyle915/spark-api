@@ -159,4 +159,6 @@ def notify_ambassador_need_photos(recap) -> None:
                 },
             )
     except Exception:
-        logger.exception("recap client sign-off BA notify failed")
+        # Best-effort push: WARNING, not exception — must not page the
+        # error monitor for a BA notify hiccup.
+        logger.warning("recap client sign-off BA notify failed", exc_info=True)

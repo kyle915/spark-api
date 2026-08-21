@@ -157,7 +157,11 @@ class Command(BaseCommand):
                 )
                 pushed += 1
             except Exception:
-                logger.exception("payment push failed payment=%s", p.id)
+                # Best-effort push: WARNING, not exception — must not page
+                # the error monitor per payment per run.
+                logger.warning(
+                    "payment push failed payment=%s", p.id, exc_info=True
+                )
 
         self.stdout.write(
             f"payment notifications: pushed {pushed}, "
