@@ -4541,6 +4541,58 @@ class SetupSipliCheckinView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class SetupBreakawayCheckinView(View):
+    """GET/POST `/internal/cron/setup-breakaway-checkin`.
+
+    The Breakaway twin of setup-sipli-checkin: creates the tenant if missing
+    (createTenant-style seeds), seeds the Jimmy Johns recap (PDF minus Date;
+    Festival Location stays as open city/state text) plus the Hiyo recap,
+    mints the standing ``BRK-`` check-in code, and makes Jimmy Johns vs Hiyo
+    selectable on that one link (same picker as Sipli/Liquid Death). Recaps
+    stay human-reviewed. Location mode is Event-style address/GPS. Existing
+    Breakaway event types are left alone — nothing is retired.
+
+    Idempotent: get_or_create for the templates, and an existing checkin_code
+    is left alone (rotating it breaks every copy already shared).
+
+    Params: tenant (default "breakaway"), prefix, apply (default DRY RUN).
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        kwargs: dict = {}
+        for key in ("tenant", "prefix"):
+            val = request.GET.get(key) or request.POST.get(key)
+            if val:
+                kwargs[key] = str(val)
+        raw = (request.GET.get("apply") or request.POST.get("apply") or "").lower()
+        apply_it = raw in ("1", "true", "yes", "on")
+        if apply_it:
+            kwargs["apply"] = True
+
+        out = io.StringIO()
+        try:
+            call_command("setup_breakaway_checkin", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("setup-breakaway-checkin cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc),
+                 "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "apply": apply_it, "log": out.getvalue()})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class BackfillTorchPublicFormSheetView(View):
     """GET/POST `/internal/cron/backfill-torch-public-form-sheet`.
 
@@ -7929,6 +7981,7 @@ def _registered_views() -> dict[str, Any]:
         "setup-krispy-krunchy-checkin": SetupKrispyKrunchyCheckinView,
         "setup-g7-entertainment-checkin": SetupG7EntertainmentCheckinView,
         "setup-sipli-checkin": SetupSipliCheckinView,
+        "setup-breakaway-checkin": SetupBreakawayCheckinView,
         "backfill-torch-public-form-sheet": BackfillTorchPublicFormSheetView,
         "inspect-tenants": InspectTenantsView,
         "delete-tenant": DeleteTenantView,
