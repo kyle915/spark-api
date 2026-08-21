@@ -122,6 +122,7 @@ class Command(BaseCommand):
         asked = 0
         stamped_ids: list[int] = []
         unreachable = 0
+        failed = 0
         for r in rosters:
             user_id = getattr(r.ambassador, "user_id", None)
             if not user_id or user_id not in device_user_ids:
@@ -158,10 +159,18 @@ class Command(BaseCommand):
                 asked += 1
                 stamped_ids.append(r.id)
             except Exception:
-                logger.exception(
+                # Best-effort, same posture as ambassadors.push itself: the
+                # row stays UNSTAMPED so the next hourly run retries, and
+                # Phase B still emails the Ignite team if the BA never
+                # confirms. WARNING, not exception — a per-BA send failure
+                # must not page the error monitor once per row per run (the
+                # 2026-07 executor-thread stale-connection bug paged 215×).
+                logger.warning(
                     "shift confirmation push failed amb=%s event=%s",
                     r.ambassador_id, r.event_id,
+                    exc_info=True,
                 )
+                failed += 1
 
         # One bulk stamp so a second run in the same window can't re-ask.
         if stamped_ids and not dry:
@@ -222,7 +231,8 @@ class Command(BaseCommand):
 
         self.stdout.write(
             f"shift confirmations: asked {asked} "
-            f"({len(stamped_ids)} stamped, {unreachable} unreachable) of "
+            f"({len(stamped_ids)} stamped, {unreachable} unreachable, "
+            f"{failed} failed) of "
             f"{len(rosters)} in the {lead_hours}h window; alerted on "
             f"{alerted} unconfirmed row(s) in the {alert_hours}h window."
         )

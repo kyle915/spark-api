@@ -231,3 +231,50 @@ async def test_send_push_sync_runs_inside_running_loop():
 
     assert result == 2
     mock_send.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+async def test_send_push_survives_closed_executor_thread_connection(user, devices):
+    """Regression for the 2026-07 shift-confirmation pager (×215): push DB
+    work runs on asgiref's shared single-thread executor — a long-lived
+    thread Django's request-boundary connection cleanup never reaches, so a
+    Cloud SQL idle-drop left its wrapper holding a closed psycopg handle and
+    EVERY send then died with OperationalError("the connection is closed")
+    until the instance recycled. `_db_sync` closes around each DB op, so a
+    send always runs on a connection it opened itself."""
+    from django.db import connections
+
+    from ambassadors.models import PushNotification
+
+    def _poison():
+        # Close the psycopg handle underneath the Django wrapper WITHOUT
+        # telling it — exactly the state the executor thread was stuck in.
+        conn = connections["default"]
+        conn.ensure_connection()
+        conn.connection.close()
+
+    # sync_to_async from this test's loop lands on the same shared executor
+    # thread the send path uses, so this poisons the very connection the
+    # send is about to touch.
+    await sync_to_async(_poison)()
+
+    fake_client = AsyncMock()
+    fake_client.send.return_value = [
+        ExpoPushTicket(status="ok", id="recv-1"),
+        ExpoPushTicket(status="ok", id="recv-2"),
+    ]
+
+    try:
+        ok = await send_push_to_user(user, title="t", body="b", client=fake_client)
+
+        assert ok == 2  # both devices reached despite the poisoned handle
+        # The inbox record is the send's FIRST DB op — it proves even the
+        # earliest query recovered.
+        row = await sync_to_async(
+            lambda: PushNotification.objects.filter(user=user).first()
+        )()
+        assert row is not None
+    finally:
+        # Don't leak the poisoned/closed wrapper into later tests.
+        await sync_to_async(lambda: connections["default"].close())()
