@@ -162,6 +162,16 @@ TORCH_PRODUCTS: list[tuple[str, str, str]] = [
 ]
 
 
+def torch_product_options() -> list[str]:
+    """The 45 SKUs as ``"Line — Name"`` choice values for Event Confirmation.
+
+    Same shape as Liquid Death's picker (``Category — SKU``) so the admin tab
+    and the email strip-prefix path stay one code path. Used when the live
+    Product catalog is empty (tests, a tenant that hasn't been onboarded).
+    """
+    return [f"{cat} — {name}" for cat, name, _url in TORCH_PRODUCTS]
+
+
 class Command(BaseCommand):
     help = (
         "Seed Torch THC product types + products (+ artwork). "

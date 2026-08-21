@@ -1384,8 +1384,9 @@ class EventConfirmation(models.Model):
     )
 
     # Selected SKUs as a list of the option strings offered by the picker
-    # (recaps...setup_ld_retail_checkin.product_options). Stored as chosen so
-    # the email reproduces the admin's selection even if the SKU list changes.
+    # (events.event_confirmations.confirmation_product_options). Stored as
+    # chosen so the email reproduces the admin's selection even if the SKU
+    # list changes.
     products = models.JSONField(default=list, blank=True)
 
     # Whether the sweep may fire t24/t3 for this row. Opt-in per send (the tab

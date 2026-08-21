@@ -296,12 +296,10 @@ class EventConfirmationQueries:
         def _go():
             from events.models import TimeZone
             from events.event_confirmations import (
-                CONFIRMATION_FROM_EMAIL, recap_url_for, training_url_for,
-            )
-            # The ONLY tenant-specific piece of this whole feature. Imported
-            # rather than re-typed so the picker and LD's recap form can't drift.
-            from recaps.management.commands.setup_ld_retail_checkin import (
-                product_options,
+                CONFIRMATION_FROM_EMAIL,
+                confirmation_product_options,
+                recap_url_for,
+                training_url_for,
             )
             from tenants.models import Tenant
 
@@ -326,7 +324,7 @@ class EventConfirmationQueries:
             ]
             default_label, type_options = _event_type_choices(tenant)
             return EventConfirmationFormOptions(
-                product_options=product_options(),
+                product_options=confirmation_product_options(tenant),
                 recap_url=recap,
                 training_url=training,
                 timezones=zones,

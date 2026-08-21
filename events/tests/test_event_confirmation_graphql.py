@@ -158,6 +158,38 @@ class TestEventConfirmationGraphQL(AmbassadorsGraphQLTestCase):
         assert data["hasTrainingLink"] is False
         assert data["recapUrl"] == ""
 
+    @pytest.mark.asyncio
+    async def test_torch_gets_torch_skus_and_links_not_liquid_death(self):
+        """The picker must never offer a Torch BA Liquid Death water."""
+        torch = await sync_to_async(self.create_tenant)(
+            name="Torch THC", slug="torch-thc", checkin_code="TH-2HRV3D"
+        )
+        result = await self._run(
+            """
+            query O($tenantId: ID!) {
+              eventConfirmationFormOptions(tenantId: $tenantId) {
+                productOptions
+                recapUrl
+                hasRecapLink
+                brandName
+              }
+            }
+            """,
+            {"tenantId": str(torch.id)},
+        )
+        assert result.errors is None, result.errors
+        data = result.data["eventConfirmationFormOptions"]
+        # No catalog rows in the test DB → the 45-SKU onboard list.
+        assert len(data["productOptions"]) == 45
+        assert data["productOptions"][0].startswith("Iced Tea 10mg — ")
+        assert not any("Sparkling Water" in o for o in data["productOptions"])
+        assert data["brandName"] == "Torch THC"
+        # The standing walk-up code, read off the tenant — not reminted.
+        assert data["recapUrl"] == (
+            "https://client.igniteproductions.co/checkin/TH-2HRV3D"
+        )
+        assert data["hasRecapLink"] is True
+
     # --------------------------------------------------------------- writes
 
     @pytest.mark.asyncio

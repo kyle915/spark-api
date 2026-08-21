@@ -30,13 +30,20 @@ from events.event_confirmations import (
     absolute_public_url,
     build_context,
     build_subject,
+    confirmation_product_options,
     due_reminders,
     format_time_range,
     recap_url_for,
     send_confirmation_stage,
     training_url_for,
 )
-from events.models import EventConfirmation, EventConfirmationSend, TimeZone
+from events.models import (
+    EventConfirmation,
+    EventConfirmationSend,
+    Product,
+    ProductType,
+    TimeZone,
+)
 from tenants.models import Tenant
 
 CHICAGO = ZoneInfo("America/Chicago")
@@ -250,6 +257,116 @@ class TestPublicEmailUrls:
         tenant = _tenant(checkin_training_url="", checkin_code="")
         assert training_url_for(tenant) == ""
         assert recap_url_for(tenant) == ""
+
+
+# ---------------------------------------------------------------------------
+# Tenant-aware SKU picker — the one brand-specific piece of the feature
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestTenantProductOptions:
+    def test_liquid_death_keeps_the_spark_form_list(self):
+        """LD's picker and /spark-form/ighn-liquid-death must not drift."""
+        tenant = _tenant()
+        options = confirmation_product_options(tenant)
+        assert len(options) == 31
+        assert options[0].startswith("Sparkling Water — ")
+
+    def test_torch_without_a_catalog_falls_back_to_the_onboard_list(self):
+        """An unseeded Torch tenant still offers Torch SKUs, never LD water."""
+        tenant = _tenant(
+            name="Torch THC", slug="torch-thc", checkin_code="TH-2HRV3D"
+        )
+        options = confirmation_product_options(tenant)
+        assert len(options) == 45
+        assert options[0].startswith("Iced Tea 10mg — ")
+        assert "Seltzer 60mg High Potency — Black Cherry 60mg 12oz" in options
+        assert not any("Sparkling Water" in o for o in options)
+
+    def test_a_live_catalog_wins_over_the_onboard_fallback(self):
+        """Once Torch's Product rows exist, the picker reads THEM — an admin
+        edit to the catalog shows up without a deploy."""
+        tenant = _tenant(name="Torch THC", slug="torch-thc")
+        user = _system_user()
+        line = ProductType.objects.create(
+            tenant=tenant, name="Seltzer 5mg Lite", created_by=user
+        )
+        Product.objects.create(
+            tenant=tenant,
+            product_type=line,
+            name="Black Cherry 5mg 12oz",
+            created_by=user,
+        )
+        assert confirmation_product_options(tenant) == [
+            "Seltzer 5mg Lite — Black Cherry 5mg 12oz"
+        ]
+
+    def test_an_unknown_tenant_with_no_catalog_gets_an_empty_picker(self):
+        tenant = _tenant(name="Feel Free")
+        assert confirmation_product_options(tenant) == []
+
+
+@pytest.mark.django_db
+class TestTorchConfirmationContent:
+    """The same email, Torch-branded — nothing Liquid Death may leak through."""
+
+    def _torch_confirmation(self):
+        tenant = _tenant(
+            name="Torch THC",
+            slug="torch-thc",
+            checkin_code="TH-2HRV3D",
+            checkin_training_url="",
+        )
+        return _confirmation(
+            tenant,
+            starts_at=datetime(2026, 8, 1, 13, 0, tzinfo=CHICAGO),
+            ends_at=datetime(2026, 8, 1, 16, 0, tzinfo=CHICAGO),
+            store_name="Binny's Beverage Depot",
+            products=[
+                "Iced Tea 10mg — Raspberry 10mg 12oz",
+                "Seltzer 5mg Lite — Black Cherry 5mg 12oz",
+            ],
+        )
+
+    def test_subject_and_eyebrow_are_torch_not_liquid_death(self):
+        c = self._torch_confirmation()
+        assert build_subject(c) == (
+            "Your Torch THC Retail Sampling – "
+            "Binny's Beverage Depot | 08/01/2026 | 1p - 4p"
+        )
+        ctx = build_context(c, EventConfirmation.STAGE_BOOKED)
+        assert ctx["eyebrow"] == "TORCH THC • RETAIL SAMPLING"
+        assert "Torch THC retail sampling" in ctx["intro_html"]
+        assert "Liquid Death" not in build_subject(c)
+        assert "Liquid Death" not in ctx["intro_html"]
+
+    def test_products_strip_the_line_prefix_and_links_mint_client_host(self):
+        c = self._torch_confirmation()
+        ctx = build_context(c, EventConfirmation.STAGE_BOOKED)
+        assert ctx["products_label"] == (
+            "Raspberry 10mg 12oz, Black Cherry 5mg 12oz"
+        )
+        # The standing BA clock code, READ — never reminted, never admin.
+        assert ctx["recap_url"] == (
+            "https://client.igniteproductions.co/checkin/TH-2HRV3D"
+        )
+        # Torch has no training site configured: no button, not a dead link.
+        assert ctx["training_url"] == ""
+
+    def test_the_rendered_email_has_no_liquid_death_in_it(self):
+        from events.event_confirmations import EventConfirmationMailer
+
+        c = self._torch_confirmation()
+        html = EventConfirmationMailer(
+            c, EventConfirmation.STAGE_BOOKED
+        ).envelope().render_template()
+        assert "TORCH THC" in html
+        assert "Liquid Death" not in html
+        assert 'href="https://client.igniteproductions.co/checkin/TH-2HRV3D"' in html
+        assert "spark.igniteproductions.co" not in html
+        assert "admin.igniteproductions.co" not in html
+        # No training URL → the block is omitted, not rendered empty.
+        assert "Review Training Site" not in html
 
 
 # ---------------------------------------------------------------------------
