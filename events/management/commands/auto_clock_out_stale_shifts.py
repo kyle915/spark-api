@@ -183,9 +183,13 @@ class Command(BaseCommand):
                               "eventUuid": str(getattr(ev, "uuid", ""))},
                     )
             except Exception:
-                logger.exception(
+                # Best-effort push: WARNING, not exception — must not page
+                # the error monitor per BA per run. (The clock-out itself
+                # failing above stays ERROR — that's actionable.)
+                logger.warning(
                     "auto clock-out push failed amb=%s event=%s",
                     r.ambassador_id, r.event_id,
+                    exc_info=True,
                 )
 
         self.stdout.write(

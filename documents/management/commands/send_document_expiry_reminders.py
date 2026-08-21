@@ -122,7 +122,11 @@ class Command(BaseCommand):
                 )
                 sent += 1
             except Exception:
-                logger.exception("document expiry notify failed user=%s", uid)
+                # Best-effort push: WARNING, not exception — must not page
+                # the error monitor per BA per run.
+                logger.warning(
+                    "document expiry notify failed user=%s", uid, exc_info=True
+                )
 
         self.stdout.write(
             f"document expiry: notified {sent} BA(s) about docs expiring "

@@ -158,9 +158,12 @@ class Command(BaseCommand):
                     )
                     nudged += 1
                 except Exception:
-                    logger.exception(
+                    # Best-effort push: WARNING, not exception — must not
+                    # page the error monitor per BA per run.
+                    logger.warning(
                         "no-show BA nudge failed amb=%s event=%s",
                         r.ambassador_id, r.event_id,
+                        exc_info=True,
                     )
 
         # --- One digest email to the Ignite team. ---

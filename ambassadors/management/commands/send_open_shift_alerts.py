@@ -169,9 +169,12 @@ class Command(BaseCommand):
                             },
                         )
                     except Exception:
-                        logger.exception(
+                        # Best-effort push: WARNING, not exception — must
+                        # not page the error monitor per BA per shift.
+                        logger.warning(
                             "open-shift alert push failed amb=%s open_shift=%s",
                             amb.id, os_row.id,
+                            exc_info=True,
                         )
                         continue
                 sent_this += 1
