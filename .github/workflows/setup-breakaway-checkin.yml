@@ -1,0 +1,54 @@
+name: Setup Breakaway check-in
+
+# Seeds the Breakaway Jimmy Johns + Hiyo recap templates (PDF minus Date;
+# Festival Location stays an open city/state text), creates the tenant if
+# missing, and mints the standing BRK- check-in code. Idempotent. Recaps
+# stay human-reviewed. BA picks Jimmy Johns vs Hiyo on the standing link
+# (same picker as Sipli/Liquid Death).
+#
+# RUN apply=false FIRST AND READ THE LOG.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tenant:
+        description: "Tenant name/slug substring"
+        required: false
+        default: "breakaway"
+      prefix:
+        description: "Brand prefix for a NEW code. Blank = BRK-"
+        required: false
+        default: ""
+      apply:
+        description: "Actually write (read the dry run first)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+jobs:
+  setup-breakaway-checkin:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire setup endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/setup-breakaway-checkin
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          TENANT: ${{ github.event.inputs.tenant }}
+          PREFIX: ${{ github.event.inputs.prefix }}
+          APPLY: ${{ github.event.inputs.apply }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL" \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            --data-urlencode "tenant=$TENANT" \
+            --data-urlencode "prefix=$PREFIX" \
+            --data-urlencode "apply=$APPLY")
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          echo ""
+          [ "$STATUS" != "200" ] && exit 1 || exit 0
