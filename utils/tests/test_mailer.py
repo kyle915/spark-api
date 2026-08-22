@@ -472,6 +472,9 @@ class TestMailer:
         """Test dispatch calls driver.send with envelope."""
         mailer = Mailer()
         mock_envelope = MagicMock()
+        mock_envelope.to_emails = ["test@example.com"]
+        mock_envelope.context = {}
+        mock_envelope.attachments = []
         with patch.object(mailer, 'envelope', return_value=mock_envelope):
             with patch.object(mailer, 'get_driver') as mock_get_driver:
                 mock_driver = MagicMock()
@@ -485,6 +488,9 @@ class TestMailer:
         """Test send enqueues email task to RQ."""
         mailer = Mailer()
         mock_envelope = MagicMock()
+        mock_envelope.to_emails = ["to@example.com"]
+        mock_envelope.context = {}
+        mock_envelope.attachments = []
         mock_envelope.compile.return_value = {
             "from": "from@example.com",
             "to": ["to@example.com"],
