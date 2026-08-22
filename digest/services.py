@@ -18,6 +18,7 @@ from django.utils import timezone
 
 from ambassadors.models import AmbassadorEvent
 from events.models import Event, Request
+from events.routing import suppress_cc
 from recaps.models import Recap
 from tenants.models import Tenant, TenantedUser, Role
 
@@ -282,6 +283,11 @@ def admin_recipients_for_tenant(tenant: Tenant) -> list[str]:
     """Email addresses for the admin + spark-admin users in this
     tenant. Filters out blanks and the synthetic system/service account
     (see SYSTEM_ACCOUNT_*). Returns [] when no real admins are found.
+
+    Also honors ``events.routing.CC_SUPPRESS_EMAILS`` — the same
+    suppression list every other admin mail path applies — so a
+    no-mail admin (e.g. a view-only creative login) isn't mailed by
+    this one path while every CC list drops them.
     """
     qs = (
         TenantedUser.objects.filter(tenant=tenant, is_active=True)
@@ -297,4 +303,4 @@ def admin_recipients_for_tenant(tenant: Tenant) -> list[str]:
     for tu in qs:
         if tu.user and tu.user.email:
             emails.append(tu.user.email)
-    return list(dict.fromkeys(emails))  # de-dupe, preserve order
+    return suppress_cc(list(dict.fromkeys(emails)))  # de-dupe, preserve order
