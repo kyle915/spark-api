@@ -1,0 +1,295 @@
+{% load static %}<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>You're invited to Spark</title>
+    <!-- Hidden inbox preview text -->
+    <style type="text/css">
+      @media only screen and (max-width: 600px) {
+        .shell { width: 100% !important; }
+        .pad   { padding-left: 24px !important; padding-right: 24px !important; }
+        .hero  { font-size: 28px !important; line-height: 32px !important; }
+      }
+      a.cta:hover { filter: brightness(1.05); }
+    </style>
+  </head>
+  <body
+    style="margin:0;padding:0;background:#f4f4f0;
+           font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,
+                       'Helvetica Neue',Arial,sans-serif;
+           color:#0a0d09;">
+    <span style="display:none;max-height:0;overflow:hidden;mso-hide:all;">
+      Set a password, continue with Google, or use your one-click sign-in
+      link — your Spark workspace is ready.&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;
+    </span>
+    <table role="presentation" cellspacing="0" cellpadding="0" border="0"
+           width="100%" style="background:#f4f4f0;">
+      <tr>
+        <td align="center" style="padding:24px 12px;">
+          <!-- Email card -->
+          <table role="presentation" cellspacing="0" cellpadding="0" border="0"
+                 width="600" class="shell"
+                 style="width:600px;max-width:600px;
+                        background:#ffffff;border-radius:18px;
+                        overflow:hidden;
+                        box-shadow:0 1px 2px rgba(10,13,9,0.04);">
+
+            <!-- Header: thin full-width strip of the Ignite logo's burn
+                 pattern (flame/wave grain, no wordmark — Kyle 2026-08-21).
+                 Decorative; the card's border-radius clips the corners. -->
+            <tr>
+              <td style="padding:0;line-height:0;font-size:0;">
+                <img src="{{ brand_strip_url }}"
+                     alt=""
+                     width="600" height="23"
+                     style="display:block;width:100%;max-width:600px;
+                            height:auto;border:0;outline:none;
+                            text-decoration:none;" />
+              </td>
+            </tr>
+
+            <!-- Hero copy -->
+            <tr>
+              <td class="pad" style="padding:36px 40px 8px 40px;">
+                <p style="margin:0 0 4px 0;
+                          font-family:'Courier New',Courier,monospace;
+                          font-size:10px;letter-spacing:0.22em;
+                          color:#5a6354;">
+                  YOU'RE INVITED
+                </p>
+                <h1 class="hero"
+                    style="margin:0;
+                           font-family:Georgia,'Times New Roman',serif;
+                           font-weight:700;font-size:34px;line-height:38px;
+                           letter-spacing:-0.02em;color:#0a0d09;">
+                  Welcome to Spark, {{ first_name }}.
+                </h1>
+              </td>
+            </tr>
+
+            <!-- Why they got this -->
+            <tr>
+              <td class="pad" style="padding:16px 40px 4px 40px;">
+                <p style="margin:0;font-size:15px;line-height:22px;color:#3b4034;">
+                  Ignite Productions just set up
+                  {% if tenant_name %}<strong>{{ tenant_name }}'s</strong>{% else %}your{% endif %}
+                  workspace on Spark — your program's requests, recaps, and
+                  approvals live here.
+                </p>
+                <p style="margin:12px 0 0 0;font-size:15px;line-height:22px;
+                          color:#3b4034;">
+                  Three ways in — pick whichever is easiest:
+                </p>
+              </td>
+            </tr>
+
+            <!-- OPTION 1 — PRIMARY CTA: set a password. Most durable path:
+                 once set, they can sign in with email + password forever.
+                 The link carries the 7-day invite token and lands on the
+                 admin app's /reset-password page. -->
+            <tr>
+              <td class="pad" style="padding:28px 40px 6px 40px;">
+                <p style="margin:0 0 8px 0;
+                          font-family:'Courier New',Courier,monospace;
+                          font-size:10px;letter-spacing:0.22em;color:#5a6354;">
+                  1 · SET YOUR PASSWORD
+                </p>
+                <table role="presentation" cellspacing="0" cellpadding="0" border="0">
+                  <tr>
+                    <td bgcolor="#c5f546"
+                        style="border-radius:14px;
+                               box-shadow:0 0 0 1px rgba(10,13,9,0.06);">
+                      <a href="{{ set_password_link }}" class="cta"
+                         style="display:inline-block;
+                                padding:14px 26px;font-size:15px;font-weight:700;
+                                color:#0a0d09;text-decoration:none;
+                                font-family:Georgia,'Times New Roman',serif;
+                                letter-spacing:-0.01em;border-radius:14px;">
+                        Set your password&nbsp;→
+                      </a>
+                    </td>
+                  </tr>
+                </table>
+                <p style="margin:8px 0 0 0;font-size:12px;line-height:18px;
+                          color:#7a8074;">
+                  Takes 20 seconds. This link is good for
+                  {{ expires_days }} days.
+                </p>
+              </td>
+            </tr>
+
+            <!-- OPTION 2 — Google SSO. No token needed: the login page's
+                 Google button works for any registered email, and the
+                 invite already created their account. -->
+            <tr>
+              <td class="pad" style="padding:20px 40px 6px 40px;">
+                <p style="margin:0 0 8px 0;
+                          font-family:'Courier New',Courier,monospace;
+                          font-size:10px;letter-spacing:0.22em;color:#5a6354;">
+                  2 · CONTINUE WITH GOOGLE
+                </p>
+                <table role="presentation" cellspacing="0" cellpadding="0" border="0">
+                  <tr>
+                    <td bgcolor="#0a0d09"
+                        style="border-radius:14px;">
+                      <a href="{{ login_url }}" class="cta"
+                         style="display:inline-block;
+                                padding:14px 26px;font-size:15px;font-weight:700;
+                                color:#c5f546;text-decoration:none;
+                                font-family:Georgia,'Times New Roman',serif;
+                                letter-spacing:-0.01em;border-radius:14px;">
+                        Continue with Google&nbsp;→
+                      </a>
+                    </td>
+                  </tr>
+                </table>
+                <p style="margin:8px 0 0 0;font-size:12px;line-height:18px;
+                          color:#7a8074;">
+                  On the sign-in page, use the Google account for
+                  <strong>{{ user.email }}</strong>. No password needed, ever.
+                </p>
+              </td>
+            </tr>
+
+            <!-- OPTION 3 — one-click magic link (same 7-day invite token). -->
+            <tr>
+              <td class="pad" style="padding:20px 40px 4px 40px;">
+                <p style="margin:0 0 6px 0;
+                          font-family:'Courier New',Courier,monospace;
+                          font-size:10px;letter-spacing:0.22em;color:#5a6354;">
+                  3 · SKIP SETUP ENTIRELY
+                </p>
+                <p style="margin:0;font-size:14px;line-height:21px;color:#3b4034;">
+                  <a href="{{ magic_link }}"
+                     style="color:#3b7ddb;text-decoration:underline;
+                            font-weight:600;">One-click sign-in&nbsp;→</a>
+                  no password, no Google. Also good for {{ expires_days }} days.
+                </p>
+              </td>
+            </tr>
+
+            <!-- Reassurance row -->
+            <tr>
+              <td class="pad" style="padding:8px 40px 8px 40px;">
+                <table role="presentation" cellspacing="0" cellpadding="0" border="0"
+                       width="100%"
+                       style="background:#f4f4f0;border-radius:12px;">
+                  <tr>
+                    <td style="padding:14px 18px;font-size:12px;line-height:18px;
+                               color:#3b4034;">
+                      Links expired? No stress — open
+                      <a href="{{ login_url }}"
+                         style="color:#3b7ddb;text-decoration:underline;">the sign-in page</a>
+                      and tap <strong>“Email me a sign-in link”</strong> for a
+                      fresh one. Didn't expect this invite? Just reply — a human
+                      on the Ignite team will sort it out.
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+
+            <!-- Sign-off -->
+            <tr>
+              <td class="pad" style="padding:24px 40px 4px 40px;">
+                <p style="margin:0;font-size:14px;line-height:20px;color:#3b4034;">
+                  — Spark, Ignite Productions
+                </p>
+              </td>
+            </tr>
+
+            <!-- Divider -->
+            <tr>
+              <td class="pad" style="padding:8px 40px 0 40px;">
+                <hr style="border:0;border-top:1px solid #ef5a2a;margin:0;" />
+              </td>
+            </tr>
+
+            <!-- AI / human disclaimer -->
+            <tr>
+              <td class="pad" style="padding:16px 40px 8px 40px;">
+                <p style="margin:0;font-size:12px;line-height:18px;
+                          color:#7a8074;font-style:italic;">
+                  This message was sent by Spark, Ignite's field marketing
+                  platform. If you'd like to speak with a team member, simply
+                  reply to this email and a human will follow up.
+                </p>
+              </td>
+            </tr>
+
+            <!-- Ignite signature block -->
+            <tr>
+              <td class="pad" style="padding:16px 40px 36px 40px;">
+                <table role="presentation" cellspacing="0" cellpadding="0" border="0"
+                       width="100%">
+                  <tr>
+                    <td valign="top" width="140" style="padding-right:18px;">
+                      <img src="{{ brand_mark_url }}"
+                           alt="Ignite Productions"
+                           width="130" height="130"
+                           style="display:block;width:130px;height:130px;
+                                  border-radius:8px;border:0;outline:none;
+                                  text-decoration:none;" />
+                    </td>
+                    <td valign="top" style="font-size:14px;line-height:22px;color:#0a0d09;">
+                      <p style="margin:0 0 4px 0;color:#0a0d09;font-weight:700;font-size:16px;">
+                        Ignite Productions
+                      </p>
+                      <p style="margin:0 0 4px 0;color:#3b4034;">
+                        Brand Activation &amp; Event Marketing Agency
+                      </p>
+                      <p style="margin:0;">
+                        📞 <a href="tel:+17754060435"
+                              style="color:#0a0d09;text-decoration:none;">
+                          775-406-0435
+                        </a>
+                      </p>
+                      <p style="margin:0;">
+                        ✉️ <a href="mailto:staffing@igniteproductions.co"
+                              style="color:#0a0d09;text-decoration:none;">
+                          staffing@igniteproductions.co
+                        </a>
+                      </p>
+                      <p style="margin:0;">
+                        🌐 <a href="https://www.igniteproductions.co"
+                              style="color:#3b7ddb;text-decoration:none;">
+                          igniteproductions.co
+                        </a>
+                      </p>
+                      <p style="margin:6px 0 0 0;">
+                        <a href="https://www.linkedin.com/company/ignite-productions-llc"
+                           style="color:#3b7ddb;text-decoration:none;font-weight:600;">
+                          LinkedIn
+                        </a>
+                      </p>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+
+            <!-- Legal footer -->
+            <tr>
+              <td class="pad"
+                  style="padding:18px 40px 28px 40px;
+                         background:#f9f9f4;border-top:1px solid #eeeae0;">
+                <p style="margin:0;font-family:'Courier New',Courier,monospace;
+                          font-size:10px;letter-spacing:0.16em;color:#7a8074;
+                          line-height:16px;">
+                  © {% now "Y" %} IGNITE PRODUCTIONS LLC<br/>
+                  <a href="https://admin.igniteproductions.co/legal/terms-of-service.pdf"
+                     style="color:#7a8074;">TERMS</a>
+                  &nbsp;·&nbsp;
+                  <a href="https://admin.igniteproductions.co/legal/privacy-policy.pdf"
+                     style="color:#7a8074;">PRIVACY</a>
+                </p>
+              </td>
+            </tr>
+          </table>
+
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>

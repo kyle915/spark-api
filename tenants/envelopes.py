@@ -125,6 +125,80 @@ class MagicLinkMailer(_NoAttachedLogoMixin, Mailer):
         )
 
 
+class ClientInviteMailer(_NoAttachedLogoMixin, Mailer):
+    """
+    Welcome invite for a brand-new CLIENT login.
+
+    This is the first email a client contact ever receives from Spark, so
+    unlike MagicLinkMailer (a bare "Welcome back" sign-in link for people
+    who already know the platform) it has to do three jobs: say WHY they
+    got it (Ignite set up their brand's workspace), offer ALL THREE
+    sign-in paths the admin login page supports — set a password,
+    Continue with Google, or a one-click magic link — and carry the
+    longer-lived invite token (days, not 30 minutes) so a contact who
+    reads it next week isn't dead-ended.
+
+    Only sent for newly created users. Re-invites of existing users stay
+    on the plain MagicLinkMailer so we never re-"welcome" (or spam)
+    someone who already has a Spark account.
+    """
+
+    def __init__(
+        self,
+        user: User,
+        *,
+        tenant_name: str | None,
+        set_password_link: str,
+        magic_link: str,
+        login_url: str,
+        expires_days: int = 7,
+    ):
+        self.user = user
+        self.tenant_name = (tenant_name or "").strip() or None
+        self.set_password_link = set_password_link
+        self.magic_link = magic_link
+        self.login_url = login_url
+        self.expires_days = expires_days
+
+    def envelope(self) -> Envelope:
+        first = (self.user.first_name or self.user.email.split("@")[0]).strip()
+        subject = (
+            f"You're invited to {self.tenant_name} on Spark"
+            if self.tenant_name
+            else "You're invited to Spark"
+        )
+        return Envelope(
+            subject=subject,
+            template="tenants.templates.emails.client_invite",
+            from_email="Spark by Ignite <no-reply@igniteproductions.co>",
+            to_emails=[self.user.email],
+            headers={"Reply-To": "staffing@igniteproductions.co"},
+            context={
+                "user": self.user,
+                "first_name": first,
+                "tenant_name": self.tenant_name,
+                "set_password_link": self.set_password_link,
+                "magic_link": self.magic_link,
+                "login_url": self.login_url,
+                # Wavy red Ignite artwork (Kyle's asset, 2026-08-21):
+                # brand_strip_url is a thin burn-pattern bar for the header;
+                # brand_mark_url is the square wordmark crop for the
+                # signature. Both live in the admin app's public/email/ —
+                # ships with the frontend deploy, which must land before
+                # this mailer goes live.
+                "brand_strip_url": (
+                    "https://admin.igniteproductions.co"
+                    "/email/ignite-burn-strip.jpg"
+                ),
+                "brand_mark_url": (
+                    "https://admin.igniteproductions.co"
+                    "/email/ignite-wavy-mark.jpg"
+                ),
+                "expires_days": self.expires_days,
+            },
+        )
+
+
 class SupportTicketIgniteNotificationMailer(_NoAttachedLogoMixin, Mailer):
     """Notifies the Ignite team that a support ticket was filed from the web
     Help page.

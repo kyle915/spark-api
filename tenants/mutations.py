@@ -6,7 +6,9 @@ from graphql import GraphQLError
 from django.contrib.auth import get_user_model
 from gqlauth.core.utils import get_token
 from asgiref.sync import sync_to_async
+import logging
 import random
+import re
 import secrets
 import string
 from django.utils.text import slugify
@@ -18,7 +20,11 @@ from django.db import transaction
 from utils.graphql.inputs import SparkGraphQLInput
 from utils.graphql.relay import ensure_relay_mutation
 from utils.graphql.mixins import resolve_id_to_int
-from utils.graphql.permissions import StrictIsAuthenticated
+from utils.graphql.permissions import (
+    StrictIsAuthenticated,
+    _is_admin_access,
+    resolve_request_user_access,
+)
 from utils.utils import ROLE_ID
 from utils.gcs import delete_blob, extract_blob_name_from_url
 from .models import Role, TenantedUser, Tenant, TenantTheme, PasswordResetCode
@@ -26,6 +32,7 @@ from .types import TenantType, TenantThemeType
 from .inputs import CreateOrUpdateTenantThemeInput
 from .social_auth import BaseSocialAuthMutations, SocialAuthResponse
 from .envelopes import (
+    ClientInviteMailer,
     EmailVerificationMailer,
     ForgotPasswordCodeMailer,
     MagicLinkMailer,
@@ -219,7 +226,44 @@ class InviteUserInput(SparkGraphQLInput):
     last_name: str | None = None
     role: str  # "admin" | "client" | "ambassador"
     tenant_id: strawberry.ID | None = None  # required for client/ambassador
+    # Accepted but UNUSED — the new-client form still posts it. Kyle cut the
+    # personal-note block from the invite email (2026-08-21), so nothing
+    # reads this anymore. Keep accepting it so old clients don't 400.
     note: str | None = None
+
+
+@strawberry.input
+class ClientInviteRowInput:
+    email: str
+    first_name: str | None = None
+    last_name: str | None = None
+
+
+@strawberry.input
+class InviteClientUsersInput(SparkGraphQLInput):
+    tenant_id: strawberry.ID
+    rows: list[ClientInviteRowInput]
+
+
+@strawberry.type
+class ClientInviteRowResult:
+    email: str
+    # "invited" (new user, email sent) | "existing" (already had an account —
+    # tenant link ensured, NO email) | "invalid" (bad email) | "error"
+    # (account created but the invite email failed to send).
+    status: str
+    message: str
+
+
+@strawberry.type
+class InviteClientUsersResponse:
+    success: bool
+    message: str
+    invited: int
+    existing: int
+    invalid: int
+    results: list[ClientInviteRowResult]
+    client_mutation_id: strawberry.ID | None = None
 
 
 @strawberry.input
@@ -522,6 +566,41 @@ class SparkCustomRegister:
 MAGIC_LINK_SALT = "spark.magic-link.v1"
 MAGIC_LINK_TTL_SECONDS = 60 * 30  # 30 min
 
+# Client-invite tokens: same signed-token mechanics as magic links, but a
+# separate salt and a 7-DAY life. An invite is often read hours or days
+# after it's sent (the contact is at work, in meetings, on a plane); the
+# 30-minute magic-link TTL would dead-end them and bounce them into a
+# "request a new link" loop before they've ever seen the dashboard. Both
+# login_with_magic_token and confirm_password_reset accept this salt, so
+# the one token in the invite email powers the one-click sign-in AND the
+# set-your-password link.
+CLIENT_INVITE_SALT = "spark.client-invite.v1"
+CLIENT_INVITE_TTL_SECONDS = 60 * 60 * 24 * 7  # 7 days
+
+
+def _unsign_with_salts(
+    token: str, candidates: list[tuple[str, int]]
+) -> tuple[dict | None, str | None]:
+    """Try each (salt, max_age) pair in order.
+
+    Returns (payload, None) on success, or (None, "expired" | "invalid").
+    "expired" wins over "invalid" when at least one salt verified the
+    signature but the token was too old — that distinction decides whether
+    the user hears "link expired, request a new one" vs "invalid link".
+    """
+    saw_expired = False
+    for salt, max_age in candidates:
+        try:
+            return signing.loads(token, salt=salt, max_age=max_age), None
+        except signing.SignatureExpired:
+            # Signature valid for THIS salt but stale — no point trying the
+            # others (a different salt can't verify the same signature).
+            saw_expired = True
+            break
+        except signing.BadSignature:
+            continue
+    return None, ("expired" if saw_expired else "invalid")
+
 
 def _build_magic_link(token: str, redirect: str | None) -> str:
     base = getattr(settings, "ADMIN_FRONTEND_URL", "https://admin.igniteproductions.co").rstrip("/")
@@ -539,6 +618,21 @@ def _build_magic_link_mobile(token: str) -> str:
     """
     scheme = getattr(settings, "MOBILE_DEEP_LINK_SCHEME", "spark")
     return f"{scheme}://magic/{token}"
+
+
+def _ensure_verified(user) -> None:
+    """Mark the gqlauth UserStatus verified so password login works.
+
+    gqlauth's tokenAuth gates on ``UserStatus.verified`` — an invited user
+    who sets a password from the invite email and then signs in with it
+    would otherwise hit "Please verify your account" (the Toni trap the
+    verify_user command exists to unwedge). Admin-invited accounts prove
+    inbox ownership by clicking the invite link, so they skip the
+    email-verification dance — same as admin-created BAs.
+    """
+    UserStatus.objects.update_or_create(
+        user=user, defaults={"verified": True, "archived": False}
+    )
 
 
 @strawberry.type
@@ -607,14 +701,21 @@ class SparkUserMutations:
         info: strawberry.Info,
         input: LoginWithMagicTokenInput,
     ) -> MagicLinkLoginResponse:
-        """Exchange a magic-link token for a JWT."""
-        try:
-            payload = signing.loads(
-                input.token, salt=MAGIC_LINK_SALT, max_age=MAGIC_LINK_TTL_SECONDS,
-            )
-        except signing.SignatureExpired:
+        """Exchange a magic-link token for a JWT.
+
+        Accepts both the 30-minute sign-in token (requestMagicLink) and the
+        7-day client-invite token — the invite email's one-click link mints
+        the latter so a contact who reads it days later still gets in."""
+        payload, error_kind = _unsign_with_salts(
+            input.token,
+            [
+                (MAGIC_LINK_SALT, MAGIC_LINK_TTL_SECONDS),
+                (CLIENT_INVITE_SALT, CLIENT_INVITE_TTL_SECONDS),
+            ],
+        )
+        if error_kind == "expired":
             return MagicLinkLoginResponse(success=False, message="Link expired. Request a new one.")
-        except signing.BadSignature:
+        if payload is None:
             return MagicLinkLoginResponse(success=False, message="Invalid sign-in link.")
 
         user = await sync_to_async(
@@ -704,19 +805,22 @@ class SparkUserMutations:
                 client_mutation_id=input.client_mutation_id,
             )
 
-        try:
-            payload = signing.loads(
-                input.token,
-                salt="spark.password-reset.v1",
-                max_age=60 * 30,  # 30 min
-            )
-        except signing.SignatureExpired:
+        payload, error_kind = _unsign_with_salts(
+            input.token,
+            [
+                ("spark.password-reset.v1", 60 * 30),  # 30 min
+                # The invite email's "Set your password" link carries the
+                # 7-day invite token — same page, same mutation.
+                (CLIENT_INVITE_SALT, CLIENT_INVITE_TTL_SECONDS),
+            ],
+        )
+        if error_kind == "expired":
             return UpdateUserResponse(
                 success=False,
                 message="Reset link expired. Request a new one.",
                 client_mutation_id=input.client_mutation_id,
             )
-        except signing.BadSignature:
+        if payload is None:
             return UpdateUserResponse(
                 success=False,
                 message="Invalid reset link.",
@@ -726,7 +830,9 @@ class SparkUserMutations:
         user = await sync_to_async(
             lambda: User.objects.filter(id=payload.get("u")).first()
         )()
-        if not user or user.email != payload.get("e") or payload.get("k") != "pwd":
+        # "pwd" = requestPasswordReset token; "invite" = client-invite token.
+        # Both prove inbox ownership, so both may set a password.
+        if not user or user.email != payload.get("e") or payload.get("k") not in ("pwd", "invite"):
             return UpdateUserResponse(
                 success=False,
                 message="Account not found.",
@@ -767,10 +873,6 @@ class SparkUserMutations:
         Idempotent: if a user with this email already exists, we
         re-send the magic link without altering their role or tenants.
         """
-        from .envelopes import MagicLinkMailer
-        from django.core import signing
-        import logging
-
         role_slug = (input.role or "").strip().lower()
         role_map = {"admin": 2, "spark-admin": 2, "client": 3, "ambassador": 1}
         if role_slug not in role_map:
@@ -841,6 +943,7 @@ class SparkUserMutations:
                     existing.is_active = True
                     existing.save(update_fields=["is_active"])
                 _ensure_tenant_links(existing, existing.role_id or role_id)
+                _ensure_verified(existing)
                 return existing, False
             # Match the seed script: unusable password marker so the
             # user is forced through magic-link / password-reset to set
@@ -856,6 +959,7 @@ class SparkUserMutations:
                 is_superuser=False,
                 role_id=role_id,
             )
+            _ensure_verified(user)
             _ensure_tenant_links(user, role_id)
             return user, True
 
@@ -871,13 +975,51 @@ class SparkUserMutations:
                 client_mutation_id=input.client_mutation_id,
             )
 
+        # Email the way in. A BRAND-NEW client gets the full welcome invite
+        # (set-password + Google SSO + one-click link on a 7-day token) —
+        # it's the first email they've ever had from Spark, so it has to
+        # explain itself. Everyone else (re-invites, admins, BAs) keeps the
+        # plain 30-minute magic-link they've always gotten.
+        base = getattr(
+            settings, "ADMIN_FRONTEND_URL", "https://admin.igniteproductions.co",
+        ).rstrip("/")
+
+        if created and role_slug == "client":
+            tenant_name = await sync_to_async(
+                lambda: Tenant.objects.filter(
+                    id=resolve_id_to_int(input.tenant_id)
+                ).values_list("name", flat=True).first()
+            )() if input.tenant_id else None
+
+            invite_token = signing.dumps(
+                {"u": user.id, "e": user.email, "k": "invite"},
+                salt=CLIENT_INVITE_SALT,
+            )
+            try:
+                mailer = ClientInviteMailer(
+                    user,
+                    tenant_name=tenant_name,
+                    set_password_link=f"{base}/reset-password/{invite_token}",
+                    magic_link=f"{base}/magic/{invite_token}",
+                    login_url=f"{base}/login",
+                    expires_days=CLIENT_INVITE_TTL_SECONDS // (60 * 60 * 24),
+                )
+                await mailer.send_async_now()
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "Client invite email failed for %s", email,
+                )
+
+            return UpdateUserResponse(
+                success=True,
+                message=f"Invite sent — {email} will get a welcome email with three ways to sign in.",
+                client_mutation_id=input.client_mutation_id,
+            )
+
         # Email a magic-link so the new user can sign in immediately.
         token = signing.dumps(
             {"u": user.id, "e": user.email}, salt="spark.magic-link.v1",
         )
-        base = getattr(
-            settings, "ADMIN_FRONTEND_URL", "https://admin.igniteproductions.co",
-        ).rstrip("/")
         link = f"{base}/magic/{token}"
         # Also hand the mobile app deep-link so an invited BA can open the
         # Spark app straight from the email instead of bouncing through the
@@ -908,6 +1050,229 @@ class SparkUserMutations:
                 if created
                 else f"User exists — re-sent sign-in link to {email}."
             ),
+            client_mutation_id=input.client_mutation_id,
+        )
+
+    @relay.mutation
+    async def invite_client_users(
+        self,
+        info: strawberry.Info,
+        input: InviteClientUsersInput,
+    ) -> InviteClientUsersResponse:
+        """Bulk version of invite_user for CLIENT accounts only.
+
+        One tenant, many rows. Per row:
+          - new email      → create the user (role=client, unusable
+                             password, is_active=True), link the tenant,
+                             send the full welcome invite (set-password /
+                             Google SSO / one-click link, 7-day token).
+          - existing email → ensure the tenant link and report it, but
+                             send NO email — Kyle's rule: this flow must
+                             never spam people who already have a Spark
+                             account (the single-invite modal's re-send
+                             covers that case deliberately).
+          - bad email      → skipped, reported.
+
+        Spark-admin only: unlike invite_user (which predates permission
+        checks and is wired into several schemas), this mutation verifies
+        the requester is a platform admin before creating anyone.
+        """
+        request = getattr(info.context, "request", None)
+        requester = getattr(request, "user", None) or getattr(
+            info.context, "user", None
+        )
+        if not requester or not getattr(requester, "is_authenticated", False):
+            return InviteClientUsersResponse(
+                success=False,
+                message="Authentication required.",
+                invited=0, existing=0, invalid=0, results=[],
+                client_mutation_id=input.client_mutation_id,
+            )
+        role_slug, is_staff, is_super, req_email = (
+            await resolve_request_user_access(requester)
+        )
+        if not _is_admin_access(role_slug, is_staff, is_super, req_email):
+            return InviteClientUsersResponse(
+                success=False,
+                message="Only Spark admins can bulk-invite clients.",
+                invited=0, existing=0, invalid=0, results=[],
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        MAX_ROWS = 100  # one admin action shouldn't burst more than this
+        if not input.rows:
+            return InviteClientUsersResponse(
+                success=False,
+                message="No rows to invite.",
+                invited=0, existing=0, invalid=0, results=[],
+                client_mutation_id=input.client_mutation_id,
+            )
+        if len(input.rows) > MAX_ROWS:
+            return InviteClientUsersResponse(
+                success=False,
+                message=f"Too many rows — {len(input.rows)} given, max {MAX_ROWS} per batch.",
+                invited=0, existing=0, invalid=0, results=[],
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        tenant = await sync_to_async(
+            lambda: Tenant.objects.filter(
+                id=resolve_id_to_int(input.tenant_id)
+            ).first()
+        )()
+        if tenant is None:
+            return InviteClientUsersResponse(
+                success=False,
+                message="Couldn't find that brand / tenant.",
+                invited=0, existing=0, invalid=0, results=[],
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        base = getattr(
+            settings, "ADMIN_FRONTEND_URL", "https://admin.igniteproductions.co",
+        ).rstrip("/")
+        email_re = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+        @sync_to_async
+        def _create_client(email: str, first: str, last: str):
+            """Create the user + tenant link, or ensure the link on an
+            existing user. Mirrors invite_user's _create_or_get for the
+            client role exactly (unusable-password marker, is_active=True,
+            soft-deleted accounts/links reactivated)."""
+            from django.utils.crypto import get_random_string
+
+            with transaction.atomic():
+                user = User.objects.filter(email__iexact=email).first()
+                created = False
+                if user is None:
+                    user = User.objects.create(
+                        username=email,
+                        email=email,
+                        first_name=first,
+                        last_name=last,
+                        password="!" + get_random_string(40),
+                        is_active=True,
+                        is_staff=False,
+                        is_superuser=False,
+                        role_id=ROLE_ID.Client,
+                    )
+                    created = True
+                elif not user.is_active:
+                    # Re-inviting a soft-deleted account must actually
+                    # restore it — magic-link login hard-rejects inactive.
+                    user.is_active = True
+                    user.save(update_fields=["is_active"])
+                # Password login gates on gqlauth's verified flag — without
+                # this the invitee sets a password and hits "Please verify
+                # your account" (see _ensure_verified).
+                _ensure_verified(user)
+                link, link_created = TenantedUser.objects.get_or_create(
+                    user=user, tenant=tenant, defaults={"is_active": True},
+                )
+                if not link_created and not link.is_active:
+                    link.is_active = True
+                    link.save(update_fields=["is_active"])
+            return user, created
+
+        results: list[ClientInviteRowResult] = []
+        invited = existing = invalid = 0
+        seen: set[str] = set()
+
+        for row in input.rows:
+            raw_email = (row.email or "").strip()
+            email = raw_email.lower()
+            if not email or not email_re.match(email):
+                invalid += 1
+                results.append(ClientInviteRowResult(
+                    email=raw_email,
+                    status="invalid",
+                    message="Not a valid email address — skipped.",
+                ))
+                continue
+            if email in seen:
+                invalid += 1
+                results.append(ClientInviteRowResult(
+                    email=raw_email,
+                    status="invalid",
+                    message="Duplicate row in this batch — skipped.",
+                ))
+                continue
+            seen.add(email)
+
+            first = (row.first_name or "").strip()
+            last = (row.last_name or "").strip()
+            try:
+                user, created = await _create_client(email, first, last)
+            except Exception as exc:
+                logging.getLogger(__name__).exception(
+                    "inviteClientUsers: create failed for %s", email,
+                )
+                invalid += 1
+                results.append(ClientInviteRowResult(
+                    email=raw_email,
+                    status="error",
+                    message=f"Couldn't create: {exc}",
+                ))
+                continue
+
+            if not created:
+                existing += 1
+                results.append(ClientInviteRowResult(
+                    email=raw_email,
+                    status="existing",
+                    message=(
+                        "Already had a Spark account — linked to "
+                        f"{tenant.name}, no email sent."
+                    ),
+                ))
+                continue
+
+            invite_token = signing.dumps(
+                {"u": user.id, "e": user.email, "k": "invite"},
+                salt=CLIENT_INVITE_SALT,
+            )
+            try:
+                mailer = ClientInviteMailer(
+                    user,
+                    tenant_name=tenant.name,
+                    set_password_link=f"{base}/reset-password/{invite_token}",
+                    magic_link=f"{base}/magic/{invite_token}",
+                    login_url=f"{base}/login",
+                    expires_days=CLIENT_INVITE_TTL_SECONDS // (60 * 60 * 24),
+                )
+                await mailer.send_async_now()
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "inviteClientUsers: invite email failed for %s", email,
+                )
+                invited += 1
+                results.append(ClientInviteRowResult(
+                    email=raw_email,
+                    status="error",
+                    message=(
+                        "Account created, but the invite email failed — "
+                        "use RESEND LINK on the People page."
+                    ),
+                ))
+                continue
+
+            invited += 1
+            results.append(ClientInviteRowResult(
+                email=raw_email,
+                status="invited",
+                message="Account created — welcome email sent.",
+            ))
+
+        return InviteClientUsersResponse(
+            success=True,
+            message=(
+                f"{invited} invited, {existing} already had accounts "
+                f"(linked, no email), {invalid} skipped."
+            ),
+            invited=invited,
+            existing=existing,
+            invalid=invalid,
+            results=results,
             client_mutation_id=input.client_mutation_id,
         )
 
