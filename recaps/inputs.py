@@ -291,6 +291,23 @@ class ShareRecapByEmailInput(SparkGraphQLInput):
 
 
 @strawberry.input
+class ShareRecapsByEmailInput(SparkGraphQLInput):
+    """Bulk sibling of ShareRecapByEmailInput — the Recaps list's
+    multi-select Share / Email action. Sends ONE email per recipient
+    that lists every selected recap with its public /r/:token link
+    (a digest reads far better than N separate emails landing in a
+    client's inbox at once). At least one of recap_ids /
+    custom_recap_ids must be non-empty.
+    """
+
+    recap_ids: List[strawberry.ID] | None = None
+    custom_recap_ids: List[strawberry.ID] | None = None
+    recipients: List[str]
+    # Optional personal note rendered above the recap list.
+    message: str | None = None
+
+
+@strawberry.input
 class RecapClientSignoffInput(SparkGraphQLInput):
     # One of recap_id / custom_recap_id. Public token path is HTTP, not this.
     recap_id: strawberry.ID | None = None
