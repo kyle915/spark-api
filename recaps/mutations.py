@@ -21,6 +21,7 @@ from recaps import heic_conversion
 from recaps.envelopes import (
     RecapApprovedNotificationMailer,
     RecapReadyForReviewAdminMailer,
+    RecapShareLinkMailer,
 )
 from recaps.queries import RecapQueriesService, CustomRecapQueriesService
 from ambassadors.models import FileType, Ambassador, Attendance
@@ -3708,6 +3709,132 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
 
         return await _mark()
 
+    async def share_recap_by_email(self) -> tuple[str, int]:
+        """Email the public /r/:token recap link to hand-picked recipients.
+
+        Backs the on-platform Share modal (the replacement for the native
+        OS share sheet). Returns (share_url, sent_count). Authorization
+        mirrors mark_recaps_shared — admins any tenant, clients only their
+        own, ambassadors blocked — plus the read-side client gate: a
+        client-only caller can't share an unapproved recap (they can't
+        even see one), so drafts never leak via a guessed id.
+        """
+        if not isinstance(self.input, inputs.ShareRecapByEmailInput):
+            raise GraphQLError("Invalid input type.")
+
+        if bool(self.input.recap_id) == bool(self.input.custom_recap_id):
+            raise GraphQLError("Provide exactly one of recapId / customRecapId.")
+
+        # Validate recipients before any sends — a typo'd address should
+        # come back as input feedback, not a partial send.
+        clean: list[str] = []
+        seen: set[str] = set()
+        for raw in list(self.input.recipients or []):
+            email = (raw or "").strip()
+            if not email:
+                continue
+            if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+                raise GraphQLError(f"Invalid email address: {email}")
+            key = email.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            clean.append(email)
+        if not clean:
+            raise GraphQLError("Add at least one recipient email.")
+        if len(clean) > 10:
+            raise GraphQLError("Share with up to 10 recipients at a time.")
+
+        kind = "custom" if self.input.custom_recap_id else "legacy"
+        if kind == "custom":
+            try:
+                pk = resolve_id_to_int(self.input.custom_recap_id)
+                recap = await sync_to_async(
+                    models.CustomRecap.objects.select_related(
+                        "event", "event__tenant", "tenant"
+                    ).get
+                )(id=pk)
+            except Exception:
+                raise GraphQLError("Custom recap not found.")
+            tenant_id = recap.tenant_id or (
+                recap.event.tenant_id if recap.event_id else None
+            )
+            record_label = "Custom recap"
+        else:
+            try:
+                pk = resolve_id_to_int(self.input.recap_id)
+                recap = await sync_to_async(
+                    models.Recap.objects.select_related(
+                        "event", "event__tenant"
+                    ).get
+                )(id=pk)
+            except Exception:
+                raise GraphQLError("Recap not found.")
+            tenant_id = recap.event.tenant_id if recap.event_id else None
+            record_label = "Recap"
+
+        await self._assert_caller_authorized_for_recap_tenant(
+            tenant_id,
+            action="share",
+            block_ambassadors=True,
+            record_label=record_label,
+        )
+
+        # Client-only callers never share unapproved recaps — same posture
+        # as the read resolvers (drafts return None for them). Admins keep
+        # today's behavior: every recap is shareable.
+        if not getattr(recap, "approved", False):
+            role_slug, is_staff, is_super, email = (
+                await resolve_request_user_access(self.user)
+            )
+            if not _is_admin_access(role_slug, is_staff, is_super, email):
+                raise GraphQLError(f"{record_label} not found.")
+
+        from recaps.recap_tokens import make_recap_token
+        from events.event_confirmations import public_page_base
+
+        token = make_recap_token(kind, int(recap.id))
+        share_url = f"{public_page_base()}/r/{token}"
+
+        sender = self.user
+        sender_name = (
+            (sender.get_full_name() or "").strip()
+            if hasattr(sender, "get_full_name")
+            else ""
+        ) or getattr(sender, "email", "")
+
+        sent = 0
+        for recipient in clean:
+            mailer = RecapShareLinkMailer(
+                recap=recap,
+                recipients=[recipient],
+                share_url=share_url,
+                sender_name=sender_name,
+                message=self.input.message,
+            )
+            try:
+                await sync_to_async(mailer.send)()
+                sent += 1
+            except Exception:
+                logger.exception(
+                    "share_recap_by_email: send failed to %s recap=%s",
+                    recipient,
+                    getattr(recap, "id", None),
+                )
+        if sent == 0:
+            raise GraphQLError("Could not send the share email. Try again.")
+
+        # Emailing the link IS sharing — stamp shared_at (same fields as
+        # mark_recaps_shared) so the pipeline shows Shared.
+        @sync_to_async
+        def _stamp():
+            type(recap).objects.filter(pk=recap.pk, shared_at__isnull=True).update(
+                shared_at=django_timezone.now(), updated_by=self.user
+            )
+
+        await _stamp()
+        return share_url, sent
+
     async def submit_recap_client_signoff(self):
         if not isinstance(self.input, inputs.RecapClientSignoffInput):
             raise GraphQLError("Invalid input type.")
@@ -5665,6 +5792,34 @@ class RecapMutations:
                 message=str(e),
                 input_obj=input,
                 updated_count=0,
+            )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def share_recap_by_email(
+        self,
+        info: strawberry.Info,
+        input: inputs.ShareRecapByEmailInput,
+    ) -> types.ShareRecapByEmailResponse:
+        """Email the public /r/:token recap link from the Share modal."""
+        try:
+            service = RecapMutationService.with_input(input)
+            await service.set_user(info)
+            share_url, sent = await service.share_recap_by_email()
+            return build_mutation_response(
+                types.ShareRecapByEmailResponse,
+                success=True,
+                message=f"Recap link emailed to {sent} recipient(s).",
+                input_obj=input,
+                share_url=share_url,
+                sent_count=sent,
+            )
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.ShareRecapByEmailResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+                sent_count=0,
             )
 
     @relay.mutation(permission_classes=[StrictIsAuthenticated])
