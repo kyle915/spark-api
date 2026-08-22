@@ -962,6 +962,23 @@ class ShareRecapByEmailResponse:
 
 
 @strawberry.type
+class ShareRecapsByEmailResponse:
+    """Result of the bulk Share / Email action on the Recaps list.
+
+    `sent_count` is recipients emailed (one digest email each);
+    `shared_count` is how many of the requested recaps were actually
+    included + stamped shared — the two differ when some selected ids
+    fail the per-recap gate (cross-tenant, unapproved-for-client).
+    """
+
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    sent_count: int = 0
+    shared_count: int = 0
+
+
+@strawberry.type
 class DeleteRecapResponse:
     """Result of deleting a legacy Recap.
 

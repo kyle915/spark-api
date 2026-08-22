@@ -404,6 +404,115 @@ class RecapShareLinkMailer(Mailer):
         )
 
 
+class RecapShareDigestMailer(Mailer):
+    """Bulk sibling of RecapShareLinkMailer — ONE email that lists every
+    selected recap with its own public /r/:token link.
+
+    Backs the Recaps list multi-select Share / Email action. A single
+    digest reads far better for clients than N near-identical emails
+    landing at once, and it keeps the recipient's inbox reply-thread
+    to one conversation with ops.
+    """
+
+    def __init__(
+        self,
+        *,
+        items: _Iterable[tuple[models.Recap | models.CustomRecap, str]],
+        recipients: _Iterable[str],
+        sender_name: str | None = None,
+        message: str | None = None,
+        reply_to_email: str | None = None,
+    ) -> None:
+        seen: set[str] = set()
+        clean: list[str] = []
+        for r in recipients:
+            norm = (r or "").strip()
+            if not norm:
+                continue
+            key = norm.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            clean.append(norm)
+        self.recipients = clean
+        # Preserve the sender's pick order — it matches the on-screen
+        # selection order the modal showed.
+        self.items = [(recap, url) for recap, url in items]
+        self.sender_name = (sender_name or "").strip() or None
+        self.message = (message or "").strip() or None
+        self.reply_to_email = (
+            (reply_to_email or "").strip() or "events@igniteproductions.co"
+        )
+
+    def _subject_line(self) -> str:
+        first = self.items[0][0].name or "Activation recap"
+        if len(self.items) == 1:
+            return f"Recap: {first}"
+        return f"Recaps: {first} + {len(self.items) - 1} more"
+
+    def _html_body(self) -> str:
+        sender = escape(self.sender_name or "The Ignite team")
+        count = len(self.items)
+        note = ""
+        if self.message:
+            note = (
+                '<p style="margin:0 0 16px;padding:12px 14px;background:#f5f5f0;'
+                'border-left:3px solid #c5f546;border-radius:6px;color:#333">'
+                f"{escape(self.message)}</p>"
+            )
+        rows: list[str] = []
+        for recap, url in self.items:
+            event = getattr(recap, "event", None)
+            tenant = getattr(event, "tenant", None) or getattr(
+                recap, "tenant", None
+            )
+            brand = escape(getattr(tenant, "name", "") or "")
+            recap_name = escape(recap.name or "Activation recap")
+            brand_line = (
+                f'<p style="margin:0 0 8px;color:#666;font-size:13px">{brand}</p>'
+                if brand
+                else ""
+            )
+            rows.append(
+                '<div style="padding:14px 0;border-top:1px solid #e5e5de">'
+                f'<p style="margin:0 0 2px"><strong>{recap_name}</strong></p>'
+                f"{brand_line}"
+                f'<a href="{escape(url)}" '
+                'style="display:inline-block;background:#c5f546;color:#0a0d09;'
+                'font-weight:bold;text-decoration:none;padding:10px 18px;'
+                'border-radius:8px;font-size:13px">View recap</a>'
+                f'<p style="color:#888;font-size:12px;margin:8px 0 0;'
+                f'word-break:break-all">{escape(url)}</p>'
+                "</div>"
+            )
+        noun = "recap" if count == 1 else "recaps"
+        return (
+            '<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;'
+            'color:#111;line-height:1.5">'
+            f"<p>Hi there,</p>"
+            f"<p>{sender} shared {count} activation {noun} with you — "
+            "each link opens the public recap, no login needed.</p>"
+            f"{note}"
+            f"{''.join(rows)}"
+            '<p style="color:#888;margin-top:20px;border-top:1px solid #e5e5de;'
+            'padding-top:14px">— Spark by Ignite Productions</p>'
+            "</div>"
+        )
+
+    def envelope(self) -> Envelope:
+        return Envelope(
+            subject=self._subject_line(),
+            from_email=getattr(
+                settings,
+                "DEFAULT_FROM_EMAIL",
+                "Spark by Ignite <no-reply@igniteproductions.co>",
+            ),
+            to_emails=self.recipients,
+            headers={"Reply-To": self.reply_to_email},
+            html=self._html_body(),
+        )
+
+
 # ─── Campaign Report email ──────────────────────────────────────
 #
 # Wraps a generated campaign-report PDF (recaps/pdf.py
