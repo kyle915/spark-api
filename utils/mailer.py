@@ -27,6 +27,22 @@ resend.api_key = settings.RESEND_API_KEY
 logger = logging.getLogger(__name__)
 
 
+def valid_recipient_emails(emails: list[str] | None) -> list[str]:
+    """Non-blank ``to`` addresses, de-duplicated (case-insensitive), order kept."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in emails or []:
+        email = (raw or "").strip()
+        if not email:
+            continue
+        key = email.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(email)
+    return out
+
+
 def json_safe_attachment_content(content: Any) -> Any:
     """Make attachment content JSON-serializable for the Resend SDK.
 
@@ -234,6 +250,17 @@ class Envelope:
         )
 
 
+def _skip_if_no_recipients(envelope: Envelope) -> bool:
+    """True when there is nobody to send to — caller should no-op."""
+    if valid_recipient_emails(envelope.to_emails):
+        return False
+    logger.info(
+        "Mail send skipped — no valid recipients for subject=%r",
+        envelope.subject,
+    )
+    return True
+
+
 class MailDriver:
     """
     The Mail Driver class.
@@ -249,9 +276,16 @@ class ResendMailDriver(MailDriver):
     """
 
     def send(self, envelope: Envelope) -> None:
+        to_emails = valid_recipient_emails(envelope.to_emails)
+        if not to_emails:
+            logger.info(
+                "Resend send skipped — no valid recipients for subject=%r",
+                envelope.subject,
+            )
+            return
         params: resend.Emails.SendParams = {
             "from": envelope.from_email,
-            "to": envelope.to_emails,
+            "to": to_emails,
             "subject": envelope.subject,
             "html": envelope.render_template(),
             # Plain-text alternative — multipart/alternative is friendlier to
@@ -295,13 +329,20 @@ class MailpitMailDriver(MailDriver):
     """
 
     def send(self, envelope: Envelope) -> None:
+        to_emails = valid_recipient_emails(envelope.to_emails)
+        if not to_emails:
+            logger.info(
+                "Mailpit send skipped — no valid recipients for subject=%r",
+                envelope.subject,
+            )
+            return
         html_content = envelope.render_template()
         email = EmailMultiAlternatives(
             subject=envelope.subject,
             # body is the text/plain part; HTML is attached as the alternative.
             body=envelope.render_text(),
             from_email=envelope.from_email,
-            to=envelope.to_emails,
+            to=to_emails,
             cc=envelope.cc_emails,
             headers=envelope.delivery_headers(),
         )
@@ -361,6 +402,8 @@ def send_email_task(payload: dict) -> None:
     """
     try:
         envelope = Envelope.from_dict(payload)
+        if _skip_if_no_recipients(envelope):
+            return
         driver = MailDrivers()
         driver.send(envelope)
         logger.info(
@@ -459,6 +502,8 @@ class Mailer:
 
     def dispatch(self) -> None:
         envelope = self._prepare_envelope(self.envelope())
+        if _skip_if_no_recipients(envelope):
+            return
         self.get_driver().send(envelope)
 
     async def send_async(self) -> None:
@@ -490,6 +535,8 @@ class Mailer:
         """
         envelope: Envelope = self.envelope()
         envelope = self._prepare_envelope(envelope)
+        if _skip_if_no_recipients(envelope):
+            return
 
         # Cloud Run has no Redis. Skip the queue entirely so we never
         # open localhost:6379 (connection-refused ERROR logs → Spark alerts).
