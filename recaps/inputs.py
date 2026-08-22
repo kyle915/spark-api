@@ -274,6 +274,23 @@ class MarkRecapsSharedInput(SparkGraphQLInput):
 
 
 @strawberry.input
+class ShareRecapByEmailInput(SparkGraphQLInput):
+    """Email the public /r/:token recap link to one or more recipients.
+
+    Powers the on-platform Share modal (replaces the native OS share
+    sheet): the sender types emails + an optional note, we mint/reuse
+    the signed share token and send the client-host link. Exactly one
+    of recap_id / custom_recap_id.
+    """
+
+    recap_id: strawberry.ID | None = None
+    custom_recap_id: strawberry.ID | None = None
+    recipients: List[str]
+    # Optional personal note rendered above the link in the email body.
+    message: str | None = None
+
+
+@strawberry.input
 class RecapClientSignoffInput(SparkGraphQLInput):
     # One of recap_id / custom_recap_id. Public token path is HTTP, not this.
     recap_id: strawberry.ID | None = None

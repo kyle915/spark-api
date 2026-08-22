@@ -951,6 +951,17 @@ class BulkRecapsResponse:
 
 
 @strawberry.type
+class ShareRecapByEmailResponse:
+    """Result of emailing the public recap link from the Share modal."""
+
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    share_url: str | None = None
+    sent_count: int = 0
+
+
+@strawberry.type
 class DeleteRecapResponse:
     """Result of deleting a legacy Recap.
 

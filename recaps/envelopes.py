@@ -1,5 +1,6 @@
 import datetime
 from html import escape
+from typing import Iterable as _Iterable
 
 from django.conf import settings
 
@@ -305,6 +306,104 @@ class RecapReadyForReviewAdminMailer(Mailer):
         )
 
 
+# ─── Share-modal recap link email ───────────────────────────────
+#
+# Sent by the `shareRecapByEmail` mutation when someone clicks Share on
+# a recap view and picks the email option (the on-platform replacement
+# for the native OS share sheet). Link-only on purpose: the public
+# /r/:token page already renders the full recap (and offers the PDF),
+# so this mail stays light and never attaches bytes.
+
+
+class RecapShareLinkMailer(Mailer):
+    """Email the public /r/:token recap link to hand-picked recipients."""
+
+    def __init__(
+        self,
+        *,
+        recap: models.Recap | models.CustomRecap,
+        recipients: _Iterable[str],
+        share_url: str,
+        sender_name: str | None = None,
+        message: str | None = None,
+        reply_to_email: str | None = None,
+    ) -> None:
+        # De-dup recipients case-insensitively + strip (same posture as
+        # CampaignReportMailer) — cheap typo protection.
+        seen: set[str] = set()
+        clean: list[str] = []
+        for r in recipients:
+            norm = (r or "").strip()
+            if not norm:
+                continue
+            key = norm.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            clean.append(norm)
+        self.recipients = clean
+        self.recap = recap
+        self.share_url = share_url
+        self.sender_name = (sender_name or "").strip() or None
+        self.message = (message or "").strip() or None
+        self.reply_to_email = (
+            (reply_to_email or "").strip() or "events@igniteproductions.co"
+        )
+
+    def _subject_line(self) -> str:
+        return f"Recap: {self.recap.name or 'Activation recap'}"
+
+    def _html_body(self) -> str:
+        event = getattr(self.recap, "event", None)
+        tenant = getattr(event, "tenant", None)
+        brand = escape(getattr(tenant, "name", "") or "")
+        recap_name = escape(self.recap.name or "Activation recap")
+        sender = escape(self.sender_name or "The Ignite team")
+        note = ""
+        if self.message:
+            note = (
+                '<p style="margin:0 0 16px;padding:12px 14px;background:#f5f5f0;'
+                'border-left:3px solid #c5f546;border-radius:6px;color:#333">'
+                f"{escape(self.message)}</p>"
+            )
+        brand_line = (
+            f'<p style="margin:0 0 4px;color:#666;font-size:13px">{brand}</p>'
+            if brand
+            else ""
+        )
+        return (
+            '<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;'
+            'color:#111;line-height:1.5">'
+            f"<p>Hi there,</p>"
+            f"<p>{sender} shared an activation recap with you.</p>"
+            f"{brand_line}"
+            f'<p style="margin:0 0 16px"><strong>{recap_name}</strong></p>'
+            f"{note}"
+            '<p style="margin:0 0 16px">'
+            f'<a href="{escape(self.share_url)}" '
+            'style="display:inline-block;background:#c5f546;color:#0a0d09;'
+            'font-weight:bold;text-decoration:none;padding:12px 22px;'
+            'border-radius:8px">View recap</a></p>'
+            f'<p style="color:#666;font-size:13px;word-break:break-all">'
+            f"Or paste this link: {escape(self.share_url)}</p>"
+            '<p style="color:#888;margin-top:16px">— Spark by Ignite Productions</p>'
+            "</div>"
+        )
+
+    def envelope(self) -> Envelope:
+        return Envelope(
+            subject=self._subject_line(),
+            from_email=getattr(
+                settings,
+                "DEFAULT_FROM_EMAIL",
+                "Spark by Ignite <no-reply@igniteproductions.co>",
+            ),
+            to_emails=self.recipients,
+            headers={"Reply-To": self.reply_to_email},
+            html=self._html_body(),
+        )
+
+
 # ─── Campaign Report email ──────────────────────────────────────
 #
 # Wraps a generated campaign-report PDF (recaps/pdf.py
@@ -316,7 +415,6 @@ class RecapReadyForReviewAdminMailer(Mailer):
 # reusable: future "download + email" combo doesn't render twice.
 
 import base64 as _base64
-from typing import Iterable as _Iterable
 
 
 class CampaignReportMailer(Mailer):
