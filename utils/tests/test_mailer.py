@@ -27,7 +27,27 @@ from utils.mailer import (
     json_safe_attachment_content,
     json_safe_attachments,
     attachment_bytes,
+    valid_recipient_emails,
+    _skip_if_no_recipients,
 )
+
+
+@pytest.mark.django_db
+class TestValidRecipientEmails:
+    """Tests for recipient normalization and empty-recipient guards."""
+
+    def test_valid_recipient_emails_strips_and_dedupes(self):
+        assert valid_recipient_emails(
+            ["  A@x.com ", "a@x.com", "", "b@x.com", "   "]
+        ) == ["A@x.com", "b@x.com"]
+
+    def test_skip_if_no_recipients_true_when_empty(self):
+        env = Envelope(subject="Test", to_emails=[])
+        assert _skip_if_no_recipients(env) is True
+
+    def test_skip_if_no_recipients_false_when_present(self):
+        env = Envelope(subject="Test", to_emails=["a@b.co"])
+        assert _skip_if_no_recipients(env) is False
 
 
 @pytest.mark.django_db
@@ -241,6 +261,18 @@ class TestMailDrivers:
                     ),
                 },
             })
+
+    @patch('utils.mailer.resend.Emails.send')
+    def test_resend_mail_driver_skips_empty_to(self, mock_resend_send):
+        """Resend must not be called when to_emails is empty."""
+        driver = ResendMailDriver()
+        envelope = Envelope(
+            subject="New ambassador signup — no alert recipients configured",
+            html="<html>Test</html>",
+            to_emails=[],
+        )
+        driver.send(envelope)
+        mock_resend_send.assert_not_called()
 
     @patch('utils.mailer.EmailMultiAlternatives')
     def test_mailpit_mail_driver_send(self, mock_email_class):
@@ -538,6 +570,25 @@ class TestMailer:
 
         mock_queues_class.assert_not_called()
         mock_resend_send.assert_called_once()
+
+    @override_settings(MAIL_DRIVER="resend", RQ_ENABLED=False, NEW_AMBASSADOR_ALERT_EMAILS=[])
+    @patch("utils.mailer.resend.Emails.send")
+    @patch("utils.mailer.Queues")
+    def test_send_skips_empty_recipients_inline(
+        self, mock_queues_class, mock_resend_send
+    ):
+        """Cloud Run inline path: empty to must no-op, not ResendError."""
+
+        from ambassadors.envelopes import NewAmbassadorAlertMailer
+
+        ambassador = MagicMock()
+        ambassador.user.email = "newba@example.com"
+
+        with patch.object(Mailer, "_build_logo_attachment", return_value=None):
+            NewAmbassadorAlertMailer(ambassador, provider="email").send()
+
+        mock_queues_class.assert_not_called()
+        mock_resend_send.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_mailer_send_async(self):
