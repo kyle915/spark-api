@@ -12,9 +12,9 @@ Once per run:
   For every approved AmbassadorEvent whose event STARTED more than
   `--threshold-minutes` ago (but within `--lookback-hours`, so we don't
   rescan yesterday) with NO Attendance row of any kind for that BA on that
-  event — nudge the BA ("you're not clocked in — are you there?") and add
-  the row to a single digest email to the Ignite team. Deduped via
-  no_show_alerted_at so each shift pages exactly once.
+  event — nudge the BA ("you're not clocked in — are you there?").
+  Deduped via no_show_alerted_at so each shift is handled exactly once.
+  (Ops digest email to Ignite is disabled — BA push nudges only.)
 
 Distinct from the T-15m activation reminder (which fires BEFORE start): this
 is the escalation AFTER start, when silence means a real problem.
@@ -37,6 +37,10 @@ from django.core.management.base import BaseCommand
 from django.utils import timezone
 
 logger = logging.getLogger(__name__)
+
+# Ops asked to stop the "[Spark] N BAs not clocked in" digest (Aug 2026).
+# BA push nudges in handle() still run; only the Ignite-team email is off.
+OPS_NO_SHOW_EMAIL_ENABLED = False
 
 
 class Command(BaseCommand):
@@ -166,27 +170,32 @@ class Command(BaseCommand):
                         exc_info=True,
                     )
 
-        # --- One digest email to the Ignite team. ---
-        alerted = 0
-        if self._send_alert(no_shows, dry=dry):
-            alerted = len(no_shows)
-            if not dry:
-                AmbassadorEvent.objects.filter(
-                    id__in=[r.id for r in no_shows]
-                ).update(no_show_alerted_at=now)
+        # Stamp once processed so each shift is handled exactly once (dedup
+        # used to be tied to the ops email; now decoupled so BA nudges don't
+        # repeat every cron tick).
+        if not dry:
+            AmbassadorEvent.objects.filter(
+                id__in=[r.id for r in no_shows]
+            ).update(no_show_alerted_at=now)
+
+        if OPS_NO_SHOW_EMAIL_ENABLED:
+            self._send_alert(no_shows, dry=dry)
 
         self.stdout.write(
             f"no-show radar: {len(no_shows)} no-show(s) of {len(candidates)} "
             f"started shift(s); nudged {nudged} BA(s), "
-            f"{'would alert' if dry else 'alerted'} on {alerted or len(no_shows)}."
+            f"ops email {'enabled' if OPS_NO_SHOW_EMAIL_ENABLED else 'disabled'}."
         )
 
     # ---------- helpers ----------
 
     def _send_alert(self, rows, *, dry: bool) -> bool:
         """One digest email to the Ignite team listing every no-show, grouped
-        by event. Returns True when the email actually went out (so the caller
-        stamps); dry-run logs and returns False. Never raises."""
+        by event. Returns True when the email actually went out; dry-run logs
+        and returns False. Never raises. Gated by OPS_NO_SHOW_EMAIL_ENABLED."""
+        if not OPS_NO_SHOW_EMAIL_ENABLED:
+            return False
+
         from ambassadors.queries import _shift_time_labels
 
         try:
