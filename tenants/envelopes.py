@@ -180,10 +180,16 @@ class ClientInviteMailer(_NoAttachedLogoMixin, Mailer):
                 "set_password_link": self.set_password_link,
                 "magic_link": self.magic_link,
                 "login_url": self.login_url,
-                # Wavy red Ignite mark (Kyle's asset, 2026-08-21), square
-                # crop used for the compact header + signature. Lives in
-                # the admin app's public/email/ — ships with the frontend
-                # deploy, which must land before this mailer goes live.
+                # Wavy red Ignite artwork (Kyle's asset, 2026-08-21):
+                # brand_strip_url is a thin burn-pattern bar for the header;
+                # brand_mark_url is the square wordmark crop for the
+                # signature. Both live in the admin app's public/email/ —
+                # ships with the frontend deploy, which must land before
+                # this mailer goes live.
+                "brand_strip_url": (
+                    "https://admin.igniteproductions.co"
+                    "/email/ignite-burn-strip.jpg"
+                ),
                 "brand_mark_url": (
                     "https://admin.igniteproductions.co"
                     "/email/ignite-wavy-mark.jpg"

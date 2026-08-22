@@ -113,11 +113,14 @@ class TestClientInviteEnvelope(BaseGraphQLTestCase):
         assert "paste this URL" not in html  # raw-URL fallback
 
     def test_header_is_the_wavy_red_ignite_mark(self):
-        """Kyle 2026-08-21: the wavy red/blue grain Ignite mark — never
-        the flat orange legal squircle or the lime Spark wordmark, in
-        the header OR the signature."""
+        """Kyle 2026-08-21: header is a thin burn-pattern strip (no
+        wordmark); the wavy wordmark mark lives in the signature. Never
+        the flat orange legal squircle or the lime Spark wordmark."""
         html = _mailer(self.user).envelope().render_template()
-        assert "/email/ignite-wavy-mark.jpg" in html
+        header = html.split("Hero copy")[0]
+        assert "/email/ignite-burn-strip.jpg" in header
+        assert "ignite-wavy-mark.jpg" not in header  # wordmark stays out
+        assert "/email/ignite-wavy-mark.jpg" in html  # signature keeps it
         assert "ignite-square-orange.png" not in html
         assert "spark-logo-full.png" not in html
 
