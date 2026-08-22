@@ -35,7 +35,7 @@ invite_ctx = {
     "magic_link": f"{BASE}/magic/{TOK}",
     "login_url": f"{BASE}/login",
     # Local preview: served by the http.server rooted at the output dir.
-    "brand_header_url": "ignite-wavy-banner.jpg",
+    "brand_mark_url": "ignite-wavy-mark.jpg",
     "expires_days": 7,
 }
 

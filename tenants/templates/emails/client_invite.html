@@ -35,16 +35,17 @@
                         overflow:hidden;
                         box-shadow:0 1px 2px rgba(10,13,9,0.04);">
 
-            <!-- Header: full-bleed Ignite Productions banner — the wavy
-                 red/blue grain mark Kyle supplied (2026-08-21), cropped to
-                 720x288. Hosted on the admin app's public/email path. -->
+            <!-- Header: compact centered Ignite mark — the wavy red/blue
+                 grain logo Kyle supplied (2026-08-21), square crop shown
+                 small so it doesn't eat the top of the email. -->
             <tr>
-              <td style="padding:0;">
-                <img src="{{ brand_header_url }}"
+              <td class="pad" align="center"
+                  style="padding:28px 40px 4px 40px;">
+                <img src="{{ brand_mark_url }}"
                      alt="Ignite Productions"
-                     width="600" height="240"
-                     style="display:block;width:100%;max-width:600px;
-                            height:auto;border:0;outline:none;
+                     width="140" height="140"
+                     style="display:block;width:140px;height:140px;
+                            border-radius:20px;border:0;outline:none;
                             text-decoration:none;" />
               </td>
             </tr>
@@ -225,7 +226,7 @@
                        width="100%">
                   <tr>
                     <td valign="top" width="140" style="padding-right:18px;">
-                      <img src="https://admin.igniteproductions.co/legal/ignite-square-orange.png"
+                      <img src="{{ brand_mark_url }}"
                            alt="Ignite Productions"
                            width="130" height="130"
                            style="display:block;width:130px;height:130px;
@@ -233,7 +234,7 @@
                                   text-decoration:none;" />
                     </td>
                     <td valign="top" style="font-size:14px;line-height:22px;color:#0a0d09;">
-                      <p style="margin:0 0 4px 0;color:#ef5a2a;font-weight:700;font-size:16px;">
+                      <p style="margin:0 0 4px 0;color:#0a0d09;font-weight:700;font-size:16px;">
                         Ignite Productions
                       </p>
                       <p style="margin:0 0 4px 0;color:#3b4034;">
@@ -247,7 +248,7 @@
                       </p>
                       <p style="margin:0;">
                         ✉️ <a href="mailto:staffing@igniteproductions.co"
-                              style="color:#ef5a2a;text-decoration:none;">
+                              style="color:#0a0d09;text-decoration:none;">
                           staffing@igniteproductions.co
                         </a>
                       </p>
