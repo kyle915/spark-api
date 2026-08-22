@@ -151,8 +151,6 @@ class ClientInviteMailer(_NoAttachedLogoMixin, Mailer):
         set_password_link: str,
         magic_link: str,
         login_url: str,
-        inviter_name: str | None = None,
-        note: str | None = None,
         expires_days: int = 7,
     ):
         self.user = user
@@ -160,8 +158,6 @@ class ClientInviteMailer(_NoAttachedLogoMixin, Mailer):
         self.set_password_link = set_password_link
         self.magic_link = magic_link
         self.login_url = login_url
-        self.inviter_name = (inviter_name or "").strip() or "The Ignite team"
-        self.note = (note or "").strip() or None
         self.expires_days = expires_days
 
     def envelope(self) -> Envelope:
@@ -184,8 +180,6 @@ class ClientInviteMailer(_NoAttachedLogoMixin, Mailer):
                 "set_password_link": self.set_password_link,
                 "magic_link": self.magic_link,
                 "login_url": self.login_url,
-                "inviter_name": self.inviter_name,
-                "note": self.note,
                 "expires_days": self.expires_days,
             },
         )

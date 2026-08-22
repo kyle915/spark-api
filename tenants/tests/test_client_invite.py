@@ -44,8 +44,6 @@ def _mailer(user, **overrides):
         set_password_link=SET_PW,
         magic_link=MAGIC,
         login_url=LOGIN,
-        inviter_name="Kyle Christiansen",
-        note=None,
         expires_days=7,
     )
     kwargs.update(overrides)
@@ -98,16 +96,21 @@ class TestClientInviteEnvelope(BaseGraphQLTestCase):
         assert "Welcome to Spark, Ross." in html
         assert "Welcome back" not in html
 
-    def test_personal_note_rendered_when_present(self):
-        html = _mailer(
-            self.user, note="Excited to onboard the Liquid Death program."
-        ).envelope().render_template()
-        assert "Excited to onboard the Liquid Death program." in html
-        assert "Kyle Christiansen" in html
-
-    def test_no_note_block_when_absent(self):
+    def test_actor_is_ignite_productions_not_a_person(self):
+        """2026-08-21 review: copy reads 'Ignite Productions just set up …'
+        — never the inviter's personal name, and never duplicated."""
         html = _mailer(self.user).envelope().render_template()
-        assert "&ldquo;" not in html
+        assert "Ignite Productions just set up" in html
+        assert "Liquid Death's" in html
+        assert html.count("Ignite Productions just set up") == 1
+
+    def test_kyle_cut_blocks_stay_cut(self):
+        """2026-08-21 review: no personal-note quote, no BA-app button,
+        no paste-this-URL fallback in the client invite."""
+        html = _mailer(self.user).envelope().render_template()
+        assert "&ldquo;" not in html  # personal-note quote block
+        assert "Spark BA app" not in html  # BA app deep-link CTA
+        assert "paste this URL" not in html  # raw-URL fallback
 
 
 @pytest.mark.django_db(transaction=True)
@@ -290,11 +293,11 @@ class TestInviteUserWelcomeEmail(BaseGraphQLTestCase):
         invite_cls.return_value.send_async_now.assert_awaited_once()
         magic_cls.return_value.send_async_now.assert_not_awaited()
 
-        # The mailer got the tenant name, the inviter's note, and all
-        # three links on a 7-day token.
+        # The mailer got the tenant name and all three links on a 7-day
+        # token. (No personal note — Kyle cut that block 2026-08-21.)
         _, kwargs = invite_cls.call_args
         assert kwargs["tenant_name"] == "Liquid Death"
-        assert kwargs["note"] == "Welcome aboard!"
+        assert "note" not in kwargs
         assert kwargs["expires_days"] == 7
         assert "/reset-password/" in kwargs["set_password_link"]
         assert "/magic/" in kwargs["magic_link"]

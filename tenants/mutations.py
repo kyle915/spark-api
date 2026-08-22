@@ -226,6 +226,9 @@ class InviteUserInput(SparkGraphQLInput):
     last_name: str | None = None
     role: str  # "admin" | "client" | "ambassador"
     tenant_id: strawberry.ID | None = None  # required for client/ambassador
+    # Accepted but UNUSED — the new-client form still posts it. Kyle cut the
+    # personal-note block from the invite email (2026-08-21), so nothing
+    # reads this anymore. Keep accepting it so old clients don't 400.
     note: str | None = None
 
 
@@ -240,7 +243,6 @@ class ClientInviteRowInput:
 class InviteClientUsersInput(SparkGraphQLInput):
     tenant_id: strawberry.ID
     rows: list[ClientInviteRowInput]
-    note: str | None = None
 
 
 @strawberry.type
@@ -988,17 +990,6 @@ class SparkUserMutations:
                     id=resolve_id_to_int(input.tenant_id)
                 ).values_list("name", flat=True).first()
             )() if input.tenant_id else None
-            requester = await sync_to_async(
-                lambda: getattr(
-                    getattr(info.context, "request", None), "user", None
-                ) or getattr(info.context, "user", None)
-            )()
-            inviter_name = " ".join(
-                part for part in (
-                    getattr(requester, "first_name", "") or "",
-                    getattr(requester, "last_name", "") or "",
-                ) if part
-            ).strip() or getattr(requester, "email", None) or None
 
             invite_token = signing.dumps(
                 {"u": user.id, "e": user.email, "k": "invite"},
@@ -1011,8 +1002,6 @@ class SparkUserMutations:
                     set_password_link=f"{base}/reset-password/{invite_token}",
                     magic_link=f"{base}/magic/{invite_token}",
                     login_url=f"{base}/login",
-                    inviter_name=inviter_name,
-                    note=input.note,
                     expires_days=CLIENT_INVITE_TTL_SECONDS // (60 * 60 * 24),
                 )
                 await mailer.send_async_now()
@@ -1139,13 +1128,6 @@ class SparkUserMutations:
                 client_mutation_id=input.client_mutation_id,
             )
 
-        inviter_name = " ".join(
-            part for part in (
-                getattr(requester, "first_name", "") or "",
-                getattr(requester, "last_name", "") or "",
-            ) if part
-        ).strip() or getattr(requester, "email", None) or None
-
         base = getattr(
             settings, "ADMIN_FRONTEND_URL", "https://admin.igniteproductions.co",
         ).rstrip("/")
@@ -1256,8 +1238,6 @@ class SparkUserMutations:
                     set_password_link=f"{base}/reset-password/{invite_token}",
                     magic_link=f"{base}/magic/{invite_token}",
                     login_url=f"{base}/login",
-                    inviter_name=inviter_name,
-                    note=input.note,
                     expires_days=CLIENT_INVITE_TTL_SECONDS // (60 * 60 * 24),
                 )
                 await mailer.send_async_now()
