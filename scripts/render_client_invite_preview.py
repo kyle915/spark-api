@@ -34,6 +34,8 @@ invite_ctx = {
     "set_password_link": f"{BASE}/reset-password/{TOK}",
     "magic_link": f"{BASE}/magic/{TOK}",
     "login_url": f"{BASE}/login",
+    # Local preview: served by the http.server rooted at the output dir.
+    "brand_header_url": "ignite-wavy-banner.jpg",
     "expires_days": 7,
 }
 

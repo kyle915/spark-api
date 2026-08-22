@@ -112,6 +112,16 @@ class TestClientInviteEnvelope(BaseGraphQLTestCase):
         assert "Spark BA app" not in html  # BA app deep-link CTA
         assert "paste this URL" not in html  # raw-URL fallback
 
+    def test_header_is_the_wavy_red_ignite_banner(self):
+        """Kyle 2026-08-21: the wavy red/blue grain Ignite mark — never
+        the flat orange legal squircle or the lime Spark wordmark."""
+        html = _mailer(self.user).envelope().render_template()
+        assert "/email/ignite-wavy-banner.jpg" in html
+        assert "ignite-square-orange.png" not in html.split(
+            "Ignite signature block"
+        )[0]  # header must not use it (signature block still may)
+        assert "spark-logo-full.png" not in html
+
 
 @pytest.mark.django_db(transaction=True)
 class TestClientInviteToken(BaseGraphQLTestCase):

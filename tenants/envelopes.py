@@ -180,6 +180,13 @@ class ClientInviteMailer(_NoAttachedLogoMixin, Mailer):
                 "set_password_link": self.set_password_link,
                 "magic_link": self.magic_link,
                 "login_url": self.login_url,
+                # Wavy red Ignite banner (Kyle's asset, 2026-08-21). Lives in
+                # the admin app's public/email/ — ships with the frontend
+                # deploy, which must land before this mailer goes live.
+                "brand_header_url": (
+                    "https://admin.igniteproductions.co"
+                    "/email/ignite-wavy-banner.jpg"
+                ),
                 "expires_days": self.expires_days,
             },
         )
