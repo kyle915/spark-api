@@ -129,7 +129,7 @@ class TestGrubhubSetupCommand(BaseGraphQLTestCase):
         ) == ["Event"]
         assert FileRecapCategory.objects.filter(tenant=tenant).count() >= 2
         assert FileRecapCategory.objects.filter(
-            tenant=tenant, name="Consumer Sampling Pictures"
+            tenant=tenant, name="Event Pictures"
         ).exists()
         assert FileRecapCategory.objects.filter(
             tenant=tenant, name="Expense Receipts"
