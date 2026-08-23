@@ -336,6 +336,11 @@ class Tenant(Asyncable, models.Model):
     # column, and never touch row 1 or the client's manual columns (J onward:
     # BA Name, Rate, Recap, Email …). See utils/sheets_mirror LD_RETAIL_LAYOUT.
     master_tracker_layout = models.CharField(max_length=32, default="", blank=True)
+    # Last Google Sheet mirror attempt for linked_sheet_url — surfaced in
+    # admin Settings so ops can see silent append failures without logs.
+    linked_sheet_last_sync_at = models.DateTimeField(null=True, blank=True)
+    linked_sheet_last_sync_error = models.TextField(null=True, blank=True)
+    linked_sheet_last_request_id = models.BigIntegerField(null=True, blank=True)
     # Which worksheet the recap "demo data" export writes into. Null/blank =
     # "Demo Recaps" (the Girl Beer default, which feeds an existing Summary).
     # Liquid Death sets "Spark Recaps" — a dedicated branded raw-recaps tab on
