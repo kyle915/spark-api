@@ -17,7 +17,10 @@ from recaps.management.commands.setup_feel_free_checkin import (
     SPEC,
     TEMPLATE_NAME,
 )
-from recaps.types import _consumers_sampled_from_fields
+from recaps.types import (
+    _consumers_sampled_from_fields,
+    _engagement_totals_from_field_pairs,
+)
 
 
 class TestConsumersSampledMatcher:
@@ -75,6 +78,25 @@ class TestConsumersSampledMatcher:
             )
             == 192
         )
+
+
+    def test_first_time_derived_from_sampled_minus_tried_before(self):
+        pairs = [
+            ("How many TOTAL consumers did you sample?", "192"),
+            ("How many consumers had tried a Feel Free flavor before?", "60"),
+        ]
+        totals = _engagement_totals_from_field_pairs(pairs)
+        assert totals["total_consumer"] == 192
+        assert totals["first_time_consumers"] == 132
+
+    def test_explicit_first_time_label_wins_over_derivation(self):
+        pairs = [
+            ("Consumers Sampled", "100"),
+            ("First time consumers", "25"),
+            ("How many consumers had tried a Feel Free flavor before?", "40"),
+        ]
+        totals = _engagement_totals_from_field_pairs(pairs)
+        assert totals["first_time_consumers"] == 25
 
 
 class TestFeelFreeSpec:

@@ -256,6 +256,81 @@ def _consumers_sampled_from_fields(
     return total if matched else None
 
 
+def _tried_before_from_fields(
+    fields: Iterable[tuple[str | None, str | None]],
+) -> int | None:
+    """Parsed value of the 'had tried … before' COUNT field, else None.
+
+    Liquid Death / Feel Free / Sipli ask prior-trier counts with wording like
+    'had tried a … flavor before'. Used to derive first-time consumers when a
+    template has no explicit 'first time' field.
+    """
+    for name, value in fields:
+        if not name:
+            continue
+        label = name.lower()
+        if "tried" not in label or "before" not in label:
+            continue
+        if "percent" in label or "%" in label:
+            continue
+        if not _is_clean_count(value):
+            continue
+        parsed = _parse_recap_int(value)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _engagement_totals_from_field_pairs(
+    pairs: Iterable[tuple[str | None, str | None]],
+) -> dict[str, int]:
+    """Map custom recap engagement fields onto the four consumer metrics.
+
+    Shared by the campaign-report PDF cover and ``report_service`` so the
+    dashboard and bulk-download rollup never drift. Uses the canonical
+    ``_consumers_sampled_from_fields`` matcher (LD/Feel Free question phrasing)
+    and derives first-time as ``sampled − tried_before`` when a template logs
+    prior triers but not an explicit first-time count.
+    """
+    out = {
+        "total_consumer": 0,
+        "first_time_consumers": 0,
+        "brand_aware_consumers": 0,
+        "willing_to_purchase_consumers": 0,
+    }
+    demographic_sampled = 0
+    pair_list = list(pairs)
+    for name, value in pair_list:
+        label = (name or "").lower()
+        parsed = _parse_recap_int(value)
+        if parsed is None:
+            continue
+        if "consumers sampled" in label:
+            out["total_consumer"] += parsed
+        elif _SAMPLED_TOTAL_RE.search(label):
+            demographic_sampled += parsed
+        elif "first time" in label:
+            out["first_time_consumers"] += parsed
+        elif "knew about" in label:
+            out["brand_aware_consumers"] += parsed
+        elif "willing to purchase" in label and "not" not in label:
+            out["willing_to_purchase_consumers"] += parsed
+
+    consumers_sampled = _consumers_sampled_from_fields(pair_list)
+    if consumers_sampled is not None:
+        out["total_consumer"] = consumers_sampled
+    elif out["total_consumer"] == 0 and demographic_sampled:
+        out["total_consumer"] = demographic_sampled
+
+    if out["first_time_consumers"] == 0:
+        tried_before = _tried_before_from_fields(pair_list)
+        total = out["total_consumer"]
+        if tried_before is not None and total:
+            out["first_time_consumers"] = max(0, total - tried_before)
+
+    return out
+
+
 def _samples_given_from_fields(
     fields: Iterable[tuple[str | None, str | None]],
 ) -> int | None:
