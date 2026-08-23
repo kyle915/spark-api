@@ -39,6 +39,8 @@ Data files live in ``recaps/management/commands/data/<key>.json``:
       "timezone_code": "CDT",
       "state_code": "TX",
       "external_ba_name": "Internal",
+      "ba_name_key": "BA Name",       # optional; per-row BA overrides external_ba_name
+      "event_name_key": "Event Name", # optional; per-row event title (else city suffix)
       "event_name_prefix": "H-E-B (Internal Demo)",
       "date_key": "Date",             # row key → event date (YYYY-MM-DD)
       "address_key": "Store/Location",# row key → event address
@@ -400,6 +402,23 @@ class Command(BaseCommand):
         local_hour = int(spec.get("local_hour") or 12)
         approved = bool(spec.get("approved", True))
         ba_name = (spec.get("external_ba_name") or "").strip() or None
+        ba_name_key = (spec.get("ba_name_key") or "").strip() or None
+        event_name_key = (spec.get("event_name_key") or "").strip() or None
+
+        def _ba_name_for_row(row):
+            if ba_name_key:
+                val = str(row.get(ba_name_key) or "").strip()
+                if val:
+                    return val
+            return ba_name
+
+        def _event_name_for_row(row, address: str) -> str:
+            if event_name_key:
+                val = str(row.get(event_name_key) or "").strip()
+                if val:
+                    return val
+            city = self._city_from_address(address)
+            return f"{prefix} — {city}" if city else prefix
 
         def _engagements(row):
             if not engagements_field_norm:
@@ -421,7 +440,7 @@ class Command(BaseCommand):
                 event=event,
                 timezone=timezone_row,
                 ambassador=None,
-                external_ba_name=ba_name,
+                external_ba_name=_ba_name_for_row(row),
                 retailer=None,
                 location=None,
                 state=state,
@@ -492,8 +511,7 @@ class Command(BaseCommand):
                 w(self.style.ERROR(f"  row {i}: {row_res['error']}"))
                 continue
 
-            city = self._city_from_address(address)
-            event_name = f"{prefix} — {city}" if city else prefix
+            event_name = _event_name_for_row(row, address)
             row_res["event_name"] = event_name
 
             n_vals, notes = 0, []
