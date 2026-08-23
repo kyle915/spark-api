@@ -138,9 +138,8 @@ class ClientInviteMailer(_NoAttachedLogoMixin, Mailer):
     longer-lived invite token (days, not 30 minutes) so a contact who
     reads it next week isn't dead-ended.
 
-    Only sent for newly created users. Re-invites of existing users stay
-    on the plain MagicLinkMailer so we never re-"welcome" (or spam)
-    someone who already has a Spark account.
+    Only sent for client accounts (new invites and re-invites). Admins and
+    BAs keep the plain MagicLinkMailer sign-in email.
     """
 
     def __init__(
