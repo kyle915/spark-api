@@ -1049,7 +1049,6 @@ def submit_checkin_recap(
             getattr(event, "name", "") or "", getattr(event, "address", "") or ""
         )
         typed_addr = (getattr(event, "address", "") or "").strip()
-        auto_approve = is_feel_free_tenant(getattr(event, "tenant", None))
         if recap is None:
             recap = rmodels.CustomRecap.objects.create(
                 name=name,
@@ -1076,7 +1075,6 @@ def submit_checkin_recap(
                     if third_party
                     else []
                 ),
-                approved=auto_approve,
             )
         else:
             recap.submitted_at = dj_tz.now()
@@ -1085,8 +1083,6 @@ def submit_checkin_recap(
             recap.updated_by = actor
             if third_party:
                 recap.is_third_party = True
-            if auto_approve:
-                recap.approved = True
             recap.save(
                 update_fields=[
                     "submitted_at",
@@ -1095,7 +1091,6 @@ def submit_checkin_recap(
                     "updated_by",
                     "updated_at",
                     *(["is_third_party"] if third_party else []),
-                    *(["approved"] if auto_approve else []),
                 ]
             )
             rmodels.CustomFieldValue.objects.filter(custom_recap=recap).delete()
@@ -1285,7 +1280,7 @@ def submit_checkin_recap(
             )
         except Exception:  # noqa: BLE001 — never fail a filed recap on hours
             logger.exception(
-                "checkin recap: auto-approve booking failed recap=%s", recap.id
+                "checkin recap: approved booking hours failed recap=%s", recap.id
             )
 
     _finalize_recap_offthread(recap.id)
@@ -1304,7 +1299,6 @@ def _finalize_recap_offthread(recap_id: int) -> None:
         from recaps import models as rmodels
         from recaps.mutations import (
             _guard_recap_data_quality,
-            _kick_recap_approved_notify,
             _notify_recap_ready_for_review_to_admins,
         )
 
@@ -1316,20 +1310,10 @@ def _finalize_recap_offthread(recap_id: int) -> None:
             await _guard_recap_data_quality(recap)
         except Exception:  # noqa: BLE001
             logger.exception("checkin recap: data-quality guard failed id=%s", recap_id)
-        if recap.approved:
-            # Feel Free auto-approve: skip NEEDS REVIEW, send the same
-            # client mail a human approve would (Girl Beer still no-ops).
-            try:
-                await _kick_recap_approved_notify(recap, "custom")
-            except Exception:  # noqa: BLE001
-                logger.exception(
-                    "checkin recap: auto-approve notify failed id=%s", recap_id
-                )
-        else:
-            try:
-                await _notify_recap_ready_for_review_to_admins(recap, created_by)
-            except Exception:  # noqa: BLE001
-                logger.exception("checkin recap: notify-admins failed id=%s", recap_id)
+        try:
+            await _notify_recap_ready_for_review_to_admins(recap, created_by)
+        except Exception:  # noqa: BLE001
+            logger.exception("checkin recap: notify-admins failed id=%s", recap_id)
         # Field-ops crew for the check-in link specifically — nobody is
         # watching a queue for these, so the submission has to reach a person.
         try:

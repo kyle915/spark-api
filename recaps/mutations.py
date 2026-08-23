@@ -118,6 +118,17 @@ def _get_event_by_flexible_id(raw_id, qs=None):
         raise GraphQLError("Event not found.")
 
 
+def _stamp_recap_approval(recap: models.Recap | models.CustomRecap, *, approved: bool, actor) -> None:
+    """Set approved flag and durable approval audit fields."""
+    recap.approved = approved
+    recap.updated_by = actor
+    if approved:
+        recap.approved_by = actor
+        recap.approved_at = django_timezone.now()
+    else:
+        recap.approved_by = None
+        recap.approved_at = None
+
 
 class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
     """Service for recap mutations."""
@@ -3445,8 +3456,7 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
         @sync_to_async
         def approve_recap_transaction():
             with transaction.atomic():
-                recap.approved = self.input.approved
-                recap.updated_by = self.user
+                _stamp_recap_approval(recap, approved=self.input.approved, actor=self.user)
                 recap.save()
                 return recap
 
@@ -3516,8 +3526,9 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
         @sync_to_async
         def approve_custom_recap_transaction():
             with transaction.atomic():
-                custom_recap.approved = self.input.approved
-                custom_recap.updated_by = self.user
+                _stamp_recap_approval(
+                    custom_recap, approved=self.input.approved, actor=self.user
+                )
                 custom_recap.save()
                 return custom_recap
 
@@ -4013,12 +4024,6 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
             except ValueError as e:
                 raise GraphQLError(str(e))
             await sync_to_async(notify_ops_signoff)(recap, kind="legacy")
-            if self.input.status == "looks_good" and not recap.approved:
-                svc = RecapMutationService.with_input(
-                    inputs.ApproveRecapInput(id=self.input.recap_id, approved=True)
-                )
-                svc.user = self.user
-                recap = await svc.approve_recap()
             return "legacy", recap
         if self.input.custom_recap_id:
             try:
@@ -4043,14 +4048,6 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
             except ValueError as e:
                 raise GraphQLError(str(e))
             await sync_to_async(notify_ops_signoff)(recap, kind="custom")
-            if self.input.status == "looks_good" and not recap.approved:
-                svc = RecapMutationService.with_input(
-                    inputs.ApproveCustomRecapInput(
-                        id=self.input.custom_recap_id, approved=True
-                    )
-                )
-                svc.user = self.user
-                recap = await svc.approve_custom_recap()
             return "custom", recap
         raise GraphQLError("Provide recapId or customRecapId.")
 
@@ -4078,8 +4075,7 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
         @sync_to_async
         def decline_custom_recap_transaction():
             with transaction.atomic():
-                custom_recap.approved = False
-                custom_recap.updated_by = self.user
+                _stamp_recap_approval(custom_recap, approved=False, actor=self.user)
                 custom_recap.save()
                 return custom_recap
 
