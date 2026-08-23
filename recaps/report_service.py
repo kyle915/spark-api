@@ -184,34 +184,9 @@ def _custom_engagement_totals(pairs) -> dict[str, int]:
     consumer metrics by label. Same matching as
     ``recaps.pdf._custom_engagement_totals``.
     """
-    out = {
-        "total_consumer": 0,
-        "first_time_consumers": 0,
-        "brand_aware_consumers": 0,
-        "willing_to_purchase_consumers": 0,
-    }
-    from recaps.types import _SAMPLED_TOTAL_RE
+    from recaps.types import _engagement_totals_from_field_pairs
 
-    demographic_sampled = 0
-    for name, value in pairs:
-        label = (name or "").lower()
-        val = _leading_int(value)
-        if val is None:
-            continue
-        if "consumers sampled" in label:
-            out["total_consumer"] += val
-        elif _SAMPLED_TOTAL_RE.search(label):
-            # Girl Beer style: "Men/Women who sampled (Total)" demographics
-            demographic_sampled += val
-        elif "first time" in label:
-            out["first_time_consumers"] += val
-        elif "knew about" in label:
-            out["brand_aware_consumers"] += val
-        elif "willing to purchase" in label and "not" not in label:
-            out["willing_to_purchase_consumers"] += val
-    if out["total_consumer"] == 0 and demographic_sampled:
-        out["total_consumer"] = demographic_sampled
-    return out
+    return _engagement_totals_from_field_pairs(pairs)
 
 
 def _all(obj, attr: str) -> list:

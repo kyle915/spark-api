@@ -109,6 +109,16 @@ def test_report_totals_borjomi_unchanged():
     assert out["willing_to_purchase_consumers"] == 33
 
 
+def test_report_totals_feel_free_first_time_derived():
+    pairs = [
+        ("How many TOTAL consumers did you sample?", "192"),
+        ("How many consumers had tried a Feel Free flavor before?", "60"),
+    ]
+    out = _custom_engagement_totals(pairs)
+    assert out["total_consumer"] == 192
+    assert out["first_time_consumers"] == 132
+
+
 def test_report_totals_headline_beats_demographics():
     out = _custom_engagement_totals(
         [("Consumers Sampled", "77"), ("Men who sampled (Total)", "38")]

@@ -133,6 +133,55 @@ def test_aggregate_engagements_ignores_non_numeric():
     assert totals["willing_to_purchase_consumers"] == 8
 
 
+def test_aggregate_engagements_ld_event_activation_custom_fields():
+    """Liquid Death Event Activation: question-phrased consumers field +
+    first-time derived from sampled minus prior triers."""
+    recap_a = _make_custom_recap(
+        [
+            ("How many TOTAL consumers did you sample?", "1000"),
+            (
+                "How many consumers would be willing to purchase the product "
+                "after tasting it?",
+                "200",
+            ),
+            (
+                "How many consumers that were engaged with knew about "
+                "Liquid Death product/brand?",
+                "600",
+            ),
+            (
+                "How many consumers had tried a Liquid Death flavor before?",
+                "450",
+            ),
+        ]
+    )
+    recap_b = _make_custom_recap(
+        [
+            ("How many TOTAL consumers did you sample?", "1000"),
+            (
+                "How many consumers would be willing to purchase the product "
+                "after tasting it?",
+                "400",
+            ),
+            (
+                "How many consumers that were engaged with knew about "
+                "Liquid Death product/brand?",
+                "500",
+            ),
+            (
+                "How many consumers had tried a Liquid Death flavor before?",
+                "600",
+            ),
+        ]
+    )
+
+    totals = _aggregate_engagements([recap_a, recap_b])
+
+    assert totals["total_consumer"] == 2000
+    assert totals["first_time_consumers"] == 950  # (1000-450) + (1000-600)
+    assert totals["willing_to_purchase_consumers"] == 600
+
+
 # ─── _aggregate_units_sold ───────────────────────────────────────
 
 
