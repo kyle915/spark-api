@@ -65,7 +65,7 @@ class TestGrubhubSpec:
 
     def test_photo_buckets_match_the_pdf_labels(self):
         assert [b["name"] for b in PHOTO_BUCKETS] == [
-            "Consumer Sampling Pictures",
+            "Event Pictures",
             "Expense Receipts",
         ]
 

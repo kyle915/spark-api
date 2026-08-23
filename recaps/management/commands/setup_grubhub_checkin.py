@@ -16,7 +16,7 @@ campus account-linking counts Kyle asked for on top of the standard fields.
    this recap → clock out. Several BAs at one address on one day land on
    the SAME event.
 
-Photos are labelled **buckets** (Consumer Sampling Pictures, Expense
+Photos are labelled **buckets** (Event Pictures, Expense
 Receipts) rather than template image fields.
 
 Recaps stay human-reviewed (not Feel Free auto-approve). Location mode is
@@ -50,9 +50,9 @@ CODE_PREFIX = "GH-"
 PROGRAM_NAME = "Event"
 
 # Taken field-for-field from the "BA EVENT RECAP" PDF. Date and Event
-# Location belong to the event the check-in resolves. Consumer Sampling
-# Pictures and Expense Receipts are photo buckets, not template image
-# fields — see PHOTO_BUCKETS.
+# Location belong to the event the check-in resolves. Event Pictures and
+# Expense Receipts are photo buckets, not template image fields — see
+# PHOTO_BUCKETS.
 SPEC: list[tuple[str, list[tuple[str, str, bool, list[str]]]]] = [
     (
         "Event Details",
@@ -91,7 +91,7 @@ SPEC: list[tuple[str, list[tuple[str, str, bool, list[str]]]]] = [
 # Labelled dropzones on the walk-up recap. Names match FileRecapCategory
 # rows so the recap PDF groups shots the way the client's form did.
 PHOTO_BUCKETS: list[dict] = [
-    {"name": "Consumer Sampling Pictures"},
+    {"name": "Event Pictures"},
     {"name": "Expense Receipts"},
 ]
 
