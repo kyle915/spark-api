@@ -714,6 +714,7 @@ class Recap(Node):
     uuid: str
     name: str
     approved: bool
+    approved_at: str | None
     shared_at: str | None
     client_signoff_status: str
     client_signoff_comment: str
@@ -731,6 +732,7 @@ class Recap(Node):
     location: event_types.Location | None
     state_id: strawberry.ID | None
     state: event_types.State | None
+    approved_by: tenant_types.SparkUserType | None
     created_at: str
     updated_at: str
 
@@ -1078,6 +1080,7 @@ class CustomRecap(Node):
     late: bool
     incomplete: bool
     approved: bool
+    approved_at: str | None
     shared_at: str | None
     client_signoff_status: str
     client_signoff_comment: str
@@ -1108,6 +1111,7 @@ class CustomRecap(Node):
     state: event_types.State | None
     custom_recap_template_id: strawberry.ID
     custom_recap_template: "CustomRecapTemplate"
+    approved_by: tenant_types.SparkUserType | None
     created_at: str
     updated_at: str
     custom_recap_product_sample: List["CustomRecapProductSample"]

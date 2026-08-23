@@ -53,6 +53,14 @@ class Recap(models.Model):
         max_digits=10, decimal_places=4, null=True
     )
     approved = models.BooleanField(default=False)
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="recaps_approved_by",
+    )
+    approved_at = models.DateTimeField(null=True, blank=True)
     # Set when ops copies/emails the /r/:token link. Pipeline "Shared"
     # is derived from this — not a new status enum.
     shared_at = models.DateTimeField(null=True, blank=True)
@@ -437,6 +445,14 @@ class CustomRecap(models.Model):
     late = models.BooleanField(default=False)
     incomplete = models.BooleanField(default=False)
     approved = models.BooleanField(default=False)
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="custom_recaps_approved_by",
+    )
+    approved_at = models.DateTimeField(null=True, blank=True)
     shared_at = models.DateTimeField(null=True, blank=True)
     client_signoff_status = models.CharField(max_length=32, blank=True, default="")
     client_signoff_comment = models.TextField(blank=True, default="")
