@@ -1,0 +1,30 @@
+{
+  "_comment": "Single Grub Hub BA Event Recap for client preview / feedback. Wilson County Fair–style campus activation with realistic engagement counts.",
+  "tenant_slug": "grub-hub",
+  "tenant_name": "Grub Hub",
+  "template_name": "Grub Hub · BA Event Recap",
+  "event_type_name": "Event",
+  "event_status_slug": "approved",
+  "timezone_code": "EDT",
+  "state_code": "MI",
+  "ba_name_key": "BA Name",
+  "event_name_key": "Event Name",
+  "date_key": "Date",
+  "address_key": "Event Location",
+  "local_hour": 11,
+  "approved": true,
+  "engagements_field": "How many consumers did you interact with?",
+  "rows": [
+    {
+      "Event Name": "University of Michigan — Welcome Week (Client Preview)",
+      "Date": "2026-08-19",
+      "BA Name": "Leah Love",
+      "Event Location": "University of Michigan, 500 S State St, Ann Arbor, MI 48109, USA",
+      "How many consumers did you interact with?": 312,
+      "How many students knew they could link their GrubHub account on-campus?": 89,
+      "How many students did you help link their account?": 34,
+      "Consumer Feedback/Quotes": "Lots of freshmen didn't realize campus dining dollars work in the app — once we showed them the link flow, most were excited. A few grad students asked about group orders for study sessions. One student said linking took under a minute and they'd been ordering delivery without knowing about on-campus pickup.",
+      "Anything you'd improve or change?": "Would love a one-pager QR at the table for the account-link steps — verbal walk-through works but slows the line at peak class change. Also helpful to have a short demo phone ready so students can see the linked account screen before pulling out their own device."
+    }
+  ]
+}
