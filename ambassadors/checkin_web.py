@@ -785,6 +785,9 @@ def existing_shift_event_for(*, ambassador, tenant, on_date, address: str = ""):
                 return ev
             if core and address_core_key(ev_addr) == core:
                 return ev
+        # Typed a different store on the same day — mint/join that activation,
+        # don't hijack the first clock-in (LD: Walmart then 7-Eleven).
+        return None
     return events[0]
 
 

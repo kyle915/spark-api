@@ -449,6 +449,56 @@ class TestStandingRecapRepeat(AmbassadorsGraphQLTestCase):
         assert res.status_code == 200, res.content
         assert res.json()["event"]["uuid"] == str(ev.uuid)
 
+    def test_identify_second_store_same_day_mints_a_new_event(self):
+        """LD-style: Walmart recap done, 7-Eleven same day must not reuse Walmart."""
+        today = dj_tz.localdate()
+        walmart = self._event(
+            name="Walmart Baldwin Park",
+            address="3250 Big Dalton Avenue, Baldwin Park, CA 91706",
+            on_date=today,
+        )
+        stub, _ = checkin_web.get_or_create_checkin_ambassador(
+            first_name="Courtney", last_name="B", phone="5550100777", email=None
+        )
+        punched = checkin_web._event_date_utc(today).replace(hour=11)
+        source_in, _ = Source.objects.get_or_create(name="clock_in")
+        source_out, _ = Source.objects.get_or_create(name="clock_out")
+        Attendance.objects.create(
+            ambassador=stub,
+            event=walmart,
+            source=source_in,
+            clock_time=punched,
+        )
+        Attendance.objects.create(
+            ambassador=stub,
+            event=walmart,
+            source=source_out,
+            clock_time=punched + _dt.timedelta(hours=5),
+        )
+
+        seven = "1234 Main St, Baldwin Park, CA 91706"
+        res = self.http.post(
+            reverse(
+                "events.public_checkin_identify",
+                kwargs={"code": self.tenant.checkin_code},
+            ),
+            data={
+                "firstName": "Courtney",
+                "lastName": "B",
+                "phone": "5550100777",
+                "eventDate": today.isoformat(),
+                "address": seven,
+                "storeName": "7-Eleven",
+            },
+            content_type="application/json",
+        )
+        assert res.status_code == 200, res.content
+        body = res.json()
+        assert body["event"]["uuid"] != str(walmart.uuid)
+        assert "7-eleven" in (body["event"]["name"] or "").lower() or seven.lower() in (
+            body["event"]["address"] or ""
+        ).lower()
+
 
 class TestFeelFreeTenantGate:
     def test_only_the_feel_free_brand_matches(self):
