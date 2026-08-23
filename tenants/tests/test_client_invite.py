@@ -256,8 +256,8 @@ class TestClientInviteToken(BaseGraphQLTestCase):
 
 @pytest.mark.django_db(transaction=True)
 class TestInviteUserWelcomeEmail(BaseGraphQLTestCase):
-    """inviteUser: NEW clients get the welcome invite; everyone else keeps
-    the plain 30-minute magic link."""
+    """inviteUser: client accounts get the workspace invite (new or existing);
+    admins and BAs keep the plain 30-minute magic link."""
 
     @pytest.fixture(autouse=True)
     def setup(self, db):
@@ -348,7 +348,7 @@ class TestInviteUserWelcomeEmail(BaseGraphQLTestCase):
         assert payload == {"u": user.id, "e": user.email, "k": "invite"}
 
     @pytest.mark.asyncio
-    async def test_existing_user_keeps_plain_magic_link(self):
+    async def test_existing_client_gets_workspace_invite(self):
         tenant = await self._tenant()
         await sync_to_async(self.create_user)(
             username="ross@liquid-death.com",
@@ -382,10 +382,10 @@ class TestInviteUserWelcomeEmail(BaseGraphQLTestCase):
 
         assert result.errors is None
         assert result.data["inviteUser"]["success"] is True
-        assert "re-sent" in result.data["inviteUser"]["message"]
-        # Existing user: plain sign-in link, NOT the welcome invite.
-        magic_cls.return_value.send_async_now.assert_awaited_once()
-        invite_cls.return_value.send_async_now.assert_not_awaited()
+        assert "sign-in options" in result.data["inviteUser"]["message"]
+        # Existing client: full workspace invite, NOT the bare magic link.
+        invite_cls.return_value.send_async_now.assert_awaited_once()
+        magic_cls.return_value.send_async_now.assert_not_awaited()
 
 
 @pytest.mark.django_db(transaction=True)

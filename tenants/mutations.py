@@ -578,6 +578,45 @@ CLIENT_INVITE_SALT = "spark.client-invite.v1"
 CLIENT_INVITE_TTL_SECONDS = 60 * 60 * 24 * 7  # 7 days
 
 
+def _admin_frontend_base() -> str:
+    return getattr(
+        settings, "ADMIN_FRONTEND_URL", "https://admin.igniteproductions.co",
+    ).rstrip("/")
+
+
+def _resolve_tenant_name_for_invite(user, tenant_id: int | None = None) -> str | None:
+    """Best tenant label for a client invite email."""
+    if tenant_id:
+        name = Tenant.objects.filter(id=tenant_id).values_list("name", flat=True).first()
+        if name:
+            return name
+    return (
+        Tenant.objects.filter(
+            tenanteduser__user_id=user.id,
+            tenanteduser__is_active=True,
+        )
+        .values_list("name", flat=True)
+        .first()
+    )
+
+
+def _client_invite_mailer(user, *, tenant_name: str | None = None) -> ClientInviteMailer:
+    """Welcome / workspace invite with set-password, Google SSO, and magic link."""
+    base = _admin_frontend_base()
+    invite_token = signing.dumps(
+        {"u": user.id, "e": user.email, "k": "invite"},
+        salt=CLIENT_INVITE_SALT,
+    )
+    return ClientInviteMailer(
+        user,
+        tenant_name=tenant_name,
+        set_password_link=f"{base}/reset-password/{invite_token}",
+        magic_link=f"{base}/magic/{invite_token}",
+        login_url=f"{base}/login",
+        expires_days=CLIENT_INVITE_TTL_SECONDS // (60 * 60 * 24),
+    )
+
+
 def _unsign_with_salts(
     token: str, candidates: list[tuple[str, int]]
 ) -> tuple[dict | None, str | None]:
@@ -674,6 +713,21 @@ class SparkUserMutations:
         # the admin web (which has no BA home). Admins/clients keep the web
         # link primary.
         is_ambassador = getattr(user, "role_id", None) == ROLE_ID.Ambassadors
+
+        if getattr(user, "role_id", None) == ROLE_ID.Client:
+            tenant_name = await sync_to_async(
+                lambda: _resolve_tenant_name_for_invite(user)
+            )()
+            try:
+                mailer = _client_invite_mailer(user, tenant_name=tenant_name)
+                await mailer.send_async_now()
+            except Exception:
+                import logging
+                logging.getLogger(__name__).exception(
+                    "Client workspace invite email failed for %s", email,
+                )
+                return generic
+            return generic
 
         try:
             mailer = MagicLinkMailer(
@@ -975,35 +1029,18 @@ class SparkUserMutations:
                 client_mutation_id=input.client_mutation_id,
             )
 
-        # Email the way in. A BRAND-NEW client gets the full welcome invite
-        # (set-password + Google SSO + one-click link on a 7-day token) —
-        # it's the first email they've ever had from Spark, so it has to
-        # explain itself. Everyone else (re-invites, admins, BAs) keeps the
-        # plain 30-minute magic-link they've always gotten.
-        base = getattr(
-            settings, "ADMIN_FRONTEND_URL", "https://admin.igniteproductions.co",
-        ).rstrip("/")
-
-        if created and role_slug == "client":
+        # Email the way in. Client accounts always get the full workspace
+        # invite (set-password + Google SSO + one-click link on a 7-day
+        # token) — new OR existing. Re-inviting someone who already has a
+        # Spark login still needs those three paths, not a bare 30-minute
+        # "Welcome back" magic link. Admins and BAs keep the plain magic link.
+        if getattr(user, "role_id", None) == ROLE_ID.Client:
+            tenant_id = resolve_id_to_int(input.tenant_id) if input.tenant_id else None
             tenant_name = await sync_to_async(
-                lambda: Tenant.objects.filter(
-                    id=resolve_id_to_int(input.tenant_id)
-                ).values_list("name", flat=True).first()
-            )() if input.tenant_id else None
-
-            invite_token = signing.dumps(
-                {"u": user.id, "e": user.email, "k": "invite"},
-                salt=CLIENT_INVITE_SALT,
-            )
+                lambda: _resolve_tenant_name_for_invite(user, tenant_id)
+            )()
             try:
-                mailer = ClientInviteMailer(
-                    user,
-                    tenant_name=tenant_name,
-                    set_password_link=f"{base}/reset-password/{invite_token}",
-                    magic_link=f"{base}/magic/{invite_token}",
-                    login_url=f"{base}/login",
-                    expires_days=CLIENT_INVITE_TTL_SECONDS // (60 * 60 * 24),
-                )
+                mailer = _client_invite_mailer(user, tenant_name=tenant_name)
                 await mailer.send_async_now()
             except Exception:
                 logging.getLogger(__name__).exception(
@@ -1012,11 +1049,19 @@ class SparkUserMutations:
 
             return UpdateUserResponse(
                 success=True,
-                message=f"Invite sent — {email} will get a welcome email with three ways to sign in.",
+                message=(
+                    f"Invite sent — {email} will get a welcome email with three ways to sign in."
+                    if created
+                    else (
+                        f"User exists — re-sent workspace invite with sign-in "
+                        f"options to {email}."
+                    )
+                ),
                 client_mutation_id=input.client_mutation_id,
             )
 
         # Email a magic-link so the new user can sign in immediately.
+        base = _admin_frontend_base()
         token = signing.dumps(
             {"u": user.id, "e": user.email}, salt="spark.magic-link.v1",
         )
