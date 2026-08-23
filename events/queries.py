@@ -1480,6 +1480,34 @@ class RequestQueries:
             if filters.status_id:
                 status_id = _resolve_filter_id(filters.status_id, "status")
                 queryset = queryset.filter(status_id=status_id)
+            elif filters.status_slugs:
+                slugs = [
+                    (s or "").strip().lower()
+                    for s in filters.status_slugs
+                    if (s or "").strip()
+                ]
+                if slugs:
+                    queryset = queryset.filter(status__slug__in=slugs)
+            elif filters.status_slug:
+                slug = (filters.status_slug or "").strip().lower()
+                if slug:
+                    queryset = queryset.filter(status__slug=slug)
+            if filters.scheduling_status:
+                scheduling = (filters.scheduling_status or "").strip()
+                if scheduling:
+                    queryset = queryset.filter(scheduling_status=scheduling)
+            if filters.state_code:
+                from django.db.models import Q as _Q
+
+                code = (filters.state_code or "").strip().upper()
+                if code:
+                    queryset = queryset.filter(
+                        _Q(state__code__iexact=code)
+                        | _Q(location__state__code__iexact=code)
+                        | _Q(retailer__location__state__code__iexact=code)
+                        | _Q(address__icontains=f", {code}")
+                        | _Q(address__icontains=f" {code} ")
+                    )
             if filters.client_id:
                 client_id = _resolve_filter_id(filters.client_id, "client")
                 queryset = queryset.filter(client_id=client_id)

@@ -24,9 +24,12 @@ import re
 from typing import Iterable
 
 from django.conf import settings
+from django.utils import timezone
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+
+from tenants.models import Tenant
 
 logger = logging.getLogger(__name__)
 
@@ -1047,27 +1050,66 @@ def _ld_bulk_sync(svc, sheet_id, tab, requests) -> tuple[int, str | None]:
     return written, None
 
 
+def _record_sheet_sync(tenant, request, *, ok: bool, error: str | None = None) -> None:
+    """Persist the latest mirror attempt on the tenant for admin observability."""
+    if not tenant or not getattr(tenant, "pk", None):
+        return
+    fields = {
+        "linked_sheet_last_sync_at": timezone.now(),
+        "linked_sheet_last_request_id": getattr(request, "id", None),
+        "linked_sheet_last_sync_error": None
+        if ok
+        else (error or "Sheet append failed")[:2000],
+    }
+    try:
+        Tenant.objects.filter(pk=tenant.pk).update(**fields)
+    except Exception:
+        logger.warning(
+            "sheets_mirror: failed to record sync status for tenant=%s",
+            getattr(tenant, "pk", None),
+            exc_info=True,
+        )
+
+
 def upsert_request_row(request) -> bool:
     """Sync one Request row into its tenant's linked Sheet.
 
     Returns True on success (row inserted or updated), False otherwise.
     Safe to call on every Request save — every failure path logs and
-    returns False without raising.
+    records sync status on the tenant without raising.
     """
+    tenant = getattr(request, "tenant", None)
     try:
-        tenant = getattr(request, "tenant", None)
         sheet_url = getattr(tenant, "linked_sheet_url", None) if tenant else None
         if not sheet_url:
             return False
         sheet_id = extract_sheet_id(sheet_url)
         if not sheet_id:
+            _record_sheet_sync(
+                tenant,
+                request,
+                ok=False,
+                error="linked_sheet_url is not a valid Google Sheets URL",
+            )
             return False
         svc = _service()
         if not svc:
+            _record_sheet_sync(
+                tenant,
+                request,
+                ok=False,
+                error="Sheets API service unavailable",
+            )
             return False
 
         row = _row_for_request(request)
         if row is None:
+            _record_sheet_sync(
+                tenant,
+                request,
+                ok=False,
+                error="Could not build tracker row for request",
+            )
             return False
 
         # Optional per-tenant Master Tracker tab (None = first worksheet,
@@ -1078,7 +1120,17 @@ def upsert_request_row(request) -> bool:
         # format, keyed by a far-right Spark-UUID column; never touch the header
         # or their manual columns. Returns before the generic 15-col path.
         if _tenant_layout(tenant) == LD_RETAIL_LAYOUT:
-            return _ld_upsert_request_row(svc, sheet_id, tab, request)
+            ok = _ld_upsert_request_row(svc, sheet_id, tab, request)
+            if ok:
+                _record_sheet_sync(tenant, request, ok=True)
+            else:
+                _record_sheet_sync(
+                    tenant,
+                    request,
+                    ok=False,
+                    error="LD layout sheet write failed",
+                )
+            return ok
 
         _ensure_header(svc, sheet_id, tab)
 
@@ -1094,6 +1146,7 @@ def upsert_request_row(request) -> bool:
             ).execute()
         else:
             _append_or_insert_new(svc, sheet_id, tab, tenant, row, end_col)
+        _record_sheet_sync(tenant, request, ok=True)
         return True
     except HttpError as e:
         logger.warning(
@@ -1101,6 +1154,7 @@ def upsert_request_row(request) -> bool:
             getattr(request, "id", None),
             e,
         )
+        _record_sheet_sync(tenant, request, ok=False, error=str(e))
         return False
     except Exception as e:
         logger.warning(
@@ -1108,6 +1162,7 @@ def upsert_request_row(request) -> bool:
             getattr(request, "id", None),
             e,
         )
+        _record_sheet_sync(tenant, request, ok=False, error=str(e))
         return False
 
 
@@ -1234,6 +1289,13 @@ def bulk_sync_requests(requests) -> tuple[int, str | None]:
             "sheets_mirror: bulk write failed after %s rows: %s", written, e
         )
         error = str(e)
+
+    last_request = requests[-1] if requests else None
+    if tenant and last_request is not None:
+        if error:
+            _record_sheet_sync(tenant, last_request, ok=False, error=error)
+        else:
+            _record_sheet_sync(tenant, last_request, ok=True)
 
     return written, error
 

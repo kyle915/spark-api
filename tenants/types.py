@@ -20,6 +20,9 @@ class TenantType(Node):
     slug: strawberry.auto
     request_url_name: strawberry.auto
     linked_sheet_url: strawberry.auto
+    linked_sheet_last_sync_at: strawberry.auto
+    linked_sheet_last_sync_error: strawberry.auto
+    linked_sheet_last_request_id: strawberry.auto
     # Read side of the scheduled monthly-report opt-in (toggled via
     # setScheduledReportEnabled). Lets the admin UI show the current
     # ON/OFF state. Default False (opt-in only).

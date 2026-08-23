@@ -98,6 +98,13 @@ class RequestFiltersInput(BaseTenantInput):
     # Event-date sort direction for the tracker's clickable Date column.
     # "asc" = soonest first, "desc" (default) = furthest-future first.
     date_sort: str | None = None
+    # Master Tracker status chips — slug-based (status_id still supported).
+    status_slug: str | None = None
+    status_slugs: list[str] | None = None
+    # Two-value scheduling metadata on Request.scheduling_status.
+    scheduling_status: str | None = None
+    # 2-letter US state code (retailer / location / address fallback).
+    state_code: str | None = None
     created_within_hours: int | None = None
     edited: bool | None = None
     reviewed: bool | None = None
