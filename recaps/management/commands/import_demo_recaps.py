@@ -579,10 +579,15 @@ class Command(BaseCommand):
                     row_res["recap"] = "exists"
                 else:
                     recap, written = _create_recap(event, row)
+                    from recaps.recap_tokens import make_recap_token
+
+                    share_token = make_recap_token("custom", int(recap.id))
                     row_res.update(
                         recap="created",
                         recap_id=recap.id,
                         field_values_written=written,
+                        share_token=share_token,
+                        share_url=f"https://client.igniteproductions.co/r/{share_token}",
                     )
 
                 if not create_request:
