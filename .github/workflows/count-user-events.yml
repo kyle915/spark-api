@@ -1,0 +1,80 @@
+name: Count user events
+
+# "How many <event type> are mapped to <person>?"
+#
+# A person maps to work through FOUR columns that do not agree:
+#   Event.rmm_asigned        the RMM on the executed event
+#   Request.rmm_asigned      the RMM on the request behind it
+#   Request.requestor_email  free text — who submitted it
+#   Request.created_by       the account that keyed it in
+#
+# This reports ALL FOUR, split by event type, rather than picking one and
+# calling it the number — they disagree, and a confidently wrong count is
+# worse than four labelled ones. Soft-deleted requests are counted on their
+# own line because the dashboard KPIs exclude them, so a total that folds
+# them in won't reconcile with what the client sees.
+#
+# Read-only. There is no apply flag and nothing is written.
+
+on:
+  workflow_dispatch:
+    inputs:
+      name:
+        description: "Name or email fragment (e.g. Lauren Giaccio)"
+        required: false
+        default: ""
+      user_id:
+        description: "…or an exact user id (preferred if the name is ambiguous)"
+        required: false
+        default: ""
+      tenant:
+        description: "Tenant slug or name to scope to (e.g. liquid-death)"
+        required: false
+        default: ""
+      event_type:
+        description: "Only this event type, substring (e.g. Retail Sampling)"
+        required: false
+        default: ""
+      list:
+        description: "Also list the matching events"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+jobs:
+  count-user-events:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire count-user-events endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/count-user-events
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          NAME: ${{ github.event.inputs.name }}
+          USER_ID: ${{ github.event.inputs.user_id }}
+          TENANT: ${{ github.event.inputs.tenant }}
+          EVENT_TYPE: ${{ github.event.inputs.event_type }}
+          LIST: ${{ github.event.inputs.list }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            --max-time 180 \
+            -X POST "$CRON_URL" \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            --data-urlencode "name=$NAME" \
+            --data-urlencode "user_id=$USER_ID" \
+            --data-urlencode "tenant=$TENANT" \
+            --data-urlencode "event_type=$EVENT_TYPE" \
+            --data-urlencode "list=$LIST")
+          echo "HTTP $STATUS"
+          python3 -c "
+          import json, sys
+          d = json.load(open('/tmp/cron-response.json'))
+          print(d.get('log') or '(no log)')
+          if not d.get('ok'):
+              print('ERROR:', d.get('error'), d.get('detail', ''), file=sys.stderr)
+          " || cat /tmp/cron-response.json
+          [ "$STATUS" != "200" ] && exit 1 || exit 0
