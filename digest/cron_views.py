@@ -5246,6 +5246,72 @@ class SetupLdRetailCheckinView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class CountUserEventsView(View):
+    """GET/POST `/internal/cron/count-user-events`.
+
+    "How many <event type> are mapped to <person>?" — answered across every
+    attribution column at once (Event.rmm_asigned, Request.rmm_asigned,
+    requestor_email, created_by), broken out by event type.
+
+    All four are reported rather than one, because they disagree and picking
+    one silently is how a confident wrong number gets sent to a client.
+    Soft-deleted requests are counted separately, since the dashboard KPIs
+    exclude them and a total including them won't reconcile.
+
+    READ-ONLY — no apply flag.
+
+    Params: name or user_id (one required), tenant, event_type, list.
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _param(key: str) -> str:
+            return (request.GET.get(key) or request.POST.get(key) or "").strip()
+
+        kwargs: dict = {}
+        for key in ("name", "tenant", "event_type"):
+            value = _param(key)
+            if value:
+                kwargs[key] = value
+
+        raw_id = _param("user_id")
+        if raw_id:
+            try:
+                kwargs["user_id"] = int(raw_id)
+            except ValueError:
+                return JsonResponse(
+                    {"ok": False, "error": "user_id-must-be-an-integer"}, status=400
+                )
+        if not kwargs.get("name") and not kwargs.get("user_id"):
+            return JsonResponse(
+                {"ok": False, "error": "name-or-user_id-required"}, status=400
+            )
+        if _param("list").lower() in ("1", "true", "yes", "on"):
+            kwargs["list"] = True
+
+        out = io.StringIO()
+        try:
+            call_command("count_user_events", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("count-user-events cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc),
+                 "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "log": out.getvalue()})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class ListCheckinLinksView(View):
     """GET/POST `/internal/cron/list-checkin-links`.
 
@@ -8094,6 +8160,7 @@ def _registered_views() -> dict[str, Any]:
         "add-tenant-user": AddTenantUserView,
         "export-recap-pdf": ExportRecapPdfView,
         "list-checkin-links": ListCheckinLinksView,
+        "count-user-events": CountUserEventsView,
         "set-checkin-resources": SetCheckinResourcesView,
         "set-tenant-mileage-tracking": SetTenantMileageTrackingView,
         "staff-tenant-events": StaffTenantEventsView,
