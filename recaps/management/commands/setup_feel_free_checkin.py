@@ -123,6 +123,15 @@ SPEC: list[tuple[str, list[tuple[str, str, bool, list[str]]]]] = [
 
 CODE_PREFIX = "FF-"
 
+# Appended to the LIVE Feel Free form ("Feel Free - Field Sampling") without
+# re-seeding the whole SPEC — that template name predates the seeder default
+# and applying SPEC under the default title would mint a second form.
+SAMPLING_DETAIL_FIELDS: list[tuple[str, str, bool]] = [
+    ("Where did you sample? (name a few locations)", "longtext", True),
+    ("Sampling Timeframe?", "text", True),
+]
+SAMPLING_DETAIL_SECTION = "Sampling Details"
+
 
 class Command(BaseCommand):
     help = (
@@ -164,6 +173,16 @@ class Command(BaseCommand):
             dest="photo_section",
             default="Photos",
             help="section for --add-photo-field (default: 'Photos').",
+        )
+        parser.add_argument(
+            "--add-sampling-details",
+            dest="add_sampling_details",
+            action="store_true",
+            help=(
+                "add 'Where did you sample?' + 'Sampling Timeframe?' to the "
+                "tenant's EXISTING sole template (Feel Free - Field Sampling). "
+                "Skips SPEC seeding so we do not mint a second form."
+            ),
         )
         parser.add_argument(
             "--location-mode",
@@ -382,6 +401,13 @@ class Command(BaseCommand):
                 tenant, creator, opts["add_photo_field"], opts["photo_section"], apply
             )
 
+        if opts.get("add_sampling_details"):
+            self._add_sampling_details(tenant, creator, apply)
+            # Live Feel Free form is "Feel Free - Field Sampling" — never mint
+            # a second template from SPEC when this flag is the reason we ran.
+            self._checkin_code(tenant, apply, opts.get("prefix"))
+            return
+
         if opts.get("pin_event_type"):
             self._pin_event_type(tenant, event_type, apply)
 
@@ -580,6 +606,86 @@ class Command(BaseCommand):
         self.stdout.write(
             self.style.SUCCESS(f"  ADDED image field in section {section_name!r}")
         )
+
+    def _add_sampling_details(self, tenant, creator, apply: bool) -> None:
+        """Append where-sampled + timeframe to the tenant's sole live template.
+
+        Feel Free's production form is ``Feel Free - Field Sampling`` (not
+        the seeder default title). This is the safe path to grow that form
+        without splitting recaps across two templates.
+        """
+        from recaps.models import (
+            CustomField,
+            CustomRecapFieldType,
+            CustomRecapTemplate,
+            RecapSection,
+        )
+
+        templates = list(CustomRecapTemplate.objects.filter(tenant_id=tenant.id))
+        if len(templates) != 1:
+            raise CommandError(
+                f"--add-sampling-details needs exactly one template on the "
+                f"tenant; found {len(templates)}. Pass the live form through "
+                f"the admin editor if there is more than one."
+            )
+        tpl = templates[0]
+        self.stdout.write(f"\nSampling detail fields on {tpl.name!r}:")
+
+        ft_cache: dict = {}
+        for _, kind, _ in SAMPLING_DETAIL_FIELDS:
+            self._resolve_field_type(kind, creator, apply, ft_cache)
+
+        if not apply:
+            for fname, kind, required in SAMPLING_DETAIL_FIELDS:
+                exists = CustomField.objects.filter(
+                    custom_recap_template=tpl, name__iexact=fname
+                ).exists()
+                state = "already present" if exists else f"would add [{kind}]"
+                req = " REQUIRED" if required else ""
+                self.stdout.write(
+                    self.style.WARNING(
+                        f"  DRY-RUN — {fname!r}{req}: {state} "
+                        f"(section {SAMPLING_DETAIL_SECTION!r})"
+                    )
+                )
+            return
+
+        section, _ = RecapSection.objects.get_or_create(
+            tenant_id=tenant.id,
+            name=SAMPLING_DETAIL_SECTION,
+            defaults={"order": 85, "created_by": creator},
+        )
+        last = (
+            CustomField.objects.filter(custom_recap_template=tpl)
+            .order_by("-order")
+            .values_list("order", flat=True)
+            .first()
+        )
+        order = last or 0
+        for fname, kind, required in SAMPLING_DETAIL_FIELDS:
+            existing = CustomField.objects.filter(
+                custom_recap_template=tpl, name__iexact=fname
+            ).first()
+            if existing:
+                self.stdout.write(f"  {fname!r} already present — skip")
+                continue
+            order += 1
+            ft = ft_cache[kind]
+            CustomField.objects.create(
+                custom_recap_template=tpl,
+                recap_section=section,
+                name=fname,
+                custom_field_type=ft,
+                required=required,
+                options=[],
+                order=order,
+                created_by=creator,
+            )
+            self.stdout.write(
+                self.style.SUCCESS(
+                    f"  ADDED {fname!r} [{kind}] in {SAMPLING_DETAIL_SECTION!r}"
+                )
+            )
 
     def _location_mode(self, tenant, mode: str | None, apply: bool) -> None:
         """Set (or just report) how the link asks for location."""
