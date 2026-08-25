@@ -1,0 +1,66 @@
+name: Backfill Torch public form sheet
+
+# Appends SPECIFIC Torch public spark-form requests to the retail-schedule
+# Google Sheet (1kAvZhy2B9HoeSS…, tab gid 0).
+#
+# New submissions already append THEMSELVES — events/mutations.py calls
+# append_torch_public_form_row inside createRequestByUrl. This workflow is only
+# for rows that predate that wiring, or that were missed while the sheet was
+# not yet shared with the service account.
+#
+# ids is REQUIRED and there is no "all" mode on purpose: the sheet is meant to
+# carry public spark-form submissions only, and the command appends whatever it
+# is handed. Handing it the bulk-imported rows would flood the client workbook.
+# Use "List tenant requests" (tenant 17) to pick ids — it prints a paste-ready
+# IDS: line containing only rows that look like public-form submissions.
+#
+# Safe to re-run: the append dedupes on the request UUID, so an id already in
+# the sheet is a no-op rather than a duplicate row.
+#
+# If nothing appears, the sheet is probably not shared as Editor with
+# spark-api-new-sa@spark-479222.iam.gserviceaccount.com — the append swallows
+# errors so the public form can never 500 on a Sheets problem.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ids:
+        description: "Comma-separated Spark Request ids (e.g. 1992)"
+        required: true
+      apply:
+        description: "Write to the Sheet (false = print the mapping only)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+jobs:
+  backfill-torch-public-form-sheet:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire backfill endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/backfill-torch-public-form-sheet
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          IDS: ${{ github.event.inputs.ids }}
+          APPLY: ${{ github.event.inputs.apply }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            --max-time 180 \
+            -X POST "$CRON_URL" \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            --data-urlencode "ids=$IDS" \
+            --data-urlencode "apply=$APPLY")
+          echo "HTTP $STATUS"
+          python3 -c "
+          import json, sys
+          d = json.load(open('/tmp/cron-response.json'))
+          print(d.get('log') or '(no log)')
+          if not d.get('ok'):
+              print('ERROR:', d.get('error'), d.get('detail', ''), file=sys.stderr)
+          " || cat /tmp/cron-response.json
+          [ "$STATUS" != "200" ] && exit 1 || exit 0
