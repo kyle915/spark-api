@@ -54,6 +54,12 @@ on:
         default: "false"
         type: choice
         options: ["false", "true"]
+      add_sampling_details:
+        description: "Add Where did you sample? + Sampling Timeframe? to the LIVE sole template (skips SPEC seed)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
       apply:
         description: "Actually write (read the dry run first)"
         required: false
@@ -77,6 +83,7 @@ jobs:
           CODE_ONLY: ${{ github.event.inputs.code_only }}
           PREFIX: ${{ github.event.inputs.prefix }}
           PIN_EVENT_TYPE: ${{ github.event.inputs.pin_event_type }}
+          ADD_SAMPLING_DETAILS: ${{ github.event.inputs.add_sampling_details }}
           APPLY: ${{ github.event.inputs.apply }}
         run: |
           if [ -z "$CRON_SECRET" ]; then
@@ -94,6 +101,7 @@ jobs:
             --data-urlencode "code_only=$CODE_ONLY" \
             --data-urlencode "prefix=$PREFIX" \
             --data-urlencode "pin_event_type=$PIN_EVENT_TYPE" \
+            --data-urlencode "add_sampling_details=$ADD_SAMPLING_DETAILS" \
             --data-urlencode "apply=$APPLY")
           echo "HTTP $STATUS"
           cat /tmp/cron-response.json
