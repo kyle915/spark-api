@@ -4535,6 +4535,56 @@ class SetupLuckinCheckinView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class SetupAnthropicCheckinView(View):
+    """GET/POST `/internal/cron/setup-anthropic-checkin`.
+
+    Creates the Anthropic tenant if missing (createTenant-style seeds), seeds
+    the BA Event Recap template off the client's PDF (minus Date / Event
+    Location and Expense Receipts), mints the standing ``AN-`` check-in code,
+    pins Event, and labels the Consumer Sampling Pictures bucket.
+
+    Idempotent: get_or_create for the template, and an existing checkin_code
+    is left alone (rotating it breaks every copy already shared).
+
+    Params: tenant (default "anthropic"), template_name, event_type, prefix,
+    apply (default DRY RUN).
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        kwargs: dict = {}
+        for key in ("tenant", "template_name", "event_type", "prefix"):
+            val = request.GET.get(key) or request.POST.get(key)
+            if val:
+                kwargs[key] = str(val)
+        raw = (request.GET.get("apply") or request.POST.get("apply") or "").lower()
+        apply_it = raw in ("1", "true", "yes", "on")
+        if apply_it:
+            kwargs["apply"] = True
+
+        out = io.StringIO()
+        try:
+            call_command("setup_anthropic_checkin", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("setup-anthropic-checkin cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc),
+                 "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "apply": apply_it, "log": out.getvalue()})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class SetupGrubhubCheckinView(View):
     """GET/POST `/internal/cron/setup-grubhub-checkin`.
 
@@ -8144,6 +8194,7 @@ def _registered_views() -> dict[str, Any]:
         "setup-g7-entertainment-checkin": SetupG7EntertainmentCheckinView,
         "setup-grubhub-checkin": SetupGrubhubCheckinView,
         "setup-luckin-checkin": SetupLuckinCheckinView,
+        "setup-anthropic-checkin": SetupAnthropicCheckinView,
         "setup-sipli-checkin": SetupSipliCheckinView,
         "setup-breakaway-checkin": SetupBreakawayCheckinView,
         "backfill-torch-public-form-sheet": BackfillTorchPublicFormSheetView,
