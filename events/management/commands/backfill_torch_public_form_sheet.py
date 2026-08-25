@@ -11,8 +11,8 @@ Usage:
 from django.core.management.base import BaseCommand, CommandError
 
 from events.models import Request
-from events.torch_portal import TORCH_PUBLIC_FORM_SLUGS, is_torch_tenant
-from utils.torch_public_form_sheet import append_torch_public_form_row
+from events.torch_portal import is_torch_tenant
+from utils.torch_public_form_sheet import append_torch_request_row
 
 
 class Command(BaseCommand):
@@ -47,7 +47,6 @@ class Command(BaseCommand):
         if not ids:
             raise CommandError("Pass at least one id via --ids")
 
-        slug = next(iter(TORCH_PUBLIC_FORM_SLUGS))
         qs = (
             Request.objects.filter(id__in=ids, deleted_at__isnull=True)
             .select_related(
@@ -78,11 +77,15 @@ class Command(BaseCommand):
             )
             if not apply:
                 continue
-            if append_torch_public_form_row(req, slug):
+            if append_torch_request_row(req):
                 written += 1
                 self.stdout.write(self.style.SUCCESS(f"  wrote REQ-{rid}"))
             else:
-                self.stdout.write(f"  skipped REQ-{rid} (already on sheet or no-op)")
+                self.stdout.write(
+                    f"  skipped REQ-{rid} — already on the sheet, OR the "
+                    "write failed silently. Run diagnose_torch_sheet "
+                    "--ids {rid} to tell which."
+                )
         if not apply:
             self.stdout.write("Dry run. Re-run with --apply to write.")
         else:
