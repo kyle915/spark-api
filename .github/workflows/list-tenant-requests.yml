@@ -1,0 +1,76 @@
+name: List tenant requests
+
+# Lists a tenant's requests by SUBMISSION date (created_at). Read-only.
+#
+# Built to pick ids safely for "Backfill Torch public form sheet": that
+# workflow takes explicit ids and appends whatever it is handed, while the
+# Sheet is only meant to carry public spark-form submissions. Feeding it the
+# bulk-imported rows would flood the client's workbook.
+#
+# Nothing on a Request records which path created it, so this prints the
+# signals that distinguish them — created_by (public submissions have none),
+# requestor_email, and created_at — and flags its guess as a heuristic. The
+# run ends with an IDS: line you can paste straight into the backfill.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tenant_id:
+        description: "Tenant id (Torch THC = 17)"
+        required: true
+        default: "17"
+      days:
+        description: "Look back N days (1 = today so far)"
+        required: false
+        default: "1"
+      since:
+        description: "…or an explicit start date YYYY-MM-DD"
+        required: false
+        default: ""
+      until:
+        description: "Optional end date YYYY-MM-DD"
+        required: false
+        default: ""
+      public_only:
+        description: "Only rows that look like public-form submissions"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+jobs:
+  list-tenant-requests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire list-tenant-requests endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/list-tenant-requests
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          TENANT_ID: ${{ github.event.inputs.tenant_id }}
+          DAYS: ${{ github.event.inputs.days }}
+          SINCE: ${{ github.event.inputs.since }}
+          UNTIL: ${{ github.event.inputs.until }}
+          PUBLIC_ONLY: ${{ github.event.inputs.public_only }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            --max-time 180 \
+            -X POST "$CRON_URL" \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            --data-urlencode "tenant_id=$TENANT_ID" \
+            --data-urlencode "days=$DAYS" \
+            --data-urlencode "since=$SINCE" \
+            --data-urlencode "until=$UNTIL" \
+            --data-urlencode "public_only=$PUBLIC_ONLY")
+          echo "HTTP $STATUS"
+          python3 -c "
+          import json, sys
+          d = json.load(open('/tmp/cron-response.json'))
+          print(d.get('log') or '(no log)')
+          if not d.get('ok'):
+              print('ERROR:', d.get('error'), d.get('detail', ''), file=sys.stderr)
+          " || cat /tmp/cron-response.json
+          [ "$STATUS" != "200" ] && exit 1 || exit 0
