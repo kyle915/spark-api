@@ -114,6 +114,81 @@ class TestStandingRecapRepeat(AmbassadorsGraphQLTestCase):
             CustomRecap.objects.filter(event=event, ambassador=self.ba).count() == 2
         )
 
+    def test_feel_free_force_new_labels_second_shift(self):
+        """Admin list must tell morning from afternoon on the same market day."""
+        self.tenant.name = "Feel Free"
+        self.tenant.request_url_name = "bl00-feel-free"
+        self.tenant.save(update_fields=["name", "request_url_name"])
+        today = dj_tz.localdate()
+        event = self._event(name="Tampa", address="Tampa, FL", on_date=today)
+        first = self._submit(event, [{"blobName": self._blob(event, "a")}])
+        second = self._submit(
+            event,
+            [{"blobName": self._blob(event, "b")}],
+            force_new=True,
+        )
+        first.refresh_from_db()
+        second.refresh_from_db()
+        assert first.name == "Tampa"
+        assert second.name == "Tampa · Second shift"
+        assert second.id != first.id
+
+    def test_feel_free_explicit_shift_label_wins(self):
+        self.tenant.name = "Feel Free"
+        self.tenant.request_url_name = "bl00-feel-free"
+        self.tenant.save(update_fields=["name", "request_url_name"])
+        today = dj_tz.localdate()
+        event = self._event(name="Miami", address="Miami, FL", on_date=today)
+        self._submit(event, [{"blobName": self._blob(event, "a")}])
+        second = checkin_web.submit_checkin_recap(
+            event=event,
+            ambassador=self.ba,
+            template=self.template,
+            field_values=[],
+            files=[{"blobName": self._blob(event, "b")}],
+            total_engagements=None,
+            force_new=True,
+            shift_label="Second shift",
+        )
+        assert second.name == "Miami · Second shift"
+
+    def test_non_feel_free_force_new_does_not_auto_label(self):
+        today = dj_tz.localdate()
+        event = self._event(name="Austin", address="Austin, TX", on_date=today)
+        self._submit(event, [{"blobName": self._blob(event, "a")}])
+        second = self._submit(
+            event,
+            [{"blobName": self._blob(event, "b")}],
+            force_new=True,
+        )
+        assert second.name == "Austin"
+        assert "Second shift" not in second.name
+
+    def test_force_new_stub_reuse_still_gets_second_shift_label(self):
+        self.tenant.name = "Feel Free"
+        self.tenant.request_url_name = "bl00-feel-free"
+        self.tenant.save(update_fields=["name", "request_url_name"])
+        today = dj_tz.localdate()
+        event = self._event(name="Austin", address="Austin, TX", on_date=today)
+        self._submit(event, [{"blobName": self._blob(event, "a")}])
+        stub = CustomRecap.objects.create(
+            name="stub",
+            event=event,
+            ambassador=self.ba,
+            tenant=self.tenant,
+            custom_recap_template=self.template,
+            created_by=self.actor,
+            updated_by=self.actor,
+        )
+        filed = self._submit(
+            event,
+            [{"blobName": self._blob(event, "b")}],
+            force_new=True,
+        )
+        assert filed.id == stub.id
+        filed.refresh_from_db()
+        assert filed.name == "Austin · Second shift"
+
     def test_edit_without_force_new_still_updates_the_same_row(self):
         today = dj_tz.localdate()
         event = self._event(name="Austin", address="Austin, TX", on_date=today)
@@ -354,6 +429,8 @@ class TestStandingRecapRepeat(AmbassadorsGraphQLTestCase):
             data={
                 "session": token,
                 "forceNew": True,
+                "secondShift": True,
+                "shiftLabel": "Second shift",
                 "fieldValues": [],
                 "files": [{"blobName": self._blob(event, "b")}],
             },
@@ -364,6 +441,15 @@ class TestStandingRecapRepeat(AmbassadorsGraphQLTestCase):
         assert (
             CustomRecap.objects.filter(event=event, ambassador=self.ba).count() == 2
         )
+        names = list(
+            CustomRecap.objects.filter(event=event, ambassador=self.ba)
+            .order_by("id")
+            .values_list("name", flat=True)
+        )
+        # Tenant is "Feel Free {uid}" in this fixture — not the real brand —
+        # so auto-label does not fire; the explicit secondShift/shiftLabel does.
+        assert names[0] == "Austin"
+        assert names[1] == "Austin · Second shift"
 
     def test_identify_today_does_not_resume_a_leftover_sunday_shift(self):
         """Alicia: eventDate=Wednesday must mint today, not Sunday's open punch."""
@@ -524,4 +610,22 @@ class TestFeelFreeTenantGate:
         )
         assert not checkin_web.is_feel_free_tenant(
             t(slug="girl-beer", name="Girl Beer")
+        )
+
+    def test_standing_multi_shift_label_ordinals(self):
+        assert checkin_web.standing_multi_shift_label(filed_count=0) == ""
+        assert (
+            checkin_web.standing_multi_shift_label(filed_count=1)
+            == checkin_web.SECOND_SHIFT_LABEL
+        )
+        assert checkin_web.standing_multi_shift_label(filed_count=2) == "Third shift"
+        assert checkin_web.standing_multi_shift_label(filed_count=4) == "Shift 5"
+
+    def test_compose_shift_recap_name(self):
+        assert (
+            checkin_web.compose_shift_recap_name("Tampa", "Second shift")
+            == "Tampa · Second shift"
+        )
+        assert checkin_web.compose_shift_recap_name("Tampa · Second shift", "Second shift") == (
+            "Tampa · Second shift"
         )
