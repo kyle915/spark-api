@@ -5303,6 +5303,75 @@ class SetupLdRetailCheckinView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class ListTenantRequestsView(View):
+    """GET/POST `/internal/cron/list-tenant-requests`.
+
+    Lists a tenant's requests by SUBMISSION date. Read-only.
+
+    Exists to pick ids safely for the Torch Sheet backfill: that command takes
+    explicit ids and will append whatever you give it, while the Sheet is only
+    meant to carry public spark-form submissions. Nothing on the row records
+    which path created it, so this prints the signals that distinguish them
+    (created_by, requestor_email, created_at) rather than guessing.
+
+    Params: tenant_id (required), days, since, until, public_only.
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _param(key: str) -> str:
+            return (request.GET.get(key) or request.POST.get(key) or "").strip()
+
+        raw_tid = _param("tenant_id")
+        if not raw_tid:
+            return JsonResponse(
+                {"ok": False, "error": "tenant_id-required"}, status=400
+            )
+        try:
+            kwargs: dict = {"tenant_id": int(raw_tid)}
+        except ValueError:
+            return JsonResponse(
+                {"ok": False, "error": "tenant_id-must-be-an-integer"}, status=400
+            )
+
+        for key in ("since", "until"):
+            v = _param(key)
+            if v:
+                kwargs[key] = v
+        days = _param("days")
+        if days:
+            try:
+                kwargs["days"] = int(days)
+            except ValueError:
+                return JsonResponse(
+                    {"ok": False, "error": "days-must-be-an-integer"}, status=400
+                )
+        if _param("public_only").lower() in ("1", "true", "yes", "on"):
+            kwargs["public_only"] = True
+
+        out = io.StringIO()
+        try:
+            call_command("list_tenant_requests", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("list-tenant-requests cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc),
+                 "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "log": out.getvalue()})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class CountUserEventsView(View):
     """GET/POST `/internal/cron/count-user-events`.
 
@@ -8219,6 +8288,7 @@ def _registered_views() -> dict[str, Any]:
         "export-recap-pdf": ExportRecapPdfView,
         "list-checkin-links": ListCheckinLinksView,
         "count-user-events": CountUserEventsView,
+        "list-tenant-requests": ListTenantRequestsView,
         "set-checkin-resources": SetCheckinResourcesView,
         "set-tenant-mileage-tracking": SetTenantMileageTrackingView,
         "staff-tenant-events": StaffTenantEventsView,
