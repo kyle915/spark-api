@@ -5303,6 +5303,51 @@ class SetupLdRetailCheckinView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class DiagnoseTorchSheetView(View):
+    """GET/POST `/internal/cron/diagnose-torch-sheet`.
+
+    Says whether the Torch public-form Sheet is actually reachable, and whether
+    specific requests landed on it.
+
+    Exists because `append_torch_public_form_row` returns False both when a row
+    is already present and when the write soft-failed, and the backfill prints
+    the same "skipped" for each. That hides the one failure that matters — the
+    workbook not shared with the service account — which is silent by design so
+    a Sheets error can never 500 the public form.
+
+    READ-ONLY. Params: ids (optional).
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        kwargs: dict = {}
+        ids = (request.GET.get("ids") or request.POST.get("ids") or "").strip()
+        if ids:
+            kwargs["ids"] = ids
+
+        out = io.StringIO()
+        try:
+            call_command("diagnose_torch_sheet", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("diagnose-torch-sheet cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc),
+                 "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "log": out.getvalue()})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class ListTenantRequestsView(View):
     """GET/POST `/internal/cron/list-tenant-requests`.
 
@@ -8289,6 +8334,7 @@ def _registered_views() -> dict[str, Any]:
         "list-checkin-links": ListCheckinLinksView,
         "count-user-events": CountUserEventsView,
         "list-tenant-requests": ListTenantRequestsView,
+        "diagnose-torch-sheet": DiagnoseTorchSheetView,
         "set-checkin-resources": SetCheckinResourcesView,
         "set-tenant-mileage-tracking": SetTenantMileageTrackingView,
         "staff-tenant-events": StaffTenantEventsView,
