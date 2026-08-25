@@ -1,0 +1,54 @@
+name: Diagnose Torch sheet
+
+# Is the Torch public-form Google Sheet actually reachable, and did specific
+# requests land on it?
+#
+# Worth having because "Backfill Torch public form sheet" prints
+# "skipped (already on sheet or no-op)" for BOTH a row that is already there
+# and a write that silently failed. The public form swallows Sheets errors on
+# purpose — a Sheets problem must never 500 a client's request form — so a
+# permissions failure is otherwise invisible until someone asks where their
+# rows went.
+#
+# Read-only. Nothing is written.
+#
+# If it reports credentials or the workbook open failing, share the sheet as
+# EDITOR with spark-api-new-sa@spark-479222.iam.gserviceaccount.com. If reads
+# work but the header write fails, the account is Viewer, not Editor.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ids:
+        description: "Optional Spark Request ids to look for (e.g. 1992)"
+        required: false
+        default: ""
+
+jobs:
+  diagnose-torch-sheet:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire diagnose endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/diagnose-torch-sheet
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          IDS: ${{ github.event.inputs.ids }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            --max-time 180 \
+            -X POST "$CRON_URL" \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            --data-urlencode "ids=$IDS")
+          echo "HTTP $STATUS"
+          python3 -c "
+          import json, sys
+          d = json.load(open('/tmp/cron-response.json'))
+          print(d.get('log') or '(no log)')
+          if not d.get('ok'):
+              print('ERROR:', d.get('error'), d.get('detail', ''), file=sys.stderr)
+          " || cat /tmp/cron-response.json
+          [ "$STATUS" != "200" ] && exit 1 || exit 0
