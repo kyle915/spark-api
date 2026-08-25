@@ -146,3 +146,19 @@ class TestFeelFreeSpec:
     def test_code_prefix_is_brand_scoped(self):
         assert CODE_PREFIX == "FF-"
         assert TEMPLATE_NAME.startswith("Feel Free")
+
+    def test_sampling_detail_fields_are_on_the_spec(self):
+        from recaps.management.commands.setup_feel_free_checkin import (
+            SAMPLING_DETAIL_FIELDS,
+            SAMPLING_DETAIL_SECTION,
+        )
+
+        names = [f[0] for _, fields in SPEC for f in fields]
+        for fname, kind, required in SAMPLING_DETAIL_FIELDS:
+            assert fname in names
+            assert kind in {"text", "longtext"}
+            assert required is True
+        assert SAMPLING_DETAIL_SECTION == "Sampling Details"
+        assert any(
+            section == SAMPLING_DETAIL_SECTION for section, _ in SPEC
+        )

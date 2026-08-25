@@ -4357,6 +4357,13 @@ class SetupFeelFreeCheckinView(View):
         co = (request.GET.get("code_only") or request.POST.get("code_only") or "").lower()
         if co in ("1", "true", "yes", "on"):
             kwargs["code_only"] = True
+        asd = (
+            request.GET.get("add_sampling_details")
+            or request.POST.get("add_sampling_details")
+            or ""
+        ).lower()
+        if asd in ("1", "true", "yes", "on"):
+            kwargs["add_sampling_details"] = True
         pet = (
             request.GET.get("pin_event_type")
             or request.POST.get("pin_event_type")
