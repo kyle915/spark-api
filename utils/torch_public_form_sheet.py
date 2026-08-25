@@ -293,26 +293,25 @@ def _find_uuid_row(svc, sheet_id: str, tab: str | None, header: list[str], uuid:
     return None
 
 
-def append_torch_public_form_row(
-    request, request_url_name: str | None = None
-) -> bool:
-    """Append (or no-op if UUID already present) one Torch public-form row.
+def _append_row(request) -> bool:
+    """Write one already-authorised request onto the sheet.
 
-    Returns True when a row was written. Returns False on skip / soft fail.
-    Never raises to the caller.
+    Callers own the authorisation decision; this only writes. Split out so the
+    public-form and signed-in paths cannot drift into two different row shapes
+    or two different dedupe rules.
+
+    Returns True when a row was written. Returns False on skip / soft fail, and
+    never raises — a Sheets problem must not 500 a request submission. Use
+    `diagnose_torch_sheet` to tell those two Falses apart.
     """
-    tenant = getattr(request, "tenant", None)
     try:
-        if not should_append_torch_public_form(request_url_name, tenant):
-            return False
         uuid = getattr(request, "uuid", None)
         if not uuid:
             return False
         svc = _service()
         if not svc:
             logger.warning(
-                "torch public-form sheet: no Sheets credentials "
-                "(share Editor with %s)",
+                "torch sheet: no Sheets credentials (share Editor with %s)",
                 SERVICE_ACCOUNT_EMAIL,
             )
             return False
@@ -332,8 +331,39 @@ def append_torch_public_form_row(
         return True
     except Exception:
         logger.warning(
-            "torch public-form sheet append failed for request=%s",
+            "torch sheet append failed for request=%s",
             getattr(request, "id", None),
             exc_info=True,
         )
         return False
+
+
+def append_torch_public_form_row(
+    request, request_url_name: str | None = None
+) -> bool:
+    """Append one Torch row submitted through the PUBLIC spark-form.
+
+    Gated on the form slug as well as the tenant, so nothing else can reach
+    this entry point by accident.
+    """
+    tenant = getattr(request, "tenant", None)
+    if not should_append_torch_public_form(request_url_name, tenant):
+        return False
+    return _append_row(request)
+
+
+def append_torch_request_row(request) -> bool:
+    """Append one Torch row created by a SIGNED-IN user (the in-app form).
+
+    Tenant-gated only — there is no form slug on this path.
+
+    Deliberately NOT wired into the bulk importer
+    (`events.batch_requests.import_requests_from_excel_bytes`). Torch's Binny /
+    Total Wine loads come through that path in the hundreds, and dumping them
+    into the client's workbook is exactly the flood the ids-only backfill was
+    written to prevent. One person filling in one form is the thing this is
+    for.
+    """
+    if not is_torch_tenant(getattr(request, "tenant", None)):
+        return False
+    return _append_row(request)

@@ -46,7 +46,10 @@ from .torch_portal import (
     should_auto_approve_public_request,
     torch_request_approved_lists,
 )
-from utils.torch_public_form_sheet import append_torch_public_form_row
+from utils.torch_public_form_sheet import (
+    append_torch_public_form_row,
+    append_torch_request_row,
+)
 from utils.gcs import (
     delete_blob,
     download_blob_bytes,
@@ -3680,6 +3683,22 @@ class RequestMutations:
                     "distributor__location__state",
                 ).get
             )(id=request.id)
+
+            # Torch: mirror signed-in in-app requests onto the retail-schedule
+            # Sheet, same as the public spark-form does. Tenant-gated inside.
+            # The bulk importer is a different code path and stays out on
+            # purpose -- Binny / Total Wine loads arrive in the hundreds and
+            # would flood the client's workbook.
+            try:
+                await sync_to_async(append_torch_request_row)(
+                    request_with_relations
+                )
+            except Exception:
+                logger.warning(
+                    "torch sheet append failed for request=%s",
+                    getattr(request_with_relations, "id", None),
+                    exc_info=True,
+                )
 
             # Audit log: first entry in the request's timeline.
             try:

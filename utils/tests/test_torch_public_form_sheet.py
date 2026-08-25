@@ -11,6 +11,7 @@ from utils.torch_public_form_sheet import (
     TORCH_PUBLIC_FORM_SHEET_ID,
     UUID_HEADER,
     append_torch_public_form_row,
+    append_torch_request_row,
     build_torch_public_form_values,
     extract_city,
     should_append_torch_public_form,
@@ -247,3 +248,36 @@ def test_append_failure_is_swallowed():
         side_effect=RuntimeError("sheets down"),
     ):
         assert append_torch_public_form_row(req, "keee-torch-thc") is False
+
+
+def test_signed_in_torch_request_appends_without_a_form_slug():
+    """The in-app form has no slug, so this path is gated on tenant alone."""
+    req = _request()
+    svc = MagicMock()
+    values_api = svc.spreadsheets.return_value.values.return_value
+    header = ["State", "Store Name", "Rate"] + SPARK_EXTRA_HEADERS
+    values_api.get.return_value.execute.side_effect = [
+        {"values": [header]},
+        {"values": []},
+    ]
+    svc.spreadsheets.return_value.get.return_value.execute.return_value = {
+        "sheets": [{"properties": {"title": "Retail Schedule", "sheetId": 0}}]
+    }
+
+    with patch("utils.torch_public_form_sheet._service", return_value=svc):
+        assert append_torch_request_row(req) is True
+    values_api.append.assert_called_once()
+
+
+def test_signed_in_non_torch_request_never_touches_sheets():
+    """Tenant gate still holds when there is no slug to fall back on."""
+    ld = _request(
+        tenant=SimpleNamespace(
+            slug="liquid-death",
+            name="Liquid Death",
+            request_url_name="ighn-liquid-death",
+        )
+    )
+    with patch("utils.torch_public_form_sheet._service") as svc:
+        assert append_torch_request_row(ld) is False
+        svc.assert_not_called()
