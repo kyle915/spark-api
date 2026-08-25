@@ -117,6 +117,8 @@ class TestFeelFreeSpec:
             "What were the top 5 frequently asked questions you received "
             "from consumers?",
             "Sampling Pictures",
+            "Where did you sample? (name a few locations)",
+            "Sampling Timeframe?",
             "Helpful feedback",
         ]
 

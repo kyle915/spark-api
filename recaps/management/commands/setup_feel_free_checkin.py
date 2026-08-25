@@ -99,6 +99,21 @@ SPEC: list[tuple[str, list[tuple[str, str, bool, list[str]]]]] = [
         ],
     ),
     (
+        # Written summary of the roaming day. Distinct from mid-shift "Log
+        # this stop" GPS pins — admins reading the filed recap need the BA's
+        # own short list of spots and when they worked, not a stop trail.
+        "Sampling Details",
+        [
+            (
+                "Where did you sample? (name a few locations)",
+                "longtext",
+                True,
+                [],
+            ),
+            ("Sampling Timeframe?", "text", True, []),
+        ],
+    ),
+    (
         "Wrap Up",
         [
             ("Helpful feedback", "longtext", False, []),

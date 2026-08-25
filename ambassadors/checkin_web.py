@@ -934,6 +934,17 @@ _FEEL_FREE_SLUGS = frozenset(
     {"feel-free", "feelfree", "bl00-feel-free", "bl00feelfree"}
 )
 
+# Feel Free (and any BA who opts in via the walk-up "second shift" control)
+# files more than one recap on the same market/day event. This label is the
+# durable title fragment admins see in the recap list — keep it short and
+# stable; do not localize or paraphrase per request.
+SECOND_SHIFT_LABEL = "Second shift"
+
+_SHIFT_ORDINAL_LABELS = {
+    2: SECOND_SHIFT_LABEL,
+    3: "Third shift",
+}
+
 
 def is_feel_free_tenant(tenant) -> bool:
     """True for the Feel Free brand only (standing link FF-YMMK3Q).
@@ -953,6 +964,63 @@ def is_feel_free_tenant(tenant) -> bool:
     if url in _FEEL_FREE_SLUGS or url.endswith("-feel-free"):
         return True
     return name == "feel free"
+
+
+def standing_multi_shift_label(*, filed_count: int) -> str:
+    """Label for the NEXT recap when this BA already has ``filed_count`` filed.
+
+    ``filed_count`` is how many filed recaps exist before this write. The first
+    shift stays the plain event title; the second becomes "Second shift".
+    """
+    shift_number = int(filed_count) + 1
+    if shift_number <= 1:
+        return ""
+    return _SHIFT_ORDINAL_LABELS.get(shift_number, f"Shift {shift_number}")
+
+
+def compose_shift_recap_name(event_name: str, shift_label: str) -> str:
+    """Append a shift label to the event title without duplicating it."""
+    base = (event_name or "Recap").strip() or "Recap"
+    label = (shift_label or "").strip()
+    if not label:
+        return base[:255]
+    if normalize_place(label) in normalize_place(base):
+        return base[:255]
+    return f"{base} · {label}"[:255]
+
+
+def resolve_force_new_shift_label(
+    *,
+    tenant,
+    event,
+    ambassador,
+    force_new: bool,
+    shift_label: str | None,
+) -> str:
+    """Pick the durable shift label for a force_new standing filing.
+
+    Explicit ``shift_label`` from the walk-up page wins. Feel Free auto-fills
+    "Second shift" (or Third / Shift N) so a BA who only taps forceNew still
+    lands a distinguishable admin title. Other standing brands stay unlabeled
+    unless the page sends a label — Liquid Death / Grub Hub one-per-store
+    paths must not suddenly grow "Second shift" titles.
+    """
+    explicit = (shift_label or "").strip()
+    if explicit:
+        return explicit[:80]
+    if not force_new:
+        return ""
+    if not is_feel_free_tenant(tenant):
+        return ""
+    from recaps import models as rmodels
+    from recaps.filed import custom_filed_q
+
+    filed_count = (
+        rmodels.CustomRecap.objects.filter(event=event, ambassador=ambassador)
+        .filter(custom_filed_q())
+        .count()
+    )
+    return standing_multi_shift_label(filed_count=filed_count)
 
 
 class RecapNeedsAPhoto(ValueError):
@@ -977,6 +1045,7 @@ def submit_checkin_recap(
     product_samples: list[dict] | None = None,
     force_new: bool = False,
     third_party: bool = False,
+    shift_label: str | None = None,
 ):
     """Create a ``CustomRecap`` (+ field values, photos, product samples) for a
     walk-up BA, attributed to their own user. Replicates the write path in
@@ -1045,6 +1114,17 @@ def submit_checkin_recap(
                 .exists()
             ):
                 recap = None
+        resolved_shift_label = ""
+        if force_new:
+            resolved_shift_label = resolve_force_new_shift_label(
+                tenant=getattr(event, "tenant", None),
+                event=event,
+                ambassador=ambassador,
+                force_new=True,
+                shift_label=shift_label,
+            )
+            if resolved_shift_label:
+                name = compose_shift_recap_name(name, resolved_shift_label)
         typed_name = _store_display_name(
             getattr(event, "name", "") or "", getattr(event, "address", "") or ""
         )
@@ -1083,16 +1163,20 @@ def submit_checkin_recap(
             recap.updated_by = actor
             if third_party:
                 recap.is_third_party = True
-            recap.save(
-                update_fields=[
-                    "submitted_at",
-                    "total_engagements",
-                    "custom_recap_template",
-                    "updated_by",
-                    "updated_at",
-                    *(["is_third_party"] if third_party else []),
-                ]
-            )
+            update_fields = [
+                "submitted_at",
+                "total_engagements",
+                "custom_recap_template",
+                "updated_by",
+                "updated_at",
+                *(["is_third_party"] if third_party else []),
+            ]
+            # force_new reusing an empty stub still needs the second-shift
+            # title — otherwise admin sees two rows both named the market.
+            if resolved_shift_label and recap.name != name:
+                recap.name = name
+                update_fields.append("name")
+            recap.save(update_fields=update_fields)
             rmodels.CustomFieldValue.objects.filter(custom_recap=recap).delete()
             rmodels.CustomRecapProductSample.objects.filter(
                 custom_recap=recap

@@ -738,6 +738,18 @@ def public_checkin_recap(request: HttpRequest, code: str) -> HttpResponse:
         # clock; never overwrite the previous filing.
         force_new = True
 
+    shift_label = (
+        data.get("shiftLabel") or data.get("shift_label") or ""
+    )
+    if isinstance(shift_label, str):
+        shift_label = shift_label.strip() or None
+    else:
+        shift_label = None
+    if force_new and (
+        data.get("secondShift") or data.get("asSecondShift") or data.get("second_shift")
+    ):
+        shift_label = shift_label or checkin_web.SECOND_SHIFT_LABEL
+
     try:
         checkin_web.submit_checkin_recap(
             event=event,
@@ -749,6 +761,7 @@ def public_checkin_recap(request: HttpRequest, code: str) -> HttpResponse:
             product_samples=product_samples if isinstance(product_samples, list) else [],
             force_new=force_new,
             third_party=checkin_web.is_recap_only_code(code, _target),
+            shift_label=shift_label,
         )
     except checkin_web.RecapNeedsAPhoto as exc:
         # The BA's to fix, not a server fault — so a 400 carrying the SAME
