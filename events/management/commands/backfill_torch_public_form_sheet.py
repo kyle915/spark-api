@@ -84,7 +84,7 @@ class Command(BaseCommand):
                 self.stdout.write(
                     f"  skipped REQ-{rid} — already on the sheet, OR the "
                     "write failed silently. Run diagnose_torch_sheet "
-                    "--ids {rid} to tell which."
+                    f"--ids {rid} to tell which."
                 )
         if not apply:
             self.stdout.write("Dry run. Re-run with --apply to write.")
