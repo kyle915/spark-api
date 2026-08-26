@@ -17,13 +17,14 @@ name: Ambassador job reminders
 # Secret-gated via `X-Cron-Secret` (shared INTERNAL_CRON_SECRET on both the
 # Cloud Run env and the repo secret).
 #
-# Schedule: every 10 minutes. The 15-min "before" window is wider than the
-# cadence on purpose so no shift slips between two runs; the dedup stamps keep
-# each reminder to a single send.
+# Schedule: every 10 minutes at :01/:11/… (offset from :00 so six crons don't
+# stampede the hosted-runner queue). The 15-min "before" window is wider than
+# the cadence on purpose so no shift slips between two runs; the dedup stamps
+# keep each reminder to a single send.
 
 on:
   schedule:
-    - cron: "*/10 * * * *"
+    - cron: "1,11,21,31,41,51 * * * *"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -39,9 +40,14 @@ on:
         required: false
         default: "120"
 
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
 jobs:
   fire-ambassador-job-reminders:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Fire ambassador-job-reminders cron endpoint
         env:

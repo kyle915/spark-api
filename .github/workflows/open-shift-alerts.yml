@@ -13,13 +13,13 @@ name: Open shift alerts
 # the Cloud Run service env and the GitHub repo secret) — see the
 # activation-reminders workflow for the full setup notes.
 #
-# Lives on the default branch (main) so GitHub Actions actually fires the
-# schedule; the endpoint it calls is deployed from develop. notified_at
-# dedup keeps a drop to a single fan-out regardless of cron jitter.
+# Schedule: every 10 minutes at :06/:16/… (offset from :00 so six crons don't
+# stampede the hosted-runner queue). notified_at dedup keeps a drop to a single
+# fan-out regardless of cron jitter.
 
 on:
   schedule:
-    - cron: "*/10 * * * *"
+    - cron: "6,16,26,36,46,56 * * * *"
   workflow_dispatch:
     inputs:
       radius_miles:
@@ -39,9 +39,14 @@ on:
           - "false"
           - "true"
 
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
 jobs:
   fire-open-shift-alerts:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Fire open-shift alerts cron endpoint
         env:

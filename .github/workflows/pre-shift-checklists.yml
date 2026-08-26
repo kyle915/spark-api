@@ -17,13 +17,14 @@ name: Pre-shift checklists
 # Secret-gated via `X-Cron-Secret` (shared INTERNAL_CRON_SECRET on both the
 # Cloud Run env and the repo secret).
 #
-# Schedule: every 10 minutes. The 120-min lead window is far wider than the
-# cadence on purpose so no shift slips between two runs; the dedup stamp
+# Schedule: every 10 minutes at :02/:12/… (offset from :00 so six crons don't
+# stampede the hosted-runner queue). The 120-min lead window is far wider than
+# the cadence on purpose so no shift slips between two runs; the dedup stamp
 # keeps each checklist to a single send (~2h before start).
 
 on:
   schedule:
-    - cron: "*/10 * * * *"
+    - cron: "2,12,22,32,42,52 * * * *"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -39,9 +40,14 @@ on:
         required: false
         default: "120"
 
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
 jobs:
   fire-pre-shift-checklists:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Fire pre-shift-checklists cron endpoint
         env:

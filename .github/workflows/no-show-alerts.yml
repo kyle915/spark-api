@@ -11,12 +11,14 @@ name: No-show alerts
 # the Cloud Run service env and the GitHub repo secret) — see the
 # daily-admin-digest workflow for full setup notes.
 #
-# Schedule: every 15 minutes. The 45-min threshold + 8h lookback windows are
-# wider than the cadence so nothing slips; the alert stamp keeps it single-shot.
+# Schedule: every 15 minutes at :07/:22/… (offset from :00/:15 so crons don't
+# stampede the hosted-runner queue). The 45-min threshold + 8h lookback windows
+# are wider than the cadence so nothing slips; the alert stamp keeps it
+# single-shot.
 
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    - cron: "7,22,37,52 * * * *"
   workflow_dispatch:
     inputs:
       threshold_minutes:
@@ -36,9 +38,14 @@ on:
           - "false"
           - "true"
 
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
 jobs:
   fire-no-show-alerts:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Fire no-show alerts cron endpoint
         env:
