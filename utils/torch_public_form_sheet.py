@@ -293,6 +293,118 @@ def _find_uuid_row(svc, sheet_id: str, tab: str | None, header: list[str], uuid:
     return None
 
 
+
+def _parse_sheet_date(cell: str):
+    """Parse a Date cell. None when it is not a date we recognise.
+
+    The column is client-maintained free text, so this never guesses — an
+    unrecognised cell simply doesn't participate in ordering.
+    """
+    import datetime as _dt
+
+    text = (cell or "").strip()
+    if not text:
+        return None
+    for fmt in ("%m/%d/%Y", "%m/%d/%y", "%Y-%m-%d", "%m-%d-%Y",
+                "%b %d, %Y", "%B %d, %Y"):
+        try:
+            return _dt.datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _date_column_values(svc, sheet_id: str, tab, header: list[str]):
+    """[(row_number, date)] for every parseable Date cell, in sheet order."""
+    try:
+        di = header.index("Date")
+    except ValueError:
+        return None
+    grid = (
+        svc.spreadsheets()
+        .values()
+        .get(
+            spreadsheetId=sheet_id,
+            range=_qualify(tab, f"{_col_letter(di + 1)}2:{_col_letter(di + 1)}"),
+        )
+        .execute()
+        .get("values", [])
+    )
+    out = []
+    for n, row in enumerate(grid, start=2):
+        d = _parse_sheet_date(row[0] if row else "")
+        if d is not None:
+            out.append((n, d))
+    return out
+
+
+def _insert_index_for_date(dated, target):
+    """1-based row to insert BEFORE so `target` lands in date order.
+
+    None means "no opinion — append instead". That is returned when the sheet
+    is not already ascending, because there is no correct position in an
+    unsorted list and quietly inventing one would scatter rows.
+    """
+    if not dated or target is None:
+        return None
+    for (_, a), (_, b) in zip(dated, dated[1:]):
+        if b < a:
+            return None  # not sorted; don't pretend to know where this goes
+    for row_number, d in dated:
+        if d > target:
+            return row_number
+    return None  # belongs at the end
+
+
+def _insert_row_at(svc, sheet_id: str, tab, gid: int, index: int, row: list[str]):
+    """Open a blank row at `index` and write `row` into it."""
+    svc.spreadsheets().batchUpdate(
+        spreadsheetId=sheet_id,
+        body={
+            "requests": [
+                {
+                    "insertDimension": {
+                        "range": {
+                            "sheetId": gid,
+                            "dimension": "ROWS",
+                            "startIndex": index - 1,
+                            "endIndex": index,
+                        },
+                        "inheritFromBefore": True,
+                    }
+                }
+            ]
+        },
+    ).execute()
+    svc.spreadsheets().values().update(
+        spreadsheetId=sheet_id,
+        range=_qualify(tab, f"A{index}"),
+        valueInputOption="USER_ENTERED",
+        body={"values": [row]},
+    ).execute()
+
+
+def _delete_row(svc, sheet_id: str, gid: int, index: int):
+    """Remove one row. Callers must have confirmed it is a Spark-written row."""
+    svc.spreadsheets().batchUpdate(
+        spreadsheetId=sheet_id,
+        body={
+            "requests": [
+                {
+                    "deleteDimension": {
+                        "range": {
+                            "sheetId": gid,
+                            "dimension": "ROWS",
+                            "startIndex": index - 1,
+                            "endIndex": index,
+                        }
+                    }
+                }
+            ]
+        },
+    ).execute()
+
+
 def _append_row(request) -> bool:
     """Write one already-authorised request onto the sheet.
 
@@ -321,13 +433,32 @@ def _append_row(request) -> bool:
             return False
         values = build_torch_public_form_values(request)
         row = _row_from_values(header, values)
-        svc.spreadsheets().values().append(
-            spreadsheetId=TORCH_PUBLIC_FORM_SHEET_ID,
-            range=_qualify(tab, "A:A"),
-            valueInputOption="USER_ENTERED",
-            insertDataOption="INSERT_ROWS",
-            body={"values": [row]},
-        ).execute()
+
+        # Land the row in DATE order rather than at the bottom. The client's
+        # schedule is maintained chronologically and they read it that way, so
+        # appending buried each new request below December.
+        #
+        # Falls back to a plain append whenever the position isn't knowable —
+        # sheet not sorted, no Date column, unparseable date. Appending is
+        # merely untidy; guessing a position in an unsorted sheet scatters rows
+        # through the client's data, which is worse and harder to undo.
+        target = _parse_sheet_date(values.get("Date", ""))
+        dated = _date_column_values(svc, TORCH_PUBLIC_FORM_SHEET_ID, tab, header)
+        index = _insert_index_for_date(dated, target) if dated is not None else None
+
+        if index is not None:
+            _insert_row_at(
+                svc, TORCH_PUBLIC_FORM_SHEET_ID, tab,
+                TORCH_PUBLIC_FORM_GID, index, row,
+            )
+        else:
+            svc.spreadsheets().values().append(
+                spreadsheetId=TORCH_PUBLIC_FORM_SHEET_ID,
+                range=_qualify(tab, "A:A"),
+                valueInputOption="USER_ENTERED",
+                insertDataOption="INSERT_ROWS",
+                body={"values": [row]},
+            ).execute()
         return True
     except Exception:
         logger.warning(
