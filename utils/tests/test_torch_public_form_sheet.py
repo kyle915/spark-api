@@ -12,6 +12,8 @@ from utils.torch_public_form_sheet import (
     UUID_HEADER,
     append_torch_public_form_row,
     append_torch_request_row,
+    _insert_index_for_date,
+    _parse_sheet_date,
     build_torch_public_form_values,
     extract_city,
     should_append_torch_public_form,
@@ -281,3 +283,34 @@ def test_signed_in_non_torch_request_never_touches_sheets():
     with patch("utils.torch_public_form_sheet._service") as svc:
         assert append_torch_request_row(ld) is False
         svc.assert_not_called()
+
+
+def _d(text):
+    import datetime as _dt
+
+    return _dt.date.fromisoformat(text)
+
+
+def test_insert_index_places_a_date_between_its_neighbours():
+    rows = [(2, _d("2026-08-26")), (3, _d("2026-09-15")), (4, _d("2026-12-27"))]
+    assert _insert_index_for_date(rows, _d("2026-09-01")) == 3
+    assert _insert_index_for_date(rows, _d("2026-01-01")) == 2
+    # later than everything -> None means "append at the end"
+    assert _insert_index_for_date(rows, _d("2027-01-05")) is None
+
+
+def test_insert_index_refuses_to_guess_in_an_unsorted_sheet():
+    """No position is correct in an unsorted list; scattering rows through the
+    client's data is worse than appending."""
+    unsorted_rows = [(2, _d("2026-09-15")), (3, _d("2026-08-26"))]
+    assert _insert_index_for_date(unsorted_rows, _d("2026-09-01")) is None
+    assert _insert_index_for_date([], _d("2026-09-01")) is None
+    assert _insert_index_for_date([(2, _d("2026-08-26"))], None) is None
+
+
+def test_sheet_date_parsing_never_guesses():
+    assert _parse_sheet_date("09/12/2026") == _d("2026-09-12")
+    assert _parse_sheet_date("2026-09-12") == _d("2026-09-12")
+    assert _parse_sheet_date("Sep 12, 2026") == _d("2026-09-12")
+    assert _parse_sheet_date("not a date") is None
+    assert _parse_sheet_date("") is None

@@ -5303,6 +5303,49 @@ class SetupLdRetailCheckinView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class ReflowTorchSheetView(View):
+    """GET/POST `/internal/cron/reflow-torch-sheet`.
+
+    Moves Spark-written rows on the Torch sheet into date order.
+
+    Only rows carrying a Spark Request UUID are touched — the client's own
+    ~2,100 rows have no UUID and are never moved, rewritten or deleted.
+
+    DRY-RUN unless apply is truthy. Params: apply.
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        kwargs: dict = {}
+        raw = (request.GET.get("apply") or request.POST.get("apply") or "").strip()
+        if raw.lower() in ("1", "true", "yes", "on"):
+            kwargs["apply"] = True
+
+        out = io.StringIO()
+        try:
+            call_command("reflow_torch_sheet", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("reflow-torch-sheet cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc),
+                 "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse(
+            {"ok": True, "apply": bool(kwargs.get("apply")), "log": out.getvalue()}
+        )
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class DiagnoseTorchSheetView(View):
     """GET/POST `/internal/cron/diagnose-torch-sheet`.
 
@@ -8335,6 +8378,7 @@ def _registered_views() -> dict[str, Any]:
         "count-user-events": CountUserEventsView,
         "list-tenant-requests": ListTenantRequestsView,
         "diagnose-torch-sheet": DiagnoseTorchSheetView,
+        "reflow-torch-sheet": ReflowTorchSheetView,
         "set-checkin-resources": SetCheckinResourcesView,
         "set-tenant-mileage-tracking": SetTenantMileageTrackingView,
         "staff-tenant-events": StaffTenantEventsView,
