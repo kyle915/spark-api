@@ -76,24 +76,34 @@ class Command(BaseCommand):
                 .get("values", [])
             )
 
-            dated = []
+            # Anchors are the CLIENT's own rows — the ones with no Spark UUID.
+            # Position is measured against those and only those.
+            #
+            # Measuring against "every other dated row" was wrong: while two
+            # Spark rows are both out of place, that list is itself unsorted,
+            # _insert_index_for_date correctly declines to guess, and the
+            # fallback parks the row at the bottom — so the two misplaced rows
+            # just trade places forever instead of moving up into the schedule.
+            anchors: list[tuple[int, object]] = []
+            spark_rows: list[tuple[int, object, str, list]] = []
             for n, row in enumerate(grid, start=2):
-                cell = row[di] if len(row) > di else ""
-                d = T._parse_sheet_date(cell)
-                if d is not None:
-                    dated.append((n, d))
+                d = T._parse_sheet_date(row[di] if len(row) > di else "")
+                if d is None:
+                    continue
+                uuid = (row[ui] if len(row) > ui else "").strip()
+                if uuid:
+                    spark_rows.append((n, d, uuid, row))
+                else:
+                    anchors.append((n, d))
 
             target = None
-            for n, d in dated:
-                row = grid[n - 2]
-                uuid = (row[ui] if len(row) > ui else "").strip()
-                if not uuid:
-                    continue  # client-owned row — never touched
-                # Where would this row go if it were being inserted now?
-                others = [(rn, dd) for rn, dd in dated if rn != n]
-                want = T._insert_index_for_date(others, d)
+            for n, d, uuid, row in spark_rows:
+                want = T._insert_index_for_date(anchors, d)
                 if want is None:
-                    want = (others[-1][0] + 1) if others else n
+                    # Later than every client row, or the client block itself
+                    # is unsorted. Sit just after the last client row rather
+                    # than guessing a position inside their data.
+                    want = (anchors[-1][0] + 1) if anchors else n
                 if want > n:
                     want -= 1  # removing this row shifts everything below up
                 if want != n:

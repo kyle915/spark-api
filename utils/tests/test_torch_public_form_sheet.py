@@ -314,3 +314,19 @@ def test_sheet_date_parsing_never_guesses():
     assert _parse_sheet_date("Sep 12, 2026") == _d("2026-09-12")
     assert _parse_sheet_date("not a date") is None
     assert _parse_sheet_date("") is None
+
+
+def test_reflow_anchors_on_client_rows_not_on_other_spark_rows():
+    """A misplaced Spark row must be positioned against the CLIENT's sorted
+    rows. Measuring against every other dated row means two stranded Spark
+    rows make the list unsorted, the index declines to guess, and both just
+    trade places at the bottom forever."""
+    anchors = [(5, _d("2026-08-26")), (900, _d("2026-09-15")),
+               (2140, _d("2026-12-27"))]
+    assert _insert_index_for_date(anchors, _d("2026-09-12")) == 900
+    assert _insert_index_for_date(anchors, _d("2026-09-18")) == 2140
+
+    # Include another stranded Spark row and the list is no longer sorted,
+    # so no position is offered — the shape that caused the bug.
+    mixed = anchors + [(2142, _d("2026-09-18"))]
+    assert _insert_index_for_date(mixed, _d("2026-09-12")) is None
