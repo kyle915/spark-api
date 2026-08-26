@@ -28,6 +28,25 @@ from __future__ import annotations
 from django.core.management.base import BaseCommand
 
 
+def _parse_date(cell: str):
+    """Parse the sheet's date text. Returns a date or None.
+
+    The workbook is client-maintained, so the column carries whatever people
+    typed. Unparseable cells are counted, never guessed at.
+    """
+    import datetime as _dt
+
+    text = (cell or "").strip()
+    for fmt in ("%m/%d/%Y", "%m/%d/%y", "%Y-%m-%d", "%m-%d-%Y", "%b %d, %Y",
+                "%B %d, %Y", "%m/%d"):
+        try:
+            d = _dt.datetime.strptime(text, fmt).date()
+            return d.replace(year=_dt.date.today().year) if fmt == "%m/%d" else d
+        except ValueError:
+            continue
+    return None
+
+
 class Command(BaseCommand):
     help = "Diagnose the Torch public-form Google Sheet connection (read-only)."
 
@@ -110,6 +129,75 @@ class Command(BaseCommand):
             self.stdout.write(f"  ROWS: {max(len(rows) - 1, 0)} data row(s)")
         except Exception as exc:  # noqa: BLE001
             self.stdout.write(self.style.WARNING(f"  ROWS: unreadable — {exc}"))
+
+        # -- current row ORDER -------------------------------------------
+        # Whether the sheet is already chronological decides what "insert in
+        # date order" can even mean. Reported before anything is proposed,
+        # because re-sorting 2,000+ client-owned rows is not a thing to do on
+        # an assumption.
+        try:
+            di = header.index("Date")
+        except ValueError:
+            self.stdout.write(self.style.WARNING("  ORDER: no 'Date' column"))
+            di = None
+
+        if di is not None:
+            grid = (
+                svc.spreadsheets()
+                .values()
+                .get(
+                    spreadsheetId=sid,
+                    range=T._qualify(
+                        tab,
+                        f"{T._col_letter(di + 1)}2:{T._col_letter(di + 1)}",
+                    ),
+                )
+                .execute()
+                .get("values", [])
+            )
+            parsed: list[tuple[int, object]] = []
+            unparsed = 0
+            for n, row in enumerate(grid, start=2):
+                cell = (row[0] if row else "").strip()
+                if not cell:
+                    continue
+                d = _parse_date(cell)
+                if d is None:
+                    unparsed += 1
+                else:
+                    parsed.append((n, d))
+
+            self.stdout.write(
+                f"\n  ORDER: {len(parsed)} dated row(s), {unparsed} unparseable"
+            )
+            if parsed:
+                desc = [
+                    (a, b)
+                    for (_, a), (_, b) in zip(parsed, parsed[1:])
+                    if b < a
+                ]
+                if not desc:
+                    self.stdout.write(
+                        self.style.SUCCESS(
+                            "     already ascending by date end to end"
+                        )
+                    )
+                else:
+                    self.stdout.write(
+                        self.style.WARNING(
+                            f"     NOT sorted — {len(desc)} descending step(s). "
+                            "Inserting 'in order' has no single right answer "
+                            "while this is true."
+                        )
+                    )
+                self.stdout.write(
+                    f"     first={parsed[0][1]} (row {parsed[0][0]})  "
+                    f"last={parsed[-1][1]} (row {parsed[-1][0]})"
+                )
+                tail = parsed[-6:]
+                self.stdout.write("     last rows: " + ", ".join(
+                    f"r{n}:{d}" for n, d in tail
+                ))
 
         raw = (opts["ids"] or "").strip()
         if not raw:
