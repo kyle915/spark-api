@@ -1,0 +1,53 @@
+name: Reflow Torch sheet
+
+# Moves Spark-written rows on the Torch retail-schedule Sheet into date order.
+#
+# New rows insert in position automatically. This is for rows written before
+# that behaviour existed, which sit at the bottom of the workbook below
+# December where nobody reading a chronological schedule will find them.
+#
+# SAFETY: only rows carrying a Spark Request UUID are touched. The client's
+# ~2,100 own rows have no UUID and are never moved, rewritten or deleted — this
+# cannot reorder their data, only Spark's additions to it.
+#
+# Read the dry run first: it names the single next move and stops, because
+# every later position depends on that move actually happening.
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Actually move rows (read the dry run first)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+jobs:
+  reflow-torch-sheet:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire reflow endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/reflow-torch-sheet
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          APPLY: ${{ github.event.inputs.apply }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            --max-time 300 \
+            -X POST "$CRON_URL" \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            --data-urlencode "apply=$APPLY")
+          echo "HTTP $STATUS"
+          python3 -c "
+          import json, sys
+          d = json.load(open('/tmp/cron-response.json'))
+          print(d.get('log') or '(no log)')
+          if not d.get('ok'):
+              print('ERROR:', d.get('error'), d.get('detail', ''), file=sys.stderr)
+          " || cat /tmp/cron-response.json
+          [ "$STATUS" != "200" ] && exit 1 || exit 0
