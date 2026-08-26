@@ -27,17 +27,18 @@ name: Event confirmations
 # Cloud Run service env and the GitHub repo secret) — see the daily-admin-digest
 # workflow for the full setup notes.
 #
-# Schedule: every 15 minutes. The command's grace window (6h) is far wider than
-# the cadence on purpose, so a reminder can't slip between two runs even with
-# GitHub Actions' cron jitter or a spell of downtime; the per-stage claim keeps
-# it to a single send either way.
+# Schedule: every 15 minutes at :04/:19/… (offset from :00/:15 so crons don't
+# stampede the hosted-runner queue). The command's grace window (6h) is far
+# wider than the cadence on purpose, so a reminder can't slip between two runs
+# even with GitHub Actions' cron jitter or a spell of downtime; the per-stage
+# claim keeps it to a single send either way.
 #
 # BEFORE CHANGING THE SWEEP, dispatch this with dry_run=true and read the log —
 # it reports every (confirmation, stage) it would fire without sending anything.
 
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    - cron: "4,19,34,49 * * * *"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -75,9 +76,14 @@ on:
           - "t3"
           - "all"
 
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
 jobs:
   fire-event-confirmations:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Fire event-confirmations cron endpoint
         env:
