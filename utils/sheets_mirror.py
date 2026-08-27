@@ -21,17 +21,31 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Iterable
+import socket
+import time
+from typing import Any, Iterable
 
+import httplib2
 from django.conf import settings
 from django.utils import timezone
 from google.oauth2 import service_account
+from google_auth_httplib2 import AuthorizedHttp
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 from tenants.models import Tenant
 
 logger = logging.getLogger(__name__)
+
+# Bulk reads (reconcile cron scanning the LD key column) can span tens of
+# thousands of rows. httplib2 defaults to no timeout, but Google's side can
+# still stall on a single col2:col100000 fetch — paginate + cap per-request
+# time so we fail fast and retry instead of wedging the cron for minutes.
+_SHEETS_HTTP_TIMEOUT_SECONDS = 120
+_SHEETS_READ_BATCH_ROWS = 5000
+_SHEETS_READ_MAX_ROW = 100_000
+_SHEETS_RETRY_ATTEMPTS = 3
+_TRANSIENT_HTTP_CODES = frozenset({429, 500, 502, 503, 504})
 
 # Column A holds the request UUID — we look it up here to decide
 # whether to update an existing row or append a new one. Keep stable
@@ -106,12 +120,54 @@ def _credentials():
         return None
 
 
+def _execute_sheets(request: Any, *, op: str) -> dict:
+    """Execute a built Sheets API request with retries on transient failures."""
+    last_exc: BaseException | None = None
+    for attempt in range(_SHEETS_RETRY_ATTEMPTS):
+        try:
+            return request.execute()
+        except HttpError as e:
+            last_exc = e
+            status = getattr(getattr(e, "resp", None), "status", None)
+            if status not in _TRANSIENT_HTTP_CODES or attempt >= _SHEETS_RETRY_ATTEMPTS - 1:
+                raise
+            delay = 2**attempt
+            logger.warning(
+                "sheets_mirror: %s HttpError %s, retry %d/%d in %ds",
+                op,
+                status,
+                attempt + 1,
+                _SHEETS_RETRY_ATTEMPTS,
+                delay,
+            )
+            time.sleep(delay)
+        except (TimeoutError, socket.timeout) as e:
+            last_exc = e
+            if attempt >= _SHEETS_RETRY_ATTEMPTS - 1:
+                raise
+            delay = 2**attempt
+            logger.warning(
+                "sheets_mirror: %s timeout (%s), retry %d/%d in %ds",
+                op,
+                type(e).__name__,
+                attempt + 1,
+                _SHEETS_RETRY_ATTEMPTS,
+                delay,
+            )
+            time.sleep(delay)
+    assert last_exc is not None
+    raise last_exc
+
+
 def _service():
     creds = _credentials()
     if not creds:
         return None
     try:
-        return build("sheets", "v4", credentials=creds, cache_discovery=False)
+        http = AuthorizedHttp(
+            creds, http=httplib2.Http(timeout=_SHEETS_HTTP_TIMEOUT_SECONDS)
+        )
+        return build("sheets", "v4", http=http, cache_discovery=False)
     except Exception as e:
         logger.warning("sheets_mirror: failed to build service: %s", e)
         return None
@@ -577,18 +633,34 @@ def _ld_existing_rows(svc, sheet_id, tab) -> dict:
     """Map {spark_uuid: 1-based row} from the far-right key column."""
     col = _ld_key_col()
     out: dict[str, int] = {}
-    try:
-        resp = (
-            svc.spreadsheets()
-            .values()
-            .get(spreadsheetId=sheet_id, range=_qualify(tab, f"{col}2:{col}100000"))
-            .execute()
-        )
-        for i, r in enumerate(resp.get("values") or [], start=2):
+    start = 2
+    while start <= _SHEETS_READ_MAX_ROW:
+        end = min(start + _SHEETS_READ_BATCH_ROWS - 1, _SHEETS_READ_MAX_ROW)
+        rng = _qualify(tab, f"{col}{start}:{col}{end}")
+        try:
+            resp = _execute_sheets(
+                svc.spreadsheets().values().get(
+                    spreadsheetId=sheet_id, range=rng
+                ),
+                op=f"ld key-column read rows {start}-{end}",
+            )
+        except HttpError as e:
+            logger.warning("sheets_mirror[ld]: key-column read failed at %s: %s", rng, e)
+            break
+        except (TimeoutError, socket.timeout) as e:
+            logger.warning(
+                "sheets_mirror[ld]: key-column read timed out at %s: %s", rng, e
+            )
+            break
+        values = resp.get("values") or []
+        if not values:
+            break
+        for i, r in enumerate(values, start=start):
             if r and str(r[0]).strip():
                 out[str(r[0]).strip()] = i
-    except HttpError as e:
-        logger.warning("sheets_mirror[ld]: key-column read failed: %s", e)
+        if len(values) < _SHEETS_READ_BATCH_ROWS:
+            break
+        start = end + 1
     return out
 
 
@@ -601,16 +673,18 @@ def _ld_next_row(svc, sheet_id, tab) -> int:
     col = _ld_key_col()
     for rng in (_qualify(tab, "D1:D100000"), _qualify(tab, f"{col}1:{col}100000")):
         try:
-            vals = (
-                svc.spreadsheets()
-                .values()
-                .get(spreadsheetId=sheet_id, range=rng)
-                .execute()
-                .get("values")
-                or []
+            resp = _execute_sheets(
+                svc.spreadsheets().values().get(
+                    spreadsheetId=sheet_id, range=rng
+                ),
+                op=f"ld extent read {rng}",
             )
+            vals = resp.get("values") or []
         except HttpError as e:
             logger.warning("sheets_mirror[ld]: extent read failed: %s", e)
+            continue
+        except (TimeoutError, socket.timeout) as e:
+            logger.warning("sheets_mirror[ld]: extent read timed out (%s): %s", rng, e)
             continue
         for i in range(len(vals), 0, -1):
             if vals[i - 1] and str(vals[i - 1][0]).strip():
