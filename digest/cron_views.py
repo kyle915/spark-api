@@ -5303,6 +5303,57 @@ class SetupLdRetailCheckinView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class FlattenTorchSheetView(View):
+    """GET/POST `/internal/cron/flatten-torch-sheet`.
+
+    Backs the Torch workbook up to GCS (values AND formulas, both tabs) and
+    reports how many cells are formulas.
+
+    `apply` replaces the formulas with their currently displayed values, making
+    the tab plain editable data. That is ONE-WAY: nothing can recompute the tab
+    from the source afterwards, and whatever is on screen at that moment is
+    frozen. Read the backup + report first.
+
+    Params: apply, source_tab.
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _param(key: str) -> str:
+            return (request.GET.get(key) or request.POST.get(key) or "").strip()
+
+        kwargs: dict = {}
+        src = _param("source_tab")
+        if src:
+            kwargs["source_tab"] = src
+        if _param("apply").lower() in ("1", "true", "yes", "on"):
+            kwargs["apply"] = True
+
+        out = io.StringIO()
+        try:
+            call_command("flatten_torch_sheet", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("flatten-torch-sheet cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc),
+                 "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse(
+            {"ok": True, "apply": bool(kwargs.get("apply")), "log": out.getvalue()}
+        )
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class ReflowTorchSheetView(View):
     """GET/POST `/internal/cron/reflow-torch-sheet`.
 
@@ -8379,6 +8430,7 @@ def _registered_views() -> dict[str, Any]:
         "list-tenant-requests": ListTenantRequestsView,
         "diagnose-torch-sheet": DiagnoseTorchSheetView,
         "reflow-torch-sheet": ReflowTorchSheetView,
+        "flatten-torch-sheet": FlattenTorchSheetView,
         "set-checkin-resources": SetCheckinResourcesView,
         "set-tenant-mileage-tracking": SetTenantMileageTrackingView,
         "staff-tenant-events": StaffTenantEventsView,
