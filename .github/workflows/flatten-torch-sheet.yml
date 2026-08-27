@@ -1,0 +1,61 @@
+name: Flatten Torch sheet
+
+# Backs the Torch workbook up to GCS, and optionally replaces the formulas in
+# the visible tab with their current displayed values.
+#
+# WHY: the visible tab is an INDEX/MATCH mirror of 'Retail Schedule Source'
+# keyed on ROW(). That is why the rows can't be edited (a cell holds a formula,
+# not a value) and why deleting row 4 blanks row 5 — every formula below shifts
+# and resolves to a different source record.
+#
+# Leave apply=false first. That run is READ-ONLY: it backs up BOTH tabs, values
+# AND formulas, and tells you how many formula cells there are.
+#
+# apply=true is ONE-WAY. It freezes whatever the tab is displaying at that
+# moment and removes the formulas that could have recomputed it. If the tab is
+# rendering shifted rows, that shift becomes permanent. Fix alignment FIRST.
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Replace formulas with values (ONE-WAY — back up and check alignment first)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+      source_tab:
+        description: "Name of the source tab"
+        required: false
+        default: "Retail Schedule Source"
+
+jobs:
+  flatten-torch-sheet:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire flatten endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/flatten-torch-sheet
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          APPLY: ${{ github.event.inputs.apply }}
+          SOURCE_TAB: ${{ github.event.inputs.source_tab }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            --max-time 540 \
+            -X POST "$CRON_URL" \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            --data-urlencode "apply=$APPLY" \
+            --data-urlencode "source_tab=$SOURCE_TAB")
+          echo "HTTP $STATUS"
+          python3 -c "
+          import json, sys
+          d = json.load(open('/tmp/cron-response.json'))
+          print(d.get('log') or '(no log)')
+          if not d.get('ok'):
+              print('ERROR:', d.get('error'), d.get('detail', ''), file=sys.stderr)
+          " || cat /tmp/cron-response.json
+          [ "$STATUS" != "200" ] && exit 1 || exit 0
