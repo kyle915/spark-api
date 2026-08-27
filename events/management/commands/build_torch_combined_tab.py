@@ -165,13 +165,33 @@ class Command(BaseCommand):
         conflicted = [combined[k] for k in order if combined[k]["conflicts"]]
         multi = [combined[k] for k in order if len(combined[k]["tabs"]) > 1]
 
+        # Where do the singletons come from? A row present in only ONE tab is
+        # either genuinely missing from the others, or an artifact of the
+        # mirror rendering shifted values (which changes its dedupe key). Those
+        # need very different responses, so the breakdown is reported BEFORE
+        # any tab is written rather than discovered afterwards.
+        from collections import Counter
+
+        only = Counter()
+        allthree = 0
+        for k in order:
+            tabs = set(combined[k]["tabs"])
+            if len(tabs) == 1:
+                only[next(iter(tabs))] += 1
+            if len(tabs) == len(want):
+                allthree += 1
+
         self.stdout.write("")
         self.stdout.write("-" * 74)
         self.stdout.write(
             f"  unique activations : {len(order)}\n"
             f"  appear in >1 tab   : {len(multi)}\n"
+            f"  in ALL {len(want)} tabs      : {allthree}\n"
             f"  WITH CONFLICTS     : {len(conflicted)}"
         )
+        self.stdout.write("\n  present in ONE tab only:")
+        for tab in want:
+            self.stdout.write(f"     {tab:<28} {only.get(tab, 0)}")
         self.stdout.write("-" * 74)
 
         for e in conflicted[:15]:
