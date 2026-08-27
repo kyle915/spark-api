@@ -1,0 +1,64 @@
+name: Build Torch combined tab
+
+# Combines and de-dupes the Torch schedule tabs — 'Retail Schedule',
+# 'Retail Schedule Raw' and 'Retail Schedule Source' — into one tab.
+#
+# It does NOT pick a winner when the tabs disagree. Each conflicting field is
+# flagged in the tab ('Conflict?' / 'Conflict detail') and listed in a CSV, so
+# the disagreements are visible instead of buried. The only thing it resolves
+# on its own is blank-vs-present: a blank never overwrites data.
+#
+# apply=false is read-only: inventory, dedupe counts, conflicts, CSV.
+# apply=true ADDS a tab. Existing tabs are read, never edited or deleted, and
+# it refuses to overwrite a tab that already exists.
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Create the combined tab (adds a tab; never edits existing ones)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+      tabs:
+        description: "Tabs to combine, comma separated"
+        required: false
+        default: "Retail Schedule,Retail Schedule Raw,Retail Schedule Source"
+      target:
+        description: "Name of the tab to create"
+        required: false
+        default: "Combined Schedule (Spark)"
+
+jobs:
+  build-torch-combined-tab:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire combine endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/build-torch-combined-tab
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          APPLY: ${{ github.event.inputs.apply }}
+          TABS: ${{ github.event.inputs.tabs }}
+          TARGET: ${{ github.event.inputs.target }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            --max-time 540 \
+            -X POST "$CRON_URL" \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            --data-urlencode "apply=$APPLY" \
+            --data-urlencode "tabs=$TABS" \
+            --data-urlencode "target=$TARGET")
+          echo "HTTP $STATUS"
+          python3 -c "
+          import json, sys
+          d = json.load(open('/tmp/cron-response.json'))
+          print(d.get('log') or '(no log)')
+          if not d.get('ok'):
+              print('ERROR:', d.get('error'), d.get('detail', ''), file=sys.stderr)
+          " || cat /tmp/cron-response.json
+          [ "$STATUS" != "200" ] && exit 1 || exit 0
