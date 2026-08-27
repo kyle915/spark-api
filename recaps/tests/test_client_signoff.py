@@ -1,6 +1,6 @@
 """Client recap sign-off (Looks good / Need more photos)."""
 
-from django.test import RequestFactory
+from django.test import RequestFactory, override_settings
 from django.utils import timezone as dj_tz
 
 from recaps.client_signoff import LOOKS_GOOD, NEED_MORE_PHOTOS, apply_signoff
@@ -158,6 +158,7 @@ def test_ops_looks_good_does_not_notify_ambassador(monkeypatch):
     assert called == []
 
 
+@override_settings(ADMIN_FRONTEND_URL="https://admin.igniteproductions.co")
 def test_ops_signoff_email_includes_tenant_brand(monkeypatch):
     from recaps.client_signoff import NEED_MORE_PHOTOS, notify_ops_signoff
 
@@ -184,6 +185,7 @@ def test_ops_signoff_email_includes_tenant_brand(monkeypatch):
 
     class _Recap:
         name = "8/14/2026 - 1303 SW lovejoy (Safeway)"
+        uuid = "01900000-0000-7000-8000-00000000c001"
         client_signoff_status = NEED_MORE_PHOTOS
         client_signoff_comment = ""
         event = _Event()
@@ -197,6 +199,11 @@ def test_ops_signoff_email_includes_tenant_brand(monkeypatch):
     assert "Brew Dr. Kombucha" in envelopes[0].html
     assert "8/14/2026 - 1303 SW lovejoy (Safeway)" in envelopes[0].html
     assert "(custom)" in envelopes[0].html
+    assert (
+        'href="https://admin.igniteproductions.co/recap/view-custom/'
+        '01900000-0000-7000-8000-00000000c001"'
+    ) in envelopes[0].html
+    assert "Open recap in Spark" in envelopes[0].html
 
 
 def test_ops_signoff_email_omits_brand_when_tenant_missing(monkeypatch):
@@ -222,3 +229,72 @@ def test_ops_signoff_email_omits_brand_when_tenant_missing(monkeypatch):
     assert len(envelopes) == 1
     assert envelopes[0].subject == "Recap sign-off — Looks good — LD recap"
     assert "Client sign-off on <strong>LD recap</strong> (legacy)." in envelopes[0].html
+    assert "Open recap in Spark" not in envelopes[0].html
+
+
+@override_settings(ADMIN_FRONTEND_URL="https://admin.example.com/")
+def test_ops_signoff_email_links_custom_recap_admin_view(monkeypatch):
+    from recaps.client_signoff import NEED_MORE_PHOTOS, notify_ops_signoff
+
+    envelopes = []
+    monkeypatch.setattr(
+        "utils.mailer.Mailer.send_now",
+        lambda self: envelopes.append(self.envelope()),
+    )
+    monkeypatch.setattr(
+        "events.mutations._get_spark_admin_emails",
+        lambda: ["ops@example.com"],
+    )
+    monkeypatch.setattr(
+        "recaps.client_signoff.notify_ambassador_need_photos",
+        lambda recap: None,
+    )
+
+    class _Recap:
+        name = "8/14/2026 - 1303 SW lovejoy (Safeway)"
+        uuid = "01900000-0000-7000-8000-00000000c002"
+        client_signoff_status = NEED_MORE_PHOTOS
+        client_signoff_comment = "need store shots"
+        event = None
+
+    notify_ops_signoff(_Recap(), kind="custom")
+    html = envelopes[0].html
+    href = (
+        "https://admin.example.com/recap/view-custom/"
+        "01900000-0000-7000-8000-00000000c002"
+    )
+    assert f'href="{href}"' in html
+    assert "Open recap in Spark" in html
+    assert "/recap/view/" not in html.replace("/recap/view-custom/", "")
+    assert "need store shots" in html
+
+
+@override_settings(ADMIN_FRONTEND_URL="https://admin.example.com")
+def test_ops_signoff_email_links_legacy_recap_admin_view(monkeypatch):
+    from recaps.client_signoff import LOOKS_GOOD, notify_ops_signoff
+
+    envelopes = []
+    monkeypatch.setattr(
+        "utils.mailer.Mailer.send_now",
+        lambda self: envelopes.append(self.envelope()),
+    )
+    monkeypatch.setattr(
+        "events.mutations._get_spark_admin_emails",
+        lambda: ["ops@example.com"],
+    )
+
+    class _Recap:
+        name = "LD recap"
+        uuid = "01900000-0000-7000-8000-00000000l001"
+        client_signoff_status = LOOKS_GOOD
+        client_signoff_comment = ""
+        event = None
+
+    notify_ops_signoff(_Recap(), kind="legacy")
+    html = envelopes[0].html
+    href = (
+        "https://admin.example.com/recap/view/"
+        "01900000-0000-7000-8000-00000000l001"
+    )
+    assert f'href="{href}"' in html
+    assert "/view-custom/" not in html
