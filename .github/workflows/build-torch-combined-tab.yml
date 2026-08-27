@@ -26,9 +26,15 @@ on:
         required: false
         default: "Retail Schedule,Retail Schedule Raw,Retail Schedule Source"
       target:
-        description: "Name of the tab to create"
+        description: "Name of the tab to write"
         required: false
         default: "Combined Schedule (Spark)"
+      overwrite:
+        description: "Allow writing into a tab that ALREADY EXISTS — destructive: clears and rebuilds it, removing its formulas. Backs up every tab first."
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
 
 jobs:
   build-torch-combined-tab:
@@ -41,6 +47,7 @@ jobs:
           APPLY: ${{ github.event.inputs.apply }}
           TABS: ${{ github.event.inputs.tabs }}
           TARGET: ${{ github.event.inputs.target }}
+          OVERWRITE: ${{ github.event.inputs.overwrite }}
         run: |
           if [ -z "$CRON_SECRET" ]; then
             echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
@@ -52,7 +59,8 @@ jobs:
             -H "X-Cron-Secret: $CRON_SECRET" \
             --data-urlencode "apply=$APPLY" \
             --data-urlencode "tabs=$TABS" \
-            --data-urlencode "target=$TARGET")
+            --data-urlencode "target=$TARGET" \
+            --data-urlencode "overwrite=$OVERWRITE")
           echo "HTTP $STATUS"
           python3 -c "
           import json, sys
