@@ -70,7 +70,13 @@ class Command(BaseCommand):
         parser.add_argument("--tabs", default=",".join(DEFAULT_TABS),
                             help="Comma-separated tab names to combine.")
         parser.add_argument("--target", default=COMBINED_TAB,
-                            help=f"Name of the tab to create (default {COMBINED_TAB!r}).")
+                            help=f"Tab to write (default {COMBINED_TAB!r}).")
+        parser.add_argument(
+            "--overwrite", action="store_true",
+            help="Allow writing into a tab that already exists. DESTRUCTIVE: "
+                 "the tab is cleared and rebuilt, which also removes any "
+                 "formulas in it. Every tab is backed up first.",
+        )
 
     # ------------------------------------------------------------------
 
@@ -142,25 +148,37 @@ class Command(BaseCommand):
                     continue
                 if key not in combined:
                     combined[key] = {"row": padded, "tabs": [tab],
-                                     "rownums": [n], "conflicts": []}
+                                     "rownums": [n], "conflicts": [],
+                                     "filled": 0}
                     order.append(key)
                     continue
                 entry = combined[key]
                 entry["tabs"].append(tab)
                 entry["rownums"].append(n)
-                # Compare the core columns; record every disagreement.
-                for i in range(CORE):
-                    a = str(entry["row"][i]).strip()
+                # Merge across EVERY column, not just the descriptive nine.
+                # Ops-owned columns (Rate, BA Name, Recap, Contract ...) exist
+                # on some tabs and not others; taking the base row from one tab
+                # and ignoring the rest would silently drop whichever of those
+                # only lived on another tab.
+                for i in range(len(padded)):
+                    a = str(entry["row"][i]).strip() if i < len(entry["row"]) else ""
                     b = str(padded[i]).strip()
-                    if a != b and (a or b):
+                    if not b:
+                        continue
+                    if not a:
+                        # Fill a blank from whichever tab has the value. This is
+                        # the only merge decision made without a human.
+                        entry["row"][i] = padded[i]
+                        entry["filled"] += 1
+                        continue
+                    if a != b and i < CORE:
+                        # Only the descriptive columns are worth flagging; ops
+                        # columns differ by design across tabs.
                         col = header[i] if i < len(header) else f"col{i+1}"
                         entry["conflicts"].append(
                             {"field": str(col), "a_tab": entry["tabs"][0], "a": a,
                              "b_tab": tab, "b": b}
                         )
-                        # Prefer a non-empty value; never overwrite data with blank.
-                        if not a and b:
-                            entry["row"][i] = b
 
         conflicted = [combined[k] for k in order if combined[k]["conflicts"]]
         multi = [combined[k] for k in order if len(combined[k]["tabs"]) > 1]
@@ -237,19 +255,56 @@ class Command(BaseCommand):
 
         # -- create the tab (additive only) --------------------------------
         target = opts["target"]
-        if target in present:
+        overwrite = bool(opts["overwrite"])
+
+        if target in present and not overwrite:
             self.stdout.write(
                 self.style.ERROR(
                     f"\n  {target!r} already exists — refusing to overwrite it. "
-                    "Rename or pass --target."
+                    "Pass --overwrite if that is genuinely intended."
                 )
             )
             return
 
-        svc.spreadsheets().batchUpdate(
-            spreadsheetId=sid,
-            body={"requests": [{"addSheet": {"properties": {"title": target}}}]},
-        ).execute()
+        # A destructive write gets a FULL backup first — every tab, values and
+        # formulas. The earlier backup covered two tabs; rebuilding a tab from
+        # a snapshot that never contained the others is not a backup.
+        if target in present:
+            full = {}
+            for t in present:
+                try:
+                    full[t] = {
+                        "values": svc.spreadsheets().values().get(
+                            spreadsheetId=sid, range=f"'{t}'!A1:BZ",
+                            valueRenderOption="FORMATTED_VALUE",
+                        ).execute().get("values", []),
+                        "formulas": svc.spreadsheets().values().get(
+                            spreadsheetId=sid, range=f"'{t}'!A1:BZ",
+                            valueRenderOption="FORMULA",
+                        ).execute().get("values", []),
+                    }
+                except Exception as exc:  # noqa: BLE001
+                    full[t] = {"error": str(exc)}
+            blob2 = f"exports/torch-combined/{stamp}-FULL-BACKUP.json"
+            upload_bytes(
+                blob2,
+                json.dumps({"sheet_id": sid, "tabs": full}, indent=2).encode(),
+                content_type="application/json",
+            )
+            self.stdout.write(
+                self.style.WARNING(
+                    f"\n  FULL BACKUP (all {len(present)} tabs): {public_url(blob2)}"
+                )
+            )
+            # Clear the target so stale rows below the new data can't survive.
+            svc.spreadsheets().values().clear(
+                spreadsheetId=sid, range=f"'{target}'!A1:BZ", body={}
+            ).execute()
+        else:
+            svc.spreadsheets().batchUpdate(
+                spreadsheetId=sid,
+                body={"requests": [{"addSheet": {"properties": {"title": target}}}]},
+            ).execute()
 
         out_header = list(header) + ["Sources", "Conflict?", "Conflict detail"]
         body = [out_header]
@@ -279,5 +334,8 @@ class Command(BaseCommand):
                 f"{len(conflicted)} flagged."
             )
         )
-        self.stdout.write("Existing tabs were read only — none were edited.")
+        filled = sum(e["filled"] for e in combined.values())
+        self.stdout.write(
+            f"{filled} blank cell(s) filled from another tab."
+        )
         self.stdout.write("=" * 74)

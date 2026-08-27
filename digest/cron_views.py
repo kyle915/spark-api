@@ -5332,6 +5332,8 @@ class BuildTorchCombinedTabView(View):
                 kwargs[key] = v
         if _param("apply").lower() in ("1", "true", "yes", "on"):
             kwargs["apply"] = True
+        if _param("overwrite").lower() in ("1", "true", "yes", "on"):
+            kwargs["overwrite"] = True
 
         out = io.StringIO()
         try:
