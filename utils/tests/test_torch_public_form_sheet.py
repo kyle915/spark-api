@@ -14,6 +14,7 @@ from utils.torch_public_form_sheet import (
     append_torch_request_row,
     _insert_index_for_date,
     _parse_sheet_date,
+    _tab_is_formula_driven,
     build_torch_public_form_values,
     extract_city,
     should_append_torch_public_form,
@@ -214,8 +215,10 @@ def test_append_writes_new_row_and_is_idempotent_on_uuid():
     values_api = svc.spreadsheets.return_value.values.return_value
     header = ["State", "Store Name", "Rate"] + SPARK_EXTRA_HEADERS
     values_api.get.return_value.execute.side_effect = [
+        {"values": [["TX", "Friday", "09/04/2026"]]},  # formula probe: plain values
         {"values": [header]},
         {"values": []},
+        {"values": []},   # date column read
     ]
     svc.spreadsheets.return_value.get.return_value.execute.return_value = {
         "sheets": [{"properties": {"title": "Retail Schedule", "sheetId": 0}}]
@@ -234,6 +237,7 @@ def test_append_writes_new_row_and_is_idempotent_on_uuid():
     assert append.call_args.kwargs["spreadsheetId"] == TORCH_PUBLIC_FORM_SHEET_ID
 
     values_api.get.return_value.execute.side_effect = [
+        {"values": [["TX", "Friday", "09/04/2026"]]},  # formula probe: plain values
         {"values": [header]},
         {"values": [[str(req.uuid)]]},
     ]
@@ -259,8 +263,10 @@ def test_signed_in_torch_request_appends_without_a_form_slug():
     values_api = svc.spreadsheets.return_value.values.return_value
     header = ["State", "Store Name", "Rate"] + SPARK_EXTRA_HEADERS
     values_api.get.return_value.execute.side_effect = [
+        {"values": [["TX", "Friday", "09/04/2026"]]},  # formula probe: plain values
         {"values": [header]},
         {"values": []},
+        {"values": []},   # date column read
     ]
     svc.spreadsheets.return_value.get.return_value.execute.return_value = {
         "sheets": [{"properties": {"title": "Retail Schedule", "sheetId": 0}}]
@@ -330,3 +336,44 @@ def test_reflow_anchors_on_client_rows_not_on_other_spark_rows():
     # so no position is offered — the shape that caused the bug.
     mixed = anchors + [(2142, _d("2026-09-18"))]
     assert _insert_index_for_date(mixed, _d("2026-09-12")) is None
+
+
+def test_formula_tab_is_detected():
+    """A tab whose cells are INDEX/MATCH must never be written to."""
+    svc = MagicMock()
+    svc.spreadsheets.return_value.values.return_value.get.return_value.execute.return_value = {
+        "values": [["TX", "=IFERROR(INDEX('Retail Schedule Source'!N$5:N$2367,1),\"\")"]]
+    }
+    assert _tab_is_formula_driven(svc, "sid", "Retail Schedule") is True
+
+
+def test_plain_value_tab_is_writable():
+    svc = MagicMock()
+    svc.spreadsheets.return_value.values.return_value.get.return_value.execute.return_value = {
+        "values": [["TX", "Friday", "09/04/2026"]]
+    }
+    assert _tab_is_formula_driven(svc, "sid", "Retail Schedule") is False
+
+
+def test_failed_probe_blocks_the_write():
+    """If we cannot tell, refuse. Corrupting a client schedule silently is
+    worse than not recording a request."""
+    svc = MagicMock()
+    svc.spreadsheets.return_value.values.return_value.get.return_value.execute.side_effect = (
+        RuntimeError("sheets down")
+    )
+    assert _tab_is_formula_driven(svc, "sid", "Retail Schedule") is True
+
+
+def test_write_is_refused_on_a_formula_tab():
+    req = _request()
+    svc = MagicMock()
+    svc.spreadsheets.return_value.get.return_value.execute.return_value = {
+        "sheets": [{"properties": {"title": "Retail Schedule", "sheetId": 0}}]
+    }
+    svc.spreadsheets.return_value.values.return_value.get.return_value.execute.return_value = {
+        "values": [["=IFERROR(INDEX(A1,1),\"\")"]]
+    }
+    with patch("utils.torch_public_form_sheet._service", return_value=svc):
+        assert append_torch_request_row(req) is False
+    svc.spreadsheets.return_value.values.return_value.append.assert_not_called()
