@@ -156,3 +156,69 @@ def test_ops_looks_good_does_not_notify_ambassador(monkeypatch):
 
     notify_ops_signoff(_Recap(), kind="legacy")
     assert called == []
+
+
+def test_ops_signoff_email_includes_tenant_brand(monkeypatch):
+    from recaps.client_signoff import NEED_MORE_PHOTOS, notify_ops_signoff
+
+    envelopes = []
+    monkeypatch.setattr(
+        "utils.mailer.Mailer.send_now",
+        lambda self: envelopes.append(self.envelope()),
+    )
+    monkeypatch.setattr(
+        "events.mutations._get_spark_admin_emails",
+        lambda: ["ops@example.com"],
+    )
+    monkeypatch.setattr(
+        "recaps.client_signoff.notify_ambassador_need_photos",
+        lambda recap: None,
+    )
+
+    class _Tenant:
+        name = "Brew Dr. Kombucha"
+
+    class _Event:
+        tenant = _Tenant()
+        rmm_asigned = None
+
+    class _Recap:
+        name = "8/14/2026 - 1303 SW lovejoy (Safeway)"
+        client_signoff_status = NEED_MORE_PHOTOS
+        client_signoff_comment = ""
+        event = _Event()
+
+    notify_ops_signoff(_Recap(), kind="custom")
+    assert len(envelopes) == 1
+    assert envelopes[0].subject == (
+        "Recap sign-off — Need more photos — Brew Dr. Kombucha — "
+        "8/14/2026 - 1303 SW lovejoy (Safeway)"
+    )
+    assert "Brew Dr. Kombucha" in envelopes[0].html
+    assert "8/14/2026 - 1303 SW lovejoy (Safeway)" in envelopes[0].html
+    assert "(custom)" in envelopes[0].html
+
+
+def test_ops_signoff_email_omits_brand_when_tenant_missing(monkeypatch):
+    from recaps.client_signoff import LOOKS_GOOD, notify_ops_signoff
+
+    envelopes = []
+    monkeypatch.setattr(
+        "utils.mailer.Mailer.send_now",
+        lambda self: envelopes.append(self.envelope()),
+    )
+    monkeypatch.setattr(
+        "events.mutations._get_spark_admin_emails",
+        lambda: ["ops@example.com"],
+    )
+
+    class _Recap:
+        name = "LD recap"
+        client_signoff_status = LOOKS_GOOD
+        client_signoff_comment = ""
+        event = None
+
+    notify_ops_signoff(_Recap(), kind="legacy")
+    assert len(envelopes) == 1
+    assert envelopes[0].subject == "Recap sign-off — Looks good — LD recap"
+    assert "Client sign-off on <strong>LD recap</strong> (legacy)." in envelopes[0].html

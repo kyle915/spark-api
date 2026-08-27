@@ -18,6 +18,15 @@ NEED_MORE_PHOTOS = "need_more_photos"
 ALLOWED = {LOOKS_GOOD, NEED_MORE_PHOTOS}
 
 
+def _tenant_brand_name(recap) -> str:
+    """Display name for the client brand (Tenant.name), same as recap emails."""
+    event = getattr(recap, "event", None)
+    tenant = getattr(event, "tenant", None) if event is not None else None
+    if tenant is None:
+        tenant = getattr(recap, "tenant", None)
+    return (getattr(tenant, "name", None) or "").strip()
+
+
 def apply_signoff(recap, *, status: str, comment: str | None) -> Any:
     status = (status or "").strip()
     if status not in ALLOWED:
@@ -51,13 +60,23 @@ def notify_ops_signoff(recap, *, kind: str) -> None:
         if rmm_email and rmm_email not in admins:
             admins.append(rmm_email)
         name = getattr(recap, "name", None) or "Recap"
+        brand = _tenant_brand_name(recap)
         status = recap.client_signoff_status
         label = "Looks good" if status == LOOKS_GOOD else "Need more photos"
         comment = (recap.client_signoff_comment or "").strip()
         if admins:
+            if brand:
+                lead = (
+                    f"Client sign-off on <strong>{_esc(brand)}</strong> — "
+                    f"<strong>{_esc(name)}</strong> ({kind})."
+                )
+                subject = f"Recap sign-off — {label} — {brand} — {name}"
+            else:
+                lead = f"Client sign-off on <strong>{_esc(name)}</strong> ({kind})."
+                subject = f"Recap sign-off — {label} — {name}"
             html = (
                 f"<div style='font-family:sans-serif;font-size:14px'>"
-                f"<p>Client sign-off on <strong>{_esc(name)}</strong> ({kind}).</p>"
+                f"<p>{lead}</p>"
                 f"<p><strong>{_esc(label)}</strong></p>"
                 + (f"<p>“{_esc(comment[:800])}”</p>" if comment else "")
                 + "</div>"
@@ -66,7 +85,7 @@ def notify_ops_signoff(recap, *, kind: str) -> None:
             class _Mailer(Mailer):
                 def envelope(self) -> Envelope:
                     return Envelope(
-                        subject=f"Recap sign-off — {label} — {name}",
+                        subject=subject,
                         html=html,
                         to_emails=admins,
                     )
