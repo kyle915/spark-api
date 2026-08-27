@@ -5303,6 +5303,58 @@ class SetupLdRetailCheckinView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class BuildTorchCombinedTabView(View):
+    """GET/POST `/internal/cron/build-torch-combined-tab`.
+
+    Combines and de-dupes the Torch schedule tabs, FLAGGING every field the
+    tabs disagree on rather than silently picking a winner.
+
+    Default is read-only: inventory, dedupe counts, conflicts, and a CSV of
+    every conflict uploaded to GCS. `apply` creates the combined tab — an
+    additive write only; existing tabs are read, never edited or deleted, and
+    it refuses to overwrite a tab that already exists.
+
+    Params: apply, tabs, target.
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _param(key: str) -> str:
+            return (request.GET.get(key) or request.POST.get(key) or "").strip()
+
+        kwargs: dict = {}
+        for key in ("tabs", "target"):
+            v = _param(key)
+            if v:
+                kwargs[key] = v
+        if _param("apply").lower() in ("1", "true", "yes", "on"):
+            kwargs["apply"] = True
+
+        out = io.StringIO()
+        try:
+            call_command("build_torch_combined_tab", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("build-torch-combined-tab cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc),
+                 "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse(
+            {"ok": True, "apply": bool(kwargs.get("apply")), "log": out.getvalue()}
+        )
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class FlattenTorchSheetView(View):
     """GET/POST `/internal/cron/flatten-torch-sheet`.
 
@@ -8431,6 +8483,7 @@ def _registered_views() -> dict[str, Any]:
         "diagnose-torch-sheet": DiagnoseTorchSheetView,
         "reflow-torch-sheet": ReflowTorchSheetView,
         "flatten-torch-sheet": FlattenTorchSheetView,
+        "build-torch-combined-tab": BuildTorchCombinedTabView,
         "set-checkin-resources": SetCheckinResourcesView,
         "set-tenant-mileage-tracking": SetTenantMileageTrackingView,
         "staff-tenant-events": StaffTenantEventsView,
