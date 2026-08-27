@@ -3405,6 +3405,55 @@ class SeedBrewDrRecapTemplateView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class SetupBrewDrCheckinView(View):
+    """GET/POST `/internal/cron/setup-brew-dr-checkin`.
+
+    Wires Brew Dr. Kombucha's standing check-in photo buckets (six labelled
+    retail-sampling dropzones with minimum photo nudges). The recap template
+    is seeded separately by ``seed-brew-dr-recap-template``. Pins Retail
+    Sampling and mints a ``BD-`` code only when the tenant has none yet.
+
+    Idempotent: an existing checkin_code is left alone (rotating it breaks
+    every copy already shared, e.g. BD-AQRACD).
+
+    Params: tenant (default "brew"), event_type, prefix, apply (default DRY RUN).
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        kwargs: dict = {}
+        for key in ("tenant", "event_type", "prefix"):
+            val = request.GET.get(key) or request.POST.get(key)
+            if val:
+                kwargs[key] = str(val)
+        raw = (request.GET.get("apply") or request.POST.get("apply") or "").lower()
+        apply_it = raw in ("1", "true", "yes", "on")
+        if apply_it:
+            kwargs["apply"] = True
+
+        out = io.StringIO()
+        try:
+            call_command("setup_brew_dr_checkin", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("setup-brew-dr-checkin cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc),
+                 "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "apply": apply_it, "log": out.getvalue()})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class ImportDemoRecapsView(View):
     """GET/POST `/internal/cron/import-demo-recaps`.
 
@@ -8441,6 +8490,7 @@ def _registered_views() -> dict[str, Any]:
         "set-tenant-event-types": SetTenantEventTypesView,
         "set-custom-recap-field": SetCustomRecapFieldView,
         "seed-brew-dr-recap-template": SeedBrewDrRecapTemplateView,
+        "setup-brew-dr-checkin": SetupBrewDrCheckinView,
         "import-demo-recaps": ImportDemoRecapsView,
         "audit-client-submissions": AuditClientSubmissionsView,
         "dump-field-sampling": DumpFieldSamplingView,
