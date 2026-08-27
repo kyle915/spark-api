@@ -27,6 +27,32 @@ def _tenant_brand_name(recap) -> str:
     return (getattr(tenant, "name", None) or "").strip()
 
 
+def _admin_recap_url(recap, *, kind: str) -> str:
+    """Admin Spark permalink ops use to open the signed-off recap.
+
+    Same path scheme as RecapReadyForReviewAdminMailer:
+    custom → /recap/view-custom/:uuid, legacy → /recap/view/:uuid.
+    """
+    from django.conf import settings
+
+    uuid = getattr(recap, "uuid", None)
+    if not uuid:
+        return ""
+    base = str(
+        getattr(
+            settings,
+            "ADMIN_FRONTEND_URL",
+            "https://admin.igniteproductions.co",
+        )
+    ).rstrip("/")
+    path = (
+        f"/recap/view-custom/{uuid}"
+        if kind == "custom"
+        else f"/recap/view/{uuid}"
+    )
+    return f"{base}{path}"
+
+
 def apply_signoff(recap, *, status: str, comment: str | None) -> Any:
     status = (status or "").strip()
     if status not in ALLOWED:
@@ -74,11 +100,18 @@ def notify_ops_signoff(recap, *, kind: str) -> None:
             else:
                 lead = f"Client sign-off on <strong>{_esc(name)}</strong> ({kind})."
                 subject = f"Recap sign-off — {label} — {name}"
+            recap_url = _admin_recap_url(recap, kind=kind)
+            link_html = (
+                f"<p><a href=\"{_esc(recap_url)}\">Open recap in Spark</a></p>"
+                if recap_url
+                else ""
+            )
             html = (
                 f"<div style='font-family:sans-serif;font-size:14px'>"
                 f"<p>{lead}</p>"
                 f"<p><strong>{_esc(label)}</strong></p>"
                 + (f"<p>“{_esc(comment[:800])}”</p>" if comment else "")
+                + link_html
                 + "</div>"
             )
 
