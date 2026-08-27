@@ -42,6 +42,7 @@ on:
 jobs:
   reconcile-tracker-rows:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Fire reconcile endpoint
         env:
@@ -66,7 +67,8 @@ jobs:
             --data-urlencode "tenant_slug=$TENANT_SLUG" \
             --data-urlencode "days_back=$DAYS_BACK" \
             --data-urlencode "days_ahead=$DAYS_AHEAD" \
-            --data-urlencode "apply=$APPLY")
+            --data-urlencode "apply=$APPLY" \
+            --max-time 540)
           echo "HTTP $STATUS"
           cat /tmp/cron-response.json
           echo ""
