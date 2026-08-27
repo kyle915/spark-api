@@ -41,6 +41,11 @@ TORCH_PUBLIC_FORM_SHEET_ID = "1kAvZhy2B9HoeSS-qjKXve8JWUV1oBxDqnhs1-7dQUYw"
 TORCH_PUBLIC_FORM_GID = 0
 SERVICE_ACCOUNT_EMAIL = "spark-api-new-sa@spark-479222.iam.gserviceaccount.com"
 
+# Date-ordered insertion is OFF. It shifts every row below the insert, which
+# corrupts a formula tab keyed on ROW() — and did. Re-enable only once the
+# writer targets a plain-values tab that nothing else indexes positionally.
+ALLOW_DATE_ORDER_INSERT = False
+
 # Extra columns appended after the client's existing retail-schedule header.
 # Never rename Rate / BA Name / Recap — those stay ops-owned and blank.
 SPARK_EXTRA_HEADERS = [
@@ -405,6 +410,41 @@ def _delete_row(svc, sheet_id: str, gid: int, index: int):
     ).execute()
 
 
+
+def _tab_is_formula_driven(svc, sheet_id: str, tab) -> bool:
+    """True when the target tab's cells are FORMULAS rather than values.
+
+    The Torch workbook's visible tab turned out to be an INDEX/MATCH mirror of
+    a separate source tab, keyed on ROW(). Writing into a grid like that is
+    destructive in two ways at once: a literal value overwrites the formula in
+    that cell, and INSERTING a row shifts every formula below it so each one
+    resolves to the next source record — the whole schedule below the insert
+    renders shifted, silently, with no error anywhere.
+
+    Row counts and sort order both look perfectly healthy afterwards, which is
+    why this has to be checked directly rather than inferred.
+    """
+    try:
+        got = (
+            svc.spreadsheets()
+            .values()
+            .get(
+                spreadsheetId=sheet_id,
+                range=_qualify(tab, "A5:BZ40"),
+                valueRenderOption="FORMULA",
+            )
+            .execute()
+            .get("values", [])
+        )
+    except Exception:  # noqa: BLE001 — a failed probe must not authorise a write
+        return True
+    for row in got:
+        for cell in row:
+            if isinstance(cell, str) and cell.startswith("="):
+                return True
+    return False
+
+
 def _append_row(request) -> bool:
     """Write one already-authorised request onto the sheet.
 
@@ -428,6 +468,17 @@ def _append_row(request) -> bool:
             )
             return False
         tab = _tab_for_gid(svc, TORCH_PUBLIC_FORM_SHEET_ID, TORCH_PUBLIC_FORM_GID)
+
+        if _tab_is_formula_driven(svc, TORCH_PUBLIC_FORM_SHEET_ID, tab):
+            logger.error(
+                "torch sheet: tab %r is formula-driven — refusing to write "
+                "request=%s. Writing here overwrites formulas and shifts every "
+                "row below. Point this at the plain-values source tab instead.",
+                tab,
+                getattr(request, "id", None),
+            )
+            return False
+
         header = _ensure_extra_headers(svc, TORCH_PUBLIC_FORM_SHEET_ID, tab)
         if _find_uuid_row(svc, TORCH_PUBLIC_FORM_SHEET_ID, tab, header, str(uuid)):
             return False
@@ -446,7 +497,11 @@ def _append_row(request) -> bool:
         dated = _date_column_values(svc, TORCH_PUBLIC_FORM_SHEET_ID, tab, header)
         index = _insert_index_for_date(dated, target) if dated is not None else None
 
-        if index is not None:
+        # Inserting a row is what shifts a ROW()-keyed lookup, so it is now
+        # gated behind the tenant's own opt-in and only reached on a tab we
+        # have confirmed carries no formulas (checked above). Appending stays
+        # the default: untidy beats silently re-pointing a client's schedule.
+        if index is not None and ALLOW_DATE_ORDER_INSERT:
             _insert_row_at(
                 svc, TORCH_PUBLIC_FORM_SHEET_ID, tab,
                 TORCH_PUBLIC_FORM_GID, index, row,
