@@ -1,14 +1,17 @@
-"""Set up Brew Dr. Kombucha check-in photo buckets.
+"""Make Brew Dr. Kombucha's ONE standing check-in link serve BOTH programs.
 
-Brew Dr's recap template is seeded by ``seed_brew_dr_recap_template``. This
-command wires the labelled photo dropzones on the standing check-in recap
-step — ``Tenant.checkin_photo_buckets`` plus matching ``FileRecapCategory``
-rows — so BAs see Kyle's retail sampling shot list instead of one generic
-grid.
+Mirrors ``setup_ld_retail_checkin``: Retail Sampling + Event Activation on the
+same ``BD-`` URL. Recap forms are seeded by ``seed_brew_dr_recap_template`` —
+this command creates NEITHER. What's missing is only:
 
-Each required bucket carries ``min: 1`` as a BA-facing nudge (the page shows
-"0 of 1 suggested"; submit never blocks). "Displays (if applicable)" has no
-minimum because the store may have none.
+1. a standing ``BD-`` check-in code on the tenant (keep BD-AQRACD if set),
+2. both event types made SELECTABLE on that one link, with Retail Sampling
+   pinned as the fallback when a request names no program,
+3. labelled PHOTO BUCKETS per program (``Tenant.checkin_photo_buckets`` keyed
+   by event type name + matching ``FileRecapCategory`` rows).
+
+Retail buckets stay Kyle's Brew Dr shot list (already live). Event Activation
+buckets mirror Liquid Death's activation dropzones.
 
 DRY-RUN by default. Run via ``/internal/cron/setup-brew-dr-checkin`` (or the
 "Setup Brew Dr check-in" GitHub Action) so it executes against prod.
@@ -16,18 +19,19 @@ DRY-RUN by default. Run via ``/internal/cron/setup-brew-dr-checkin`` (or the
 
 from __future__ import annotations
 
+import re
 import secrets
 
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
+from django.db import transaction
 from django.db.models import Q
 
 CODE_PREFIX = "BD-"
-PROGRAM_NAME = "retail sampling"
+ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 
-# Kyle's retail sampling shot list, in render order. Names become both the
-# walk-up dropzone labels and the FileRecapCategory rows the recap PDF groups by.
-PHOTO_BUCKETS: list[dict] = [
+# Kyle's retail sampling shot list (already live on BD-AQRACD).
+RETAIL_BUCKETS: list[dict] = [
     {"name": "Set Before", "min": 1},
     {"name": "Set After", "min": 1},
     {"name": "Demo Table Before Demo (Far Back)", "min": 1},
@@ -36,11 +40,48 @@ PHOTO_BUCKETS: list[dict] = [
     {"name": "Displays (if applicable)"},
 ]
 
+# LD Event Activation dropzones, brand-agnostic shot names.
+CONSUMER_SAMPLING: dict = {
+    "name": "Consumer Sampling Pictures",
+    "helper": "please try to upload 8+",
+    "min": 8,
+}
+
+ACTIVATION_BUCKETS: list[dict] = [
+    {"name": "Activation Set Up"},
+    CONSUMER_SAMPLING,
+    {"name": "Expense Receipts (Parking)"},
+]
+
+# First entry = pinned default when the BA / request names no program.
+PROGRAMS: list[dict] = [
+    {
+        "event_type": "retail sampling",
+        "label": "Retail Sampling",
+        "photos": RETAIL_BUCKETS,
+    },
+    {
+        "event_type": "event activation",
+        "label": "Event Activation",
+        "photos": ACTIVATION_BUCKETS,
+    },
+]
+
+# Flat list kept for older tests / imports that expect PHOTO_BUCKETS.
+PHOTO_BUCKETS = RETAIL_BUCKETS
+
+SENTINEL_CATEGORY_NAMES = ("Sampling photos", "Receipts")
+
+
+def _norm(name: str | None) -> str:
+    """Fold a category label for comparison — case and punctuation dropped."""
+    return re.sub(r"[^a-z0-9]+", "", (name or "").lower())
+
 
 class Command(BaseCommand):
     help = (
-        "Set up Brew Dr. Kombucha check-in photo buckets on the standing link "
-        "(dry-run by default; --apply to write)."
+        "Make Brew Dr. Kombucha's standing check-in link serve Retail Sampling "
+        "and Event Activation (photo buckets + selectable types; dry-run default)."
     )
 
     def add_arguments(self, parser):
@@ -48,15 +89,6 @@ class Command(BaseCommand):
             "--tenant",
             default="brew",
             help="tenant name/slug substring (case-insensitive). Default: 'brew'.",
-        )
-        parser.add_argument(
-            "--event-type",
-            dest="event_type",
-            default=None,
-            help=(
-                "event type name substring. Default: prefer 'retail', else the "
-                "tenant's recap template event type."
-            ),
         )
         parser.add_argument(
             "--prefix",
@@ -68,48 +100,15 @@ class Command(BaseCommand):
             ),
         )
         parser.add_argument(
+            "--code",
+            default="",
+            help="force a specific check-in code (to keep an already-shared link).",
+        )
+        parser.add_argument(
             "--apply",
             action="store_true",
             help="actually write (omit for a dry-run that changes nothing).",
         )
-
-    def handle(self, *args, **opts):
-        apply = opts["apply"]
-        creator = self._resolve_creator()
-        tenant = self._resolve_tenant(opts["tenant"])
-        event_type = self._resolve_event_type(tenant, opts.get("event_type"))
-
-        self.stdout.write("=" * 68)
-        self.stdout.write(
-            f"Tenant     : [{tenant.id}] {tenant.name!r} (slug {tenant.slug!r})"
-        )
-        self.stdout.write(
-            f"Event type : {getattr(event_type, 'name', None)!r} "
-            f"(id {getattr(event_type, 'id', None)})"
-        )
-        existing_code = (getattr(tenant, "checkin_code", "") or "").strip()
-        if existing_code:
-            self.stdout.write(f"Check-in   : {existing_code!r} (will be left as-is)")
-        self.stdout.write(f"Created by : {getattr(creator, 'email', creator)!r}")
-        self.stdout.write(
-            f"Mode       : {'APPLY (writing)' if apply else 'DRY-RUN (no writes)'}"
-        )
-        self.stdout.write("=" * 68)
-
-        if event_type is None:
-            raise CommandError(
-                f"Tenant {tenant.slug!r} has no event types — run set_tenant_event_types "
-                f"or seed_brew_dr_recap_template first."
-            )
-
-        self.stdout.write("\nPhoto buckets:")
-        for bucket in PHOTO_BUCKETS:
-            min_note = f", min={bucket['min']}" if bucket.get("min") else ""
-            self.stdout.write(f"    - {bucket['name']!r}{min_note}")
-
-        self._photo_buckets(tenant, creator, apply)
-        self._pin_event_type(tenant, event_type, apply)
-        self._checkin_code(tenant, apply, opts.get("prefix"))
 
     def _resolve_creator(self):
         from django.contrib.auth import get_user_model
@@ -146,88 +145,22 @@ class Command(BaseCommand):
             f"({', '.join(repr(t.slug) for t in matches)}) — narrow --tenant."
         )
 
-    def _resolve_event_type(self, tenant, hint: str | None):
+    def _ensure_event_type(self, tenant, label: str, creator, apply: bool):
         from events.models import EventType
-        from recaps.models import CustomRecapTemplate
 
-        qs = EventType.objects.filter(tenant_id=tenant.id).order_by("id")
-        if hint:
-            match = qs.filter(name__icontains=hint).first()
-            if not match:
-                raise CommandError(
-                    f"No event type on tenant {tenant.slug!r} matches {hint!r}."
-                )
-            return match
-        existing = (
-            CustomRecapTemplate.objects.filter(tenant_id=tenant.id)
-            .select_related("event_type")
-            .first()
-        )
-        return (
-            qs.filter(name__icontains="retail").first()
-            or (existing.event_type if existing else None)
-            or qs.first()
-        )
-
-    def _photo_buckets(self, tenant, creator, apply: bool) -> None:
-        from recaps.models import FileRecapCategory
-
-        self.stdout.write("\nFileRecapCategory rows:")
-        for spec in PHOTO_BUCKETS:
-            name = spec["name"]
-            existing = FileRecapCategory.objects.filter(
-                tenant_id=tenant.id, name__iexact=name
-            ).first()
-            if existing:
-                self.stdout.write(f"    = {name!r} — [{existing.id}] already present")
-            elif apply:
-                cat = FileRecapCategory.objects.create(
-                    name=name, tenant_id=tenant.id, created_by=creator
-                )
-                self.stdout.write(f"    + {name!r} — created [{cat.id}]")
-            else:
-                self.stdout.write(f"    + {name!r} — would be created")
-
-        current = getattr(tenant, "checkin_photo_buckets", None)
-        if current == PHOTO_BUCKETS:
-            self.stdout.write("  checkin_photo_buckets already set — left as-is.")
-            return
+        existing = EventType.objects.filter(
+            tenant_id=tenant.id, name__iexact=label
+        ).first()
+        if existing:
+            return existing
         if not apply:
-            self.stdout.write(
-                self.style.WARNING("  DRY-RUN — would set checkin_photo_buckets")
-            )
-            return
-        tenant.checkin_photo_buckets = PHOTO_BUCKETS
-        tenant.save(update_fields=["checkin_photo_buckets"])
-        self.stdout.write(self.style.SUCCESS("  checkin_photo_buckets set."))
+            self.stdout.write(f"  would create event type {label!r}")
+            return None
+        et = EventType.objects.create(name=label, tenant=tenant, created_by=creator)
+        self.stdout.write(f"  + event type {label!r} [{et.id}]")
+        return et
 
-    def _pin_event_type(self, tenant, event_type, apply: bool) -> None:
-        current = getattr(tenant, "checkin_event_type_id", None)
-        already = current == event_type.id
-        if already:
-            self.stdout.write(
-                f"\ncheckin_event_type already pinned to {event_type.name!r}."
-            )
-        elif not apply:
-            self.stdout.write(
-                self.style.WARNING(
-                    f"\nDRY-RUN — would pin checkin_event_type="
-                    f"{event_type.name!r} (id {event_type.id})"
-                )
-            )
-        else:
-            tenant.checkin_event_type = event_type
-            tenant.save(update_fields=["checkin_event_type"])
-            self.stdout.write(
-                self.style.SUCCESS(
-                    f"\nPinned checkin_event_type={event_type.name!r} "
-                    f"(id {event_type.id})"
-                )
-            )
-        if apply:
-            tenant.checkin_event_types.set([event_type])
-
-    def _checkin_code(self, tenant, apply: bool, prefix: str = "") -> None:
+    def _mint_code(self, prefix: str) -> str:
         from tenants.models import Tenant
 
         raw = (prefix or "").strip().upper().rstrip("-")
@@ -235,47 +168,208 @@ class Command(BaseCommand):
         if raw and not 1 <= len(cleaned) <= 4:
             raise CommandError("--prefix should be 1-4 letters/digits, e.g. BD.")
         code_prefix = f"{cleaned}-" if cleaned else CODE_PREFIX
-
-        ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
-        base = (
-            getattr(settings, "PUBLIC_CHECKIN_BASE_URL", "")
-            or "https://client.igniteproductions.co"
-        ).rstrip("/")
-
-        self.stdout.write("\n" + "=" * 68)
-        existing = (getattr(tenant, "checkin_code", "") or "").strip()
-        if existing:
-            self.stdout.write(
-                f"Check-in code already set: {existing}\n"
-                f"  Link: {base}/checkin/{existing}\n"
-                "  (left as-is — rotating it would break every copy already shared)"
-            )
-            return
-
-        code = None
-        for _ in range(12):
+        for _ in range(50):
             candidate = code_prefix + "".join(
                 secrets.choice(ALPHABET) for _ in range(6)
             )
-            if not Tenant.objects.filter(checkin_code__iexact=candidate).exists():
-                code = candidate
-                break
-        if code is None:
-            raise CommandError("Couldn't mint a unique check-in code — try again.")
+            if not Tenant.objects.filter(checkin_code=candidate).exists():
+                return candidate
+        raise CommandError("Could not mint an unused check-in code.")
+
+    def _plan_photo_buckets(self, tenant, programs: list[dict]) -> dict:
+        from recaps.models import FileRecapCategory
+
+        existing = list(
+            FileRecapCategory.objects.filter(tenant_id=tenant.id).order_by("id")
+        )
+        self.stdout.write("")
+        self.stdout.write(
+            f"Categories : {len(existing)} on this tenant today"
+            + ("" if existing else "  (none — every bucket will be created)")
+        )
+        for cat in existing:
+            protected = (
+                " [sentinel target — never renamed]"
+                if any(_norm(cat.name) == _norm(n) for n in SENTINEL_CATEGORY_NAMES)
+                else ""
+            )
+            self.stdout.write(f"    [{cat.id}] {cat.name!r}{protected}")
+
+        by_norm: dict[str, object] = {}
+        for cat in existing:
+            key = _norm(cat.name)
+            if key not in by_norm:
+                by_norm[key] = cat
+
+        self.stdout.write("")
+        plan: dict = {}
+        for program in programs:
+            self.stdout.write(
+                f"Buckets    : {program['type'].name} — {len(program['photos'])} "
+                "dropzone(s)"
+            )
+            for spec in program["photos"]:
+                name = spec["name"]
+                key = _norm(name)
+                hint = (
+                    f" (min {spec['min']}, {spec.get('helper', '')!r})"
+                    if spec.get("min")
+                    else ""
+                )
+                if key in plan:
+                    self.stdout.write(
+                        f"    ⇄ {name!r} — shared with an earlier program, "
+                        f"one row{hint}"
+                    )
+                    continue
+                match = by_norm.get(key)
+                plan[key] = {**spec, "category": match}
+                if match is None:
+                    self.stdout.write(f"    + {name!r} — will be CREATED{hint}")
+                elif match.name == name:
+                    self.stdout.write(
+                        f"    = {name!r} — [{match.id}] already correct{hint}"
+                    )
+                else:
+                    self.stdout.write(
+                        f"    ~ {name!r} — reusing [{match.id}] {match.name!r}, "
+                        f"relabelling in place{hint}"
+                    )
+        return plan
+
+    def _ensure_photo_buckets(
+        self, tenant, programs: list[dict], bucket_plan: dict, creator, apply: bool
+    ) -> dict:
+        """Create/relabel categories, return the keyed checkin_photo_buckets dict."""
+        from recaps.models import FileRecapCategory
+
+        for key, spec in bucket_plan.items():
+            cat = spec.get("category")
+            name = spec["name"]
+            if cat is None:
+                if apply:
+                    cat = FileRecapCategory.objects.create(
+                        name=name, tenant_id=tenant.id, created_by=creator
+                    )
+                    self.stdout.write(f"    + {name!r} — created [{cat.id}]")
+                    spec["category"] = cat
+            elif cat.name != name and apply:
+                if any(_norm(cat.name) == _norm(n) for n in SENTINEL_CATEGORY_NAMES):
+                    self.stdout.write(
+                        self.style.WARNING(
+                            f"    ! refusing to rename sentinel {cat.name!r}"
+                        )
+                    )
+                else:
+                    old = cat.name
+                    cat.name = name
+                    cat.save(update_fields=["name"])
+                    self.stdout.write(
+                        f"    ~ relabelled [{cat.id}] {old!r} → {name!r}"
+                    )
+
+        config: dict[str, list] = {}
+        for program in programs:
+            etype = program["type"]
+            entries = []
+            for spec in program["photos"]:
+                entry = {"name": spec["name"]}
+                if spec.get("min"):
+                    entry["min"] = spec["min"]
+                if spec.get("helper"):
+                    entry["helper"] = spec["helper"]
+                entries.append(entry)
+            config[etype.name] = entries
+        return config
+
+    def handle(self, *args, **opts):
+        apply = opts["apply"]
+        creator = self._resolve_creator()
+        tenant = self._resolve_tenant(opts["tenant"])
+        forced_code = (opts.get("code") or "").strip().upper()
+
+        self.stdout.write("=" * 68)
+        self.stdout.write(
+            f"Tenant     : [{tenant.id}] {tenant.name!r} (slug {tenant.slug!r})"
+        )
+        existing_code = (getattr(tenant, "checkin_code", "") or "").strip()
+        if existing_code:
+            self.stdout.write(f"Check-in   : {existing_code!r} (will be left as-is)")
+        self.stdout.write(f"Created by : {getattr(creator, 'email', creator)!r}")
+        self.stdout.write(
+            f"Mode       : {'APPLY (writing)' if apply else 'DRY-RUN (no writes)'}"
+        )
+        self.stdout.write("=" * 68)
+
+        plan: list[dict] = []
+        for spec in PROGRAMS:
+            etype = self._ensure_event_type(
+                tenant, spec["label"], creator, apply
+            )
+            if etype is None and apply:
+                raise CommandError(
+                    f"Could not ensure event type {spec['label']!r}."
+                )
+            # Dry-run may leave etype None — synthesize a stand-in for reporting.
+            if etype is None:
+                from events.models import EventType
+
+                etype = EventType(name=spec["label"], tenant=tenant, id=0)
+            plan.append({"type": etype, "photos": spec["photos"]})
+
+        self.stdout.write("\nSelectable on the link (in this order):")
+        for i, entry in enumerate(plan):
+            etype = entry["type"]
+            pin = "   ← pinned default" if i == 0 else ""
+            self.stdout.write(f"  [{etype.id}] {etype.name!r}{pin}")
+
+        bucket_plan = self._plan_photo_buckets(tenant, plan)
+        config = self._ensure_photo_buckets(
+            tenant, plan, bucket_plan, creator, apply=False
+        )
 
         if not apply:
+            self.stdout.write("")
             self.stdout.write(
                 self.style.WARNING(
-                    f"DRY-RUN — would set checkin_code={code}\n"
-                    f"  Link would be: {base}/checkin/{code}"
+                    "DRY-RUN — would set checkin_event_types + keyed "
+                    "checkin_photo_buckets. Re-run with --apply to write."
                 )
             )
             return
 
-        tenant.checkin_code = code
-        tenant.save(update_fields=["checkin_code"])
-        self.stdout.write(
-            self.style.SUCCESS(
-                f"Check-in code set: {code}\n  Link: {base}/checkin/{code}"
+        with transaction.atomic():
+            config = self._ensure_photo_buckets(
+                tenant, plan, bucket_plan, creator, apply=True
             )
+            real_types = [e["type"] for e in plan if e["type"].id]
+            tenant.checkin_event_type = real_types[0]
+            tenant.checkin_photo_buckets = config
+            update_fields = ["checkin_event_type", "checkin_photo_buckets"]
+            if forced_code:
+                tenant.checkin_code = forced_code
+                update_fields.append("checkin_code")
+            elif not (tenant.checkin_code or "").strip():
+                tenant.checkin_code = self._mint_code(opts.get("prefix") or "")
+                update_fields.append("checkin_code")
+            tenant.save(update_fields=update_fields)
+            tenant.checkin_event_types.set(real_types)
+
+        base = (
+            getattr(settings, "PUBLIC_CHECKIN_BASE_URL", "")
+            or "https://client.igniteproductions.co"
+        ).rstrip("/")
+        self.stdout.write("")
+        self.stdout.write(
+            self.style.SUCCESS(f"Check-in code : {tenant.checkin_code}")
         )
+        self.stdout.write(f"Link          : {base}/checkin/{tenant.checkin_code}")
+        self.stdout.write(
+            "  selectable = "
+            + ", ".join(f"[{t.id}] {t.name}" for t in real_types)
+        )
+        for key, entries in config.items():
+            self.stdout.write(
+                f"Photo buckets : {key} — "
+                + " | ".join(b["name"] for b in entries)
+            )
