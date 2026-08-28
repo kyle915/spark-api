@@ -4,7 +4,7 @@ Mirrors Liquid Death's live forms field-for-field (prod template ids 9 and 3),
 with only brand swaps:
 
 * ``Liquid Death`` → ``Brew Dr. Kombucha`` in awareness / flavor copy
-* LD's typo ``tasing`` → ``tasting`` (same fix Feel Free's seeder makes)
+* LD question text kept verbatim except ``Liquid Death`` → ``Brew Dr. Kombucha``
 * ``Products Sampled`` options = the five Brew Dr. cans (no Product catalog)
 
 Photos stay on the walk-up ``FileRecapCategory`` buckets from
@@ -71,14 +71,14 @@ RETAIL_SPEC: list[tuple[str, list[tuple[str, str, bool, list[str]]]]] = [
             ),
             (
                 "How many consumers would be willing to purchase the product "
-                "after tasting it?",
+                "after tasing it?",
                 "number",
                 True,
                 [],
             ),
             (
                 "How many consumers would NOT be willing to purchase the "
-                "product after tasting it?",
+                "product after tasing it?",
                 "number",
                 True,
                 [],
@@ -130,7 +130,7 @@ EVENT_SPEC: list[tuple[str, list[tuple[str, str, bool, list[str]]]]] = [
         [
             (
                 "How many consumers would be willing to purchase the product "
-                "after tasting it?",
+                "after tasing it?",
                 "number",
                 True,
                 [],
