@@ -61,9 +61,9 @@ class TestBrewDrRecapTemplateSpec:
             labels = [name for _, fields in spec for name, *_ in fields]
             blob = " ".join(labels)
             assert "Liquid Death" not in blob
-            assert "tasing" not in blob
+            assert "Liquid Death" not in blob
             assert "Brew Dr. Kombucha" in blob or "Products Sampled" in blob
-            assert "tasting" in blob or "TOTAL consumers" in blob
+            assert "tasing" in blob or "TOTAL consumers" in blob
 
     def test_event_spec_has_ld_question_shapes(self):
         labels = [name for _, fields in EVENT_SPEC for name, *_ in fields]
@@ -271,7 +271,7 @@ class TestBrewDrRecapTemplateSeed(BaseGraphQLTestCase):
         log = self._run(tenant="brew")
         assert "DRY-RUN" in log
         assert "Consumer Engagement" in log
-        assert "tasting" in log
+        assert "tasing" in log
         assert "Event Activation" in log
         assert not CustomRecapTemplate.objects.filter(tenant=self.tenant).exists()
         assert not CustomField.objects.filter(
