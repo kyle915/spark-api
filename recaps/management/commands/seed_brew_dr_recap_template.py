@@ -1,23 +1,20 @@
-"""Seed the Brew Dr. Kombucha retail sampling recap template.
+"""Seed Brew Dr. Kombucha Retail Sampling + Event Activation recap templates.
 
-Mirrors Liquid Death's live ``Liquid Death-Retail Sampling`` form (template
-id 9 in prod) — same four sections and field shapes — with Brew Dr. branding:
+Mirrors Liquid Death's live forms field-for-field (prod template ids 9 and 3),
+with only brand swaps:
 
-* ``Liquid Death`` → ``Brew Dr. Kombucha`` in awareness copy
+* ``Liquid Death`` → ``Brew Dr. Kombucha`` in awareness / flavor copy
 * LD's typo ``tasing`` → ``tasting`` (same fix Feel Free's seeder makes)
-* ``Products Sampled`` options = the five Brew Dr. cans (tenant has no
-  Product catalog yet, so we cannot use ``--products-from-target``)
+* ``Products Sampled`` options = the five Brew Dr. cans (no Product catalog)
 
 Photos stay on the walk-up ``FileRecapCategory`` buckets from
-``setup_brew_dr_checkin`` (Set Before / Set After / Demo Table…); this SPEC
-does NOT add template image fields, matching how LD keeps photo dropzones
-off the form itself.
+``setup_brew_dr_checkin``; these SPECs do NOT add template image fields.
 
-Idempotent. When the prior ``Brew Dr. Kombucha Recap`` (or a stacked
-rename) still holds submitted answers, it is archived onto a non-checkin
-``Legacy Recap Archive`` event type and a clean LD-mirrored template is
-minted for Retail Sampling — so ``resolve_template_for_event`` never
-serves a franken-form on BD-AQRACD. Empty legacy rows are renamed in place.
+Idempotent. When the prior ``Brew Dr. Kombucha Recap`` (or a stacked rename)
+still holds submitted answers on Retail Sampling, it is archived onto a
+non-checkin ``Legacy Recap Archive`` event type and a clean LD-mirrored
+retail template is minted — so ``resolve_template_for_event`` never serves a
+franken-form on BD-AQRACD. Empty legacy rows are renamed in place.
 
 DRY-RUN by default. Run via ``/internal/cron/seed-brew-dr-recap-template``
 (or the "Seed Brew Dr recap template" GitHub Action) against prod.
@@ -38,18 +35,28 @@ CANS = [
     "Pineapple Paradise",
 ]
 
-# LD-style name so clones and exports read the same as Resort / Torch.
-TEMPLATE_NAME = "Brew Dr. Kombucha-Retail Sampling"
-# Prior seeder name(s). When those rows still hold submitted answers we archive
-# them onto a non-checkin event type instead of stacking LD fields on top —
-# resolve_template_for_event would otherwise serve a 35-field franken-form.
+RETAIL_TEMPLATE_NAME = "Brew Dr. Kombucha-Retail Sampling"
+EVENT_TEMPLATE_NAME = "Brew Dr. Kombucha-Event Activation"
+# Back-compat alias used by older tests / docs.
+TEMPLATE_NAME = RETAIL_TEMPLATE_NAME
+
 LEGACY_TEMPLATE_NAMES = ("Brew Dr. Kombucha Recap",)
 ARCHIVED_TEMPLATE_NAME = "Brew Dr. Kombucha Recap (archived)"
 ARCHIVE_EVENT_TYPE = "Legacy Recap Archive"
 
-# Field-for-field off Liquid Death-Retail Sampling, brand-swapped. Kinds are
-# canonical CustomRecapFieldType tokens the FE fuzzy-matches.
-SPEC: list[tuple[str, list[tuple[str, str, bool, list[str]]]]] = [
+RETAIL_PROGRAM = "Retail Sampling"
+EVENT_PROGRAM = "Event Activation"
+
+# Shared RecapSection order across both templates (sections are tenant-scoped).
+SECTION_ORDER = {
+    "Consumer Engagement": 0,
+    "Feedback & Account Notes": 1,
+    "Additional Insights": 2,
+    "Products Sampled": 3,
+}
+
+# Field-for-field off Liquid Death-Retail Sampling (id 9), brand-swapped.
+RETAIL_SPEC: list[tuple[str, list[tuple[str, str, bool, list[str]]]]] = [
     (
         "Consumer Engagement",
         [
@@ -116,6 +123,74 @@ SPEC: list[tuple[str, list[tuple[str, str, bool, list[str]]]]] = [
     ),
 ]
 
+# Field-for-field off Liquid Death-Event Activation (id 3), brand-swapped.
+EVENT_SPEC: list[tuple[str, list[tuple[str, str, bool, list[str]]]]] = [
+    (
+        "Consumer Engagement",
+        [
+            (
+                "How many consumers would be willing to purchase the product "
+                "after tasting it?",
+                "number",
+                True,
+                [],
+            ),
+            (
+                "How many consumers that were engaged with knew about "
+                "Brew Dr. Kombucha product/brand?",
+                "number",
+                True,
+                [],
+            ),
+            (
+                "How many consumers had tried a Brew Dr. Kombucha flavor before?",
+                "number",
+                True,
+                [],
+            ),
+            ("How many TOTAL consumers did you sample?", "number", True, []),
+        ],
+    ),
+    (
+        "Feedback & Account Notes",
+        [
+            ("Demographics", "longtext", True, []),
+            (
+                "What were the top 5 frequently asked questions you received "
+                "from consumers?",
+                "longtext",
+                True,
+                [],
+            ),
+            ("Helpful feedback", "longtext", True, []),
+        ],
+    ),
+    (
+        "Products Sampled",
+        [
+            ("Products Sampled", "multiselect", True, list(CANS)),
+        ],
+    ),
+]
+
+# Back-compat: older tests import SPEC as the retail layout.
+SPEC = RETAIL_SPEC
+
+PROGRAMS: list[dict] = [
+    {
+        "event_type": RETAIL_PROGRAM,
+        "template_name": RETAIL_TEMPLATE_NAME,
+        "spec": RETAIL_SPEC,
+        "archive_legacy": True,
+    },
+    {
+        "event_type": EVENT_PROGRAM,
+        "template_name": EVENT_TEMPLATE_NAME,
+        "spec": EVENT_SPEC,
+        "archive_legacy": False,
+    },
+]
+
 
 def _match_field_type(kind: str, name_lower: str) -> bool:
     """Does an existing CustomRecapFieldType named `name_lower` serve `kind`?
@@ -141,8 +216,8 @@ def _match_field_type(kind: str, name_lower: str) -> bool:
 
 class Command(BaseCommand):
     help = (
-        "Seed Brew Dr. Kombucha's LD-mirrored retail sampling recap template "
-        "(dry-run by default; --apply to write)."
+        "Seed Brew Dr. Kombucha's LD-mirrored Retail Sampling + Event "
+        "Activation recap templates (dry-run by default; --apply to write)."
     )
 
     def add_arguments(self, parser):
@@ -154,16 +229,19 @@ class Command(BaseCommand):
         parser.add_argument(
             "--template-name",
             dest="template_name",
-            default=TEMPLATE_NAME,
-            help=f"template name. Default: {TEMPLATE_NAME!r}.",
+            default=None,
+            help=(
+                "If set, only seed the program whose template name matches "
+                "(substring). Default: seed both Retail + Event templates."
+            ),
         )
         parser.add_argument(
             "--event-type",
             dest="event_type",
             default=None,
             help=(
-                "event type name substring to attach the template to. "
-                "Default: prefer 'retail', else the tenant's first."
+                "If set, only seed the program whose event type matches "
+                "(substring). Default: seed both."
             ),
         )
         parser.add_argument(
@@ -209,28 +287,20 @@ class Command(BaseCommand):
             raise CommandError("No user available to own the created rows.")
         return creator
 
-    def _resolve_event_type(self, tenant, hint: str | None):
+    def _ensure_event_type(self, tenant, name: str, creator, apply: bool):
         from events.models import EventType
-        from recaps.models import CustomRecapTemplate
 
-        qs = EventType.objects.filter(tenant_id=tenant.id).order_by("id")
-        if hint:
-            match = qs.filter(name__icontains=hint).first()
-            if not match:
-                raise CommandError(
-                    f"No event type on tenant {tenant.slug!r} matches {hint!r}."
-                )
-            return match
-        existing = (
-            CustomRecapTemplate.objects.filter(tenant_id=tenant.id)
-            .select_related("event_type")
-            .first()
-        )
-        return (
-            qs.filter(name__icontains="retail").first()
-            or (existing.event_type if existing else None)
-            or qs.first()
-        )
+        existing = EventType.objects.filter(
+            tenant_id=tenant.id, name__iexact=name
+        ).first()
+        if existing:
+            return existing
+        if not apply:
+            self.stdout.write(f"  would create event type {name!r}")
+            return None
+        et = EventType.objects.create(name=name, tenant=tenant, created_by=creator)
+        self.stdout.write(f"  + event type {name!r} [{et.id}]")
+        return et
 
     def _resolve_field_type(self, kind: str, creator, apply: bool, cache: dict):
         """Find (or, under --apply, create) the CustomRecapFieldType for a kind."""
@@ -254,8 +324,8 @@ class Command(BaseCommand):
         cache[kind] = existing
         return existing
 
-    def _spec_field_names(self) -> set[str]:
-        return {fname for _, fields in SPEC for fname, *_ in fields}
+    def _spec_field_names(self, spec) -> set[str]:
+        return {fname for _, fields in spec for fname, *_ in fields}
 
     def _archive_event_type(self, tenant, creator, apply: bool):
         from events.models import EventType
@@ -289,7 +359,9 @@ class Command(BaseCommand):
                 return True
         return False
 
-    def _strip_unanswered_spec_fields(self, template, keep_names: set[str], apply: bool) -> int:
+    def _strip_unanswered_spec_fields(
+        self, template, keep_names: set[str], apply: bool
+    ) -> int:
         """Remove SPEC fields that were layered on with zero answers (safe undo)."""
         from recaps.models import CustomField
 
@@ -302,7 +374,9 @@ class Command(BaseCommand):
             if apply:
                 field.delete()
                 removed += 1
-                self.stdout.write(f"    - stripped unanswered SPEC field {field.name!r}")
+                self.stdout.write(
+                    f"    - stripped unanswered SPEC field {field.name!r}"
+                )
             else:
                 removed += 1
                 self.stdout.write(
@@ -326,33 +400,40 @@ class Command(BaseCommand):
         )
 
     def _resolve_template(
-        self, tenant, template_name: str, event_type, creator, apply: bool
+        self,
+        tenant,
+        template_name: str,
+        event_type,
+        creator,
+        apply: bool,
+        *,
+        spec,
+        archive_legacy: bool,
     ):
-        """Return the Retail Sampling walk-up template — never a franken-form.
-
-        If the existing retail template still holds answers on pre-LD fields,
-        archive it (historical recaps keep working via their template FK) and
-        mint a clean LD-mirrored template for new filings.
-        """
+        """Return the walk-up template for this program — never a franken-form."""
         from recaps.models import CustomRecapTemplate
 
-        keep_names = self._spec_field_names()
+        keep_names = self._spec_field_names(spec)
 
-        retail_tpls = list(
-            CustomRecapTemplate.objects.filter(
-                tenant_id=tenant.id, event_type=event_type
-            ).order_by("id")
-        )
-        for tpl in retail_tpls:
-            if not self._template_has_legacy_answers(tpl, keep_names):
-                continue
-            self.stdout.write(
-                f"Retail template id={tpl.id} {tpl.name!r} still has legacy "
-                f"answers — archiving so walk-up gets a clean LD form."
+        if archive_legacy and event_type is not None:
+            retail_tpls = list(
+                CustomRecapTemplate.objects.filter(
+                    tenant_id=tenant.id, event_type=event_type
+                ).order_by("id")
             )
-            self._strip_unanswered_spec_fields(tpl, keep_names, apply)
-            archive_et = self._archive_event_type(tenant, creator, apply)
-            self._archive_template(tpl, archive_et, apply)
+            for tpl in retail_tpls:
+                if not self._template_has_legacy_answers(tpl, keep_names):
+                    continue
+                self.stdout.write(
+                    f"Retail template id={tpl.id} {tpl.name!r} still has legacy "
+                    f"answers — archiving so walk-up gets a clean LD form."
+                )
+                self._strip_unanswered_spec_fields(tpl, keep_names, apply)
+                archive_et = self._archive_event_type(tenant, creator, apply)
+                self._archive_template(tpl, archive_et, apply)
+
+        if event_type is None and not apply:
+            return None, True, "would-create"
 
         existing = CustomRecapTemplate.objects.filter(
             tenant_id=tenant.id, name=template_name, event_type=event_type
@@ -360,25 +441,25 @@ class Command(BaseCommand):
         if existing is not None:
             return existing, False, "exists"
 
-        # Empty legacy (no answers) can be renamed in place — keeps the lowest id.
-        for legacy in LEGACY_TEMPLATE_NAMES:
-            prior = CustomRecapTemplate.objects.filter(
-                tenant_id=tenant.id, name=legacy, event_type=event_type
-            ).first()
-            if prior is None:
-                continue
-            if self._template_has_legacy_answers(prior, keep_names):
-                continue
-            self.stdout.write(
-                f"Legacy template {legacy!r} (id {prior.id}) → rename to "
-                f"{template_name!r}"
-            )
-            if not apply:
-                return prior, False, "would-rename"
-            prior.name = template_name
-            prior.product_samples = True
-            prior.save(update_fields=["name", "product_samples", "updated_at"])
-            return prior, False, "renamed"
+        if archive_legacy:
+            for legacy in LEGACY_TEMPLATE_NAMES:
+                prior = CustomRecapTemplate.objects.filter(
+                    tenant_id=tenant.id, name=legacy, event_type=event_type
+                ).first()
+                if prior is None:
+                    continue
+                if self._template_has_legacy_answers(prior, keep_names):
+                    continue
+                self.stdout.write(
+                    f"Legacy template {legacy!r} (id {prior.id}) → rename to "
+                    f"{template_name!r}"
+                )
+                if not apply:
+                    return prior, False, "would-rename"
+                prior.name = template_name
+                prior.product_samples = True
+                prior.save(update_fields=["name", "product_samples", "updated_at"])
+                return prior, False, "renamed"
 
         if not apply:
             return None, True, "would-create"
@@ -422,23 +503,195 @@ class Command(BaseCommand):
                 self.stdout.write(f"    - would prune {field.name!r}")
         return removed, kept_with_data
 
+    def _programs_to_seed(self, opts) -> list[dict]:
+        """Filter PROGRAMS by optional --event-type / --template-name."""
+        et_hint = (opts.get("event_type") or "").strip().lower()
+        name_hint = (opts.get("template_name") or "").strip().lower()
+        out = []
+        for program in PROGRAMS:
+            if et_hint and et_hint not in program["event_type"].lower():
+                continue
+            if name_hint and name_hint not in program["template_name"].lower():
+                continue
+            out.append(program)
+        if not out:
+            raise CommandError(
+                "No Brew Dr programs matched "
+                f"--event-type={opts.get('event_type')!r} "
+                f"--template-name={opts.get('template_name')!r}."
+            )
+        return out
+
+    def _seed_program(
+        self, tenant, creator, apply: bool, program: dict, ft_cache: dict
+    ) -> None:
+        from recaps.models import CustomField, RecapSection
+
+        spec = program["spec"]
+        template_name = program["template_name"]
+        event_type_name = program["event_type"]
+
+        self.stdout.write("\n" + "-" * 68)
+        self.stdout.write(f"PROGRAM: {event_type_name} → {template_name!r}")
+        self.stdout.write("-" * 68)
+
+        event_type = self._ensure_event_type(
+            tenant, event_type_name, creator, apply
+        )
+        if event_type is None and apply:
+            raise CommandError(
+                f"Could not ensure event type {event_type_name!r}."
+            )
+
+        for _, fields in spec:
+            for _, kind, _, _ in fields:
+                self._resolve_field_type(kind, creator, apply, ft_cache)
+
+        created = {"sections": 0, "fields": 0}
+        updated = {"sections": 0, "fields": 0}
+
+        template, made, how = self._resolve_template(
+            tenant,
+            template_name,
+            event_type,
+            creator,
+            apply,
+            spec=spec,
+            archive_legacy=bool(program.get("archive_legacy")),
+        )
+        if apply and template is not None:
+            self.stdout.write(
+                f"Template {how.upper()} "
+                f"(id {template.id}, uuid {template.uuid})"
+            )
+            if not made and template.product_samples is not True:
+                template.product_samples = True
+                template.save(update_fields=["product_samples", "updated_at"])
+        else:
+            self.stdout.write(f"Template {how}")
+
+        keep_names: set[str] = set()
+        for section_name, fields in spec:
+            s_idx = SECTION_ORDER.get(section_name, 99)
+            self.stdout.write(f"\n[{s_idx}] SECTION {section_name!r}")
+            section = None
+            if apply:
+                section, made_sec = RecapSection.objects.get_or_create(
+                    tenant_id=tenant.id,
+                    name=section_name,
+                    defaults={"order": s_idx, "created_by": creator},
+                )
+                if made_sec:
+                    created["sections"] += 1
+                elif section.order != s_idx:
+                    section.order = s_idx
+                    section.save(update_fields=["order", "updated_at"])
+                    updated["sections"] += 1
+
+            for f_idx, (fname, kind, required, options) in enumerate(fields):
+                keep_names.add(fname)
+                ft = ft_cache[kind]
+                req = "REQUIRED" if required else "optional"
+                opt = f" options={options}" if options else ""
+                self.stdout.write(f"    - {fname!r}  [{kind}] {req}{opt}")
+                if not apply:
+                    continue
+                field, made_f = CustomField.objects.get_or_create(
+                    custom_recap_template=template,
+                    recap_section=section,
+                    name=fname,
+                    defaults={
+                        "custom_field_type": ft,
+                        "required": required,
+                        "options": list(options),
+                        "order": f_idx,
+                        "created_by": creator,
+                    },
+                )
+                if made_f:
+                    created["fields"] += 1
+                else:
+                    changed = []
+                    if field.custom_field_type_id != ft.id:
+                        field.custom_field_type = ft
+                        changed.append("custom_field_type")
+                    if field.required != required:
+                        field.required = required
+                        changed.append("required")
+                    if list(field.options or []) != list(options):
+                        field.options = list(options)
+                        changed.append("options")
+                    if field.order != f_idx:
+                        field.order = f_idx
+                        changed.append("order")
+                    if field.recap_section_id != section.id:
+                        field.recap_section = section
+                        changed.append("recap_section")
+                    if changed:
+                        changed.append("updated_at")
+                        field.save(update_fields=changed)
+                        updated["fields"] += 1
+
+        self.stdout.write("\nObsolete fields (not in this program SPEC):")
+        if apply and template is not None:
+            pruned, kept = self._prune_obsolete_fields(
+                template, keep_names, apply=True
+            )
+        else:
+            from recaps.models import CustomRecapTemplate
+
+            preview = CustomRecapTemplate.objects.filter(
+                tenant_id=tenant.id, name=template_name
+            ).first()
+            if (
+                preview is None
+                and program.get("archive_legacy")
+            ):
+                preview = CustomRecapTemplate.objects.filter(
+                    tenant_id=tenant.id, name__in=LEGACY_TEMPLATE_NAMES
+                ).first()
+            if preview is None:
+                self.stdout.write("    (none — no existing template)")
+                pruned, kept = 0, 0
+            else:
+                pruned, kept = self._prune_obsolete_fields(
+                    preview, keep_names, apply=False
+                )
+
+        total_fields = sum(len(f) for _, f in spec)
+        if apply and template is not None:
+            self.stdout.write(
+                self.style.SUCCESS(
+                    f"  APPLIED {template_name!r} — "
+                    f"sections +{created['sections']}/~{updated['sections']} · "
+                    f"fields +{created['fields']}/~{updated['fields']} · "
+                    f"pruned {pruned} · kept-with-data {kept}."
+                )
+            )
+        else:
+            self.stdout.write(
+                self.style.WARNING(
+                    f"  DRY-RUN {template_name!r} — "
+                    f"{len(spec)} sections + {total_fields} fields "
+                    f"(prune ~{pruned}, keep-with-data {kept})."
+                )
+            )
+
     # ---- handle ----------------------------------------------------------
 
     def handle(self, *args, **opts):
         apply = opts["apply"]
         tenant = self._resolve_tenant(opts["tenant"])
         creator = self._resolve_creator()
-        event_type = self._resolve_event_type(tenant, opts["event_type"])
-        template_name = opts["template_name"]
+        programs = self._programs_to_seed(opts)
 
         self.stdout.write("=" * 68)
         self.stdout.write(
             f"Tenant     : [{tenant.id}] {tenant.name!r} (slug {tenant.slug!r})"
         )
-        self.stdout.write(f"Template   : {template_name!r}")
         self.stdout.write(
-            f"Event type : {getattr(event_type, 'name', None)!r} "
-            f"(id {getattr(event_type, 'id', None)})"
+            "Programs   : "
+            + ", ".join(p["event_type"] for p in programs)
         )
         self.stdout.write(f"Created by : {getattr(creator, 'email', creator)!r}")
         self.stdout.write(
@@ -446,146 +699,27 @@ class Command(BaseCommand):
         )
         self.stdout.write("=" * 68)
         self.stdout.write(
-            "Mirrors Liquid Death-Retail Sampling (Consumer Engagement / "
-            "Feedback & Account Notes / Additional Insights / Products Sampled)."
+            "Mirrors Liquid Death Retail Sampling + Event Activation "
+            "(brand-swapped; Products Sampled = five Brew Dr. cans)."
         )
 
-        if event_type is None:
-            raise CommandError(
-                f"Tenant {tenant.slug!r} has no event types — run set_tenant_event_types "
-                f"first, then re-run this."
-            )
-
         ft_cache: dict = {}
-        for _, fields in SPEC:
-            for _, kind, _, _ in fields:
-                self._resolve_field_type(kind, creator, apply, ft_cache)
-
-        from recaps.models import CustomField, RecapSection
 
         def _run():
-            created = {"sections": 0, "fields": 0}
-            updated = {"sections": 0, "fields": 0}
-
-            template, made, how = self._resolve_template(
-                tenant, template_name, event_type, creator, apply
-            )
-            if apply and template is not None:
-                self.stdout.write(
-                    f"Template {how.upper()} "
-                    f"(id {template.id}, uuid {template.uuid})"
-                )
-                if not made and template.product_samples is not True:
-                    template.product_samples = True
-                    template.save(update_fields=["product_samples", "updated_at"])
-                    updated["fields"] += 0  # flag only
-            elif not apply:
-                self.stdout.write(f"Template {how}")
-
-            keep_names: set[str] = set()
-            for s_idx, (section_name, fields) in enumerate(SPEC):
-                self.stdout.write(f"\n[{s_idx}] SECTION {section_name!r}")
-                section = None
-                if apply:
-                    section, made_sec = RecapSection.objects.get_or_create(
-                        tenant_id=tenant.id,
-                        name=section_name,
-                        defaults={"order": s_idx, "created_by": creator},
-                    )
-                    if made_sec:
-                        created["sections"] += 1
-                    elif section.order != s_idx:
-                        section.order = s_idx
-                        section.save(update_fields=["order", "updated_at"])
-                        updated["sections"] += 1
-
-                for f_idx, (fname, kind, required, options) in enumerate(fields):
-                    keep_names.add(fname)
-                    ft = ft_cache[kind]
-                    req = "REQUIRED" if required else "optional"
-                    opt = f" options={options}" if options else ""
-                    self.stdout.write(f"    - {fname!r}  [{kind}] {req}{opt}")
-                    if not apply:
-                        continue
-                    field, made_f = CustomField.objects.get_or_create(
-                        custom_recap_template=template,
-                        recap_section=section,
-                        name=fname,
-                        defaults={
-                            "custom_field_type": ft,
-                            "required": required,
-                            "options": list(options),
-                            "order": f_idx,
-                            "created_by": creator,
-                        },
-                    )
-                    if made_f:
-                        created["fields"] += 1
-                    else:
-                        changed = []
-                        if field.custom_field_type_id != ft.id:
-                            field.custom_field_type = ft
-                            changed.append("custom_field_type")
-                        if field.required != required:
-                            field.required = required
-                            changed.append("required")
-                        if list(field.options or []) != list(options):
-                            field.options = list(options)
-                            changed.append("options")
-                        if field.order != f_idx:
-                            field.order = f_idx
-                            changed.append("order")
-                        if field.recap_section_id != section.id:
-                            field.recap_section = section
-                            changed.append("recap_section")
-                        if changed:
-                            changed.append("updated_at")
-                            field.save(update_fields=changed)
-                            updated["fields"] += 1
-
-            self.stdout.write("\nObsolete fields (not in LD-mirrored SPEC):")
-            if apply and template is not None:
-                pruned, kept = self._prune_obsolete_fields(
-                    template, keep_names, apply=True
-                )
-            else:
-                # Dry-run: prune report against the template we'd rename/reuse.
-                from recaps.models import CustomRecapTemplate
-
-                preview = (
-                    CustomRecapTemplate.objects.filter(
-                        tenant_id=tenant.id, name=template_name
-                    ).first()
-                    or CustomRecapTemplate.objects.filter(
-                        tenant_id=tenant.id, name__in=LEGACY_TEMPLATE_NAMES
-                    ).first()
-                )
-                if preview is None:
-                    self.stdout.write("    (none — no existing template)")
-                    pruned, kept = 0, 0
-                else:
-                    pruned, kept = self._prune_obsolete_fields(
-                        preview, keep_names, apply=False
-                    )
-
+            for program in programs:
+                self._seed_program(tenant, creator, apply, program, ft_cache)
             self.stdout.write("\n" + "=" * 68)
             if apply:
                 self.stdout.write(
                     self.style.SUCCESS(
-                        f"APPLIED — template {template.uuid} · "
-                        f"sections +{created['sections']}/~{updated['sections']} · "
-                        f"fields +{created['fields']}/~{updated['fields']} · "
-                        f"pruned {pruned} · kept-with-data {kept}."
+                        f"APPLIED — seeded {len(programs)} Brew Dr program(s)."
                     )
                 )
             else:
-                total_fields = sum(len(f) for _, f in SPEC)
                 self.stdout.write(
                     self.style.WARNING(
-                        f"DRY-RUN — would create/reconcile {len(SPEC)} sections + "
-                        f"{total_fields} fields on tenant {tenant.slug!r} "
-                        f"(prune ~{pruned}, keep-with-data {kept}). "
-                        f"Re-run with --apply to write."
+                        f"DRY-RUN — would seed {len(programs)} program(s) on "
+                        f"tenant {tenant.slug!r}. Re-run with --apply to write."
                     )
                 )
 

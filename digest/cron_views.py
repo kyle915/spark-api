@@ -3349,17 +3349,16 @@ class SetCustomRecapFieldView(View):
 class SeedBrewDrRecapTemplateView(View):
     """GET/POST `/internal/cron/seed-brew-dr-recap-template`.
 
-    Builds/reconciles Brew Dr. Kombucha's LD-mirrored retail sampling recap
-    template (Consumer Engagement / Feedback & Account Notes / Additional
-    Insights / Products Sampled with the five Brew Dr. cans). Renames the
-    legacy ``Brew Dr. Kombucha Recap`` in place when present. Fires
-    ``seed_brew_dr_recap_template``. DRY-RUN unless apply=true; the response
-    ``report`` is the command's full stdout.
+    Builds/reconciles Brew Dr. Kombucha's LD-mirrored **Retail Sampling** and
+    **Event Activation** recap templates (brand-swapped LD questions; five
+    Brew Dr. cans on Products Sampled). Archives a franken retail form when
+    needed. Fires ``seed_brew_dr_recap_template``. DRY-RUN unless apply=true;
+    the response ``report`` is the command's full stdout.
 
     Params (query or POST, all optional):
       - tenant: tenant name/slug substring (default "brew")
-      - template_name: override the template name
-      - event_type: event-type name substring to attach to
+      - template_name: only seed programs whose template name matches
+      - event_type: only seed programs whose event type matches
       - apply: "1"/"true"/"yes" — actually write (omit for dry-run)
     """
 
@@ -3410,15 +3409,16 @@ class SeedBrewDrRecapTemplateView(View):
 class SetupBrewDrCheckinView(View):
     """GET/POST `/internal/cron/setup-brew-dr-checkin`.
 
-    Wires Brew Dr. Kombucha's standing check-in photo buckets (six labelled
-    retail-sampling dropzones with minimum photo nudges). The recap template
-    is seeded separately by ``seed-brew-dr-recap-template``. Pins Retail
-    Sampling and mints a ``BD-`` code only when the tenant has none yet.
+    Makes Brew Dr. Kombucha's standing ``BD-`` link serve **Retail Sampling**
+    and **Event Activation** (same picker as Liquid Death): selectable event
+    types + per-program photo buckets. Recap templates are seeded separately
+    by ``seed-brew-dr-recap-template``. Retail is the pinned default. Mints a
+    ``BD-`` code only when the tenant has none yet.
 
     Idempotent: an existing checkin_code is left alone (rotating it breaks
     every copy already shared, e.g. BD-AQRACD).
 
-    Params: tenant (default "brew"), event_type, prefix, apply (default DRY RUN).
+    Params: tenant (default "brew"), prefix, code, apply (default DRY RUN).
     """
 
     def _run(self, request: HttpRequest) -> HttpResponse:
@@ -3427,7 +3427,7 @@ class SetupBrewDrCheckinView(View):
             return deny
 
         kwargs: dict = {}
-        for key in ("tenant", "event_type", "prefix"):
+        for key in ("tenant", "prefix", "code"):
             val = request.GET.get(key) or request.POST.get(key)
             if val:
                 kwargs[key] = str(val)

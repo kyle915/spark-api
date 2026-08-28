@@ -1,8 +1,9 @@
 name: Setup Brew Dr check-in
 
-# Wires Brew Dr. Kombucha's standing check-in photo buckets (six labelled
-# retail-sampling dropzones). Recap template is seeded separately by the
-# "Seed Brew Dr recap template" workflow. Idempotent — BD-AQRACD is left alone.
+# Makes Brew Dr. Kombucha's standing BD- link serve Retail Sampling + Event
+# Activation (same picker as Liquid Death): selectable event types + keyed
+# photo buckets. Recap templates are seeded separately by "Seed Brew Dr recap
+# template". Idempotent — BD-AQRACD is left alone.
 #
 # RUN apply=false FIRST AND READ THE LOG.
 
