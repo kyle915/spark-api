@@ -222,7 +222,7 @@ class TestBrewDrRecapTemplateSeed(BaseGraphQLTestCase):
         assert list(products.options) == list(CANS)
         assert len(names) == 16
 
-    def test_apply_renames_legacy_template_in_place(self):
+    def test_apply_renames_empty_legacy_template_in_place(self):
         from recaps.models import CustomField, CustomRecapTemplate
 
         legacy = CustomRecapTemplate.objects.create(
@@ -245,6 +245,122 @@ class TestBrewDrRecapTemplateSeed(BaseGraphQLTestCase):
         assert (
             CustomField.objects.filter(custom_recap_template=legacy).count() == 16
         )
+
+    def test_apply_archives_franken_form_and_seeds_clean_ld_template(self):
+        """Prod stacked LD fields on the legacy form; seeder must split them."""
+        from ambassadors.checkin_web import resolve_template_for_event
+        from django.utils import timezone
+        from events.models import Event
+        from recaps.models import (
+            CustomField,
+            CustomFieldValue,
+            CustomRecap,
+            CustomRecapFieldType,
+            CustomRecapTemplate,
+            RecapSection,
+        )
+
+        from recaps.management.commands.seed_brew_dr_recap_template import (
+            ARCHIVE_EVENT_TYPE,
+            ARCHIVED_TEMPLATE_NAME,
+        )
+
+        franken = CustomRecapTemplate.objects.create(
+            tenant=self.tenant,
+            name=TEMPLATE_NAME,
+            event_type=self.event_type,
+            product_samples=True,
+            sales_performance=False,
+            layout={},
+            created_by=self.user,
+        )
+        section = RecapSection.objects.create(
+            tenant=self.tenant, name="Event Details", order=0, created_by=self.user
+        )
+        ftype = CustomRecapFieldType.objects.create(
+            name="text", created_by=self.user
+        )
+        ba = CustomField.objects.create(
+            name="BA Name",
+            custom_recap_template=franken,
+            recap_section=section,
+            custom_field_type=ftype,
+            required=True,
+            options=[],
+            order=0,
+            created_by=self.user,
+        )
+        # Layer an unanswered SPEC field the way the first apply did.
+        CustomField.objects.create(
+            name="Total number of consumers sampled",
+            custom_recap_template=franken,
+            recap_section=section,
+            custom_field_type=ftype,
+            required=True,
+            options=[],
+            order=1,
+            created_by=self.user,
+        )
+        event = Event.objects.create(
+            name="Legacy HEB",
+            tenant=self.tenant,
+            address="1 Main",
+            event_type=self.event_type,
+            date=timezone.now(),
+            created_by=self.user,
+        )
+        recap = CustomRecap.objects.create(
+            name="old brew dr recap",
+            event=event,
+            tenant=self.tenant,
+            custom_recap_template=franken,
+            created_by=self.user,
+        )
+        CustomFieldValue.objects.create(
+            value="Alex",
+            custom_recap=recap,
+            custom_field=ba,
+            created_by=self.user,
+        )
+
+        log = self._run(tenant="brew", apply=True)
+        assert "archiving" in log.lower() or "archive" in log.lower()
+
+        franken.refresh_from_db()
+        assert franken.name == ARCHIVED_TEMPLATE_NAME
+        assert franken.event_type.name == ARCHIVE_EVENT_TYPE
+        assert CustomField.objects.filter(
+            custom_recap_template=franken, name="BA Name"
+        ).exists()
+        assert not CustomField.objects.filter(
+            custom_recap_template=franken,
+            name="Total number of consumers sampled",
+        ).exists()
+
+        live = CustomRecapTemplate.objects.get(
+            tenant=self.tenant, name=TEMPLATE_NAME, event_type=self.event_type
+        )
+        assert live.id != franken.id
+        assert (
+            CustomField.objects.filter(custom_recap_template=live).count() == 16
+        )
+        assert not CustomField.objects.filter(
+            custom_recap_template=live, name="BA Name"
+        ).exists()
+
+        walkup = resolve_template_for_event(event)
+        # Event already has a recap on the archived template — resolution
+        # prefers that. A fresh event on Retail Sampling must hit `live`.
+        fresh = Event.objects.create(
+            name="New HEB",
+            tenant=self.tenant,
+            address="2 Main",
+            event_type=self.event_type,
+            date=timezone.now(),
+            created_by=self.user,
+        )
+        assert resolve_template_for_event(fresh).id == live.id
+        assert walkup.id == franken.id
 
     def test_apply_prunes_obsolete_fields_without_values(self):
         from recaps.models import (

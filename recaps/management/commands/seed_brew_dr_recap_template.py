@@ -13,11 +13,11 @@ Photos stay on the walk-up ``FileRecapCategory`` buckets from
 does NOT add template image fields, matching how LD keeps photo dropzones
 off the form itself.
 
-Idempotent. Preferentially renames the legacy ``Brew Dr. Kombucha Recap``
-row in place so ``resolve_template_for_event`` (order_by id) keeps hitting
-the same template id already live on BD-AQRACD. Obsolete fields with no
-submitted values are pruned; fields that still have answers are left and
-reported.
+Idempotent. When the prior ``Brew Dr. Kombucha Recap`` (or a stacked
+rename) still holds submitted answers, it is archived onto a non-checkin
+``Legacy Recap Archive`` event type and a clean LD-mirrored template is
+minted for Retail Sampling — so ``resolve_template_for_event`` never
+serves a franken-form on BD-AQRACD. Empty legacy rows are renamed in place.
 
 DRY-RUN by default. Run via ``/internal/cron/seed-brew-dr-recap-template``
 (or the "Seed Brew Dr recap template" GitHub Action) against prod.
@@ -40,8 +40,12 @@ CANS = [
 
 # LD-style name so clones and exports read the same as Resort / Torch.
 TEMPLATE_NAME = "Brew Dr. Kombucha-Retail Sampling"
-# Prior seeder name — rename in place so walk-up keeps the lowest template id.
+# Prior seeder name(s). When those rows still hold submitted answers we archive
+# them onto a non-checkin event type instead of stacking LD fields on top —
+# resolve_template_for_event would otherwise serve a 35-field franken-form.
 LEGACY_TEMPLATE_NAMES = ("Brew Dr. Kombucha Recap",)
+ARCHIVED_TEMPLATE_NAME = "Brew Dr. Kombucha Recap (archived)"
+ARCHIVE_EVENT_TYPE = "Legacy Recap Archive"
 
 # Field-for-field off Liquid Death-Retail Sampling, brand-swapped. Kinds are
 # canonical CustomRecapFieldType tokens the FE fuzzy-matches.
@@ -250,23 +254,120 @@ class Command(BaseCommand):
         cache[kind] = existing
         return existing
 
-    def _resolve_template(self, tenant, template_name: str, event_type, creator, apply: bool):
-        """Reuse the live Brew Dr template id when renaming from the legacy title."""
+    def _spec_field_names(self) -> set[str]:
+        return {fname for _, fields in SPEC for fname, *_ in fields}
+
+    def _archive_event_type(self, tenant, creator, apply: bool):
+        from events.models import EventType
+
+        existing = EventType.objects.filter(
+            tenant_id=tenant.id, name=ARCHIVE_EVENT_TYPE
+        ).first()
+        if existing:
+            return existing
+        if not apply:
+            self.stdout.write(f"  would create event type {ARCHIVE_EVENT_TYPE!r}")
+            return None
+        et = EventType.objects.create(
+            name=ARCHIVE_EVENT_TYPE, tenant=tenant, created_by=creator
+        )
+        self.stdout.write(f"  + event type {ARCHIVE_EVENT_TYPE!r} [{et.id}]")
+        return et
+
+    def _field_value_count(self, field) -> int:
+        from recaps.models import CustomFieldValue
+
+        return CustomFieldValue.objects.filter(custom_field=field).count()
+
+    def _template_has_legacy_answers(self, template, keep_names: set[str]) -> bool:
+        from recaps.models import CustomField
+
+        for field in CustomField.objects.filter(custom_recap_template=template):
+            if field.name in keep_names:
+                continue
+            if self._field_value_count(field):
+                return True
+        return False
+
+    def _strip_unanswered_spec_fields(self, template, keep_names: set[str], apply: bool) -> int:
+        """Remove SPEC fields that were layered on with zero answers (safe undo)."""
+        from recaps.models import CustomField
+
+        removed = 0
+        for field in CustomField.objects.filter(custom_recap_template=template):
+            if field.name not in keep_names:
+                continue
+            if self._field_value_count(field):
+                continue
+            if apply:
+                field.delete()
+                removed += 1
+                self.stdout.write(f"    - stripped unanswered SPEC field {field.name!r}")
+            else:
+                removed += 1
+                self.stdout.write(
+                    f"    - would strip unanswered SPEC field {field.name!r}"
+                )
+        return removed
+
+    def _archive_template(self, template, archive_et, apply: bool) -> None:
+        """Park a form with historical answers off Retail Sampling."""
+        self.stdout.write(
+            f"  archive template id={template.id} {template.name!r} → "
+            f"{ARCHIVED_TEMPLATE_NAME!r} / {ARCHIVE_EVENT_TYPE!r}"
+        )
+        if not apply or archive_et is None:
+            return
+        template.name = ARCHIVED_TEMPLATE_NAME
+        template.event_type = archive_et
+        template.product_samples = False
+        template.save(
+            update_fields=["name", "event_type", "product_samples", "updated_at"]
+        )
+
+    def _resolve_template(
+        self, tenant, template_name: str, event_type, creator, apply: bool
+    ):
+        """Return the Retail Sampling walk-up template — never a franken-form.
+
+        If the existing retail template still holds answers on pre-LD fields,
+        archive it (historical recaps keep working via their template FK) and
+        mint a clean LD-mirrored template for new filings.
+        """
         from recaps.models import CustomRecapTemplate
 
+        keep_names = self._spec_field_names()
+
+        retail_tpls = list(
+            CustomRecapTemplate.objects.filter(
+                tenant_id=tenant.id, event_type=event_type
+            ).order_by("id")
+        )
+        for tpl in retail_tpls:
+            if not self._template_has_legacy_answers(tpl, keep_names):
+                continue
+            self.stdout.write(
+                f"Retail template id={tpl.id} {tpl.name!r} still has legacy "
+                f"answers — archiving so walk-up gets a clean LD form."
+            )
+            self._strip_unanswered_spec_fields(tpl, keep_names, apply)
+            archive_et = self._archive_event_type(tenant, creator, apply)
+            self._archive_template(tpl, archive_et, apply)
+
         existing = CustomRecapTemplate.objects.filter(
-            tenant_id=tenant.id, name=template_name
+            tenant_id=tenant.id, name=template_name, event_type=event_type
         ).first()
         if existing is not None:
             return existing, False, "exists"
 
+        # Empty legacy (no answers) can be renamed in place — keeps the lowest id.
         for legacy in LEGACY_TEMPLATE_NAMES:
-            if legacy == template_name:
-                continue
             prior = CustomRecapTemplate.objects.filter(
-                tenant_id=tenant.id, name=legacy
+                tenant_id=tenant.id, name=legacy, event_type=event_type
             ).first()
             if prior is None:
+                continue
+            if self._template_has_legacy_answers(prior, keep_names):
                 continue
             self.stdout.write(
                 f"Legacy template {legacy!r} (id {prior.id}) → rename to "
@@ -275,16 +376,8 @@ class Command(BaseCommand):
             if not apply:
                 return prior, False, "would-rename"
             prior.name = template_name
-            prior.event_type = event_type
             prior.product_samples = True
-            prior.save(
-                update_fields=[
-                    "name",
-                    "event_type",
-                    "product_samples",
-                    "updated_at",
-                ]
-            )
+            prior.save(update_fields=["name", "product_samples", "updated_at"])
             return prior, False, "renamed"
 
         if not apply:
@@ -300,16 +393,18 @@ class Command(BaseCommand):
         )
         return template, True, "created"
 
-    def _prune_obsolete_fields(self, template, keep_names: set[str], apply: bool) -> tuple[int, int]:
+    def _prune_obsolete_fields(
+        self, template, keep_names: set[str], apply: bool
+    ) -> tuple[int, int]:
         """Drop fields not in SPEC when they have no submitted values."""
-        from recaps.models import CustomField, CustomFieldValue
+        from recaps.models import CustomField
 
         removed = 0
         kept_with_data = 0
         for field in CustomField.objects.filter(custom_recap_template=template):
             if field.name in keep_names:
                 continue
-            n_vals = CustomFieldValue.objects.filter(custom_field=field).count()
+            n_vals = self._field_value_count(field)
             if n_vals:
                 kept_with_data += 1
                 self.stdout.write(
