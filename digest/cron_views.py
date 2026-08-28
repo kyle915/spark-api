@@ -3349,10 +3349,12 @@ class SetCustomRecapFieldView(View):
 class SeedBrewDrRecapTemplateView(View):
     """GET/POST `/internal/cron/seed-brew-dr-recap-template`.
 
-    Builds the Brew Dr. Kombucha custom recap template (sections + fields,
-    incl. the sampled-cans multi-select). Fires `seed_brew_dr_recap_template`.
-    DRY-RUN unless apply=true; the response `report` is the command's full
-    stdout (self-diagnosing — lists tenants if Brew Dr. can't be matched).
+    Builds/reconciles Brew Dr. Kombucha's LD-mirrored retail sampling recap
+    template (Consumer Engagement / Feedback & Account Notes / Additional
+    Insights / Products Sampled with the five Brew Dr. cans). Renames the
+    legacy ``Brew Dr. Kombucha Recap`` in place when present. Fires
+    ``seed_brew_dr_recap_template``. DRY-RUN unless apply=true; the response
+    ``report`` is the command's full stdout.
 
     Params (query or POST, all optional):
       - tenant: tenant name/slug substring (default "brew")
