@@ -27,30 +27,92 @@ from utils.gcs import (
     get_gcs_client,
 )
 
+# Spark-rendered field/custom recap PDFs use these name prefixes. Other
+# .pdf attachments (Connecteam source, client uploads) must not count as
+# "already generated" or be emailed as the FIELD RECAP.
+_SPARK_PDF_NAME_PREFIXES = ("Custom Recap PDF -", "Recap PDF -")
+
+
+def _is_spark_generated_pdf(pdf_file) -> bool:
+    name = (getattr(pdf_file, "name", None) or "").strip()
+    if any(name.startswith(prefix) for prefix in _SPARK_PDF_NAME_PREFIXES):
+        return True
+    blob_val = getattr(pdf_file, "url", None) or getattr(pdf_file, "file", None)
+    blob = str(blob_val or "")
+    return "recaps/pdfs/" in blob
+
+
+def _pdf_matches_approval_status(recap, pdf_file) -> bool:
+    """True when the stored PDF was rendered with the current approval badge.
+
+    Approve-notify and Generate PDF used to reuse any existing .pdf row.
+    Ops often generate a preview while the recap is still a draft; that
+    snapshot keeps the red DRAFT chip, then the "recap is ready" email
+    attaches it after approval. Require the file to post-date approval.
+    """
+    if not getattr(recap, "approved", False):
+        return True
+    approved_at = getattr(recap, "approved_at", None)
+    created_at = getattr(pdf_file, "created_at", None)
+    if approved_at is not None and created_at is not None:
+        return created_at >= approved_at
+    # Approved without audit timestamps (legacy) — treat as stale so the
+    # APPROVED chip is refreshed on notify / regenerate.
+    return False
+
+
+def _list_spark_generated_pdfs(recap):
+    pdf_q = Q(file_type__extension__iexact=".pdf") | Q(
+        file_type__extension__iexact="pdf"
+    )
+    if isinstance(recap, models.CustomRecap):
+        qs = recap.custom_recap_files.filter(pdf_q).order_by("-id")
+    else:
+        qs = recap.recap_files.filter(pdf_q).order_by("-id")
+    return [pdf for pdf in qs if _is_spark_generated_pdf(pdf)]
+
+
+def _delete_spark_generated_pdfs(recap) -> None:
+    """Drop prior Spark PDF rows (+ GCS blobs) before writing a fresh render."""
+    existing = _list_spark_generated_pdfs(recap)
+    if not existing:
+        return
+    blob_names: list[str] = []
+    ids: list[int] = []
+    for item in existing:
+        blob_val = getattr(item, "url", None) or getattr(item, "file", None)
+        blob = extract_blob_name_from_url(str(blob_val)) if blob_val else None
+        if blob:
+            blob_names.append(blob)
+        ids.append(item.id)
+    if isinstance(recap, models.CustomRecap):
+        models.CustomRecapFile.objects.filter(id__in=ids).delete()
+    else:
+        models.RecapFile.objects.filter(id__in=ids).delete()
+    for blob_name in blob_names:
+        try:
+            delete_blob(blob_name)
+        except Exception:
+            logger.warning(
+                "Could not delete stale recap PDF blob %s for recap %s",
+                blob_name,
+                getattr(recap, "id", None),
+            )
+
+
 async def _resolve_recap_pdf_attachment(
     recap: models.Recap | models.CustomRecap,
 ) -> list[dict] | None:
-    """If the recap has a generated PDF (CustomRecapFile with .pdf
-    extension or RecapFile equivalent), return an `attachments` list
-    shaped for the Mailer. Returns None when no PDF exists or the
-    blob fetch fails — caller falls back to a link-only email.
+    """If the recap has a Spark-generated PDF, return Mailer attachments.
+
+    Returns None when no Spark PDF exists or the blob fetch fails —
+    caller falls back to a link-only email. Non-Spark .pdf uploads are
+    ignored so Connecteam source PDFs are never emailed as the recap.
     """
+
     def _find_blob() -> tuple[str, str] | None:
         try:
-            if isinstance(recap, models.CustomRecap):
-                qs = recap.custom_recap_files.filter(
-                    file_type__extension__iexact=".pdf"
-                ) | recap.custom_recap_files.filter(
-                    file_type__extension__iexact="pdf"
-                )
-                pdf = qs.order_by("-id").first()
-            else:
-                qs = recap.recap_files.filter(
-                    file_type__extension__iexact=".pdf"
-                ) | recap.recap_files.filter(
-                    file_type__extension__iexact="pdf"
-                )
-                pdf = qs.order_by("-id").first()
+            pdf = _find_existing_pdf_file(recap)
             if not pdf:
                 return None
             # RecapFile stores the blob on ``file``; CustomRecapFile on ``url``.
@@ -76,7 +138,9 @@ async def _resolve_recap_pdf_attachment(
         return None
     if not pdf_bytes:
         return None
-    safe_name = friendly_name if friendly_name.lower().endswith(".pdf") else f"{friendly_name}.pdf"
+    safe_name = (
+        friendly_name if friendly_name.lower().endswith(".pdf") else f"{friendly_name}.pdf"
+    )
     # Resend's Python SDK JSON-encodes the send payload. Raw bytes raise
     # ``Object of type bytes is not JSON serializable`` and the request
     # never leaves Cloud Run. Campaign / monthly report mailers already
@@ -91,23 +155,27 @@ async def _resolve_recap_pdf_attachment(
 
 
 def _find_existing_pdf_file(recap):
-    """Most recent PDF file row on this recap, or None."""
-    pdf_q = Q(file_type__extension__iexact=".pdf") | Q(file_type__extension__iexact="pdf")
-    if isinstance(recap, models.CustomRecap):
-        return recap.custom_recap_files.filter(pdf_q).order_by("-id").first()
-    return recap.recap_files.filter(pdf_q).order_by("-id").first()
+    """Most recent Spark-generated PDF on this recap, or None."""
+    spark_pdfs = _list_spark_generated_pdfs(recap)
+    return spark_pdfs[0] if spark_pdfs else None
 
 
-def _render_and_store_recap_pdf_sync(recap, user=None):
-    """Generate + persist a recap PDF if one is not already stored.
+def _render_and_store_recap_pdf_sync(recap, user=None, *, force: bool = False):
+    """Generate + persist a Spark FIELD RECAP PDF when missing or stale.
 
-    Used by the approve notify path so the email can attach the PDF
-    without regenerating on every approve. Best-effort: failures log
-    and return None (link-only email).
+    Used by the approve notify path so the email attaches a PDF that
+    matches the current approval badge. Reuses an existing Spark PDF only
+    when it was rendered after approval (APPROVED chip). Best-effort:
+    failures log and return None (link-only email).
     """
     existing = _find_existing_pdf_file(recap)
-    if existing:
+    if (
+        existing
+        and not force
+        and _pdf_matches_approval_status(recap, existing)
+    ):
         return existing
+
     actor = user or getattr(recap, "updated_by", None) or getattr(recap, "created_by", None)
     if actor is None:
         return None
@@ -121,7 +189,9 @@ def _render_and_store_recap_pdf_sync(recap, user=None):
 
     image_entries = []
     if isinstance(recap, models.CustomRecap):
-        files = list(recap.custom_recap_files.select_related("file_type", "file_recap_category"))
+        files = list(
+            recap.custom_recap_files.select_related("file_type", "file_recap_category")
+        )
         candidates = []
         for recap_file in files:
             if not should_embed_recap_file(recap_file):
@@ -130,7 +200,9 @@ def _render_and_store_recap_pdf_sync(recap, user=None):
             if blob_name:
                 candidates.append((recap_file, blob_name))
     else:
-        files = list(recap.recap_files.select_related("file_type", "file_recap_category"))
+        files = list(
+            recap.recap_files.select_related("file_type", "file_recap_category")
+        )
         candidates = []
         for recap_file in files:
             if not should_embed_recap_file(recap_file):
@@ -165,6 +237,11 @@ def _render_and_store_recap_pdf_sync(recap, user=None):
                     image_entries.append(entry)
 
     try:
+        # Drop stale Spark PDFs (e.g. pre-approval DRAFT snapshot) before
+        # writing the fresh APPROVED render. Non-Spark .pdf attachments stay.
+        if existing or force:
+            _delete_spark_generated_pdfs(recap)
+
         pdf_bytes = build_recap_pdf(recap, image_entries)
         timestamp = django_timezone.now().strftime("%Y%m%d%H%M%S")
         if isinstance(recap, models.CustomRecap):
@@ -194,4 +271,10 @@ def _render_and_store_recap_pdf_sync(recap, user=None):
 
 
 async def _ensure_recap_pdf_for_notify(recap) -> None:
+    """Ensure the approve email can attach an APPROVED-badge PDF.
+
+    Always refresh when the stored Spark PDF predates approval (or is
+    missing). Passing force=False still regenerates stale DRAFT snapshots
+    via ``_pdf_matches_approval_status``.
+    """
     await sync_to_async(_render_and_store_recap_pdf_sync)(recap)
