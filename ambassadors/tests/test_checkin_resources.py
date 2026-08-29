@@ -265,6 +265,25 @@ class TestSetCheckinResourcesCommand(AmbassadorsGraphQLTestCase):
         for row in self.tenant.checkin_resources:
             assert row["url"].startswith("https://client.igniteproductions.co/")
             assert "admin.igniteproductions.co" not in row["url"]
+        # Event confirmation emails still read the legacy column — keep it
+        # pointed at the training PDF (not the photo-release QR).
+        assert self.tenant.checkin_training_url == (
+            "https://client.igniteproductions.co/training/ff/ba-training-guide.pdf"
+        )
+
+    def test_apply_seeds_the_torch_preset_and_email_url(self):
+        torch = self.create_tenant(name="Torch THC", slug="torch-thc")
+        self._run(tenant="torch", apply=True)
+        torch.refresh_from_db()
+        assert len(torch.checkin_resources) == 1
+        assert torch.checkin_resources[0]["kind"] == "pdf"
+        assert torch.checkin_resources[0]["label"] == "BA reference & training"
+        assert torch.checkin_resources[0]["url"] == (
+            "https://client.igniteproductions.co/training/torch/ba-training-guide.pdf"
+        )
+        assert torch.checkin_training_url == (
+            "https://client.igniteproductions.co/training/torch/ba-training-guide.pdf"
+        )
 
     def test_re_running_is_idempotent(self):
         self._run(tenant="Feel Free Command", apply=True)
@@ -282,9 +301,13 @@ class TestSetCheckinResourcesCommand(AmbassadorsGraphQLTestCase):
         self.tenant.refresh_from_db()
         # None, not [] — so the tenant behaves exactly like an untouched one.
         assert self.tenant.checkin_resources is None
+        # --clear leaves the email URL alone (synced on the prior apply).
+        assert self.tenant.checkin_training_url == (
+            "https://client.igniteproductions.co/training/ff/ba-training-guide.pdf"
+        )
         assert (
             checkin_web.build_checkin_resources(self.tenant)[0]["url"]
-            == LEGACY_PUBLIC_URL
+            == "https://client.igniteproductions.co/training/ff/ba-training-guide.pdf"
         )
 
     def test_a_rejected_entry_refuses_the_whole_write(self):

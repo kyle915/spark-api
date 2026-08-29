@@ -314,12 +314,12 @@ class TestTenantProductOptions:
 class TestTorchConfirmationContent:
     """The same email, Torch-branded — nothing Liquid Death may leak through."""
 
-    def _torch_confirmation(self):
+    def _torch_confirmation(self, *, training_url: str = ""):
         tenant = _tenant(
             name="Torch THC",
             slug="torch-thc",
             checkin_code="TH-2HRV3D",
-            checkin_training_url="",
+            checkin_training_url=training_url,
         )
         return _confirmation(
             tenant,
@@ -345,7 +345,12 @@ class TestTorchConfirmationContent:
         assert "Liquid Death" not in ctx["intro_html"]
 
     def test_products_strip_the_line_prefix_and_links_mint_client_host(self):
-        c = self._torch_confirmation()
+        c = self._torch_confirmation(
+            training_url=(
+                "https://client.igniteproductions.co/training/torch/"
+                "ba-training-guide.pdf"
+            )
+        )
         ctx = build_context(c, EventConfirmation.STAGE_BOOKED)
         assert ctx["products_label"] == (
             "Raspberry 10mg 12oz, Black Cherry 5mg 12oz"
@@ -354,22 +359,43 @@ class TestTorchConfirmationContent:
         assert ctx["recap_url"] == (
             "https://client.igniteproductions.co/checkin/TH-2HRV3D"
         )
-        # Torch has no training site configured: no button, not a dead link.
-        assert ctx["training_url"] == ""
+        assert ctx["training_url"] == (
+            "https://client.igniteproductions.co/training/torch/"
+            "ba-training-guide.pdf"
+        )
 
     def test_the_rendered_email_has_no_liquid_death_in_it(self):
         from events.event_confirmations import EventConfirmationMailer
 
-        c = self._torch_confirmation()
+        c = self._torch_confirmation(
+            training_url=(
+                "https://client.igniteproductions.co/training/torch/"
+                "ba-training-guide.pdf"
+            )
+        )
         html = EventConfirmationMailer(
             c, EventConfirmation.STAGE_BOOKED
         ).envelope().render_template()
         assert "TORCH THC" in html
         assert "Liquid Death" not in html
         assert 'href="https://client.igniteproductions.co/checkin/TH-2HRV3D"' in html
+        assert (
+            'href="https://client.igniteproductions.co/training/torch/'
+            'ba-training-guide.pdf"'
+        ) in html
+        assert "Review Training Site" in html
         assert "spark.igniteproductions.co" not in html
         assert "admin.igniteproductions.co" not in html
-        # No training URL → the block is omitted, not rendered empty.
+
+    def test_no_training_url_omits_the_button(self):
+        from events.event_confirmations import EventConfirmationMailer
+
+        c = self._torch_confirmation(training_url="")
+        ctx = build_context(c, EventConfirmation.STAGE_BOOKED)
+        assert ctx["training_url"] == ""
+        html = EventConfirmationMailer(
+            c, EventConfirmation.STAGE_BOOKED
+        ).envelope().render_template()
         assert "Review Training Site" not in html
 
 

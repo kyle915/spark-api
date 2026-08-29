@@ -17,6 +17,10 @@ Dry-run by default; ``--apply`` writes. Idempotent: the desired list is
 normalised and compared against what is already stored, so a re-run with no
 content change writes nothing and says so.
 
+Applying a non-empty list also syncs ``Tenant.checkin_training_url`` to the
+first pdf/link URL so event-confirmation emails get the same training button.
+``--clear`` leaves that legacy column alone.
+
 Run via ``/internal/cron/set-checkin-resources`` (or the "Set check-in
 resources" GitHub Action) so it executes against prod.
 """
@@ -74,7 +78,31 @@ def _presets() -> dict[str, list[dict]]:
                 "note": "Show this — the consumer scans it to sign",
             },
         ],
+        # Single PDF — same cream "BA reference & training" card copy as the
+        # legacy checkin_training_url fallback. Event confirmation emails also
+        # read that legacy column; apply syncs it from the first pdf/link.
+        "torch": [
+            {
+                "label": "BA reference & training",
+                "kind": "pdf",
+                "url": f"{base}/training/torch/ba-training-guide.pdf",
+                "note": "Field guide, video, product sheets",
+            },
+        ],
     }
+
+
+def _email_training_url(resources: list[dict]) -> str:
+    """URL for Tenant.checkin_training_url (event confirmation "Review Training").
+
+    Prefers the first pdf, then the first link. Image-only resources (QR codes)
+    are not useful in an email button.
+    """
+    for kind in ("pdf", "link"):
+        for row in resources:
+            if row.get("kind") == kind and (row.get("url") or "").strip():
+                return row["url"].strip()
+    return ""
 
 
 class Command(BaseCommand):
@@ -202,12 +230,37 @@ class Command(BaseCommand):
                 "the page will render."
             )
 
-        if current == desired:
+        email_url = _email_training_url(desired)
+        current_email = (tenant.checkin_training_url or "").strip()
+        resources_same = current == desired
+        email_same = current_email == email_url
+        # Clearing resources leaves checkin_training_url alone — admins may
+        # still want the confirmation-email button after removing check-in
+        # cards. Applying a non-empty list keeps the two in sync.
+        if clear:
+            email_same = True
+        elif not desired:
+            email_same = True
+
+        if resources_same and email_same:
             self.stdout.write("")
             self.stdout.write(
                 self.style.SUCCESS("Already set — nothing to do.")
             )
             return
+
+        if email_url and not clear:
+            self.stdout.write("")
+            self.stdout.write(
+                f"Email url  : {email_url}"
+                + ("" if not email_same else "  (unchanged)")
+            )
+        elif clear:
+            self.stdout.write("")
+            self.stdout.write(
+                f"Email url  : {current_email or '(unset)'}  "
+                "(left alone on --clear)"
+            )
 
         if not apply:
             self.stdout.write("")
@@ -218,7 +271,11 @@ class Command(BaseCommand):
             # Store None rather than [] when clearing, so the model falls back
             # to `checkin_training_url` exactly as an untouched tenant does.
             tenant.checkin_resources = desired or None
-            tenant.save(update_fields=["checkin_resources"])
+            update_fields = ["checkin_resources"]
+            if email_url and not clear and not email_same:
+                tenant.checkin_training_url = email_url
+                update_fields.append("checkin_training_url")
+            tenant.save(update_fields=update_fields)
 
         self.stdout.write("")
         self.stdout.write(
@@ -226,3 +283,9 @@ class Command(BaseCommand):
                 f"Wrote {len(desired)} resource(s) to {tenant.name!r}."
             )
         )
+        if email_url and not clear and "checkin_training_url" in update_fields:
+            self.stdout.write(
+                self.style.SUCCESS(
+                    "Synced checkin_training_url for event confirmation emails."
+                )
+            )
