@@ -138,8 +138,12 @@ class TestEventConfirmationGraphQL(AmbassadorsGraphQLTestCase):
         assert result.errors is None, result.errors
         data = result.data["eventConfirmationFormOptions"]
 
-        assert len(data["productOptions"]) == 31
+        assert len(data["productOptions"]) == 32
         assert data["productOptions"][0].startswith("Sparkling Water — ")
+        assert (
+            "Sparkling Water — Feastables Peanut Butter Cup"
+            in data["productOptions"]
+        )
         # Built from Tenant.checkin_code / checkin_training_url, not hardcoded.
         assert data["recapUrl"].endswith("/checkin/LD-TNBJ8K")
         assert data["trainingUrl"].endswith("/training/LD-FZUWXT")

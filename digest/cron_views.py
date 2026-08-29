@@ -5307,8 +5307,8 @@ class SetupLdRetailCheckinView(View):
     Makes Liquid Death's ONE standing check-in link serve both their programs:
     mints/keeps the code, makes Retail Sampling and Event Activation selectable
     on it (keeping the retail pin as the fallback for a request that names no
-    program), adds the 31-SKU "Products Sampled" multi-select to each program's
-    template, and seeds each program's own photo buckets.
+    program), adds the Products Sampled multi-select (full LD SKU list) to each
+    program's template, and seeds each program's own photo buckets.
 
     Creates no template — LD already has both, and a duplicate would split the
     brand's recaps. Idempotent: re-running refreshes the option lists and
