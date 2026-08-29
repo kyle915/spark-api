@@ -62,6 +62,24 @@ def _err(message: str, status: int = 400, code: str = "invalid") -> JsonResponse
     return JsonResponse({"error": code, "message": message}, status=status)
 
 
+def _session_error_code(err_response: HttpResponse) -> str:
+    """Pull the ``error`` code off a ``_load_session`` failure response.
+
+    Standing-link GET used to fall through to a bare tenant payload when the
+    bearer failed, with no signal. The page then wiped localStorage and the BA
+    looked "not clocked in" even when Attendance still had their punch
+    (Michelle Chin / Feel Free, Aug 2026 — left for the photo-release QR and
+    came back to identify). Surface the reason so the page only drops a
+    truly dead token and can resume an open shift from identity.
+    """
+    try:
+        data = json.loads(err_response.content.decode("utf-8") or "{}")
+        code = (data.get("error") or "").strip() if isinstance(data, dict) else ""
+        return code or "bad_session"
+    except (ValueError, UnicodeDecodeError, AttributeError):
+        return "bad_session"
+
+
 def _body(request: HttpRequest) -> dict:
     try:
         raw = request.body.decode("utf-8") or "{}"
@@ -229,6 +247,7 @@ def public_checkin_context(request: HttpRequest, code: str) -> HttpResponse:
     # is what resolves an actual event.
     if kind == "tenant":
         token = request.headers.get("X-Checkin-Session") or ""
+        session_error = None
         if token:
             loaded, err = _load_session(code, token)
             if err is None:
@@ -239,11 +258,13 @@ def public_checkin_context(request: HttpRequest, code: str) -> HttpResponse:
                     ambassador=ambassador, tenant=target
                 )
                 return JsonResponse(_stamp_recap_only(payload, code, target))
+            session_error = _session_error_code(err)
         try:
             recap_only = checkin_web.is_recap_only_code(code, target)
-            return JsonResponse(
-                checkin_web.build_tenant_context(target, recap_only=recap_only)
-            )
+            payload = checkin_web.build_tenant_context(target, recap_only=recap_only)
+            if session_error:
+                payload["sessionError"] = session_error
+            return JsonResponse(payload)
         except Exception:  # noqa: BLE001
             logger.exception("checkin tenant context failed code=%s", code)
             return _err("Couldn't load this check-in.", status=500, code="server")
