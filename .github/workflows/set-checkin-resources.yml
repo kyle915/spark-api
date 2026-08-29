@@ -1,0 +1,78 @@
+name: Set check-in resources
+
+# Sets the BA-facing resource BUTTONS on a tenant's check-in page — the block
+# that sits under the header, before identify and again once clocked in.
+#
+# This replaces the single "training link" a tenant used to get. Feel Free needs
+# two resources that aren't the same kind of thing: a training deck the BA reads,
+# and a photo-release QR the BA DISPLAYS so a consumer can scan it off their
+# screen and sign their own release. That second one is why entries carry a
+# `kind` — a QR behind a hyperlink is useless, because you can't scan a code with
+# the phone that's showing it. `image` renders inline and large; `link` and `pdf`
+# open in a new tab.
+#
+# Leave `resources` blank to use the brand's built-in preset (the URLs live in
+# `set_checkin_resources` so they're reviewable in git, not retyped into a form
+# field at 6am). Pass a JSON array to override it, or tick `clear` to remove
+# every button and fall back to the legacy `checkin_training_url`.
+#
+# Idempotent — the desired list is normalised and diffed against what's stored,
+# so a re-run with no content change writes nothing and says so. Read the DRY RUN
+# first: it prints the current list and the desired one side by side.
+#
+# The assets themselves live in the FRONT-END repo under `public/training/<brand>/`
+# and ride its Firebase deploy, so a URL here only resolves once that deploy has
+# landed.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tenant:
+        description: "Tenant name/slug substring"
+        required: false
+        default: "feel free"
+      resources:
+        description: 'JSON array of {label, kind, url, note} — blank = the brand preset. kind: link|pdf|image'
+        required: false
+        default: ""
+      clear:
+        description: "Remove every resource button from this tenant"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+      apply:
+        description: "Actually write (read the dry run first)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+jobs:
+  set-checkin-resources:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire setup endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/set-checkin-resources
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          TENANT: ${{ github.event.inputs.tenant }}
+          RESOURCES: ${{ github.event.inputs.resources }}
+          CLEAR: ${{ github.event.inputs.clear }}
+          APPLY: ${{ github.event.inputs.apply }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL" \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            --data-urlencode "tenant=$TENANT" \
+            --data-urlencode "resources=$RESOURCES" \
+            --data-urlencode "clear=$CLEAR" \
+            --data-urlencode "apply=$APPLY")
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          echo ""
+          [ "$STATUS" != "200" ] && exit 1 || exit 0
