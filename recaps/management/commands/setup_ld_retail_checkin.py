@@ -119,8 +119,26 @@ PRODUCTS: list[tuple[str, list[str]]] = [
 
 
 def product_options() -> list[str]:
-    """The SKUs as ``"Category — Name"`` choice values."""
+    """Hardcoded spark-form SKUs as ``"Category — Name"`` choice values.
+
+    Prefer :func:`product_options_for_tenant` at seed/runtime so live Product
+    catalog rows win; this list is only the bootstrap fallback when the
+    tenant has no catalog yet (and the Event Confirmation LD picker).
+    """
     return [f"{cat} — {name}" for cat, names in PRODUCTS for name in names]
+
+
+def product_options_for_tenant(tenant) -> list[str]:
+    """Products Sampled choices: live catalog first, hardcoded list if empty.
+
+    GraphQL also resolves Products Sampled from the catalog at read time, so
+    a SKU added in /products appears on the pills without re-seeding. Seeding
+    still writes the list onto ``CustomField.options`` as a cache/fallback.
+    """
+    from events.event_confirmations import catalog_product_options
+
+    live = catalog_product_options(tenant)
+    return live if live else product_options()
 
 
 # Kyle's shot list, per program, in render order. Each entry is one labelled
@@ -340,8 +358,13 @@ class Command(BaseCommand):
                 )
             )
 
-        opts_list = product_options()
-        self.stdout.write(f"Products   : {len(opts_list)} options")
+        opts_list = product_options_for_tenant(tenant)
+        src = (
+            "tenant Product catalog"
+            if opts_list != product_options()
+            else "hardcoded spark-form list (catalog empty)"
+        )
+        self.stdout.write(f"Products   : {len(opts_list)} options ({src})")
 
         # -- the labelled photo buckets, per program -----------------------
         bucket_plan = self._plan_photo_buckets(tenant, plan)
@@ -639,15 +662,20 @@ class Command(BaseCommand):
     def _ensure_products_field(self, template, tenant, options: list[str]) -> None:
         """Add (or refresh) the Products Sampled multi-select, in place.
 
-        Re-running only rewrites ``options``, so adding a SKU to the brand's
-        line-up is a re-dispatch — it never duplicates the field or disturbs
-        recaps already filed against it.
+        Re-running rewrites the cached ``options`` from the catalog (or the
+        hardcoded fallback). GraphQL prefers live Product rows at read time,
+        so admin catalog adds appear on pills without this refresh — seeding
+        keeps the JSON cache aligned for dumps and catalog-empty tenants.
+        Never duplicates the field or disturbs recaps already filed against it.
         """
         from recaps.models import CustomField, CustomRecapFieldType, RecapSection
 
         creator = getattr(template, "created_by", None) or getattr(
             tenant, "created_by", None
         )
+        # Prefer the live catalog at write time too (caller may have passed
+        # a stale hardcoded list).
+        options = product_options_for_tenant(tenant) or list(options)
 
         field = CustomField.objects.filter(
             custom_recap_template=template, name__iexact=PRODUCTS_FIELD

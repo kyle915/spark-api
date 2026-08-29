@@ -20,6 +20,12 @@ IMAGES
     download is reported and skipped — the Product row is still created, so a
     site change degrades to "product without artwork", never to a missing SKU.
 
+PRODUCTS SAMPLED PILLS
+    GraphQL resolves "Products Sampled" options from live Product rows (same
+    catalog as the upper Product Samples grid). This command also refreshes
+    the stored CustomField.options cache from that catalog on --apply so dumps
+    and catalog-empty fallbacks stay aligned — no second hardcoded SKU list.
+
 Idempotent. Re-running creates nothing and (without --force-images) re-downloads
 nothing. DRY-RUN by default; --apply writes.
 
@@ -323,6 +329,8 @@ class Command(BaseCommand):
                 f"  {mark} id={product.id:<6} {product_name:<32}{note}"
             )
 
+        self._sync_products_sampled_options(tenant)
+
         self.stdout.write("")
         self.stdout.write("=" * 72)
         self.stdout.write(self.style.SUCCESS(
@@ -347,6 +355,49 @@ class Command(BaseCommand):
         self.stdout.write("=" * 72)
 
     # ------------------------------------------------------------------
+
+    def _sync_products_sampled_options(self, tenant: Tenant) -> None:
+        """Refresh every Torch Products Sampled multiselect from the catalog.
+
+        GraphQL already prefers live Product rows at read time; this keeps the
+        stored JSON cache aligned after onboard so admin dumps and any
+        catalog-empty fallback stay correct.
+        """
+        from events.event_confirmations import catalog_product_options
+        from recaps.models import CustomField
+        from recaps.products_sampled import PRODUCTS_SAMPLED_FIELD
+
+        options = catalog_product_options(tenant)
+        if not options:
+            self.stdout.write(
+                self.style.WARNING(
+                    f"  no Product rows to sync onto '{PRODUCTS_SAMPLED_FIELD}'"
+                )
+            )
+            return
+
+        fields = list(
+            CustomField.objects.filter(
+                custom_recap_template__tenant_id=tenant.id,
+                name__iexact=PRODUCTS_SAMPLED_FIELD,
+            ).select_related("custom_recap_template")
+        )
+        if not fields:
+            self.stdout.write(
+                f"  No '{PRODUCTS_SAMPLED_FIELD}' choice field on Torch "
+                "templates — nothing to refresh (pills still resolve from "
+                "catalog at GraphQL read time once a field exists)."
+            )
+            return
+
+        for field in fields:
+            field.options = list(options)
+            field.save(update_fields=["options"])
+            tpl_name = getattr(field.custom_recap_template, "name", "?")
+            self.stdout.write(
+                f"  refreshed Products Sampled on {tpl_name!r} "
+                f"→ {len(options)} catalog options"
+            )
 
     def _attach_image(self, product: Product, url: str) -> tuple[bool, str]:
         """Download `url` into Product.image. Never raises — a brand-site
