@@ -1788,22 +1788,40 @@ class CustomField(Node):
     created_at: str
     updated_at: str
 
-    @strawberry_django.field(only=["options"])
-    def options(self) -> list[str]:
-        """Admin-defined choices for 'select' / 'multiselect' fields; [] for
-        every other field type.
+    @strawberry_django.field(only=["options", "name"])
+    async def options(self) -> list[str]:
+        """Choices for 'select' / 'multiselect' fields; [] for other types.
 
-        `only=["options"]` tells the strawberry-django query optimizer to keep
-        the `options` column in its `.only(...)` selection. Without it the
-        optimizer (which can't see that this custom resolver needs the column)
-        DEFERRED `options`, so the __dict__ read below returned None and every
-        choice field came back [] — Feel Free's 'Which products were sampled?'
-        rendered 'No options configured' on the app despite having options.
-        (Reloading the column in-resolver isn't an option: this runs in the
-        async schema, where a sync ORM read raises SynchronousOnlyOperation.)
-        Read via __dict__ to avoid recursing into this resolver's own name."""
+        `only=["options", "name"]` keeps those columns in the strawberry-django
+        optimizer selection. Without it the optimizer deferred `options` and
+        every choice field came back [] — Feel Free's 'Which products were
+        sampled?' rendered 'No options configured' despite having options.
+
+        Products Sampled is special: when the template's tenant has Product
+        catalog rows, those win over the frozen JSON list so a new SKU shows
+        on the bottom pills as soon as it lands in /products (same source as
+        the upper Product Samples grid). Other choice fields and catalog-empty
+        tenants (e.g. Brew Dr. cans) still use the stored options.
+        Read stored options via __dict__ to avoid recursing into this resolver.
+        """
         raw = self.__dict__.get("options")
-        return [str(o) for o in raw] if isinstance(raw, list) else []
+        stored = [str(o) for o in raw] if isinstance(raw, list) else []
+        name = self.__dict__.get("name")
+        if name is None:
+            name = getattr(self, "name", None)
+
+        from recaps.products_sampled import is_products_sampled_field
+
+        if not is_products_sampled_field(name):
+            return stored
+
+        @sync_to_async
+        def _from_catalog() -> list[str]:
+            from recaps.products_sampled import resolve_field_options
+
+            return resolve_field_options(self, stored)
+
+        return await _from_catalog()
 
     @strawberry.field
     def value(self) -> str | None:
