@@ -3353,14 +3353,10 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
         resolver (real id, "1"/"2" sentinels, or null → uncategorized).
         Auth mirrors add_custom_recap_file — foreign-tenant access blocked.
 
-        ROLE SENTINEL site. RecapCustomView's "Move to…" dropdown offers only
-        the fixed roles — "1" Sampling photos, "2" Receipts, "" Uncategorized —
-        so every live value is a slot marker, and this keeps reading them as
-        one. The moment that dropdown is widened to list the tenant's real
-        categories, those picks must arrive as relay global ids (which never
-        collide with "1"/"2") or move to
-        `_resolve_explicit_file_recap_category`; a bare "2" meaning PK 2 would
-        silently re-file into Receipts.
+        ROLE SENTINEL + NAME site. RecapCustomView's upload / "Move to…"
+        dropdowns now list the tenant's real FileRecapCategory names (including
+        Torch "Product Spend"). Values arrive as category NAMES (or legacy
+        "1"/"2" role markers); `_resolve_file_recap_category` resolves both.
         """
         if not isinstance(self.input, inputs.SetCustomRecapFileCategoryInput):
             raise GraphQLError("Invalid input type.")

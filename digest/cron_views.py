@@ -5236,6 +5236,57 @@ class OnboardTorchProductsView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class MigrateTorchProductSpendView(View):
+    """GET/POST `/internal/cron/migrate-torch-product-spend`.
+
+    Torch THC: ensure Product Spend category, reassign files off Receipts,
+    scrub checkin_photo_buckets, delete empty Receipts row.
+
+    Idempotent. DRY-RUN unless `apply` is truthy.
+    Params: apply, tenant (slug, default torch-thc).
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        kwargs: dict = {}
+        raw = (
+            request.GET.get("apply") or request.POST.get("apply") or ""
+        ).lower()
+        if raw in ("1", "true", "yes", "on"):
+            kwargs["apply"] = True
+        tenant = (
+            request.GET.get("tenant") or request.POST.get("tenant") or ""
+        ).strip()
+        if tenant:
+            kwargs["tenant"] = tenant
+
+        out = io.StringIO()
+        try:
+            call_command("migrate_torch_product_spend", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("migrate-torch-product-spend cron failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "log": out.getvalue(),
+                },
+                status=500,
+            )
+        return JsonResponse({"ok": True, "log": out.getvalue()})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class DeleteTenantView(View):
     """GET/POST `/internal/cron/delete-tenant`.
 
@@ -8522,6 +8573,7 @@ def _registered_views() -> dict[str, Any]:
         "inspect-tenants": InspectTenantsView,
         "delete-tenant": DeleteTenantView,
         "onboard-torch-products": OnboardTorchProductsView,
+        "migrate-torch-product-spend": MigrateTorchProductSpendView,
         "clone-recap-template": CloneRecapTemplateView,
         "attach-fpo-recap-images": AttachFpoRecapImagesView,
         "add-recap-template-fields": AddRecapTemplateFieldsView,
