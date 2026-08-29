@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 
 from django.db.models import Count, Exists, F, OuterRef, Q, QuerySet
+from django.db.models.functions import Coalesce
 from django.utils import timezone
 from strawberry.relay import to_base64
 
@@ -222,3 +223,63 @@ def list_account_map_pins(
             )
         )
     return pins
+
+
+@dataclass(frozen=True)
+class TrackerStatusBucketData:
+    slug: str
+    count: int
+
+
+@dataclass(frozen=True)
+class TrackerStatusCountsData:
+    """Master Tracker status chips + market dropdown without downloading rows."""
+
+    total: int
+    buckets: list[TrackerStatusBucketData]
+    market_codes: list[str]
+
+
+def compute_tracker_status_counts(
+    qs: QuerySet[Request],
+    *,
+    market_qs: QuerySet[Request] | None = None,
+) -> TrackerStatusCountsData:
+    """Aggregate status slug counts (+ optional market codes) for the tracker.
+
+    `qs` should already have tenant + refine filters applied, but NOT a
+    status chip filter — chips need every bucket. `market_qs` defaults to
+    `qs` and should omit `state_code` so the Market dropdown stays full.
+    """
+    total = qs.count()
+    rows = qs.values("status__slug").annotate(c=Count("pk"))
+    buckets = [
+        TrackerStatusBucketData(
+            slug=((row["status__slug"] or "unknown").strip().lower() or "unknown"),
+            count=int(row["c"] or 0),
+        )
+        for row in rows
+        if int(row["c"] or 0) > 0
+    ]
+    buckets.sort(key=lambda b: (-b.count, b.slug))
+
+    source = market_qs if market_qs is not None else qs
+    raw_codes = (
+        source.annotate(
+            market_code=Coalesce(
+                "retailer__location__state__code",
+                "location__state__code",
+                "state__code",
+            )
+        )
+        .exclude(market_code__isnull=True)
+        .exclude(market_code="")
+        .values_list("market_code", flat=True)
+        .distinct()
+    )
+    market_codes = sorted({(c or "").strip().upper() for c in raw_codes if c})
+    return TrackerStatusCountsData(
+        total=total,
+        buckets=buckets,
+        market_codes=market_codes,
+    )

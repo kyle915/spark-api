@@ -13,18 +13,18 @@ WHY POTENCY IS IN EVERY PRODUCT NAME
     indistinguishable to a BA in the field and in the client's data afterwards.
     Names are therefore "<Flavor> <Potency> <Size>", unique across the tenant.
 
-PRODUCTS SAMPLED PILLS
-    The upper Product Samples grid reads live Product rows. The bottom
-    "Products Sampled" multiselect reads CustomField.options, which stay frozen
-    until rewritten. This command refreshes those options from TORCH_PRODUCTS
-    on every --apply so catalog additions land on both UIs.
-
 IMAGES
     Pulled from torchdrinks.com at run time rather than committed to this repo,
     which is how `attach_product_images` already does it. All 45 URLs were
     verified live (HTTP 200, image content-type) when this was written. A failed
     download is reported and skipped — the Product row is still created, so a
     site change degrades to "product without artwork", never to a missing SKU.
+
+PRODUCTS SAMPLED PILLS
+    GraphQL resolves "Products Sampled" options from live Product rows (same
+    catalog as the upper Product Samples grid). This command also refreshes
+    the stored CustomField.options cache from that catalog on --apply so dumps
+    and catalog-empty fallbacks stay aligned — no second hardcoded SKU list.
 
 Idempotent. Re-running creates nothing and (without --force-images) re-downloads
 nothing. DRY-RUN by default; --apply writes.
@@ -193,20 +193,6 @@ def torch_product_options() -> list[str]:
     return [f"{cat} — {name}" for cat, name, _url in TORCH_PRODUCTS]
 
 
-def torch_sampled_product_names() -> list[str]:
-    """Flat Product.name list for the recap "Products Sampled" multiselect.
-
-    The BA check-in pills render ``CustomField.options`` as-is (no line
-    prefix). Keep this aligned with ``TORCH_PRODUCTS`` so re-seeding refreshes
-    the bottom pills whenever the catalog gains SKUs — the upper Product
-    Samples grid reads live Product rows, but the pills do not.
-    """
-    return [name for _cat, name, _url in TORCH_PRODUCTS]
-
-
-PRODUCTS_SAMPLED_FIELD = "Products Sampled"
-
-
 class Command(BaseCommand):
     help = (
         "Seed Torch THC product types + products (+ artwork). "
@@ -298,19 +284,11 @@ class Command(BaseCommand):
             "images_saved": 0, "images_skipped": 0, "images_failed": 0,
         }
 
-        sampled_names = torch_sampled_product_names()
-
         if not apply:
             self.stdout.write("\nWould create/confirm product types:")
             for name in type_names:
                 n = sum(1 for r in TORCH_PRODUCTS if r[0] == name)
                 self.stdout.write(f"  {name:<28} {n:>2} product(s)")
-            self.stdout.write(
-                f"\nWould refresh '{PRODUCTS_SAMPLED_FIELD}' multiselect "
-                f"options → {len(sampled_names)} labels "
-                "(Black Cherry / Strawberry Lemonade / Watermelon Limeade 10mg "
-                "12oz + 4-Pack included)."
-            )
             self.stdout.write(
                 f"\nDRY-RUN — would upsert {len(type_names)} product type(s) and "
                 f"{len(TORCH_PRODUCTS)} product(s)"
@@ -360,8 +338,7 @@ class Command(BaseCommand):
                 f"  {mark} id={product.id:<6} {product_name:<32}{note}"
             )
 
-        self.stdout.write("")
-        self._sync_products_sampled_options(tenant, sampled_names)
+        self._sync_products_sampled_options(tenant)
 
         self.stdout.write("")
         self.stdout.write("=" * 72)
@@ -388,46 +365,48 @@ class Command(BaseCommand):
 
     # ------------------------------------------------------------------
 
-    def _sync_products_sampled_options(
-        self, tenant: Tenant, options: list[str]
-    ) -> None:
+    def _sync_products_sampled_options(self, tenant: Tenant) -> None:
         """Refresh every Torch Products Sampled multiselect from the catalog.
 
-        The upper Product Samples grid reads live Product rows; the bottom
-        pills read ``CustomField.options``, which stay frozen until rewritten.
-        Same re-seed pattern as Liquid Death's setup_ld_retail_checkin.
+        GraphQL already prefers live Product rows at read time; this keeps the
+        stored JSON cache aligned after onboard so admin dumps and any
+        catalog-empty fallback stay correct.
         """
+        from events.event_confirmations import catalog_product_options
         from recaps.models import CustomField
+        from recaps.products_sampled import PRODUCTS_SAMPLED_FIELD
 
-        fields = list(
-            CustomField.objects.filter(
-                custom_recap_template__tenant=tenant,
-                name__iexact=PRODUCTS_SAMPLED_FIELD,
-                custom_field_type__name__in=["select", "multiselect"],
-            ).select_related("custom_recap_template", "custom_field_type")
-        )
-        if not fields:
+        options = catalog_product_options(tenant)
+        if not options:
             self.stdout.write(
                 self.style.WARNING(
-                    f"No '{PRODUCTS_SAMPLED_FIELD}' choice field on Torch "
-                    "templates — catalog seeded, pills unchanged."
+                    f"  no Product rows to sync onto '{PRODUCTS_SAMPLED_FIELD}'"
                 )
             )
             return
 
+        fields = list(
+            CustomField.objects.filter(
+                custom_recap_template__tenant_id=tenant.id,
+                name__iexact=PRODUCTS_SAMPLED_FIELD,
+            ).select_related("custom_recap_template")
+        )
+        if not fields:
+            self.stdout.write(
+                f"  No '{PRODUCTS_SAMPLED_FIELD}' choice field on Torch "
+                "templates — nothing to refresh (pills still resolve from "
+                "catalog at GraphQL read time once a field exists)."
+            )
+            return
+
         for field in fields:
-            tpl_name = field.custom_recap_template.name
-            before = list(field.options or [])
             field.options = list(options)
-            field.save(update_fields=["options", "updated_at"])
-            added = [o for o in options if o not in before]
+            field.save(update_fields=["options"])
+            tpl_name = getattr(field.custom_recap_template, "name", "?")
             self.stdout.write(
                 f"  refreshed Products Sampled on {tpl_name!r} "
-                f"[{field.id}] → {len(options)} options "
-                f"(+{len(added)} new)"
+                f"→ {len(options)} catalog options"
             )
-            for label in added:
-                self.stdout.write(f"    + {label}")
 
     def _attach_image(self, product: Product, url: str) -> tuple[bool, str]:
         """Download `url` into Product.image. Never raises — a brand-site
