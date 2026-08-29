@@ -1407,6 +1407,177 @@ async def _scoped_requests(
     return admin_payloads.scoped_requests(resolved_tenant_id)
 
 
+def _apply_request_list_filters(
+    queryset: QuerySet,
+    filters: RequestFiltersInput | None,
+    *,
+    skip_status: bool = False,
+    skip_state_code: bool = False,
+) -> QuerySet:
+    """Apply Master Tracker / requests connection filters (sync portion).
+
+    Status chip filters (`status_id` / `status_slug` / `status_slugs`) and
+    `state_code` can be skipped so status-count + market-dropdown queries
+    stay accurate while rows themselves remain status/market filtered.
+    """
+    if not filters:
+        return queryset
+
+    if not skip_status:
+        if filters.status_id:
+            status_id = _resolve_filter_id(filters.status_id, "status")
+            queryset = queryset.filter(status_id=status_id)
+        elif filters.status_slugs:
+            slugs = [
+                (s or "").strip().lower()
+                for s in filters.status_slugs
+                if (s or "").strip()
+            ]
+            if slugs:
+                queryset = queryset.filter(status__slug__in=slugs)
+        elif filters.status_slug:
+            slug = (filters.status_slug or "").strip().lower()
+            if slug:
+                queryset = queryset.filter(status__slug=slug)
+
+    if filters.scheduling_status:
+        scheduling = (filters.scheduling_status or "").strip()
+        if scheduling:
+            queryset = queryset.filter(scheduling_status=scheduling)
+
+    if not skip_state_code and filters.state_code:
+        from django.db.models import Q as _Q
+
+        code = (filters.state_code or "").strip().upper()
+        if code:
+            queryset = queryset.filter(
+                _Q(state__code__iexact=code)
+                | _Q(location__state__code__iexact=code)
+                | _Q(retailer__location__state__code__iexact=code)
+                | _Q(address__icontains=f", {code}")
+                | _Q(address__icontains=f" {code} ")
+            )
+
+    if filters.client_id:
+        client_id = _resolve_filter_id(filters.client_id, "client")
+        queryset = queryset.filter(client_id=client_id)
+    if filters.billing_entity_id:
+        billing_entity_id = _resolve_filter_id(
+            filters.billing_entity_id, "billing entity"
+        )
+        queryset = queryset.filter(billing_entity_id=billing_entity_id)
+    if filters.retailer_id:
+        retailer_id = _resolve_filter_id(filters.retailer_id, "retailer")
+        queryset = queryset.filter(retailer_id=retailer_id)
+    if filters.distributor_id:
+        distributor_id = _resolve_filter_id(
+            filters.distributor_id, "distributor"
+        )
+        queryset = queryset.filter(distributor_id=distributor_id)
+    if filters.location_id:
+        location_id = _resolve_filter_id(filters.location_id, "location")
+        queryset = queryset.filter(location_id=location_id)
+    if filters.state_id:
+        state_id = _resolve_filter_id(filters.state_id, "state")
+        queryset = queryset.filter(state_id=state_id)
+    if filters.request_type_id:
+        request_type_id = _resolve_filter_id(
+            filters.request_type_id, "request type"
+        )
+        queryset = queryset.filter(request_type_id=request_type_id)
+    if filters.retailer_state_id:
+        retailer_state_id = _resolve_filter_id(
+            filters.retailer_state_id, "retailer state"
+        )
+        queryset = queryset.filter(
+            retailer__location__state_id=retailer_state_id
+        )
+    if filters.distributor_state_id:
+        distributor_state_id = _resolve_filter_id(
+            filters.distributor_state_id, "distributor state"
+        )
+        queryset = queryset.filter(
+            distributor__location__state_id=distributor_state_id
+        )
+    if filters.store_number:
+        queryset = queryset.filter(store_number__icontains=filters.store_number)
+    if filters.name:
+        from django.db.models import Q as _Q
+
+        queryset = queryset.filter(
+            _Q(name__icontains=filters.name)
+            | _Q(retailer__name__icontains=filters.name)
+        )
+    if filters.date:
+        queryset = queryset.filter(date__date=filters.date)
+    else:
+        if filters.start_date:
+            queryset = queryset.filter(date__date__gte=filters.start_date)
+        if filters.end_date:
+            queryset = queryset.filter(date__date__lte=filters.end_date)
+    if filters.created_within_hours is not None:
+        if filters.created_within_hours <= 0:
+            raise GraphQLError(
+                "created_within_hours must be greater than 0."
+            )
+        created_after = timezone.now() - datetime.timedelta(
+            hours=filters.created_within_hours
+        )
+        queryset = queryset.filter(created_at__gte=created_after)
+    if filters.edited is not None:
+        queryset = queryset.filter(updated_by__isnull=not filters.edited)
+    if filters.reviewed is not None:
+        queryset = queryset.filter(reviewed=filters.reviewed)
+
+    return queryset
+
+
+async def _apply_rmm_assigned_filter(
+    queryset: QuerySet,
+    filters: RequestFiltersInput | None,
+) -> QuerySet:
+    """RMM-asigned filter needs an async group-membership lookup."""
+    if not filters or not filters.rmm_asigned:
+        return queryset
+
+    user_id = _resolve_filter_id(filters.rmm_asigned, "rmm asigned")
+    user_group_ids = await sync_to_async(list)(
+        models.NotificationGroupUser.objects.filter(user_id=user_id)
+        .values_list("notification_group_id", flat=True)
+        .distinct()
+    )
+    if not user_group_ids:
+        return queryset.filter(
+            tenant__tenanted_users__user_id=user_id,
+            tenant__tenanted_users__is_active=True,
+            tenant__tenanted_users__user__is_active=True,
+            rmm_asigned_id=user_id,
+        )
+    return queryset.filter(
+        tenant__tenanted_users__user_id=user_id,
+        tenant__tenanted_users__is_active=True,
+        tenant__tenanted_users__user__is_active=True,
+    ).filter(
+        Q(rmm_asigned_id=user_id)
+        | Q(
+            retailer__location__notification_group_location__notification_group_id__in=user_group_ids,
+            retailer__location__notification_group_location__notification_group__state=False,
+        )
+        | Q(
+            distributor__location__notification_group_location__notification_group_id__in=user_group_ids,
+            distributor__location__notification_group_location__notification_group__state=False,
+        )
+        | Q(
+            retailer__location__state__notification_group_location__notification_group_id__in=user_group_ids,
+            retailer__location__state__notification_group_location__notification_group__state=True,
+        )
+        | Q(
+            distributor__location__state__notification_group_location__notification_group_id__in=user_group_ids,
+            distributor__location__state__notification_group_location__notification_group__state=True,
+        )
+    )
+
+
 @strawberry.type
 class RequestQueries:
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
@@ -1434,160 +1605,17 @@ class RequestQueries:
         )
 
         queryset = service.get_ordered_queryset(tenant_id=resolved_tenant_id, q=q)
-
-        if filters:
-            if filters.rmm_asigned:
-                user_id = _resolve_filter_id(filters.rmm_asigned, "rmm asigned")
-                user_group_ids = await sync_to_async(list)(
-                    models.NotificationGroupUser.objects.filter(
-                        user_id=user_id
-                    )
-                    .values_list("notification_group_id", flat=True)
-                    .distinct()
-                )
-                if not user_group_ids:
-                    queryset = queryset.filter(
-                        tenant__tenanted_users__user_id=user_id,
-                        tenant__tenanted_users__is_active=True,
-                        tenant__tenanted_users__user__is_active=True,
-                        rmm_asigned_id=user_id,
-                    )
-                else:
-                    queryset = queryset.filter(
-                        tenant__tenanted_users__user_id=user_id,
-                        tenant__tenanted_users__is_active=True,
-                        tenant__tenanted_users__user__is_active=True,
-                    ).filter(
-                        Q(rmm_asigned_id=user_id)
-                        |
-                        Q(
-                            retailer__location__notification_group_location__notification_group_id__in=user_group_ids,
-                            retailer__location__notification_group_location__notification_group__state=False,
-                        )
-                        | Q(
-                            distributor__location__notification_group_location__notification_group_id__in=user_group_ids,
-                            distributor__location__notification_group_location__notification_group__state=False,
-                        )
-                        | Q(
-                            retailer__location__state__notification_group_location__notification_group_id__in=user_group_ids,
-                            retailer__location__state__notification_group_location__notification_group__state=True,
-                        )
-                        | Q(
-                            distributor__location__state__notification_group_location__notification_group_id__in=user_group_ids,
-                            distributor__location__state__notification_group_location__notification_group__state=True,
-                        )
-                    )
-            if filters.status_id:
-                status_id = _resolve_filter_id(filters.status_id, "status")
-                queryset = queryset.filter(status_id=status_id)
-            elif filters.status_slugs:
-                slugs = [
-                    (s or "").strip().lower()
-                    for s in filters.status_slugs
-                    if (s or "").strip()
-                ]
-                if slugs:
-                    queryset = queryset.filter(status__slug__in=slugs)
-            elif filters.status_slug:
-                slug = (filters.status_slug or "").strip().lower()
-                if slug:
-                    queryset = queryset.filter(status__slug=slug)
-            if filters.scheduling_status:
-                scheduling = (filters.scheduling_status or "").strip()
-                if scheduling:
-                    queryset = queryset.filter(scheduling_status=scheduling)
-            if filters.state_code:
-                from django.db.models import Q as _Q
-
-                code = (filters.state_code or "").strip().upper()
-                if code:
-                    queryset = queryset.filter(
-                        _Q(state__code__iexact=code)
-                        | _Q(location__state__code__iexact=code)
-                        | _Q(retailer__location__state__code__iexact=code)
-                        | _Q(address__icontains=f", {code}")
-                        | _Q(address__icontains=f" {code} ")
-                    )
-            if filters.client_id:
-                client_id = _resolve_filter_id(filters.client_id, "client")
-                queryset = queryset.filter(client_id=client_id)
-            if filters.billing_entity_id:
-                billing_entity_id = _resolve_filter_id(
-                    filters.billing_entity_id, "billing entity"
-                )
-                queryset = queryset.filter(billing_entity_id=billing_entity_id)
-            if filters.retailer_id:
-                retailer_id = _resolve_filter_id(filters.retailer_id, "retailer")
-                queryset = queryset.filter(retailer_id=retailer_id)
-            if filters.distributor_id:
-                distributor_id = _resolve_filter_id(
-                    filters.distributor_id, "distributor"
-                )
-                queryset = queryset.filter(distributor_id=distributor_id)
-            if filters.location_id:
-                location_id = _resolve_filter_id(filters.location_id, "location")
-                queryset = queryset.filter(location_id=location_id)
-            if filters.state_id:
-                state_id = _resolve_filter_id(filters.state_id, "state")
-                queryset = queryset.filter(state_id=state_id)
-            if filters.request_type_id:
-                request_type_id = _resolve_filter_id(
-                    filters.request_type_id, "request type"
-                )
-                queryset = queryset.filter(request_type_id=request_type_id)
-            if filters.retailer_state_id:
-                retailer_state_id = _resolve_filter_id(
-                    filters.retailer_state_id, "retailer state"
-                )
-                queryset = queryset.filter(
-                    retailer__location__state_id=retailer_state_id
-                )
-            if filters.distributor_state_id:
-                distributor_state_id = _resolve_filter_id(
-                    filters.distributor_state_id, "distributor state"
-                )
-                queryset = queryset.filter(
-                    distributor__location__state_id=distributor_state_id
-                )
-            if filters.store_number:
-                queryset = queryset.filter(store_number__icontains=filters.store_number)
-            if filters.name:
-                # Palette/tracker text search — a request is findable by its
-                # own name OR its retailer ("Vons" surfaces Vons requests).
-                from django.db.models import Q as _Q
-
-                queryset = queryset.filter(
-                    _Q(name__icontains=filters.name)
-                    | _Q(retailer__name__icontains=filters.name)
-                )
-            if filters.date:
-                queryset = queryset.filter(date__date=filters.date)
-            else:
-                # Inclusive event-date range — only applied when an exact
-                # `date` wasn't given. Powers the tracker's quick-filter
-                # chips (This week / Upcoming / Past).
-                if filters.start_date:
-                    queryset = queryset.filter(date__date__gte=filters.start_date)
-                if filters.end_date:
-                    queryset = queryset.filter(date__date__lte=filters.end_date)
-            if filters.created_within_hours is not None:
-                if filters.created_within_hours <= 0:
-                    raise GraphQLError(
-                        "created_within_hours must be greater than 0."
-                    )
-                created_after = timezone.now() - datetime.timedelta(
-                    hours=filters.created_within_hours
-                )
-                queryset = queryset.filter(created_at__gte=created_after)
-            if filters.edited is not None:
-                queryset = queryset.filter(updated_by__isnull=not filters.edited)
-            if filters.reviewed is not None:
-                queryset = queryset.filter(reviewed=filters.reviewed)
+        queryset = await _apply_rmm_assigned_filter(queryset, filters)
+        queryset = _apply_request_list_filters(queryset, filters)
 
         # Event-date sort direction for the tracker's clickable Date
         # column. Default stays "-date" (furthest-future first) so the
         # landing view is unchanged; "asc" flips to soonest-first.
-        date_sort = (getattr(filters, "date_sort", None) or "desc").lower() if filters else "desc"
+        date_sort = (
+            (getattr(filters, "date_sort", None) or "desc").lower()
+            if filters
+            else "desc"
+        )
         order_field = "date" if date_sort == "asc" else "-date"
         queryset = queryset.order_by(order_field)
         # .distinct() is only needed when the rmm_asigned filter is active — it
@@ -1599,17 +1627,10 @@ class RequestQueries:
         if filters and filters.rmm_asigned:
             queryset = queryset.distinct()
 
-        # The Master Tracker loads the whole tenant in one page (it does
-        # status bucketing, counts and date grouping client-side), so it
-        # asks for `first: 1000`. The shared service default caps a page
-        # at 100; without lifting it here the connection silently
-        # truncated to the 100 newest requests and dropped the oldest
-        # past events — including every event still owing a recap, which
-        # are by definition in the past. That made ~18 overdue-recap
-        # events that ARE counted in totalCount (118) invisible in the
-        # tracker even on the ALL filter. Lift the ceiling so a request
-        # for the full tenant pages through everything; default page size
-        # is unchanged for callers that don't pass `first`.
+        # Master Tracker pages via cursor (`first` + `after`). Page size is
+        # typically 100 on the front; lift the shared-service default (100)
+        # so a single page can still pull a large window when needed, while
+        # infinite-scroll walks past 1,000+ rows without silent truncation.
         return await service.get_connection(
             tenant_id=resolved_tenant_id,
             q=q,
@@ -1621,6 +1642,55 @@ class RequestQueries:
             default_limit=100,
             max_limit=2000,
         )
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def tracker_status_counts(
+        self,
+        info: strawberry.Info,
+        filters: RequestFiltersInput | None = None,
+        q: str | None = None,
+    ) -> types.TrackerStatusCounts:
+        """Status chip + market totals for Master Tracker (no row download).
+
+        Ignores status chip filters so every bucket stays accurate while the
+        rows connection itself remains status-filtered. Market codes ignore
+        `stateCode` so the Market dropdown stays complete.
+        """
+        service = RequestQueriesService()
+        service.list_mode = True
+        tenant_id: strawberry.ID | None = filters.tenant_id if filters else None
+        tenant_uuid: strawberry.ID | None = filters.tenant_uuid if filters else None
+        resolved_tenant_id = await service.resolve_tenant_id(
+            info,
+            tenant_id=tenant_id,
+            tenant_uuid=tenant_uuid,
+        )
+        queryset = service.get_ordered_queryset(tenant_id=resolved_tenant_id, q=q)
+        queryset = await _apply_rmm_assigned_filter(queryset, filters)
+        if filters and filters.rmm_asigned:
+            queryset = queryset.distinct()
+
+        counts_qs = _apply_request_list_filters(
+            queryset, filters, skip_status=True
+        )
+        market_qs = _apply_request_list_filters(
+            queryset, filters, skip_status=True, skip_state_code=True
+        )
+
+        def _go():
+            data = admin_payloads.compute_tracker_status_counts(
+                counts_qs, market_qs=market_qs
+            )
+            return types.TrackerStatusCounts(
+                total=data.total,
+                buckets=[
+                    types.TrackerStatusBucket(slug=b.slug, count=b.count)
+                    for b in data.buckets
+                ],
+                market_codes=data.market_codes,
+            )
+
+        return await sync_to_async(_go)()
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def sidebar_request_counts(

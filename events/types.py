@@ -1221,6 +1221,23 @@ class SidebarRequestCounts:
 
 
 @strawberry.type
+class TrackerStatusBucket:
+    """One status chip count for the Master Tracker."""
+
+    slug: str
+    count: int
+
+
+@strawberry.type
+class TrackerStatusCounts:
+    """Status chip + market dropdown totals without downloading tracker rows."""
+
+    total: int
+    buckets: List[TrackerStatusBucket]
+    market_codes: List[str]
+
+
+@strawberry.type
 class SidebarAlertCandidate:
     """Recent request activity the sidebar unread-alerts chip keys locally."""
 
