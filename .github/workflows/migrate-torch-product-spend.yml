@@ -1,0 +1,41 @@
+name: Migrate Torch Product Spend
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Write to the DB (false = dry run)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+      tenant:
+        description: "Tenant slug (default torch-thc)"
+        required: false
+        default: "torch-thc"
+
+jobs:
+  migrate-torch-product-spend:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire migrate endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/migrate-torch-product-spend
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          APPLY: ${{ github.event.inputs.apply }}
+          TENANT: ${{ github.event.inputs.tenant }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            --max-time 300 \
+            -X POST "$CRON_URL" \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            --data-urlencode "apply=$APPLY" \
+            --data-urlencode "tenant=$TENANT")
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          echo ""
+          [ "$STATUS" != "200" ] && exit 1 || exit 0
