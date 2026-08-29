@@ -1,8 +1,9 @@
-"""Seed the Torch THC product catalog: 6 ProductTypes + 45 Products + images.
+"""Seed the Torch THC product catalog: ProductTypes + Products + images.
 
-Torch's catalog is six product LINES, each with flavors in a 12oz single and a
-4-pack, plus one variety pack. The line is the ProductType, so /products
-filters by line the way the brand and the sales team already think.
+Torch's catalog is product LINES (drink potencies plus a 10G specialty line),
+each with flavors in a 12oz single and a 4-pack (where applicable), plus one
+variety pack. The line is the ProductType, so /products filters by line the
+way the brand and the sales team already think.
 
 WHY POTENCY IS IN EVERY PRODUCT NAME
     Ten flavor+size combos appear in more than one line — Black Cherry 12oz is
@@ -51,17 +52,17 @@ TENANT_SLUG = "torch-thc"
 REQUEST_TIMEOUT = 30.0
 USER_AGENT = "Mozilla/5.0 (compatible; SparkBA-Onboarder/1.0)"
 
-# torchdrinks.com rate-limits a fast burst: seeding all 45 SKUs back-to-back
+# torchdrinks.com rate-limits a fast burst: seeding all drink SKUs back-to-back
 # reliably 429s on the last handful. Space the requests out and retry a 429
-# after a pause. 45 x 1s is well inside the request timeout, and a partial
+# after a pause. ~45 x 1s is well inside the request timeout, and a partial
 # failure is expensive here — a product whose column is already set gets
 # SKIPPED on a normal re-run, so a 429 sticks until someone forces it.
 DOWNLOAD_SPACING_SECONDS = 1.0
 RATE_LIMIT_BACKOFF_SECONDS = 8.0
 RATE_LIMIT_RETRIES = 2
 
-# (product_type, product_name, image_url) — generated from Torch manifest.csv,
-# then hand-checked. 45 SKUs across 6 lines.
+# (product_type, product_name, image_url) — drink SKUs from Torch manifest.csv
+# (hand-checked), plus client-requested 10G specialty labels (no artwork URL).
 TORCH_PRODUCTS: list[tuple[str, str, str]] = [
     # ── Iced Tea 10mg ─────────────────────────────────
     ('Iced Tea 10mg', 'Iced Tea Lemonade 10mg 12oz',
@@ -159,11 +160,16 @@ TORCH_PRODUCTS: list[tuple[str, str, str]] = [
     # ── Variety Pack ──────────────────────────────────
     ('Variety Pack', 'Variety Pack 10mg 6-Pack',
      'https://torchdrinks.com/wp-content/uploads/2025/05/torch-10mg-thc-drink-variety-sampler-2.jpg'),
+    # ── 10G (client-requested specialty labels; empty URL = no artwork) ──
+    # Exact picker strings from Torch — keep ALL CAPS / 10G vs 10MG as given.
+    ('10G', 'TORCH STRAWBERRY LEMONADE 10G', ''),
+    ('10G', 'TORCH BLACK CHERRY 10G', ''),
+    ('10G', 'TORCH WATERMELON 10MG', ''),
 ]
 
 
 def torch_product_options() -> list[str]:
-    """The 45 SKUs as ``"Line — Name"`` choice values for Event Confirmation.
+    """Onboard SKUs as ``"Line — Name"`` choice values for Event Confirmation.
 
     Same shape as Liquid Death's picker (``Category — SKU``) so the admin tab
     and the email strip-prefix path stay one code path. Used when the live
@@ -301,8 +307,10 @@ class Command(BaseCommand):
             mark = "+" if created else "="
             note = ""
 
-            if skip_images:
+            if skip_images or not image_url:
                 stats["images_skipped"] += 1
+                if not image_url and not skip_images:
+                    note = "  (no artwork URL)"
             elif product.image and not force_images:
                 stats["images_skipped"] += 1
                 note = "  (image already set)"

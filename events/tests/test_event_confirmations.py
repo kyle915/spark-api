@@ -278,9 +278,12 @@ class TestTenantProductOptions:
             name="Torch THC", slug="torch-thc", checkin_code="TH-2HRV3D"
         )
         options = confirmation_product_options(tenant)
-        assert len(options) == 45
+        assert len(options) == 48
         assert options[0].startswith("Iced Tea 10mg — ")
         assert "Seltzer 60mg High Potency — Black Cherry 60mg 12oz" in options
+        assert "10G — TORCH STRAWBERRY LEMONADE 10G" in options
+        assert "10G — TORCH BLACK CHERRY 10G" in options
+        assert "10G — TORCH WATERMELON 10MG" in options
         assert not any("Sparkling Water" in o for o in options)
 
     def test_a_live_catalog_wins_over_the_onboard_fallback(self):

@@ -1,0 +1,76 @@
+name: Onboard Torch THC products
+
+# Fires `/internal/cron/onboard-torch-products` on Cloud Run. Seeds the Torch
+# THC catalog (product lines + SKUs), pulling drink artwork from
+# torchdrinks.com when a URL is configured.
+#
+# DRY-RUN unless you set apply=true, so a stray dispatch inventories the work
+# instead of doing it. Idempotent either way — re-running creates nothing and
+# re-downloads nothing (unless force_images=true).
+#
+# Secret-gated via `X-Cron-Secret` (shared INTERNAL_CRON_SECRET) — see the
+# daily-admin-digest workflow for the full setup notes.
+
+on:
+  workflow_dispatch:
+    inputs:
+      owner_email:
+        description: "Spark admin who owns the rows (Product.created_by)"
+        required: true
+        default: "kyle@igniteproductions.co"
+      apply:
+        description: "Write to the DB (false = dry run)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+      skip_images:
+        description: "Create product rows but download no artwork"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+      force_images:
+        description: "Re-download artwork for products that already have one"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+      report:
+        description: "READ-ONLY: list each product's image URL and whether it serves"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+jobs:
+  onboard-torch-products:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire onboard endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/onboard-torch-products
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          OWNER_EMAIL: ${{ github.event.inputs.owner_email }}
+          APPLY: ${{ github.event.inputs.apply }}
+          SKIP_IMAGES: ${{ github.event.inputs.skip_images }}
+          FORCE_IMAGES: ${{ github.event.inputs.force_images }}
+          REPORT: ${{ github.event.inputs.report }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            --max-time 600 \
+            -X POST "$CRON_URL" \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            --data-urlencode "owner_email=$OWNER_EMAIL" \
+            --data-urlencode "apply=$APPLY" \
+            --data-urlencode "skip_images=$SKIP_IMAGES" \
+            --data-urlencode "force_images=$FORCE_IMAGES" \
+            --data-urlencode "report=$REPORT")
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          echo ""
+          [ "$STATUS" != "200" ] && exit 1 || exit 0
