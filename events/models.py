@@ -1164,6 +1164,8 @@ class RequestActivityLog(models.Model):
     KIND_CLONED_FROM = "cloned_from"
     KIND_NOTE_ADDED = "note_added"
     KIND_NUDGE_SENT = "nudge_sent"
+    # Ops manually clocked a BA in/out or edited a punch time.
+    KIND_ATTENDANCE_ADJUSTED = "attendance_adjusted"
 
     KIND_CHOICES = [
         (KIND_CREATED, "Created"),
@@ -1177,6 +1179,7 @@ class RequestActivityLog(models.Model):
         (KIND_CLONED_FROM, "Cloned from another request"),
         (KIND_NOTE_ADDED, "Note added"),
         (KIND_NUDGE_SENT, "Nudge sent"),
+        (KIND_ATTENDANCE_ADJUSTED, "Attendance adjusted"),
     ]
 
     id = models.BigAutoField(primary_key=True)

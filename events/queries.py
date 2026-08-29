@@ -309,7 +309,11 @@ class EventAttendanceRow:
     """One BA's clock log for an event — arrive / clock-in / clock-out
     (ISO 8601 UTC) plus the coords captured at clock-in/out and the
     on-site hours between them. Any field is null when that punch is
-    missing (e.g. clocked in but no clock-out yet)."""
+    missing (e.g. clocked in but no clock-out yet).
+
+    ``clock_in_attendance_uuid`` / ``clock_out_attendance_uuid`` power
+    the admin edit-punch controls on the Attendance table.
+    """
     ambassador_uuid: strawberry.ID
     ambassador_name: str
     arrived_at: str | None
@@ -318,6 +322,8 @@ class EventAttendanceRow:
     clock_in_coordinates: List[float] | None
     clock_out_coordinates: List[float] | None
     hours_on_site: float | None
+    clock_in_attendance_uuid: strawberry.ID | None = None
+    clock_out_attendance_uuid: strawberry.ID | None = None
 
 
 @strawberry.type
@@ -1060,6 +1066,12 @@ class EventQueries:
                         clock_in_coordinates=_coords(ci) if ci else None,
                         clock_out_coordinates=_coords(co) if co else None,
                         hours_on_site=hours,
+                        clock_in_attendance_uuid=(
+                            strawberry.ID(str(ci.uuid)) if ci else None
+                        ),
+                        clock_out_attendance_uuid=(
+                            strawberry.ID(str(co.uuid)) if co else None
+                        ),
                     )
                 )
             out.sort(key=lambda r: r.ambassador_name.lower())
