@@ -5183,7 +5183,9 @@ class OnboardTorchProductsView(View):
     """GET/POST `/internal/cron/onboard-torch-products`.
 
     Seeds the Torch THC catalog (product lines + SKUs), pulling each can's
-    artwork from torchdrinks.com at run time when a URL is configured.
+    artwork from torchdrinks.com at run time when a URL is configured, and
+    refreshes every template's Products Sampled multiselect options from that
+    same catalog list (bottom pills stay frozen otherwise).
 
     Idempotent, and DRY-RUN unless `apply` is truthy — so hitting this by
     accident inventories the work instead of doing it. Artwork downloads run

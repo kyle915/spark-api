@@ -279,9 +279,12 @@ class TestTenantProductOptions:
             name="Torch THC", slug="torch-thc", checkin_code="TH-2HRV3D"
         )
         options = confirmation_product_options(tenant)
-        assert len(options) == 48
+        assert len(options) == 54
         assert options[0].startswith("Iced Tea 10mg — ")
         assert "Seltzer 60mg High Potency — Black Cherry 60mg 12oz" in options
+        assert "Seltzer 10mg — Watermelon Limeade 10mg 12oz" in options
+        assert "Seltzer 10mg — Strawberry Lemonade 10mg 4-Pack" in options
+        assert "Seltzer 10mg — Black Cherry 10mg 12oz" in options
         assert "10G — TORCH STRAWBERRY LEMONADE 10G" in options
         assert "10G — TORCH BLACK CHERRY 10G" in options
         assert "10G — TORCH WATERMELON 10MG" in options
