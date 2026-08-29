@@ -105,41 +105,73 @@ def resolve_template_for_event(event):
     return None
 
 
-def _event_products(event):
-    """Per-SKU sampling list for the event (from its Request's products),
-    reusing the same source as ``shiftContext``. Empty when the event has no
-    request/products — the FE then hides the PRODUCTS SAMPLED section."""
-    from events.models import RequestProduct
+def _product_payload(product) -> dict | None:
+    """Serialize one Product for the public check-in template payload."""
     from utils.gcs import extract_blob_name_from_url, public_url
 
-    request = getattr(event, "request", None)
-    if request is None:
-        return []
+    name = getattr(product, "name", None)
+    if not name:
+        return None
+    image_url = None
+    field_file = getattr(product, "image", None)
+    if field_file:
+        try:
+            blob = field_file.name
+        except Exception:  # noqa: BLE001
+            blob = str(field_file)
+        try:
+            image_url = public_url(extract_blob_name_from_url(blob))
+        except Exception:  # noqa: BLE001
+            image_url = None
+    product_type = getattr(product, "product_type", None)
+    category = getattr(product_type, "name", None) if product_type else None
+    return {
+        "id": str(product.id),
+        "name": name,
+        "imageUrl": image_url,
+        "category": category,
+    }
+
+
+def _event_products(event):
+    """Per-SKU sampling list for the event.
+
+    Prefer the Request's products (same source as ``shiftContext``). Standing
+    walk-ups often have no RequestProduct rows — fall back to the tenant's
+    Product catalog so BA can counts still land on CustomRecapProductSample
+    (Liquid Death Products Sampled pills → Spark Product Samples grid).
+    """
+    from events.models import Product, RequestProduct
+
     out = []
-    rp_qs = (
-        RequestProduct.objects.select_related("product")
-        .filter(request=request)
-        .order_by("id")
-    )
-    for rp in rp_qs:
-        product = getattr(rp, "product", None)
-        if product is None:
-            continue
-        name = getattr(product, "name", None)
-        if not name:
-            continue
-        image_url = None
-        field_file = getattr(product, "image", None)
-        if field_file:
-            try:
-                blob = field_file.name
-            except Exception:  # noqa: BLE001
-                blob = str(field_file)
-            try:
-                image_url = public_url(extract_blob_name_from_url(blob))
-            except Exception:  # noqa: BLE001
-                image_url = None
-        out.append({"id": str(product.id), "name": name, "imageUrl": image_url})
+    request = getattr(event, "request", None)
+    if request is not None:
+        rp_qs = (
+            RequestProduct.objects.select_related("product", "product__product_type")
+            .filter(request=request)
+            .order_by("id")
+        )
+        for rp in rp_qs:
+            product = getattr(rp, "product", None)
+            if product is None:
+                continue
+            row = _product_payload(product)
+            if row is not None:
+                out.append(row)
+        if out:
+            return out
+
+    tenant = getattr(event, "tenant", None)
+    if tenant is None:
+        return []
+    for product in (
+        Product.objects.select_related("product_type")
+        .filter(tenant_id=tenant.id)
+        .order_by("product_type__name", "name", "id")
+    ):
+        row = _product_payload(product)
+        if row is not None:
+            out.append(row)
     return out
 
 
@@ -183,12 +215,18 @@ def serialize_template(event) -> dict | None:
             }
         )
 
+    has_products_sampled_pills = any(
+        (f.name or "").strip().lower() == "products sampled"
+        and "multi" in (getattr(f.custom_field_type, "name", "") or "").lower()
+        for f in fields
+    )
+    include_products = bool(tpl.product_samples) or has_products_sampled_pills
     return {
         "id": str(tpl.id),
         "name": tpl.name,
         "productSamples": bool(tpl.product_samples),
         "sections": sections,
-        "products": _event_products(event) if tpl.product_samples else [],
+        "products": _event_products(event) if include_products else [],
     }
 
 

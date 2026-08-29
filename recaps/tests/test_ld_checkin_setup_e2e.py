@@ -107,6 +107,8 @@ class TestSeederEndToEnd(BaseGraphQLTestCase):
             assert "Iced Tea — Sweet Reaper" in f.options
             assert "Sparkling Water — Feastables Peanut Butter Cup" in f.options
             assert f.required is False
+            tpl.refresh_from_db()
+            assert tpl.product_samples is True
         # 4. buckets per program, "Table setup" relabelled not duplicated
         names = set(
             FileRecapCategory.objects.filter(tenant=self.tenant).values_list(

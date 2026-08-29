@@ -323,9 +323,14 @@ class Command(BaseCommand):
                     if PRODUCTS_FIELD.strip().lower() in names
                     else "will be ADDED"
                 )
+                ps = (
+                    "product_samples ON"
+                    if tpl.product_samples
+                    else "product_samples will be ENABLED"
+                )
                 self.stdout.write(
                     f"        form: [{tpl.id}] {tpl.name!r} ({len(names)} fields); "
-                    f"{PRODUCTS_FIELD!r} {state}"
+                    f"{PRODUCTS_FIELD!r} {state}; {ps}"
                 )
         if etypes[0].id != plan[0]["type"].id:
             self.stdout.write(
@@ -382,6 +387,7 @@ class Command(BaseCommand):
             for entry in plan:
                 if entry["template"] is not None:
                     self._ensure_products_field(entry["template"], tenant, opts_list)
+                    self._ensure_product_samples_flag(entry["template"])
 
         self.stdout.write("")
         self.stdout.write(
@@ -611,6 +617,24 @@ class Command(BaseCommand):
         return config
 
     # -- writes ------------------------------------------------------------
+
+    def _ensure_product_samples_flag(self, template) -> None:
+        """Turn on structured CustomRecapProductSample capture for the template.
+
+        BA pills still collect the SKU list; can counts ride ``productSamples``
+        into ``CustomRecapProductSample`` so Spark's Product Samples grid
+        aggregates the same numbers admins edit by hand.
+        """
+        if template.product_samples is True:
+            self.stdout.write(
+                f"  product_samples already on [{template.id}] {template.name!r}"
+            )
+            return
+        template.product_samples = True
+        template.save(update_fields=["product_samples", "updated_at"])
+        self.stdout.write(
+            f"  enabled product_samples on [{template.id}] {template.name!r}"
+        )
 
     def _ensure_products_field(self, template, tenant, options: list[str]) -> None:
         """Add (or refresh) the Products Sampled multi-select, in place.
