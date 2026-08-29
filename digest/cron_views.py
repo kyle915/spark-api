@@ -5182,13 +5182,13 @@ class CloneRecapTemplateView(View):
 class OnboardTorchProductsView(View):
     """GET/POST `/internal/cron/onboard-torch-products`.
 
-    Seeds the Torch THC catalog: 6 product lines (ProductType) and 45 SKUs,
-    pulling each can's artwork from torchdrinks.com at run time.
+    Seeds the Torch THC catalog (product lines + SKUs), pulling each can's
+    artwork from torchdrinks.com at run time when a URL is configured.
 
     Idempotent, and DRY-RUN unless `apply` is truthy — so hitting this by
     accident inventories the work instead of doing it. Artwork downloads run
-    inline; the whole catalog is ~45 small images and finishes well inside the
-    request timeout, but `skip_images` exists if the brand site is ever down.
+    inline; drink SKUs are small images and finish well inside the request
+    timeout, but `skip_images` exists if the brand site is ever down.
 
     Params: owner_email (required), apply, skip_images, force_images.
     """
