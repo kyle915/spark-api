@@ -269,8 +269,9 @@ class TestTenantProductOptions:
         """LD's picker and /spark-form/ighn-liquid-death must not drift."""
         tenant = _tenant()
         options = confirmation_product_options(tenant)
-        assert len(options) == 31
+        assert len(options) == 32
         assert options[0].startswith("Sparkling Water — ")
+        assert "Sparkling Water — Feastables Peanut Butter Cup" in options
 
     def test_torch_without_a_catalog_falls_back_to_the_onboard_list(self):
         """An unseeded Torch tenant still offers Torch SKUs, never LD water."""

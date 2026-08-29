@@ -60,8 +60,8 @@ PRODUCTS_FIELD = "Products Sampled"
 
 # The brand's full SKU list, exactly as it reads on the LD request form
 # (/spark-form/ighn-liquid-death) so the two surfaces can't drift. Category
-# prefixes keep 31 options scannable on a phone — a flat alphabetical list of
-# 31 horror puns is unreadable at arm's length in a store aisle.
+# prefixes keep the options scannable on a phone — a flat alphabetical list of
+# horror-pun names is unreadable at arm's length in a store aisle.
 PRODUCTS: list[tuple[str, list[str]]] = [
     (
         "Sparkling Water",
@@ -82,6 +82,7 @@ PRODUCTS: list[tuple[str, list[str]]] = [
             "Deathberry Inferno",
             "Cherry Obituary",
             "Cereal Criminal",
+            "Feastables Peanut Butter Cup",
         ],
     ),
     (
@@ -118,7 +119,7 @@ PRODUCTS: list[tuple[str, list[str]]] = [
 
 
 def product_options() -> list[str]:
-    """The 31 SKUs as ``"Category — Name"`` choice values."""
+    """The SKUs as ``"Category — Name"`` choice values."""
     return [f"{cat} — {name}" for cat, names in PRODUCTS for name in names]
 
 

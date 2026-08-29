@@ -98,13 +98,14 @@ class TestSeederEndToEnd(BaseGraphQLTestCase):
         offered = [t.name for t in checkin_web.selectable_event_types(self.tenant)]
         assert offered == ["Retail Sampling", "Event Activation"]
         assert self.tenant.checkin_event_type.name == "Retail Sampling"
-        # 3. Products Sampled on BOTH templates, 31 options each
+        # 3. Products Sampled on BOTH templates, 32 options each
         for tpl in (self.tpl_retail, self.tpl_act):
             f = CustomField.objects.get(
                 custom_recap_template=tpl, name="Products Sampled"
             )
-            assert len(f.options) == 31
+            assert len(f.options) == 32
             assert "Iced Tea — Sweet Reaper" in f.options
+            assert "Sparkling Water — Feastables Peanut Butter Cup" in f.options
             assert f.required is False
         # 4. buckets per program, "Table setup" relabelled not duplicated
         names = set(

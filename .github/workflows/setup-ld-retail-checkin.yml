@@ -1,0 +1,84 @@
+name: Setup LD retail check-in
+
+# Makes Liquid Death's ONE standing check-in link serve BOTH their programs:
+# mints/keeps the code, makes Retail Sampling and Event Activation selectable on
+# it, adds the "Products Sampled" multi-select (full LD SKU list) to EACH program's existing
+# template, and seeds each program's own photo buckets.
+#
+# It never creates a template. LD already has "Liquid Death-Retail Sampling" and
+# "Liquid Death-Event Activation"; a duplicate would split the brand's recaps
+# across two forms and halve every dashboard number.
+#
+# The selectable list is the load-bearing part. A second check-in link per
+# program is NOT available — `Tenant.checkin_code` is a single column, so minting
+# the second silently repoints the first and every BA holding the old URL lands
+# on the wrong program. So the BA is asked which event they're working and their
+# answer picks the form. The retail PIN stays as the fallback for a request that
+# names no program, which beats the arbitrary lowest-id event type the walk-in
+# path used before (that could hand a retail BA the 7-field activation form
+# without anything looking broken).
+#
+# Idempotent — re-running refreshes the SKU option lists in place and reuses the
+# categories that already exist, so adding a product to the line-up, or a bucket
+# to a program, is just another dispatch. Read the DRY RUN first: it prints the
+# brand's current categories, the buckets each program will be served (with ids),
+# and a tally of where recent check-in photos actually landed.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tenant:
+        description: "Tenant name/slug substring"
+        required: false
+        default: "liquid death"
+      code:
+        description: "Force a specific check-in code (keeps an already-shared link). Blank = mint/keep"
+        required: false
+        default: ""
+      training_url:
+        description: "BA reference link shown on the check-in page. Blank = leave as-is"
+        required: false
+        default: "https://admin.igniteproductions.co/training/LD-FZUWXT"
+      skip_products:
+        description: "Don't touch the templates; only the code, the selectable programs and the photo buckets"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+      apply:
+        description: "Actually write (read the dry run first)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+jobs:
+  setup-ld-retail-checkin:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire setup endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/setup-ld-retail-checkin
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          TENANT: ${{ github.event.inputs.tenant }}
+          CODE: ${{ github.event.inputs.code }}
+          TRAINING_URL: ${{ github.event.inputs.training_url }}
+          SKIP_PRODUCTS: ${{ github.event.inputs.skip_products }}
+          APPLY: ${{ github.event.inputs.apply }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL" \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            --data-urlencode "tenant=$TENANT" \
+            --data-urlencode "code=$CODE" \
+            --data-urlencode "training_url=$TRAINING_URL" \
+            --data-urlencode "skip_products=$SKIP_PRODUCTS" \
+            --data-urlencode "apply=$APPLY")
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          echo ""
+          [ "$STATUS" != "200" ] && exit 1 || exit 0

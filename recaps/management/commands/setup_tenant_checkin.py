@@ -2,7 +2,7 @@
 
 This is the generic form of what `setup_ld_retail_checkin`,
 `setup_total_wireless_checkin` and `setup_feel_free_checkin` each do for one
-brand. Those three stay: they carry brand-specific payloads (LD's 31 SKUs, Feel
+brand. Those three stay: they carry brand-specific payloads (LD's SKU list, Feel
 Free's market list) and their own live cron endpoints. What was NOT reusable was
 the wiring every brand needs identically — mint a code, pin the program, back the
 photo dropzones with real category rows — so a fourth brand meant a fourth copy
