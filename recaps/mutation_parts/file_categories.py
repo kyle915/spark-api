@@ -42,7 +42,9 @@ _FILE_CATEGORY_ROLE_ALIASES = {
 # file in the right bucket regardless of the exact label.
 _FILE_CATEGORY_SENTINEL_KEYWORDS = {
     "1": ("photo",),
-    "2": ("receipt",),
+    # "spend" covers Torch THC "Product Spend" once classic "Receipts" is
+    # retired — without it the receipt sentinel self-heals a fresh Receipts row.
+    "2": ("receipt", "spend", "purchase", "expense"),
 }
 
 # Anchor the sentinel role names on the seeded defaults so a rename of the
@@ -193,7 +195,11 @@ def _resolve_file_recap_category(raw_id, *, tenant_id):
          role category — exact seeded role NAME, then role keyword, and if the
          tenant has no matching category at all, CREATE it (self-heal). A
          sentinel never resolves cross-tenant.
-      2. Anything else is treated as an explicit PK and handed to
+      2. An exact category NAME for this tenant (e.g. "Product Spend",
+         "Table setup") — what RecapCustomView's upload / Move-to dropdowns
+         send. Without this step a non-role name fell through to the PK
+         parser, resolved to None, and the file landed Uncategorized.
+      3. Anything else is treated as an explicit PK and handed to
          `_resolve_explicit_file_recap_category` (tenant-scoped).
 
     Never raises — a stray category id must not lose the recap or its files.
@@ -201,13 +207,19 @@ def _resolve_file_recap_category(raw_id, *, tenant_id):
     if raw_id in (None, ""):
         return None
 
-    # Positional sentinel -> tenant's own category by seeded role name. We match
-    # on the *string* sentinel the clients actually send ("1"/"2"); only fall
-    # through to PK behavior when there is no name match for that tenant.
-    by_role = _resolve_role_file_recap_category(
-        str(raw_id).strip(), tenant_id=tenant_id
-    )
+    raw = str(raw_id).strip()
+
+    by_role = _resolve_role_file_recap_category(raw, tenant_id=tenant_id)
     if by_role is not None:
         return by_role
+
+    # Exact tenant category name (Product Spend, Table setup, …). Skip bare
+    # digits so we don't treat "2" as a name after the role path already passed.
+    if tenant_id is not None and not raw.isdigit():
+        by_name = models.FileRecapCategory.objects.filter(
+            tenant_id=tenant_id, name__iexact=raw
+        ).first()
+        if by_name is not None:
+            return by_name
 
     return _resolve_explicit_file_recap_category(raw_id, tenant_id=tenant_id)
