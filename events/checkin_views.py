@@ -69,7 +69,8 @@ def _session_error_code(err_response: HttpResponse) -> str:
     bearer failed, with no signal. The page then wiped localStorage and the BA
     looked "not clocked in" even when Attendance still had their punch
     (Michelle Chin / Feel Free, Aug 2026 — left for the photo-release QR and
-    came back to identify). Surface the reason so the page only drops a
+    came back to identify). Same failure mode hits every standing code
+    (LD / Torch / Brew Dr / …). Surface the reason so the page only drops a
     truly dead token and can resume an open shift from identity.
     """
     try:
