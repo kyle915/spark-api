@@ -75,6 +75,7 @@ from recaps.mutation_parts.file_categories import (  # noqa: F401
 from recaps.mutation_parts.pdf_helpers import (  # noqa: F401
     _ensure_recap_pdf_for_notify,
     _find_existing_pdf_file,
+    _pdf_matches_approval_status,
     _render_and_store_recap_pdf_sync,
     _resolve_recap_pdf_attachment,
 )
@@ -4146,7 +4147,17 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
             recap.event.tenant_id, action="export"
         )
 
-        existing_pdf = await sync_to_async(_find_existing_pdf_file)(recap)
+        # Reuse only when the stored Spark PDF already reflects the
+        # current approval badge. A Generate-PDF click before approve
+        # used to leave a DRAFT snapshot that never refreshed.
+        @sync_to_async
+        def existing_current_pdf():
+            existing = _find_existing_pdf_file(recap)
+            if existing and _pdf_matches_approval_status(recap, existing):
+                return existing
+            return None
+
+        existing_pdf = await existing_current_pdf()
         if existing_pdf:
             return existing_pdf
 
@@ -4756,7 +4767,16 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
             record_label="Custom recap",
         )
 
-        existing_pdf = await sync_to_async(_find_existing_pdf_file)(custom_recap)
+        # Reuse only when the stored Spark PDF already reflects the
+        # current approval badge (see generate_recap_pdf).
+        @sync_to_async
+        def existing_current_custom_pdf():
+            existing = _find_existing_pdf_file(custom_recap)
+            if existing and _pdf_matches_approval_status(custom_recap, existing):
+                return existing
+            return None
+
+        existing_pdf = await existing_current_custom_pdf()
         if existing_pdf:
             return existing_pdf
 
