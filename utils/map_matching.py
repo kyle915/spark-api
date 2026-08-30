@@ -200,6 +200,104 @@ def osrm_route(
     return {"miles": round(meters / _METERS_PER_MILE, 2), "route": route}
 
 
+def _google_maps_api_key() -> str:
+    try:
+        from django.conf import settings
+
+        return (getattr(settings, "GOOGLE_MAPS_API_KEY", None) or "").strip()
+    except Exception:  # noqa: BLE001 — settings may be unavailable in some tests
+        return (os.environ.get("GOOGLE_MAPS_API_KEY") or "").strip()
+
+
+def google_directions_route_miles(
+    points: list,
+    *,
+    timeout: float = DEFAULT_TIMEOUT_SECONDS,
+) -> dict | None:
+    """Driving distance via Google Directions API (ordered waypoints).
+
+    Same contract as :func:`osrm_route_waypoints`: returns
+    ``{"miles": float, "route": [[lat, lng], ...]}`` or ``None``. NEVER raises.
+
+    Uses the recommended Google driving route (what Maps would show for
+    Storage → stop1 → stop2 → …). Still not a GPS trail of what the BA
+    actually drove through construction — BAs can bump miles on the recap.
+    """
+    key = _google_maps_api_key()
+    if not key:
+        return None
+    try:
+        pts = [
+            (float(p[0]), float(p[1]))
+            for p in (points or [])
+            if p is not None and len(p) >= 2
+        ]
+    except (TypeError, ValueError, IndexError):
+        return None
+    pts = [(lat, lng) for lat, lng in pts if not (lat == 0.0 and lng == 0.0)]
+    if len(pts) < 2:
+        return None
+    # Directions caps intermediate waypoints; Feel Free sampling days stay small.
+    if len(pts) > 27:  # origin + dest + 25 intermediates
+        pts = [pts[0], *pts[1:26], pts[-1]]
+
+    origin = f"{pts[0][0]:.6f},{pts[0][1]:.6f}"
+    destination = f"{pts[-1][0]:.6f},{pts[-1][1]:.6f}"
+    params: dict = {
+        "origin": origin,
+        "destination": destination,
+        "mode": "driving",
+        "units": "metric",
+        "departure_time": "now",  # traffic-aware duration; distance still road miles
+        "key": key,
+    }
+    if len(pts) > 2:
+        params["waypoints"] = "|".join(f"{lat:.6f},{lng:.6f}" for lat, lng in pts[1:-1])
+
+    try:
+        resp = httpx.get(
+            "https://maps.googleapis.com/maps/api/directions/json",
+            params=params,
+            timeout=timeout,
+            headers={"User-Agent": "spark-api/payable-mileage"},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        logger.warning("Google Directions failed (%d pts): %s", len(pts), exc)
+        return None
+
+    if (data or {}).get("status") != "OK":
+        logger.warning(
+            "Google Directions status=%s (%d pts)",
+            (data or {}).get("status"),
+            len(pts),
+        )
+        return None
+    routes = data.get("routes") or []
+    if not routes:
+        return None
+    legs = routes[0].get("legs") or []
+    meters = 0.0
+    for leg in legs:
+        try:
+            meters += float((leg.get("distance") or {}).get("value") or 0)
+        except (TypeError, ValueError):
+            continue
+    if meters <= 0:
+        return None
+
+    route: list[list[float]] = [[pts[0][0], pts[0][1]]]
+    for leg in legs:
+        end = leg.get("end_location") or {}
+        try:
+            route.append([float(end["lat"]), float(end["lng"])])
+        except (KeyError, TypeError, ValueError):
+            continue
+
+    return {"miles": round(meters / _METERS_PER_MILE, 2), "route": route}
+
+
 def osrm_route_waypoints(
     points: list,
     *,
