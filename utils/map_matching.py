@@ -198,3 +198,100 @@ def osrm_route(
                 continue
 
     return {"miles": round(meters / _METERS_PER_MILE, 2), "route": route}
+
+
+def osrm_route_waypoints(
+    points: list,
+    *,
+    timeout: float = DEFAULT_TIMEOUT_SECONDS,
+) -> dict | None:
+    """Driving distance through an ordered list of waypoints, best-effort.
+
+    Feel Free payable mileage is Storage → stop1 → stop2 → … (or stop1 →
+    stop2 → … when the BA did not start at storage). OSRM's /route accepts
+    multiple coordinates in one call; we sum the single returned route
+    distance. Returns ``{"miles": float, "route": [[lat, lng], ...]}`` or
+    ``None``. NEVER raises.
+    """
+    try:
+        pts = [
+            (float(p[0]), float(p[1]))
+            for p in (points or [])
+            if p is not None and len(p) >= 2
+        ]
+    except (TypeError, ValueError, IndexError):
+        return None
+    pts = [(lat, lng) for lat, lng in pts if not (lat == 0.0 and lng == 0.0)]
+    if len(pts) < 2:
+        return None
+
+    coord_str = ";".join(f"{lng:.6f},{lat:.6f}" for (lat, lng) in pts)
+    url = f"{OSRM_BASE_URL}/route/v1/driving/{coord_str}"
+
+    try:
+        resp = httpx.get(
+            url,
+            params={"overview": "full", "geometries": "geojson"},
+            timeout=timeout,
+            headers={"User-Agent": "spark-api/mileage-waypoints"},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        logger.warning("OSRM multi-route failed (%d pts): %s", len(pts), exc)
+        return None
+
+    if (data or {}).get("code") != "Ok":
+        return None
+    routes = data.get("routes") or []
+    if not routes:
+        return None
+
+    best = routes[0]
+    try:
+        meters = float(best.get("distance") or 0.0)
+    except (TypeError, ValueError):
+        return None
+    if meters <= 0:
+        return None
+
+    route: list[list[float]] = []
+    for c in ((best.get("geometry") or {}).get("coordinates")) or []:
+        if isinstance(c, (list, tuple)) and len(c) >= 2:
+            try:
+                route.append([float(c[1]), float(c[0])])
+            except (TypeError, ValueError):
+                continue
+
+    return {"miles": round(meters / _METERS_PER_MILE, 2), "route": route}
+
+
+def haversine_route_miles(points: list) -> float | None:
+    """Straight-line fallback when OSRM is unavailable. ``points`` = (lat,lng)."""
+    import math
+
+    try:
+        pts = [
+            (float(p[0]), float(p[1]))
+            for p in (points or [])
+            if p is not None and len(p) >= 2
+        ]
+    except (TypeError, ValueError, IndexError):
+        return None
+    pts = [(lat, lng) for lat, lng in pts if not (lat == 0.0 and lng == 0.0)]
+    if len(pts) < 2:
+        return None
+    earth = 3958.7613
+    total = 0.0
+    for i in range(1, len(pts)):
+        lat1, lng1 = pts[i - 1]
+        lat2, lng2 = pts[i]
+        p1, p2 = math.radians(lat1), math.radians(lat2)
+        dphi = math.radians(lat2 - lat1)
+        dlmb = math.radians(lng2 - lng1)
+        h = (
+            math.sin(dphi / 2) ** 2
+            + math.cos(p1) * math.cos(p2) * math.sin(dlmb / 2) ** 2
+        )
+        total += earth * 2 * math.asin(min(1.0, math.sqrt(h)))
+    return round(total, 2)

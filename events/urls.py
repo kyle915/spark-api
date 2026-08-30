@@ -87,6 +87,11 @@ urlpatterns = [
         name="events.public_checkin_sampling_stop",
     ),
     path(
+        "checkin/<str:code>/payable-mileage",
+        checkin_views.public_checkin_payable_mileage,
+        name="events.public_checkin_payable_mileage",
+    ),
+    path(
         "checkin/<str:code>/recap",
         checkin_views.public_checkin_recap,
         name="events.public_checkin_recap",

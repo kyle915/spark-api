@@ -31,6 +31,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
 from ambassadors import checkin_web
+from ambassadors.payable_mileage import NeedsPayableMileage
 from events.checkin_tokens import (
     BadSignature,
     CHECKIN_SESSION_MAX_AGE_SECONDS,
@@ -796,6 +797,13 @@ def public_checkin_recap(request: HttpRequest, code: str) -> HttpResponse:
             status=400,
             code="needs_photo",
         )
+    except NeedsPayableMileage as exc:
+        logger.warning("checkin recap refused, mileage, code=%s: %s", code, exc)
+        return _err(
+            str(exc) or "Complete your mileage stops before filing the recap.",
+            status=400,
+            code="needs_payable_mileage",
+        )
     except Exception:  # noqa: BLE001
         logger.exception("checkin recap submit failed code=%s", code)
         return _err("Couldn't submit your recap. Try again.", status=500, code="server")
@@ -1003,4 +1011,72 @@ def public_checkin_sampling_stop(request: HttpRequest, code: str) -> HttpRespons
         return _err(message or "Couldn't log that stop.")
     return JsonResponse(
         {"stop": stop, "stops": checkin_web.sampling_stops(ambassador=ambassador, event=event)}
+    )
+
+
+# ── Feel Free payable mileage (storage → sampling stops) ────────────────────
+#
+# Distinct from the GPS odometer (mileage/start|stop). The BA answers whether
+# they started at the market storage unit, enters ordered Places stops, and we
+# compute driving miles. Those miles are written into the recap Mileage field
+# on submit — the BA never re-types them.
+@csrf_exempt
+@require_http_methods(["POST"])
+def public_checkin_payable_mileage(request: HttpRequest, code: str) -> HttpResponse:
+    if _over_limit("paymile-ip", _client_ip(request), limit=60, window=3600):
+        return _rate_limited()
+    blocked = _reject_clock_on_recap_link(code)
+    if blocked is not None:
+        return blocked
+    data = _body(request)
+    loaded, err = _load_session(code, data.get("session") or "")
+    if err is not None:
+        return err
+    event, ambassador = loaded
+
+    started_raw = data.get("startedFromStorage")
+    if started_raw is None:
+        started_raw = data.get("started_from_storage")
+    if started_raw is None:
+        return _err("Tell us whether you started at the storage unit (yes or no).")
+    started = bool(started_raw) if not isinstance(started_raw, str) else started_raw.strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "y",
+    )
+
+    stops = data.get("stops") or []
+    if not isinstance(stops, list):
+        return _err("Stops must be a list of places.")
+
+    shift_label = data.get("shiftLabel") or data.get("shift_label") or ""
+    if not isinstance(shift_label, str):
+        shift_label = ""
+    storage_market = data.get("storageMarket") or data.get("storage_market") or ""
+
+    from ambassadors.payable_mileage import (
+        payable_mileage_state,
+        save_payable_mileage_claim,
+    )
+
+    payload, message = save_payable_mileage_claim(
+        ambassador=ambassador,
+        event=event,
+        started_from_storage=started,
+        stops=stops,
+        shift_label=shift_label.strip(),
+        storage_market=str(storage_market or "").strip() or None,
+    )
+    if payload is None:
+        return _err(message or "Couldn't save mileage.")
+    return JsonResponse(
+        {
+            "payableMileage": payable_mileage_state(
+                ambassador=ambassador,
+                event=event,
+                shift_label=shift_label.strip(),
+            ),
+            "claim": payload,
+        }
     )

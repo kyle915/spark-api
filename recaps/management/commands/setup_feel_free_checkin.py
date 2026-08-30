@@ -111,6 +111,9 @@ SPEC: list[tuple[str, list[tuple[str, str, bool, list[str]]]]] = [
                 [],
             ),
             ("Sampling Timeframe?", "text", True, []),
+            # Filled automatically from payable-mileage itinerary on check-in
+            # submit (storage→stops or stops-only). Not typed by the BA.
+            ("Mileage", "number", True, []),
         ],
     ),
     (
@@ -129,6 +132,9 @@ CODE_PREFIX = "FF-"
 SAMPLING_DETAIL_FIELDS: list[tuple[str, str, bool]] = [
     ("Where did you sample? (name a few locations)", "longtext", True),
     ("Sampling Timeframe?", "text", True),
+    # Auto-filled from the storage→stops itinerary on walk-up submit.
+    # BA never types this — check-in writes the computed payable miles.
+    ("Mileage", "number", True),
 ]
 SAMPLING_DETAIL_SECTION = "Sampling Details"
 
@@ -228,6 +234,16 @@ class Command(BaseCommand):
                 "event type, which is arbitrary — harmless while a brand has "
                 "one template (the sole-template fallback still finds the right "
                 "form) but it mislabels the event for reporting."
+            ),
+        )
+        parser.add_argument(
+            "--seed-storage-units",
+            dest="seed_storage_units",
+            action="store_true",
+            help=(
+                "write Feel Free market storage-unit addresses onto "
+                "Tenant.checkin_storage_units (enables payable-mileage capture "
+                "on the standing check-in)."
             ),
         )
         parser.add_argument(
@@ -395,6 +411,11 @@ class Command(BaseCommand):
 
         self._report_existing_templates(tenant, template_name)
         self._location_mode(tenant, opts.get("location_mode"), apply)
+        self._seed_storage_units(
+            tenant,
+            apply=apply,
+            force=bool(opts.get("seed_storage_units")),
+        )
 
         if opts.get("add_photo_field"):
             self._add_photo_field(
@@ -713,6 +734,41 @@ class Command(BaseCommand):
         tenant.checkin_location_mode = mode
         tenant.save(update_fields=["checkin_location_mode"])
         self.stdout.write(self.style.SUCCESS(f"Location mode set to {mode!r}"))
+
+    def _seed_storage_units(self, tenant, *, apply: bool, force: bool = False) -> None:
+        """Write Feel Free market → storage unit addresses for payable mileage."""
+        from ambassadors.payable_mileage import FEEL_FREE_STORAGE_UNITS
+
+        current = getattr(tenant, "checkin_storage_units", None) or []
+        self.stdout.write(
+            f"\nStorage units: {len(current)} configured"
+            + (
+                f" ({', '.join(u.get('market', '?') for u in current if isinstance(u, dict))})"
+                if current
+                else ""
+            )
+        )
+        if current and not force:
+            self.stdout.write("  already seeded — left as-is (pass --seed-storage-units to rewrite)")
+            return
+        if not apply:
+            self.stdout.write(
+                self.style.WARNING(
+                    f"DRY-RUN — would set checkin_storage_units to "
+                    f"{len(FEEL_FREE_STORAGE_UNITS)} markets"
+                )
+            )
+            for u in FEEL_FREE_STORAGE_UNITS:
+                self.stdout.write(f"    · {u['market']}: {u['address']}")
+            return
+        tenant.checkin_storage_units = list(FEEL_FREE_STORAGE_UNITS)
+        tenant.save(update_fields=["checkin_storage_units"])
+        self.stdout.write(
+            self.style.SUCCESS(
+                f"Seeded {len(FEEL_FREE_STORAGE_UNITS)} storage units "
+                "(payable mileage capture ON)"
+            )
+        )
 
     # ---- standing check-in link -----------------------------------------
 

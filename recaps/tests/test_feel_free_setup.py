@@ -119,6 +119,7 @@ class TestFeelFreeSpec:
             "Sampling Pictures",
             "Where did you sample? (name a few locations)",
             "Sampling Timeframe?",
+            "Mileage",
             "Helpful feedback",
         ]
 
@@ -156,7 +157,7 @@ class TestFeelFreeSpec:
         names = [f[0] for _, fields in SPEC for f in fields]
         for fname, kind, required in SAMPLING_DETAIL_FIELDS:
             assert fname in names
-            assert kind in {"text", "longtext"}
+            assert kind in {"text", "longtext", "number"}
             assert required is True
         assert SAMPLING_DETAIL_SECTION == "Sampling Details"
         assert any(

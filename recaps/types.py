@@ -1520,6 +1520,35 @@ class CustomRecap(Node):
 
         return await _get()
 
+    @strawberry.field
+    async def payable_miles(self) -> float | None:
+        """Feel Free storage→stops payable miles for this BA + event.
+
+        Looked up from PayableMileageClaim (itinerary captured on check-in).
+        None when the brand doesn't use payable mileage or no claim exists.
+        """
+        amb_id = getattr(self, "ambassador_id", None)
+        event_id = getattr(self, "event_id", None)
+        if not amb_id or not event_id:
+            return None
+
+        @sync_to_async
+        def _get():
+            from ambassadors.models import PayableMileageClaim
+
+            claim = (
+                PayableMileageClaim.objects.filter(
+                    ambassador_id=amb_id, event_id=event_id
+                )
+                .order_by("-id")
+                .first()
+            )
+            if claim is None or claim.payable_miles is None:
+                return None
+            return float(claim.payable_miles)
+
+        return await _get()
+
 
 @strawberry_django.type(models.CustomFieldValue)
 class CustomFieldValue(Node):

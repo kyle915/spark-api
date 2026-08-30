@@ -1102,6 +1102,40 @@ def submit_checkin_recap(
     actor = ambassador.user
     name = (event.name or "Recap").strip() or "Recap"
 
+    # Feel Free payable mileage: require the itinerary claim, then write the
+    # computed miles into the template's Mileage field so the BA never re-types.
+    from ambassadors.payable_mileage import (
+        NeedsPayableMileage,
+        get_claim_for_submit,
+        inject_mileage_into_field_values,
+        payable_mileage_enabled,
+    )
+
+    resolved_shift_for_miles = ""
+    if force_new:
+        resolved_shift_for_miles = resolve_force_new_shift_label(
+            tenant=getattr(event, "tenant", None),
+            event=event,
+            ambassador=ambassador,
+            force_new=True,
+            shift_label=shift_label,
+        ) or ""
+    if payable_mileage_enabled(getattr(event, "tenant", None)):
+        claim = get_claim_for_submit(
+            ambassador=ambassador,
+            event=event,
+            shift_label=resolved_shift_for_miles or (shift_label or ""),
+        )
+        if claim is None:
+            raise NeedsPayableMileage(
+                "Tell us whether you started at storage and add your sampling stops before filing."
+            )
+        field_values = inject_mileage_into_field_values(
+            template=template,
+            field_values=field_values or [],
+            payable_miles=claim.payable_miles,
+        )
+
     retailer = getattr(event, "retailer", None)
     location = getattr(event, "location", None) or (
         getattr(retailer, "location", None) if retailer else None
@@ -1636,8 +1670,17 @@ def build_public_context(event, ambassador=None) -> dict:
             # never appears for brands that don't reimburse driving.
             "mileage": mileage_state(ambassador=ambassador, event=event),
             "stops": sampling_stops(ambassador=ambassador, event=event),
+            # Feel Free storage→stops payable mileage (distinct from GPS
+            # odometer above). Present when Tenant.checkin_storage_units is set.
+            "payableMileage": _payable_mileage_session(ambassador=ambassador, event=event),
         }
     return payload
+
+
+def _payable_mileage_session(*, ambassador, event) -> dict:
+    from ambassadors.payable_mileage import payable_mileage_state
+
+    return payable_mileage_state(ambassador=ambassador, event=event)
 
 
 # ---------------------------------------------------------------------------
