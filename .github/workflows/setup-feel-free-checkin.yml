@@ -1,17 +1,11 @@
 name: Setup Feel Free check-in
 
-# Seeds the "Feel Free - Sampling Recap" template (field-for-field off the
-# client's own PDF) AND mints the tenant's STANDING check-in code, in one
-# idempotent run. The Feel Free twin of "Setup Total Wireless check-in".
+# Seeds Feel Free standing check-in (FF-YMMK3Q left alone) and optionally
+# market storage-unit addresses for payable-mileage capture.
+# See recaps/management/commands/setup_feel_free_checkin.py.
 #
-# RUN apply=false FIRST AND READ THE LOG. Unlike Total Wireless, Feel Free is
-# an established tenant: the dry run dumps every template already on it. If one
-# of those is already their live sampling form, EDIT that instead of applying
-# this — two templates split the brand's recaps across two forms and halve
-# every dashboard number.
-#
-# Idempotent otherwise: get_or_create for the template, and an existing
-# check-in code is left alone (rotating it breaks every copy already shared).
+# Prefer code_only=true when only seeding storage / preserving the link.
+# RUN apply=false FIRST AND READ THE LOG.
 
 on:
   workflow_dispatch:
@@ -20,71 +14,38 @@ on:
         description: "Tenant name/slug substring"
         required: false
         default: "feel free"
-      template_name:
-        description: "Template name (blank = the default)"
-        required: false
-        default: ""
-      event_type:
-        description: "Event type substring to attach the template to (blank = prefer 'sampling')"
-        required: false
-        default: ""
-      add_photo_field:
-        description: "Add an IMAGE field with this name to the brand's template (e.g. Consumer Sampling Pictures). Blank = skip"
-        required: false
-        default: ""
-      location_mode:
-        description: "How the link asks for location: market (roaming crew) or address (static store). Blank = leave as-is"
-        required: false
-        default: ""
-        type: choice
-        options: ["", "market", "address"]
-      code_only:
-        description: "Mint ONLY the standing link; touch no templates (use when the brand already has its form)"
-        required: false
-        default: "false"
-        type: choice
-        options: ["false", "true"]
-      prefix:
-        description: "Brand prefix for a NEW code, e.g. BD -> BD-XXXXXX. Blank = FF- (set this for any brand that isn't Feel Free; the code is permanent)"
-        required: false
-        default: ""
-      pin_event_type:
-        description: "Also pin Tenant.checkin_event_type to the resolved event type (stops the walk-in path guessing)"
-        required: false
-        default: "false"
-        type: choice
-        options: ["false", "true"]
-      add_sampling_details:
-        description: "Add Where did you sample? + Sampling Timeframe? to the LIVE sole template (skips SPEC seed)"
-        required: false
-        default: "false"
-        type: choice
-        options: ["false", "true"]
       apply:
         description: "Actually write (read the dry run first)"
         required: false
         default: "false"
         type: choice
         options: ["false", "true"]
+      code_only:
+        description: "Leave templates untouched (code + storage seed only)"
+        required: false
+        default: "true"
+        type: choice
+        options: ["false", "true"]
+      seed_storage_units:
+        description: "Write/rewrite Feel Free market storage units"
+        required: false
+        default: "true"
+        type: choice
+        options: ["false", "true"]
 
 jobs:
   setup-feel-free-checkin:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - name: Fire setup endpoint
+      - name: Fire setup-feel-free-checkin cron endpoint
         env:
           CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/setup-feel-free-checkin
           CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
           TENANT: ${{ github.event.inputs.tenant }}
-          TEMPLATE_NAME: ${{ github.event.inputs.template_name }}
-          EVENT_TYPE: ${{ github.event.inputs.event_type }}
-          ADD_PHOTO_FIELD: ${{ github.event.inputs.add_photo_field }}
-          LOCATION_MODE: ${{ github.event.inputs.location_mode }}
-          CODE_ONLY: ${{ github.event.inputs.code_only }}
-          PREFIX: ${{ github.event.inputs.prefix }}
-          PIN_EVENT_TYPE: ${{ github.event.inputs.pin_event_type }}
-          ADD_SAMPLING_DETAILS: ${{ github.event.inputs.add_sampling_details }}
           APPLY: ${{ github.event.inputs.apply }}
+          CODE_ONLY: ${{ github.event.inputs.code_only }}
+          SEED_STORAGE: ${{ github.event.inputs.seed_storage_units }}
         run: |
           if [ -z "$CRON_SECRET" ]; then
             echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
@@ -94,15 +55,10 @@ jobs:
             -X POST "$CRON_URL" \
             -H "X-Cron-Secret: $CRON_SECRET" \
             --data-urlencode "tenant=$TENANT" \
-            --data-urlencode "template_name=$TEMPLATE_NAME" \
-            --data-urlencode "event_type=$EVENT_TYPE" \
-            --data-urlencode "add_photo_field=$ADD_PHOTO_FIELD" \
-            --data-urlencode "location_mode=$LOCATION_MODE" \
+            --data-urlencode "apply=$APPLY" \
             --data-urlencode "code_only=$CODE_ONLY" \
-            --data-urlencode "prefix=$PREFIX" \
-            --data-urlencode "pin_event_type=$PIN_EVENT_TYPE" \
-            --data-urlencode "add_sampling_details=$ADD_SAMPLING_DETAILS" \
-            --data-urlencode "apply=$APPLY")
+            --data-urlencode "seed_storage_units=$SEED_STORAGE" \
+            --max-time 540)
           echo "HTTP $STATUS"
           cat /tmp/cron-response.json
           echo ""
