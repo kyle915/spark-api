@@ -146,3 +146,19 @@ async def log_nudge_sent(*, request, actor_user, ba_name: str) -> None:
         summary=f"Nudged {ba_name} for recap",
         metadata={"ba_name": ba_name},
     )
+
+
+async def log_attendance_adjusted(
+    *,
+    request,
+    actor_user,
+    summary: str,
+    metadata: Optional[dict] = None,
+) -> None:
+    await alog(
+        request=request,
+        actor_user=actor_user,
+        kind=RequestActivityLog.KIND_ATTENDANCE_ADJUSTED,
+        summary=summary,
+        metadata=metadata or {},
+    )

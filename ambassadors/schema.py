@@ -1,6 +1,6 @@
 import strawberry
 
-from ambassadors import queries, mutations, walkup
+from ambassadors import queries, mutations, walkup, admin_attendance
 from ambassadors.staffing import StaffingQueries, StaffingSuggestionQueries
 
 
@@ -105,6 +105,8 @@ class AmbassadorMutationsClient(
     # Walk-up self-serve clock-ins: generate/revoke event code + confirm/
     # reject a walk-up (the web app uses the CLIENTS schema).
     walkup.WalkupAdminMutations,
+    # Admin manual clock-in / clock-out / edit punch times (ops TIME CLOCK).
+    admin_attendance.AdminAttendanceMutations,
     # Admin notification center (the web app uses the CLIENTS schema): mark
     # notifications read + resolve (approve/decline) a shift-extension request.
     mutations.NotificationMutations,
