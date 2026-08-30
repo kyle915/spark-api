@@ -23,6 +23,16 @@ on:
         required: true
         default: false
         type: boolean
+      recap_id:
+        description: "Optional single custom/legacy recap id."
+        required: false
+        default: ""
+        type: string
+      force:
+        description: "Clear client_notified_at and re-send (requires recap_id)."
+        required: true
+        default: false
+        type: boolean
 
 jobs:
   fire-resend-recap-approved:
@@ -35,6 +45,8 @@ jobs:
           DRY_RUN: ${{ github.event.inputs.dry_run }}
           HTML_ONLY: ${{ github.event.inputs.html_only }}
           SINCE: ${{ github.event.inputs.since }}
+          RECAP_ID: ${{ github.event.inputs.recap_id }}
+          FORCE: ${{ github.event.inputs.force }}
         run: |
           set -euo pipefail
           if [ -z "$CRON_SECRET" ]; then
@@ -42,13 +54,19 @@ jobs:
             exit 1
           fi
           if [ "$DRY_RUN" = "false" ]; then EXECUTE="true"; else EXECUTE="false"; fi
-          echo "since=$SINCE dry_run=$DRY_RUN execute=$EXECUTE html_only=$HTML_ONLY"
-          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
-            -X POST "$CRON_URL" \
-            -H "X-Cron-Secret: $CRON_SECRET" \
-            --data-urlencode "since=$SINCE" \
-            --data-urlencode "execute=$EXECUTE" \
-            --data-urlencode "html_only=$HTML_ONLY")
+          echo "since=$SINCE dry_run=$DRY_RUN execute=$EXECUTE html_only=$HTML_ONLY recap_id=$RECAP_ID force=$FORCE"
+          CURL_ARGS=(
+            -X POST "$CRON_URL"
+            -H "X-Cron-Secret: $CRON_SECRET"
+            --data-urlencode "since=$SINCE"
+            --data-urlencode "execute=$EXECUTE"
+            --data-urlencode "html_only=$HTML_ONLY"
+            --data-urlencode "force=$FORCE"
+          )
+          if [ -n "$RECAP_ID" ]; then
+            CURL_ARGS+=(--data-urlencode "recap_id=$RECAP_ID")
+          fi
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' "${CURL_ARGS[@]}")
           echo "HTTP $STATUS"
           python3 - <<'PY'
           import json
@@ -59,7 +77,8 @@ jobs:
               print(raw[:2000])
           else:
               print("ok=", data.get("ok"), "execute=", data.get("execute"),
-                    "html_only=", data.get("html_only"), "since=", data.get("since"))
+                    "html_only=", data.get("html_only"), "force=", data.get("force"),
+                    "recap_id=", data.get("recap_id"), "since=", data.get("since"))
               log = data.get("log") or ""
               # Recap ids + recipient counts only — no bodies, no keys.
               print(log)

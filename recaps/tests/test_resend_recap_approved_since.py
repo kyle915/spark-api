@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 import pytest
 from asgiref.sync import async_to_sync
 from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.utils import timezone
 
 from jobs.tests.base import JobsGraphQLTestCase
@@ -287,6 +288,42 @@ class TestResendRecapApprovedSince(JobsGraphQLTestCase):
         text = out.getvalue()
         assert f"custom #{first.id} " not in text
         assert f"after_id={first.id}" in text
+
+    def test_force_requires_recap_id(self):
+        out = io.StringIO()
+        with pytest.raises(CommandError, match="--force requires --recap-id"):
+            call_command(
+                "resend_recap_approved_since",
+                "--since=2026-08-15",
+                "--force",
+                stdout=out,
+            )
+
+    def test_force_resends_already_notified(self):
+        since = parse_since("2026-08-15")
+        recap = self._make_custom(
+            approved=True, updated_at=since + timedelta(hours=1), name="StalePDF"
+        )
+        recap_models.CustomRecap.objects.filter(id=recap.id).update(
+            client_notified_at=since + timedelta(hours=2)
+        )
+        out = io.StringIO()
+        with patch(
+            "recaps.mutation_parts.notify._thread_recap_approved_notify"
+        ) as send:
+            call_command(
+                "resend_recap_approved_since",
+                "--since=2026-08-15",
+                f"--recap-id={recap.id}",
+                "--kind=custom",
+                "--force",
+                stdout=out,
+            )
+        send.assert_called_once_with(recap.id, "custom", html_only=False)
+        text = out.getvalue()
+        assert "force-resend" in text
+        assert "force_cleared=1" in text
+        assert "sent=1" in text
 
     def test_already_notified_is_skipped(self):
         since = parse_since("2026-08-15")
