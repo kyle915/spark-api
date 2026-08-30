@@ -267,10 +267,14 @@ def compute_payable_miles(
 
     YES + ≥1 stop with coords → Storage → stops chain.
     NO  + ≥2 stops with coords → stops-only chain.
-    Fewer usable points → 0 miles (still a valid claim: e.g. one stop, no
-    storage start means nothing to reimburse between locations).
+    Prefer Google Directions (Maps driving miles) when
+    ``GOOGLE_MAPS_API_KEY`` is set; else OSRM; else haversine.
     """
-    from utils.map_matching import haversine_route_miles, osrm_route_waypoints
+    from utils.map_matching import (
+        google_directions_route_miles,
+        haversine_route_miles,
+        osrm_route_waypoints,
+    )
 
     points = build_route_points(
         started_from_storage=started_from_storage,
@@ -279,6 +283,14 @@ def compute_payable_miles(
     )
     if len(points) < 2:
         return Decimal("0.00"), "none", None
+
+    google = google_directions_route_miles(points)
+    if google and google.get("miles") is not None:
+        return (
+            Decimal(str(google["miles"])).quantize(Decimal("0.01")),
+            "google_route",
+            google.get("route"),
+        )
 
     routed = osrm_route_waypoints(points)
     if routed and routed.get("miles") is not None:

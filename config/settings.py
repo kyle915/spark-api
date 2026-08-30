@@ -320,6 +320,11 @@ if GOOGLE_CALENDAR_CREDENTIALS_JSON:
 else:
     GOOGLE_CALENDAR_CREDENTIALS = None
 
+# Server-side Maps key for Feel Free payable-mileage Directions lookups.
+# Prefer a key with Directions API (Legacy) enabled and NO HTTP-referrer
+# restriction (Cloud Run calls it server-side). Falls back to OSRM when unset.
+GOOGLE_MAPS_API_KEY = env("GOOGLE_MAPS_API_KEY", default="")
+
 # Django-RQ / Redis. Optional — Cloud Run has no Memorystore, and the
 # mailer already falls back to inline Resend. Do NOT default to
 # localhost:6379 when DEBUG is False: that connection-refused on every

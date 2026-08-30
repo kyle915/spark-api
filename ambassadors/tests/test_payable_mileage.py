@@ -86,9 +86,12 @@ class TestPayableMileage(AmbassadorsGraphQLTestCase):
         assert len(pts) == 2
 
     def test_save_yes_computes_miles_from_storage_chain(self):
-        with patch(
-            "utils.map_matching.osrm_route_waypoints", return_value=ROUTED
-        ) as m:
+        with (
+            patch("utils.map_matching.google_directions_route_miles", return_value=None),
+            patch(
+                "utils.map_matching.osrm_route_waypoints", return_value=ROUTED
+            ) as m,
+        ):
             payload, err = pm.save_payable_mileage_claim(
                 ambassador=self.ba,
                 event=self.event,
@@ -98,15 +101,42 @@ class TestPayableMileage(AmbassadorsGraphQLTestCase):
         assert err is None
         assert payload["startedFromStorage"] is True
         assert payload["payableMiles"] == 12.4
+        assert payload["routeSource"] == "osrm_route"
         assert m.called
         # First waypoint must be storage.
         call_pts = m.call_args[0][0]
         assert call_pts[0] == (STORAGE["lat"], STORAGE["lng"])
 
+    def test_save_prefers_google_directions_when_available(self):
+        google = {
+            "miles": 14.2,
+            "route": [[30.2672, -97.7431], [30.2710, -97.7530]],
+        }
+        with (
+            patch(
+                "utils.map_matching.google_directions_route_miles", return_value=google
+            ) as g,
+            patch("utils.map_matching.osrm_route_waypoints") as o,
+        ):
+            payload, err = pm.save_payable_mileage_claim(
+                ambassador=self.ba,
+                event=self.event,
+                started_from_storage=True,
+                stops=[STOP_A],
+            )
+        assert err is None
+        assert payload["payableMiles"] == 14.2
+        assert payload["routeSource"] == "google_route"
+        assert g.called
+        assert not o.called
+
     def test_save_no_routes_stops_only(self):
-        with patch(
-            "utils.map_matching.osrm_route_waypoints", return_value=ROUTED
-        ) as m:
+        with (
+            patch("utils.map_matching.google_directions_route_miles", return_value=None),
+            patch(
+                "utils.map_matching.osrm_route_waypoints", return_value=ROUTED
+            ) as m,
+        ):
             payload, err = pm.save_payable_mileage_claim(
                 ambassador=self.ba,
                 event=self.event,
@@ -234,7 +264,10 @@ class TestPayableMileage(AmbassadorsGraphQLTestCase):
         assert matched["market"] == "Tampa, FL"
 
     def test_upsert_claim_row(self):
-        with patch("utils.map_matching.osrm_route_waypoints", return_value=ROUTED):
+        with (
+            patch("utils.map_matching.google_directions_route_miles", return_value=None),
+            patch("utils.map_matching.osrm_route_waypoints", return_value=ROUTED),
+        ):
             pm.save_payable_mileage_claim(
                 ambassador=self.ba,
                 event=self.event,
