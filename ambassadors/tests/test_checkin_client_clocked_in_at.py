@@ -149,6 +149,37 @@ class TestCheckinClientClockedInAt(AmbassadorsGraphQLTestCase):
         assert second.json().get("alreadyIn") is True
         assert self._punches().count() == 1
 
+    def test_idempotency_key_does_not_block_second_shift_after_clock_out(self):
+        """Feel Free morning→afternoon: first shift's offline key must not
+        no-op the afternoon clock-in after they clocked out."""
+        morning = dj_tz.now() - _dt.timedelta(hours=3)
+        first = self._clock(
+            clockedInAt=morning.isoformat(), idempotencyKey="shift1-offline"
+        )
+        assert first.status_code == 200
+        assert first.json()["clock"]["state"] == "clocked_in"
+
+        out = self.http.post(
+            reverse(
+                "events.public_checkin_clock",
+                kwargs={"code": self.event.walkup_code},
+            ),
+            data={"session": self.token, "kind": "out"},
+            content_type="application/json",
+        )
+        assert out.status_code == 200
+        assert out.json()["clock"]["state"] == "clocked_out"
+
+        afternoon = dj_tz.now() - _dt.timedelta(minutes=5)
+        second = self._clock(
+            clockedInAt=afternoon.isoformat(),
+            idempotencyKey="shift1-offline",  # stale key from morning queue
+        )
+        assert second.status_code == 200, second.content
+        assert second.json().get("alreadyIn") is not True
+        assert second.json()["clock"]["state"] == "clocked_in"
+        assert self._punches().count() == 2
+
     def test_omitting_clocked_in_at_still_uses_server_now(self):
         before = dj_tz.now()
         res = self._clock()
