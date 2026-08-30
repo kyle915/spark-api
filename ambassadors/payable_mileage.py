@@ -20,11 +20,19 @@ from decimal import Decimal
 
 logger = logging.getLogger(__name__)
 
-# Matches Feel Free "Mileage" and common variants ("Miles driven", …).
+# Matches Feel Free "Mileage", "Insert your mileage", and common variants
+# ("Miles driven", …).
 MILEAGE_FIELD_RE = re.compile(
-    r"^\s*mileage\s*$|^\s*miles?\s*(driven|traveled|travelled|reimbursed)?\s*$",
+    r"mileage|^\s*miles?\s*(driven|traveled|travelled|reimbursed)?\s*$",
     re.IGNORECASE,
 )
+
+
+def is_mileage_custom_field(name: str | None) -> bool:
+    n = (name or "").strip()
+    if not n:
+        return False
+    return bool(MILEAGE_FIELD_RE.search(n))
 
 # Canonical Feel Free storage roster (seeded onto the tenant).
 FEEL_FREE_STORAGE_UNITS: list[dict] = [
@@ -168,10 +176,6 @@ def market_hint_for_event(event) -> str:
     return ""
 
 
-def is_mileage_custom_field(name: str | None) -> bool:
-    return bool(MILEAGE_FIELD_RE.match((name or "").strip()))
-
-
 def find_mileage_custom_field(template):
     """The template's Mileage / Miles-driven field, or None."""
     if template is None:
@@ -189,16 +193,16 @@ def find_mileage_custom_field(template):
 def inject_mileage_into_field_values(
     *, template, field_values: list, payable_miles
 ) -> list:
-    """Ensure ``field_values`` carries the computed miles on the Mileage field.
+    """Ensure ``field_values`` carries payable miles on the Mileage field.
 
-    Overwrites any BA-typed value so the itinerary is the source of truth.
-    Returns a new list (does not mutate the caller's list in place beyond
-    copies of dicts we replace).
+    Prefer a BA-submitted value when present (construction / detour bump).
+    Otherwise fill from the itinerary claim so required Mileage never blocks
+    submit. Returns a new list.
     """
     field = find_mileage_custom_field(template)
     if field is None or payable_miles is None:
         return list(field_values or [])
-    miles_str = str(payable_miles)
+    claim_str = str(payable_miles)
     fid = str(field.id)
     out: list = []
     found = False
@@ -207,12 +211,19 @@ def inject_mileage_into_field_values(
             continue
         raw_id = fv.get("customFieldId") or fv.get("custom_field_id")
         if str(raw_id) == fid:
-            out.append({**fv, "customFieldId": fid, "value": miles_str})
+            typed = str(fv.get("value") or "").strip()
+            out.append(
+                {
+                    **fv,
+                    "customFieldId": fid,
+                    "value": typed if typed else claim_str,
+                }
+            )
             found = True
         else:
             out.append(fv)
     if not found:
-        out.append({"customFieldId": fid, "value": miles_str})
+        out.append({"customFieldId": fid, "value": claim_str})
     return out
 
 
