@@ -192,6 +192,22 @@ class TestPayableMileage(AmbassadorsGraphQLTestCase):
         assert matched is not None
         assert matched["address"] == STORAGE["address"]
 
+    def test_resolve_tampa_st_pete_market_to_tampa_storage(self):
+        """Feel Free check-in market label ≠ storage market label."""
+        self.tenant.checkin_storage_units = [
+            STORAGE,
+            {
+                "market": "Tampa, FL",
+                "address": "10700 US Highway 19 N Pinellas Park, Florida FL 33782",
+                "lat": 27.84,
+                "lng": -82.70,
+            },
+        ]
+        self.tenant.save(update_fields=["checkin_storage_units"])
+        matched = pm.resolve_storage_unit(self.tenant, "Tampa / St. Pete, FL")
+        assert matched is not None
+        assert matched["market"] == "Tampa, FL"
+
     def test_upsert_claim_row(self):
         with patch("utils.map_matching.osrm_route_waypoints", return_value=ROUTED):
             pm.save_payable_mileage_claim(
