@@ -100,6 +100,9 @@ def resolve_storage_unit(tenant, market_hint: str | None) -> dict | None:
     Market-mode walk-ins key ``Event.address`` (and often ``Event.name``) on
     the market label the BA picked ("Austin, TX"). Exact match first, then
     substring either way so "Austin" still finds "Austin, TX".
+
+    Also token-overlap so Feel Free's check-in market
+    ``Tampa / St. Pete, FL`` resolves to storage ``Tampa, FL``.
     """
     units = tenant_storage_units(tenant)
     if not units:
@@ -114,7 +117,46 @@ def resolve_storage_unit(tenant, market_hint: str | None) -> dict | None:
         m = _norm_market(u["market"])
         if hint in m or m in hint:
             return u
-    return None
+
+    # Shared city tokens (skip state abbreviations / tiny words).
+    skip = {
+        "fl",
+        "tx",
+        "az",
+        "ca",
+        "nv",
+        "ga",
+        "nc",
+        "sc",
+        "oh",
+        "ny",
+        "nj",
+        "pa",
+        "il",
+        "co",
+        "wa",
+        "or",
+        "st",
+        "pete",
+        "ft",
+        "fort",
+    }
+    hint_tokens = {t for t in hint.split() if t not in skip and len(t) > 2}
+    if not hint_tokens:
+        return None
+    best = None
+    best_score = 0
+    for u in units:
+        m_tokens = {
+            t
+            for t in _norm_market(u["market"]).split()
+            if t not in skip and len(t) > 2
+        }
+        score = len(hint_tokens & m_tokens)
+        if score > best_score:
+            best_score = score
+            best = u
+    return best if best_score > 0 else None
 
 
 def market_hint_for_event(event) -> str:

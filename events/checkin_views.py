@@ -1060,14 +1060,18 @@ def public_checkin_payable_mileage(request: HttpRequest, code: str) -> HttpRespo
         save_payable_mileage_claim,
     )
 
-    payload, message = save_payable_mileage_claim(
-        ambassador=ambassador,
-        event=event,
-        started_from_storage=started,
-        stops=stops,
-        shift_label=shift_label.strip(),
-        storage_market=str(storage_market or "").strip() or None,
-    )
+    try:
+        payload, message = save_payable_mileage_claim(
+            ambassador=ambassador,
+            event=event,
+            started_from_storage=started,
+            stops=stops,
+            shift_label=shift_label.strip(),
+            storage_market=str(storage_market or "").strip() or None,
+        )
+    except Exception:  # noqa: BLE001 — never 500 the BA mid-shift
+        logger.exception("payable-mileage save failed code=%s", code)
+        return _err("Couldn't calculate mileage right now. Try again in a moment.")
     if payload is None:
         return _err(message or "Couldn't save mileage.")
     return JsonResponse(
