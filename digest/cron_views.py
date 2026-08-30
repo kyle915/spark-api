@@ -4422,6 +4422,13 @@ class SetupFeelFreeCheckinView(View):
         ).lower()
         if pet in ("1", "true", "yes", "on"):
             kwargs["pin_event_type"] = True
+        ssu = (
+            request.GET.get("seed_storage_units")
+            or request.POST.get("seed_storage_units")
+            or ""
+        ).lower()
+        if ssu in ("1", "true", "yes", "on"):
+            kwargs["seed_storage_units"] = True
 
         out = io.StringIO()
         try:
