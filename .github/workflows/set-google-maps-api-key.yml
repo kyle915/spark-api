@@ -1,0 +1,46 @@
+name: Set Google Maps API key on Cloud Run
+
+# Stamp GOOGLE_MAPS_API_KEY onto spark-api-new so Feel Free payable
+# mileage can call Directions. Deploy preserves env vars; re-run when
+# rotating the key.
+
+on:
+  workflow_dispatch:
+
+env:
+  GCP_PROJECT_ID: spark-479222
+  GCP_REGION: us-central1
+  CLOUD_RUN_SERVICE: spark-api-new
+
+jobs:
+  set-env:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_DEPLOY_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Update Cloud Run env
+        env:
+          GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GOOGLE_MAPS_API_KEY:-}" ]; then
+            echo "::error::GOOGLE_MAPS_API_KEY repo secret is empty"
+            exit 1
+          fi
+          gcloud run services update "$CLOUD_RUN_SERVICE" \
+            --region="$GCP_REGION" \
+            --project="$GCP_PROJECT_ID" \
+            --update-env-vars="GOOGLE_MAPS_API_KEY=${GOOGLE_MAPS_API_KEY}" \
+            --quiet
+          gcloud run services describe "$CLOUD_RUN_SERVICE" \
+            --region="$GCP_REGION" \
+            --project="$GCP_PROJECT_ID" \
+            --format='yaml(spec.template.spec.containers[0].env)' \
+            | grep -q 'name: GOOGLE_MAPS_API_KEY'
+          echo "GOOGLE_MAPS_API_KEY is set on ${CLOUD_RUN_SERVICE}"
