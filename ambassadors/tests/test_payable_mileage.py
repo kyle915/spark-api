@@ -139,7 +139,7 @@ class TestPayableMileage(AmbassadorsGraphQLTestCase):
         assert payload is None
         assert err
 
-    def test_inject_mileage_overwrites_field_value(self):
+    def test_inject_mileage_prefers_ba_detour_bump(self):
         from events.models import EventType
         from recaps.models import (
             CustomField,
@@ -179,10 +179,35 @@ class TestPayableMileage(AmbassadorsGraphQLTestCase):
             payable_miles=Decimal("12.40"),
         )
         assert len(out) == 1
-        assert out[0]["value"] == "12.40"
+        # BA-typed detour bump wins over the itinerary claim.
+        assert out[0]["value"] == "999"
+
+        filled = pm.inject_mileage_into_field_values(
+            template=tpl,
+            field_values=[],
+            payable_miles=Decimal("12.40"),
+        )
+        assert filled[0]["value"] == "12.40"
+
+        insert_named = CustomField.objects.create(
+            custom_recap_template=tpl,
+            recap_section=section,
+            name="Insert your mileage",
+            custom_field_type=ftype,
+            required=True,
+            options=[],
+            order=2,
+            created_by=self.admin,
+        )
+        # Prefer the first mileage-named field (order=1 Mileage) — still matches
+        # the "Insert your mileage" naming pattern via is_mileage_custom_field.
+        assert pm.is_mileage_custom_field("Insert your mileage")
+        assert pm.find_mileage_custom_field(tpl).id == field.id
+        _ = insert_named  # created to prove name matching in is_mileage_custom_field
 
     def test_is_mileage_field_matches_variants(self):
         assert pm.is_mileage_custom_field("Mileage")
+        assert pm.is_mileage_custom_field("Insert your mileage")
         assert pm.is_mileage_custom_field("Miles driven")
         assert pm.is_mileage_custom_field("miles")
         assert not pm.is_mileage_custom_field("Sampling Timeframe?")
