@@ -138,6 +138,15 @@ TORCH_PRODUCTS: list[tuple[str, str, str]] = [
      'https://torchdrinks.com/wp-content/uploads/2026/03/torch-lite-5mg-thc-12oz-Watemelon-Limeade.jpg'),
     ('Seltzer 5mg Lite', 'Watermelon Limeade 5mg 4-Pack',
      'https://torchdrinks.com/wp-content/uploads/2026/03/torch-lite-5mg-thc-12oz-4pk-Watemelon-Limeade.jpg'),
+    # ── Seltzer 10mg (client-requested tastes; no artwork URL yet) ──
+    # Same "<Flavor> <Potency> <Size>" shape as the 5mg/60mg peers so the
+    # recap "Products Sampled" pills stay scannable next to existing options.
+    ('Seltzer 10mg', 'Black Cherry 10mg 12oz', ''),
+    ('Seltzer 10mg', 'Black Cherry 10mg 4-Pack', ''),
+    ('Seltzer 10mg', 'Strawberry Lemonade 10mg 12oz', ''),
+    ('Seltzer 10mg', 'Strawberry Lemonade 10mg 4-Pack', ''),
+    ('Seltzer 10mg', 'Watermelon Limeade 10mg 12oz', ''),
+    ('Seltzer 10mg', 'Watermelon Limeade 10mg 4-Pack', ''),
     # ── Seltzer 60mg High Potency ─────────────────────
     ('Seltzer 60mg High Potency', 'Black Cherry 60mg 12oz',
      'https://torchdrinks.com/wp-content/uploads/2025/01/3.Black-Cherry-Seltzer_Torch_12oz.png'),

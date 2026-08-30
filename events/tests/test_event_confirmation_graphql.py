@@ -184,8 +184,9 @@ class TestEventConfirmationGraphQL(AmbassadorsGraphQLTestCase):
         assert result.errors is None, result.errors
         data = result.data["eventConfirmationFormOptions"]
         # No catalog rows in the test DB → the onboard SKU list.
-        assert len(data["productOptions"]) == 48
+        assert len(data["productOptions"]) == 54
         assert data["productOptions"][0].startswith("Iced Tea 10mg — ")
+        assert "Seltzer 10mg — Black Cherry 10mg 4-Pack" in data["productOptions"]
         assert "10G — TORCH STRAWBERRY LEMONADE 10G" in data["productOptions"]
         assert "10G — TORCH WATERMELON 10MG" in data["productOptions"]
         assert not any("Sparkling Water" in o for o in data["productOptions"])
