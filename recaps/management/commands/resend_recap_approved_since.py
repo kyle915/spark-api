@@ -191,6 +191,14 @@ class Command(BaseCommand):
                 "without SMTP (ledger for already-sent #154-#406)."
             ),
         )
+        parser.add_argument(
+            "--force",
+            action="store_true",
+            help=(
+                "Clear client_notified_at and re-send even if already stamped. "
+                "Requires --recap-id so a window rerun cannot mass re-spam."
+            ),
+        )
 
     def handle(self, *args, **opts):
         from recaps.mutation_parts.notify import (
@@ -211,6 +219,10 @@ class Command(BaseCommand):
         limit = opts["limit"] or None
         mark_girl_beer = opts["mark_girl_beer"]
         mark_notified = opts["mark_notified"]
+        force = opts["force"]
+
+        if force and not recap_id:
+            raise CommandError("--force requires --recap-id to avoid mass re-spam")
 
         rows = list(
             approved_recaps_since(
@@ -227,6 +239,7 @@ class Command(BaseCommand):
         already_rows = []
         send_rows = []
         unique_to: set[str] = set()
+        force_cleared = 0
 
         for recap_kind, recap in rows:
             recipients, _reply = _collect_recap_approved_recipients(recap)
@@ -242,19 +255,24 @@ class Command(BaseCommand):
                     f"action={action} tenant={_tenant_label(recap)}"
                 )
                 continue
-            if recap.client_notified_at:
+            if recap.client_notified_at and not force:
                 already_rows.append((recap_kind, recap))
                 self.stdout.write(
                     f"{recap_kind} #{recap.id} recipients={len(recipients)} "
                     f"action=skip-notified tenant={_tenant_label(recap)}"
                 )
                 continue
+            action = "force-resend" if recap.client_notified_at and force else "send"
+            if recap.client_notified_at and force and not dry_run:
+                type(recap).objects.filter(pk=recap.pk).update(client_notified_at=None)
+                recap.client_notified_at = None
+                force_cleared += 1
             for email, _first in recipients:
                 unique_to.add(email.lower())
             send_rows.append((recap_kind, recap, len(recipients)))
             self.stdout.write(
                 f"{recap_kind} #{recap.id} recipients={len(recipients)} "
-                f"action=send tenant={_tenant_label(recap)} "
+                f"action={action} tenant={_tenant_label(recap)} "
                 f"updated_at={timezone.localtime(recap.updated_at).isoformat()}"
             )
 
@@ -303,9 +321,10 @@ class Command(BaseCommand):
             f"send_batch={len(send_batch)} unique_to={len(unique_to)} "
             f"girl_beer={len(gb_rows)} girl_beer_unmarked={len(gb_to_stamp)} "
             f"already_notified={len(already_rows)} "
+            f"force_cleared={force_cleared} "
             f"sent={sent} failed={failed} marked_gb={marked_gb} "
             f"marked_sent={marked_sent} last_id={last_id} "
-            f"dry_run={dry_run} html_only={html_only} "
+            f"dry_run={dry_run} html_only={html_only} force={force} "
             f"mark_girl_beer={mark_girl_beer} mark_notified={mark_notified} "
             f"after_id={after_id or 0} through_id={through_id or 0} "
             f"limit={limit or 0} since={since.isoformat()}"

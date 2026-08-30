@@ -6288,7 +6288,7 @@ class ResendRecapApprovedSinceView(View):
     Does not re-send Ignite internal review/suspect-numbers alerts.
     Girl Beer is marked sent without SMTP. Dry-run by default.
     Params: since, execute, html_only, recap_id, kind, after_id,
-    through_id, exclude_id, limit, mark_girl_beer, mark_notified.
+    through_id, exclude_id, limit, mark_girl_beer, mark_notified, force.
     """
 
     def _run(self, request: HttpRequest) -> HttpResponse:
@@ -6306,6 +6306,7 @@ class ResendRecapApprovedSinceView(View):
         html_only = _get("html_only").lower() in ("1", "true", "yes", "on")
         mark_girl_beer = _get("mark_girl_beer").lower() in ("1", "true", "yes", "on")
         mark_notified = _get("mark_notified").lower() in ("1", "true", "yes", "on")
+        force = _get("force").lower() in ("1", "true", "yes", "on")
         recap_id = _get("recap_id")
         kind = _get("kind")
         after_id = _get("after_id")
@@ -6321,6 +6322,8 @@ class ResendRecapApprovedSinceView(View):
             cmd_args.append("--mark-girl-beer")
         if mark_notified:
             cmd_args.append("--mark-notified")
+        if force:
+            cmd_args.append("--force")
         if recap_id:
             cmd_args.extend(["--recap-id", recap_id])
         if kind in ("legacy", "custom"):
@@ -6356,6 +6359,8 @@ class ResendRecapApprovedSinceView(View):
                 "html_only": html_only,
                 "mark_girl_beer": mark_girl_beer,
                 "mark_notified": mark_notified,
+                "force": force,
+                "recap_id": recap_id,
                 "since": since,
                 "after_id": after_id,
                 "through_id": through_id,
