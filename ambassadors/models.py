@@ -1648,6 +1648,74 @@ class AmbassadorReferral(models.Model):
         )
 
 
+class PayableMileageClaim(models.Model):
+    """Feel Free payable mileage for one BA + event + shift.
+
+    Distinct from GPS ``MileageSession`` (odometer breadcrumbs). This is an
+    itinerary the BA enters before filing the recap: yes/no started at the
+    market storage unit, then ordered sampling stops via Places. Payable
+    miles = Storage→stops when started_from_storage, else stops-only.
+    Written into the recap's Mileage custom field on submit.
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+
+    tenant = models.ForeignKey(
+        Tenant,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="payable_mileage_claims",
+    )
+    ambassador = models.ForeignKey(
+        "ambassadors.Ambassador",
+        on_delete=models.CASCADE,
+        related_name="payable_mileage_claims",
+    )
+    event = models.ForeignKey(
+        Event,
+        on_delete=models.CASCADE,
+        related_name="payable_mileage_claims",
+    )
+    shift_label = models.CharField(max_length=64, blank=True, default="")
+
+    started_from_storage = models.BooleanField(default=False)
+    storage_market = models.CharField(max_length=255, blank=True, default="")
+    storage_address = models.CharField(max_length=512, blank=True, default="")
+    storage_lat = models.FloatField(null=True, blank=True)
+    storage_lng = models.FloatField(null=True, blank=True)
+
+    stops = models.JSONField(default=list, blank=True)
+
+    payable_miles = models.DecimalField(
+        max_digits=8, decimal_places=2, default=0
+    )
+    route = models.JSONField(null=True, blank=True)
+    route_source = models.CharField(max_length=16, blank=True, default="")
+
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["ambassador", "event", "shift_label"],
+                name="uniq_payable_mileage_ba_event_shift",
+            )
+        ]
+        indexes = [
+            models.Index(fields=["event", "-created_at"]),
+            models.Index(fields=["ambassador", "-created_at"]),
+        ]
+
+    def __str__(self):
+        return (
+            f"payable-miles {self.ambassador_id}@{self.event_id} "
+            f"{self.payable_miles}mi"
+        )
+
+
 class SamplingStop(models.Model):
     """One place a roaming BA actually sampled, logged in the moment.
 

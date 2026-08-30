@@ -188,6 +188,17 @@ class Tenant(Asyncable, models.Model):
     # there is ONE list rather than two that drift apart. This is the override
     # for brands whose template doesn't carry one.
     checkin_markets = models.JSONField(null=True, blank=True)
+    # Feel Free (and similar roaming brands): market → storage unit addresses
+    # used for payable mileage. When non-empty, the standing check-in asks
+    # "Did you start at storage?" + sampling stops (Places), computes driving
+    # miles, and writes them into the recap Mileage field on submit.
+    #
+    #   [{"market": "Austin, TX",
+    #     "address": "6330 Harold Ct Austin, Texas TX 78721",
+    #     "lat": 30.27, "lng": -97.68}, ...]
+    #
+    # lat/lng are optional (geocoded on first use). Empty / null = feature off.
+    checkin_storage_units = models.JSONField(null=True, blank=True)
     # Which event type the standing link stamps on the events it opens — and
     # therefore WHICH RECAP FORM a BA gets. Without this the walk-in path falls
     # back to the tenant's lowest-id EventType, which is arbitrary: Liquid Death
