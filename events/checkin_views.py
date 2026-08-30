@@ -601,7 +601,15 @@ def public_checkin_clock(request: HttpRequest, code: str) -> HttpResponse:
     )
     if source_name == "clock_in" and state.get("state") == "clocked_in":
         return JsonResponse({"clock": state, "alreadyIn": True})
-    if source_name == "clock_in" and idem_key and cache.get(idem_key):
+    # Idempotency only short-circuits a *retry of the same open shift*.
+    # After clock-out (Feel Free second shift), the first shift's key can
+    # still sit in cache for 24h — replaying it must NOT block a new punch.
+    if (
+        source_name == "clock_in"
+        and idem_key
+        and cache.get(idem_key)
+        and state.get("state") == "clocked_in"
+    ):
         return JsonResponse({"clock": state, "alreadyIn": True, "replayed": True})
 
     try:
