@@ -133,7 +133,12 @@ def test_row_schedule_for_me_and_non_active_yes():
     assert values["Cases to Ship"] == "12"
 
 
-def test_row_from_values_keeps_rate_blank():
+def test_row_from_values_skips_ops_columns_with_none():
+    """Ops columns must be None (skip), never "" (clear).
+
+    Writing empty string into Rate/Notes/BA Name can clear those cells — and
+    if the column is array-driven, wipe the formula for every existing row.
+    """
     header = [
         "State",
         "Store Name",
@@ -151,8 +156,8 @@ def test_row_from_values_keeps_rate_blank():
     row = _row_from_values(header, values)
     assert row[0] == "FL"
     assert row[1] == "Party liquor"
-    assert row[2] == ""
-    assert row[3] == ""
+    assert row[2] is None
+    assert row[3] is None
     assert row[4] == "abc"
     assert row[5] == "a@b.com"
 
@@ -232,7 +237,7 @@ def test_append_writes_new_row_and_is_idempotent_on_uuid():
     body_row = append.call_args.kwargs["body"]["values"][0]
     assert body_row[0] == "FL"
     assert body_row[1] == "IN AND OUT LIQUORS"
-    assert body_row[2] == ""
+    assert body_row[2] is None  # Rate — skip, never clear
     assert str(body_row[3]).endswith("1980")
     assert append.call_args.kwargs["spreadsheetId"] == TORCH_PUBLIC_FORM_SHEET_ID
 

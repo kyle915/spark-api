@@ -258,16 +258,24 @@ def _ensure_extra_headers(svc, sheet_id: str, tab: str | None) -> list[str]:
     return existing + missing
 
 
-def _row_from_values(header: list[str], values: dict[str, str]) -> list[str]:
-    out: list[str] = []
+def _row_from_values(
+    header: list[str], values: dict[str, str]
+) -> list[str | None]:
+    """Map header → cells for one write.
+
+    Columns we do not own (Rate, BA Name, Notes, …) are ``None``, not ``""``.
+    Sheets treats empty string as "clear this cell" and a clear inside an
+    ARRAYFORMULA / spilled column wipes that formula for every existing row.
+    ``None`` means skip — leave the cell alone.
+    """
+    out: list[str | None] = []
     for name in header:
-        key = name
-        if key in values:
-            out.append(values[key])
+        if name in values:
+            out.append(values[name])
             continue
         # Client header has a trailing space on "Requested? " / "Shipped? ".
         stripped = name.strip()
-        matched = ""
+        matched: str | None = None
         for vk, vv in values.items():
             if vk.strip() == stripped:
                 matched = vv
@@ -364,8 +372,16 @@ def _insert_index_for_date(dated, target):
     return None  # belongs at the end
 
 
-def _insert_row_at(svc, sheet_id: str, tab, gid: int, index: int, row: list[str]):
-    """Open a blank row at `index` and write `row` into it."""
+def _insert_row_at(
+    svc, sheet_id: str, tab, gid: int, index: int, row: list[str | None]
+):
+    """Open a blank row at `index` and write `row` into it.
+
+    ``inheritFromBefore`` stays False: copying the previous row's values and
+    then writing empties over Rate / Notes / BA Name is exactly how we used to
+    clear ops copy on insert. New row starts blank; ``None`` cells are skipped
+    so we never punch holes in column formulas that feed existing rows.
+    """
     svc.spreadsheets().batchUpdate(
         spreadsheetId=sheet_id,
         body={
@@ -378,7 +394,7 @@ def _insert_row_at(svc, sheet_id: str, tab, gid: int, index: int, row: list[str]
                             "startIndex": index - 1,
                             "endIndex": index,
                         },
-                        "inheritFromBefore": True,
+                        "inheritFromBefore": False,
                     }
                 }
             ]
