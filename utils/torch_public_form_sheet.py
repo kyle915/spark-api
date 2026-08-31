@@ -41,10 +41,13 @@ TORCH_PUBLIC_FORM_SHEET_ID = "1kAvZhy2B9HoeSS-qjKXve8JWUV1oBxDqnhs1-7dQUYw"
 TORCH_PUBLIC_FORM_GID = 0
 SERVICE_ACCOUNT_EMAIL = "spark-api-new-sa@spark-479222.iam.gserviceaccount.com"
 
-# Date-ordered insertion is OFF. It shifts every row below the insert, which
-# corrupts a formula tab keyed on ROW() — and did. Re-enable only once the
-# writer targets a plain-values tab that nothing else indexes positionally.
-ALLOW_DATE_ORDER_INSERT = False
+# Date-ordered insertion is ON again. It was disabled because inserting a row
+# shifts every row below it, which corrupts a tab whose cells are INDEX/MATCH
+# formulas keyed on ROW() — and did exactly that. The tab has since been merged
+# and flattened to plain values, so there is no positional lookup left to
+# break, and _tab_is_formula_driven still refuses the write if a formula ever
+# reappears there.
+ALLOW_DATE_ORDER_INSERT = True
 
 # Extra columns appended after the client's existing retail-schedule header.
 # Never rename Rate / BA Name / Recap — those stay ops-owned and blank.
