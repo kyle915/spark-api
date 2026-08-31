@@ -149,6 +149,57 @@ class TestPayableMileage(AmbassadorsGraphQLTestCase):
         assert call_pts[0] == (STOP_A["lat"], STOP_A["lng"])
         assert STORAGE["lat"] not in [p[0] for p in call_pts]
 
+    def test_no_mileage_waives_zero_claim(self):
+        payload, err = pm.save_payable_mileage_claim(
+            ambassador=self.ba,
+            event=self.event,
+            started_from_storage=True,
+            stops=[],
+            no_mileage=True,
+        )
+        assert err is None
+        assert payload["payableMiles"] == 0.0
+        assert payload["routeSource"] == "waived"
+        assert payload["completed"] is True
+        assert payload["stops"] == []
+
+    def test_force_new_labels_second_shift_claim(self):
+        with (
+            patch("utils.map_matching.google_directions_route_miles", return_value=None),
+            patch("utils.map_matching.osrm_route_waypoints", return_value=ROUTED),
+            patch(
+                "ambassadors.checkin_web.resolve_force_new_shift_label",
+                return_value="Second shift",
+            ),
+        ):
+            payload, err = pm.save_payable_mileage_claim(
+                ambassador=self.ba,
+                event=self.event,
+                started_from_storage=False,
+                stops=[STOP_A, STOP_B],
+                force_new=True,
+            )
+        assert err is None
+        assert payload["shiftLabel"] == "Second shift"
+
+    def test_get_claim_falls_back_to_newest_when_label_mismatches(self):
+        with (
+            patch("utils.map_matching.google_directions_route_miles", return_value=None),
+            patch("utils.map_matching.osrm_route_waypoints", return_value=ROUTED),
+        ):
+            pm.save_payable_mileage_claim(
+                ambassador=self.ba,
+                event=self.event,
+                started_from_storage=False,
+                stops=[STOP_A, STOP_B],
+                shift_label="",
+            )
+        claim = pm.get_claim_for_submit(
+            ambassador=self.ba, event=self.event, shift_label="Second shift"
+        )
+        assert claim is not None
+        assert float(claim.payable_miles) == 12.4
+
     def test_no_requires_two_stops(self):
         payload, err = pm.save_payable_mileage_claim(
             ambassador=self.ba,

@@ -361,13 +361,53 @@ def save_payable_mileage_claim(
     stops: list,
     shift_label: str = "",
     storage_market: str | None = None,
+    force_new: bool = False,
+    no_mileage: bool = False,
 ) -> tuple[dict | None, str | None]:
-    """Upsert the BA's itinerary for this shift. Returns (payload, error)."""
+    """Upsert the BA's itinerary for this shift. Returns (payload, error).
+
+    ``no_mileage``: BA explicitly waived reimbursable miles (0.00). Lets them
+    reach the recap when they didn't drive / have nothing to claim.
+
+    ``force_new``: align shift_label with recap submit (late / second filing),
+    so a leftover-day "file another" claim isn't saved unlabeled while submit
+    looks for "Second shift".
+    """
+    from ambassadors.checkin_web import resolve_force_new_shift_label
     from ambassadors.models import PayableMileageClaim
 
     tenant = getattr(event, "tenant", None)
     if tenant is None or not payable_mileage_enabled(tenant):
         return None, "Mileage capture isn't set up for this brand."
+
+    label = resolve_force_new_shift_label(
+        tenant=tenant,
+        event=event,
+        ambassador=ambassador,
+        force_new=bool(force_new),
+        shift_label=shift_label,
+    )[:64]
+
+    if no_mileage:
+        defaults = {
+            "started_from_storage": False,
+            "storage_market": "",
+            "storage_address": "",
+            "storage_lat": None,
+            "storage_lng": None,
+            "stops": [],
+            "payable_miles": Decimal("0.00"),
+            "route": None,
+            "route_source": "waived",
+            "tenant": tenant,
+        }
+        claim, _created = PayableMileageClaim.objects.update_or_create(
+            ambassador=ambassador,
+            event=event,
+            shift_label=label,
+            defaults=defaults,
+        )
+        return claim_payload(claim), None
 
     cleaned: list[dict] = []
     for raw in stops or []:
@@ -406,7 +446,6 @@ def save_payable_mileage_claim(
         stops=cleaned,
     )
 
-    label = (shift_label or "").strip()[:64]
     defaults = {
         "started_from_storage": bool(started_from_storage),
         "storage_market": (storage or {}).get("market", "") if storage else "",
@@ -426,7 +465,6 @@ def save_payable_mileage_claim(
         defaults=defaults,
     )
     return claim_payload(claim), None
-
 
 def claim_payload(claim) -> dict:
     return {
@@ -484,20 +522,25 @@ def payable_mileage_state(*, ambassador, event, shift_label: str = "") -> dict:
 
 
 def get_claim_for_submit(*, ambassador, event, shift_label: str = ""):
+    """Claim for this BA + event + shift.
+
+    Exact label first. If a late / leftover filing saved under a different
+    label (or blank) than submit resolves, fall back to the newest claim for
+    this BA+event so miles still inject and they aren't bounced to a loop.
+    """
     from ambassadors.models import PayableMileageClaim
 
     label = (shift_label or "").strip()[:64]
     claim = PayableMileageClaim.objects.filter(
         ambassador=ambassador, event=event, shift_label=label
     ).first()
-    if claim is None and not label:
+    if claim is None:
         claim = (
             PayableMileageClaim.objects.filter(ambassador=ambassador, event=event)
             .order_by("-id")
             .first()
         )
     return claim
-
 
 class NeedsPayableMileage(Exception):
     """Raised when Feel Free recap submit is missing the itinerary claim."""
