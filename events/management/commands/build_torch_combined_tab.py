@@ -138,9 +138,18 @@ class Command(BaseCommand):
                 if n == 1 or not any(str(c).strip() for c in row):
                     continue
                 padded = list(row) + [""] * (width - len(row))
+                # Date + Address + Start Time. Store NAME is deliberately not
+                # in the key: the tabs spell the same store differently
+                # ("Castroville" vs "LOL Liquors - Castroville", "Cibolo" vs
+                # "Sip & Smoke Liquors - Cibolo"), so including it produced
+                # 1,519 duplicate pairs of the same activation.
+                #
+                # Start Time IS in the key. Dropping it too would collapse 113
+                # genuine same-store, same-day double shifts (a 12p-3p and a
+                # 3p-6p at one address) into one row and silently lose half a
+                # day's work.
                 key = (
                     _norm_date(padded[2]),
-                    _norm(padded[3]),
                     _norm(padded[6]),
                     _norm(padded[4]),
                 )
@@ -170,6 +179,16 @@ class Command(BaseCommand):
                         # the only merge decision made without a human.
                         entry["row"][i] = padded[i]
                         entry["filled"] += 1
+                        continue
+                    if a != b and i == 3:
+                        # Store Name: the tabs use short and banner-qualified
+                        # spellings of one store. Keep the longer, which is the
+                        # more identifiable one, and do not flag it — this is a
+                        # known naming difference, not a data disagreement, and
+                        # flagging it would bury the real conflicts under ~1,500
+                        # rows of noise.
+                        if len(b) > len(a):
+                            entry["row"][i] = padded[i]
                         continue
                     if a != b and i < CORE:
                         # Only the descriptive columns are worth flagging; ops
