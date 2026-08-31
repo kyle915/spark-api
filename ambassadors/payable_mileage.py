@@ -35,30 +35,44 @@ def is_mileage_custom_field(name: str | None) -> bool:
     return bool(MILEAGE_FIELD_RE.search(n))
 
 # Canonical Feel Free storage roster (seeded onto the tenant).
+# lat/lng are Extra Space / facility pins so YES routes never depend on
+# a live Photon hit at save time.
 FEEL_FREE_STORAGE_UNITS: list[dict] = [
     {
         "market": "Miami, FL",
         "address": "13101 NE 16th Ave Miami, Florida FL 33161",
+        "lat": 25.8970112,
+        "lng": -80.1658886,
     },
     {
         "market": "Ft. Lauderdale, FL",
         "address": "4551 W Sunrise Blvd, Plantation, FL, 33313",
+        "lat": 26.1360019,
+        "lng": -80.2106518,
     },
     {
         "market": "Tampa, FL",
         "address": "10700 US Highway 19 N Pinellas Park, Florida FL 33782",
+        "lat": 27.8773293,
+        "lng": -82.7109289,
     },
     {
         "market": "Austin, TX",
         "address": "6330 Harold Ct Austin, Texas TX 78721",
+        "lat": 30.2677580,
+        "lng": -97.6715621,
     },
     {
         "market": "San Antonio, TX",
         "address": "3440 Fredericksburg Road, San Antonio TX 78201",
+        "lat": 29.4753003,
+        "lng": -98.5367260,
     },
     {
         "market": "Phoenix, AZ",
         "address": "1356 E Baseline Rd, Mesa, AZ, 85204",
+        "lat": 33.3792251,
+        "lng": -111.8015223,
     },
 ]
 
@@ -73,11 +87,18 @@ def payable_mileage_enabled(tenant) -> bool:
 
 
 def tenant_storage_units(tenant) -> list[dict]:
-    """Normalized storage unit list for the check-in page / matcher."""
+    """Normalized storage unit list for the check-in page / matcher.
+
+    Already-seeded tenants may lack lat/lng. Fill from the canonical roster
+    when market (or address) matches so YES routes don't depend on Photon.
+    """
     raw = getattr(tenant, "checkin_storage_units", None) or []
     out: list[dict] = []
     if not isinstance(raw, list):
         return out
+    canon_by_market = {
+        _norm_market(u["market"]): u for u in FEEL_FREE_STORAGE_UNITS
+    }
     for row in raw:
         if not isinstance(row, dict):
             continue
@@ -92,6 +113,11 @@ def tenant_storage_units(tenant) -> list[dict]:
                     entry[key] = float(row[key])
             except (TypeError, ValueError):
                 pass
+        if "lat" not in entry or "lng" not in entry:
+            canon = canon_by_market.get(_norm_market(market))
+            if canon and canon.get("lat") is not None and canon.get("lng") is not None:
+                entry["lat"] = float(canon["lat"])
+                entry["lng"] = float(canon["lng"])
         out.append(entry)
     return out
 
@@ -439,12 +465,28 @@ def save_payable_mileage_claim(
                     "Ask your lead, or pick the market that matches your storage.",
                 )
         storage = ensure_storage_coords(storage)
+        if not _coords_of(storage):
+            return (
+                None,
+                "We couldn't locate that storage unit on the map. "
+                "Pick the storage market again, or tap “I don't have any mileage” "
+                "if you didn't drive from storage.",
+            )
 
     miles, source, route = compute_payable_miles(
         started_from_storage=bool(started_from_storage),
         storage=storage if started_from_storage else None,
         stops=cleaned,
     )
+    # A completed claim with 0mi and no route usually means geocode / routing
+    # collapsed — don't pretend reimbursement is settled.
+    if source == "none" and miles == Decimal("0.00"):
+        return (
+            None,
+            "We couldn't calculate driving miles for those stops. "
+            "Check each stop was picked from suggestions, or tap "
+            "“I don't have any mileage” if you have nothing to claim.",
+        )
 
     defaults = {
         "started_from_storage": bool(started_from_storage),
@@ -524,23 +566,15 @@ def payable_mileage_state(*, ambassador, event, shift_label: str = "") -> dict:
 def get_claim_for_submit(*, ambassador, event, shift_label: str = ""):
     """Claim for this BA + event + shift.
 
-    Exact label first. If a late / leftover filing saved under a different
-    label (or blank) than submit resolves, fall back to the newest claim for
-    this BA+event so miles still inject and they aren't bounced to a loop.
+    Exact ``shift_label`` only — including blank for the first shift. Never
+    silently inject another shift's miles when the label doesn't match.
     """
     from ambassadors.models import PayableMileageClaim
 
     label = (shift_label or "").strip()[:64]
-    claim = PayableMileageClaim.objects.filter(
+    return PayableMileageClaim.objects.filter(
         ambassador=ambassador, event=event, shift_label=label
     ).first()
-    if claim is None:
-        claim = (
-            PayableMileageClaim.objects.filter(ambassador=ambassador, event=event)
-            .order_by("-id")
-            .first()
-        )
-    return claim
 
 class NeedsPayableMileage(Exception):
     """Raised when Feel Free recap submit is missing the itinerary claim."""
