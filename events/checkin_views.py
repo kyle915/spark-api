@@ -1042,17 +1042,32 @@ def public_checkin_payable_mileage(request: HttpRequest, code: str) -> HttpRespo
         return err
     event, ambassador = loaded
 
+    no_mileage_raw = data.get("noMileage")
+    if no_mileage_raw is None:
+        no_mileage_raw = data.get("no_mileage")
+    no_mileage = bool(no_mileage_raw) if not isinstance(
+        no_mileage_raw, str
+    ) else no_mileage_raw.strip().lower() in ("1", "true", "yes", "y")
+
+    force_new_raw = data.get("forceNew")
+    if force_new_raw is None:
+        force_new_raw = data.get("force_new")
+    force_new = bool(force_new_raw) if not isinstance(
+        force_new_raw, str
+    ) else force_new_raw.strip().lower() in ("1", "true", "yes", "y")
+
     started_raw = data.get("startedFromStorage")
     if started_raw is None:
         started_raw = data.get("started_from_storage")
-    if started_raw is None:
+    if started_raw is None and not no_mileage:
         return _err("Tell us whether you started at the storage unit (yes or no).")
-    started = bool(started_raw) if not isinstance(started_raw, str) else started_raw.strip().lower() in (
-        "1",
-        "true",
-        "yes",
-        "y",
-    )
+    started = False
+    if started_raw is not None:
+        started = (
+            bool(started_raw)
+            if not isinstance(started_raw, str)
+            else started_raw.strip().lower() in ("1", "true", "yes", "y")
+        )
 
     stops = data.get("stops") or []
     if not isinstance(stops, list):
@@ -1076,6 +1091,8 @@ def public_checkin_payable_mileage(request: HttpRequest, code: str) -> HttpRespo
             stops=stops,
             shift_label=shift_label.strip(),
             storage_market=str(storage_market or "").strip() or None,
+            force_new=force_new,
+            no_mileage=no_mileage,
         )
     except Exception:  # noqa: BLE001 — never 500 the BA mid-shift
         logger.exception("payable-mileage save failed code=%s", code)
@@ -1087,7 +1104,7 @@ def public_checkin_payable_mileage(request: HttpRequest, code: str) -> HttpRespo
             "payableMileage": payable_mileage_state(
                 ambassador=ambassador,
                 event=event,
-                shift_label=shift_label.strip(),
+                shift_label=(payload.get("shiftLabel") or shift_label).strip(),
             ),
             "claim": payload,
         }

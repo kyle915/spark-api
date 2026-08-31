@@ -243,12 +243,13 @@ def google_directions_route_miles(
 
     origin = f"{pts[0][0]:.6f},{pts[0][1]:.6f}"
     destination = f"{pts[-1][0]:.6f},{pts[-1][1]:.6f}"
+    # No departure_time — reimbursement wants the stable recommended route
+    # distance, not a traffic-aware alternate that changes for late filings.
     params: dict = {
         "origin": origin,
         "destination": destination,
         "mode": "driving",
         "units": "metric",
-        "departure_time": "now",  # traffic-aware duration; distance still road miles
         "key": key,
     }
     if len(pts) > 2:
