@@ -308,6 +308,32 @@ class Command(BaseCommand):
 
         out_header = list(header) + ["Sources", "Conflict?", "Conflict detail"]
         body = [out_header]
+
+        # Chronological, by PARSED date. A Sheets text sort on "Sep 6, 2026"
+        # orders alphabetically -- April, August, December -- which looks
+        # sorted and isn't. Rows whose date won't parse keep their relative
+        # order and go last rather than being silently reordered into the
+        # middle of the schedule.
+        import datetime as _dt
+
+        def _sort_key(k):
+            raw = str(combined[k]["row"][2] or "").strip()
+            for fmt in ("%b %d, %Y", "%B %d, %Y", "%m/%d/%Y", "%Y-%m-%d", "%m/%d/%y"):
+                try:
+                    return (0, _dt.datetime.strptime(raw, fmt).date())
+                except ValueError:
+                    continue
+            return (1, _dt.date.max)
+
+        order = sorted(order, key=_sort_key)
+        undated = sum(1 for k in order if _sort_key(k)[0] == 1)
+        if undated:
+            self.stdout.write(
+                self.style.WARNING(
+                    f"\n  {undated} row(s) have no parseable date — placed last."
+                )
+            )
+
         for k in order:
             e = combined[k]
             detail = "; ".join(
