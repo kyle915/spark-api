@@ -170,7 +170,10 @@ class TestCheckinClientClockedInAt(AmbassadorsGraphQLTestCase):
         assert out.status_code == 200
         assert out.json()["clock"]["state"] == "clocked_out"
 
-        afternoon = dj_tz.now() - _dt.timedelta(minutes=5)
+        # Clock-out stamps server now. Afternoon must be *after* that punch —
+        # clock_state orders by clock_time, so an earlier second-shift stamp
+        # would leave the BA looking clocked_out even after a successful in.
+        afternoon = dj_tz.now() + _dt.timedelta(seconds=5)
         second = self._clock(
             clockedInAt=afternoon.isoformat(),
             idempotencyKey="shift1-offline",  # stale key from morning queue
