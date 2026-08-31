@@ -182,7 +182,7 @@ class TestPayableMileage(AmbassadorsGraphQLTestCase):
         assert err is None
         assert payload["shiftLabel"] == "Second shift"
 
-    def test_get_claim_falls_back_to_newest_when_label_mismatches(self):
+    def test_get_claim_requires_exact_shift_label(self):
         with (
             patch("utils.map_matching.google_directions_route_miles", return_value=None),
             patch("utils.map_matching.osrm_route_waypoints", return_value=ROUTED),
@@ -194,8 +194,14 @@ class TestPayableMileage(AmbassadorsGraphQLTestCase):
                 stops=[STOP_A, STOP_B],
                 shift_label="",
             )
+        assert (
+            pm.get_claim_for_submit(
+                ambassador=self.ba, event=self.event, shift_label="Second shift"
+            )
+            is None
+        )
         claim = pm.get_claim_for_submit(
-            ambassador=self.ba, event=self.event, shift_label="Second shift"
+            ambassador=self.ba, event=self.event, shift_label=""
         )
         assert claim is not None
         assert float(claim.payable_miles) == 12.4
@@ -334,3 +340,58 @@ class TestPayableMileage(AmbassadorsGraphQLTestCase):
         assert PayableMileageClaim.objects.filter(
             ambassador=self.ba, event=self.event
         ).count() == 1
+
+    def test_yes_refuses_when_storage_coords_missing(self):
+        self.tenant.checkin_storage_units = [
+            {
+                "market": "Austin, TX",
+                "address": "6330 Harold Ct Austin, Texas TX 78721",
+                # no lat/lng — and not in canon if we use a fake market
+            }
+        ]
+        self.tenant.save(update_fields=["checkin_storage_units"])
+        # Use a market that won't enrich from FEEL_FREE roster.
+        self.tenant.checkin_storage_units = [
+            {"market": "Nowhere, ZZ", "address": "1 Fake St Nowhere ZZ 00000"}
+        ]
+        self.tenant.save(update_fields=["checkin_storage_units"])
+        with patch(
+            "ambassadors.payable_mileage.ensure_storage_coords",
+            side_effect=lambda u: u,
+        ):
+            payload, err = pm.save_payable_mileage_claim(
+                ambassador=self.ba,
+                event=self.event,
+                started_from_storage=True,
+                stops=[STOP_A],
+                storage_market="Nowhere, ZZ",
+            )
+        assert payload is None
+        assert err and "couldn't locate" in err.lower()
+
+    def test_refuses_silent_zero_when_route_source_none(self):
+        with patch(
+            "ambassadors.payable_mileage.compute_payable_miles",
+            return_value=(Decimal("0.00"), "none", None),
+        ):
+            payload, err = pm.save_payable_mileage_claim(
+                ambassador=self.ba,
+                event=self.event,
+                started_from_storage=False,
+                stops=[STOP_A, STOP_B],
+            )
+        assert payload is None
+        assert err and "couldn't calculate" in err.lower()
+
+    def test_tenant_units_enrich_coords_from_canon(self):
+        self.tenant.checkin_storage_units = [
+            {
+                "market": "Austin, TX",
+                "address": "6330 Harold Ct Austin, Texas TX 78721",
+            }
+        ]
+        self.tenant.save(update_fields=["checkin_storage_units"])
+        units = pm.tenant_storage_units(self.tenant)
+        assert len(units) == 1
+        assert units[0].get("lat") is not None
+        assert units[0].get("lng") is not None
