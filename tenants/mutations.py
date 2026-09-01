@@ -285,7 +285,14 @@ class MagicLinkLoginResponse:
 
 @strawberry.input
 class GoogleSocialAuthInput(SparkGraphQLInput):
-    access_token: str
+    """Web Google SSO.
+
+    Prefer ``id_token`` (GIS credential / Sign in with Google button).
+    ``access_token`` remains for the older implicit popup flow.
+    """
+
+    access_token: str | None = None
+    id_token: str | None = None
 
 
 @strawberry.input
@@ -502,6 +509,7 @@ class AmbassadorsCustomRegister:
     ) -> SocialAuthResponse:
         return await BaseSocialAuthMutations.social_auth_google(
             access_token=input.access_token,
+            id_token=input.id_token,
             role_id=ROLE_ID.Ambassadors,
             client_mutation_id=input.client_mutation_id,
         )
@@ -546,6 +554,7 @@ class SparkCustomRegister:
     ) -> SocialAuthResponse:
         return await BaseSocialAuthMutations.social_auth_google(
             access_token=input.access_token,
+            id_token=input.id_token,
             role_id=ROLE_ID.SparkAdmin,
             client_mutation_id=input.client_mutation_id,
         )
@@ -1988,6 +1997,7 @@ class ClientsCustomRegister:
     ) -> SocialAuthResponse:
         return await BaseSocialAuthMutations.social_auth_google(
             access_token=input.access_token,
+            id_token=input.id_token,
             client_mutation_id=input.client_mutation_id,
         )
 

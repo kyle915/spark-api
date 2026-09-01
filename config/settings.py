@@ -527,10 +527,12 @@ APPLE_OAUTH_ISSUER = env(
 # so there's no secret to leak by hardcoding them.
 _env_google_audiences = env.list("GOOGLE_OAUTH_AUDIENCES", default=[])
 _required_google_audiences = [
-    # Web client (legacy admin app + Continue-with-Google on the web
-    # sign-in flow). Google id_tokens minted by these flows carry the
-    # WEB client as the `aud` claim.
+    # Web client (legacy Continue-with-Google / GIS credential aud).
     "490085168610-ork3r7pnev7e9ksmkf1osp7v6c34g851.apps.googleusercontent.com",
+    # Web client currently baked into admin/client hosting builds
+    # (VITE_GOOGLE_CLIENT_ID secret). id_tokens from that GIS client
+    # carry this aud — missing it breaks Sign in with Google for everyone.
+    "490085168610-3569fdjqq8e7kqpk2a25d2acv1k9lk0p.apps.googleusercontent.com",
     # iOS client (Spark BA mobile app, bundle id co.igniteproductions.spark).
     # Google id_tokens minted by Sign-in-with-Google on iOS carry the
     # iOS client as the `aud` claim. Missing this gives:
