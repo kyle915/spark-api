@@ -60,6 +60,36 @@ jobs:
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
 
+      # A cancelled traffic-route left a revision created but never
+      # Ready. Subsequent deploys then failed health against that
+      # stuck latestCreatedRevision. Drop non-serving unhealthy
+      # revisions so --source can mint a clean one.
+      - name: Drop stuck non-serving revisions
+        run: |
+          set +e
+          gcloud run revisions list \
+            --service="$CLOUD_RUN_SERVICE" \
+            --region="$GCP_REGION" \
+            --project="$GCP_PROJECT_ID" \
+            --format='csv[no-heading](metadata.name,status.conditions[0].status)' \
+            | while IFS=, read -r name status; do
+                [ -z "$name" ] && continue
+                pct=$(gcloud run services describe "$CLOUD_RUN_SERVICE" \
+                  --region="$GCP_REGION" --project="$GCP_PROJECT_ID" \
+                  --format=json \
+                  | python3 -c "import json,sys; d=json.load(sys.stdin); rev=sys.argv[1]; print(sum(int(t.get('percent') or 0) for t in (d.get('status') or {}).get('traffic') or [] if t.get('revisionName')==rev))" "$name")
+                if [ "${pct:-0}" != "0" ]; then
+                  echo "keep serving $name (${pct}%)"
+                  continue
+                fi
+                if [ "$status" != "True" ]; then
+                  echo "deleting stuck revision $name (status=$status)"
+                  gcloud run revisions delete "$name" \
+                    --region="$GCP_REGION" --project="$GCP_PROJECT_ID" --quiet
+                fi
+              done
+          set -e
+
       # `gcloud run deploy --source .` zips the source, ships to Cloud
       # Build, builds the Dockerfile, and updates the service while
       # preserving env vars, secrets, and Cloud SQL connections.
@@ -70,13 +100,18 @@ jobs:
       # --min-instances 1 keeps one warm container so the first
       # morning click is not a scale-from-zero stall. --quiet skips
       # the "deploy to <env>?" interactive prompt.
+      # --revision-suffix forces a unique revision so a prior
+      # failed/cancelled create cannot block the next deploy.
       - name: Deploy to Cloud Run
+        env:
+          RUN_ID: ${{ github.run_id }}
         run: |
           gcloud run deploy "$CLOUD_RUN_SERVICE" \
             --source . \
             --region "$GCP_REGION" \
             --project "$GCP_PROJECT_ID" \
             --min-instances 1 \
+            --revision-suffix="gha${RUN_ID}" \
             --quiet
 
       # Schema migrate + Girl Beer template repair once per deploy.
