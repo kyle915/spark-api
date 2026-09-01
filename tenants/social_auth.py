@@ -83,35 +83,71 @@ async def authenticate_or_create_social_user(
 class BaseSocialAuthMutations:
     @staticmethod
     async def social_auth_google(
-        access_token: str,
+        access_token: str | None = None,
+        id_token: str | None = None,
         role_id: int | None = None,
         tenant_id: int | None = None,
         client_mutation_id: strawberry.ID | None = None,
     ) -> SocialAuthResponse:
-        """
-        Authenticate with Google OAuth access token.
-        Returns JWT tokens compatible with strawberry-django-auth.
+        """Authenticate with a Google GIS id_token (preferred) or access token.
+
+        Web Sign-in-with-Google should send the GIS credential JWT
+        (``id_token``). The older implicit popup still sends
+        ``access_token`` and we resolve email via Google's userinfo API.
         """
         try:
-            import httpx
+            email = ""
+            first_name = ""
+            last_name = ""
 
-            # Fetch user info from Google
-            async with httpx.AsyncClient() as client:
-                response = await client.get(
-                    'https://www.googleapis.com/oauth2/v2/userinfo',
-                    headers={'Authorization': f'Bearer {access_token}'}
+            id_tok = (id_token or "").strip()
+            access = (access_token or "").strip()
+
+            if id_tok:
+                from tenants.oauth import (
+                    OAuthVerificationError,
+                    verify_google_id_token,
                 )
 
-                if response.status_code != 200:
+                try:
+                    identity = await sync_to_async(verify_google_id_token)(id_tok)
+                except OAuthVerificationError as exc:
                     return SocialAuthResponse(
                         success=False,
-                        message="Invalid Google access token",
+                        message=str(exc) or "Invalid Google id token",
                         client_mutation_id=client_mutation_id,
                     )
+                email = identity.email
+                first_name = identity.first_name or ""
+                last_name = identity.last_name or ""
+            elif access:
+                import httpx
 
-                user_info = response.json()
+                async with httpx.AsyncClient() as client:
+                    response = await client.get(
+                        "https://www.googleapis.com/oauth2/v2/userinfo",
+                        headers={"Authorization": f"Bearer {access}"},
+                    )
 
-            email = user_info.get('email')
+                    if response.status_code != 200:
+                        return SocialAuthResponse(
+                            success=False,
+                            message="Invalid Google access token",
+                            client_mutation_id=client_mutation_id,
+                        )
+
+                    user_info = response.json()
+
+                email = (user_info.get("email") or "").strip()
+                first_name = user_info.get("given_name", "") or ""
+                last_name = user_info.get("family_name", "") or ""
+            else:
+                return SocialAuthResponse(
+                    success=False,
+                    message="Missing Google credential",
+                    client_mutation_id=client_mutation_id,
+                )
+
             if not email:
                 return SocialAuthResponse(
                     success=False,
@@ -129,18 +165,15 @@ class BaseSocialAuthMutations:
                     client_mutation_id=client_mutation_id,
                 )
 
-            # Authenticate or create user
             user, is_new = await authenticate_or_create_social_user(
                 email=email,
-                first_name=user_info.get('given_name', ''),
-                last_name=user_info.get('family_name', ''),
-                provider='google',
+                first_name=first_name,
+                last_name=last_name,
+                provider="google",
                 role_id=role_id,
                 tenant_id=tenant_id,
             )
 
-            # Generate JWT tokens using gqlauth
-            # token = await sync_to_async(get_token)(user, "authentication")
             token = TokenType.from_user(user)
             refresh_token_obj = await sync_to_async(RefreshToken.from_user)(user)
             refresh_token = refresh_token_obj.token
