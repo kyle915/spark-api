@@ -229,7 +229,8 @@ def test_append_writes_new_row_and_is_idempotent_on_uuid():
         "sheets": [{"properties": {"title": "Retail Schedule", "sheetId": 0}}]
     }
 
-    with patch("utils.torch_public_form_sheet._service", return_value=svc):
+    with patch("utils.torch_public_form_sheet.TORCH_SHEET_WRITES_ENABLED", True), \
+         patch("utils.torch_public_form_sheet._service", return_value=svc):
         assert append_torch_public_form_row(req, "keee-torch-thc") is True
 
     append = values_api.append
@@ -247,7 +248,8 @@ def test_append_writes_new_row_and_is_idempotent_on_uuid():
         {"values": [[str(req.uuid)]]},
     ]
     values_api.append.reset_mock()
-    with patch("utils.torch_public_form_sheet._service", return_value=svc):
+    with patch("utils.torch_public_form_sheet.TORCH_SHEET_WRITES_ENABLED", True), \
+         patch("utils.torch_public_form_sheet._service", return_value=svc):
         assert append_torch_public_form_row(req, "keee-torch-thc") is False
     values_api.append.assert_not_called()
 
@@ -277,7 +279,8 @@ def test_signed_in_torch_request_appends_without_a_form_slug():
         "sheets": [{"properties": {"title": "Retail Schedule", "sheetId": 0}}]
     }
 
-    with patch("utils.torch_public_form_sheet._service", return_value=svc):
+    with patch("utils.torch_public_form_sheet.TORCH_SHEET_WRITES_ENABLED", True), \
+         patch("utils.torch_public_form_sheet._service", return_value=svc):
         assert append_torch_request_row(req) is True
     values_api.append.assert_called_once()
 
@@ -382,3 +385,16 @@ def test_write_is_refused_on_a_formula_tab():
     with patch("utils.torch_public_form_sheet._service", return_value=svc):
         assert append_torch_request_row(req) is False
     svc.spreadsheets.return_value.values.return_value.append.assert_not_called()
+
+
+def test_kill_switch_blocks_every_write_path():
+    """One flag has to stop all of them, or "writes are off" is a lie."""
+    import utils.torch_public_form_sheet as T
+
+    req = _request()
+    with patch.object(T, "TORCH_SHEET_WRITES_ENABLED", False):
+        with patch("utils.torch_public_form_sheet._service") as svc:
+            assert T.append_torch_public_form_row(req, "keee-torch-thc") is False
+            assert T.append_torch_request_row(req) is False
+            # Never even asked Sheets for credentials.
+            svc.assert_not_called()

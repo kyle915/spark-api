@@ -49,6 +49,18 @@ SERVICE_ACCOUNT_EMAIL = "spark-api-new-sa@spark-479222.iam.gserviceaccount.com"
 # reappears there.
 ALLOW_DATE_ORDER_INSERT = True
 
+# KILL SWITCH — Spark writes NOTHING to the Torch workbook while this is False.
+#
+# Turned off at Kyle's request on 2026-08-31 after repeated corruption of the
+# client's schedule. It gates the single writer both entry points funnel
+# through, so it stops the public-form append, the signed-in append, AND the
+# ids-based backfill in one place. Nothing partial: a request submitted while
+# this is off simply never reaches the sheet, and there is no queue that will
+# quietly flush later.
+#
+# Flipping it back to True is the whole re-enable; nothing else is stubbed out.
+TORCH_SHEET_WRITES_ENABLED = False
+
 # Extra columns appended after the client's existing retail-schedule header.
 # Never rename Rate / BA Name / Recap — those stay ops-owned and blank.
 SPARK_EXTRA_HEADERS = [
@@ -475,6 +487,13 @@ def _append_row(request) -> bool:
     never raises — a Sheets problem must not 500 a request submission. Use
     `diagnose_torch_sheet` to tell those two Falses apart.
     """
+    if not TORCH_SHEET_WRITES_ENABLED:
+        logger.info(
+            "torch sheet: writes are DISABLED — not writing request=%s. "
+            "Flip TORCH_SHEET_WRITES_ENABLED to re-enable.",
+            getattr(request, "id", None),
+        )
+        return False
     try:
         uuid = getattr(request, "uuid", None)
         if not uuid:
