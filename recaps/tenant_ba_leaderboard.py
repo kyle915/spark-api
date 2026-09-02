@@ -60,11 +60,21 @@ from __future__ import annotations
 
 import logging
 
-from django.db.models import Avg, Count
+from django.db.models import Avg, Count, Sum
 
 from ambassadors.models import Ambassador, AmbassadorEvent, AmbassadorRating
-from recaps.models import CustomRecap, Recap
-from recaps.tenant_overview import _filter_event_year, _filter_year
+from recaps.models import (
+    ConsumerEngagements,
+    CustomRecap,
+    CustomRecapProductSample,
+    ProductSamples,
+    Recap,
+)
+from recaps.tenant_overview import (
+    _coerce_event_window,
+    _filter_event_window,
+    _filter_window,
+)
 
 log = logging.getLogger(__name__)
 
@@ -173,56 +183,56 @@ def _ratings_by_ambassador(queryset) -> dict[int, tuple[float, int]]:
     return out
 
 
-def _shifts_worked(tenant_id: int, year: int | None) -> dict[int, int]:
+def _shifts_worked(tenant_id: int, window: tuple | None) -> dict[int, int]:
     """Per-BA shift count: tenant-scoped :class:`AmbassadorEvent` roster rows.
 
     One roster row == one BA assigned to one of the tenant's events == one
     shift worked. Scoped by the roster row's own ``tenant_id`` (non-null,
-    indexed, equal to the event's tenant) and year-filtered on the EVENT date
-    (:func:`_filter_event_year`, the hero + KPI basis) so a shift counts in
+    indexed, equal to the event's tenant) and windowed on the EVENT date
+    (:func:`_filter_event_window`, the hero + KPI basis) so a shift counts in
     the period it was WORKED, not when the roster row was created — a BA's
-    roster rows for OTHER brands are never counted. All-time (``year=None``)
+    roster rows for OTHER brands are never counted. All-time (``window=None``)
     is untouched.
     """
     return _count_by_ambassador(
-        _filter_event_year(
+        _filter_event_window(
             AmbassadorEvent.objects.filter(tenant_id=tenant_id),
             "event__",
-            year,
+            window,
         )
     )
 
 
-def _recaps_filed(tenant_id: int, year: int | None) -> dict[int, int]:
+def _recaps_filed(tenant_id: int, window: tuple | None) -> dict[int, int]:
     """Per-BA recap count across BOTH recap shapes, tenant-scoped.
 
     Legacy :class:`recaps.models.Recap` is scoped through the event
     (``event__tenant_id`` — it has no direct tenant FK) and custom
     :class:`recaps.models.CustomRecap` via its direct ``tenant_id``; both are
     restricted to rows with a real ``ambassador`` FK (external typed-name
-    credits have no rankable id) and year-filtered on the EVENT date
-    (:func:`_filter_event_year`, the hero + KPI basis) so a recap counts in
+    credits have no rankable id) and windowed on the EVENT date
+    (:func:`_filter_event_window`, the hero + KPI basis) so a recap counts in
     the period its event happened, not when the row was created/imported. The
     two per-BA maps are summed so a BA who filed both shapes gets credit for
     each, matching the recap-count headline in
     :func:`recaps.tenant_overview.tenant_event_recap_counts`.
     """
     legacy = _count_by_ambassador(
-        _filter_event_year(
+        _filter_event_window(
             Recap.objects.filter(
                 event__tenant_id=tenant_id, ambassador__isnull=False
             ),
             "event__",
-            year,
+            window,
         )
     )
     custom = _count_by_ambassador(
-        _filter_event_year(
+        _filter_event_window(
             CustomRecap.objects.filter(
                 tenant_id=tenant_id, ambassador__isnull=False
             ),
             "event__",
-            year,
+            window,
         )
     )
     merged: dict[int, int] = dict(legacy)
@@ -231,12 +241,12 @@ def _recaps_filed(tenant_id: int, year: int | None) -> dict[int, int]:
     return merged
 
 
-def _ratings(tenant_id: int, year: int | None) -> dict[int, tuple[float, int]]:
+def _ratings(tenant_id: int, window: tuple | None) -> dict[int, tuple[float, int]]:
     """Per-BA ``(avg_score, count)`` over the tenant's gig ratings.
 
     :class:`ambassadors.models.AmbassadorRating` carries its own ``tenant_id``
     (captured from the gig at create time), so scoping by it keeps a BA's
-    ratings from OTHER brands out — even for the same BA. Year-filtered on the
+    ratings from OTHER brands out — even for the same BA. Windowed on the
     rating's own ``created_at`` — deliberately NOT the event date (unlike
     shifts/recaps): ``AmbassadorRating.event`` is nullable (general, non-gig
     ratings exist), so an event-date window would silently drop those; a
@@ -245,10 +255,10 @@ def _ratings(tenant_id: int, year: int | None) -> dict[int, tuple[float, int]]:
     flag only governs UI visibility, not the performance mean).
     """
     return _ratings_by_ambassador(
-        _filter_year(
+        _filter_window(
             AmbassadorRating.objects.filter(tenant_id=tenant_id),
             "created_at",
-            year,
+            window,
         )
     )
 
@@ -276,7 +286,7 @@ def _names_for(ambassador_ids: set[int]) -> dict[int, str]:
 
 def _sort_key(entry: dict) -> tuple:
     """Leaderboard ordering key: avg_rating desc (unrated last), then
-    recaps_filed desc, then shifts_worked desc.
+    consumers_reached / recaps_filed / shifts_worked desc.
 
     Python sorts ascending, so we negate the "desc" metrics. ``avg_rating``
     is ``None`` for unrated BAs; we map that to a sentinel that sorts AFTER
@@ -289,13 +299,91 @@ def _sort_key(entry: dict) -> tuple:
     rating_rank = (0, -avg) if avg is not None else (1, 0.0)
     return (
         rating_rank,
+        -entry.get("consumers_reached", 0),
         -entry["recaps_filed"],
         -entry["shifts_worked"],
         entry["ba_id"],
     )
 
 
-def tenant_ba_leaderboard(tenant_id: int, year: int | None = None) -> list[dict]:
+
+def _sum_by_ambassador(queryset, sum_field: str, ambassador_path: str = "ambassador_id") -> dict[int, int]:
+    """``{ambassador_id: SUM(sum_field)}`` for a tenant-scoped queryset.
+
+    Database GROUP BY; null ambassador ids skipped. Degrades to {} on error.
+    """
+    out: dict[int, int] = {}
+    try:
+        rows = (
+            queryset.values(ambassador_path)
+            .annotate(_v=Sum(sum_field))
+            .values_list(ambassador_path, "_v")
+        )
+        for ambassador_id, n in rows:
+            if ambassador_id is None:
+                continue
+            out[int(ambassador_id)] = out.get(int(ambassador_id), 0) + int(n or 0)
+    except Exception:  # noqa: BLE001
+        log.exception("tenant_ba_leaderboard: sum aggregation failed")
+        return {}
+    return out
+
+
+def _consumers_reached(tenant_id: int, window: tuple | None) -> dict[int, int]:
+    """Per-BA consumers reached from legacy ConsumerEngagements."""
+    return _sum_by_ambassador(
+        _filter_event_window(
+            ConsumerEngagements.objects.filter(
+                recap__event__tenant_id=tenant_id,
+                recap__ambassador__isnull=False,
+            ),
+            "recap__event__",
+            window,
+        ),
+        "total_consumer",
+        ambassador_path="recap__ambassador_id",
+    )
+
+
+def _samples_distributed(tenant_id: int, window: tuple | None) -> dict[int, int]:
+    """Per-BA samples from legacy ProductSamples + custom structured samples."""
+    legacy = _sum_by_ambassador(
+        _filter_event_window(
+            ProductSamples.objects.filter(
+                recap__event__tenant_id=tenant_id,
+                recap__ambassador__isnull=False,
+            ),
+            "recap__event__",
+            window,
+        ),
+        "quantity",
+        ambassador_path="recap__ambassador_id",
+    )
+    custom = _sum_by_ambassador(
+        _filter_event_window(
+            CustomRecapProductSample.objects.filter(
+                custom_recap__tenant_id=tenant_id,
+                custom_recap__ambassador__isnull=False,
+            ),
+            "custom_recap__event__",
+            window,
+        ),
+        "quantity",
+        ambassador_path="custom_recap__ambassador_id",
+    )
+    merged = dict(legacy)
+    for ba_id, n in custom.items():
+        merged[ba_id] = merged.get(ba_id, 0) + n
+    return merged
+
+
+def tenant_ba_leaderboard(
+    tenant_id: int,
+    year: int | None = None,
+    *,
+    start=None,
+    end=None,
+) -> list[dict]:
     """Rank the BAs who worked for ONE tenant by performance.
 
     Returns a list of per-BA dicts, best first, each shaped::
@@ -330,10 +418,13 @@ def tenant_ba_leaderboard(tenant_id: int, year: int | None = None) -> list[dict]
     real Spark BAs are ranked; free-text ``external_ba_name`` credits are
     excluded (no stable id to rank/de-dupe).
     """
+    window = _coerce_event_window(year=year, start=start, end=end)
     try:
-        shifts = _shifts_worked(tenant_id, year)
-        recaps = _recaps_filed(tenant_id, year)
-        ratings = _ratings(tenant_id, year)
+        shifts = _shifts_worked(tenant_id, window)
+        recaps = _recaps_filed(tenant_id, window)
+        ratings = _ratings(tenant_id, window)
+        consumers = _consumers_reached(tenant_id, window)
+        samples = _samples_distributed(tenant_id, window)
     except Exception:  # noqa: BLE001 — belt-and-suspenders; helpers already guard.
         log.exception(
             "tenant_ba_leaderboard: aggregation failed for tenant %s", tenant_id
@@ -341,7 +432,9 @@ def tenant_ba_leaderboard(tenant_id: int, year: int | None = None) -> list[dict]
         return []
 
     # The BA universe is every id that showed up in ANY tenant-scoped source.
-    ba_ids: set[int] = set(shifts) | set(recaps) | set(ratings)
+    ba_ids: set[int] = (
+        set(shifts) | set(recaps) | set(ratings) | set(consumers) | set(samples)
+    )
     if not ba_ids:
         return []
 
@@ -362,6 +455,8 @@ def tenant_ba_leaderboard(tenant_id: int, year: int | None = None) -> list[dict]
                 "name": names.get(ba_id) or "(ambassador)",
                 "shifts_worked": shifts.get(ba_id, 0),
                 "recaps_filed": recaps.get(ba_id, 0),
+                "consumers_reached": consumers.get(ba_id, 0),
+                "samples_distributed": samples.get(ba_id, 0),
                 "avg_rating": avg_rating,
                 "ratings_count": ratings_count,
                 # Omitted for the MVP — see RELIABILITY_SUPPORTED.
