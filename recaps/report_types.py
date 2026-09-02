@@ -47,6 +47,7 @@ from recaps.tenant_overview import (
     tenant_market_performance,
     tenant_metro_breakdown,
     tenant_monthly_trend,
+    tenant_program_health,
 )
 from utils.ai_text import (
     AiUnavailable,
@@ -490,6 +491,51 @@ def _build_activation_breakdown(
     )
 
 
+
+
+@strawberry.type
+class TenantProgramHealth:
+    """Scheduled → filed → approved funnel for Insights program-health.
+
+    ``scheduled`` / ``filed`` / ``approved`` / ``missing`` are request counts
+    in the inclusive date window. Filed excludes empty clock-out shells
+    (see :mod:`recaps.filed`). ``start_date`` / ``end_date`` echo the window.
+    """
+
+    scheduled: int
+    filed: int
+    approved: int
+    missing: int
+    start_date: str | None = None
+    end_date: str | None = None
+
+
+def _empty_program_health(
+    start_date: str | None = None, end_date: str | None = None
+) -> TenantProgramHealth:
+    return TenantProgramHealth(
+        scheduled=0,
+        filed=0,
+        approved=0,
+        missing=0,
+        start_date=start_date,
+        end_date=end_date,
+    )
+
+
+def _build_program_health(
+    tenant_id: int, start: date | None, end: date | None
+) -> TenantProgramHealth:
+    data = tenant_program_health(tenant_id, start=start, end=end)
+    return TenantProgramHealth(
+        scheduled=int(data["scheduled"]),
+        filed=int(data["filed"]),
+        approved=int(data["approved"]),
+        missing=int(data["missing"]),
+        start_date=data.get("start_date"),
+        end_date=data.get("end_date"),
+    )
+
 def _build_tenant_kpis(tenant_id: int, year: int | None = None) -> TenantKpis:
     """Assemble the structured :class:`TenantKpis` for one tenant.
 
@@ -653,7 +699,11 @@ class MarketPerformance:
 
 
 def _build_market_performance(
-    tenant_id: int, year: int | None = None
+    tenant_id: int,
+    year: int | None = None,
+    *,
+    start: date | None = None,
+    end: date | None = None,
 ) -> list[MarketPerformance]:
     """Map the per-state dicts to :class:`MarketPerformance` GraphQL rows.
 
@@ -661,7 +711,8 @@ def _build_market_performance(
     Delegates the aggregation to
     :func:`recaps.tenant_overview.tenant_market_performance` so the numbers
     share the tenant KPI source of truth, then mirrors each dict field-for-
-    field onto the strawberry type.
+    field onto the strawberry type. Explicit ``start``/``end`` (Insights
+    page range) win over calendar ``year``.
     """
     return [
         MarketPerformance(
@@ -673,7 +724,9 @@ def _build_market_performance(
             products_sold=row["products_sold"],
             total_engagements=row["total_engagements"],
         )
-        for row in tenant_market_performance(tenant_id, year)
+        for row in tenant_market_performance(
+            tenant_id, year, start=start, end=end
+        )
     ]
 
 
@@ -779,13 +832,19 @@ class BaLeaderboardEntry:
     name: str
     shifts_worked: int
     recaps_filed: int
+    consumers_reached: int
+    samples_distributed: int
     avg_rating: float | None
     ratings_count: int
     reliability_pct: int | None = None
 
 
 def _build_ba_leaderboard(
-    tenant_id: int, year: int | None = None
+    tenant_id: int,
+    year: int | None = None,
+    *,
+    start: date | None = None,
+    end: date | None = None,
 ) -> list[BaLeaderboardEntry]:
     """Map the per-BA leaderboard dicts to :class:`BaLeaderboardEntry` rows.
 
@@ -793,7 +852,8 @@ def _build_ba_leaderboard(
     Delegates the tenant-scoped aggregation + ranking to
     :func:`recaps.tenant_ba_leaderboard.tenant_ba_leaderboard`, then mirrors
     each already-sorted dict field-for-field onto the strawberry type
-    (preserving the builder's order).
+    (preserving the builder's order). Explicit ``start``/``end`` win over
+    calendar ``year``.
     """
     return [
         BaLeaderboardEntry(
@@ -801,11 +861,15 @@ def _build_ba_leaderboard(
             name=row["name"],
             shifts_worked=row["shifts_worked"],
             recaps_filed=row["recaps_filed"],
+            consumers_reached=int(row.get("consumers_reached", 0) or 0),
+            samples_distributed=int(row.get("samples_distributed", 0) or 0),
             avg_rating=row["avg_rating"],
             ratings_count=row["ratings_count"],
             reliability_pct=row["reliability_pct"],
         )
-        for row in tenant_ba_leaderboard(tenant_id, year)
+        for row in tenant_ba_leaderboard(
+            tenant_id, year, start=start, end=end
+        )
     ]
 
 
@@ -1894,6 +1958,55 @@ class CampaignReportQueries:
 
         return data if data is not None else empty
 
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def tenant_program_health(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> TenantProgramHealth:
+        """Scheduled → filed → approved funnel for Insights program-health.
+
+        Counts confirmed/completed Requests in the inclusive ``start_date`` /
+        ``end_date`` window. ``filed`` uses the shared filed-content definition
+        (empty clock-out shells do not count). ``missing`` = scheduled − filed
+        for the /recaps/missing drill.
+
+        Tenant scoping matches :meth:`tenant_kpis`. Never raises — missing /
+        out-of-scope tenants resolve to zeros.
+        """
+        empty = _empty_program_health(start_date, end_date)
+        service = _CampaignReportService()
+        target_tenant_id = await service.resolve_target_tenant_id(info, tenant_id)
+        if target_tenant_id is None:
+            return empty
+
+        start_d: date | None = None
+        end_d: date | None = None
+        try:
+            if start_date:
+                start_d = datetime.fromisoformat(start_date).date()
+            if end_date:
+                end_d = datetime.fromisoformat(end_date).date()
+        except (ValueError, TypeError):
+            return empty
+
+        def _build():
+            from tenants.models import Tenant
+
+            if not Tenant.objects.filter(id=target_tenant_id).exists():
+                return None
+            return _build_program_health(target_tenant_id, start_d, end_d)
+
+        try:
+            data = await sync_to_async(_build, thread_sensitive=True)()
+        except Exception:
+            return empty
+
+        return data if data is not None else empty
+
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def tenant_kpi_comparison(
         self,
@@ -1955,6 +2068,8 @@ class CampaignReportQueries:
         info: strawberry.Info,
         tenant_id: strawberry.ID,
         year: int | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
     ) -> list[MarketPerformance]:
         """Per-US-state KPI roll-up for the geographic performance heatmap.
 
@@ -1985,6 +2100,16 @@ class CampaignReportQueries:
         if target_tenant_id is None:
             return []
 
+        start_d: date | None = None
+        end_d: date | None = None
+        try:
+            if start_date:
+                start_d = datetime.fromisoformat(start_date).date()
+            if end_date:
+                end_d = datetime.fromisoformat(end_date).date()
+        except (ValueError, TypeError):
+            return []
+
         def _build():
             # Guard the tenant's existence the same way tenant_kpis does, so
             # an admin passing an unknown id degrades to an empty list instead
@@ -1993,7 +2118,9 @@ class CampaignReportQueries:
 
             if not Tenant.objects.filter(id=target_tenant_id).exists():
                 return None
-            return _build_market_performance(target_tenant_id, year)
+            return _build_market_performance(
+                target_tenant_id, year, start=start_d, end=end_d
+            )
 
         try:
             data = await sync_to_async(_build, thread_sensitive=True)()
@@ -2162,6 +2289,8 @@ class CampaignReportQueries:
         info: strawberry.Info,
         tenant_id: strawberry.ID,
         year: int | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
     ) -> list[BaLeaderboardEntry]:
         """Per-BA performance leaderboard for ONE tenant.
 
@@ -2195,6 +2324,16 @@ class CampaignReportQueries:
         if target_tenant_id is None:
             return []
 
+        start_d: date | None = None
+        end_d: date | None = None
+        try:
+            if start_date:
+                start_d = datetime.fromisoformat(start_date).date()
+            if end_date:
+                end_d = datetime.fromisoformat(end_date).date()
+        except (ValueError, TypeError):
+            return []
+
         def _build():
             # Guard the tenant's existence the same way tenant_kpis does, so
             # an admin passing an unknown id degrades to an empty list instead
@@ -2203,7 +2342,9 @@ class CampaignReportQueries:
 
             if not Tenant.objects.filter(id=target_tenant_id).exists():
                 return None
-            return _build_ba_leaderboard(target_tenant_id, year)
+            return _build_ba_leaderboard(
+                target_tenant_id, year, start=start_d, end=end_d
+            )
 
         try:
             data = await sync_to_async(_build, thread_sensitive=True)()

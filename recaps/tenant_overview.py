@@ -42,7 +42,7 @@ import re
 from dataclasses import dataclass, fields as dataclass_fields
 from datetime import date, timedelta
 
-from django.db.models import Count, Max, Min, Q, Sum
+from django.db.models import Count, Exists, Max, Min, OuterRef, Q, Sum
 from django.db.models.functions import Coalesce, TruncMonth
 from django.utils import timezone
 
@@ -122,6 +122,52 @@ def _sum(queryset, field: str) -> int:
     """
     total = queryset.aggregate(_t=Sum(field))["_t"]
     return int(total or 0)
+
+
+def _inclusive_dates_to_window(
+    start: date | None, end: date | None
+) -> tuple | None:
+    """Half-open ``[start, end)`` from inclusive calendar dates.
+
+    Both sides may be ``None`` (→ ``None`` = all-time). One-sided windows
+    are supported: open start uses a far-past floor so ``_filter_event_window``
+    still gets a ``(start, end)`` pair; open end leaves ``end=None``.
+    """
+    if start is None and end is None:
+        return None
+    anchor = timezone.now().replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    if start is None:
+        start_dt = anchor.replace(year=2000, month=1, day=1)
+    else:
+        start_dt = anchor.replace(
+            year=start.year, month=start.month, day=start.day
+        )
+    if end is None:
+        return start_dt, None
+    end_dt = anchor.replace(
+        year=end.year, month=end.month, day=end.day
+    ) + timedelta(days=1)
+    return start_dt, end_dt
+
+
+def _coerce_event_window(
+    year: int | None = None,
+    start: date | None = None,
+    end: date | None = None,
+) -> tuple | None:
+    """Prefer explicit inclusive dates over calendar ``year``; else all-time.
+
+    Insights page ranges pass ``start``/``end``. Year-scoped callers keep
+    using ``year``. Explicit dates win when both are provided so a 30d
+    window never accidentally expands to the whole year.
+    """
+    if start is not None or end is not None:
+        return _inclusive_dates_to_window(start, end)
+    if year is not None:
+        return _year_bounds(year)
+    return None
 
 
 def _year_bounds(year: int) -> tuple:
@@ -1102,7 +1148,12 @@ def _grouped_sum_state_or_address(
     return out
 
 
-def _legacy_market_kpis(tenant_id: int, year: int | None = None) -> dict[str, dict]:
+def _legacy_market_kpis(
+    tenant_id: int,
+    year: int | None = None,
+    *,
+    window: tuple | None = None,
+) -> dict[str, dict]:
     """Per-state legacy :class:`recaps.models.Recap` KPIs for one tenant.
 
     The per-state sibling of :func:`_legacy_kpis`: the identical KPI columns
@@ -1111,24 +1162,26 @@ def _legacy_market_kpis(tenant_id: int, year: int | None = None) -> dict[str, di
     off ``ProductSamples``) summed in the DB but GROUPED BY the recap's
     ``event``'s state code instead of rolled into one tenant total. Every
     queryset is scoped through the event (``…__event__tenant_id``) and
-    year-filtered on the EVENT date (:func:`_filter_event_year`, same basis
+    windowed on the EVENT date (:func:`_filter_event_window`, same basis
     as the hero + :func:`_legacy_kpis`), so a state's row counts the period
     its events happened in — not when the recap rows were created/imported;
-    ``year=None`` leaves the SQL unfiltered. Returns
+    ``window=None`` (and no year) leaves the SQL unfiltered. Returns
     ``{state_code: {kpi: value, …}}`` (recap/event counts added by the caller).
     """
-    recaps = _filter_event_year(
-        Recap.objects.filter(event__tenant_id=tenant_id), "event__", year
+    if window is None:
+        window = _coerce_event_window(year=year)
+    recaps = _filter_event_window(
+        Recap.objects.filter(event__tenant_id=tenant_id), "event__", window
     )
-    engagements = _filter_event_year(
+    engagements = _filter_event_window(
         ConsumerEngagements.objects.filter(recap__event__tenant_id=tenant_id),
         "recap__event__",
-        year,
+        window,
     )
-    samples = _filter_event_year(
+    samples = _filter_event_window(
         ProductSamples.objects.filter(recap__event__tenant_id=tenant_id),
         "recap__event__",
-        year,
+        window,
     )
 
     eng_path = f"recap__{_LEGACY_STATE_PATH}"
@@ -1153,7 +1206,12 @@ def _legacy_market_kpis(tenant_id: int, year: int | None = None) -> dict[str, di
     return per_state
 
 
-def _custom_market_kpis(tenant_id: int, year: int | None = None) -> dict[str, dict]:
+def _custom_market_kpis(
+    tenant_id: int,
+    year: int | None = None,
+    *,
+    window: tuple | None = None,
+) -> dict[str, dict]:
     """Per-state custom :class:`recaps.models.CustomRecap` KPIs for one tenant.
 
     The per-state sibling of :func:`_custom_kpis`, attributing each metric to
@@ -1183,13 +1241,15 @@ def _custom_market_kpis(tenant_id: int, year: int | None = None) -> dict[str, di
     # (a complete address like "…, Austin, TX 78759" still resolves to TX).
     from events.routing import extract_state_code
 
-    custom_recaps = _filter_event_year(
-        CustomRecap.objects.filter(tenant_id=tenant_id), "event__", year
+    if window is None:
+        window = _coerce_event_window(year=year)
+    custom_recaps = _filter_event_window(
+        CustomRecap.objects.filter(tenant_id=tenant_id), "event__", window
     )
-    structured_samples_qs = _filter_event_year(
+    structured_samples_qs = _filter_event_window(
         CustomRecapProductSample.objects.filter(custom_recap__tenant_id=tenant_id),
         "custom_recap__event__",
-        year,
+        window,
     )
 
     per_state: dict[str, dict] = {}
@@ -1222,13 +1282,13 @@ def _custom_market_kpis(tenant_id: int, year: int | None = None) -> dict[str, di
     # attribute the result to the right state. Bounded slice, never the full
     # recap tree.
     rows = (
-        _filter_event_year(
+        _filter_event_window(
             CustomFieldValue.objects.filter(
                 custom_recap__tenant_id=tenant_id,
                 custom_field__name__iregex=_CUSTOM_KPI_NAME_RE.pattern,
             ),
             "custom_recap__event__",
-            year,
+            window,
         )
         .values_list(
             "custom_recap_id",
@@ -1294,7 +1354,11 @@ def _custom_market_kpis(tenant_id: int, year: int | None = None) -> dict[str, di
 
 
 def tenant_market_performance(
-    tenant_id: int, year: int | None = None
+    tenant_id: int,
+    year: int | None = None,
+    *,
+    start: date | None = None,
+    end: date | None = None,
 ) -> list[dict]:
     """Per-US-state KPI roll-up for one tenant, for the geographic heatmap.
 
@@ -1337,27 +1401,29 @@ def tenant_market_performance(
     """
     # Per-state event + recap counts (each a DB GROUP BY + COUNT), windowed
     # on the EVENT date so the counts agree with the KPIs below (same basis).
+    # Explicit start/end (Insights page range) win over calendar year.
+    window = _coerce_event_window(year=year, start=start, end=end)
     event_counts = _grouped_count(
-        _filter_event_year(
-            Event.objects.filter(tenant_id=tenant_id), "", year
+        _filter_event_window(
+            Event.objects.filter(tenant_id=tenant_id), "", window
         ),
         "state__code",
     )
     legacy_recap_counts = _grouped_count(
-        _filter_event_year(
-            Recap.objects.filter(event__tenant_id=tenant_id), "event__", year
+        _filter_event_window(
+            Recap.objects.filter(event__tenant_id=tenant_id), "event__", window
         ),
         _LEGACY_STATE_PATH,
     )
     custom_recap_counts = _grouped_count(
-        _filter_event_year(
-            CustomRecap.objects.filter(tenant_id=tenant_id), "event__", year
+        _filter_event_window(
+            CustomRecap.objects.filter(tenant_id=tenant_id), "event__", window
         ),
         _CUSTOM_STATE_PATH,
     )
 
-    legacy_kpis = _legacy_market_kpis(tenant_id, year)
-    custom_kpis = _custom_market_kpis(tenant_id, year)
+    legacy_kpis = _legacy_market_kpis(tenant_id, window=window)
+    custom_kpis = _custom_market_kpis(tenant_id, window=window)
 
     # Union every state code that showed up in any of the per-state maps.
     codes = (
@@ -1676,6 +1742,80 @@ def tenant_activation_breakdown(
     )
     return {"buckets": buckets, "by_type": by_type}
 
+
+
+
+def tenant_program_health(
+    tenant_id: int,
+    start: date | None = None,
+    end: date | None = None,
+) -> dict:
+    """Scheduled → filed → approved funnel for one tenant + date window.
+
+    Counts :class:`events.models.Request` rows (same confirmed/completed
+    status filter as activation breakdown) whose ``Request.date`` falls in
+    the inclusive ``[start, end]`` window. Soft-deleted requests are
+    excluded.
+
+    * ``scheduled`` — requests in window (the funnel top).
+    * ``filed`` — those with at least one *filed* recap on any child event
+      (legacy or custom; empty clock-out shells do not count — see
+      :mod:`recaps.filed`).
+    * ``approved`` — those with at least one filed + ``approved=True`` recap.
+    * ``missing`` — scheduled minus filed (drill target for /recaps/missing).
+
+    Returns ints only; never raises (callers degrade to zeros).
+    """
+    from recaps.filed import custom_filed_q, legacy_filed_q
+
+    qs = Request.objects.filter(
+        tenant_id=tenant_id,
+        deleted_at__isnull=True,
+    ).filter(_ACTIVATION_STATUS_Q)
+
+    if start is not None:
+        qs = qs.filter(date__date__gte=start)
+    if end is not None:
+        qs = qs.filter(date__date__lte=end)
+
+    scheduled = qs.count()
+
+    filed_q = (
+        Exists(
+            Recap.objects.filter(event__request_id=OuterRef("pk")).filter(
+                legacy_filed_q()
+            )
+        )
+        | Exists(
+            CustomRecap.objects.filter(event__request_id=OuterRef("pk")).filter(
+                custom_filed_q()
+            )
+        )
+    )
+    approved_q = (
+        Exists(
+            Recap.objects.filter(
+                event__request_id=OuterRef("pk"), approved=True
+            ).filter(legacy_filed_q())
+        )
+        | Exists(
+            CustomRecap.objects.filter(
+                event__request_id=OuterRef("pk"), approved=True
+            ).filter(custom_filed_q())
+        )
+    )
+
+    filed = qs.annotate(_filed=filed_q).filter(_filed=True).count()
+    approved = qs.annotate(_approved=approved_q).filter(_approved=True).count()
+    missing = max(0, scheduled - filed)
+    return {
+        "scheduled": int(scheduled),
+        "filed": int(filed),
+        "approved": int(approved),
+        "missing": int(missing),
+        "start_date": start.isoformat() if start else None,
+        "end_date": end.isoformat() if end else None,
+    }
 
 def _recent_event_lines(tenant_id: int) -> list[str]:
     """Up to :data:`MAX_RECENT_EVENTS` recent events as 'name · date · city, ST'.
