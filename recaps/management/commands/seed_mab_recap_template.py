@@ -1,0 +1,747 @@
+"""Seed Mark Anthony Brands Retail Sampling + Event Activation recap templates.
+
+Mirrors Liquid Death's live forms field-for-field (prod template ids 9 and 3),
+with brand-AGNOSTIC question copy (say "the product/brand", never a brand name
+in field labels). Template *names* keep the tenant brand for ops clarity.
+
+* ``Products Sampled`` options = :func:`mab_products.product_options`
+  (``Category — Name``, 141 SKUs)
+
+Photos stay on the walk-up ``FileRecapCategory`` buckets from
+``setup_mab_checkin``; these SPECs do NOT add template image fields.
+
+Idempotent. When a legacy franken retail form still holds submitted answers,
+it is archived onto a non-checkin ``Legacy Recap Archive`` event type and a
+clean LD-mirrored retail template is minted — so ``resolve_template_for_event``
+never serves a franken-form. Empty legacy rows are renamed in place.
+
+DRY-RUN by default. Run via ``/internal/cron/seed-mab-recap-template``
+(or the "Seed MAB recap template" GitHub Action) against prod.
+"""
+
+from __future__ import annotations
+
+from django.core.management.base import BaseCommand, CommandError
+from django.db import transaction
+from django.db.models import Q
+
+from recaps.management.commands.mab_products import product_options
+
+PRODUCT_OPTS = product_options()
+
+RETAIL_TEMPLATE_NAME = "Mark Anthony Brands-Retail Sampling"
+EVENT_TEMPLATE_NAME = "Mark Anthony Brands-Event Activation"
+# Back-compat alias used by older tests / docs.
+TEMPLATE_NAME = RETAIL_TEMPLATE_NAME
+
+LEGACY_TEMPLATE_NAMES = ("Mark Anthony Brands Recap",)
+ARCHIVED_TEMPLATE_NAME = "Mark Anthony Brands Recap (archived)"
+ARCHIVE_EVENT_TYPE = "Legacy Recap Archive"
+
+RETAIL_PROGRAM = "Retail Sampling"
+EVENT_PROGRAM = "Event Activation"
+
+# Shared RecapSection order across both templates (sections are tenant-scoped).
+SECTION_ORDER = {
+    "Consumer Engagement": 0,
+    "Feedback & Account Notes": 1,
+    "Additional Insights": 2,
+    "Products Sampled": 3,
+}
+
+# Field-for-field off Liquid Death-Retail Sampling (id 9), brand-agnostic.
+RETAIL_SPEC: list[tuple[str, list[tuple[str, str, bool, list[str]]]]] = [
+    (
+        "Consumer Engagement",
+        [
+            ("Total number of consumers sampled", "number", True, []),
+            ("First Time consumers?", "number", True, []),
+            (
+                "How many consumers that were engaged with knew about "
+                "the product/brand?",
+                "number",
+                True,
+                [],
+            ),
+            (
+                "How many consumers would be willing to purchase the product "
+                "after tasing it?",
+                "number",
+                True,
+                [],
+            ),
+            (
+                "How many consumers would NOT be willing to purchase the "
+                "product after tasing it?",
+                "number",
+                True,
+                [],
+            ),
+            (
+                "How many single cans did consumers purchase?",
+                "number",
+                True,
+                [],
+            ),
+            ("How many packs did consumers purchase?", "number", True, []),
+        ],
+    ),
+    (
+        "Feedback & Account Notes",
+        [
+            (
+                "Demographics (general age, sex, ethnicities of consumers)",
+                "longtext",
+                True,
+                [],
+            ),
+            ("Consumer Feedback", "longtext", True, []),
+            ("Positive stories from your sampling today", "longtext", True, []),
+            ("Reasons to decline to purchase?", "longtext", True, []),
+            ("Quotes from Consumers", "longtext", True, []),
+            ("Anything you'd change or do differently?", "longtext", True, []),
+            ("Account Feedback", "longtext", True, []),
+        ],
+    ),
+    (
+        "Additional Insights",
+        [
+            ("Account Spend Amount", "number", True, []),
+        ],
+    ),
+    (
+        "Products Sampled",
+        [
+            ("Products Sampled", "multiselect", True, list(PRODUCT_OPTS)),
+        ],
+    ),
+]
+
+# Field-for-field off Liquid Death-Event Activation (id 3), brand-agnostic.
+EVENT_SPEC: list[tuple[str, list[tuple[str, str, bool, list[str]]]]] = [
+    (
+        "Consumer Engagement",
+        [
+            (
+                "How many consumers would be willing to purchase the product "
+                "after tasing it?",
+                "number",
+                True,
+                [],
+            ),
+            (
+                "How many consumers that were engaged with knew about "
+                "the product/brand?",
+                "number",
+                True,
+                [],
+            ),
+            (
+                "How many consumers had tried the product before?",
+                "number",
+                True,
+                [],
+            ),
+            ("How many TOTAL consumers did you sample?", "number", True, []),
+        ],
+    ),
+    (
+        "Feedback & Account Notes",
+        [
+            ("Demographics", "longtext", True, []),
+            (
+                "What were the top 5 frequently asked questions you received "
+                "from consumers?",
+                "longtext",
+                True,
+                [],
+            ),
+            ("Helpful feedback", "longtext", True, []),
+        ],
+    ),
+    (
+        "Products Sampled",
+        [
+            ("Products Sampled", "multiselect", True, list(PRODUCT_OPTS)),
+        ],
+    ),
+]
+
+# Back-compat: older tests import SPEC as the retail layout.
+SPEC = RETAIL_SPEC
+
+PROGRAMS: list[dict] = [
+    {
+        "event_type": RETAIL_PROGRAM,
+        "template_name": RETAIL_TEMPLATE_NAME,
+        "spec": RETAIL_SPEC,
+        "archive_legacy": True,
+    },
+    {
+        "event_type": EVENT_PROGRAM,
+        "template_name": EVENT_TEMPLATE_NAME,
+        "spec": EVENT_SPEC,
+        "archive_legacy": False,
+    },
+]
+
+
+def _match_field_type(kind: str, name_lower: str) -> bool:
+    """Does an existing CustomRecapFieldType named `name_lower` serve `kind`?
+
+    Mirrors the FE `customFieldKind` fuzzy rules so a field renders as the
+    intended control. Order matters: multiselect before select (both contain
+    'select'); text is an exact match so it never swallows longtext/multiselect.
+    """
+    if kind == "image":
+        return any(t in name_lower for t in ("image", "photo", "img"))
+    if kind == "multiselect":
+        return name_lower == "multiselect" or "multi" in name_lower
+    if kind == "select":
+        return name_lower == "select" or "dropdown" in name_lower
+    if kind == "number":
+        return name_lower == "number" or "num" in name_lower or "integer" in name_lower
+    if kind == "longtext":
+        return "long" in name_lower or "textarea" in name_lower or "paragraph" in name_lower
+    if kind == "text":
+        return name_lower == "text"
+    return False
+
+
+class Command(BaseCommand):
+    help = (
+        "Seed Mark Anthony Brands' LD-mirrored Retail Sampling + Event "
+        "Activation recap templates (dry-run by default; --apply to write)."
+    )
+
+    def add_arguments(self, parser):
+        parser.add_argument(
+            "--tenant",
+            default="mark anthony",
+            help=(
+                "tenant name/slug substring (case-insensitive). "
+                "Default: 'mark anthony' (also matches 'mab')."
+            ),
+        )
+        parser.add_argument(
+            "--template-name",
+            dest="template_name",
+            default=None,
+            help=(
+                "If set, only seed the program whose template name matches "
+                "(substring). Default: seed both Retail + Event templates."
+            ),
+        )
+        parser.add_argument(
+            "--event-type",
+            dest="event_type",
+            default=None,
+            help=(
+                "If set, only seed the program whose event type matches "
+                "(substring). Default: seed both."
+            ),
+        )
+        parser.add_argument(
+            "--apply",
+            action="store_true",
+            help="actually write (omit for a dry-run that changes nothing).",
+        )
+
+    # ---- resolvers -------------------------------------------------------
+
+    def _resolve_tenant(self, needle: str):
+        from tenants.models import Tenant
+
+        # Accept short alias "mab" as mark anthony / mark-anthony-brands.
+        search = (needle or "").strip()
+        if search.lower() == "mab":
+            search = "mark anthony"
+
+        matches = list(
+            Tenant.objects.filter(
+                Q(name__icontains=search) | Q(slug__icontains=search)
+                | Q(slug__iexact="mark-anthony-brands")
+            ).distinct().order_by("id")
+        )
+        # Prefer exact slug when needle was mab / mark anthony.
+        if len(matches) > 1:
+            exact = [
+                t for t in matches if (t.slug or "").lower() == "mark-anthony-brands"
+            ]
+            if len(exact) == 1:
+                return exact[0]
+        if len(matches) == 1:
+            return matches[0]
+        self.stdout.write(self.style.WARNING("Tenants in this database:"))
+        for t in Tenant.objects.order_by("id"):
+            self.stdout.write(f"  [{t.id}] name={t.name!r} slug={t.slug!r}")
+        if not matches:
+            raise CommandError(
+                f"No tenant matches {needle!r}. Create Mark Anthony Brands "
+                f"first (onboard_mab_products / ensure_mab_tenant) or pass "
+                f"--tenant with a matching name/slug."
+            )
+        raise CommandError(
+            f"{needle!r} matched {len(matches)} tenants "
+            f"({', '.join(repr(t.slug) for t in matches)}) — narrow --tenant."
+        )
+
+    def _resolve_creator(self):
+        from django.contrib.auth import get_user_model
+
+        User = get_user_model()
+        creator = (
+            User.objects.filter(is_superuser=True).order_by("id").first()
+            or User.objects.order_by("id").first()
+        )
+        if creator is None:
+            raise CommandError("No user available to own the created rows.")
+        return creator
+
+    def _ensure_event_type(self, tenant, name: str, creator, apply: bool):
+        from events.models import EventType
+
+        existing = EventType.objects.filter(
+            tenant_id=tenant.id, name__iexact=name
+        ).first()
+        if existing:
+            return existing
+        if not apply:
+            self.stdout.write(f"  would create event type {name!r}")
+            return None
+        et = EventType.objects.create(name=name, tenant=tenant, created_by=creator)
+        self.stdout.write(f"  + event type {name!r} [{et.id}]")
+        return et
+
+    def _resolve_field_type(self, kind: str, creator, apply: bool, cache: dict):
+        """Find (or, under --apply, create) the CustomRecapFieldType for a kind."""
+        if kind in cache:
+            return cache[kind]
+        from recaps.models import CustomRecapFieldType
+
+        existing = None
+        for ft in CustomRecapFieldType.objects.all():
+            if _match_field_type(kind, (ft.name or "").lower()):
+                existing = ft
+                break
+        if existing is None:
+            if apply:
+                existing = CustomRecapFieldType.objects.create(
+                    name=kind, created_by=creator
+                )
+                self.stdout.write(f"    (created field type {kind!r})")
+            else:
+                existing = f"<would-create '{kind}'>"
+        cache[kind] = existing
+        return existing
+
+    def _spec_field_names(self, spec) -> set[str]:
+        return {fname for _, fields in spec for fname, *_ in fields}
+
+    def _archive_event_type(self, tenant, creator, apply: bool):
+        from events.models import EventType
+
+        existing = EventType.objects.filter(
+            tenant_id=tenant.id, name=ARCHIVE_EVENT_TYPE
+        ).first()
+        if existing:
+            return existing
+        if not apply:
+            self.stdout.write(f"  would create event type {ARCHIVE_EVENT_TYPE!r}")
+            return None
+        et = EventType.objects.create(
+            name=ARCHIVE_EVENT_TYPE, tenant=tenant, created_by=creator
+        )
+        self.stdout.write(f"  + event type {ARCHIVE_EVENT_TYPE!r} [{et.id}]")
+        return et
+
+    def _field_value_count(self, field) -> int:
+        from recaps.models import CustomFieldValue
+
+        return CustomFieldValue.objects.filter(custom_field=field).count()
+
+    def _template_has_legacy_answers(self, template, keep_names: set[str]) -> bool:
+        from recaps.models import CustomField
+
+        for field in CustomField.objects.filter(custom_recap_template=template):
+            if field.name in keep_names:
+                continue
+            if self._field_value_count(field):
+                return True
+        return False
+
+    def _strip_unanswered_spec_fields(
+        self, template, keep_names: set[str], apply: bool
+    ) -> int:
+        """Remove SPEC fields that were layered on with zero answers (safe undo)."""
+        from recaps.models import CustomField
+
+        removed = 0
+        for field in CustomField.objects.filter(custom_recap_template=template):
+            if field.name not in keep_names:
+                continue
+            if self._field_value_count(field):
+                continue
+            if apply:
+                field.delete()
+                removed += 1
+                self.stdout.write(
+                    f"    - stripped unanswered SPEC field {field.name!r}"
+                )
+            else:
+                removed += 1
+                self.stdout.write(
+                    f"    - would strip unanswered SPEC field {field.name!r}"
+                )
+        return removed
+
+    def _archive_template(self, template, archive_et, apply: bool) -> None:
+        """Park a form with historical answers off Retail Sampling."""
+        self.stdout.write(
+            f"  archive template id={template.id} {template.name!r} → "
+            f"{ARCHIVED_TEMPLATE_NAME!r} / {ARCHIVE_EVENT_TYPE!r}"
+        )
+        if not apply or archive_et is None:
+            return
+        template.name = ARCHIVED_TEMPLATE_NAME
+        template.event_type = archive_et
+        template.product_samples = False
+        template.save(
+            update_fields=["name", "event_type", "product_samples", "updated_at"]
+        )
+
+    def _resolve_template(
+        self,
+        tenant,
+        template_name: str,
+        event_type,
+        creator,
+        apply: bool,
+        *,
+        spec,
+        archive_legacy: bool,
+    ):
+        """Return the walk-up template for this program — never a franken-form."""
+        from recaps.models import CustomRecapTemplate
+
+        keep_names = self._spec_field_names(spec)
+
+        if archive_legacy and event_type is not None:
+            retail_tpls = list(
+                CustomRecapTemplate.objects.filter(
+                    tenant_id=tenant.id, event_type=event_type
+                ).order_by("id")
+            )
+            for tpl in retail_tpls:
+                if not self._template_has_legacy_answers(tpl, keep_names):
+                    continue
+                self.stdout.write(
+                    f"Retail template id={tpl.id} {tpl.name!r} still has legacy "
+                    f"answers — archiving so walk-up gets a clean LD form."
+                )
+                self._strip_unanswered_spec_fields(tpl, keep_names, apply)
+                archive_et = self._archive_event_type(tenant, creator, apply)
+                self._archive_template(tpl, archive_et, apply)
+
+        if event_type is None and not apply:
+            return None, True, "would-create"
+
+        existing = CustomRecapTemplate.objects.filter(
+            tenant_id=tenant.id, name=template_name, event_type=event_type
+        ).first()
+        if existing is not None:
+            return existing, False, "exists"
+
+        if archive_legacy:
+            for legacy in LEGACY_TEMPLATE_NAMES:
+                prior = CustomRecapTemplate.objects.filter(
+                    tenant_id=tenant.id, name=legacy, event_type=event_type
+                ).first()
+                if prior is None:
+                    continue
+                if self._template_has_legacy_answers(prior, keep_names):
+                    continue
+                self.stdout.write(
+                    f"Legacy template {legacy!r} (id {prior.id}) → rename to "
+                    f"{template_name!r}"
+                )
+                if not apply:
+                    return prior, False, "would-rename"
+                prior.name = template_name
+                prior.product_samples = True
+                prior.save(update_fields=["name", "product_samples", "updated_at"])
+                return prior, False, "renamed"
+
+        if not apply:
+            return None, True, "would-create"
+        template = CustomRecapTemplate.objects.create(
+            tenant_id=tenant.id,
+            name=template_name,
+            event_type=event_type,
+            product_samples=True,
+            sales_performance=False,
+            layout={},
+            created_by=creator,
+        )
+        return template, True, "created"
+
+    def _prune_obsolete_fields(
+        self, template, keep_names: set[str], apply: bool
+    ) -> tuple[int, int]:
+        """Drop fields not in SPEC when they have no submitted values."""
+        from recaps.models import CustomField
+
+        removed = 0
+        kept_with_data = 0
+        for field in CustomField.objects.filter(custom_recap_template=template):
+            if field.name in keep_names:
+                continue
+            n_vals = self._field_value_count(field)
+            if n_vals:
+                kept_with_data += 1
+                self.stdout.write(
+                    self.style.WARNING(
+                        f"    keep obsolete {field.name!r} — {n_vals} value(s) on file"
+                    )
+                )
+                continue
+            if apply:
+                field.delete()
+                removed += 1
+                self.stdout.write(f"    - pruned {field.name!r}")
+            else:
+                removed += 1
+                self.stdout.write(f"    - would prune {field.name!r}")
+        return removed, kept_with_data
+
+    def _programs_to_seed(self, opts) -> list[dict]:
+        """Filter PROGRAMS by optional --event-type / --template-name."""
+        et_hint = (opts.get("event_type") or "").strip().lower()
+        name_hint = (opts.get("template_name") or "").strip().lower()
+        out = []
+        for program in PROGRAMS:
+            if et_hint and et_hint not in program["event_type"].lower():
+                continue
+            if name_hint and name_hint not in program["template_name"].lower():
+                continue
+            out.append(program)
+        if not out:
+            raise CommandError(
+                "No Mark Anthony Brands programs matched "
+                f"--event-type={opts.get('event_type')!r} "
+                f"--template-name={opts.get('template_name')!r}."
+            )
+        return out
+
+    def _seed_program(
+        self, tenant, creator, apply: bool, program: dict, ft_cache: dict
+    ) -> None:
+        from recaps.models import CustomField, RecapSection
+
+        spec = program["spec"]
+        template_name = program["template_name"]
+        event_type_name = program["event_type"]
+
+        self.stdout.write("\n" + "-" * 68)
+        self.stdout.write(f"PROGRAM: {event_type_name} → {template_name!r}")
+        self.stdout.write("-" * 68)
+
+        event_type = self._ensure_event_type(
+            tenant, event_type_name, creator, apply
+        )
+        if event_type is None and apply:
+            raise CommandError(
+                f"Could not ensure event type {event_type_name!r}."
+            )
+
+        for _, fields in spec:
+            for _, kind, _, _ in fields:
+                self._resolve_field_type(kind, creator, apply, ft_cache)
+
+        created = {"sections": 0, "fields": 0}
+        updated = {"sections": 0, "fields": 0}
+
+        template, made, how = self._resolve_template(
+            tenant,
+            template_name,
+            event_type,
+            creator,
+            apply,
+            spec=spec,
+            archive_legacy=bool(program.get("archive_legacy")),
+        )
+        if apply and template is not None:
+            self.stdout.write(
+                f"Template {how.upper()} "
+                f"(id {template.id}, uuid {template.uuid})"
+            )
+            if not made and template.product_samples is not True:
+                template.product_samples = True
+                template.save(update_fields=["product_samples", "updated_at"])
+        else:
+            self.stdout.write(f"Template {how}")
+
+        keep_names: set[str] = set()
+        for section_name, fields in spec:
+            s_idx = SECTION_ORDER.get(section_name, 99)
+            self.stdout.write(f"\n[{s_idx}] SECTION {section_name!r}")
+            section = None
+            if apply:
+                section, made_sec = RecapSection.objects.get_or_create(
+                    tenant_id=tenant.id,
+                    name=section_name,
+                    defaults={"order": s_idx, "created_by": creator},
+                )
+                if made_sec:
+                    created["sections"] += 1
+                elif section.order != s_idx:
+                    section.order = s_idx
+                    section.save(update_fields=["order", "updated_at"])
+                    updated["sections"] += 1
+
+            for f_idx, (fname, kind, required, options) in enumerate(fields):
+                keep_names.add(fname)
+                ft = ft_cache[kind]
+                req = "REQUIRED" if required else "optional"
+                opt = (
+                    f" options=[{len(options)} SKUs]"
+                    if options and len(options) > 5
+                    else (f" options={options}" if options else "")
+                )
+                self.stdout.write(f"    - {fname!r}  [{kind}] {req}{opt}")
+                if not apply:
+                    continue
+                field, made_f = CustomField.objects.get_or_create(
+                    custom_recap_template=template,
+                    recap_section=section,
+                    name=fname,
+                    defaults={
+                        "custom_field_type": ft,
+                        "required": required,
+                        "options": list(options),
+                        "order": f_idx,
+                        "created_by": creator,
+                    },
+                )
+                if made_f:
+                    created["fields"] += 1
+                else:
+                    changed = []
+                    if field.custom_field_type_id != ft.id:
+                        field.custom_field_type = ft
+                        changed.append("custom_field_type")
+                    if field.required != required:
+                        field.required = required
+                        changed.append("required")
+                    if list(field.options or []) != list(options):
+                        field.options = list(options)
+                        changed.append("options")
+                    if field.order != f_idx:
+                        field.order = f_idx
+                        changed.append("order")
+                    if field.recap_section_id != section.id:
+                        field.recap_section = section
+                        changed.append("recap_section")
+                    if changed:
+                        changed.append("updated_at")
+                        field.save(update_fields=changed)
+                        updated["fields"] += 1
+
+        self.stdout.write("\nObsolete fields (not in this program SPEC):")
+        if apply and template is not None:
+            pruned, kept = self._prune_obsolete_fields(
+                template, keep_names, apply=True
+            )
+        else:
+            from recaps.models import CustomRecapTemplate
+
+            preview = CustomRecapTemplate.objects.filter(
+                tenant_id=tenant.id, name=template_name
+            ).first()
+            if (
+                preview is None
+                and program.get("archive_legacy")
+            ):
+                preview = CustomRecapTemplate.objects.filter(
+                    tenant_id=tenant.id, name__in=LEGACY_TEMPLATE_NAMES
+                ).first()
+            if preview is None:
+                self.stdout.write("    (none — no existing template)")
+                pruned, kept = 0, 0
+            else:
+                pruned, kept = self._prune_obsolete_fields(
+                    preview, keep_names, apply=False
+                )
+
+        total_fields = sum(len(f) for _, f in spec)
+        if apply and template is not None:
+            self.stdout.write(
+                self.style.SUCCESS(
+                    f"  APPLIED {template_name!r} — "
+                    f"sections +{created['sections']}/~{updated['sections']} · "
+                    f"fields +{created['fields']}/~{updated['fields']} · "
+                    f"pruned {pruned} · kept-with-data {kept}."
+                )
+            )
+        else:
+            self.stdout.write(
+                self.style.WARNING(
+                    f"  DRY-RUN {template_name!r} — "
+                    f"{len(spec)} sections + {total_fields} fields "
+                    f"(prune ~{pruned}, keep-with-data {kept})."
+                )
+            )
+
+    # ---- handle ----------------------------------------------------------
+
+    def handle(self, *args, **opts):
+        apply = opts["apply"]
+        tenant = self._resolve_tenant(opts["tenant"])
+        creator = self._resolve_creator()
+        programs = self._programs_to_seed(opts)
+
+        self.stdout.write("=" * 68)
+        self.stdout.write(
+            f"Tenant     : [{tenant.id}] {tenant.name!r} (slug {tenant.slug!r})"
+        )
+        self.stdout.write(
+            "Programs   : "
+            + ", ".join(p["event_type"] for p in programs)
+        )
+        self.stdout.write(f"Created by : {getattr(creator, 'email', creator)!r}")
+        self.stdout.write(
+            f"Mode       : {'APPLY (writing)' if apply else 'DRY-RUN (no writes)'}"
+        )
+        self.stdout.write("=" * 68)
+        self.stdout.write(
+            "Mirrors Liquid Death Retail Sampling + Event Activation "
+            f"(brand-agnostic copy; Products Sampled = {len(PRODUCT_OPTS)} "
+            "Category — Name SKUs)."
+        )
+
+        ft_cache: dict = {}
+
+        def _run():
+            for program in programs:
+                self._seed_program(tenant, creator, apply, program, ft_cache)
+            self.stdout.write("\n" + "=" * 68)
+            if apply:
+                self.stdout.write(
+                    self.style.SUCCESS(
+                        f"APPLIED — seeded {len(programs)} Mark Anthony Brands "
+                        "program(s)."
+                    )
+                )
+            else:
+                self.stdout.write(
+                    self.style.WARNING(
+                        f"DRY-RUN — would seed {len(programs)} program(s) on "
+                        f"tenant {tenant.slug!r}. Re-run with --apply to write."
+                    )
+                )
+
+        if apply:
+            with transaction.atomic():
+                _run()
+        else:
+            _run()

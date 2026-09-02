@@ -3456,6 +3456,164 @@ class SetupBrewDrCheckinView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class SeedMabRecapTemplateView(View):
+    """GET/POST `/internal/cron/seed-mab-recap-template`.
+
+    Builds/reconciles Mark Anthony Brands' LD-mirrored **Retail Sampling** and
+    **Event Activation** recap templates (brand-agnostic LD questions; full MAB
+    SKU catalog on Products Sampled). Fires ``seed_mab_recap_template``.
+    DRY-RUN unless apply=true.
+
+    Params: tenant (default "mark anthony"), template_name, event_type, apply.
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _param(name: str) -> str | None:
+            return request.GET.get(name) or request.POST.get(name)
+
+        apply_raw = (_param("apply") or "").lower()
+        kwargs: dict = {
+            "tenant": _param("tenant") or "mark anthony",
+            "apply": apply_raw in ("1", "true", "yes", "on"),
+        }
+        if _param("template_name"):
+            kwargs["template_name"] = str(_param("template_name"))
+        if _param("event_type"):
+            kwargs["event_type"] = str(_param("event_type"))
+
+        out = io.StringIO()
+        try:
+            call_command("seed_mab_recap_template", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("seed_mab_recap_template cron failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "report": out.getvalue(),
+                },
+                status=500,
+            )
+        return JsonResponse(
+            {"ok": True, "applied": kwargs["apply"], "report": out.getvalue()}
+        )
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class SetupMabCheckinView(View):
+    """GET/POST `/internal/cron/setup-mab-checkin`.
+
+    Makes Mark Anthony Brands' standing ``MAB-`` link serve **Retail Sampling**
+    and **Event Activation**: selectable event types + per-program photo
+    buckets (LD-style dropzones). Recap templates are seeded separately by
+    ``seed-mab-recap-template``. Retail is the pinned default.
+
+    Params: tenant (default "mark anthony"), prefix, code, apply.
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        kwargs: dict = {}
+        for key in ("tenant", "prefix", "code"):
+            val = request.GET.get(key) or request.POST.get(key)
+            if val:
+                kwargs[key] = str(val)
+        raw = (request.GET.get("apply") or request.POST.get("apply") or "").lower()
+        apply_it = raw in ("1", "true", "yes", "on")
+        if apply_it:
+            kwargs["apply"] = True
+
+        out = io.StringIO()
+        try:
+            call_command("setup_mab_checkin", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("setup-mab-checkin cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc),
+                 "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "apply": apply_it, "log": out.getvalue()})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class OnboardMabProductsView(View):
+    """GET/POST `/internal/cron/onboard-mab-products`.
+
+    Seeds Mark Anthony Brands ProductTypes + Products from the shared SKU
+    list (no artwork downloads). DRY-RUN unless apply is truthy.
+
+    Params: owner_email (required), tenant, create_tenant, apply.
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        owner_email = (
+            request.GET.get("owner_email")
+            or request.POST.get("owner_email")
+            or ""
+        ).strip()
+        if not owner_email:
+            return JsonResponse(
+                {"ok": False, "error": "owner-email-required"}, status=400
+            )
+
+        kwargs: dict = {"owner_email": owner_email}
+        tenant = request.GET.get("tenant") or request.POST.get("tenant")
+        if tenant:
+            kwargs["tenant"] = str(tenant)
+        for flag in ("apply", "create_tenant"):
+            raw = (
+                request.GET.get(flag) or request.POST.get(flag) or ""
+            ).lower()
+            if raw in ("1", "true", "yes", "on"):
+                kwargs[flag] = True
+
+        out = io.StringIO()
+        try:
+            call_command("onboard_mab_products", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("onboard-mab-products cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc),
+                 "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "log": out.getvalue()})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
 class ImportDemoRecapsView(View):
     """GET/POST `/internal/cron/import-demo-recaps`.
 
@@ -8557,7 +8715,9 @@ def _registered_views() -> dict[str, Any]:
         "set-tenant-event-types": SetTenantEventTypesView,
         "set-custom-recap-field": SetCustomRecapFieldView,
         "seed-brew-dr-recap-template": SeedBrewDrRecapTemplateView,
+        "seed-mab-recap-template": SeedMabRecapTemplateView,
         "setup-brew-dr-checkin": SetupBrewDrCheckinView,
+        "setup-mab-checkin": SetupMabCheckinView,
         "import-demo-recaps": ImportDemoRecapsView,
         "audit-client-submissions": AuditClientSubmissionsView,
         "dump-field-sampling": DumpFieldSamplingView,
@@ -8587,6 +8747,7 @@ def _registered_views() -> dict[str, Any]:
         "inspect-tenants": InspectTenantsView,
         "delete-tenant": DeleteTenantView,
         "onboard-torch-products": OnboardTorchProductsView,
+        "onboard-mab-products": OnboardMabProductsView,
         "migrate-torch-product-spend": MigrateTorchProductSpendView,
         "clone-recap-template": CloneRecapTemplateView,
         "attach-fpo-recap-images": AttachFpoRecapImagesView,
