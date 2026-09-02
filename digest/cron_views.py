@@ -3456,9 +3456,6 @@ class SetupBrewDrCheckinView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
-
-
-@method_decorator(csrf_exempt, name="dispatch")
 class SeedMabRecapTemplateView(View):
     """GET/POST `/internal/cron/seed-mab-recap-template`.
 
@@ -3614,6 +3611,7 @@ class OnboardMabProductsView(View):
         return self._run(request)
 
 
+@method_decorator(csrf_exempt, name="dispatch")
 class ImportDemoRecapsView(View):
     """GET/POST `/internal/cron/import-demo-recaps`.
 

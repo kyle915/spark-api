@@ -69,6 +69,17 @@ class Command(BaseCommand):
             action="store_true",
             help="Actually write (omit for a dry run that changes nothing).",
         )
+        parser.add_argument(
+            "--create-tenant",
+            dest="create_tenant",
+            action="store_true",
+            help=(
+                "When the tenant is missing, create Mark Anthony Brands "
+                "(slug mark-anthony-brands). Implied by --apply if you pass "
+                "this flag; without it a missing tenant is an error even "
+                "under --apply."
+            ),
+        )
 
     def _needle(self, raw: str) -> str:
         search = (raw or "").strip()
@@ -76,7 +87,9 @@ class Command(BaseCommand):
             return "mark anthony"
         return search
 
-    def _resolve_tenant(self, needle: str, owner, apply: bool) -> Tenant:
+    def _resolve_tenant(
+        self, needle: str, owner, apply: bool, create_tenant: bool
+    ) -> Tenant:
         search = self._needle(needle)
 
         # Prefer exact slug first.
@@ -120,10 +133,11 @@ class Command(BaseCommand):
                 f"({', '.join(repr(t.slug) for t in matches)}) — narrow --tenant."
             )
 
-        if not apply:
+        if not (apply and create_tenant):
             raise CommandError(
-                f"No Mark Anthony Brands tenant found. Re-run with --apply to "
-                f"create {TENANT_NAME!r} (slug {TENANT_SLUG!r})."
+                f"No Mark Anthony Brands tenant found. Re-run with "
+                f"--apply --create-tenant to create {TENANT_NAME!r} "
+                f"(slug {TENANT_SLUG!r}), or ensure_mab_tenant first."
             )
 
         tenant = Tenant.objects.create(
@@ -139,13 +153,16 @@ class Command(BaseCommand):
 
     def handle(self, *args, **opts):
         apply = bool(opts["apply"])
+        create_tenant = bool(opts.get("create_tenant"))
 
         try:
             owner = User.objects.get(email__iexact=opts["owner_email"])
         except User.DoesNotExist:
             raise CommandError(f"No user with email {opts['owner_email']!r}.")
 
-        tenant = self._resolve_tenant(opts.get("tenant") or "", owner, apply)
+        tenant = self._resolve_tenant(
+            opts.get("tenant") or "", owner, apply, create_tenant
+        )
         rows = flat_product_rows()
         type_names = sorted({cat for cat, _ in rows})
 

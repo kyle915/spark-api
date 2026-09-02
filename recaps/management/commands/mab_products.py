@@ -216,3 +216,7 @@ def product_options() -> list[str]:
 def flat_product_rows() -> list[tuple[str, str]]:
     """(product_type, product_name) rows for catalog seeding."""
     return [(cat, name) for cat, names in PRODUCTS for name in names]
+
+
+# Alias used by event-confirmation catalog-empty fallbacks / onboard.
+mab_product_options = product_options
