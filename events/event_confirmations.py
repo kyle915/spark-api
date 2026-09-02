@@ -93,6 +93,15 @@ def is_liquid_death_tenant(tenant) -> bool:
     return name == "liquid death"
 
 
+def is_mab_tenant(tenant) -> bool:
+    """True for Mark Anthony Brands (White Claw / Mike's / etc.)."""
+    slug = _norm_tenant_key(getattr(tenant, "slug", None))
+    name = _norm_tenant_key(getattr(tenant, "name", None))
+    if slug in {"mark-anthony-brands", "mab", "mark-anthony"}:
+        return True
+    return "mark anthony" in name
+
+
 def catalog_product_options(tenant) -> list[str]:
     """Live Product rows as ``Type — Name``, matching the LD picker format."""
     from events.models import Product
@@ -148,6 +157,11 @@ def confirmation_product_options(tenant) -> list[str]:
         )
 
         return torch_product_options()
+
+    if is_mab_tenant(tenant):
+        from recaps.management.commands.mab_products import mab_product_options
+
+        return mab_product_options()
     return []
 
 
