@@ -1,0 +1,59 @@
+name: Onboard Mark Anthony Brands products
+
+# Seeds Mark Anthony Brands ProductTypes + Products (141 SKUs). No artwork.
+# See tenants/management/commands/onboard_mab_products.py.
+#
+# RUN apply=false FIRST AND READ THE LOG.
+
+on:
+  workflow_dispatch:
+    inputs:
+      owner_email:
+        description: "Spark admin email that owns the product rows"
+        required: true
+        default: "kyle@igniteproductions.co"
+      tenant:
+        description: "Tenant name/slug substring"
+        required: false
+        default: "mark anthony"
+      create_tenant:
+        description: "Create Mark Anthony Brands tenant if missing"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+      apply:
+        description: "Actually write (read the dry run first)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+jobs:
+  onboard-mab-products:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire onboard-mab-products cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/onboard-mab-products
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          OWNER_EMAIL: ${{ github.event.inputs.owner_email }}
+          TENANT: ${{ github.event.inputs.tenant }}
+          CREATE_TENANT: ${{ github.event.inputs.create_tenant }}
+          APPLY: ${{ github.event.inputs.apply }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL" \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            --data-urlencode "owner_email=$OWNER_EMAIL" \
+            --data-urlencode "tenant=$TENANT" \
+            --data-urlencode "create_tenant=$CREATE_TENANT" \
+            --data-urlencode "apply=$APPLY")
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          echo ""
+          [ "$STATUS" != "200" ] && exit 1 || exit 0
