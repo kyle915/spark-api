@@ -28,6 +28,7 @@ from django.db.models import Q
 from recaps.management.commands.mab_products import product_options
 
 PRODUCT_OPTS = product_options()
+PRODUCT_OPTIONS = PRODUCT_OPTS  # alias for tests
 
 RETAIL_TEMPLATE_NAME = "Mark Anthony Brands-Retail Sampling"
 EVENT_TEMPLATE_NAME = "Mark Anthony Brands-Event Activation"

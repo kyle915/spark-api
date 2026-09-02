@@ -12,7 +12,7 @@ from recaps.management.commands.mab_products import product_options
 from recaps.management.commands.seed_mab_recap_template import (
     EVENT_SPEC,
     EVENT_TEMPLATE_NAME,
-    PRODUCT_OPTIONS,
+    PRODUCT_OPTS,
     RETAIL_SPEC,
     RETAIL_TEMPLATE_NAME,
 )
@@ -60,14 +60,14 @@ class TestMabRecapTemplateSpec:
     def test_products_sampled_uses_full_catalog(self):
         opts = product_options()
         assert len(opts) == 141
-        assert PRODUCT_OPTIONS == opts
+        assert PRODUCT_OPTS == opts
         assert opts[0].startswith("White Claw — ")
         for spec in (RETAIL_SPEC, EVENT_SPEC):
             products = next(
                 fields for section, fields in spec if section == "Products Sampled"
             )
             assert products == [
-                ("Products Sampled", "multiselect", True, list(PRODUCT_OPTIONS))
+                ("Products Sampled", "multiselect", True, list(PRODUCT_OPTS))
             ]
 
     def test_no_template_image_fields(self):
