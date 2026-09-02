@@ -1576,6 +1576,107 @@ def tenant_metro_breakdown(
     return {"metros": metros, "weeks": weeks}
 
 
+# Fixed activation-type buckets the Insights "By activation type" card shows.
+# Classification mirrors the legacy client-side regex so labels stay stable;
+# counting happens in SQL (GROUP BY request_type) so we never roll up a
+# first-N page of requests in the browser.
+_ACTIVATION_BUCKETS: tuple[tuple[str, str, re.Pattern[str]], ...] = (
+    ("retail", "Retail samplings", re.compile(r"retail", re.I)),
+    ("onprem", "On-premise", re.compile(r"on[-\s]?prem|bar|venue", re.I)),
+    ("event", "Events", re.compile(r"event|activation|festival|pop[-\s]?up", re.I)),
+)
+
+# Statuses that count as "confirmed + completed" on the Insights card —
+# same slug/name substrings the previous client rollup used.
+_ACTIVATION_STATUS_Q = (
+    Q(status__slug__icontains="done")
+    | Q(status__slug__icontains="complete")
+    | Q(status__slug__icontains="scheduled")
+    | Q(status__slug__icontains="approved")
+    | Q(status__name__icontains="done")
+    | Q(status__name__icontains="complete")
+    | Q(status__name__icontains="scheduled")
+    | Q(status__name__icontains="approved")
+)
+
+
+def _activation_bucket_for_type_name(name: str | None) -> tuple[str, str]:
+    """Map a RequestType name onto one Insights bucket (key, label)."""
+    text = name or ""
+    for key, label, pattern in _ACTIVATION_BUCKETS:
+        if pattern.search(text):
+            return key, label
+    return "other", "Other"
+
+
+def tenant_activation_breakdown(
+    tenant_id: int,
+    start: date | None = None,
+    end: date | None = None,
+) -> dict:
+    """Server-side activation-type counts for one tenant.
+
+    Aggregates :class:`events.models.Request` rows (not the first 2000
+    edges of a connection) grouped by ``request_type``, then folds those
+    into the three Insights buckets (Retail / On-premise / Events) plus
+    an ``other`` catch-all. Soft-deleted requests are excluded.
+
+    ``start`` / ``end`` are inclusive calendar dates on ``Request.date``
+    (the scheduled activation day). Either bound may be ``None`` to leave
+    that side open.
+
+    Returns::
+
+        {
+          "buckets": [{"key", "label", "count"}, ...],  # fixed order, always 4
+          "by_type": [{"request_type_id", "name", "count"}, ...],
+        }
+    """
+    qs = Request.objects.filter(
+        tenant_id=tenant_id,
+        deleted_at__isnull=True,
+    ).filter(_ACTIVATION_STATUS_Q)
+
+    if start is not None:
+        qs = qs.filter(date__date__gte=start)
+    if end is not None:
+        qs = qs.filter(date__date__lte=end)
+
+    type_rows = list(
+        qs.values("request_type_id", "request_type__name")
+        .annotate(count=Count("id"))
+        .order_by("-count", "request_type__name")
+    )
+
+    bucket_counts = {key: 0 for key, _, _ in _ACTIVATION_BUCKETS}
+    bucket_counts["other"] = 0
+    by_type: list[dict] = []
+    for row in type_rows:
+        name = row.get("request_type__name") or "Untitled"
+        count = int(row.get("count") or 0)
+        if count <= 0:
+            continue
+        type_id = row.get("request_type_id")
+        by_type.append(
+            {
+                "request_type_id": str(type_id) if type_id is not None else None,
+                "name": name,
+                "count": count,
+            }
+        )
+        key, _ = _activation_bucket_for_type_name(name)
+        bucket_counts[key] = bucket_counts.get(key, 0) + count
+
+    buckets = [
+        {"key": key, "label": label, "count": bucket_counts[key]}
+        for key, label, _ in _ACTIVATION_BUCKETS
+    ]
+    buckets.append(
+        {"key": "other", "label": "Other", "count": bucket_counts["other"]}
+    )
+    return {"buckets": buckets, "by_type": by_type}
+
+
 def _recent_event_lines(tenant_id: int) -> list[str]:
     """Up to :data:`MAX_RECENT_EVENTS` recent events as 'name · date · city, ST'.
 

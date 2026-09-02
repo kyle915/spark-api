@@ -21,7 +21,7 @@ because the aggregation is synchronous Django ORM.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 import strawberry
 from asgiref.sync import sync_to_async
@@ -40,6 +40,7 @@ from recaps.field_sampling_report import (
 )
 from recaps.tenant_overview import (
     build_tenant_overview,
+    tenant_activation_breakdown,
     tenant_event_recap_counts,
     tenant_kpi_comparison,
     tenant_kpi_totals,
@@ -410,6 +411,82 @@ def _zeroed_tenant_kpis() -> TenantKpis:
         brand_aware_consumers=0,
         willing_to_purchase=0,
         monthly_trend=[],
+    )
+
+
+@strawberry.type
+class TenantActivationBucket:
+    """One Insights activation-type bucket (Retail / On-premise / Events / Other)."""
+
+    key: str
+    label: str
+    count: int
+
+
+@strawberry.type
+class TenantActivationTypeCount:
+    """Raw per-RequestType count that rolls into the Insights buckets."""
+
+    request_type_id: str | None
+    name: str
+    count: int
+
+
+@strawberry.type
+class TenantActivationBreakdown:
+    """Server-side activation-type roll-up for the Insights card.
+
+    ``buckets`` is the fixed Retail / On-premise / Events / Other set (always
+    present, zero when empty). ``by_type`` is the underlying RequestType
+    GROUP BY for debugging / future drill-down. ``start_date`` / ``end_date``
+    echo the inclusive window the resolver applied (null = open side).
+    """
+
+    buckets: list[TenantActivationBucket]
+    by_type: list[TenantActivationTypeCount]
+    start_date: str | None = None
+    end_date: str | None = None
+
+
+def _empty_activation_breakdown(
+    start_date: str | None = None, end_date: str | None = None
+) -> TenantActivationBreakdown:
+    """Zeroed activation breakdown used when tenant is out of scope."""
+    return TenantActivationBreakdown(
+        buckets=[
+            TenantActivationBucket(key="retail", label="Retail samplings", count=0),
+            TenantActivationBucket(key="onprem", label="On-premise", count=0),
+            TenantActivationBucket(key="event", label="Events", count=0),
+            TenantActivationBucket(key="other", label="Other", count=0),
+        ],
+        by_type=[],
+        start_date=start_date,
+        end_date=end_date,
+    )
+
+
+def _build_activation_breakdown(
+    tenant_id: int, start: date | None, end: date | None
+) -> TenantActivationBreakdown:
+    """Map :func:`tenant_activation_breakdown` dicts onto GraphQL types."""
+    data = tenant_activation_breakdown(tenant_id, start=start, end=end)
+    return TenantActivationBreakdown(
+        buckets=[
+            TenantActivationBucket(
+                key=b["key"], label=b["label"], count=int(b["count"])
+            )
+            for b in data["buckets"]
+        ],
+        by_type=[
+            TenantActivationTypeCount(
+                request_type_id=row.get("request_type_id"),
+                name=row["name"],
+                count=int(row["count"]),
+            )
+            for row in data["by_type"]
+        ],
+        start_date=start.isoformat() if start else None,
+        end_date=end.isoformat() if end else None,
     )
 
 
@@ -1764,6 +1841,58 @@ class CampaignReportQueries:
         if data is None:
             return _zeroed_tenant_kpis()
         return data
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def tenant_activation_breakdown(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> TenantActivationBreakdown:
+        """Server-side activation-type counts for Insights.
+
+        Replaces the previous client rollup of the first 2000 Requests +
+        regex-on-type-name. Aggregates every non-deleted Request for the
+        tenant whose status looks confirmed/completed, grouped by
+        RequestType, then folded into Retail / On-premise / Events / Other.
+
+        ``start_date`` / ``end_date`` are optional ISO dates (YYYY-MM-DD)
+        applied inclusively on ``Request.date``. Omit either side for an
+        open bound (all-time when both omitted).
+
+        Tenant scoping matches :meth:`tenant_kpis`. Never raises — missing
+        / out-of-scope tenants resolve to a zeroed breakdown.
+        """
+        empty = _empty_activation_breakdown(start_date, end_date)
+        service = _CampaignReportService()
+        target_tenant_id = await service.resolve_target_tenant_id(info, tenant_id)
+        if target_tenant_id is None:
+            return empty
+
+        start_d: date | None = None
+        end_d: date | None = None
+        try:
+            if start_date:
+                start_d = datetime.fromisoformat(start_date).date()
+            if end_date:
+                end_d = datetime.fromisoformat(end_date).date()
+        except (ValueError, TypeError):
+            return empty
+
+        def _build():
+            from tenants.models import Tenant
+
+            if not Tenant.objects.filter(id=target_tenant_id).exists():
+                return None
+            return _build_activation_breakdown(target_tenant_id, start_d, end_d)
+
+        try:
+            data = await sync_to_async(_build, thread_sensitive=True)()
+        except Exception:
+            return empty
+
+        return data if data is not None else empty
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def tenant_kpi_comparison(
