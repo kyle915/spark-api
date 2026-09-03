@@ -14,9 +14,14 @@ carrying a single type, and the second BA is silently handed the first BA's
 recap form. It submits cleanly against the wrong template, so nobody notices.
 """
 import datetime
+import json
 import uuid
 
 import pytest
+from django.core.cache import cache
+from django.test import Client as DjangoClient
+from django.urls import reverse
+from django.utils import timezone as dj_tz
 
 from ambassadors import checkin_web
 from ambassadors.tests.base import AmbassadorsGraphQLTestCase
@@ -350,3 +355,81 @@ class TestCheckinEventTypeSelector(AmbassadorsGraphQLTestCase):
         for etype in (self.retail, self.activation):
             buckets = checkin_web.serialize_photo_buckets(self._event(etype))
             assert [b["name"] for b in buckets] == ["Table Set Up"]
+
+
+@pytest.mark.django_db(transaction=True)
+class TestProductSeedingSkipsIdentifyLocation(AmbassadorsGraphQLTestCase):
+    """Product Seeding: location + mileage live on the recap — identify must
+    not 400 without a store address when that program is selected."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self, db):
+        cache.clear()
+        self.system_user = self.get_system_user()
+        self.roles = self.setup_default_roles()
+        uid = str(uuid.uuid4())[:8]
+        self.tenant = self.create_tenant(name=f"LD Seed {uid}")
+        self.tenant.checkin_code = f"LD{uid.upper()}"
+        self.tenant.save(update_fields=["checkin_code"])
+        self.retail = self.create_event_type("Retail Sampling", self.tenant)
+        self.activation = self.create_event_type("Event Activation", self.tenant)
+        self.seeding = self.create_event_type("Product Seeding", self.tenant)
+        self.tenant.checkin_event_type = self.retail
+        self.tenant.save(update_fields=["checkin_event_type"])
+        self.tenant.checkin_event_types.set(
+            [self.retail, self.activation, self.seeding]
+        )
+        self.on = dj_tz.localdate()
+        self.http = DjangoClient()
+
+    def _identify(self, **extra):
+        body = {
+            "firstName": "Pat",
+            "lastName": "Seeder",
+            "phone": "5550199",
+            "eventDate": self.on.isoformat(),
+        }
+        body.update(extra)
+        return self.http.post(
+            reverse(
+                "events.public_checkin_identify",
+                kwargs={"code": self.tenant.checkin_code},
+            ),
+            data=json.dumps(body),
+            content_type="application/json",
+        )
+
+    def test_helpers_recognize_product_seeding(self):
+        assert checkin_web.is_product_seeding_event_type(self.seeding) is True
+        assert checkin_web.is_product_seeding_event_type(self.retail) is False
+        addr = checkin_web.deferred_product_seeding_address(
+            ambassador_id=42, on_date=self.on
+        )
+        assert "Product Seeding" in addr
+        assert "42" in addr
+        assert self.on.isoformat() in addr
+
+    def test_seeding_identify_without_address_succeeds(self):
+        res = self._identify(eventTypeId=str(self.seeding.id))
+        assert res.status_code == 200, res.content
+        payload = res.json()
+        assert payload.get("sessionToken")
+        assert payload["event"]["eventType"]["name"] == "Product Seeding"
+        assert payload["event"]["address"].startswith("Product Seeding · BA ")
+        ev = Event.objects.get(uuid=payload["event"]["uuid"])
+        assert ev.event_type_id == self.seeding.id
+
+    def test_retail_still_requires_address(self):
+        res = self._identify(eventTypeId=str(self.retail.id))
+        assert res.status_code == 400
+        assert "address" in (res.json().get("message") or "").lower()
+
+    def test_seeding_resume_reuses_deferred_event(self):
+        first = self._identify(eventTypeId=str(self.seeding.id))
+        assert first.status_code == 200
+        addr = first.json()["event"]["address"]
+        second = self._identify(
+            eventTypeId=str(self.seeding.id), address=addr
+        )
+        assert second.status_code == 200
+        assert first.json()["event"]["uuid"] == second.json()["event"]["uuid"]
