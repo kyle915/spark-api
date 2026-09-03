@@ -1,25 +1,19 @@
 """Coverage for the DETERMINISTIC proactive-insight buckets:
 
-* :func:`recaps.tenant_insights.build_insight_buckets` — the five fixed,
-  computed-live buckets (reach, sampling, sales, new audience, momentum) that
-  replaced the old free-form OpenAI insights, and
+* :func:`recaps.tenant_insights.build_insight_buckets` — computed-live
+  buckets (consumers sampled / optional samples handed out when distinct,
+  sales, new audience, momentum) that replaced the old free-form OpenAI
+  insights, and
 * the ``tenantInsights(tenantId)`` GraphQL query on the clients schema — the
   tenant-scoped, never-raises shell that now computes those buckets live (no
   AI call, no snapshot read) so they stay in lockstep with ``tenantKpis``.
 
-The headline regression these tests lock in is the **Momentum fix**: the old
-panel compared the CURRENT/empty trailing month (a month that has not started)
-against the prior real month and dramatized it as a "-100% — Operations
-halted" card. The deterministic Momentum bucket only ever compares months that
-actually have activity, so the empty current/future month can never produce a
-negative delta or a "halted" card.
+The headline regressions these tests lock in:
 
-Fixtures follow the style of test_tenant_market_performance.py. Because
-``Recap.created_at`` is ``auto_now_add``, recaps are placed into specific
-trend months by updating ``created_at`` after creation (the same trick the
-existing insights tests use). Target months are chosen RELATIVE to the live
-trailing window (via :func:`recaps.tenant_overview.tenant_monthly_trend`) so
-the tests are independent of the wall clock.
+* **Momentum empty-month fix** — never dramatize the trailing empty month as
+  "-100% halted".
+* **Aggregation honesty** — never show the same headcount as both "reach" and
+  "samples handed out"; cap/suppress absurd MoM % swings.
 """
 
 import pytest
@@ -28,7 +22,7 @@ from django.utils import timezone
 from ambassadors.tests.base import AmbassadorsGraphQLTestCase
 from events import models as event_models
 from recaps import models as recap_models
-from recaps.tenant_insights import build_insight_buckets
+from recaps.tenant_insights import _format_delta, _momentum_bucket, build_insight_buckets
 from recaps.tenant_overview import tenant_kpi_totals, tenant_monthly_trend
 
 
@@ -228,8 +222,9 @@ class TestTenantInsightBuckets(AmbassadorsGraphQLTestCase):
         buckets = build_insight_buckets(self.tenant.id)
 
         keys = [b["key"] for b in buckets]
-        # Two active months -> momentum is emitted; full fixed order.
-        assert keys == ["reach", "sampling", "sales", "new_audience", "momentum"]
+        # Samples mirror consumers (kyle's rule) → no duplicate sampling card.
+        # Two active months -> momentum is emitted.
+        assert keys == ["reach", "sales", "new_audience", "momentum"]
 
         # Every bucket has the full dict shape with a known sentiment.
         for b in buckets:
@@ -238,25 +233,28 @@ class TestTenantInsightBuckets(AmbassadorsGraphQLTestCase):
             assert isinstance(b["metric"], str)
             assert isinstance(b["detail"], str)
 
+        reach = next(b for b in buckets if b["key"] == "reach")
+        assert reach["title"] == "Consumers sampled"
+        assert "samples handed out" not in reach["detail"].lower()
+
     def test_numbers_reconcile_with_tenant_kpi_totals(self):
         self._seed_two_active_months_newest_empty()
         totals = tenant_kpi_totals(self.tenant.id)
         by = {b["key"]: b for b in build_insight_buckets(self.tenant.id)}
 
-        # Reach / sampling / sales / new-audience metrics are the formatted
+        # Reach / sales / new-audience metrics are the formatted
         # source-of-truth totals (thousands separators), so they reconcile.
         assert by["reach"]["metric"] == f"{totals.consumers_reached:,}"
-        assert by["sampling"]["metric"] == f"{totals.samples_distributed:,}"
+        assert "sampling" not in by  # collapsed: samples == consumers
         assert by["sales"]["metric"] == f"{totals.products_sold:,}"
         assert by["new_audience"]["metric"] == f"{totals.first_time_consumers:,}"
 
         # consumers = 200 + 150 = 350 -> formatted with a comma.
         assert totals.consumers_reached == 350
         assert by["reach"]["metric"] == "350"
-        # Samples distributed now = consumers sampled (kyle's rule): 200 + 150
-        # = 350 across 2 events -> ~175/event (not the ProductSamples qty 80).
+        # Samples distributed mirrors consumers sampled (kyle's rule) — Insights
+        # must NOT also emit a "samples handed out" card with the same number.
         assert totals.samples_distributed == 350
-        assert "~175/event" in by["sampling"]["detail"]
         # sales detail shows the cans/packs breakdown (12 cans · 3 packs).
         assert "12 cans" in by["sales"]["detail"]
         assert "3 packs" in by["sales"]["detail"]
@@ -268,10 +266,19 @@ class TestTenantInsightBuckets(AmbassadorsGraphQLTestCase):
         )
         by = {b["key"]: b for b in build_insight_buckets(self.tenant.id)}
         assert by["reach"]["metric"] == "12,400"
-        assert "12,400 consumers reached" in by["reach"]["detail"]
-        # Samples distributed = consumers sampled (kyle's rule), so it mirrors
-        # the 12,400 reach, not the ProductSamples qty (3,400).
-        assert by["sampling"]["metric"] == "12,400"
+        assert "12,400 consumers sampled" in by["reach"]["detail"]
+        # Samples distributed = consumers sampled (kyle's rule), so sampling
+        # card is omitted — never label 12,400 as "samples handed out".
+        assert "sampling" not in by
+
+    def test_does_not_duplicate_reach_as_samples_handed_out(self):
+        """Honesty: one headcount, one label — never Reach + Sampling twins."""
+        self._seed_two_active_months_newest_empty()
+        buckets = build_insight_buckets(self.tenant.id)
+        blob = " ".join(f"{b['title']} {b['metric']} {b['detail']}" for b in buckets)
+        assert blob.lower().count("samples handed out") == 0
+        reach = next(b for b in buckets if b["key"] == "reach")
+        assert reach["title"] == "Consumers sampled"
 
     # -- THE Momentum fix ------------------------------------------------
 
@@ -316,6 +323,66 @@ class TestTenantInsightBuckets(AmbassadorsGraphQLTestCase):
         # Still sourced from a REAL prior month, not the empty tail.
         assert "halted" not in momentum["detail"].lower()
 
+    def test_momentum_suppresses_sparse_base_absurd_pct(self):
+        """5 → 150 engagements is ~2900% — show n/a, not fake precision."""
+        self._recap_in_month(self.older_month, engagements=5, consumers=5)
+        self._recap_in_month(
+            self.newer_active_month, engagements=150, consumers=150
+        )
+        by = {b["key"]: b for b in build_insight_buckets(self.tenant.id)}
+        momentum = by["momentum"]
+        assert momentum["metric"].startswith("n/a vs ")
+        assert "2886%" not in momentum["metric"]
+        assert "2900%" not in momentum["metric"]
+        assert "sparse" in momentum["detail"].lower() or "collection" in momentum[
+            "detail"
+        ].lower()
+
+    def test_momentum_caps_large_swing_off_solid_prior(self):
+        """100 → 3600 is +3500% — cap chip at >500% and annotate."""
+        self._recap_in_month(self.older_month, engagements=100, consumers=50)
+        self._recap_in_month(
+            self.newer_active_month, engagements=3600, consumers=1800
+        )
+        by = {b["key"]: b for b in build_insight_buckets(self.tenant.id)}
+        momentum = by["momentum"]
+        assert momentum["metric"].startswith("▲ >500% vs ")
+        assert "3500%" not in momentum["metric"]
+        assert "organic growth" in momentum["detail"].lower()
+
+    def test_format_delta_honesty_gates(self):
+        assert _format_delta(0, 0) is None
+        assert _format_delta(50, 0) == "+50 (0 -> 50)"
+        sparse = _format_delta(149, 5)
+        assert sparse is not None and "n/a" in sparse and "sparse" in sparse
+        large = _format_delta(3581, 100)
+        assert large is not None and ">500%" in large and "organic growth" in large
+        normal = _format_delta(112, 100)
+        assert normal == "+12% (100 -> 112)"
+
+    def test_momentum_bucket_unit_sparse_and_cap(self):
+        from types import SimpleNamespace
+
+        sparse = _momentum_bucket(
+            [
+                SimpleNamespace(month="2026-01", recaps=1, engagements=5, samples=5),
+                SimpleNamespace(month="2026-02", recaps=1, engagements=150, samples=150),
+            ]
+        )
+        assert sparse is not None
+        assert sparse["metric"].startswith("n/a vs ")
+
+        large = _momentum_bucket(
+            [
+                SimpleNamespace(month="2026-01", recaps=1, engagements=100, samples=50),
+                SimpleNamespace(
+                    month="2026-02", recaps=1, engagements=3600, samples=1800
+                ),
+            ]
+        )
+        assert large is not None
+        assert large["metric"].startswith("▲ >500% vs ")
+
     def test_single_active_month_reports_peak_not_delta(self):
         # Exactly one active month -> no comparison; a neutral "Peak" card.
         self._recap_in_month(self.newer_active_month, engagements=77, consumers=88)
@@ -356,10 +423,12 @@ class TestTenantInsightBuckets(AmbassadorsGraphQLTestCase):
 
         buckets = build_insight_buckets(self.tenant.id)
         keys = [b["key"] for b in buckets]
-        # Tenant is non-empty (a recap + products_sold) so the four core
-        # buckets show, but no trend month is active -> momentum omitted.
-        assert keys == ["reach", "sampling", "sales", "new_audience"]
+        # Tenant is non-empty (a recap + products_sold) so the core
+        # buckets show (sampling collapsed — samples mirror consumers/zero),
+        # but no trend month is active -> momentum omitted.
+        assert keys == ["reach", "sales", "new_audience"]
         assert "momentum" not in keys
+        assert "sampling" not in keys
 
     @staticmethod
     def _short(month_key: str) -> str:
@@ -388,11 +457,13 @@ class TestTenantInsightBuckets(AmbassadorsGraphQLTestCase):
         items = payload["items"]
         assert [i["key"] for i in items] == [
             "reach",
-            "sampling",
             "sales",
             "new_audience",
             "momentum",
         ]
+        assert all(i["key"] != "sampling" for i in items)
+        reach = next(i for i in items if i["key"] == "reach")
+        assert reach["title"] == "Consumers sampled"
         momentum = next(i for i in items if i["key"] == "momentum")
         assert momentum["metric"].startswith("▲ 20% vs ")
         assert "-100%" not in momentum["metric"]
@@ -413,12 +484,12 @@ class TestTenantInsightBuckets(AmbassadorsGraphQLTestCase):
         )
         assert result.errors is None, f"errored: {result.errors}"
         items = result.data["tenantInsights"]["items"]
-        assert [i["key"] for i in items][:4] == [
+        assert [i["key"] for i in items][:3] == [
             "reach",
-            "sampling",
             "sales",
             "new_audience",
         ]
+        assert all(i["key"] != "sampling" for i in items)
 
     @pytest.mark.asyncio
     async def test_graphql_empty_tenant_degrades_to_empty_items(self):

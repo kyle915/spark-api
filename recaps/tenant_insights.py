@@ -1,23 +1,26 @@
 """Proactive "what's notable" insights for one tenant — DETERMINISTIC.
 
 The dashboard surfaces a short list of headline observations about a client's
-activation program — reach, sampling, sales, new audience, and momentum —
-WITHOUT the user asking. This module owns the computation of those buckets.
+activation program — consumers sampled, samples handed out (when distinct),
+sales, new audience, and momentum — WITHOUT the user asking. This module owns
+the computation of those buckets.
 
 This used to ask OpenAI for 3–6 free-form themes. That was inconsistent
 run-to-run and, worse, once dramatized the CURRENT/empty month (a month that
 hasn't started yet) as a scary "-100% collapse". It has been replaced with
-FIVE FIXED, deterministic, templated buckets computed straight from the shared
+FIXED, deterministic, templated buckets computed straight from the shared
 :mod:`recaps.tenant_overview` aggregates — no AI call, no token cost, and the
 same numbers the ``tenantKpis`` charts show.
 
 * :func:`build_insight_buckets` — the deterministic builder. Returns ``[]`` for
-  a tenant with no activity, otherwise EXACTLY five buckets in a fixed order:
-  ``reach``, ``sampling``, ``sales``, ``new_audience``, ``momentum`` — except
+  a tenant with no activity, otherwise the fixed buckets:
+  ``reach`` (consumers sampled), optional ``sampling`` only when sample units
+  differ from consumers, ``sales``, ``new_audience``, ``momentum`` — except
   ``momentum`` is omitted when the tenant has fewer than one *active* month
   (so we never emit a misleading card). Each bucket is a dict
   ``{key, title, detail, sentiment, metric}`` with every number formatted with
-  thousands separators; a number is NEVER fabricated.
+  thousands separators; a number is NEVER fabricated. The same headcount is
+  NEVER labeled both "consumers reached" and "samples handed out".
 * :func:`build_tenant_insights` — thin back-compat wrapper that returns
   :func:`build_insight_buckets` (so the snapshot/cron path keeps working
   without any AI code). It never raises; any error degrades to ``[]``.
@@ -35,7 +38,10 @@ Design rules (mirroring the rest of the report surface):
   with the ``tenantKpis`` chart and the text overview.
 * **Never invent a number, never dramatize an empty month.** The Momentum
   bucket compares only months that actually have activity, so the empty
-  current/future month can never become a "-100%" card.
+  current/future month can never become a "-100%" card. Absurd MoM % swings
+  are capped or suppressed (collection-method / sparse-base honesty).
+* **One definition per metric.** Consumers sampled ≠ samples handed out;
+  when the API mirrors one into the other, Insights shows a single card.
 
 Everything here is synchronous Django ORM — the GraphQL resolver computes the
 buckets live and the cron command calls the entry points directly.
@@ -60,6 +66,14 @@ _VALID_SENTIMENTS = frozenset({"positive", "neutral", "attention"})
 # A month-over-month drop at least this steep flips Momentum to "attention"
 # (a meaningful decline worth a callout) rather than plain "neutral".
 _MOMENTUM_ATTENTION_PCT = -25
+
+# Absolute MoM % beyond this is not trustworthy as organic growth (collection
+# method change / bulk import / sparse prior). Cap the chip and annotate.
+_ABSURD_PCT_THRESHOLD = 500
+
+# Prior-period engagement floor: below this AND a large ratio → suppress %.
+_SPARSE_PREV_MAX = 20
+_SPARSE_RATIO_THRESHOLD = 10
 
 # Abbreviated month names indexed 1..12 (index 0 unused), for "2026-04" -> "Apr".
 _MONTH_ABBR = (
@@ -87,6 +101,10 @@ def _format_delta(latest: int, prior: int) -> str | None:
     move (``"+170 (0 -> 170)"``); when both months are zero there's nothing to
     say and we return None.
 
+    Absurd swings (``|pct| > 500``) or sparse priors are annotated rather than
+    printed as fake-precision 2000%+ figures — same honesty gate as Momentum
+    and the front-end period comparison chips.
+
     Retained from the original AI-prompt module per request as a generic,
     reusable month-over-month delta formatter (e.g. for any future caller that
     wants this verbose ``"+42% (a -> b)"`` form). The Momentum bucket computes
@@ -99,6 +117,17 @@ def _format_delta(latest: int, prior: int) -> str | None:
         sign = "+" if latest >= 0 else ""
         return f"{sign}{latest:,} ({prior:,} -> {latest:,})"
     pct = round((latest - prior) / prior * 100)
+    ratio = latest / prior if prior else 0
+    if prior <= _SPARSE_PREV_MAX and ratio >= _SPARSE_RATIO_THRESHOLD and latest > prior:
+        return (
+            f"n/a ({prior:,} -> {latest:,}; base period sparse / collection changed)"
+        )
+    if abs(pct) > _ABSURD_PCT_THRESHOLD:
+        sign = "+" if pct >= 0 else "-"
+        return (
+            f"{sign}>{_ABSURD_PCT_THRESHOLD}% ({prior:,} -> {latest:,}; "
+            f"large change — may reflect new collection, not organic growth)"
+        )
     sign = "+" if pct >= 0 else ""
     return f"{sign}{pct}% ({prior:,} -> {latest:,})"
 
@@ -132,6 +161,7 @@ def _momentum_bucket(trend: list) -> dict | None:
       prior active month's short name; detail names the latest active month,
       its engagements, and the direction. Sentiment is ``positive`` when up,
       ``attention`` on a meaningful drop (<= -25%), else ``neutral``.
+      Absurd / sparse swings are capped or suppressed (never 2000%+ chips).
     * ``== 1`` active month — no comparison to make; report it as the peak so
       far. Sentiment ``neutral``.
     * ``0`` active months — return None so no (misleading) card is emitted.
@@ -166,9 +196,58 @@ def _momentum_bucket(trend: list) -> dict | None:
     # bogus number — and never a negative one (the empty-month guard above
     # already prevents the latest from being the empty tail).
     if prior_eng == 0:
-        pct = 0
-    else:
-        pct = round((latest_eng - prior_eng) / prior_eng * 100)
+        return {
+            "key": "momentum",
+            "title": "Momentum",
+            "metric": f"▬ vs {prior_short}",
+            "detail": (
+                f"Engagements in {latest.month}: {latest_eng:,} "
+                f"(prior active month {prior.month} had none logged)."
+            ),
+            "sentiment": "neutral",
+        }
+
+    pct = round((latest_eng - prior_eng) / prior_eng * 100)
+    ratio = latest_eng / prior_eng
+
+    # Sparse prior + huge jump → don't invent a growth rate.
+    if (
+        prior_eng <= _SPARSE_PREV_MAX
+        and ratio >= _SPARSE_RATIO_THRESHOLD
+        and latest_eng > prior_eng
+    ):
+        return {
+            "key": "momentum",
+            "title": "Momentum",
+            "metric": f"n/a vs {prior_short}",
+            "detail": (
+                f"Engagements {latest_eng:,} in {latest.month} vs "
+                f"{prior_eng:,} in {prior.month} — base period sparse / "
+                f"collection changed; % not shown."
+            ),
+            "sentiment": "neutral",
+        }
+
+    # Absurd swing off a solid prior → cap the chip, annotate the detail.
+    if abs(pct) > _ABSURD_PCT_THRESHOLD:
+        arrow = "▲" if pct > 0 else "▼"
+        direction = "up" if pct > 0 else "down"
+        sentiment = (
+            "attention"
+            if pct <= _MOMENTUM_ATTENTION_PCT
+            else ("positive" if pct > 0 else "neutral")
+        )
+        return {
+            "key": "momentum",
+            "title": "Momentum",
+            "metric": f"{arrow} >{_ABSURD_PCT_THRESHOLD}% vs {prior_short}",
+            "detail": (
+                f"Engagements {direction} sharply in {latest.month} "
+                f"({latest_eng:,} vs {prior_eng:,} in {prior.month}). "
+                f"Large change — may reflect new collection, not organic growth."
+            ),
+            "sentiment": sentiment,
+        }
 
     if pct > 0:
         arrow = "▲"
@@ -206,11 +285,12 @@ def build_insight_buckets(tenant_id: int) -> list[dict]:
 
     Returns ``[]`` when the tenant has NO activity at all (no events, no
     recaps, and every KPI total zero). Otherwise returns the buckets in this
-    exact order — ``reach``, ``sampling``, ``sales``, ``new_audience``,
+    order — ``reach`` (consumers sampled), optional ``sampling`` only when
+    samples handed out is a DISTINCT count, ``sales``, ``new_audience``,
     ``momentum`` — each a dict ``{key, title, detail, sentiment, metric}`` with
     every number formatted with thousands separators. ``momentum`` is omitted
     when the tenant has fewer than one active month (see
-    :func:`_momentum_bucket`), so the card count is four or five.
+    :func:`_momentum_bucket`), so the card count is three to five.
 
     Synchronous Django ORM; callers wrap it as needed. Numbers are only ever
     read from the aggregates — never fabricated.
@@ -241,35 +321,48 @@ def build_insight_buckets(tenant_id: int) -> list[dict]:
 
     buckets: list[dict] = []
 
-    # 1) Reach.
+    # Consumers sampled (people). The API often mirrors this into
+    # samples_distributed when no separate sample-unit count exists ("kyle's
+    # rule"). Showing the same number twice as "reach" AND "samples handed
+    # out" is a lie — collapse to one consumers-sampled card unless the
+    # sample-unit total is actually distinct.
+    consumers = k.consumers_reached or k.samples_distributed
+    samples = k.samples_distributed
+    samples_distinct = samples > 0 and samples != consumers
+
+    reach_detail = (
+        f"{consumers:,} consumers sampled across "
+        f"{event_count:,} events"
+    )
+    if k.total_engagements > 0 and k.total_engagements != consumers:
+        reach_detail += f" · {k.total_engagements:,} engagements"
+    reach_detail += "."
     buckets.append(
         {
             "key": "reach",
-            "title": "Reach",
-            "metric": f"{k.consumers_reached:,}",
-            "detail": (
-                f"{k.consumers_reached:,} consumers reached across "
-                f"{event_count:,} events and {k.total_engagements:,} engagements."
-            ),
-            "sentiment": "positive" if k.consumers_reached > 0 else "neutral",
+            "title": "Consumers sampled",
+            "metric": f"{consumers:,}",
+            "detail": reach_detail,
+            "sentiment": "positive" if consumers > 0 else "neutral",
         }
     )
 
-    # 2) Sampling.
-    sampling_detail = f"{k.samples_distributed:,} samples handed out"
-    if event_count > 0:
-        avg = round(k.samples_distributed / event_count)
-        sampling_detail += f", ~{avg:,}/event"
-    sampling_detail += "."
-    buckets.append(
-        {
-            "key": "sampling",
-            "title": "Sampling",
-            "metric": f"{k.samples_distributed:,}",
-            "detail": sampling_detail,
-            "sentiment": "positive" if k.samples_distributed > 0 else "neutral",
-        }
-    )
+    # Samples handed out (units) — only when distinct from consumers sampled.
+    if samples_distinct:
+        sampling_detail = f"{samples:,} samples handed out"
+        if event_count > 0:
+            avg = round(samples / event_count)
+            sampling_detail += f", ~{avg:,}/event"
+        sampling_detail += "."
+        buckets.append(
+            {
+                "key": "sampling",
+                "title": "Samples handed out",
+                "metric": f"{samples:,}",
+                "detail": sampling_detail,
+                "sentiment": "positive",
+            }
+        )
 
     # 3) Sales.
     sales_detail = f"{k.products_sold:,} products sold"
