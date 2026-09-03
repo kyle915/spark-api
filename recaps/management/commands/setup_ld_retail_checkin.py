@@ -171,7 +171,8 @@ CONSUMER_SAMPLING: dict = {
 # fallback that lands there is the less wrong of the three.
 #
 # Product Seeding template name must stay free of "event"/"activation"/etc. so
-# Recaps list activation chips leave those rows under View all only.
+# Recaps list activation chips leave Product Seeding under its own
+# ``seeding`` filter (never Retail / Event / CONV).
 PROGRAMS: list[dict] = [
     {
         "event_type": "retail sampling",

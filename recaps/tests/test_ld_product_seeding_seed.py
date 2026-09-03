@@ -68,11 +68,11 @@ class TestSeedLdProductSeeding(BaseGraphQLTestCase):
             "Cases Dropped by SKU",
         }
 
-        # Must stay off Retail / Event chips → View all only.
+        # Classifies as seeding (Recaps chip); never Retail / Event / CONV.
         key, _ = _activation_bucket_for_type_name(tpl.name)
-        assert key == "other"
+        assert key == "seeding"
         key2, _ = _activation_bucket_for_type_name(et.name)
-        assert key2 == "other"
+        assert key2 == "seeding"
 
     def test_apply_is_idempotent(self):
         from recaps.models import CustomField, CustomRecapTemplate

@@ -1667,11 +1667,16 @@ _ACTIVATION_STATUS_Q = (
 
 
 def _activation_bucket_for_type_name(name: str | None) -> tuple[str, str]:
-    """Map a RequestType name onto one Insights bucket (key, label)."""
+    """Map a RequestType name onto one activation bucket (key, label).
+
+    Product Seeding is checked before Event patterns so names like
+    ``Liquid Death-Product Seeding`` never match ``activation``. Insights
+    folds ``seeding`` into ``other`` (CONV stays Retail + On-prem only);
+    the Recaps list filter uses ``seeding`` explicitly.
+    """
     text = name or ""
-    # Product Seeding must stay unclassified (View all only) — never Event.
     if re.search(r"product\s*seeding|\bseeding\b", text, re.I):
-        return "other", "Other"
+        return "seeding", "Product Seeding"
     for key, label, pattern in _ACTIVATION_BUCKETS:
         if pattern.search(text):
             return key, label
@@ -1734,6 +1739,11 @@ def tenant_activation_breakdown(
             }
         )
         key, _ = _activation_bucket_for_type_name(name)
+        # Insights chart stays Retail / On-prem / Events / Other.
+        # Seeding is filterable on Recaps but not a fifth Insights slice,
+        # and must stay out of CONV (Retail + On-prem only).
+        if key == "seeding":
+            key = "other"
         bucket_counts[key] = bucket_counts.get(key, 0) + count
 
     buckets = [

@@ -34,7 +34,9 @@ class RecapFiltersInput(SparkGraphQLInput):
     shared: bool | None = None
     # Activation program bucket for the Recaps list chips.
     # ``retail`` = Retail + On-premise (same fold as Insights CONV),
-    # ``event`` = Event activations only. Null / other = no filter.
+    # ``event`` = Event activations only,
+    # ``seeding`` = Product Seeding (excluded from CONV).
+    # Null / other = no filter.
     # Classification mirrors ``_activation_bucket_for_type_name``.
     activation_bucket: str | None = None
 
