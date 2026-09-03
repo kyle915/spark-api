@@ -32,6 +32,11 @@ class RecapFiltersInput(SparkGraphQLInput):
     state_code: str | None = None
     # True = shared_at is set (link copied / emailed). False = not yet shared.
     shared: bool | None = None
+    # Activation program bucket for the Recaps list chips.
+    # ``retail`` = Retail + On-premise (same fold as Insights CONV),
+    # ``event`` = Event activations only. Null / other = no filter.
+    # Classification mirrors ``_activation_bucket_for_type_name``.
+    activation_bucket: str | None = None
 
 
 @strawberry.input

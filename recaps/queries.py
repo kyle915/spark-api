@@ -50,6 +50,48 @@ from utils.graphql.relay import (
 RECAPS_LIST_MAX_LIMIT = 50
 
 
+def _activation_bucket_name_q(field: str, bucket: str) -> Q | None:
+    """Build a Q that matches request-type / template names for ``bucket``.
+
+    Mirrors ``tenant_overview._activation_bucket_for_type_name`` order
+    (Retail → On-premise → Events). List UI folds On-premise into Retail,
+    so ``bucket="retail"`` includes both retail and onprem classifications.
+    ``bucket="event"`` requires the event patterns and excludes names that
+    would have classified as retail/onprem first.
+    """
+    key = (bucket or "").strip().lower()
+    retail_q = Q(**{f"{field}__icontains": "retail"})
+    onprem_q = (
+        Q(**{f"{field}__iregex": r"on[-\s]?prem"})
+        | Q(**{f"{field}__icontains": "bar"})
+        | Q(**{f"{field}__icontains": "venue"})
+    )
+    event_q = (
+        Q(**{f"{field}__icontains": "event"})
+        | Q(**{f"{field}__icontains": "activation"})
+        | Q(**{f"{field}__icontains": "festival"})
+        | Q(**{f"{field}__iregex": r"pop[-\s]?up"})
+    )
+    if key == "retail":
+        return retail_q | onprem_q
+    if key == "event":
+        return event_q & ~retail_q & ~onprem_q
+    return None
+
+
+def _apply_activation_bucket_filter(
+    queryset: QuerySet,
+    *,
+    activation_bucket: str | None,
+    name_field: str,
+) -> QuerySet:
+    """Narrow the list queryset by activation program bucket."""
+    bucket_q = _activation_bucket_name_q(name_field, activation_bucket or "")
+    if bucket_q is None:
+        return queryset
+    return queryset.filter(bucket_q)
+
+
 def _apply_name_code_filters(
     queryset: QuerySet,
     *,
@@ -1392,6 +1434,9 @@ class RecapQueries:
         ambassador_name = (
             getattr(filters, "ambassador_name", None) if filters else None
         )
+        activation_bucket = (
+            getattr(filters, "activation_bucket", None) if filters else None
+        )
         # Force approved=True for client users — they never see drafts.
         # Overrides whatever the client (or a stale frontend filter) sent.
         # Also ignore `shared`: that flag is an admin publish step, not
@@ -1430,6 +1475,11 @@ class RecapQueries:
             retailer_name=retailer_name,
             state_code=state_code,
             ambassador_name=ambassador_name,
+        )
+        queryset = _apply_activation_bucket_filter(
+            queryset,
+            activation_bucket=activation_bucket,
+            name_field="event__request__request_type__name",
         )
         # List cards only need hero + count + flat event labels.
         # Drop the fat default prefetches (engagements/samples/sales).
@@ -1624,6 +1674,9 @@ class RecapQueries:
         ambassador_name = (
             getattr(filters, "ambassador_name", None) if filters else None
         )
+        activation_bucket = (
+            getattr(filters, "activation_bucket", None) if filters else None
+        )
 
         # Force approved=True for client users on custom recaps too.
         # Ignore `shared` the same way as the legacy recaps list — clients
@@ -1655,6 +1708,13 @@ class RecapQueries:
             retailer_name=retailer_name,
             state_code=state_code,
             ambassador_name=ambassador_name,
+        )
+        queryset = _apply_activation_bucket_filter(
+            queryset,
+            activation_bucket=activation_bucket,
+            # Custom list cards label by template name (same as FE
+            # activationBucketForTypeName on customRecapTemplate.name).
+            name_field="custom_recap_template__name",
         )
         if (
             filters
