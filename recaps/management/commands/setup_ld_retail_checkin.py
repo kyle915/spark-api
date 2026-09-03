@@ -1,19 +1,21 @@
-"""Make Liquid Death's ONE standing check-in link serve BOTH their programs.
+"""Make Liquid Death's ONE standing check-in link serve their programs.
 
 (Name kept for its live wiring — the `/internal/cron/setup-ld-retail-checkin`
 endpoint and the "Setup LD retail check-in" workflow both point at it. It now
-covers Retail Sampling and Event Activation.)
+covers Retail Sampling, Event Activation, and Product Seeding.)
 
-LD ALREADY HAS BOTH RECAP FORMS — "Liquid Death-Retail Sampling" (event type
-"Retail Sampling") and "Liquid Death-Event Activation" (event type "Event
-Activation"). This command creates NEITHER. Seeding a duplicate would split the
-brand's recaps across two forms and halve every dashboard number; the Feel Free
-near-miss is written up in `setup_feel_free_checkin`. What's missing is only:
+LD ALREADY HAS the Retail / Event recap forms — "Liquid Death-Retail Sampling"
+and "Liquid Death-Event Activation". Product Seeding is seeded separately by
+``seed_ld_product_seeding_recap_template`` (this command creates NONE of the
+templates). Seeding a duplicate would split the brand's recaps across two forms
+and halve every dashboard number; the Feel Free near-miss is written up in
+`setup_feel_free_checkin`. What's missing is only:
 
 1. a standing ``LD-`` check-in code on the tenant,
-2. both event types made SELECTABLE on that one link, with the retail pin kept
+2. the event types made SELECTABLE on that one link, with the retail pin kept
    as the fallback for a request that names no program,
-3. a "Products Sampled" multi-select on each program's existing template, and
+3. a "Products Sampled" / Cases-by-SKU multi-select on each program's template,
+   and
 4. the labelled PHOTO BUCKETS the recap step uploads into, per program.
 
 (2) is why this exists. A second check-in link per program looks like the
@@ -166,7 +168,10 @@ CONSUMER_SAMPLING: dict = {
 #
 # The FIRST entry is the default: what the link stamps when a request carries no
 # program (an old page, a curl). Retail is the higher-volume program, so a
-# fallback that lands there is the less wrong of the two.
+# fallback that lands there is the less wrong of the three.
+#
+# Product Seeding template name must stay free of "event"/"activation"/etc. so
+# Recaps list activation chips leave those rows under View all only.
 PROGRAMS: list[dict] = [
     {
         "event_type": "retail sampling",
@@ -187,6 +192,18 @@ PROGRAMS: list[dict] = [
             {"name": "Expense Receipts (Parking)"},
         ],
     },
+    {
+        "event_type": "product seeding",
+        "template": "product seeding",
+        "photos": [
+            {"name": "Drop-off Placement"},
+            {"name": "Product on Display"},
+            {"name": "Delivery Receipt"},
+        ],
+        # Cases-by-SKU field is seeded on the Product Seeding template itself;
+        # skip adding a second "Products Sampled" row onto that form.
+        "skip_products_field": True,
+    },
 ]
 
 # Categories that back a positional upload sentinel ("1" = photos, "2" =
@@ -205,9 +222,10 @@ def _norm(name: str | None) -> str:
 
 class Command(BaseCommand):
     help = (
-        "Make Liquid Death's standing check-in link serve both programs: "
-        "selectable event types, per-program photo buckets, and the Products "
-        "Sampled picker on each existing template (dry-run default)."
+        "Make Liquid Death's standing check-in link serve Retail Sampling, "
+        "Event Activation, and Product Seeding: selectable event types, "
+        "per-program photo buckets, and the Products Sampled picker on "
+        "sampling templates (dry-run default)."
     )
 
     def add_arguments(self, parser):
@@ -319,7 +337,14 @@ class Command(BaseCommand):
                         "deliberately does NOT create one — check the list above."
                     )
             plan.append(
-                {"type": etype, "template": template, "photos": spec["photos"]}
+                {
+                    "type": etype,
+                    "template": template,
+                    "photos": spec["photos"],
+                    "skip_products_field": bool(
+                        spec.get("skip_products_field")
+                    ),
+                }
             )
 
         self.stdout.write("")
@@ -336,20 +361,40 @@ class Command(BaseCommand):
                     (f.name or "").strip().lower()
                     for f in CustomField.objects.filter(custom_recap_template=tpl)
                 }
-                state = (
-                    "ALREADY PRESENT — options refreshed"
-                    if PRODUCTS_FIELD.strip().lower() in names
-                    else "will be ADDED"
-                )
-                ps = (
-                    "product_samples ON"
-                    if tpl.product_samples
-                    else "product_samples will be ENABLED"
-                )
-                self.stdout.write(
-                    f"        form: [{tpl.id}] {tpl.name!r} ({len(names)} fields); "
-                    f"{PRODUCTS_FIELD!r} {state}; {ps}"
-                )
+                if entry.get("skip_products_field"):
+                    sku_state = (
+                        "Cases Dropped by SKU already on form "
+                        "(seed_ld_product_seeding owns this field)"
+                        if "cases dropped by sku" in names
+                        or PRODUCTS_FIELD.strip().lower() in names
+                        else "SKU field expected from seed_ld_product_seeding "
+                        "— run that seeder first"
+                    )
+                    ps = (
+                        "product_samples ON"
+                        if tpl.product_samples
+                        else "product_samples will be ENABLED"
+                    )
+                    self.stdout.write(
+                        f"        form: [{tpl.id}] {tpl.name!r} "
+                        f"({len(names)} fields); {sku_state}; {ps}"
+                    )
+                else:
+                    state = (
+                        "ALREADY PRESENT — options refreshed"
+                        if PRODUCTS_FIELD.strip().lower() in names
+                        else "will be ADDED"
+                    )
+                    ps = (
+                        "product_samples ON"
+                        if tpl.product_samples
+                        else "product_samples will be ENABLED"
+                    )
+                    self.stdout.write(
+                        f"        form: [{tpl.id}] {tpl.name!r} "
+                        f"({len(names)} fields); "
+                        f"{PRODUCTS_FIELD!r} {state}; {ps}"
+                    )
         if etypes[0].id != plan[0]["type"].id:
             self.stdout.write(
                 self.style.WARNING(
@@ -409,9 +454,16 @@ class Command(BaseCommand):
 
             for entry in plan:
                 if entry["template"] is not None:
-                    self._ensure_products_field(entry["template"], tenant, opts_list)
+                    if not entry.get("skip_products_field"):
+                        self._ensure_products_field(
+                            entry["template"], tenant, opts_list
+                        )
                     self._ensure_product_samples_flag(entry["template"])
-
+                    if entry.get("skip_products_field"):
+                        # Refresh Cases Dropped by SKU options from catalog.
+                        self._refresh_cases_by_sku_options(
+                            entry["template"], tenant, opts_list
+                        )
         self.stdout.write("")
         self.stdout.write(
             self.style.SUCCESS(f"Check-in code : {tenant.checkin_code}")
@@ -640,6 +692,36 @@ class Command(BaseCommand):
         return config
 
     # -- writes ------------------------------------------------------------
+
+    def _refresh_cases_by_sku_options(
+        self, template, tenant, options: list[str]
+    ) -> None:
+        """Refresh Product Seeding Cases Dropped by SKU option cache in place."""
+        from recaps.models import CustomField
+        from recaps.products_sampled import is_products_sampled_field
+
+        options = product_options_for_tenant(tenant) or list(options)
+        field = next(
+            (
+                f
+                for f in CustomField.objects.filter(custom_recap_template=template)
+                if is_products_sampled_field(f.name)
+            ),
+            None,
+        )
+        if field is None:
+            self.stdout.write(
+                self.style.WARNING(
+                    f"  no Cases/Products Sampled field on [{template.id}] "
+                    f"{template.name!r} — run seed_ld_product_seeding first"
+                )
+            )
+            return
+        field.options = options
+        field.save(update_fields=["options"])
+        self.stdout.write(
+            f"  refreshed [{field.id}] {field.name!r} → {len(options)} options"
+        )
 
     def _ensure_product_samples_flag(self, template) -> None:
         """Turn on structured CustomRecapProductSample capture for the template.

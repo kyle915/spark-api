@@ -57,7 +57,8 @@ def _activation_bucket_name_q(field: str, bucket: str) -> Q | None:
     (Retail → On-premise → Events). List UI folds On-premise into Retail,
     so ``bucket="retail"`` includes both retail and onprem classifications.
     ``bucket="event"`` requires the event patterns and excludes names that
-    would have classified as retail/onprem first.
+    would have classified as retail/onprem first. Product Seeding / seeding
+    names are excluded from event so they stay View-all only.
     """
     key = (bucket or "").strip().lower()
     retail_q = Q(**{f"{field}__icontains": "retail"})
@@ -66,6 +67,7 @@ def _activation_bucket_name_q(field: str, bucket: str) -> Q | None:
         | Q(**{f"{field}__icontains": "bar"})
         | Q(**{f"{field}__icontains": "venue"})
     )
+    seeding_q = Q(**{f"{field}__iregex": r"product\s*seeding|\bseeding\b"})
     event_q = (
         Q(**{f"{field}__icontains": "event"})
         | Q(**{f"{field}__icontains": "activation"})
@@ -75,7 +77,7 @@ def _activation_bucket_name_q(field: str, bucket: str) -> Q | None:
     if key == "retail":
         return retail_q | onprem_q
     if key == "event":
-        return event_q & ~retail_q & ~onprem_q
+        return event_q & ~retail_q & ~onprem_q & ~seeding_q
     return None
 
 

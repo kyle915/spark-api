@@ -5517,18 +5517,74 @@ class DeleteTenantView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class SeedLdProductSeedingRecapTemplateView(View):
+    """GET/POST `/internal/cron/seed-ld-product-seeding-recap-template`.
+
+    Builds/reconciles Liquid Death's **Product Seeding** event type +
+    ``Liquid Death-Product Seeding`` recap template (location, cases total,
+    cases-by-SKU from catalog, mileage). Fires
+    ``seed_ld_product_seeding_recap_template``. DRY-RUN unless apply=true.
+
+    After apply, re-run ``setup-ld-retail-checkin`` so the standing LD- link
+    offers Product Seeding alongside Retail + Event.
+
+    Params: tenant (default "liquid death"), apply.
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _param(name: str) -> str | None:
+            return request.GET.get(name) or request.POST.get(name)
+
+        apply_raw = (_param("apply") or "").lower()
+        kwargs: dict = {
+            "tenant": _param("tenant") or "liquid death",
+            "apply": apply_raw in ("1", "true", "yes", "on"),
+        }
+
+        out = io.StringIO()
+        try:
+            call_command(
+                "seed_ld_product_seeding_recap_template", stdout=out, **kwargs
+            )
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("seed_ld_product_seeding_recap_template cron failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "report": out.getvalue(),
+                },
+                status=500,
+            )
+        return JsonResponse(
+            {"ok": True, "applied": kwargs["apply"], "report": out.getvalue()}
+        )
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class SetupLdRetailCheckinView(View):
     """GET/POST `/internal/cron/setup-ld-retail-checkin`.
 
-    Makes Liquid Death's ONE standing check-in link serve both their programs:
-    mints/keeps the code, makes Retail Sampling and Event Activation selectable
-    on it (keeping the retail pin as the fallback for a request that names no
-    program), adds the Products Sampled multi-select (full LD SKU list) to each
-    program's template, and seeds each program's own photo buckets.
+    Makes Liquid Death's ONE standing check-in link serve Retail Sampling,
+    Event Activation, and Product Seeding: mints/keeps the code, makes those
+    event types selectable (keeping the retail pin as the fallback for a
+    request that names no program), adds Products Sampled to sampling
+    templates, refreshes Cases-by-SKU options on Product Seeding, and seeds
+    each program's own photo buckets.
 
-    Creates no template — LD already has both, and a duplicate would split the
-    brand's recaps. Idempotent: re-running refreshes the option lists and
-    reuses the categories that already exist.
+    Creates no template — Retail/Event already exist; Product Seeding is
+    seeded by ``seed-ld-product-seeding-recap-template``. Idempotent.
 
     Params: tenant, code, training_url, skip_products, apply (default DRY RUN).
     """
@@ -8714,6 +8770,7 @@ def _registered_views() -> dict[str, Any]:
         "set-custom-recap-field": SetCustomRecapFieldView,
         "seed-brew-dr-recap-template": SeedBrewDrRecapTemplateView,
         "seed-mab-recap-template": SeedMabRecapTemplateView,
+        "seed-ld-product-seeding-recap-template": SeedLdProductSeedingRecapTemplateView,
         "setup-brew-dr-checkin": SetupBrewDrCheckinView,
         "setup-mab-checkin": SetupMabCheckinView,
         "import-demo-recaps": ImportDemoRecapsView,

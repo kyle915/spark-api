@@ -1,13 +1,15 @@
 name: Setup LD retail check-in
 
-# Makes Liquid Death's ONE standing check-in link serve BOTH their programs:
-# mints/keeps the code, makes Retail Sampling and Event Activation selectable on
-# it, adds the "Products Sampled" multi-select (full LD SKU list) to EACH program's existing
-# template, and seeds each program's own photo buckets.
+# Makes Liquid Death's ONE standing check-in link serve their programs:
+# mints/keeps the code, makes Retail Sampling, Event Activation, and Product
+# Seeding selectable on it, adds the "Products Sampled" multi-select (full LD
+# SKU list) to Retail/Event templates, refreshes Cases-by-SKU on Product
+# Seeding, and seeds each program's own photo buckets.
 #
-# It never creates a template. LD already has "Liquid Death-Retail Sampling" and
-# "Liquid Death-Event Activation"; a duplicate would split the brand's recaps
-# across two forms and halve every dashboard number.
+# It never creates a template. LD already has Retail/Event forms; Product
+# Seeding is seeded by seed-ld-product-seeding-recap-template. A duplicate
+# would split the brand's recaps across two forms and halve every dashboard
+# number.
 #
 # The selectable list is the load-bearing part. A second check-in link per
 # program is NOT available — `Tenant.checkin_code` is a single column, so minting
