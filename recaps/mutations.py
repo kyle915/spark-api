@@ -1551,6 +1551,13 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
 
                     from recaps.types import _consumers_sampled_from_fields
 
+                    # Backfill total_engagements from a matching "consumers
+                    # sampled" custom-field count ONLY when the caller did not
+                    # explicitly send totalEngagements. Otherwise an admin
+                    # Metrics edit (e.g. Brew Dr 7500) is silently overwritten
+                    # by a stale custom-field count (4300) on every Save that
+                    # also round-trips customFieldValues — soft refresh still
+                    # shows the old number because the DB never kept 7500.
                     sampled = _consumers_sampled_from_fields(
                         [
                             (cfv.custom_field.name, cfv.value)
@@ -1559,7 +1566,10 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
                             ).select_related("custom_field")
                         ]
                     )
-                    if sampled is not None:
+                    if (
+                        sampled is not None
+                        and self.input.total_engagements is None
+                    ):
                         custom_recap.total_engagements = sampled
                         custom_recap.save(
                             update_fields=["total_engagements", "updated_at"]
@@ -2038,6 +2048,11 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
 
                     from recaps.types import _consumers_sampled_from_fields
 
+                    # Same rule as create: never clobber an explicit
+                    # totalEngagements the admin just typed in Metrics.
+                    # RecapCustomView always round-trips customFieldValues on
+                    # Save, so without this gate a consumers-interacted custom
+                    # field (e.g. Brew Dr 4300) silently wins over 7500.
                     sampled = _consumers_sampled_from_fields(
                         [
                             (cfv.custom_field.name, cfv.value)
@@ -2046,7 +2061,10 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
                             ).select_related("custom_field")
                         ]
                     )
-                    if sampled is not None:
+                    if (
+                        sampled is not None
+                        and self.input.total_engagements is None
+                    ):
                         custom_recap.total_engagements = sampled
                         custom_recap.save(
                             update_fields=["total_engagements", "updated_at"]
