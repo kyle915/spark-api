@@ -1021,11 +1021,13 @@ class TenantInsights:
     """Deterministic, computed-live proactive insights for ONE client's program.
 
     Surfaced on the dashboard WITHOUT the user asking: a short, FIXED list of
-    headline buckets (reach, sampling, sales, new audience, momentum) computed
-    from the same aggregated numbers as :class:`TenantKpis` (see
+    headline buckets (consumers sampled, optional samples handed out when
+    distinct, sales, new audience, momentum) computed from the same aggregated
+    numbers as :class:`TenantKpis` (see
     :func:`recaps.tenant_insights.build_insight_buckets`). No AI call — the
     buckets are templated and reconcile exactly with the live ``tenantKpis``
-    charts, so the cards and the charts can never disagree.
+    charts, so the cards and the charts can never disagree. The same headcount
+    is never labeled both "consumers reached" and "samples handed out".
 
     ``generated_at`` is the ISO-8601 timestamp the buckets were computed (now),
     or null when degraded. ``items`` is the (possibly empty) list of insights.
