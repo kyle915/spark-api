@@ -389,6 +389,20 @@ def public_checkin_identify(request: HttpRequest, code: str) -> HttpResponse:
         address = (data.get("address") or data.get("storeAddress") or "").strip()
         store_name = (data.get("storeName") or data.get("eventName") or "").strip()
 
+        # WHICH PROGRAM — resolved before the store gate so Product Seeding can
+        # skip pre-recap location (drop-off address + mileage live on the form).
+        # Tenant-scoped: a forged id can't reach another brand's type / template.
+        # Unresolvable → unanswered → tenant pinned default (pre-selector behaviour).
+        chosen_type = checkin_web.resolve_checkin_event_type(
+            target, data.get("eventTypeId") or data.get("event_type_id")
+        )
+        if chosen_type is None and len(checkin_web.selectable_event_types(target)) > 1:
+            logger.info(
+                "checkin identify: no valid event type on a multi-program link "
+                "code=%s raw=%r — using the tenant default",
+                code, data.get("eventTypeId"),
+            )
+
         # ROAMING brands pick a market; the market becomes the event's location
         # key, so everyone working Austin today shares one event instead of
         # forking one per typed address. Where they actually sampled is
@@ -410,6 +424,18 @@ def public_checkin_identify(request: HttpRequest, code: str) -> HttpResponse:
                 return _err("Pick your market from the list.")
             address = canon or market
             store_name = ""
+        elif checkin_web.is_product_seeding_event_type(chosen_type):
+            # Location product dropped + Total mileage are recap fields — do not
+            # force "Where are you working?" on identify. Still need a find-or-
+            # create key; mint a stable per-BA deferred address when omitted.
+            if not address:
+                if on_date is None:
+                    return _err("Pick the date you worked (YYYY-MM-DD).")
+                address = checkin_web.deferred_product_seeding_address(
+                    ambassador_id=ambassador.id, on_date=on_date
+                )
+                if not store_name:
+                    store_name = "Product Seeding"
         elif recap_only:
             if not store_name:
                 return _err("Enter the store name.")
@@ -438,23 +464,6 @@ def public_checkin_identify(request: HttpRequest, code: str) -> HttpResponse:
             return _err(
                 f"That date is more than {CHECKIN_MAX_PAST_DAYS} days ago. "
                 "Ask your lead to log it."
-            )
-
-        # WHICH PROGRAM. A brand running more than one off the same link asks
-        # the BA ("Retail Sampling" or "Event Activation"), and the answer picks
-        # their recap form via the event's type. Resolved tenant-scoped, so a
-        # forged id can't reach another brand's type — or, through it, another
-        # brand's template. Anything unresolvable is treated as unanswered and
-        # falls through to the tenant's pinned default, which is exactly what
-        # the link did before the question existed.
-        chosen_type = checkin_web.resolve_checkin_event_type(
-            target, data.get("eventTypeId") or data.get("event_type_id")
-        )
-        if chosen_type is None and len(checkin_web.selectable_event_types(target)) > 1:
-            logger.info(
-                "checkin identify: no valid event type on a multi-program link "
-                "code=%s raw=%r — using the tenant default",
-                code, data.get("eventTypeId"),
             )
         # Prefer a shift this BA already clocked that day. Feel Free shares
         # one event per market per day; landing on that event is what lets
