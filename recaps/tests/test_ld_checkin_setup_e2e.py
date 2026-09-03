@@ -37,6 +37,7 @@ class TestSeederEndToEnd(BaseGraphQLTestCase):
             "Event Activation",
             "On-Premise Sampling",
             "Event",
+            "Product Seeding",
         ):
             self.types[name] = EventType.objects.create(
                 name=name, tenant=self.tenant, created_by=self.user
@@ -51,6 +52,13 @@ class TestSeederEndToEnd(BaseGraphQLTestCase):
             tenant=self.tenant,
             name="Liquid Death-Retail Sampling",
             event_type=self.types["Retail Sampling"],
+            created_by=self.user,
+        )
+        self.tpl_seeding = CustomRecapTemplate.objects.create(
+            tenant=self.tenant,
+            name="Liquid Death-Product Seeding",
+            event_type=self.types["Product Seeding"],
+            product_samples=True,
             created_by=self.user,
         )
         for name in ("Sampling photos", "Table setup", "Receipts"):
@@ -94,11 +102,15 @@ class TestSeederEndToEnd(BaseGraphQLTestCase):
 
         # 1. code minted
         assert (self.tenant.checkin_code or "").startswith("LD-")
-        # 2. both programs selectable, retail pinned as fallback
+        # 2. three programs selectable, retail pinned as fallback
         offered = [t.name for t in checkin_web.selectable_event_types(self.tenant)]
-        assert offered == ["Retail Sampling", "Event Activation"]
+        assert offered == [
+            "Retail Sampling",
+            "Event Activation",
+            "Product Seeding",
+        ]
         assert self.tenant.checkin_event_type.name == "Retail Sampling"
-        # 3. Products Sampled on BOTH templates, 32 options each
+        # 3. Products Sampled on Retail + Event templates, 32 options each
         for tpl in (self.tpl_retail, self.tpl_act):
             f = CustomField.objects.get(
                 custom_recap_template=tpl, name="Products Sampled"
@@ -109,6 +121,13 @@ class TestSeederEndToEnd(BaseGraphQLTestCase):
             assert f.required is False
             tpl.refresh_from_db()
             assert tpl.product_samples is True
+        # Product Seeding keeps its own Cases Dropped by SKU field (seeded
+        # separately); setup must not invent a duplicate Products Sampled row.
+        assert not CustomField.objects.filter(
+            custom_recap_template=self.tpl_seeding, name="Products Sampled"
+        ).exists()
+        self.tpl_seeding.refresh_from_db()
+        assert self.tpl_seeding.product_samples is True
         # 4. buckets per program, "Table setup" relabelled not duplicated
         names = set(
             FileRecapCategory.objects.filter(tenant=self.tenant).values_list(
@@ -123,6 +142,9 @@ class TestSeederEndToEnd(BaseGraphQLTestCase):
         activation = checkin_web.serialize_photo_buckets(
             Event(tenant=self.tenant, event_type=self.types["Event Activation"])
         )
+        seeding = checkin_web.serialize_photo_buckets(
+            Event(tenant=self.tenant, event_type=self.types["Product Seeding"])
+        )
         assert [b["name"] for b in retail] == [
             "Table Set Up",
             "Product Display",
@@ -134,6 +156,11 @@ class TestSeederEndToEnd(BaseGraphQLTestCase):
             "Consumer Sampling Pictures",
             "Expense Receipts (Parking)",
         ]
+        assert [b["name"] for b in seeding] == [
+            "Drop-off Placement",
+            "Product on Display",
+            "Delivery Receipt",
+        ]
         assert retail[2]["id"] == activation[1]["id"]
         # 5. a program NOT on the link gets no buckets
         assert (
@@ -142,11 +169,12 @@ class TestSeederEndToEnd(BaseGraphQLTestCase):
             )
             == []
         )
-        # 6. the tenant context offers both, so the FE renders a selector
+        # 6. the tenant context offers all three, so the FE renders a selector
         ctx = checkin_web.build_tenant_context(self.tenant)
         assert [t["name"] for t in ctx["eventTypes"]] == [
             "Retail Sampling",
             "Event Activation",
+            "Product Seeding",
         ]
 
     def test_apply_is_idempotent(self):
@@ -183,7 +211,7 @@ class TestSeederEndToEnd(BaseGraphQLTestCase):
             ).count()
             == fields
         )
-        assert self.tenant.checkin_event_types.count() == 2
+        assert self.tenant.checkin_event_types.count() == 3
 
     def test_forced_code_keeps_an_already_shared_link(self):
         self._run(apply=True, code="LD-TNBJ8K")

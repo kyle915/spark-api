@@ -15,10 +15,20 @@ from __future__ import annotations
 
 PRODUCTS_SAMPLED_FIELD = "Products Sampled"
 
+# Product Seeding (and similar) use a BA-facing label but still resolve from
+# the tenant Product catalog — same pills → productSamples qty path.
+PRODUCTS_SAMPLED_ALIASES = frozenset(
+    {
+        PRODUCTS_SAMPLED_FIELD.lower(),
+        "cases dropped by sku",
+        "cases by sku",
+    }
+)
+
 
 def is_products_sampled_field(name: str | None) -> bool:
     """True when a custom field is the brand Products Sampled multiselect."""
-    return (name or "").strip().lower() == PRODUCTS_SAMPLED_FIELD.lower()
+    return (name or "").strip().lower() in PRODUCTS_SAMPLED_ALIASES
 
 
 def products_sampled_options_for_tenant(tenant) -> list[str]:

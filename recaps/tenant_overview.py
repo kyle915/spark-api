@@ -1669,6 +1669,9 @@ _ACTIVATION_STATUS_Q = (
 def _activation_bucket_for_type_name(name: str | None) -> tuple[str, str]:
     """Map a RequestType name onto one Insights bucket (key, label)."""
     text = name or ""
+    # Product Seeding must stay unclassified (View all only) — never Event.
+    if re.search(r"product\s*seeding|\bseeding\b", text, re.I):
+        return "other", "Other"
     for key, label, pattern in _ACTIVATION_BUCKETS:
         if pattern.search(text):
             return key, label

@@ -32,8 +32,11 @@ from tenants.tests.base import BaseGraphQLTestCase
 
 RETAIL_BUCKETS = [b["name"] for b in PROGRAMS[0]["photos"]]
 ACTIVATION_BUCKETS = [b["name"] for b in PROGRAMS[1]["photos"]]
-# Every distinct bucket across both programs — the row set the seeder must own.
-ALL_BUCKETS = list(dict.fromkeys(RETAIL_BUCKETS + ACTIVATION_BUCKETS))
+SEEDING_BUCKETS = [b["name"] for b in PROGRAMS[2]["photos"]]
+# Every distinct bucket across all programs — the row set the seeder must own.
+ALL_BUCKETS = list(
+    dict.fromkeys(RETAIL_BUCKETS + ACTIVATION_BUCKETS + SEEDING_BUCKETS)
+)
 
 
 class TestBucketSpec:
@@ -49,14 +52,23 @@ class TestBucketSpec:
             "Consumer Sampling Pictures",
             "Expense Receipts (Parking)",
         ]
+        assert SEEDING_BUCKETS == [
+            "Drop-off Placement",
+            "Product on Display",
+            "Delivery Receipt",
+        ]
 
-    def test_consumer_sampling_is_the_same_bucket_in_both_programs(self):
+    def test_consumer_sampling_is_the_same_bucket_in_both_sampling_programs(self):
         """One row, two lists. Two rows would split the brand's consumer shots
         across categories that read identically in the PDF."""
         assert _norm(RETAIL_BUCKETS[2]) == _norm(ACTIVATION_BUCKETS[1])
 
     def test_only_consumer_sampling_carries_a_target(self):
-        every = PROGRAMS[0]["photos"] + PROGRAMS[1]["photos"]
+        every = (
+            PROGRAMS[0]["photos"]
+            + PROGRAMS[1]["photos"]
+            + PROGRAMS[2]["photos"]
+        )
         by_name = {b["name"]: b for b in every}
         assert by_name["Consumer Sampling Pictures"]["min"] == 8
         assert by_name["Consumer Sampling Pictures"]["helper"] == (
@@ -97,12 +109,20 @@ class TestBucketSeeding(BaseGraphQLTestCase):
         self.activation = EventType.objects.create(
             name="Event Activation", tenant=self.tenant, created_by=self.system_user
         )
+        self.seeding = EventType.objects.create(
+            name="Product Seeding", tenant=self.tenant, created_by=self.system_user
+        )
         self.programs = [
             {"type": self.retail, "template": None, "photos": PROGRAMS[0]["photos"]},
             {
                 "type": self.activation,
                 "template": None,
                 "photos": PROGRAMS[1]["photos"],
+            },
+            {
+                "type": self.seeding,
+                "template": None,
+                "photos": PROGRAMS[2]["photos"],
             },
         ]
         self.cmd = Command()
@@ -129,6 +149,7 @@ class TestBucketSeeding(BaseGraphQLTestCase):
         assert self._names() == sorted(ALL_BUCKETS)
         assert [c["name"] for c in config["Retail Sampling"]] == RETAIL_BUCKETS
         assert [c["name"] for c in config["Event Activation"]] == ACTIVATION_BUCKETS
+        assert [c["name"] for c in config["Product Seeding"]] == SEEDING_BUCKETS
         # Only the one Kyle put a target on carries the BA-facing hints.
         assert config["Retail Sampling"][2] == {
             "name": "Consumer Sampling Pictures",
@@ -136,6 +157,7 @@ class TestBucketSeeding(BaseGraphQLTestCase):
             "min": 8,
         }
         assert config["Retail Sampling"][0] == {"name": "Table Set Up"}
+        assert config["Product Seeding"][0] == {"name": "Drop-off Placement"}
 
     def test_a_shared_bucket_is_one_row_not_two(self):
         """Both programs list "Consumer Sampling Pictures" — one category."""

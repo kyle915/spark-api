@@ -29,6 +29,8 @@ query Ev($uuid: ID!) {
 def test_is_products_sampled_field_is_case_insensitive():
     assert is_products_sampled_field("Products Sampled")
     assert is_products_sampled_field("products sampled")
+    assert is_products_sampled_field("Cases Dropped by SKU")
+    assert is_products_sampled_field("cases by sku")
     assert not is_products_sampled_field("Which products were sampled?")
     assert not is_products_sampled_field("Market")
 
