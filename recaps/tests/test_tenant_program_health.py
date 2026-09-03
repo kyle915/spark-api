@@ -1,4 +1,4 @@
-"""Coverage for Insights program-health funnel + date-windowed geo/BA."""
+"""Coverage for Insights program-health funnel + Client Today completion."""
 
 from datetime import timedelta
 
@@ -8,6 +8,10 @@ from django.utils import timezone
 from ambassadors.tests.base import AmbassadorsGraphQLTestCase
 from events import models as event_models
 from recaps import models as recap_models
+from recaps.report_types import (
+    CLIENT_TODAY_COMPLETION_LOOKBACK_DAYS,
+    _build_client_today_completion,
+)
 from recaps.tenant_ba_leaderboard import tenant_ba_leaderboard
 from recaps.tenant_overview import tenant_market_performance, tenant_program_health
 
@@ -25,6 +29,18 @@ query($tenantId: ID!, $start: String, $end: String) {
     missing
     startDate
     endDate
+  }
+}
+"""
+
+CLIENT_TODAY_COMPLETION_QUERY = """
+query($tenantId: ID!, $lookback: Int) {
+  clientTodayCompletion(tenantId: $tenantId, lookbackDays: $lookback) {
+    scheduled
+    filed
+    startDate
+    endDate
+    lookbackDays
   }
 }
 """
@@ -191,6 +207,121 @@ class TestTenantProgramHealth(AmbassadorsGraphQLTestCase):
         assert row["filed"] == 1
         assert row["approved"] == 1
         assert row["missing"] == 1
+
+    @pytest.mark.asyncio
+    async def test_graphql_client_today_completion(self):
+        result = await self._execute_query_authenticated(
+            CLIENT_TODAY_COMPLETION_QUERY,
+            {"tenantId": str(self.tenant.id), "lookback": 7},
+            self.spark_admin,
+        )
+        assert result.errors is None
+        row = result.data["clientTodayCompletion"]
+        assert row["scheduled"] == 2
+        assert row["filed"] == 1
+        assert row["lookbackDays"] == 7
+        assert row["endDate"] == timezone.localdate().isoformat()
+
+
+@pytest.mark.django_db(transaction=True)
+class TestClientTodayCompletionUncapped(AmbassadorsGraphQLTestCase):
+    """Regression: Client Today must not approximate fill rate from first:200."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self, db):
+        from config.schema_client import schema_clients
+
+        self.roles = self.setup_default_roles()
+        self.schema = schema_clients
+        self.endpoint_path = "/api/v1/graphql/clients"
+        self.sys = self.get_system_user()
+        self.tenant = self.create_tenant(name="Busy Co")
+        self.location = self.create_location(
+            name="HQ", code="BUSY", zip_code="94105", tenant=self.tenant
+        )
+        self.client_row = self.create_client(
+            name="Brand", email="busy@example.com", tenant=self.tenant
+        )
+        self.distributor = self.create_distributor(
+            name="Distro",
+            email="busy-distro@example.com",
+            location=self.location,
+            tenant=self.tenant,
+        )
+        self.retailer = self.create_retailer(
+            name="Retailer",
+            address="1 Main",
+            store_contact="mgr",
+            location=self.location,
+            tenant=self.tenant,
+        )
+        self.status = self.create_request_status(
+            name="Scheduled", tenant=self.tenant, create_event=True
+        )
+        self.rtype = self.create_request_type("Retail Sampling", self.tenant)
+        self.spark_admin = self.create_user(
+            username="admin-busy",
+            email="admin-busy@igniteproductions.co",
+            role=self.roles["spark_admin"],
+        )
+        ba_user = self.create_user(
+            username="busy-ba",
+            email="busy-ba@test.com",
+            role=self.roles["ambassador"],
+            first_name="Busy",
+            last_name="Bee",
+        )
+        self.ambassador = self.create_ambassador(ba_user)
+
+        today = timezone.localdate()
+        # 210 past stops — more than ClientWeekAheadQuery's first:200 cap.
+        for i in range(210):
+            day = today - timedelta(days=(i % 80) + 1)
+            req = self.create_request(
+                name=f"Stop {i}",
+                date=day,
+                address="1 Main",
+                client=self.client_row,
+                distributor=self.distributor,
+                retailer=self.retailer,
+                request_type=self.rtype,
+                tenant=self.tenant,
+                status=self.status,
+            )
+            if i % 2 == 0:
+                ev = req.event_set.first() or self.create_event(
+                    name=f"Ev {i}", tenant=self.tenant
+                )
+                if ev.request_id != req.id:
+                    ev.request = req
+                    ev.save(update_fields=["request"])
+                recap_models.Recap.objects.create(
+                    name=f"filed-{i}",
+                    event=ev,
+                    ambassador=self.ambassador,
+                    total_engagements=3,
+                    created_by=self.sys,
+                    updated_by=self.sys,
+                )
+
+    def test_helper_counts_beyond_200_rows(self):
+        row = _build_client_today_completion(self.tenant.id, lookback_days=90)
+        assert row.scheduled == 210
+        assert row.filed == 105
+        assert row.lookback_days == CLIENT_TODAY_COMPLETION_LOOKBACK_DAYS
+
+    @pytest.mark.asyncio
+    async def test_graphql_uncapped_completion(self):
+        result = await self._execute_query_authenticated(
+            CLIENT_TODAY_COMPLETION_QUERY,
+            {"tenantId": str(self.tenant.id)},
+            self.spark_admin,
+        )
+        assert result.errors is None
+        row = result.data["clientTodayCompletion"]
+        assert row["scheduled"] == 210
+        assert row["filed"] == 105
+        assert row["lookbackDays"] == 90
 
 
 @pytest.mark.django_db(transaction=True)

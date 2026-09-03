@@ -500,6 +500,10 @@ class TenantProgramHealth:
     ``scheduled`` / ``filed`` / ``approved`` / ``missing`` are request counts
     in the inclusive date window. Filed excludes empty clock-out shells
     (see :mod:`recaps.filed`). ``start_date`` / ``end_date`` echo the window.
+
+    Client Today uses the thinner :class:`ClientTodayCompletion` rollup
+    (``scheduled`` / ``filed`` only, fixed 90d→today) so the bento never
+    approximates fill rate from a capped request list.
     """
 
     scheduled: int
@@ -508,6 +512,28 @@ class TenantProgramHealth:
     missing: int
     start_date: str | None = None
     end_date: str | None = None
+
+
+# Client Today "Recap completion" tile — past N calendar days through today.
+# Matches the window the bento used when it tallied ClientWeekAheadQuery rows.
+CLIENT_TODAY_COMPLETION_LOOKBACK_DAYS = 90
+
+
+@strawberry.type
+class ClientTodayCompletion:
+    """Honest Client Today recap-completion scalars (no row-cap approximation).
+
+    ``scheduled`` = confirmed/completed Requests with ``date`` in the
+    inclusive lookback→today window. ``filed`` = those with at least one
+    *filed* recap (legacy or custom; empty clock-out shells do not count —
+    same definition as :class:`TenantProgramHealth` / :mod:`recaps.filed`).
+    """
+
+    scheduled: int
+    filed: int
+    start_date: str
+    end_date: str
+    lookback_days: int = CLIENT_TODAY_COMPLETION_LOOKBACK_DAYS
 
 
 def _empty_program_health(
@@ -535,6 +561,35 @@ def _build_program_health(
         start_date=data.get("start_date"),
         end_date=data.get("end_date"),
     )
+
+
+def _empty_client_today_completion(
+    start: date, end: date, lookback_days: int
+) -> ClientTodayCompletion:
+    return ClientTodayCompletion(
+        scheduled=0,
+        filed=0,
+        start_date=start.isoformat(),
+        end_date=end.isoformat(),
+        lookback_days=lookback_days,
+    )
+
+
+def _build_client_today_completion(
+    tenant_id: int, *, lookback_days: int = CLIENT_TODAY_COMPLETION_LOOKBACK_DAYS
+) -> ClientTodayCompletion:
+    """Server rollup for Client Today completion % (uncapped request counts)."""
+    end = timezone.localdate()
+    start = end - timedelta(days=max(0, int(lookback_days)))
+    data = tenant_program_health(tenant_id, start=start, end=end)
+    return ClientTodayCompletion(
+        scheduled=int(data["scheduled"]),
+        filed=int(data["filed"]),
+        start_date=start.isoformat(),
+        end_date=end.isoformat(),
+        lookback_days=int(lookback_days),
+    )
+
 
 def _build_tenant_kpis(tenant_id: int, year: int | None = None) -> TenantKpis:
     """Assemble the structured :class:`TenantKpis` for one tenant.
@@ -2001,6 +2056,52 @@ class CampaignReportQueries:
             if not Tenant.objects.filter(id=target_tenant_id).exists():
                 return None
             return _build_program_health(target_tenant_id, start_d, end_d)
+
+        try:
+            data = await sync_to_async(_build, thread_sensitive=True)()
+        except Exception:
+            return empty
+
+        return data if data is not None else empty
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def client_today_completion(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID,
+        lookback_days: int | None = None,
+    ) -> ClientTodayCompletion:
+        """Client Today recap-completion scalars (``scheduled`` / ``filed``).
+
+        Defaults to the past :data:`CLIENT_TODAY_COMPLETION_LOOKBACK_DAYS`
+        calendar days through today (inclusive). Counts are ORM aggregates —
+        not a capped ``requests(first: N)`` edge list — so fill rate stays
+        honest for busy tenants. Filed excludes empty clock-out shells
+        (see :mod:`recaps.filed`). Tenant scoping matches
+        :meth:`tenant_program_health`.
+        """
+        days = (
+            CLIENT_TODAY_COMPLETION_LOOKBACK_DAYS
+            if lookback_days is None
+            else max(0, int(lookback_days))
+        )
+        end = timezone.localdate()
+        start = end - timedelta(days=days)
+        empty = _empty_client_today_completion(start, end, days)
+
+        service = _CampaignReportService()
+        target_tenant_id = await service.resolve_target_tenant_id(info, tenant_id)
+        if target_tenant_id is None:
+            return empty
+
+        def _build():
+            from tenants.models import Tenant
+
+            if not Tenant.objects.filter(id=target_tenant_id).exists():
+                return None
+            return _build_client_today_completion(
+                target_tenant_id, lookback_days=days
+            )
 
         try:
             data = await sync_to_async(_build, thread_sensitive=True)()
