@@ -2084,6 +2084,24 @@ def resolve_checkin_event_type(tenant, raw_id):
     return EventType.objects.filter(tenant_id=tenant.id, id=wanted).first()
 
 
+def is_product_seeding_event_type(event_type) -> bool:
+    """True when the BA picked Product Seeding (location lives on the recap)."""
+    name = (getattr(event_type, "name", None) or "").strip()
+    return bool(re.search(r"product\s*seeding", name, re.I))
+
+
+def deferred_product_seeding_address(*, ambassador_id, on_date) -> str:
+    """Stable walk-in key when identify skips the store-address step.
+
+    Product Seeding asks for drop-off location (and mileage) on the recap
+    form, not on identify. Find-or-create still needs a non-empty address, so
+    mint one per BA + calendar day — unique across crew, stable across
+    lost-session resume for the same shift.
+    """
+    day = on_date.isoformat() if hasattr(on_date, "isoformat") else str(on_date)
+    return f"Product Seeding · BA {ambassador_id} · {day}"
+
+
 def _default_event_type(tenant):
     """The event type the standing link stamps when the BA didn't choose one.
 
