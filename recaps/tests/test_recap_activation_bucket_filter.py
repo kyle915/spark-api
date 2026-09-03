@@ -1,7 +1,8 @@
 """Recaps list `activationBucket` filter.
 
-Mirrors Insights / CONV activation-type buckets so Retail / Event chips
-page correctly under the 50-row list ceiling. Retail includes On-premise.
+Mirrors Insights / CONV activation-type buckets so Retail / Event /
+Product Seeding chips page correctly under the 50-row list ceiling.
+Retail includes On-premise. Seeding is excluded from Event and CONV.
 """
 
 from datetime import datetime, timedelta, timezone as _tz
@@ -85,6 +86,9 @@ class TestRecapActivationBucketFilter(AmbassadorsGraphQLTestCase):
         self.type_event = self.create_request_type(
             "Event Activation", self.tenant
         )
+        self.type_seeding = self.create_request_type(
+            "Product Seeding", self.tenant
+        )
         self.type_other = self.create_request_type("Misc Ops", self.tenant)
 
         def _event_for(rtype, name):
@@ -111,12 +115,14 @@ class TestRecapActivationBucketFilter(AmbassadorsGraphQLTestCase):
         retail_ev = _event_for(self.type_retail, "Retail shift")
         onprem_ev = _event_for(self.type_onprem, "Onprem shift")
         event_ev = _event_for(self.type_event, "Event shift")
+        seeding_ev = _event_for(self.type_seeding, "Seeding shift")
         other_ev = _event_for(self.type_other, "Other shift")
 
         for ev, label in (
             (retail_ev, "legacy-retail"),
             (onprem_ev, "legacy-onprem"),
             (event_ev, "legacy-event"),
+            (seeding_ev, "legacy-seeding"),
             (other_ev, "legacy-other"),
         ):
             recap_models.Recap.objects.create(
@@ -132,6 +138,7 @@ class TestRecapActivationBucketFilter(AmbassadorsGraphQLTestCase):
             ("Retail Sampling Template", "custom-retail"),
             ("On-Premise Bar Night", "custom-onprem"),
             ("Festival Activation", "custom-event"),
+            ("Liquid Death-Product Seeding", "custom-seeding"),
             ("Demo Misc", "custom-other"),
         ):
             tmpl = recap_models.CustomRecapTemplate.objects.create(
@@ -171,9 +178,14 @@ class TestRecapActivationBucketFilter(AmbassadorsGraphQLTestCase):
         assert names == {"legacy-retail", "legacy-onprem"}
 
     @pytest.mark.asyncio
-    async def test_legacy_event_excludes_retail_and_other(self):
+    async def test_legacy_event_excludes_retail_seeding_and_other(self):
         names = await self._names(RECAPS_QUERY, "event")
         assert names == {"legacy-event"}
+
+    @pytest.mark.asyncio
+    async def test_legacy_seeding_only(self):
+        names = await self._names(RECAPS_QUERY, "seeding")
+        assert names == {"legacy-seeding"}
 
     @pytest.mark.asyncio
     async def test_legacy_null_bucket_returns_all(self):
@@ -182,6 +194,7 @@ class TestRecapActivationBucketFilter(AmbassadorsGraphQLTestCase):
             "legacy-retail",
             "legacy-onprem",
             "legacy-event",
+            "legacy-seeding",
             "legacy-other",
         }
 
@@ -194,3 +207,8 @@ class TestRecapActivationBucketFilter(AmbassadorsGraphQLTestCase):
     async def test_custom_event_only(self):
         names = await self._names(CUSTOM_RECAPS_QUERY, "event")
         assert names == {"custom-event"}
+
+    @pytest.mark.asyncio
+    async def test_custom_seeding_only(self):
+        names = await self._names(CUSTOM_RECAPS_QUERY, "seeding")
+        assert names == {"custom-seeding"}

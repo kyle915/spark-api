@@ -54,11 +54,11 @@ def _activation_bucket_name_q(field: str, bucket: str) -> Q | None:
     """Build a Q that matches request-type / template names for ``bucket``.
 
     Mirrors ``tenant_overview._activation_bucket_for_type_name`` order
-    (Retail → On-premise → Events). List UI folds On-premise into Retail,
-    so ``bucket="retail"`` includes both retail and onprem classifications.
-    ``bucket="event"`` requires the event patterns and excludes names that
-    would have classified as retail/onprem first. Product Seeding / seeding
-    names are excluded from event so they stay View-all only.
+    (Seeding → Retail → On-premise → Events). List UI folds On-premise
+    into Retail, so ``bucket="retail"`` includes both retail and onprem
+    classifications. ``bucket="event"`` requires the event patterns and
+    excludes names that would have classified as retail/onprem/seeding
+    first. ``bucket="seeding"`` matches Product Seeding (and similar).
     """
     key = (bucket or "").strip().lower()
     retail_q = Q(**{f"{field}__icontains": "retail"})
@@ -78,6 +78,8 @@ def _activation_bucket_name_q(field: str, bucket: str) -> Q | None:
         return retail_q | onprem_q
     if key == "event":
         return event_q & ~retail_q & ~onprem_q & ~seeding_q
+    if key == "seeding":
+        return seeding_q
     return None
 
 
