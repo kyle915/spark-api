@@ -5521,12 +5521,12 @@ class SeedLdProductSeedingRecapTemplateView(View):
     """GET/POST `/internal/cron/seed-ld-product-seeding-recap-template`.
 
     Builds/reconciles Liquid Death's **Product Seeding** event type +
-    ``Liquid Death-Product Seeding`` recap template (location, cases total,
-    cases-by-SKU from catalog, mileage). Fires
+    ``Liquid Death-Product Seeding`` recap template (Drop-off Locations JSON
+    repeater + Total mileage). Fires
     ``seed_ld_product_seeding_recap_template``. DRY-RUN unless apply=true.
 
     After apply, re-run ``setup-ld-retail-checkin`` so the standing LD- link
-    offers Product Seeding alongside Retail + Event.
+    photo buckets are Drop-off Placement only.
 
     Params: tenant (default "liquid death"), apply.
     """

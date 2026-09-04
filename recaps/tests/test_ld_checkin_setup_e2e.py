@@ -121,8 +121,8 @@ class TestSeederEndToEnd(BaseGraphQLTestCase):
             assert f.required is False
             tpl.refresh_from_db()
             assert tpl.product_samples is True
-        # Product Seeding keeps its own Cases Dropped by SKU field (seeded
-        # separately); setup must not invent a duplicate Products Sampled row.
+        # Product Seeding owns Drop-off Locations (JSON) on its own template
+        # (seeded separately); setup must not invent a Products Sampled row.
         assert not CustomField.objects.filter(
             custom_recap_template=self.tpl_seeding, name="Products Sampled"
         ).exists()
@@ -158,8 +158,6 @@ class TestSeederEndToEnd(BaseGraphQLTestCase):
         ]
         assert [b["name"] for b in seeding] == [
             "Drop-off Placement",
-            "Product on Display",
-            "Delivery Receipt",
         ]
         assert retail[2]["id"] == activation[1]["id"]
         # 5. a program NOT on the link gets no buckets

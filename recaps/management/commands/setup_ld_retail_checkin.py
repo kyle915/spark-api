@@ -195,12 +195,12 @@ PROGRAMS: list[dict] = [
     {
         "event_type": "product seeding",
         "template": "product seeding",
+        # Kyle: remove Product on Display + Delivery Receipt from seeding;
+        # keep a single Drop-off Placement bucket (multi-photo library upload).
         "photos": [
             {"name": "Drop-off Placement"},
-            {"name": "Product on Display"},
-            {"name": "Delivery Receipt"},
         ],
-        # Cases-by-SKU field is seeded on the Product Seeding template itself;
+        # Drop-off Locations JSON on the seeding template owns SKU+cases;
         # skip adding a second "Products Sampled" row onto that form.
         "skip_products_field": True,
     },

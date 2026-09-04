@@ -62,11 +62,19 @@ class TestSeedLdProductSeeding(BaseGraphQLTestCase):
             )
         )
         assert names == {
-            "Location product dropped",
-            "Total cases dropped",
+            "Drop-off Locations",
             "Total mileage",
-            "Cases Dropped by SKU",
         }
+        drop = CustomField.objects.get(
+            custom_recap_template=tpl, name="Drop-off Locations"
+        )
+        assert drop.required is True
+        assert "long" in (drop.custom_field_type.name or "").lower()
+        mileage = CustomField.objects.get(
+            custom_recap_template=tpl, name="Total mileage"
+        )
+        assert mileage.recap_section is not None
+        assert mileage.recap_section.name == "Mileage"
 
         # Must stay off Retail / Event chips → View all only.
         key, _ = _activation_bucket_for_type_name(tpl.name)

@@ -425,7 +425,7 @@ def public_checkin_identify(request: HttpRequest, code: str) -> HttpResponse:
             address = canon or market
             store_name = ""
         elif checkin_web.is_product_seeding_event_type(chosen_type):
-            # Location product dropped + Total mileage are recap fields — do not
+            # Location lives on the recap (Drop-off Locations) — do not
             # force "Where are you working?" on identify. Still need a find-or-
             # create key; mint a stable per-BA deferred address when omitted.
             if not address:

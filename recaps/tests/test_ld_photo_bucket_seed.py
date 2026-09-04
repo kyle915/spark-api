@@ -54,8 +54,6 @@ class TestBucketSpec:
         ]
         assert SEEDING_BUCKETS == [
             "Drop-off Placement",
-            "Product on Display",
-            "Delivery Receipt",
         ]
 
     def test_consumer_sampling_is_the_same_bucket_in_both_sampling_programs(self):
