@@ -30,6 +30,7 @@ from events.event_confirmations import (
     absolute_public_url,
     build_context,
     build_subject,
+    checkin_url_for,
     confirmation_product_options,
     due_reminders,
     format_time_range,
@@ -141,7 +142,9 @@ class TestConfirmationContent:
             "Squeezed-to-Death, Severed Lime, Rootbeer Wrath"
         )
         # Links are READ from the tenant, never hardcoded.
+        assert ctx["checkin_url"].endswith("/checkin/LD-TNBJ8K")
         assert ctx["recap_url"].endswith("/checkin/LD-TNBJ8K")
+        assert ctx["checkin_url"] == ctx["recap_url"]
         assert ctx["training_url"].endswith("/training/LD-FZUWXT")
 
     def test_subject_is_identical_across_stages_so_they_thread(self):
@@ -180,12 +183,15 @@ class TestConfirmationContent:
         for artifact in ("{#", "#}", "{%", "{{"):
             assert artifact not in html
         assert "Open Recap Form" in html
+        assert "Clock in / Clock out" in html
         assert "Review Training Site" in html
         # Real <a href> with a full https URL — a styled <td> with no href
         # (or href="" / a relative /training/ path) is what made the iPhone
         # button look tappable and do nothing.
         assert 'href="https://client.igniteproductions.co/training/LD-FZUWXT"' in html
-        assert 'href="https://client.igniteproductions.co/checkin/LD-TNBJ8K"' in html
+        assert html.count(
+            'href="https://client.igniteproductions.co/checkin/LD-TNBJ8K"'
+        ) >= 2
         assert "spark.igniteproductions.co" not in html
         assert "admin.igniteproductions.co" not in html
         assert env.from_email == "Ignite Productions <staffing@igniteproductions.co>"
@@ -232,9 +238,10 @@ class TestPublicEmailUrls:
         assert training_url_for(tenant) == (
             "https://client.igniteproductions.co/training/LD-FZUWXT"
         )
-        assert recap_url_for(tenant) == (
+        assert checkin_url_for(tenant) == (
             "https://client.igniteproductions.co/checkin/LD-TNBJ8K"
         )
+        assert recap_url_for(tenant) == checkin_url_for(tenant)
 
     @pytest.mark.django_db
     def test_training_url_falls_back_to_training_hub(self):
@@ -256,6 +263,7 @@ class TestPublicEmailUrls:
     def test_training_url_empty_when_tenant_has_neither(self):
         tenant = _tenant(checkin_training_url="", checkin_code="")
         assert training_url_for(tenant) == ""
+        assert checkin_url_for(tenant) == ""
         assert recap_url_for(tenant) == ""
 
 
@@ -358,10 +366,12 @@ class TestTorchConfirmationContent:
         assert ctx["products_label"] == (
             "Raspberry 10mg 12oz, Black Cherry 5mg 12oz"
         )
-        # The standing BA clock code, READ — never reminted, never admin.
-        assert ctx["recap_url"] == (
+        # The standing BA clock code, READ — never reminted, never admin,
+        # never the agency-only checkin_recap_code (TH-AGENCY).
+        assert ctx["checkin_url"] == (
             "https://client.igniteproductions.co/checkin/TH-2HRV3D"
         )
+        assert ctx["recap_url"] == ctx["checkin_url"]
         assert ctx["training_url"] == (
             "https://client.igniteproductions.co/training/torch/"
             "ba-training-guide.pdf"
@@ -382,6 +392,9 @@ class TestTorchConfirmationContent:
         assert "TORCH THC" in html
         assert "Liquid Death" not in html
         assert 'href="https://client.igniteproductions.co/checkin/TH-2HRV3D"' in html
+        assert "Clock in / Clock out" in html
+        assert "Open Recap Form" in html
+        assert "TH-AGENCY" not in html
         assert (
             'href="https://client.igniteproductions.co/training/torch/'
             'ba-training-guide.pdf"'
@@ -389,6 +402,20 @@ class TestTorchConfirmationContent:
         assert "Review Training Site" in html
         assert "spark.igniteproductions.co" not in html
         assert "admin.igniteproductions.co" not in html
+
+    def test_agency_recap_code_is_never_minted_for_bas(self):
+        """Torch's TH-AGENCY twin skips the clock — confirmation emails must
+        keep pointing BAs at TH-2HRV3D even when the agency code exists."""
+        tenant = _tenant(
+            name="Torch THC",
+            slug="torch-thc",
+            checkin_code="TH-2HRV3D",
+            checkin_recap_code="TH-AGENCY",
+        )
+        assert checkin_url_for(tenant) == (
+            "https://client.igniteproductions.co/checkin/TH-2HRV3D"
+        )
+        assert "TH-AGENCY" not in checkin_url_for(tenant)
 
     def test_no_training_url_omits_the_button(self):
         from events.event_confirmations import EventConfirmationMailer

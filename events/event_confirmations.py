@@ -7,14 +7,15 @@ opening line, so the BA reads one consistent set of details.
 
 Three things the rest of the stack has taught us, encoded here:
 
-* **The links are read, never hardcoded.** The recap URL is built from
-  ``Tenant.checkin_code`` and the training URL is ``Tenant.checkin_training_url``
-  (falling back to the tenant's active ``TrainingHub`` code). Both are live
-  columns other work is actively changing (the check-in link now asks the BA
-  which program they're on, and its photo buckets moved), so a literal URL in
-  this module would be correct only until the next deploy. Spark and admin
-  hosts are rewritten to client.igniteproductions.co before they land in
-  the email — field phones have failed to resolve admin.
+* **The links are read, never hardcoded.** Clock-in/out and recap share the
+  tenant's standing ``/checkin/<code>`` page (built from ``Tenant.checkin_code``);
+  the training URL is ``Tenant.checkin_training_url`` (falling back to the
+  tenant's active ``TrainingHub`` code). Those are live columns other work is
+  actively changing, so a literal URL in this module would be correct only
+  until the next deploy. Spark and admin hosts are rewritten to
+  client.igniteproductions.co before they land in the email — field phones
+  have failed to resolve admin. Never mint ``checkin_recap_code`` here: that
+  URL is for 3rd-party / agency filers and refuses the clock.
 
 * **Time is instant arithmetic, never a local date.** ``settings.TIME_ZONE`` is
   UTC, so ``timezone.localdate()`` is the UTC date and every naive "now"
@@ -261,17 +262,29 @@ def absolute_public_url(raw: str, *, allow_relative: bool = True) -> str:
     return value
 
 
-def recap_url_for(tenant) -> str:
-    """The tenant's standing check-in/recap link, or "" when it has no code.
+def checkin_url_for(tenant) -> str:
+    """The tenant's standing BA check-in page (clock in/out + recap), or "".
 
     Built from ``Tenant.checkin_code`` rather than stored on the confirmation:
     the code is a single column an admin can re-mint, and a snapshot taken at
     send time would keep pointing a 24h reminder at a dead link.
+
+    Deliberately ignores ``checkin_recap_code`` — that twin skips the clock and
+    is for agency filers, not the BA this confirmation email addresses.
     """
     code = (getattr(tenant, "checkin_code", "") or "").strip()
     if not code:
         return ""
     return f"{public_page_base()}/checkin/{code}"
+
+
+def recap_url_for(tenant) -> str:
+    """Alias of :func:`checkin_url_for` — same standing page files the recap.
+
+    Kept as a named helper so job/assign emails and the Event Confirmation
+    GraphQL options keep reading one shared builder.
+    """
+    return checkin_url_for(tenant)
 
 
 def training_url_for(tenant) -> str:
@@ -389,6 +402,9 @@ def build_context(confirmation: EventConfirmation, stage: str) -> dict:
             "https://www.google.com/maps/search/?api=1&query="
             + quote_plus(address)
         ) if address else "",
+        # Same standing /checkin/<code> URL for both CTAs — that page is how
+        # BAs clock in/out and file the recap (Torch: TH-2HRV3D).
+        "checkin_url": checkin_url_for(confirmation.tenant),
         "recap_url": recap_url_for(confirmation.tenant),
         "training_url": training_url_for(confirmation.tenant),
         "support_phone": SUPPORT_PHONE,

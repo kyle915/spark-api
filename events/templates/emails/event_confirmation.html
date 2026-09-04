@@ -3,11 +3,12 @@
 Replicates the confirmation Ignite was sending LD BAs by hand (see the
 "Your Liquid Death Retail Sampling – Jewel Osco | 08/01/2026 | 1p - 4p"
 reference): eyebrow, greeting, intro whose tense changes per stage, one
-details card, recap CTA, text-us line. Two things the hand-sent version
-didn't have and Kyle asked for: the training-site review block, and the fact
-all three sends (booked / 24h / 3h) are the same email with a different intro
-— so the BA sees one consistent set of details, not three differently-shaped
-messages.
+details card, clock in/out CTA, recap CTA, text-us line. Two things the
+hand-sent version didn't have and Kyle asked for: the training-site review
+block, and the fact all three sends (booked / 24h / 3h) are the same email
+with a different intro — so the BA sees one consistent set of details, not
+three differently-shaped messages. Clock + recap both mint the tenant's
+standing /checkin/<code> URL on client.igniteproductions.co.
 
 Table-based + inline styles throughout because Outlook ignores <div> layout
 and strips <style>; that's the same reason every other template here looks
@@ -114,11 +115,35 @@ the email body (and into the plain-text alternative, where it's very visible).
         </p>
       {% endif %}
 
+      {% if checkin_url %}
+        {% comment %}
+        Clock in/out first — that's what the BA does on arrival / departure.
+        Same standing /checkin/<code> page as the recap CTA below (Torch
+        TH-2HRV3D, LD LD-…, etc.). One real route; two clear jobs called out.
+        {% endcomment %}
+        <p style="margin: 0 0 14px 0;">
+          <strong style="color: #202036;">On shift,</strong> use the link below to
+          clock in when you arrive and clock out when you leave.
+        </p>
+        <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin: 0 0 8px 0;">
+          <tr>
+            <td align="center" bgcolor="#202036" style="background-color: #202036; border-radius: 6px; mso-padding-alt: 14px 30px;">
+              <a href="{{ checkin_url }}" target="_blank" rel="noopener noreferrer" style="display: inline-block; padding: 14px 30px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 15px; line-height: 1.2; font-weight: 700; color: #ffffff !important; text-decoration: none; border-radius: 6px; white-space: nowrap;">
+                Clock in / Clock out
+              </a>
+            </td>
+          </tr>
+        </table>
+        <p style="margin: 0 0 26px 0; font-size: 13px; line-height: 1.5; color: #666666; word-break: break-all;">
+          Or open: <a href="{{ checkin_url }}" target="_blank" rel="noopener noreferrer" style="color: #202036; text-decoration: underline;">{{ checkin_url }}</a>
+        </p>
+      {% endif %}
+
       {% if recap_url %}
-        <p style="margin: 0 0 20px 0;">
-          Before your demo, please review the event recap form using the link below.
-          Once your activation is complete, don't forget to submit your recap—this
-          ensures your payment is processed promptly.
+        <p style="margin: 0 0 14px 0;">
+          <strong style="color: #202036;">After your activation,</strong> submit
+          your recap from the same check-in page—this ensures your payment is
+          processed promptly. You can also review the form before your demo.
         </p>
 
         <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin: 0 0 8px 0;">
