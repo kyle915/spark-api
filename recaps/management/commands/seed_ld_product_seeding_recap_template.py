@@ -3,26 +3,27 @@
 Creates (or reconciles) event type ``Product Seeding`` and template
 ``Liquid Death-Product Seeding`` with:
 
-* Location product dropped (venue / retailer / address)
-* Total cases dropped (aggregate)
-* Cases Dropped by SKU (catalog-driven multiselect + ``product_samples`` qty)
-* Total mileage
+* Drop-off Locations (longtext JSON repeater — place name + GPS/address pin
+  + per-location SKU cases from the tenant Product catalog)
+* Total mileage (required; lives in its own section so the walk-up form can
+  render it at the end of the recap)
 
 Template name deliberately avoids ``event`` / ``activation`` / ``festival`` /
 ``pop-up`` so Recaps list ``?activation=event`` does not mis-bucket seeding
-rows; they stay unclassified and appear under View all.
+rows; they classify under ``seeding``.
 
 Photos stay on walk-up ``FileRecapCategory`` buckets from
-``setup_ld_retail_checkin`` — this SPEC does NOT add template image fields.
+``setup_ld_retail_checkin`` (Drop-off Placement only) — this SPEC does NOT
+add template image fields.
 
-SKU options prefer the live tenant Product catalog (same source as Retail /
-Event Products Sampled); hardcoded spark-form list is the empty-catalog
-fallback via ``setup_ld_retail_checkin.product_options_for_tenant``.
+Obsolete flat fields (Location product dropped, Total cases dropped, Cases
+Dropped by SKU) are pruned when they have no filed values; rows with data are
+kept so historical recaps still render.
 
 Idempotent. DRY-RUN by default. Run via
 ``/internal/cron/seed-ld-product-seeding-recap-template`` (or the GitHub
 Action) against prod, then re-run ``setup_ld_retail_checkin --apply`` so the
-standing ``LD-`` link offers Product Seeding alongside Retail + Event.
+standing ``LD-`` link photo buckets match (Drop-off Placement only).
 """
 
 from __future__ import annotations
@@ -34,37 +35,26 @@ from django.db.models import Q
 TEMPLATE_NAME = "Liquid Death-Product Seeding"
 EVENT_TYPE_NAME = "Product Seeding"
 
-# BA-facing label; catalog bridge treats this as a Products Sampled alias.
-CASES_BY_SKU_FIELD = "Cases Dropped by SKU"
+DROP_OFF_LOCATIONS_FIELD = "Drop-off Locations"
 
 SECTION_ORDER = {
     "Drop-off Details": 0,
-    "Cases by SKU": 1,
+    "Mileage": 1,
 }
 
 
-def _product_options(tenant) -> list[str]:
-    from recaps.management.commands.setup_ld_retail_checkin import (
-        product_options_for_tenant,
-    )
-
-    return product_options_for_tenant(tenant)
-
-
-def _build_spec(options: list[str]):
+def _build_spec():
     return [
         (
             "Drop-off Details",
             [
-                ("Location product dropped", "text", True, []),
-                ("Total cases dropped", "number", True, []),
-                ("Total mileage", "number", True, []),
+                (DROP_OFF_LOCATIONS_FIELD, "longtext", True, []),
             ],
         ),
         (
-            "Cases by SKU",
+            "Mileage",
             [
-                (CASES_BY_SKU_FIELD, "multiselect", False, list(options)),
+                ("Total mileage", "number", True, []),
             ],
         ),
     ]
@@ -256,8 +246,7 @@ class Command(BaseCommand):
         apply = bool(opts["apply"])
         tenant = self._resolve_tenant(opts["tenant"].strip())
         creator = self._resolve_creator()
-        options = _product_options(tenant)
-        spec = _build_spec(options)
+        spec = _build_spec()
 
         self.stdout.write(
             f"Tenant  : [{tenant.id}] {tenant.name!r} / {tenant.slug!r}"
@@ -265,7 +254,9 @@ class Command(BaseCommand):
         self.stdout.write(
             f"Program : {EVENT_TYPE_NAME} → {TEMPLATE_NAME!r}"
         )
-        self.stdout.write(f"Products: {len(options)} SKU option(s)")
+        self.stdout.write(
+            f"Fields  : {DROP_OFF_LOCATIONS_FIELD} (JSON) + Total mileage"
+        )
 
         ft_cache: dict = {}
         for _, fields in spec:
@@ -403,6 +394,6 @@ class Command(BaseCommand):
             self.style.SUCCESS(
                 f"Seeded {TEMPLATE_NAME!r}. Next: "
                 "setup_ld_retail_checkin --apply so the standing LD- link "
-                "offers Product Seeding."
+                "photo buckets are Drop-off Placement only."
             )
         )
