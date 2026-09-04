@@ -325,12 +325,13 @@ class TestTenantProductOptions:
 class TestTorchConfirmationContent:
     """The same email, Torch-branded — nothing Liquid Death may leak through."""
 
-    def _torch_confirmation(self, *, training_url: str = ""):
+    def _torch_confirmation(self, *, resources=None, training_url: str = ""):
         tenant = _tenant(
             name="Torch THC",
             slug="torch-thc",
             checkin_code="TH-2HRV3D",
             checkin_training_url=training_url,
+            checkin_resources=resources,
         )
         return _confirmation(
             tenant,
@@ -342,6 +343,28 @@ class TestTorchConfirmationContent:
                 "Seltzer 5mg Lite — Black Cherry 5mg 12oz",
             ],
         )
+
+    def _torch_resources(self):
+        return [
+            {
+                "label": "BA Sampling Guide",
+                "kind": "pdf",
+                "url": (
+                    "https://client.igniteproductions.co/training/torch/"
+                    "ba-sampling-guide.pdf"
+                ),
+                "note": "Setup, talking points, and shift checklist",
+            },
+            {
+                "label": "Product Sales Sheets",
+                "kind": "pdf",
+                "url": (
+                    "https://client.igniteproductions.co/training/torch/"
+                    "product-sales-sheets.pdf"
+                ),
+                "note": "Torch Beverage Book — SKUs and sell sheets",
+            },
+        ]
 
     def test_subject_and_eyebrow_are_torch_not_liquid_death(self):
         c = self._torch_confirmation()
@@ -357,10 +380,11 @@ class TestTorchConfirmationContent:
 
     def test_products_strip_the_line_prefix_and_links_mint_client_host(self):
         c = self._torch_confirmation(
+            resources=self._torch_resources(),
             training_url=(
                 "https://client.igniteproductions.co/training/torch/"
-                "ba-training-guide.pdf"
-            )
+                "ba-sampling-guide.pdf"
+            ),
         )
         ctx = build_context(c, EventConfirmation.STAGE_BOOKED)
         assert ctx["products_label"] == (
@@ -372,19 +396,28 @@ class TestTorchConfirmationContent:
             "https://client.igniteproductions.co/checkin/TH-2HRV3D"
         )
         assert ctx["recap_url"] == ctx["checkin_url"]
+        assert [r["label"] for r in ctx["training_resources"]] == [
+            "BA Sampling Guide",
+            "Product Sales Sheets",
+        ]
         assert ctx["training_url"] == (
             "https://client.igniteproductions.co/training/torch/"
-            "ba-training-guide.pdf"
+            "ba-sampling-guide.pdf"
+        )
+        assert ctx["training_resources"][1]["url"] == (
+            "https://client.igniteproductions.co/training/torch/"
+            "product-sales-sheets.pdf"
         )
 
     def test_the_rendered_email_has_no_liquid_death_in_it(self):
         from events.event_confirmations import EventConfirmationMailer
 
         c = self._torch_confirmation(
+            resources=self._torch_resources(),
             training_url=(
                 "https://client.igniteproductions.co/training/torch/"
-                "ba-training-guide.pdf"
-            )
+                "ba-sampling-guide.pdf"
+            ),
         )
         html = EventConfirmationMailer(
             c, EventConfirmation.STAGE_BOOKED
@@ -394,12 +427,12 @@ class TestTorchConfirmationContent:
         assert 'href="https://client.igniteproductions.co/checkin/TH-2HRV3D"' in html
         assert "Clock in / Clock out" in html
         assert "Open Recap Form" in html
+        assert "BA Sampling Guide" in html
+        assert "Product Sales Sheets" in html
+        assert "ba-sampling-guide.pdf" in html
+        assert "product-sales-sheets.pdf" in html
+        assert "ba-training-guide.pdf" not in html
         assert "TH-AGENCY" not in html
-        assert (
-            'href="https://client.igniteproductions.co/training/torch/'
-            'ba-training-guide.pdf"'
-        ) in html
-        assert "Review Training Site" in html
         assert "spark.igniteproductions.co" not in html
         assert "admin.igniteproductions.co" not in html
 
@@ -420,12 +453,14 @@ class TestTorchConfirmationContent:
     def test_no_training_url_omits_the_button(self):
         from events.event_confirmations import EventConfirmationMailer
 
-        c = self._torch_confirmation(training_url="")
+        c = self._torch_confirmation(training_url="", resources=None)
         ctx = build_context(c, EventConfirmation.STAGE_BOOKED)
         assert ctx["training_url"] == ""
+        assert ctx["training_resources"] == []
         html = EventConfirmationMailer(
             c, EventConfirmation.STAGE_BOOKED
         ).envelope().render_template()
+        assert "BA Sampling Guide" not in html
         assert "Review Training Site" not in html
 
 

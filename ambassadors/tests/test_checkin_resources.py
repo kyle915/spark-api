@@ -275,15 +275,26 @@ class TestSetCheckinResourcesCommand(AmbassadorsGraphQLTestCase):
         torch = self.create_tenant(name="Torch THC", slug="torch-thc")
         self._run(tenant="torch", apply=True)
         torch.refresh_from_db()
-        assert len(torch.checkin_resources) == 1
-        assert torch.checkin_resources[0]["kind"] == "pdf"
-        assert torch.checkin_resources[0]["label"] == "BA reference & training"
+        assert [r["kind"] for r in torch.checkin_resources] == ["pdf", "pdf"]
+        assert [r["label"] for r in torch.checkin_resources] == [
+            "BA Sampling Guide",
+            "Product Sales Sheets",
+        ]
         assert torch.checkin_resources[0]["url"] == (
-            "https://client.igniteproductions.co/training/torch/ba-training-guide.pdf"
+            "https://client.igniteproductions.co/training/torch/ba-sampling-guide.pdf"
         )
+        assert torch.checkin_resources[1]["url"] == (
+            "https://client.igniteproductions.co/training/torch/"
+            "product-sales-sheets.pdf"
+        )
+        # Email legacy column keeps the first pdf (Sampling Guide).
         assert torch.checkin_training_url == (
-            "https://client.igniteproductions.co/training/torch/ba-training-guide.pdf"
+            "https://client.igniteproductions.co/training/torch/ba-sampling-guide.pdf"
         )
+        assert "ba-training-guide.pdf" not in torch.checkin_training_url
+        for row in torch.checkin_resources:
+            assert "admin.igniteproductions.co" not in row["url"]
+            assert "spark.igniteproductions.co" not in row["url"]
 
     def test_re_running_is_idempotent(self):
         self._run(tenant="Feel Free Command", apply=True)
