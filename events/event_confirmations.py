@@ -7,14 +7,15 @@ opening line, so the BA reads one consistent set of details.
 
 Three things the rest of the stack has taught us, encoded here:
 
-* **The links are read, never hardcoded.** The recap URL is built from
-  ``Tenant.checkin_code`` and the training URL is ``Tenant.checkin_training_url``
-  (falling back to the tenant's active ``TrainingHub`` code). Both are live
-  columns other work is actively changing (the check-in link now asks the BA
-  which program they're on, and its photo buckets moved), so a literal URL in
-  this module would be correct only until the next deploy. Spark and admin
-  hosts are rewritten to client.igniteproductions.co before they land in
-  the email — field phones have failed to resolve admin.
+* **The links are read, never hardcoded.** Clock-in/out and recap share the
+  tenant's standing ``/checkin/<code>`` page (built from ``Tenant.checkin_code``);
+  the training URL is ``Tenant.checkin_training_url`` (falling back to the
+  tenant's active ``TrainingHub`` code). Those are live columns other work is
+  actively changing, so a literal URL in this module would be correct only
+  until the next deploy. Spark and admin hosts are rewritten to
+  client.igniteproductions.co before they land in the email — field phones
+  have failed to resolve admin. Never mint ``checkin_recap_code`` here: that
+  URL is for 3rd-party / agency filers and refuses the clock.
 
 * **Time is instant arithmetic, never a local date.** ``settings.TIME_ZONE`` is
   UTC, so ``timezone.localdate()`` is the UTC date and every naive "now"
@@ -261,12 +262,15 @@ def absolute_public_url(raw: str, *, allow_relative: bool = True) -> str:
     return value
 
 
-def recap_url_for(tenant) -> str:
-    """The tenant's standing check-in/recap link, or "" when it has no code.
+def checkin_url_for(tenant) -> str:
+    """The tenant's standing BA check-in page (clock in/out + recap), or "".
 
     Built from ``Tenant.checkin_code`` rather than stored on the confirmation:
     the code is a single column an admin can re-mint, and a snapshot taken at
     send time would keep pointing a 24h reminder at a dead link.
+
+    Deliberately ignores ``checkin_recap_code`` — that twin skips the clock and
+    is for agency filers, not the BA this confirmation email addresses.
     """
     code = (getattr(tenant, "checkin_code", "") or "").strip()
     if not code:
@@ -274,24 +278,90 @@ def recap_url_for(tenant) -> str:
     return f"{public_page_base()}/checkin/{code}"
 
 
+def recap_url_for(tenant) -> str:
+    """Alias of :func:`checkin_url_for` — same standing page files the recap.
+
+    Kept as a named helper so job/assign emails and the Event Confirmation
+    GraphQL options keep reading one shared builder.
+    """
+    return checkin_url_for(tenant)
+
+
 def training_url_for(tenant) -> str:
-    """The tenant's BA reference/training site as an absolute https URL.
+    """The tenant's primary BA reference/training URL as absolute https.
 
     Prefers ``Tenant.checkin_training_url`` (canonicalized so a relative
     path or a spark host still becomes a tappable email link). Falls back
-    to the tenant's active ``TrainingHub`` code — ``setup_ld_training``
-    mints the hub but does not always copy the URL onto the tenant, and
-    an empty variable would render an unclickable button.
+    to the first pdf/link in ``checkin_resources``, then the tenant's active
+    ``TrainingHub`` code — ``setup_ld_training`` mints the hub but does not
+    always copy the URL onto the tenant, and an empty variable would render
+    an unclickable button.
     """
     stored = absolute_public_url(
         getattr(tenant, "checkin_training_url", "") or ""
     )
     if stored:
         return stored
+    resources = email_training_resources(tenant, include_legacy=False)
+    if resources:
+        return resources[0]["url"]
     code = _training_hub_code(tenant)
     if code:
         return f"{public_page_base()}/training/{code}"
     return ""
+
+
+def email_training_resources(
+    tenant, *, include_legacy: bool = True
+) -> list[dict]:
+    """Ordered pdf/link resources for confirmation-email CTAs.
+
+    Reads ``Tenant.checkin_resources`` (same list the walk-up page shows),
+    rewrites hosts onto client., and skips image/QR kinds that do not belong
+    in an email button. When the list is empty and ``include_legacy`` is
+    True, falls back to a single "Review Training Site" row from
+    ``checkin_training_url`` / TrainingHub so tenants without the JSON list
+    still get one button.
+    """
+    from tenants.models import normalize_checkin_resources
+
+    out: list[dict] = []
+    seen: set[str] = set()
+    for row in normalize_checkin_resources(
+        getattr(tenant, "checkin_resources", None)
+    ):
+        if row.get("kind") not in ("pdf", "link"):
+            continue
+        url = absolute_public_url(row.get("url") or "")
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        out.append(
+            {
+                "label": (row.get("label") or "Open guide").strip() or "Open guide",
+                "url": url,
+                "note": (row.get("note") or "").strip(),
+            }
+        )
+    if out or not include_legacy:
+        return out
+
+    # Avoid recursion through training_url_for → this helper.
+    stored = absolute_public_url(
+        getattr(tenant, "checkin_training_url", "") or ""
+    )
+    if stored:
+        return [{"label": "Review Training Site", "url": stored, "note": ""}]
+    code = _training_hub_code(tenant)
+    if code:
+        return [
+            {
+                "label": "Review Training Site",
+                "url": f"{public_page_base()}/training/{code}",
+                "note": "",
+            }
+        ]
+    return []
 
 
 def _training_hub_code(tenant) -> str:
@@ -374,6 +444,7 @@ def build_context(confirmation: EventConfirmation, stage: str) -> dict:
     products = display_products(confirmation.products)
 
     intro = _STAGE_INTRO.get(stage, _STAGE_INTRO[EventConfirmation.STAGE_BOOKED])
+    training_resources = email_training_resources(confirmation.tenant)
 
     return {
         "eyebrow": eyebrow,
@@ -389,8 +460,15 @@ def build_context(confirmation: EventConfirmation, stage: str) -> dict:
             "https://www.google.com/maps/search/?api=1&query="
             + quote_plus(address)
         ) if address else "",
+        # Same standing /checkin/<code> URL for both CTAs — that page is how
+        # BAs clock in/out and file the recap (Torch: TH-2HRV3D).
+        "checkin_url": checkin_url_for(confirmation.tenant),
         "recap_url": recap_url_for(confirmation.tenant),
-        "training_url": training_url_for(confirmation.tenant),
+        "training_resources": training_resources,
+        # First pdf/link — GraphQL form options + older single-button callers.
+        "training_url": (
+            training_resources[0]["url"] if training_resources else ""
+        ),
         "support_phone": SUPPORT_PHONE,
         "support_phone_href": SUPPORT_PHONE_HREF,
         "from_address": CONFIRMATION_REPLY_TO,

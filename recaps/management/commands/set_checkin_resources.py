@@ -78,15 +78,24 @@ def _presets() -> dict[str, list[dict]]:
                 "note": "Show this — the consumer scans it to sign",
             },
         ],
-        # Single PDF — same cream "BA reference & training" card copy as the
-        # legacy checkin_training_url fallback. Event confirmation emails also
-        # read that legacy column; apply syncs it from the first pdf/link.
+        # Torch: BA Sampling Guide + Product Sales Sheets (Beverage Book).
+        # Filenames are versioned separately from the old ba-training-guide.pdf
+        # so Firebase's 7-day /training/** cache cannot keep serving the stale
+        # deck after a replace. Event confirmation emails sync
+        # checkin_training_url from the first pdf/link; the full list is also
+        # rendered as separate email CTAs.
         "torch": [
             {
-                "label": "BA reference & training",
+                "label": "BA Sampling Guide",
                 "kind": "pdf",
-                "url": f"{base}/training/torch/ba-training-guide.pdf",
-                "note": "Field guide, video, product sheets",
+                "url": f"{base}/training/torch/ba-sampling-guide.pdf",
+                "note": "Setup, talking points, and shift checklist",
+            },
+            {
+                "label": "Product Sales Sheets",
+                "kind": "pdf",
+                "url": f"{base}/training/torch/product-sales-sheets.pdf",
+                "note": "Torch Beverage Book — SKUs and sell sheets",
             },
         ],
     }
