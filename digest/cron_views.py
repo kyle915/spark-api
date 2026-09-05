@@ -3564,10 +3564,10 @@ class SetupNeutonicCheckinView(View):
 class SeedMabRecapTemplateView(View):
     """GET/POST `/internal/cron/seed-mab-recap-template`.
 
-    Builds/reconciles Mark Anthony Brands' LD-mirrored **Retail Sampling** and
-    **Event Activation** recap templates (brand-agnostic LD questions; full MAB
-    SKU catalog on Products Sampled). Fires ``seed_mab_recap_template``.
-    DRY-RUN unless apply=true.
+    Builds/reconciles Mark Anthony Brands' **Retail Sampling**, **Event
+    Activation**, and **On-Premise** recap templates (LD-mirrored retail/event
+    plus White Claw bar On-Premise fields; full MAB SKU catalog on Products
+    Sampled). Fires ``seed_mab_recap_template``. DRY-RUN unless apply=true.
 
     Params: tenant (default "mark anthony"), template_name, event_type, apply.
     """
@@ -3619,9 +3619,10 @@ class SeedMabRecapTemplateView(View):
 class SetupMabCheckinView(View):
     """GET/POST `/internal/cron/setup-mab-checkin`.
 
-    Makes Mark Anthony Brands' standing ``MAB-`` link serve **Retail Sampling**
-    and **Event Activation**: selectable event types + per-program photo
-    buckets (LD-style dropzones). Recap templates are seeded separately by
+    Makes Mark Anthony Brands' standing ``MAB-`` link serve **Retail Sampling**,
+    **On-Premise**, and **Event Activation**: selectable event types +
+    per-program photo buckets (LD-style for Retail/Event; White Claw bar
+    buckets for On-Premise). Recap templates are seeded separately by
     ``seed-mab-recap-template``. Retail is the pinned default.
 
     Params: tenant (default "mark anthony"), prefix, code, apply.

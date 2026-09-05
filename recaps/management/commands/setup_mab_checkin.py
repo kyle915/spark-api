@@ -1,15 +1,16 @@
-"""Make Mark Anthony Brands' ONE standing check-in link serve BOTH programs.
+"""Make Mark Anthony Brands' ONE standing check-in link serve THREE programs.
 
-Mirrors ``setup_ld_retail_checkin``: Retail Sampling + Event Activation on the
-same ``MAB-`` URL. Recap forms are seeded by ``seed_mab_recap_template`` —
-this command creates NEITHER. What's missing is only:
+Mirrors ``setup_ld_retail_checkin``: Retail Sampling + On-Premise + Event
+Activation on the same ``MAB-`` URL. Recap forms are seeded by
+``seed_mab_recap_template`` — this command creates NEITHER. What's missing is
+only:
 
 1. a standing ``MAB-`` check-in code on the tenant (mint if unset),
-2. both event types made SELECTABLE on that one link, with Retail Sampling
-   pinned as the fallback when a request names no program,
+2. all three event types made SELECTABLE on that one link, with Retail
+   Sampling pinned as the fallback when a request names no program,
 3. labelled PHOTO BUCKETS per program (``Tenant.checkin_photo_buckets`` keyed
-   by event type name + matching ``FileRecapCategory`` rows) — LD shot list,
-   not Brew Dr's retail demo table list.
+   by event type name + matching ``FileRecapCategory`` rows) — LD shot list
+   for Retail/Event; White Claw On-Premise bar buckets for On-Premise.
 
 Under ``--apply``, creates tenant ``Mark Anthony Brands`` /
 ``mark-anthony-brands`` when no match exists.
@@ -55,12 +56,29 @@ ACTIVATION_BUCKETS: list[dict] = [
     {"name": "Expense Receipts (Parking)"},
 ]
 
+# White Claw On-Premise bar demo PDF photo list (multi-photo library upload).
+ONPREM_BUCKETS: list[dict] = [
+    {"name": "Account Spend Receipt"},
+    {"name": "Back Bar Photo"},
+    {"name": "Drink Feature Photos"},
+    {
+        "name": "Consumer Engagement Photos",
+        "helper": "please upload 6-8",
+        "min": 6,
+    },
+]
+
 # First entry = pinned default when the BA / request names no program.
 PROGRAMS: list[dict] = [
     {
         "event_type": "retail sampling",
         "label": "Retail Sampling",
         "photos": RETAIL_BUCKETS,
+    },
+    {
+        "event_type": "on-premise",
+        "label": "On-Premise",
+        "photos": ONPREM_BUCKETS,
     },
     {
         "event_type": "event activation",
@@ -82,8 +100,9 @@ def _norm(name: str | None) -> str:
 
 class Command(BaseCommand):
     help = (
-        "Make Mark Anthony Brands' standing check-in link serve Retail Sampling "
-        "and Event Activation (LD photo buckets + selectable types; dry-run default)."
+        "Make Mark Anthony Brands' standing check-in link serve Retail "
+        "Sampling, On-Premise, and Event Activation (photo buckets + "
+        "selectable types; dry-run default)."
     )
 
     def add_arguments(self, parser):

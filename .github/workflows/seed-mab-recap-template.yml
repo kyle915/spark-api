@@ -1,8 +1,8 @@
 name: Seed Mark Anthony Brands recap template
 
-# Seeds Mark Anthony Brands Retail Sampling + Event Activation recap templates
-# (LD-mirrored, brand-agnostic copy, full MAB Products Sampled catalog).
-# See recaps/management/commands/seed_mab_recap_template.py.
+# Seeds Mark Anthony Brands Retail + Event + On-Premise recap templates
+# (LD-mirrored retail/event, White Claw On-Premise bar fields, full MAB
+# Products Sampled catalog). See seed_mab_recap_template.py.
 #
 # RUN apply=false FIRST AND READ THE LOG.
 

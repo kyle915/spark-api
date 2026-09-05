@@ -1,11 +1,16 @@
-"""Seed Mark Anthony Brands Retail Sampling + Event Activation recap templates.
+"""Seed Mark Anthony Brands Retail / Event / On-Premise recap templates.
 
-Mirrors Liquid Death's live forms field-for-field (prod template ids 9 and 3),
-with brand-AGNOSTIC question copy (say "the product/brand", never a brand name
-in field labels). Template *names* keep the tenant brand for ops clarity.
+Retail + Event mirror Liquid Death's live forms field-for-field (prod template
+ids 9 and 3), with brand-AGNOSTIC question copy (say "the product/brand",
+never a brand name in field labels). On-Premise mirrors the White Claw bar
+demo PDF (account traffic, spend, samples, can purchases, pricing, feedback)
+plus a Products Sampled catalog picker. Template *names* keep the tenant
+brand for ops clarity; the On-Premise name includes ``On-Premise`` so Recaps
+/ Insights bucket it as ``onprem`` (Retail chip folds it in).
 
 * ``Products Sampled`` options = :func:`mab_products.product_options`
-  (``Category — Name``, 141 SKUs)
+  (``Category — Name``, 141 SKUs) — same catalog source as Retail/Event;
+  the walk-up UI prefers the live tenant Product catalog when present.
 
 Photos stay on the walk-up ``FileRecapCategory`` buckets from
 ``setup_mab_checkin``; these SPECs do NOT add template image fields.
@@ -32,6 +37,7 @@ PRODUCT_OPTIONS = PRODUCT_OPTS  # alias for tests
 
 RETAIL_TEMPLATE_NAME = "Mark Anthony Brands-Retail Sampling"
 EVENT_TEMPLATE_NAME = "Mark Anthony Brands-Event Activation"
+ONPREM_TEMPLATE_NAME = "Mark Anthony Brands-On-Premise"
 # Back-compat alias used by older tests / docs.
 TEMPLATE_NAME = RETAIL_TEMPLATE_NAME
 
@@ -41,13 +47,24 @@ ARCHIVE_EVENT_TYPE = "Legacy Recap Archive"
 
 RETAIL_PROGRAM = "Retail Sampling"
 EVENT_PROGRAM = "Event Activation"
+ONPREM_PROGRAM = "On-Premise"
 
-# Shared RecapSection order across both templates (sections are tenant-scoped).
+TRAFFIC_OPTS = ["High", "Medium", "Low"]
+DISTRIBUTION_OPTS = [
+    "Chilled Cans",
+    "On Ice",
+    "Mixed Drinks / Cocktails",
+    "Other",
+]
+
+# Shared RecapSection order across templates (sections are tenant-scoped).
 SECTION_ORDER = {
-    "Consumer Engagement": 0,
-    "Feedback & Account Notes": 1,
-    "Additional Insights": 2,
-    "Products Sampled": 3,
+    "Account Details": 0,
+    "Consumer Engagement": 1,
+    "Competitive & Pricing": 2,
+    "Feedback & Account Notes": 3,
+    "Additional Insights": 4,
+    "Products Sampled": 5,
 }
 
 # Field-for-field off Liquid Death-Retail Sampling (id 9), brand-agnostic.
@@ -168,6 +185,78 @@ EVENT_SPEC: list[tuple[str, list[tuple[str, str, bool, list[str]]]]] = [
     ),
 ]
 
+# White Claw On-Premise bar demo PDF — bar/venue fields + Kyle can-purchase
+# wording. Photos live on walk-up buckets (receipt / back bar / drink feature /
+# consumer engagement), not template image fields. Bar name / market / date /
+# BA come from walk-up identify + shift context.
+ONPREM_SPEC: list[tuple[str, list[tuple[str, str, bool, list[str]]]]] = [
+    (
+        "Account Details",
+        [
+            (
+                "Describe the account's traffic",
+                "select",
+                True,
+                list(TRAFFIC_OPTS),
+            ),
+            ("Account Spend Amount", "number", True, []),
+            ("Total Estimated Attendance", "number", True, []),
+        ],
+    ),
+    (
+        "Consumer Engagement",
+        [
+            ("Total # of samples distributed", "number", True, []),
+            (
+                "How many cans were purchased by consumers from the bar",
+                "number",
+                True,
+                [],
+            ),
+            (
+                "Select the manner in which the samples were distributed",
+                "select",
+                True,
+                list(DISTRIBUTION_OPTS),
+            ),
+            (
+                "How many consumers tried this brand/drink before?",
+                "number",
+                True,
+                [],
+            ),
+        ],
+    ),
+    (
+        "Competitive & Pricing",
+        [
+            ("What is the competitive brand presence?", "text", True, []),
+            ("What is the listed price?", "text", True, []),
+            ("What is the promotional price?", "text", True, []),
+        ],
+    ),
+    (
+        "Feedback & Account Notes",
+        [
+            ("Provide consumer feedback and quotes", "longtext", True, []),
+            ("List common questions asked by consumers", "longtext", True, []),
+            (
+                "Any feedback from the account / bar staff?",
+                "longtext",
+                True,
+                [],
+            ),
+            ("Anything you'd change?", "longtext", True, []),
+        ],
+    ),
+    (
+        "Products Sampled",
+        [
+            ("Products Sampled", "multiselect", True, list(PRODUCT_OPTS)),
+        ],
+    ),
+]
+
 # Back-compat: older tests import SPEC as the retail layout.
 SPEC = RETAIL_SPEC
 
@@ -182,6 +271,12 @@ PROGRAMS: list[dict] = [
         "event_type": EVENT_PROGRAM,
         "template_name": EVENT_TEMPLATE_NAME,
         "spec": EVENT_SPEC,
+        "archive_legacy": False,
+    },
+    {
+        "event_type": ONPREM_PROGRAM,
+        "template_name": ONPREM_TEMPLATE_NAME,
+        "spec": ONPREM_SPEC,
         "archive_legacy": False,
     },
 ]
@@ -211,8 +306,8 @@ def _match_field_type(kind: str, name_lower: str) -> bool:
 
 class Command(BaseCommand):
     help = (
-        "Seed Mark Anthony Brands' LD-mirrored Retail Sampling + Event "
-        "Activation recap templates (dry-run by default; --apply to write)."
+        "Seed Mark Anthony Brands' Retail Sampling, Event Activation, and "
+        "On-Premise recap templates (dry-run by default; --apply to write)."
     )
 
     def add_arguments(self, parser):
@@ -230,7 +325,7 @@ class Command(BaseCommand):
             default=None,
             help=(
                 "If set, only seed the program whose template name matches "
-                "(substring). Default: seed both Retail + Event templates."
+                "(substring). Default: seed Retail + Event + On-Premise."
             ),
         )
         parser.add_argument(
@@ -239,7 +334,7 @@ class Command(BaseCommand):
             default=None,
             help=(
                 "If set, only seed the program whose event type matches "
-                "(substring). Default: seed both."
+                "(substring). Default: seed Retail + Event + On-Premise."
             ),
         )
         parser.add_argument(
@@ -715,9 +810,9 @@ class Command(BaseCommand):
         )
         self.stdout.write("=" * 68)
         self.stdout.write(
-            "Mirrors Liquid Death Retail Sampling + Event Activation "
-            f"(brand-agnostic copy; Products Sampled = {len(PRODUCT_OPTS)} "
-            "Category — Name SKUs)."
+            "Mirrors Liquid Death Retail + Event, plus White Claw On-Premise "
+            f"bar fields (brand-agnostic where shared; Products Sampled = "
+            f"{len(PRODUCT_OPTS)} Category — Name SKUs)."
         )
 
         ft_cache: dict = {}

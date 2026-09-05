@@ -1,4 +1,4 @@
-"""Mark Anthony Brands: LD-mirrored dual templates + Retail/Event check-in."""
+"""Mark Anthony Brands: Retail / Event / On-Premise templates + check-in."""
 
 from __future__ import annotations
 
@@ -12,6 +12,8 @@ from recaps.management.commands.mab_products import product_options
 from recaps.management.commands.seed_mab_recap_template import (
     EVENT_SPEC,
     EVENT_TEMPLATE_NAME,
+    ONPREM_SPEC,
+    ONPREM_TEMPLATE_NAME,
     PRODUCT_OPTS,
     RETAIL_SPEC,
     RETAIL_TEMPLATE_NAME,
@@ -19,6 +21,7 @@ from recaps.management.commands.seed_mab_recap_template import (
 from recaps.management.commands.setup_mab_checkin import (
     ACTIVATION_BUCKETS,
     CODE_PREFIX,
+    ONPREM_BUCKETS,
     RETAIL_BUCKETS,
 )
 from tenants.tests.base import BaseGraphQLTestCase
@@ -49,20 +52,40 @@ class TestMabRecapTemplateSpec:
         assert sum(len(fields) for _, fields in EVENT_SPEC) == 8
         assert EVENT_TEMPLATE_NAME == "Mark Anthony Brands-Event Activation"
 
+    def test_onprem_spec_mirrors_white_claw_pdf(self):
+        assert [section for section, _ in ONPREM_SPEC] == [
+            "Account Details",
+            "Consumer Engagement",
+            "Competitive & Pricing",
+            "Feedback & Account Notes",
+            "Products Sampled",
+        ]
+        assert sum(len(fields) for _, fields in ONPREM_SPEC) == 15
+        assert ONPREM_TEMPLATE_NAME == "Mark Anthony Brands-On-Premise"
+        labels = [name for _, fields in ONPREM_SPEC for name, *_ in fields]
+        assert "How many cans were purchased by consumers from the bar" in labels
+        assert "# of WC purchased from the bar" not in labels
+        assert "White Claw" not in " ".join(labels)
+
     def test_copy_is_brand_agnostic(self):
-        for spec in (RETAIL_SPEC, EVENT_SPEC):
+        for spec in (RETAIL_SPEC, EVENT_SPEC, ONPREM_SPEC):
             labels = [name for _, fields in spec for name, *_ in fields]
             blob = " ".join(labels)
             assert "Liquid Death" not in blob
             assert "Mark Anthony Brands" not in blob
-            assert "the product/brand" in blob or "Products Sampled" in blob
+            assert "White Claw" not in blob
+            assert (
+                "the product/brand" in blob
+                or "Products Sampled" in blob
+                or "this brand/drink" in blob
+            )
 
     def test_products_sampled_uses_full_catalog(self):
         opts = product_options()
         assert len(opts) == 141
         assert PRODUCT_OPTS == opts
         assert opts[0].startswith("White Claw — ")
-        for spec in (RETAIL_SPEC, EVENT_SPEC):
+        for spec in (RETAIL_SPEC, EVENT_SPEC, ONPREM_SPEC):
             products = next(
                 fields for section, fields in spec if section == "Products Sampled"
             )
@@ -71,7 +94,7 @@ class TestMabRecapTemplateSpec:
             ]
 
     def test_no_template_image_fields(self):
-        for spec in (RETAIL_SPEC, EVENT_SPEC):
+        for spec in (RETAIL_SPEC, EVENT_SPEC, ONPREM_SPEC):
             kinds = [kind for _, fields in spec for _, kind, *_ in fields]
             assert "image" not in kinds
 
@@ -92,6 +115,15 @@ class TestMabPhotoBucketSpec:
             "Expense Receipts (Parking)",
         ]
         assert ACTIVATION_BUCKETS[1].get("min") == 8
+
+    def test_onprem_buckets_mirror_white_claw_pdf(self):
+        assert [b["name"] for b in ONPREM_BUCKETS] == [
+            "Account Spend Receipt",
+            "Back Bar Photo",
+            "Drink Feature Photos",
+            "Consumer Engagement Photos",
+        ]
+        assert ONPREM_BUCKETS[3].get("min") == 6
 
     def test_code_prefix_is_brand_scoped(self):
         assert CODE_PREFIX == "MAB-"
@@ -129,10 +161,13 @@ class TestMabSetupCommand(BaseGraphQLTestCase):
         assert "DRY-RUN" in log
         assert "Table Set Up" in log
         assert "Activation Set Up" in log
+        assert "Back Bar Photo" in log
+        assert "On-Premise" in log
         assert not FileRecapCategory.objects.filter(tenant=self.tenant).exists()
 
-    def test_apply_sets_keyed_buckets_and_both_programs(self):
+    def test_apply_sets_keyed_buckets_and_three_programs(self):
         from ambassadors import checkin_web
+        from events.models import EventType
         from recaps.models import FileRecapCategory
 
         self._run(tenant="mark anthony", apply=True)
@@ -141,18 +176,25 @@ class TestMabSetupCommand(BaseGraphQLTestCase):
         assert [b["name"] for b in buckets["Retail Sampling"]] == [
             b["name"] for b in RETAIL_BUCKETS
         ]
+        assert [b["name"] for b in buckets["On-Premise"]] == [
+            b["name"] for b in ONPREM_BUCKETS
+        ]
         assert [b["name"] for b in buckets["Event Activation"]] == [
             b["name"] for b in ACTIVATION_BUCKETS
         ]
         assert self.tenant.checkin_event_type_id == self.retail.id
-        offered = list(
-            self.tenant.checkin_event_types.order_by("id").values_list(
-                "name", flat=True
-            )
+        offered = set(
+            self.tenant.checkin_event_types.values_list("name", flat=True)
         )
-        assert offered == ["Retail Sampling", "Event Activation"]
+        assert offered == {
+            "Retail Sampling",
+            "On-Premise",
+            "Event Activation",
+        }
+        onprem = EventType.objects.get(tenant=self.tenant, name="On-Premise")
         assert set(checkin_web.selectable_event_types(self.tenant)) == {
             self.retail,
+            onprem,
             self.activation,
         }
         assert self.tenant.checkin_code and self.tenant.checkin_code.startswith(
@@ -160,6 +202,7 @@ class TestMabSetupCommand(BaseGraphQLTestCase):
         )
         for name in (
             [b["name"] for b in RETAIL_BUCKETS]
+            + [b["name"] for b in ONPREM_BUCKETS]
             + [b["name"] for b in ACTIVATION_BUCKETS]
         ):
             assert FileRecapCategory.objects.filter(
@@ -189,7 +232,7 @@ class TestMabRecapTemplateSeed(BaseGraphQLTestCase):
         call_command("seed_mab_recap_template", stdout=out, **kw)
         return out.getvalue()
 
-    def test_apply_seeds_both_templates(self):
+    def test_apply_seeds_three_templates(self):
         from recaps.models import CustomField, CustomRecapTemplate
 
         log = self._run(tenant="mark anthony", apply=True)
@@ -200,9 +243,18 @@ class TestMabRecapTemplateSeed(BaseGraphQLTestCase):
         event = CustomRecapTemplate.objects.get(
             tenant=self.tenant, name=EVENT_TEMPLATE_NAME
         )
+        onprem = CustomRecapTemplate.objects.get(
+            tenant=self.tenant, name=ONPREM_TEMPLATE_NAME
+        )
         assert retail.event_type.name == "Retail Sampling"
         assert event.event_type.name == "Event Activation"
-        for tpl in (retail, event):
+        assert onprem.event_type.name == "On-Premise"
+        cans = CustomField.objects.get(
+            custom_recap_template=onprem,
+            name="How many cans were purchased by consumers from the bar",
+        )
+        assert cans is not None
+        for tpl in (retail, event, onprem):
             products = CustomField.objects.get(
                 custom_recap_template=tpl, name="Products Sampled"
             )

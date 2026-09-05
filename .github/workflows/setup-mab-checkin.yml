@@ -1,9 +1,10 @@
 name: Setup Mark Anthony Brands check-in
 
-# Makes Mark Anthony Brands' standing MAB- link serve Retail Sampling + Event
-# Activation (same picker as Liquid Death): selectable event types + keyed
-# photo buckets. Recap templates are seeded separately by "Seed Mark Anthony
-# Brands recap template". Idempotent — an existing MAB- code is left alone.
+# Makes Mark Anthony Brands' standing MAB- link serve Retail Sampling +
+# On-Premise + Event Activation: selectable event types + keyed photo buckets
+# (White Claw bar buckets for On-Premise). Recap templates are seeded
+# separately by "Seed Mark Anthony Brands recap template". Idempotent — an
+# existing MAB- code is left alone.
 #
 # RUN apply=false FIRST AND READ THE LOG.
 
