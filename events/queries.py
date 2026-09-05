@@ -1109,18 +1109,18 @@ class EventQueries:
         cutoff = timezone.now() - timedelta(minutes=within_minutes)
 
         def _fetch() -> List:
-            qs = (
-                LocationPingModel.objects.filter(
-                    recorded_at__gte=cutoff,
-                    event__tenant_id=resolved_tenant_id,
-                )
-                .select_related(
-                    "ambassador",
-                    "ambassador__user",
-                    "event",
-                )
-                .order_by("ambassador_id", "-recorded_at")
+            qs = LocationPingModel.objects.filter(
+                recorded_at__gte=cutoff,
             )
+            # Admin without an explicit tenant used to filter
+            # ``event__tenant_id=None``, which matches nothing — empty map.
+            if resolved_tenant_id is not None:
+                qs = qs.filter(event__tenant_id=resolved_tenant_id)
+            qs = qs.select_related(
+                "ambassador",
+                "ambassador__user",
+                "event",
+            ).order_by("ambassador_id", "-recorded_at")
             # Collapse to latest-per-ambassador in Python rather than
             # PostgreSQL's DISTINCT ON, so the query plan stays portable.
             latest_per_ba: dict[int, LocationPingModel] = {}
@@ -1722,6 +1722,39 @@ class RequestQueries:
                 upcoming=data.upcoming,
                 done_30d=data.done_30d,
                 recaps_due=data.recaps_due,
+            )
+
+        return await sync_to_async(_go)()
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def recap_list_kinds(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID | None = None,
+    ) -> types.RecapListKinds:
+        """Whether the scoped tenant has any legacy and/or custom recaps.
+
+        Cheap EXISTS checks so the admin Recaps list can skip empty tabs
+        without downloading rows. Legacy scopes through ``event__tenant``;
+        CustomRecap uses its direct ``tenant_id`` FK.
+        """
+        service = RequestQueriesService()
+        resolved_tenant_id = await service.resolve_tenant_id(
+            info,
+            tenant_id=tenant_id,
+        )
+
+        def _go():
+            from recaps import models as recap_models
+
+            legacy_qs = recap_models.Recap.objects.all()
+            custom_qs = recap_models.CustomRecap.objects.all()
+            if resolved_tenant_id is not None:
+                legacy_qs = legacy_qs.filter(event__tenant_id=resolved_tenant_id)
+                custom_qs = custom_qs.filter(tenant_id=resolved_tenant_id)
+            return types.RecapListKinds(
+                has_legacy=legacy_qs.exists(),
+                has_custom=custom_qs.exists(),
             )
 
         return await sync_to_async(_go)()

@@ -74,6 +74,70 @@ async def insights_model_to_graphql(insights_model) -> types.Insights:
 
 _PACK_SIZE_RE_STR = r"(\d+)\s*-?\s*pack"
 
+# Canonical event_dashboard section names (lowercase). Callers may pass
+# camelCase (globalKpis, recentEvents); we normalize before matching.
+_EVENT_DASHBOARD_SECTIONS = frozenset({
+    "metrics",
+    "trends",
+    "insights",
+    "globalkpis",
+    "recentevents",
+    "goals",
+})
+
+
+def _normalize_event_dashboard_sections(
+    sections: list[str] | None,
+) -> frozenset[str] | None:
+    """Return requested section names, or None for full (legacy) behavior.
+
+    None/empty input → None (compute everything). Unknown names are ignored.
+    """
+    if not sections:
+        return None
+    wanted = frozenset(
+        (s or "").strip().lower()
+        for s in sections
+        if (s or "").strip()
+    ) & _EVENT_DASHBOARD_SECTIONS
+    return wanted or None
+
+
+def _empty_event_dashboard_metrics() -> types.EventDashboardMetrics:
+    return types.EventDashboardMetrics(
+        total_events=0,
+        consumers_sampled=0,
+        brand_awareness=0.0,
+        purchase_intent=0.0,
+        comparison_period=None,
+        comparison_values=None,
+    )
+
+
+def _empty_monthly_trends() -> types.MonthlyPerformanceTrend:
+    return types.MonthlyPerformanceTrend(data_points=[])
+
+
+def _empty_performance_insights() -> types.PerformanceInsights:
+    return types.PerformanceInsights(
+        knew_about_brand=0,
+        knew_about_brand_percentage=0.0,
+        willing_to_purchase=0,
+        willing_to_purchase_percentage=0.0,
+        best_month=None,
+        growth_rate=0.0,
+    )
+
+
+def _empty_global_kpis() -> types.RecapGlobalKPIs:
+    return types.RecapGlobalKPIs(
+        single_cans_sold=0,
+        multi_packs_sold=0,
+        pack_cans_equivalent=0,
+        products_sold=0,
+        by_rmm=[],
+    )
+
 
 def _pack_size_from_label(label: str) -> int:
     """Cans per pack parsed from a sales-field label ("Peach 6-packs
@@ -388,9 +452,50 @@ class DashboardQueries:
                   request__date__date__lte=end_date)
             )
 
-            # Get events with recaps and their consumer engagements
-            events_with_recaps = base_queryset.filter(
-                recaps__isnull=False).distinct()
+            # Section short-circuit: None → full dashboard; otherwise only
+            # compute requested sections and stub the rest.
+            wanted = _normalize_event_dashboard_sections(
+                getattr(filters, "sections", None) if filters else None
+            )
+
+            def _want(name: str) -> bool:
+                return wanted is None or name in wanted
+
+            want_metrics = _want("metrics")
+            want_trends = _want("trends")
+            want_insights = _want("insights")
+            want_global_kpis = _want("globalkpis")
+            want_recent = _want("recentevents")
+            want_goals = _want("goals")
+            # Heavy consumers / custom-metric fold-in — skip for recentEvents-only.
+            need_consumer_agg = want_metrics or want_insights or want_global_kpis
+            need_monthly = want_trends or want_insights
+            need_total_events = want_metrics or want_insights
+
+            metrics = _empty_event_dashboard_metrics()
+            monthly_trends = _empty_monthly_trends()
+            performance_insights = _empty_performance_insights()
+            recent_events = None
+            global_kpis = _empty_global_kpis()
+            goals_progress = None
+
+            total_events = 0
+            consumers_sampled = 0
+            total_brand_aware = 0
+            total_willing_to_purchase = 0
+            brand_awareness = None
+            purchase_intent = None
+            custom_consumers = custom_brand_aware_n = custom_willing_n = 0
+            custom_single_cans = custom_packs = 0
+            custom_brand_rows = custom_willing_rows = custom_pack_cans = 0
+            custom_products_sold = 0
+            monthly_data_points: list = []
+
+            events_with_recaps = None
+            if need_consumer_agg or need_monthly:
+                events_with_recaps = base_queryset.filter(
+                    recaps__isnull=False
+                ).distinct()
 
             # Key Metrics
             # "Events Run" = events that have a recap (legacy OR custom),
@@ -399,502 +504,512 @@ class DashboardQueries:
             # which read higher than Program KPIs and confused the dashboard
             # (e.g. SHB showed 8 up top vs 6 below). custom_recap is the
             # Event->CustomRecap reverse relation; recaps is Event->Recap.
-            total_events = await sync_to_async(
-                lambda: base_queryset.filter(
-                    Q(recaps__isnull=False) | Q(custom_recap__isnull=False)
-                ).distinct().count()
-            )()
+            if need_total_events:
+                total_events = await sync_to_async(
+                    lambda: base_queryset.filter(
+                        Q(recaps__isnull=False) | Q(custom_recap__isnull=False)
+                    ).distinct().count()
+                )()
 
-            # Aggregate ConsumerEngagements data
-            consumer_data = await sync_to_async(
-                lambda: recap_models.ConsumerEngagements.objects.filter(
-                    recap__event__in=events_with_recaps
-                ).aggregate(
-                    total_consumers=Sum('total_consumer', default=0),
-                    total_brand_aware=Sum('brand_aware_consumers', default=0),
-                    total_willing_to_purchase=Sum(
-                        'willing_to_purchase_consumers', default=0)
-                )
-            )()
-
-            # Borjomi / Girl Beer use CUSTOM recaps; their numeric answers
-            # live in CustomFieldValue (text) and are ignored by the legacy
-            # ConsumerEngagements / Recap aggregates above, so their KPIs
-            # read 0. Fold the custom-recap field values into the same
-            # metrics, matched by field label. Scoped to base_queryset (all
-            # events in the window) — NOT events_with_recaps, which is
-            # legacy-recap-only and would exclude custom-recap events.
-            # Best-effort + add-only: failure leaves the legacy numbers
-            # intact, and tenants without custom recaps add 0.
-            custom_consumers = custom_brand_aware_n = custom_willing_n = 0
-            custom_single_cans = custom_packs = 0
-            custom_brand_rows = custom_willing_rows = custom_pack_cans = 0
-            custom_products_sold = 0
-            try:
-                def _sum_custom_recap_metrics():
-                    import re as _re
-                    # Reuse the recap list's two-tier SOLD matcher so the
-                    # dashboard "Products sold" headline can never drift from
-                    # the recap list again (the recurring duplicate-matcher
-                    # class: this resolver had its OWN cans/packs-only matcher
-                    # that silently showed 0 for bread tenants like Stone House
-                    # Bread, whose template says "...did consumers PURCHASE...").
-                    from recaps.types import (
-                        _consumers_sampled_from_fields,
-                        _sold_units_from_fields,
+            if need_consumer_agg:
+                # Aggregate ConsumerEngagements data
+                consumer_data = await sync_to_async(
+                    lambda: recap_models.ConsumerEngagements.objects.filter(
+                        recap__event__in=events_with_recaps
+                    ).aggregate(
+                        total_consumers=Sum('total_consumer', default=0),
+                        total_brand_aware=Sum('brand_aware_consumers', default=0),
+                        total_willing_to_purchase=Sum(
+                            'willing_to_purchase_consumers', default=0)
                     )
-                    sums = {"consumers": 0, "brand": 0,
-                            "willing": 0, "cans": 0, "packs": 0,
-                            # Girl Beer vocabulary + no-data signals:
-                            "sampled_total": 0,   # "who sampled (Total)" rows
-                            "pack_cans": 0,       # packs × label-parsed size
-                            "brand_rows": 0,      # matched awareness fields
-                            "willing_rows": 0,    # matched intent fields
-                            "products_sold": 0}   # two-tier SOLD (shared helper)
-                    rows = recap_models.CustomFieldValue.objects.filter(
-                        custom_recap__event__in=base_queryset
-                    ).values_list(
-                        "custom_recap_id", "custom_field__name", "value"
-                    )
-                    # Group (name, value) by recap so products_sold can run the
-                    # shared per-recap two-tier matcher (cans/packs primary,
-                    # sold/bought/purchased fallback minus intent) — one source
-                    # of truth with the recap list's soldUnits.
-                    by_recap: dict = {}
-                    for recap_id, name, value in rows:
-                        by_recap.setdefault(recap_id, []).append((name, value))
-                        low = (name or "").lower()
-                        digits = _re.sub(r"[^\d-]", "", str(value or ""))
-                        if not digits or digits == "-":
-                            continue
-                        try:
-                            num = int(digits)
-                        except ValueError:
-                            continue
-                        if "knew about" in low:
-                            sums["brand"] += num
-                            sums["brand_rows"] += 1
-                        elif "willing to purchase" in low and "not" not in low:
-                            sums["willing"] += num
-                            sums["willing_rows"] += 1
-                        elif "single can" in low:
-                            sums["cans"] += num
-                        elif "pack" in low:
-                            sums["packs"] += num
-                            sums["pack_cans"] += num * _pack_size_from_label(low)
-                    # SOLD + CONSUMERS-SAMPLED: per-recap via the SHARED matchers
-                    # (recaps.types), summed across recaps — ONE source of truth
-                    # with the recap list AND the Program-KPIs rollup, so the
-                    # hero strip can't drift from them. Consumers in particular
-                    # MUST go through the shared matcher (not an inline
-                    # "consumers sampled" name check): that's what skips a
-                    # free-text "General demographics of consumers sampled (age
-                    # range...)" field whose prose ("...19 to 60s...") would
-                    # otherwise digit-strip into a phantom 1960 and inflate the
-                    # headline (the recurring duplicate-matcher class — see the
-                    # SOLD note above; this is the same trap for consumers).
-                    for pairs in by_recap.values():
-                        sold = _sold_units_from_fields(pairs)
-                        if sold is not None:
-                            sums["products_sold"] += sold
-                        cs = _consumers_sampled_from_fields(pairs)
-                        if cs is not None:
-                            sums["consumers"] += cs
-                    return sums
+                )()
 
-                _cm = await sync_to_async(_sum_custom_recap_metrics)()
-                custom_consumers = _cm["consumers"]
-                custom_brand_aware_n = _cm["brand"]
-                custom_willing_n = _cm["willing"]
-                custom_single_cans = _cm["cans"]
-                custom_packs = _cm["packs"]
-                custom_brand_rows = _cm["brand_rows"]
-                custom_willing_rows = _cm["willing_rows"]
-                custom_pack_cans = _cm["pack_cans"]
-                custom_products_sold = _cm["products_sold"]
-            except Exception:
-                import logging
-                logging.getLogger(__name__).warning(
-                    "event_dashboard: custom-recap metric fold-in failed",
-                    exc_info=True,
-                )
-
-            consumers_sampled = (
-                consumer_data['total_consumers'] or 0) + custom_consumers
-            total_brand_aware = (
-                consumer_data['total_brand_aware'] or 0) + custom_brand_aware_n
-            total_willing_to_purchase = (
-                consumer_data['total_willing_to_purchase'] or 0
-            ) + custom_willing_n
-
-            # A tenant whose template never asks about awareness/intent
-            # (Girl Beer) has NO data — render "—", not a misleading 0.0%.
-            # Signal = any legacy ConsumerEngagements row OR any matched
-            # custom awareness/intent field.
-            legacy_ce_exists = await sync_to_async(
-                recap_models.ConsumerEngagements.objects.filter(
-                    recap__event__in=events_with_recaps
-                ).exists
-            )()
-            has_brand_signal = legacy_ce_exists or custom_brand_rows > 0
-            has_willing_signal = legacy_ce_exists or custom_willing_rows > 0
-
-            # Calculate percentages (always clamp to 0-100); None = no data
-            brand_awareness = clamp_percentage(
-                (total_brand_aware / consumers_sampled * 100)
-                if consumers_sampled > 0 else 0.0
-            ) if has_brand_signal else None
-
-            purchase_intent = clamp_percentage(
-                (total_willing_to_purchase / consumers_sampled * 100)
-                if consumers_sampled > 0 else 0.0
-            ) if has_willing_signal else None
-
-            # Comparison period (same period previous year)
-            comparison_period = None
-            comparison_values = None
-            if filters and filters.quarter:
+                # Borjomi / Girl Beer use CUSTOM recaps; their numeric answers
+                # live in CustomFieldValue (text) and are ignored by the legacy
+                # ConsumerEngagements / Recap aggregates above, so their KPIs
+                # read 0. Fold the custom-recap field values into the same
+                # metrics, matched by field label. Scoped to base_queryset (all
+                # events in the window) — NOT events_with_recaps, which is
+                # legacy-recap-only and would exclude custom-recap events.
+                # Best-effort + add-only: failure leaves the legacy numbers
+                # intact, and tenants without custom recaps add 0.
                 try:
-                    # Parse current quarter
-                    current_start, current_end = service._parse_quarter(
-                        filters.quarter)
-                    # Get previous year's same quarter
-                    prev_year = current_start.year - 1
-                    # Calculate quarter number from month
-                    quarter_num = (current_start.month - 1) // 3 + 1
-                    prev_quarter = f"Q{quarter_num} {prev_year}"
-                    prev_start, prev_end = service._parse_quarter(prev_quarter)
-
-                    comparison_period = prev_quarter
-
-                    # Get previous period data (apply same filters but for previous period)
-                    prev_events = event_models.Event.objects.exclude(
-                        request__deleted_at__isnull=False
-                    )
-                    # Apply same filters but with previous period dates
-                    prev_events = service._apply_event_dashboard_filters(
-                        prev_events, filters
-                    )
-                    prev_events = prev_events.filter(
-                        Q(date__date__gte=prev_start, date__date__lte=prev_end) |
-                        Q(start_time__date__gte=prev_start, start_time__date__lte=prev_end) |
-                        Q(request__date__date__gte=prev_start,
-                          request__date__date__lte=prev_end)
-                    )
-
-                    # Same "events with a recap" basis as total_events, so the
-                    # period-over-period comparison stays apples-to-apples.
-                    prev_total_events = await sync_to_async(
-                        lambda: prev_events.filter(
-                            Q(recaps__isnull=False) | Q(custom_recap__isnull=False)
-                        ).distinct().count()
-                    )()
-                    prev_events_with_recaps = prev_events.filter(
-                        recaps__isnull=False).distinct()
-
-                    prev_consumer_data = await sync_to_async(
-                        lambda: recap_models.ConsumerEngagements.objects.filter(
-                            recap__event__in=prev_events_with_recaps
-                        ).aggregate(
-                            total_consumers=Sum('total_consumer', default=0),
-                            total_brand_aware=Sum(
-                                'brand_aware_consumers', default=0),
-                            total_willing_to_purchase=Sum(
-                                'willing_to_purchase_consumers', default=0)
+                    def _sum_custom_recap_metrics():
+                        import re as _re
+                        # Reuse the recap list's two-tier SOLD matcher so the
+                        # dashboard "Products sold" headline can never drift from
+                        # the recap list again (the recurring duplicate-matcher
+                        # class: this resolver had its OWN cans/packs-only matcher
+                        # that silently showed 0 for bread tenants like Stone House
+                        # Bread, whose template says "...did consumers PURCHASE...").
+                        from recaps.types import (
+                            _consumers_sampled_from_fields,
+                            _sold_units_from_fields,
                         )
-                    )()
+                        sums = {"consumers": 0, "brand": 0,
+                                "willing": 0, "cans": 0, "packs": 0,
+                                # Girl Beer vocabulary + no-data signals:
+                                "sampled_total": 0,   # "who sampled (Total)" rows
+                                "pack_cans": 0,       # packs × label-parsed size
+                                "brand_rows": 0,      # matched awareness fields
+                                "willing_rows": 0,    # matched intent fields
+                                "products_sold": 0}   # two-tier SOLD (shared helper)
+                        rows = recap_models.CustomFieldValue.objects.filter(
+                            custom_recap__event__in=base_queryset
+                        ).values_list(
+                            "custom_recap_id", "custom_field__name", "value"
+                        )
+                        # Group (name, value) by recap so products_sold can run the
+                        # shared per-recap two-tier matcher (cans/packs primary,
+                        # sold/bought/purchased fallback minus intent) — one source
+                        # of truth with the recap list's soldUnits.
+                        by_recap: dict = {}
+                        for recap_id, name, value in rows:
+                            by_recap.setdefault(recap_id, []).append((name, value))
+                            low = (name or "").lower()
+                            digits = _re.sub(r"[^\d-]", "", str(value or ""))
+                            if not digits or digits == "-":
+                                continue
+                            try:
+                                num = int(digits)
+                            except ValueError:
+                                continue
+                            if "knew about" in low:
+                                sums["brand"] += num
+                                sums["brand_rows"] += 1
+                            elif "willing to purchase" in low and "not" not in low:
+                                sums["willing"] += num
+                                sums["willing_rows"] += 1
+                            elif "single can" in low:
+                                sums["cans"] += num
+                            elif "pack" in low:
+                                sums["packs"] += num
+                                sums["pack_cans"] += num * _pack_size_from_label(low)
+                        # SOLD + CONSUMERS-SAMPLED: per-recap via the SHARED matchers
+                        # (recaps.types), summed across recaps — ONE source of truth
+                        # with the recap list AND the Program-KPIs rollup, so the
+                        # hero strip can't drift from them. Consumers in particular
+                        # MUST go through the shared matcher (not an inline
+                        # "consumers sampled" name check): that's what skips a
+                        # free-text "General demographics of consumers sampled (age
+                        # range...)" field whose prose ("...19 to 60s...") would
+                        # otherwise digit-strip into a phantom 1960 and inflate the
+                        # headline (the recurring duplicate-matcher class — see the
+                        # SOLD note above; this is the same trap for consumers).
+                        for pairs in by_recap.values():
+                            sold = _sold_units_from_fields(pairs)
+                            if sold is not None:
+                                sums["products_sold"] += sold
+                            cs = _consumers_sampled_from_fields(pairs)
+                            if cs is not None:
+                                sums["consumers"] += cs
+                        return sums
 
-                    prev_consumers = prev_consumer_data['total_consumers'] or 0
-                    prev_brand_aware = prev_consumer_data['total_brand_aware'] or 0
-                    prev_willing = prev_consumer_data['total_willing_to_purchase'] or 0
-
-                    prev_brand_awareness = clamp_percentage(
-                        (prev_brand_aware / prev_consumers * 100)
-                        if prev_consumers > 0 else 0.0
+                    _cm = await sync_to_async(_sum_custom_recap_metrics)()
+                    custom_consumers = _cm["consumers"]
+                    custom_brand_aware_n = _cm["brand"]
+                    custom_willing_n = _cm["willing"]
+                    custom_single_cans = _cm["cans"]
+                    custom_packs = _cm["packs"]
+                    custom_brand_rows = _cm["brand_rows"]
+                    custom_willing_rows = _cm["willing_rows"]
+                    custom_pack_cans = _cm["pack_cans"]
+                    custom_products_sold = _cm["products_sold"]
+                except Exception:
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        "event_dashboard: custom-recap metric fold-in failed",
+                        exc_info=True,
                     )
-                    prev_purchase_intent = clamp_percentage(
-                        (prev_willing / prev_consumers * 100)
-                        if prev_consumers > 0 else 0.0
-                    )
 
-                    comparison_values = types.ComparisonValues(
-                        total_events=prev_total_events,
-                        consumers_sampled=prev_consumers,
-                        brand_awareness=prev_brand_awareness,
-                        purchase_intent=prev_purchase_intent
-                    )
-                except ValueError:
-                    pass
+                consumers_sampled = (
+                    consumer_data['total_consumers'] or 0) + custom_consumers
+                total_brand_aware = (
+                    consumer_data['total_brand_aware'] or 0) + custom_brand_aware_n
+                total_willing_to_purchase = (
+                    consumer_data['total_willing_to_purchase'] or 0
+                ) + custom_willing_n
 
-            metrics = types.EventDashboardMetrics(
-                total_events=total_events,
-                consumers_sampled=consumers_sampled,
-                brand_awareness=(
-                    round(brand_awareness, 1)
-                    if brand_awareness is not None else None
-                ),
-                purchase_intent=(
-                    round(purchase_intent, 1)
-                    if purchase_intent is not None else None
-                ),
-                comparison_period=comparison_period,
-                comparison_values=comparison_values
-            )
+                # A tenant whose template never asks about awareness/intent
+                # (Girl Beer) has NO data — render "—", not a misleading 0.0%.
+                # Signal = any legacy ConsumerEngagements row OR any matched
+                # custom awareness/intent field.
+                legacy_ce_exists = await sync_to_async(
+                    recap_models.ConsumerEngagements.objects.filter(
+                        recap__event__in=events_with_recaps
+                    ).exists
+                )()
+                has_brand_signal = legacy_ce_exists or custom_brand_rows > 0
+                has_willing_signal = legacy_ce_exists or custom_willing_rows > 0
 
-            # Monthly Performance Trends
-            # Group by month and aggregate consumer data
-            monthly_data = await sync_to_async(list)(
-                recap_models.ConsumerEngagements.objects.filter(
-                    recap__event__in=events_with_recaps
-                ).select_related('recap__event')
-                .annotate(
-                    month=TruncMonth('recap__event__date')
-                )
-                .values('month')
-                .annotate(
-                    consumers_sampled=Sum('total_consumer', default=0),
-                    willing_to_purchase=Sum(
-                        'willing_to_purchase_consumers', default=0),
-                    events_count=Count('recap__event_id', distinct=True)
-                )
-                .order_by('month')
-            )
+                # Calculate percentages (always clamp to 0-100); None = no data
+                brand_awareness = clamp_percentage(
+                    (total_brand_aware / consumers_sampled * 100)
+                    if consumers_sampled > 0 else 0.0
+                ) if has_brand_signal else None
 
-            monthly_data_points = []
-            for item in monthly_data:
-                month_str = item['month'].strftime(
-                    '%Y-%m') if item['month'] else None
-                if not month_str:
-                    continue
+                purchase_intent = clamp_percentage(
+                    (total_willing_to_purchase / consumers_sampled * 100)
+                    if consumers_sampled > 0 else 0.0
+                ) if has_willing_signal else None
 
-                consumers = item['consumers_sampled'] or 0
-                willing = item['willing_to_purchase'] or 0
-                conversion_rate = clamp_percentage(
-                    (willing / consumers * 100) if consumers > 0 else 0.0
-                )
+            if want_metrics:
+                # Comparison period (same period previous year)
+                comparison_period = None
+                comparison_values = None
+                if filters and filters.quarter:
+                    try:
+                        # Parse current quarter
+                        current_start, current_end = service._parse_quarter(
+                            filters.quarter)
+                        # Get previous year's same quarter
+                        prev_year = current_start.year - 1
+                        # Calculate quarter number from month
+                        quarter_num = (current_start.month - 1) // 3 + 1
+                        prev_quarter = f"Q{quarter_num} {prev_year}"
+                        prev_start, prev_end = service._parse_quarter(prev_quarter)
 
-                monthly_data_points.append(
-                    types.MonthlyDataPoint(
-                        month=month_str,
-                        consumers_sampled=consumers,
-                        willing_to_purchase=willing,
-                        conversion_rate=round(conversion_rate, 1),
-                        events_count=item['events_count'] or 0
-                    )
-                )
+                        comparison_period = prev_quarter
 
-            monthly_trends = types.MonthlyPerformanceTrend(
-                data_points=monthly_data_points
-            )
-
-            # Performance Insights
-            knew_about_brand = total_brand_aware
-            knew_about_brand_percentage = brand_awareness
-            willing_to_purchase_count = total_willing_to_purchase
-            willing_to_purchase_percentage = purchase_intent
-
-            # Best Month (month with highest consumers sampled)
-            best_month_data = None
-            if monthly_data_points:
-                best_month_point = max(
-                    monthly_data_points,
-                    key=lambda x: x.consumers_sampled
-                )
-                best_month_data = types.BestMonth(
-                    month=best_month_point.month,
-                    events_count=best_month_point.events_count,
-                    consumers_count=best_month_point.consumers_sampled
-                )
-
-            # Growth Rate (events vs last year)
-            growth_rate = 0.0
-            if filters and filters.quarter:
-                try:
-                    current_start, current_end = service._parse_quarter(
-                        filters.quarter)
-                    prev_year = current_start.year - 1
-                    # Calculate quarter number from month
-                    quarter_num = (current_start.month - 1) // 3 + 1
-                    prev_quarter = f"Q{quarter_num} {prev_year}"
-                    prev_start, prev_end = service._parse_quarter(prev_quarter)
-
-                    # Get previous period events with same filters
-                    prev_events = event_models.Event.objects.all()
-                    prev_events = service._apply_event_dashboard_filters(
-                        prev_events, filters
-                    )
-                    # Growth rate compares against total_events, so use the
-                    # same "events with a recap" basis here too.
-                    prev_events_count = await sync_to_async(
-                        lambda: prev_events.filter(
+                        # Get previous period data (apply same filters but for previous period)
+                        prev_events = event_models.Event.objects.exclude(
+                            request__deleted_at__isnull=False
+                        )
+                        # Apply same filters but with previous period dates
+                        prev_events = service._apply_event_dashboard_filters(
+                            prev_events, filters
+                        )
+                        prev_events = prev_events.filter(
                             Q(date__date__gte=prev_start, date__date__lte=prev_end) |
                             Q(start_time__date__gte=prev_start, start_time__date__lte=prev_end) |
                             Q(request__date__date__gte=prev_start,
                               request__date__date__lte=prev_end)
-                        ).filter(
-                            Q(recaps__isnull=False) | Q(custom_recap__isnull=False)
-                        ).distinct().count()
-                    )()
-
-                    if prev_events_count > 0:
-                        growth_rate = (
-                            (total_events - prev_events_count) /
-                            prev_events_count * 100
                         )
-                except ValueError:
-                    pass
 
-            performance_insights = types.PerformanceInsights(
-                knew_about_brand=knew_about_brand,
-                knew_about_brand_percentage=(
-                    round(knew_about_brand_percentage, 1)
-                    if knew_about_brand_percentage is not None else None
-                ),
-                willing_to_purchase=willing_to_purchase_count,
-                willing_to_purchase_percentage=(
-                    round(willing_to_purchase_percentage, 1)
-                    if willing_to_purchase_percentage is not None else None
-                ),
-                best_month=best_month_data,
-                growth_rate=round(growth_rate, 1)
-            )
+                        # Same "events with a recap" basis as total_events, so the
+                        # period-over-period comparison stays apples-to-apples.
+                        prev_total_events = await sync_to_async(
+                            lambda: prev_events.filter(
+                                Q(recaps__isnull=False) | Q(custom_recap__isnull=False)
+                            ).distinct().count()
+                        )()
+                        prev_events_with_recaps = prev_events.filter(
+                            recaps__isnull=False).distinct()
 
-            # Recent Events (upcoming events)
-            now = timezone.now()
-            recent_events_qs = base_queryset.filter(
-                Q(start_time__gt=now) | Q(date__gt=now)
-            ).select_related(
-                'request__retailer'
-            ).prefetch_related('recaps__consumer_engagements')[:10]
+                        prev_consumer_data = await sync_to_async(
+                            lambda: recap_models.ConsumerEngagements.objects.filter(
+                                recap__event__in=prev_events_with_recaps
+                            ).aggregate(
+                                total_consumers=Sum('total_consumer', default=0),
+                                total_brand_aware=Sum(
+                                    'brand_aware_consumers', default=0),
+                                total_willing_to_purchase=Sum(
+                                    'willing_to_purchase_consumers', default=0)
+                            )
+                        )()
 
-            recent_events_list = await sync_to_async(list)(recent_events_qs)
+                        prev_consumers = prev_consumer_data['total_consumers'] or 0
+                        prev_brand_aware = prev_consumer_data['total_brand_aware'] or 0
+                        prev_willing = prev_consumer_data['total_willing_to_purchase'] or 0
 
-            recent_events = []
-            for event in recent_events_list:
-                # Get retailer name (RMM)
-                retailer_name = None
-                if event.request and event.request.retailer:
-                    retailer_name = event.request.retailer.name
+                        prev_brand_awareness = clamp_percentage(
+                            (prev_brand_aware / prev_consumers * 100)
+                            if prev_consumers > 0 else 0.0
+                        )
+                        prev_purchase_intent = clamp_percentage(
+                            (prev_willing / prev_consumers * 100)
+                            if prev_consumers > 0 else 0.0
+                        )
 
-                # Get consumers and intent rate from recaps
-                event_consumers = 0
-                event_willing = 0
-                for recap in event.recaps.all():
-                    for ce in recap.consumer_engagements.all():
-                        event_consumers += ce.total_consumer or 0
-                        event_willing += ce.willing_to_purchase_consumers or 0
+                        comparison_values = types.ComparisonValues(
+                            total_events=prev_total_events,
+                            consumers_sampled=prev_consumers,
+                            brand_awareness=prev_brand_awareness,
+                            purchase_intent=prev_purchase_intent
+                        )
+                    except ValueError:
+                        pass
 
-                intent_rate = (
-                    (event_willing / event_consumers * 100)
-                    if event_consumers > 0 else 0.0
+                metrics = types.EventDashboardMetrics(
+                    total_events=total_events,
+                    consumers_sampled=consumers_sampled,
+                    brand_awareness=(
+                        round(brand_awareness, 1)
+                        if brand_awareness is not None else None
+                    ),
+                    purchase_intent=(
+                        round(purchase_intent, 1)
+                        if purchase_intent is not None else None
+                    ),
+                    comparison_period=comparison_period,
+                    comparison_values=comparison_values
                 )
 
-                # Event date
-                event_date = event.date or event.start_time or event.request.date if event.request else None
-                date_str = event_date.strftime(
-                    '%Y-%m-%d') if event_date else ''
+            if need_monthly:
+                # Monthly Performance Trends
+                # Group by month and aggregate consumer data
+                monthly_data = await sync_to_async(list)(
+                    recap_models.ConsumerEngagements.objects.filter(
+                        recap__event__in=events_with_recaps
+                    ).select_related('recap__event')
+                    .annotate(
+                        month=TruncMonth('recap__event__date')
+                    )
+                    .values('month')
+                    .annotate(
+                        consumers_sampled=Sum('total_consumer', default=0),
+                        willing_to_purchase=Sum(
+                            'willing_to_purchase_consumers', default=0),
+                        events_count=Count('recap__event_id', distinct=True)
+                    )
+                    .order_by('month')
+                )
 
-                recent_events.append(
-                    types.RecentEvent(
-                        id=str(event.id),
-                        name=event.name,
-                        date=date_str,
-                        location=retailer_name or '',
-                        consumers=event_consumers,
-                        intent_rate=round(intent_rate, 1),
-                        status="Upcoming"
+                for item in monthly_data:
+                    month_str = item['month'].strftime(
+                        '%Y-%m') if item['month'] else None
+                    if not month_str:
+                        continue
+
+                    consumers = item['consumers_sampled'] or 0
+                    willing = item['willing_to_purchase'] or 0
+                    conversion_rate = clamp_percentage(
+                        (willing / consumers * 100) if consumers > 0 else 0.0
+                    )
+
+                    monthly_data_points.append(
+                        types.MonthlyDataPoint(
+                            month=month_str,
+                            consumers_sampled=consumers,
+                            willing_to_purchase=willing,
+                            conversion_rate=round(conversion_rate, 1),
+                            events_count=item['events_count'] or 0
+                        )
+                    )
+
+            if want_trends:
+                monthly_trends = types.MonthlyPerformanceTrend(
+                    data_points=monthly_data_points
+                )
+
+            if want_insights:
+                # Performance Insights
+                knew_about_brand = total_brand_aware
+                knew_about_brand_percentage = brand_awareness
+                willing_to_purchase_count = total_willing_to_purchase
+                willing_to_purchase_percentage = purchase_intent
+
+                # Best Month (month with highest consumers sampled)
+                best_month_data = None
+                if monthly_data_points:
+                    best_month_point = max(
+                        monthly_data_points,
+                        key=lambda x: x.consumers_sampled
+                    )
+                    best_month_data = types.BestMonth(
+                        month=best_month_point.month,
+                        events_count=best_month_point.events_count,
+                        consumers_count=best_month_point.consumers_sampled
+                    )
+
+                # Growth Rate (events vs last year)
+                growth_rate = 0.0
+                if filters and filters.quarter:
+                    try:
+                        current_start, current_end = service._parse_quarter(
+                            filters.quarter)
+                        prev_year = current_start.year - 1
+                        # Calculate quarter number from month
+                        quarter_num = (current_start.month - 1) // 3 + 1
+                        prev_quarter = f"Q{quarter_num} {prev_year}"
+                        prev_start, prev_end = service._parse_quarter(prev_quarter)
+
+                        # Get previous period events with same filters
+                        prev_events = event_models.Event.objects.all()
+                        prev_events = service._apply_event_dashboard_filters(
+                            prev_events, filters
+                        )
+                        # Growth rate compares against total_events, so use the
+                        # same "events with a recap" basis here too.
+                        prev_events_count = await sync_to_async(
+                            lambda: prev_events.filter(
+                                Q(date__date__gte=prev_start, date__date__lte=prev_end) |
+                                Q(start_time__date__gte=prev_start, start_time__date__lte=prev_end) |
+                                Q(request__date__date__gte=prev_start,
+                                  request__date__date__lte=prev_end)
+                            ).filter(
+                                Q(recaps__isnull=False) | Q(custom_recap__isnull=False)
+                            ).distinct().count()
+                        )()
+
+                        if prev_events_count > 0:
+                            growth_rate = (
+                                (total_events - prev_events_count) /
+                                prev_events_count * 100
+                            )
+                    except ValueError:
+                        pass
+
+                performance_insights = types.PerformanceInsights(
+                    knew_about_brand=knew_about_brand,
+                    knew_about_brand_percentage=(
+                        round(knew_about_brand_percentage, 1)
+                        if knew_about_brand_percentage is not None else None
+                    ),
+                    willing_to_purchase=willing_to_purchase_count,
+                    willing_to_purchase_percentage=(
+                        round(willing_to_purchase_percentage, 1)
+                        if willing_to_purchase_percentage is not None else None
+                    ),
+                    best_month=best_month_data,
+                    growth_rate=round(growth_rate, 1)
+                )
+
+            if want_recent:
+                # Recent Events (upcoming events)
+                now = timezone.now()
+                recent_events_qs = base_queryset.filter(
+                    Q(start_time__gt=now) | Q(date__gt=now)
+                ).select_related(
+                    'request__retailer'
+                ).prefetch_related('recaps__consumer_engagements')[:10]
+
+                recent_events_list = await sync_to_async(list)(recent_events_qs)
+
+                recent_events = []
+                for event in recent_events_list:
+                    # Get retailer name (RMM)
+                    retailer_name = None
+                    if event.request and event.request.retailer:
+                        retailer_name = event.request.retailer.name
+
+                    # Get consumers and intent rate from recaps
+                    event_consumers = 0
+                    event_willing = 0
+                    for recap in event.recaps.all():
+                        for ce in recap.consumer_engagements.all():
+                            event_consumers += ce.total_consumer or 0
+                            event_willing += ce.willing_to_purchase_consumers or 0
+
+                    intent_rate = (
+                        (event_willing / event_consumers * 100)
+                        if event_consumers > 0 else 0.0
+                    )
+
+                    # Event date
+                    event_date = event.date or event.start_time or event.request.date if event.request else None
+                    date_str = event_date.strftime(
+                        '%Y-%m-%d') if event_date else ''
+
+                    recent_events.append(
+                        types.RecentEvent(
+                            id=str(event.id),
+                            name=event.name,
+                            date=date_str,
+                            location=retailer_name or '',
+                            consumers=event_consumers,
+                            intent_rate=round(intent_rate, 1),
+                            status="Upcoming"
+                        )
+                    )
+                if not recent_events:
+                    recent_events = None
+
+            if want_global_kpis:
+                # Global KPIs for dashboard view (respecting active filters/date range)
+                if events_with_recaps is None:
+                    events_with_recaps = base_queryset.filter(
+                        recaps__isnull=False
+                    ).distinct()
+                recap_queryset = recap_models.Recap.objects.filter(
+                    event__in=events_with_recaps
+                )
+
+                global_kpis_data = await sync_to_async(
+                    lambda: recap_queryset.aggregate(
+                        single_cans_sold=Sum('total_cans_sold', default=0),
+                        multi_packs_sold=Sum('total_packs_sold', default=0),
+                        products_sold=Sum('products_sold', default=0),
+                    )
+                )()
+                # Cans-equivalent of the packs sold: legacy Recap packs keep the
+                # historical ×12 assumption; custom pack fields use the size
+                # parsed from each label ("6-packs Sold" → ×6, Girl Beer).
+                legacy_packs = global_kpis_data.get('multi_packs_sold') or 0
+                pack_cans_equivalent = legacy_packs * 12 + custom_pack_cans
+
+                # Fold custom-recap cans/packs into the global KPIs (legacy
+                # Recap aggregate above misses custom-recap tenants like Borjomi).
+                global_kpis_data['single_cans_sold'] = (
+                    global_kpis_data.get('single_cans_sold') or 0
+                ) + custom_single_cans
+                global_kpis_data['multi_packs_sold'] = (
+                    global_kpis_data.get('multi_packs_sold') or 0
+                ) + custom_packs
+
+                global_by_rmm_data = await sync_to_async(list)(
+                    recap_queryset.select_related('event__rmm_asigned')
+                    .filter(event__rmm_asigned__isnull=False)
+                    .values(
+                        'event__rmm_asigned_id',
+                        'event__rmm_asigned__first_name',
+                        'event__rmm_asigned__last_name',
+                        'event__rmm_asigned__email',
+                    )
+                    .annotate(
+                        single_cans_sold=Sum('total_cans_sold', default=0),
+                        multi_packs_sold=Sum('total_packs_sold', default=0),
+                    )
+                    .order_by(
+                        'event__rmm_asigned__first_name',
+                        'event__rmm_asigned__last_name',
+                        'event__rmm_asigned__email',
                     )
                 )
 
-            # Global KPIs for dashboard view (respecting active filters/date range)
-            recap_queryset = recap_models.Recap.objects.filter(
-                event__in=events_with_recaps
-            )
+                global_kpis_by_rmm = [
+                    types.RecapGlobalKPIByRMM(
+                        rmm_id=str(item['event__rmm_asigned_id']),
+                        rmm_name=(
+                            f"{(item['event__rmm_asigned__first_name'] or '').strip()} "
+                            f"{(item['event__rmm_asigned__last_name'] or '').strip()}"
+                        ).strip()
+                        or (item['event__rmm_asigned__email'] or ''),
+                        single_cans_sold=item['single_cans_sold'] or 0,
+                        multi_packs_sold=item['multi_packs_sold'] or 0,
+                    )
+                    for item in global_by_rmm_data
+                ]
 
-            global_kpis_data = await sync_to_async(
-                lambda: recap_queryset.aggregate(
-                    single_cans_sold=Sum('total_cans_sold', default=0),
-                    multi_packs_sold=Sum('total_packs_sold', default=0),
-                    products_sold=Sum('products_sold', default=0),
+                # Total units sold for tenants that don't break sales into
+                # cans/packs (legacy Recap.products_sold + custom-recap two-tier
+                # matcher). Disjoint sources: legacy Recaps store products_sold on
+                # the row; custom recaps store it in CustomFieldValue — so summing
+                # both never double-counts. The FE shows this as "Products sold"
+                # only when there's no can/pack breakdown.
+                products_sold_total = (
+                    global_kpis_data.get('products_sold') or 0
+                ) + custom_products_sold
+
+                global_kpis = types.RecapGlobalKPIs(
+                    single_cans_sold=global_kpis_data['single_cans_sold'] or 0,
+                    multi_packs_sold=global_kpis_data['multi_packs_sold'] or 0,
+                    pack_cans_equivalent=pack_cans_equivalent,
+                    products_sold=products_sold_total,
+                    by_rmm=global_kpis_by_rmm
                 )
-            )()
-            # Cans-equivalent of the packs sold: legacy Recap packs keep the
-            # historical ×12 assumption; custom pack fields use the size
-            # parsed from each label ("6-packs Sold" → ×6, Girl Beer).
-            legacy_packs = global_kpis_data.get('multi_packs_sold') or 0
-            pack_cans_equivalent = legacy_packs * 12 + custom_pack_cans
 
-            # Fold custom-recap cans/packs into the global KPIs (legacy
-            # Recap aggregate above misses custom-recap tenants like Borjomi).
-            global_kpis_data['single_cans_sold'] = (
-                global_kpis_data.get('single_cans_sold') or 0
-            ) + custom_single_cans
-            global_kpis_data['multi_packs_sold'] = (
-                global_kpis_data.get('multi_packs_sold') or 0
-            ) + custom_packs
-
-            global_by_rmm_data = await sync_to_async(list)(
-                recap_queryset.select_related('event__rmm_asigned')
-                .filter(event__rmm_asigned__isnull=False)
-                .values(
-                    'event__rmm_asigned_id',
-                    'event__rmm_asigned__first_name',
-                    'event__rmm_asigned__last_name',
-                    'event__rmm_asigned__email',
+            if want_goals:
+                goals_progress = await _resolve_goals_progress(
+                    info, service, filters, start_date, end_date
                 )
-                .annotate(
-                    single_cans_sold=Sum('total_cans_sold', default=0),
-                    multi_packs_sold=Sum('total_packs_sold', default=0),
-                )
-                .order_by(
-                    'event__rmm_asigned__first_name',
-                    'event__rmm_asigned__last_name',
-                    'event__rmm_asigned__email',
-                )
-            )
-
-            global_kpis_by_rmm = [
-                types.RecapGlobalKPIByRMM(
-                    rmm_id=str(item['event__rmm_asigned_id']),
-                    rmm_name=(
-                        f"{(item['event__rmm_asigned__first_name'] or '').strip()} "
-                        f"{(item['event__rmm_asigned__last_name'] or '').strip()}"
-                    ).strip()
-                    or (item['event__rmm_asigned__email'] or ''),
-                    single_cans_sold=item['single_cans_sold'] or 0,
-                    multi_packs_sold=item['multi_packs_sold'] or 0,
-                )
-                for item in global_by_rmm_data
-            ]
-
-            # Total units sold for tenants that don't break sales into
-            # cans/packs (legacy Recap.products_sold + custom-recap two-tier
-            # matcher). Disjoint sources: legacy Recaps store products_sold on
-            # the row; custom recaps store it in CustomFieldValue — so summing
-            # both never double-counts. The FE shows this as "Products sold"
-            # only when there's no can/pack breakdown.
-            products_sold_total = (
-                global_kpis_data.get('products_sold') or 0
-            ) + custom_products_sold
-
-            global_kpis = types.RecapGlobalKPIs(
-                single_cans_sold=global_kpis_data['single_cans_sold'] or 0,
-                multi_packs_sold=global_kpis_data['multi_packs_sold'] or 0,
-                pack_cans_equivalent=pack_cans_equivalent,
-                products_sold=products_sold_total,
-                by_rmm=global_kpis_by_rmm
-            )
-
-            goals_progress = await _resolve_goals_progress(
-                info, service, filters, start_date, end_date
-            )
 
             return types.EventDashboard(
                 metrics=metrics,
                 global_kpis=global_kpis,
                 monthly_trends=monthly_trends,
                 performance_insights=performance_insights,
-                recent_events=recent_events if recent_events else None,
+                recent_events=recent_events,
                 goals_progress=goals_progress,
             )
 

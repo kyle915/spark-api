@@ -137,3 +137,43 @@ def test_customrecapfile_display_url_heic_without_sibling_still_rewrites():
 def test_customrecapfile_display_url_plain_image_unchanged():
     out = _resolve_customfile_display_url("recaps/shot.jpeg", sibling_exists=True)
     assert out == "https://cdn/recaps/shot.jpeg"
+
+
+# ---------------------------------------------------------------------------
+# CustomRecap.hero_image_url — HEIC siblings count as heroes
+# ---------------------------------------------------------------------------
+
+
+class _FakeCustomRecapFile:
+    def __init__(self, blob: str):
+        self.__dict__["url"] = _FakeFieldFile(blob)
+
+
+def _resolve_hero_image_url(blobs: list[str]) -> str | None:
+    inst = recap_types.CustomRecap.__new__(recap_types.CustomRecap)
+    files = [_FakeCustomRecapFile(b) for b in blobs]
+    with patch.object(
+        recap_types, "_prefetched", return_value=files
+    ), patch(
+        "recaps.types.public_url", side_effect=lambda b: f"https://cdn/{b}" if b else None
+    ), patch(
+        "recaps.types.extract_blob_name_from_url", side_effect=lambda b: b
+    ):
+        return async_to_sync(inst.hero_image_url)()
+
+
+def test_hero_image_url_prefers_browser_image():
+    out = _resolve_hero_image_url(
+        ["recaps/receipt.pdf", "recaps/shot.jpg", "recaps/later.heic"]
+    )
+    assert out == "https://cdn/recaps/shot.jpg"
+
+
+def test_hero_image_url_heic_rewrites_to_jpg_sibling():
+    out = _resolve_hero_image_url(["recaps/IMG_1.heic", "recaps/later.jpg"])
+    assert out == "https://cdn/recaps/IMG_1.jpg"
+
+
+def test_hero_image_url_skips_non_image_without_heic():
+    out = _resolve_hero_image_url(["recaps/notes.pdf", "recaps/clip.mp4"])
+    assert out is None

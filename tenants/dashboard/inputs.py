@@ -42,6 +42,12 @@ class EventDashboardFiltersInput(BaseTenantInput):
     # Optional year for goals progress (e.g. 2025); when not set, year is derived from dashboard date range
     year: int | None = None
 
+    # Optional section short-circuit: when set, event_dashboard only computes
+    # the named sections and returns empty/zero stubs for the rest.
+    # Values (case-insensitive): metrics, trends, insights, globalKpis,
+    # recentEvents, goals. None/empty → full dashboard (current behavior).
+    sections: list[str] | None = None
+
 
 @strawberry.input
 class RecapDashboardFiltersInput(BaseTenantInput):

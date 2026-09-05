@@ -447,10 +447,33 @@ class Request(Node):
         return [item.product for item in items if item.product]
 
     @strawberry.field
-    async def open_shifts(self) -> List[OpenShiftAdminType]:
-        """Shift-swap activity across this request's events — dropped slots
-        that reopened for self-serve claim (open or claimed). Reads from the
-        event_set__open_shifts prefetch when present (no N+1)."""
+    async def product_names(self) -> List[str]:
+        """Distinct product names for Master Tracker SKU cell (no nested products)."""
+
+        def _go() -> list[str]:
+            cached = getattr(self, "_prefetched_objects_cache", {}).get(
+                "request_product"
+            )
+            rows = (
+                list(cached)
+                if cached is not None
+                else list(self.request_product.select_related("product").all())
+            )
+            names: list[str] = []
+            seen: set[str] = set()
+            for item in rows:
+                product = getattr(item, "product", None)
+                name = (getattr(product, "name", None) or "").strip()
+                if name and name not in seen:
+                    seen.add(name)
+                    names.append(name)
+            return names
+
+        return await sync_to_async(_go)()
+
+    @staticmethod
+    def _open_shift_rows(self_req) -> list:
+        """Collect open-shift admin rows from prefetch (shared by list + scalars)."""
 
         def _name(u):
             if not u:
@@ -462,50 +485,89 @@ class Request(Node):
             ).strip()
             return full or getattr(u, "email", None)
 
-        def _collect():
-            ev_cache = getattr(self, "_prefetched_objects_cache", {}).get("event_set")
-            events = list(ev_cache) if ev_cache is not None else list(
-                self.event_set.all()
+        ev_cache = getattr(self_req, "_prefetched_objects_cache", {}).get("event_set")
+        events = list(ev_cache) if ev_cache is not None else list(
+            self_req.event_set.all()
+        )
+        out: list[OpenShiftAdminType] = []
+        for ev in events:
+            os_cache = getattr(ev, "_prefetched_objects_cache", {}).get("open_shifts")
+            rows = (
+                list(os_cache)
+                if os_cache is not None
+                else list(
+                    ev.open_shifts.select_related("released_by", "claimed_by").all()
+                )
             )
-            out: list[OpenShiftAdminType] = []
-            for ev in events:
-                os_cache = getattr(ev, "_prefetched_objects_cache", {}).get(
-                    "open_shifts"
-                )
-                rows = (
-                    list(os_cache)
-                    if os_cache is not None
-                    else list(
-                        ev.open_shifts.select_related(
-                            "released_by", "claimed_by"
-                        ).all()
+            for r in rows:
+                out.append(
+                    OpenShiftAdminType(
+                        uuid=strawberry.ID(str(r.uuid)),
+                        event_uuid=strawberry.ID(str(getattr(ev, "uuid", ""))),
+                        event_name=getattr(ev, "name", None),
+                        released_by_name=_name(getattr(r, "released_by", None)),
+                        claimed_by_name=_name(getattr(r, "claimed_by", None)),
+                        claimed_at=(
+                            r.claimed_at.isoformat()
+                            if getattr(r, "claimed_at", None)
+                            else None
+                        ),
+                        created_at=(
+                            r.created_at.isoformat()
+                            if getattr(r, "created_at", None)
+                            else None
+                        ),
+                        status="claimed" if getattr(r, "claimed_at", None) else "open",
                     )
                 )
-                for r in rows:
-                    out.append(
-                        OpenShiftAdminType(
-                            uuid=strawberry.ID(str(r.uuid)),
-                            event_uuid=strawberry.ID(str(getattr(ev, "uuid", ""))),
-                            event_name=getattr(ev, "name", None),
-                            released_by_name=_name(getattr(r, "released_by", None)),
-                            claimed_by_name=_name(getattr(r, "claimed_by", None)),
-                            claimed_at=(
-                                r.claimed_at.isoformat()
-                                if getattr(r, "claimed_at", None)
-                                else None
-                            ),
-                            created_at=(
-                                r.created_at.isoformat()
-                                if getattr(r, "created_at", None)
-                                else None
-                            ),
-                            status="claimed" if getattr(r, "claimed_at", None) else "open",
-                        )
-                    )
-            out.sort(key=lambda x: x.created_at or "", reverse=True)
-            return out
+        out.sort(key=lambda x: x.created_at or "", reverse=True)
+        return out
 
-        return await sync_to_async(_collect)()
+    @strawberry.field
+    async def open_shifts(self) -> List[OpenShiftAdminType]:
+        """Shift-swap activity across this request's events — dropped slots
+        that reopened for self-serve claim (open or claimed). Reads from the
+        event_set__open_shifts prefetch when present (no N+1)."""
+        return await sync_to_async(Request._open_shift_rows)(self)
+
+    @strawberry.field
+    async def open_shifts_open(self) -> int:
+        """Count of still-open dropped shifts (Master Tracker chip)."""
+
+        def _go() -> int:
+            return sum(1 for r in Request._open_shift_rows(self) if r.status == "open")
+
+        return await sync_to_async(_go)()
+
+    @strawberry.field
+    async def open_shifts_total(self) -> int:
+        """Total open+claimed dropped shifts for this request."""
+
+        def _go() -> int:
+            return len(Request._open_shift_rows(self))
+
+        return await sync_to_async(_go)()
+
+    @strawberry.field
+    async def open_shifts_tooltip(self) -> str:
+        """Single tooltip string for Master Tracker open-shift chip."""
+
+        def _go() -> str:
+            parts: list[str] = []
+            for s in Request._open_shift_rows(self):
+                who = s.released_by_name or "A BA"
+                if s.status == "claimed":
+                    claim = (
+                        f" → claimed by {s.claimed_by_name}"
+                        if s.claimed_by_name
+                        else " → claimed"
+                    )
+                    parts.append(f"{who} dropped{claim}")
+                else:
+                    parts.append(f"{who} dropped — still open")
+            return " · ".join(parts)
+
+        return await sync_to_async(_go)()
 
     @strawberry.field
     async def event(self) -> Event | None:
@@ -1218,6 +1280,14 @@ class SidebarRequestCounts:
     upcoming: int
     done_30d: int
     recaps_due: int
+
+
+@strawberry.type
+class RecapListKinds:
+    """Cheap existence flags so the recaps list can skip empty legacy/custom tabs."""
+
+    has_legacy: bool
+    has_custom: bool
 
 
 @strawberry.type

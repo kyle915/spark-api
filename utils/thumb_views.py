@@ -47,6 +47,7 @@ from utils.gcs import (
     public_url,
     upload_bytes,
 )
+from recaps.heic_conversion import is_heic_blob, jpg_blob_name_for
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +123,23 @@ def thumb(request: HttpRequest) -> HttpResponse:
 
     if _is_non_image_blob(blob):
         return _not_an_image()
+
+    # HEIC/HEIF: never hand the original to Pillow (and never 302 to a
+    # multi-MB HEIC as the first choice). Prefer the JPG sibling's thumb,
+    # else the sibling public URL. Conversion is scheduled at upload.
+    if is_heic_blob(blob):
+        sibling = jpg_blob_name_for(blob)
+        sibling_thumb = _thumb_blob_name(sibling, width)
+        try:
+            if blob_exists(sibling_thumb):
+                return _redirect(public_url(sibling_thumb) or original_url)
+            if blob_exists(sibling):
+                return _redirect(public_url(sibling) or original_url)
+        except Exception:  # noqa: BLE001 — degrade without Pillow on HEIC
+            logger.exception(
+                "HEIC sibling thumb lookup failed for blob=%r", blob
+            )
+        return _redirect(original_url) if original_url else _not_an_image()
 
     try:
         if blob_exists(thumb_blob):

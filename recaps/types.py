@@ -15,7 +15,7 @@ from tenants import types as tenant_types
 from . import models
 from asgiref.sync import sync_to_async
 from utils.gcs import public_url, extract_blob_name_from_url
-from .heic_conversion import display_blob_name
+from .heic_conversion import display_blob_name, is_heic_blob
 
 
 # ---------------------------------------------------------------------------
@@ -1263,16 +1263,13 @@ class CustomRecap(Node):
 
     @strawberry.field
     async def hero_image_url(self) -> str | None:
-        """Public URL of the first image-typed custom recap file.
+        """Public URL of the first browser-renderable custom recap image.
 
-        Replicates the frontend hero pick: take customRecapFiles in order,
-        resolve each file's public `url` (same logic as CustomRecapFile.url
-        — blob name -> public_url), and return the first whose URL matches
-        isImage (jpg/jpeg/png/webp/gif). Returns the raw public_url (not
-        displayUrl): the matched file is already a browser-renderable
-        image, so its displayUrl would equal its url anyway, and skipping
-        the HEIC sibling check avoids any GCS round-trip. None when no
-        image file exists."""
+        Walk customRecapFiles in order. Prefer the first browser image
+        (jpg/jpeg/png/webp/gif) via raw ``public_url``, or the first HEIC/
+        HEIF rewritten to its JPG sibling via ``display_blob_name`` — so a
+        phone-only photo gallery still gets a hero instead of None.
+        """
 
         def _compute(files):
             for f in files:
@@ -1283,9 +1280,14 @@ class CustomRecap(Node):
                     blob = field_file.name
                 except Exception:
                     blob = str(field_file)
-                url = public_url(extract_blob_name_from_url(blob))
+                blob_name = extract_blob_name_from_url(blob)
+                if not blob_name:
+                    continue
+                url = public_url(blob_name)
                 if _is_image_url(url):
                     return url
+                if is_heic_blob(blob_name):
+                    return public_url(display_blob_name(blob_name))
             return None
 
         cached = _prefetched(self, "custom_recap_files")
